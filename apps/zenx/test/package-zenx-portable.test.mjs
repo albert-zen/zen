@@ -382,7 +382,7 @@ test("pins helper architecture and deployment target to the app minimum", () => 
   );
 });
 
-test("extracts and compiles both fixed macOS Computer helpers into App Resources", async () => {
+test("extracts and compiles all fixed macOS Computer helpers into App Resources", async () => {
   const providerSource = await readFile(
     new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
     "utf8",
@@ -510,10 +510,11 @@ test("extracts and compiles both fixed macOS Computer helpers into App Resources
     });
     assert.deepEqual(
       compiled.map(({ name }) => name),
-      ["zenx-accessibility", "zenx-foreground-input"],
+      ["zenx-bound-target", "zenx-accessibility", "zenx-foreground-input"],
     );
-    assert.equal(compiled[0].source, sources.MAC_ACCESSIBILITY_SOURCE);
-    assert.equal(compiled[1].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal(compiled[0].source, sources.MAC_BOUND_TARGET_SOURCE);
+    assert.equal(compiled[1].source, sources.MAC_ACCESSIBILITY_SOURCE);
+    assert.equal(compiled[2].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
     assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
     for (const { name } of compiled) {
       const mode = (await stat(path.join(destinationDirectory, name))).mode;

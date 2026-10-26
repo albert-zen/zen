@@ -135,6 +135,18 @@ declare global {
         onFocusAddress(listener: (threadId: string) => void): () => void;
       };
       workspaceFiles: {
+        applications(): Promise<
+          import("../../main/workspace-external-open.js").ExternalApplicationCatalog
+        >;
+        configureApplication(
+          id: import("../../main/workspace-external-open.js").ExternalApplicationId,
+          reset?: boolean,
+        ): Promise<
+          import("../../main/workspace-external-open.js").ExternalApplicationCatalog
+        >;
+        openExternal(
+          input: import("../../main/workspace-external-open.js").ExternalOpenRequest,
+        ): Promise<void>;
         search(
           threadId: string,
           query: string,

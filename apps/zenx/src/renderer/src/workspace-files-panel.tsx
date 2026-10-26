@@ -1,3 +1,4 @@
+import { WorkspaceExternalOpen } from "./workspace-external-open.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
@@ -199,6 +200,14 @@ export function WorkspaceFilesPanel({
           {i18n.t("panels:files")}
         </button>
         <span title={filePath}>{filePath}</span>
+        {!standalone && file ? (
+          <WorkspaceExternalOpen
+            threadId={threadId}
+            path={file.base.path}
+            disabled={dirty || file.saving || !!file.conflict}
+            onError={setError}
+          />
+        ) : null}
         <button
           type="button"
           disabled={loading || file?.saving}
@@ -227,6 +236,12 @@ export function WorkspaceFilesPanel({
               </React.Fragment>
             ))}
           </div>
+          <WorkspaceExternalOpen
+            threadId={threadId}
+            path={file.base.path}
+            disabled={dirty || file.saving || !!file.conflict}
+            onError={setError}
+          />
           <span className="file-location-status">
             {file.saving
               ? i18n.t("panels:saving")

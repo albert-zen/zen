@@ -325,6 +325,20 @@ try {
     { name: "narrow-en", lang: "en", theme: "light", width: 390, height: 640 },
     { name: "short-en", lang: "en", theme: "dark", width: 390, height: 400 },
     {
+      name: "narrow-zh",
+      lang: "zh-CN",
+      theme: "dark",
+      width: 390,
+      height: 640,
+    },
+    {
+      name: "short-zh",
+      lang: "zh-CN",
+      theme: "light",
+      width: 390,
+      height: 400,
+    },
+    {
       name: "desktop-zh",
       lang: "zh-CN",
       theme: "light",
@@ -548,6 +562,366 @@ try {
         (call) => call.threadId === "synthetic-file-sidebar-thread",
       ),
     );
+    // Production menu; only the fixture's catalog/picker/dispatch boundary is fake.
+    const externalLabel =
+      options.lang === "en" ? "Open file externally" : "在外部打开文件";
+    const externalSelector = `${fileSelector} button[aria-label="${externalLabel}"]`;
+    const clickMenu = async (label) => {
+      const point = await evaluate(`(() => {
+        const button=[...document.querySelectorAll('[role="menuitem"]')].find(e=>e.querySelector('strong')?.textContent===${JSON.stringify(label)});
+        if(!button || button.disabled) throw new Error('Unavailable menu action: '+${JSON.stringify(label)});
+        button.scrollIntoView({block:'nearest'});
+        const r=button.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      })()`);
+      await click(point.x, point.y);
+      await delay(200);
+    };
+    await clickSelector(externalSelector);
+    await waitFor(`!!document.querySelector('[role="menu"]')`);
+    receipt.externalMenu = await evaluate(
+      `(() => { const e=document.querySelector('[role="menu"]');const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,labels:[...e.querySelectorAll('strong')].map(x=>x.textContent)}; })()`,
+    );
+    check(
+      receipt,
+      "external-menu-bounded",
+      receipt.externalMenu.x >= 0 &&
+        receipt.externalMenu.y >= 0 &&
+        receipt.externalMenu.right <= options.width &&
+        receipt.externalMenu.bottom <= options.height,
+    );
+    receipt.externalIcons = await evaluate(`(() => {
+      return [...document.querySelectorAll('[role="menuitem"]')].map(button => {
+        const icon=button.querySelector('.ui-action-icon svg'), label=button.querySelector('strong > span:last-child');
+        const i=icon?.getBoundingClientRect(), l=label?.getBoundingClientRect();
+        return {name:icon?.getAttribute('data-icon'),hidden:icon?.getAttribute('aria-hidden'),width:i?.width,height:i?.height,gap:i&&l?l.left-i.right:null};
+      });
+    })()`);
+    check(
+      receipt,
+      "menu-icons-uniform-decorative-aligned",
+      receipt.externalIcons.length === 6 &&
+        receipt.externalIcons.every(
+          (icon) =>
+            icon.name &&
+            icon.hidden === "true" &&
+            icon.width === 16 &&
+            icon.height === 16 &&
+            icon.gap >= 7 &&
+            icon.gap <= 9,
+        ),
+    );
+    check(
+      receipt,
+      "menu-icons-have-app-identity-and-management-gear",
+      JSON.stringify(receipt.externalIcons.map((icon) => icon.name)) ===
+        JSON.stringify([
+          "folder",
+          "external-link",
+          "vscode",
+          "cursor",
+          "compose",
+          "settings",
+        ]),
+    );
+    await capture("external-open-menu");
+    await key("Escape", "Escape", 27);
+    await delay(250);
+    check(
+      receipt,
+      "external-menu-escape-restores-focus",
+      await evaluate(
+        `document.activeElement?.getAttribute('aria-label')===${JSON.stringify(externalLabel)}`,
+      ),
+    );
+    await key("ArrowDown", "ArrowDown", 40);
+    await delay(200);
+    await clickMenu(
+      options.lang === "en"
+        ? "Open in default application"
+        : "使用默认应用打开",
+    );
+    const manageLabel =
+      options.lang === "en" ? "Manage applications…" : "管理应用…";
+    const chooseCustomLabel =
+      options.lang === "en"
+        ? "Choose application for Custom application…"
+        : "选择 自定义应用 应用…";
+    const closeLabel = options.lang === "en" ? "Close" : "关闭";
+    const dialogSelector = '.external-applications-dialog[role="dialog"]';
+    const openManagement = async () => {
+      await clickSelector(externalSelector);
+      await clickMenu(manageLabel);
+      await waitFor(`!!document.querySelector('${dialogSelector}')`);
+      await delay(250);
+    };
+    const clickDialogButton = async (label) => {
+      const point = await evaluate(`(() => {
+        const dialog=document.querySelector('${dialogSelector}');
+        const button=[...dialog.querySelectorAll('button')].find(e=>(e.getAttribute('aria-label') || e.textContent.trim())===${JSON.stringify(label)});
+        if(!button || button.disabled) throw new Error('Unavailable dialog action: '+${JSON.stringify(label)});
+        button.scrollIntoView({block:'nearest'});
+        const r=button.getBoundingClientRect();
+        const x=r.x+r.width/2,y=r.y+r.height/2;
+        if(!button.contains(document.elementFromPoint(x,y))) throw new Error('Dialog action is obscured');
+        return {x,y};
+      })()`);
+      await click(point.x, point.y);
+      await delay(250);
+    };
+    const managementState = () =>
+      evaluate(`(() => {
+      const e=document.querySelector('${dialogSelector}');
+      if(!e) return null;
+      const r=e.getBoundingClientRect();
+      return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,
+        text:e.textContent, focusWithin:e.contains(document.activeElement),
+        cards:e.querySelectorAll('section.external-application').length,
+        focusableCount:e.querySelectorAll('button:not(:disabled),summary').length,
+        buttons:[...e.querySelectorAll('button')].map(b=>({label:b.getAttribute('aria-label') || b.textContent.trim(),disabled:b.disabled})),
+        pageWidth:document.documentElement.scrollWidth,
+        pageHeight:document.documentElement.scrollHeight};
+    })()`);
+    const checkManagementBounds = (state, phase) => {
+      check(
+        receipt,
+        `${phase}:management-dialog-bounded`,
+        !!state &&
+          state.x >= 0 &&
+          state.y >= 0 &&
+          state.right <= options.width + 1 &&
+          state.bottom <= options.height + 1 &&
+          state.pageWidth <= options.width &&
+          state.pageHeight <= options.height,
+        JSON.stringify(state),
+      );
+    };
+    check(
+      receipt,
+      "compact-menu-has-only-available-open-actions-and-management",
+      receipt.externalMenu.labels.length === 6 &&
+        receipt.externalMenu.labels.includes(manageLabel) &&
+        !receipt.externalMenu.labels.some((label) =>
+          /Choose|选择|Custom application|自定义应用/.test(label),
+        ),
+    );
+    await openManagement();
+    receipt.managementInitial = await managementState();
+    checkManagementBounds(receipt.managementInitial, "initial");
+    check(
+      receipt,
+      "management-icons-match-opening-menu",
+      await evaluate(
+        `JSON.stringify([...document.querySelectorAll('.external-application h3 svg')].map(e=>e.getAttribute('data-icon')))===JSON.stringify(['vscode','cursor','compose','computer'])`,
+      ),
+    );
+    check(
+      receipt,
+      "management-has-four-labelled-configuration-actions",
+      receipt.managementInitial.buttons.filter((b) =>
+        /^(Choose application for |选择 )/.test(b.label),
+      ).length === 4,
+    );
+    check(
+      receipt,
+      "management-retains-full-paths-for-disclosure",
+      [
+        "/synthetic/apps/VS Code",
+        "/synthetic/apps/Cursor",
+        "/synthetic/apps/Text Editor",
+      ].every((value) => receipt.managementInitial.text.includes(value)),
+    );
+    check(
+      receipt,
+      "management-has-exactly-four-cards",
+      receipt.managementInitial.cards === 4,
+    );
+    await capture("external-applications-management");
+    check(
+      receipt,
+      "management-initial-focus-is-inside",
+      receipt.managementInitial.focusWithin,
+    );
+    const focusTrace = [];
+    for (
+      let index = 0;
+      index < receipt.managementInitial.focusableCount + 2;
+      index++
+    ) {
+      await key("Tab", "Tab", 9);
+      focusTrace.push(
+        await evaluate(
+          `({inside:document.querySelector('${dialogSelector}')?.contains(document.activeElement),label:document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent})`,
+        ),
+      );
+    }
+    await key("Tab", "Tab", 9, 8);
+    focusTrace.push(
+      await evaluate(
+        `({inside:document.querySelector('${dialogSelector}')?.contains(document.activeElement),label:document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent})`,
+      ),
+    );
+    receipt.managementFocusTrace = focusTrace;
+    check(
+      receipt,
+      "management-tab-and-shift-tab-stay-inside",
+      focusTrace.every((item) => item.inside),
+    );
+    await capture("external-management-keyboard-focus");
+    await key("Escape", "Escape", 27);
+    await delay(300);
+    check(
+      receipt,
+      "management-escape-closes-and-restores-toolbar-focus",
+      await evaluate(
+        `!document.querySelector('${dialogSelector}') && document.activeElement?.getAttribute('aria-label')===${JSON.stringify(externalLabel)}`,
+      ),
+    );
+
+    // All outcomes below are synthetic API responses, not native picker evidence.
+    await openManagement();
+    await evaluate(
+      "window.__fileSidebarPreview.externalState.cancelConfigure=true",
+    );
+    await clickDialogButton(chooseCustomLabel);
+    receipt.managementCancelled = await managementState();
+    check(
+      receipt,
+      "simulated-picker-cancel-keeps-catalog-and-dialog",
+      !!receipt.managementCancelled &&
+        !receipt.managementCancelled.text.includes(
+          "/synthetic/apps/Chosen Editor",
+        ),
+    );
+    await capture("external-management-configure-cancelled");
+    await evaluate(
+      "window.__fileSidebarPreview.externalState.cancelConfigure=false; window.__fileSidebarPreview.externalState.rejectConfigure=true",
+    );
+    await clickDialogButton(chooseCustomLabel);
+    receipt.managementError = await managementState();
+    check(
+      receipt,
+      "simulated-picker-error-visible-without-changing-catalog",
+      !!receipt.managementError &&
+        receipt.managementError.text.includes(
+          "Synthetic application selection failed. Try again.",
+        ) &&
+        !receipt.managementError.text.includes("/synthetic/apps/Chosen Editor"),
+    );
+    await evaluate(
+      `document.querySelector('${dialogSelector} [role="alert"]')?.scrollIntoView({block:'nearest'})`,
+    );
+    await capture("external-management-configure-error");
+    await evaluate(
+      "window.__fileSidebarPreview.externalState.rejectConfigure=false",
+    );
+    await clickDialogButton(chooseCustomLabel);
+    receipt.managementConfigured = await managementState();
+    check(
+      receipt,
+      "simulated-picker-success-persists-immediately",
+      !!receipt.managementConfigured &&
+        receipt.managementConfigured.text.includes(
+          "/synthetic/apps/Chosen Editor",
+        ),
+    );
+    checkManagementBounds(receipt.managementConfigured, "configured");
+    const customCardSelector = `${dialogSelector} section.external-application[aria-label="${options.lang === "en" ? "Custom application" : "自定义应用"}"]`;
+    await evaluate(
+      `document.querySelector(${JSON.stringify(`${customCardSelector} summary`)})?.scrollIntoView({block:'center'})`,
+    );
+    await clickSelector(`${customCardSelector} summary`);
+    await key("Enter", "Enter", 13);
+    check(
+      receipt,
+      "configured-path-disclosure-keyboard-closes",
+      await evaluate(
+        `document.querySelector(${JSON.stringify(`${customCardSelector} details`)})?.open===false`,
+      ),
+    );
+    await key("Enter", "Enter", 13);
+    check(
+      receipt,
+      "configured-path-disclosure-is-keyboard-reachable-and-expanded",
+      await evaluate(
+        `document.querySelector(${JSON.stringify(`${customCardSelector} details`)})?.open && document.activeElement===document.querySelector(${JSON.stringify(`${customCardSelector} summary`)})`,
+      ),
+    );
+    await delay(180);
+    await capture("external-management-configured");
+    await clickDialogButton(closeLabel);
+    await delay(300);
+    check(
+      receipt,
+      "management-close-restores-toolbar-focus",
+      await evaluate(
+        `!document.querySelector('${dialogSelector}') && document.activeElement?.getAttribute('aria-label')===${JSON.stringify(externalLabel)}`,
+      ),
+    );
+    await openManagement();
+    receipt.managementReopened = await managementState();
+    check(
+      receipt,
+      "management-reopen-retains-memory-only-selection",
+      receipt.managementReopened.text.includes("/synthetic/apps/Chosen Editor"),
+    );
+    await capture("external-management-reopened");
+    await key("Escape", "Escape", 27);
+    await delay(300);
+    await clickSelector(externalSelector);
+    await capture("external-custom-configured");
+    await clickMenu(
+      options.lang === "en"
+        ? "Open with Custom application"
+        : "使用 自定义应用 打开",
+    );
+    receipt.externalCalls = await evaluate(
+      "window.__fileSidebarPreview.externalCalls",
+    );
+    check(
+      receipt,
+      "external-default-and-custom-use-exact-local-file",
+      receipt.externalCalls.filter((c) => c.operation === "synthetic-open")
+        .length === 2 &&
+        receipt.externalCalls
+          .filter((c) => c.operation === "synthetic-open")
+          .every(
+            (c) =>
+              c.host === "local" &&
+              c.threadId === "synthetic-file-sidebar-thread" &&
+              c.path === "src/long-source.ts",
+          ) &&
+        receipt.externalCalls.some(
+          (c) =>
+            c.operation === "synthetic-open" && c.application === "default",
+        ) &&
+        receipt.externalCalls.some(
+          (c) => c.operation === "synthetic-open" && c.application === "custom",
+        ),
+    );
+    check(
+      receipt,
+      "custom-application-picker-is-simulated",
+      receipt.externalCalls.some(
+        (c) => c.operation === "synthetic-picker" && c.id === "custom",
+      ),
+    );
+    await evaluate(
+      "window.__fileSidebarPreview.externalState.rejectRemote=true",
+    );
+    await clickSelector(externalSelector);
+    await clickMenu(
+      options.lang === "en"
+        ? "Open in default application"
+        : "使用默认应用打开",
+    );
+    check(
+      receipt,
+      "unsupported-remote-error-is-visible-without-fallback",
+      await evaluate(
+        `document.querySelector(${JSON.stringify(fileSelector)})?.textContent.includes('No local fallback was attempted.') && window.__fileSidebarPreview.externalCalls.filter(c=>c.operation==='synthetic-open').length===2`,
+      ),
+    );
+    await capture("external-unsupported-remote-error");
     receipt.status = receipt.checks.every((check) => check.status === "passed")
       ? receipt.visualFontSupport
         ? "passed"

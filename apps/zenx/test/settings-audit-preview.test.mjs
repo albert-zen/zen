@@ -230,3 +230,83 @@ test("Settings audit uses actual language controller and recovers synthetic init
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Metadata preview changes existing input only and preserves unknown/manual fields", async () => {
+  const directory = await mkdtemp(
+    path.join(tmpdir(), "zenx-metadata-preview-"),
+  );
+  let dom;
+  try {
+    await execute(
+      process.execPath,
+      [
+        new URL("../scripts/build-settings-audit-preview.mjs", import.meta.url)
+          .pathname,
+        directory,
+      ],
+      { maxBuffer: 2 * 1024 * 1024 },
+    );
+    const html = await readFile(
+      path.join(directory, "settings-audit.html"),
+      "utf8",
+    );
+    for (const lang of ["en", "zh-CN"]) {
+      dom = new JSDOM(html, {
+        url: `http://localhost/settings-audit.html?lang=${lang}&metadata=1`,
+        runScripts: "dangerously",
+        pretendToBeVisual: true,
+        virtualConsole: new VirtualConsole(),
+        beforeParse(window) {
+          window.structuredClone = structuredClone;
+          window.matchMedia = () => ({
+            matches: false,
+            addEventListener() {},
+            removeEventListener() {},
+          });
+          window.HTMLElement.prototype.scrollIntoView = () => undefined;
+        },
+      });
+      const document = dom.window.document;
+      await waitFor(
+        () => document.querySelectorAll(".provider-profile-card").length === 4,
+      );
+      document.querySelector(".provider-profile-actions button").click();
+      await waitFor(() => document.querySelector(".model-catalog-head button"));
+      const rowText = () =>
+        document.querySelector(".provider-model-row").textContent;
+      assert.match(rowText(), lang === "en" ? /input unknown/u : /输入未知/u);
+      const manualBefore = document.querySelectorAll(".provider-model-row")[1]
+        .textContent;
+      document.querySelector(".model-catalog-head button").click();
+      await waitFor(() =>
+        document.querySelector(".model-catalog-status button"),
+      );
+      document.querySelector(".model-catalog-status button").click();
+      await waitFor(
+        () => !document.querySelector(".model-catalog-status button"),
+      );
+      assert.match(rowText(), /text \+ image/u);
+      assert.match(
+        rowText(),
+        lang === "en" ? /reasoning unknown/u : /推理未知/u,
+      );
+      assert.match(
+        rowText(),
+        lang === "en" ? /context required/u : /需要上下文/u,
+      );
+      assert.equal(
+        document.querySelectorAll(".provider-model-row")[1].textContent,
+        manualBefore,
+      );
+      assert.equal(
+        dom.window.__settingsAudit.calls.some((x) => x.includes("save")),
+        false,
+      );
+      dom.window.close();
+      dom = undefined;
+    }
+  } finally {
+    dom?.window.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

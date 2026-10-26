@@ -68,6 +68,18 @@ jobs:
           retention-days: 14
       - name: Install CJK fonts for synthetic UI acceptance
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Capture compaction capsules (production components, synthetic records)
+        run: |
+          node apps/zenx/scripts/build-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
+          node apps/zenx/scripts/capture-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"
+      - name: Retain compaction capsule synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-compaction-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-compaction
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture reference bubble width diagnostic (production components, synthetic identity)
         run: |
           node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
@@ -249,7 +261,7 @@ jobs:
       - name: Verify macOS input construction without desktop input
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
-        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts apps/zenx/test/computer-bound-native.test.ts
       - name: Retain construction-only CoreGraphics metadata
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
