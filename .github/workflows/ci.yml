@@ -54,6 +54,28 @@ jobs:
           cache: npm
       - run: npm ci
         id: zenx-dependencies
+      - name: Test fail-closed CJK prerequisite contracts (synthetic data)
+        run: node --test apps/zenx/test/cjk-font-prerequisite.test.mjs
+      - name: Resolve CJK font from authenticated Ubuntu package indexes
+        id: cjk-package
+        timeout-minutes: 3
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Restore exact verified CJK package archive
+        id: cjk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Install and verify CJK fonts before all synthetic UI capture
+        id: zenx-fonts
+        timeout-minutes: 5
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Cache only the verified CJK package archive
+        if: ${{ steps.zenx-fonts.outcome == 'success' && steps.cjk-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.cjk-package.outputs.deb-path }}
+          key: ${{ steps.cjk-package.outputs.cache-key }}
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
@@ -66,8 +88,6 @@ jobs:
           path: ${{ runner.temp }}/zenx-titlebar-safe-area
           if-no-files-found: warn
           retention-days: 14
-      - name: Install CJK fonts for synthetic UI acceptance
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - name: Capture reference bubble width diagnostic (production components, synthetic identity)
         run: |
           node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
@@ -119,7 +139,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture What's New actual-component preview
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-whats-new-preview.mjs "${{ runner.temp }}/zenx-whats-new-preview"
@@ -133,7 +153,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture trigger message bubble evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           npx tsc -p apps/zenx/tsconfig.trigger-message-preview.json --noEmit
@@ -148,7 +168,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Build and capture file sidebar actual-component preview
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
@@ -162,7 +182,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture read-only Settings audit evidence
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           node apps/zenx/scripts/build-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
@@ -176,7 +196,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Capture synthetic trigger management UI
-        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
         run: |
           git fetch --no-tags origin 98caf2f44ec697bd705909eb970036ce615ca664

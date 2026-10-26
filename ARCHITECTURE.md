@@ -1487,3 +1487,5 @@ ZenX renders conservative local file-path tokens as disposable Markdown links to
 ### Packaged renderer style authorization
 
 ZenX main's existing file-loading session transforms only its exact trusted packaged renderer entry, generating a cryptographically random style nonce per document response; all CodeMirror editors consume that document nonce. The existing CSP remains unchanged except for this narrowly authorized style source, and script policy is never broadened. Adjacent local assets retain the built-in file fetch path without recursive interception; no nonce becomes Thread/Turn/history state or a stored preference.
+
+- **CI CJK font prerequisite** — Synthetic UI capture requires a normally installed font package resolved from the runner’s authenticated current Ubuntu indexes; only its exact OS/release/architecture/version/SHA-256 .deb is cached and reverified, with bounded downloads restricted to already configured official archives and no source/key or product-state changes.
