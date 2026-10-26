@@ -3809,21 +3809,52 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         invalidExecutionContextIds: new Set(),
         pendingIsolatedContexts: new Map(),
       });
-      await this.#enableAttachmentDomain(
-        attachmentClosure,
-        response.sessionId,
-        "Page.enable",
-        setupDeadline,
-        signal,
+      const cdpSessionId = response.sessionId;
+      // Both domains subscribe independently. Register the exact route and
+      // lifecycle state first, then send each once without serial round trips.
+      // Join BOTH outcomes before publishing readiness or compensating: a
+      // rejected sibling must never leave an unobserved setup or detach twice.
+      const setup = await Promise.allSettled(
+        (["Page.enable", "Runtime.enable"] as const).map((method) =>
+          this.#enableAttachmentDomain(
+            attachmentClosure,
+            cdpSessionId,
+            method,
+            setupDeadline,
+            signal,
+          ),
+        ),
       );
-      await this.#enableAttachmentDomain(
-        attachmentClosure,
-        response.sessionId,
-        "Runtime.enable",
-        setupDeadline,
-        signal,
-      );
-      return response.sessionId;
+      // A known failure in one domain cannot mask the other's unknown send.
+      const failure =
+        setup.find(
+          (result) =>
+            result.status === "rejected" &&
+            result.reason instanceof UserBrowserCdpOutcomeUnknownError,
+        ) ?? setup.find((result) => result.status === "rejected");
+      try {
+        if (failure?.status === "rejected") throw failure.reason;
+        this.#assertAttachmentSetupCurrent(
+          attachmentClosure,
+          cdpSessionId,
+          "attachment domains",
+        );
+        // The aggregate continuation can be delayed after both domain replies.
+        // Do not publish an expired setup and let first inspection obtain an
+        // ordinary budget. Both commands are known here; readiness was not sent.
+        if (performance.now() >= setupDeadline)
+          throw new Error(
+            "User browser attachment setup deadline elapsed before readiness",
+          );
+      } catch (error) {
+        try {
+          await this.#compensateAttachment(attachmentClosure, cdpSessionId);
+        } catch (compensationError) {
+          attachmentClosure.taint = `attachment setup closure failed (${describeError(error)}; ${describeError(compensationError)})`;
+        }
+        throw error;
+      }
+      return cdpSessionId;
     })();
     attachment.promise = attaching;
     this.#targetAttachments.set(targetId, attachment);
@@ -3858,7 +3889,23 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
           `User browser attachment setup timed out before ${method}`,
         );
       }
-      await this.#send(method, {}, sessionId, signal, remaining);
+      await this.#send(
+        method,
+        {},
+        sessionId,
+        signal,
+        remaining,
+        undefined,
+        undefined,
+        () => this.#assertAttachmentSetupCurrent(epoch, sessionId, method),
+        undefined,
+        setupDeadline,
+      );
+      if (performance.now() >= setupDeadline)
+        throw new UserBrowserCdpOutcomeUnknownError(
+          method,
+          "original attachment setup deadline elapsed",
+        );
       epoch[outcome] = "known-success";
       this.#assertAttachmentSetupCurrent(epoch, sessionId, method);
     } catch (error) {
@@ -3870,11 +3917,6 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         if (epoch[outcome] === "outcome-unknown") {
           epoch.unknownEvidence[outcome] = describeError(error);
         }
-      }
-      try {
-        await this.#compensateAttachment(epoch, sessionId);
-      } catch (compensationError) {
-        epoch.taint = `${method} closure failed (${describeError(error)}; ${describeError(compensationError)})`;
       }
       throw error;
     }
