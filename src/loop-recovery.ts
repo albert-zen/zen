@@ -1,3 +1,4 @@
+import { canonicalMediaPart } from "./media-content.js";
 import type {
   CanonicalItem,
   RecoveryMediaOccurrence,
@@ -37,6 +38,22 @@ export function recoveryDelay(error: unknown): number {
   return typeof delay === "number" && Number.isFinite(delay) && delay >= 0
     ? delay
     : 0;
+}
+
+/** Do not replay deterministic HTTP admission failures as model-output repairs.
+ * Existing media/output-limit repairs deliberately change the next request.
+ */
+export function isDeterministicProviderRejection(error: unknown): boolean {
+  const candidate = error as { status?: unknown; retryable?: unknown } | null;
+  return (
+    candidate?.retryable === false &&
+    typeof candidate.status === "number" &&
+    Number.isInteger(candidate.status) &&
+    candidate.status >= 400 &&
+    candidate.status < 500 &&
+    !mediaRequestRejected(error) &&
+    !isOutputLimit(error)
+  );
 }
 
 /** Only fixed, non-user-controlled identity vocabulary enters repair context. */
@@ -233,19 +250,24 @@ export function recoveryDiagnostic(error: unknown): string {
     ? "The provider stopped this single response at its output-token limit. Produce a shorter answer or finish in smaller steps; any truncated tool calls from this failed sample were not executed."
     : mediaRequestRejected(error)
       ? "The request's media or resource representation was rejected or unavailable; its contents have not been established."
-      : /context.*(?:length|limit|overflow)|input.*(?:long|length)/u.test(
-            message,
-          )
-        ? "The model context was rejected for length; no new model answer was produced."
-        : /tool.*(?:invalid|incomplete|unavailable)|(?:invalid|incomplete).*tool/u.test(
+      : typeof status === "number" &&
+          Number.isInteger(status) &&
+          status >= 400 &&
+          status <= 599
+        ? "The model request failed at the provider; this is not evidence of malformed model tool output."
+        : /context.*(?:length|limit|overflow)|input.*(?:long|length)/u.test(
               message,
             )
-          ? "The model produced an invalid or incomplete tool call; that sample's calls were not executed."
-          : /auth|credential|api.?key/u.test(message)
-            ? "Model authentication failed; existing credentials and permissions are unchanged."
-            : /timeout|timed out|network|transport|socket/u.test(message)
-              ? "The model request or transport did not complete."
-              : "An unexpected execution error interrupted the previous step.";
+          ? "The model context was rejected for length; no new model answer was produced."
+          : /tool.*(?:invalid|incomplete|unavailable)|(?:invalid|incomplete).*tool/u.test(
+                message,
+              )
+            ? "The model produced an invalid or incomplete tool call; that sample's calls were not executed."
+            : /auth|credential|api.?key/u.test(message)
+              ? "Model authentication failed; existing credentials and permissions are unchanged."
+              : /timeout|timed out|network|transport|socket/u.test(message)
+                ? "The model request or transport did not complete."
+                : "An unexpected execution error interrupted the previous step.";
   const detail = (
     error as {
       recoveryDetails?: { code?: unknown; type?: unknown; param?: unknown };
@@ -326,9 +348,14 @@ export function sampledMediaOccurrences(
       const key = `${part.type}:${part.attachment.sha256}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (rejectedParts !== undefined && !rejectedParts.includes(part))
+      const canonicalPart = canonicalMediaPart(part);
+      if (
+        rejectedParts !== undefined &&
+        !rejectedParts.includes(part) &&
+        !rejectedParts.includes(canonicalPart)
+      )
         continue;
-      const origin = origins.get(part);
+      const origin = origins.get(canonicalPart);
       if (origin !== undefined) found.set(JSON.stringify(origin), origin);
     }
   }

@@ -59,7 +59,7 @@ const result: ModelRequestDebugResult = {
   ],
 };
 
-test("per-message experiment never enables capture, displays saved vs attributed input, and fences closed reads", async () => {
+test("per-message inspection never enables capture, displays saved vs attributed input, and fences closed reads", async () => {
   const previous = { document: globalThis.document, window: globalThis.window };
   const dom = new JSDOM(
     "<!doctype html><html><body><div id='root'></div></body></html>",
@@ -93,7 +93,11 @@ test("per-message experiment never enables capture, displays saved vs attributed
         MessageContextDebugContext.Provider,
         {
           value: enabled
-            ? { threadId, items: new Map([[item.id, { ...item, threadId }]]) }
+            ? {
+                threadId,
+                items: new Map([[item.id, { ...item, threadId }]]),
+                captureAvailable: true,
+              }
             : null,
         },
         React.createElement(MessageContextDebugAction, { itemId: item.id }),
@@ -122,11 +126,25 @@ test("per-message experiment never enables capture, displays saved vs attributed
     assert.equal(document.querySelectorAll("button").length, 0);
     await act(async () => render(true));
     await click("Inspect message input");
-    assert.match(document.body.textContent!, /Exact saved message content/);
+    assert.match(
+      document.body.textContent!,
+      /Saved content, in text-part order/,
+    );
     assert.match(
       document.body.textContent!,
       /saved reference <reference>literal<\/reference>/,
     );
+    assert.equal(
+      commands.length,
+      0,
+      "canonical inspection does not query captures",
+    );
+    await act(async () => {
+      document.querySelector<HTMLDetailsElement>(
+        ".message-context-debug > details",
+      )!.open = true;
+    });
+    await settle();
     assert.deepEqual(commands[0], {
       action: "list",
       threadId: "thread",
@@ -174,6 +192,12 @@ test("per-message experiment never enables capture, displays saved vs attributed
     currentResult = { ...result, records: [] };
     await act(async () => render(true, "another-thread"));
     await settle();
+    await act(async () => {
+      document.querySelector<HTMLDetailsElement>(
+        ".message-context-debug > details",
+      )!.open = true;
+    });
+    await settle();
     await act(async () =>
       previousThreadRead({
         ...result,
@@ -195,6 +219,12 @@ test("per-message experiment never enables capture, displays saved vs attributed
     });
     currentResult = structuredClone(result);
     await act(async () => render(true));
+    await settle();
+    await act(async () => {
+      document.querySelector<HTMLDetailsElement>(
+        ".message-context-debug > details",
+      )!.open = true;
+    });
     await settle();
     await click("test-model");
     await click("Close message input");
@@ -221,4 +251,79 @@ test("per-message experiment never enables capture, displays saved vs attributed
     Object.assign(globalThis, previous, { IS_REACT_ACT_ENVIRONMENT: false });
     dom.window.close();
   }
+});
+
+test("canonical content is complete without a Host bridge and labels trusted metadata only", async () => {
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { CanonicalMessageContent } =
+    await import("../src/renderer/src/MessageContextDebug.js");
+  await i18n.changeLanguage("en");
+  const content = [
+    { type: "text" as const, text: '[received_at="synthetic-time"]' },
+    {
+      type: "text" as const,
+      text: "literal human text [received_at=not-trusted]",
+    },
+  ];
+  const html = renderToStaticMarkup(
+    React.createElement(CanonicalMessageContent, {
+      item: {
+        ...item,
+        text: undefined,
+        content,
+        contentAuthority: { version: 1, hostTextPartIndices: [0] },
+      } as never,
+    }),
+  );
+  assert.match(html, /synthetic-time/);
+  assert.match(html, /literal human text/);
+  assert.equal((html.match(/Host-authored metadata/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /Legacy Item/);
+  const legacy = renderToStaticMarkup(
+    React.createElement(CanonicalMessageContent, {
+      item: { ...item, text: undefined, content } as never,
+    }),
+  );
+  assert.match(legacy, /Legacy Item/);
+  assert.match(legacy, /synthetic-time/);
+  assert.doesNotMatch(legacy, /Host-authored metadata/);
+});
+
+test("materialized content preserves origin and failed operation diagnostics are not model content", async () => {
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { CanonicalMessageContent } =
+    await import("../src/renderer/src/MessageContextDebug.js");
+  const context = {
+    id: "context",
+    threadId: "thread",
+    createdAt: "2026-01-01T00:00:00Z",
+    type: "context_message" as const,
+    compilerPolicyVersion: 1 as const,
+    sourceItemIds: ["host"],
+    role: "user" as const,
+    origin: "host" as const,
+    purpose: "host-message",
+    variant: "fixture",
+    content: [{ type: "text" as const, text: "exact committed wrapper" }],
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(CanonicalMessageContent, { item: context }),
+  );
+  assert.match(html, /host · user · host-message/);
+  assert.match(html, /exact committed wrapper/);
+  const failed = renderToStaticMarkup(
+    React.createElement(CanonicalMessageContent, {
+      item: {
+        id: "done",
+        threadId: "thread",
+        createdAt: context.createdAt,
+        type: "model_operation_completed",
+        operationItemId: "operation",
+        status: "failed",
+        error: "synthetic transport failure",
+      },
+    }),
+  );
+  assert.match(failed, /Host diagnostic/);
+  assert.doesNotMatch(failed, /Legacy Item|content\[0\]/);
 });

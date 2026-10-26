@@ -535,3 +535,51 @@ test("critical consent stays visible before enabling and simultaneous integrity 
     assert.match(metadata.textContent!, /omitted content is unavailable/);
     assert.match(metadata.textContent!, /not byte-identical/);
   }));
+
+test("sample-linked viewer never substitutes another sample from the same Thread", async () =>
+  withDom(async (root) => {
+    const store = new ModelRequestDebugStore();
+    store.control({ action: "setEnabled", enabled: true });
+    await capture(store);
+    const commands: ModelRequestDebugCommand[] = [];
+    Object.assign(window, {
+      zenx: {
+        modelRequestDebug: {
+          request: async (command: ModelRequestDebugCommand) => {
+            commands.push(command);
+            return store.control(command);
+          },
+        },
+      },
+    });
+    await i18n.changeLanguage("en");
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, {
+          threadId: "synthetic-thread",
+          sampleId: "missing-sample",
+        }),
+      ),
+    );
+    await settle();
+    assert.equal(document.querySelectorAll(".model-debug-request").length, 0);
+    assert.doesNotMatch(
+      document.querySelector(".model-debug-list")?.textContent ?? "",
+      /synthetic-model/,
+    );
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, {
+          key: "present",
+          threadId: "synthetic-thread",
+          sampleId: "synthetic-sample",
+        }),
+      ),
+    );
+    await settle();
+    assert.match(document.body.textContent!, /synthetic-model/);
+    assert.equal(
+      commands.some((command) => command.action === "setEnabled"),
+      false,
+    );
+  }));

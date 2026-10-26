@@ -121,7 +121,9 @@ export class ModelRequestDebugStore {
               summary.threadId === command.threadId) &&
             (command.itemId === undefined ||
               summary.messageSources?.some(
-                (source) => source.itemId === command.itemId,
+                (source) =>
+                  source.itemId === command.itemId ||
+                  source.sourceItemIds?.includes(command.itemId!),
               )) &&
             (!query ||
               body.toLocaleLowerCase().includes(query) ||
@@ -146,7 +148,9 @@ export class ModelRequestDebugStore {
         const payload = JSON.parse(body) as Record<string, unknown>;
         const mappings =
           record.summary.messageSources?.filter(
-            (source) => source.itemId === command.itemId,
+            (source) =>
+              source.itemId === command.itemId ||
+              source.sourceItemIds?.includes(command.itemId!),
           ) ?? [];
         if (view === "message" && mappings.length !== 1)
           throw new Error("Exact message attribution unavailable");
@@ -195,6 +199,9 @@ export class ModelRequestDebugStore {
     const store = this;
     return {
       provider: adapter.provider,
+      ...(adapter.contextInstructions === undefined
+        ? {}
+        : { contextInstructions: adapter.contextInstructions }),
       ...(adapter.requestPayloadFormat === undefined
         ? {}
         : { requestPayloadFormat: adapter.requestPayloadFormat }),

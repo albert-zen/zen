@@ -38,6 +38,59 @@
     opacity: 1;
   }
 }
+
+.context-usage-breakdown {
+  margin: 7px 0 3px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+  font-size: 11px;
+}
+.context-usage-breakdown > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.context-usage-breakdown dt {
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.context-usage-breakdown dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-popover [data-category="instructions"] {
+  --context-category-color: var(--color-context-instructions);
+}
+.context-usage-popover [data-category="toolDefinitions"] {
+  --context-category-color: var(--color-context-tools);
+}
+.context-usage-popover [data-category="pluginContext"] {
+  --context-category-color: var(--color-context-plugins);
+}
+.context-usage-popover [data-category="conversation"] {
+  --context-category-color: var(--color-context-conversation);
+}
+.context-usage-popover .context-usage-meter {
+  display: flex;
+  height: 6px;
+  margin: 3px 0;
+}
+.context-usage-popover .context-usage-meter > span[data-category] {
+  background: var(--context-category-color);
+  border-radius: 0;
+  flex: none;
+}
+.context-usage-breakdown dt > i {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--context-category-color);
+}
 @media (prefers-reduced-motion: reduce) {
   .context-usage-indicator,
   .context-usage-trigger,

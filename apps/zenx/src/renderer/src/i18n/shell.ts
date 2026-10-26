@@ -1,14 +1,35 @@
 export const en = {
+  modelDebugOperation: "Auxiliary operation",
+  debugOperationProbe: "Image capability probe",
+  debugOperations: "System operation histories",
+  debugOperationsNote:
+    "Read-only probe histories, separate from chats. Titles remain in their source Thread history. The model_operation Item records the actual provider/model selection; container defaults are not execution evidence.",
+  debugOperationsEmpty: "No recorded probe histories.",
+  debugOperationsUnavailable:
+    "Operation history unavailable. Refresh to retry.",
+
+  messageDebugRelated: "Related materialized content in this history",
+  messageDebugOrigin: "Origin / role / purpose",
+  messageDebugSources: "Canonical source Items",
+  messageDebugHostDiagnostic: "Host diagnostic",
+  messageDebugHostPart: "Host-authored metadata",
+  messageDebugSampleRequest: "Optional: this sample’s captured requests",
+  messageDebugItemType: "Source Item type",
+  messageDebugRecordedAt: "Item recorded at (metadata)",
+  messageDebugPartSource: "Saved part provenance",
+  messageDebugLegacy:
+    "Legacy Item: displaying saved content without a content-authority declaration. Missing parts and past provider input cannot be reconstructed.",
+
   messageDebugOpen: "Inspect message input",
   messageDebugTitle: "Message input",
   messageDebugClose: "Close message input",
-  messageDebugExperiment: "EXPERIMENT · LOCAL MEMORY",
+  messageDebugExperiment: "CANONICAL ITEM HISTORY",
   messageDebugScope:
-    "Read-only. Opening this panel does not enable capture or resend the message. Only this message is shown, not system instructions or tools.",
-  messageDebugSaved: "Saved admitted input",
+    "Read-only canonical history. Content is available without request capture. Optional transport observations are separate and never enable capture or resend input.",
+  messageDebugSaved: "Canonical content",
   messageDebugSavedNote:
-    "Exact saved message content, including reference markup. This is not proof of what a provider received.",
-  messageDebugCaptured: "Captured provider message",
+    "Saved content, in text-part order, without reconstructing or adding metadata. The original Item remains available below.",
+  messageDebugCaptured: "Optional: observed provider message",
   messageDebugCaptureNote:
     "Explicit serializer attribution, not text matching. Each entry is one observed sample/transport attempt; observation before transport does not prove server receipt.",
   messageDebugUnavailable:
@@ -733,7 +754,7 @@ export const en = {
   thought: "Thought",
   thoughts: "Thoughts",
   thread: "Thread",
-  threadCacheUnknown: "Thread cache unknown",
+  threadCacheUnknown: "Thread cache hit rate unknown",
   threadName: "Thread name",
   threadTitle: "Thread title",
   timedOut: "Timed out",
@@ -947,9 +968,14 @@ export const en = {
   usageWithCache: "{{cache}} · {{input}} in · {{output}} out",
   contextUnknownWindow: "Context unknown · {{window}} configured window",
   contextUnknownInput: "Context unknown · {{input}} {{source}}",
+  contextCompactTitle: "Context",
+  "contextCategory.instructions": "System",
+  "contextCategory.toolDefinitions": "Tools",
+  "contextCategory.pluginContext": "Plugins",
+  "contextCategory.conversation": "Chat",
   contextUsageFull:
     "Context {{percent}}% · {{input}} {{source}} / {{window}} configured window",
-  threadCachePercent: "Thread cache {{percent}}%",
+  threadCachePercent: "Thread cache hit rate {{percent}}%",
   tokenCount: "{{count}} tokens",
   contextPercentUsage: "Context {{percent}}% · {{usage}}",
   openContextDetails: "Open context details. {{details}}",
@@ -973,16 +999,36 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  modelDebugOperation: "辅助操作",
+  debugOperationProbe: "图片能力探测",
+  debugOperations: "系统操作历史",
+  debugOperationsNote:
+    "只读查看独立的探测 history，不混入聊天。标题操作仍在来源线程 history。实际 Provider/模型选择以 model_operation Item 为准，容器默认配置不是执行证据。",
+  debugOperationsEmpty: "没有已记录的探测历史。",
+  debugOperationsUnavailable: "操作历史暂不可读，请刷新重试。",
+
+  messageDebugRelated: "同一 history 中关联的已提交内容",
+  messageDebugOrigin: "来源 / 角色 / 用途",
+  messageDebugSources: "关联的原始 Item",
+  messageDebugHostDiagnostic: "Host 诊断",
+  messageDebugHostPart: "Host 生成的元数据",
+  messageDebugSampleRequest: "可选校验：本次采样的请求捕获",
+  messageDebugItemType: "来源 Item 类型",
+  messageDebugRecordedAt: "Item 记录时间（元数据）",
+  messageDebugPartSource: "已保存的 part 来源",
+  messageDebugLegacy:
+    "旧格式 Item：忠实显示已保存的内容，但没有完整内容权威声明。不补造缺失的 part，也不据此还原历史供应商输入。",
+
   messageDebugOpen: "查看消息输入",
   messageDebugTitle: "消息输入",
   messageDebugClose: "关闭消息输入",
-  messageDebugExperiment: "实验功能 · 本机内存",
+  messageDebugExperiment: "权威 Item history",
   messageDebugScope:
-    "只读。打开面板不会开启捕获或重新发送消息。仅显示本条消息，不显示系统指令或工具定义。",
-  messageDebugSaved: "已保存的接收内容",
+    "只读展示同一份 Item history，无需开启请求捕获。传输观察是独立的可选校验入口，不会开启捕获或重发消息。",
+  messageDebugSaved: "权威消息 content",
   messageDebugSavedNote:
-    "已保存的原始消息内容，包含引用标记。不代表供应商实际收到的内容。",
-  messageDebugCaptured: "捕获的供应商消息字段",
+    "按 text part 顺序显示已保存的完整内容，不推导或补写元数据。下方可展开原始 Item。",
+  messageDebugCaptured: "可选校验：观察到的供应商消息",
   messageDebugCaptureNote:
     "依据序列化时的明确来源映射，不按文字猜测。每项对应一次采样或传输尝试；发送前的观察不能证明服务器已收到。",
   messageDebugUnavailable: "捕获不可用、已过期或来源映射不唯一。请刷新检查。",
@@ -1668,7 +1714,7 @@ export const zhCN = {
   thought: "思考",
   thoughts: "思考过程",
   thread: "会话",
-  threadCacheUnknown: "会话缓存未知",
+  threadCacheUnknown: "线程缓存命中率未知",
   threadName: "会话名称",
   threadTitle: "会话标题",
   timedOut: "已超时",
@@ -1875,9 +1921,14 @@ export const zhCN = {
   usageWithCache: "{{cache}} · 输入 {{input}} · 输出 {{output}}",
   contextUnknownWindow: "上下文未知 · 已配置窗口 {{window}}",
   contextUnknownInput: "上下文未知 · {{input}} {{source}}",
+  contextCompactTitle: "上下文",
+  "contextCategory.instructions": "系统",
+  "contextCategory.toolDefinitions": "工具",
+  "contextCategory.pluginContext": "插件",
+  "contextCategory.conversation": "对话",
   contextUsageFull:
     "上下文 {{percent}}% · {{input}} {{source}} / 已配置窗口 {{window}}",
-  threadCachePercent: "会话缓存 {{percent}}%",
+  threadCachePercent: "线程缓存命中率 {{percent}}%",
   tokenCount: "{{count}} token",
   contextPercentUsage: "上下文 {{percent}}% · {{usage}}",
   openContextDetails: "打开上下文详情。{{details}}",

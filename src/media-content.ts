@@ -1,4 +1,4 @@
-import type { UserInput } from "./item.js";
+import type { UserInput, UserInputPart } from "./item.js";
 
 /** Collapse only identical media, keeping explicit text and first-occurrence order. */
 export function deduplicateMediaContent(content: UserInput): UserInput {
@@ -10,4 +10,17 @@ export function deduplicateMediaContent(content: UserInput): UserInput {
     seen.add(key);
     return true;
   });
+}
+
+/** Ephemeral identity only: never infer a canonical occurrence from equal bytes. */
+const mediaOrigins = new WeakMap<object, UserInputPart>();
+export function canonicalMediaPart(part: UserInputPart): UserInputPart {
+  return mediaOrigins.get(part) ?? part;
+}
+export function linkCanonicalMediaPart(
+  source: UserInputPart,
+  projected: UserInputPart,
+): void {
+  if (source.type !== "text" && projected.type !== "text")
+    mediaOrigins.set(projected, canonicalMediaPart(source));
 }

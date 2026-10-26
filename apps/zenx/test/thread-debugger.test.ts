@@ -240,3 +240,173 @@ test("normal conversation fills its flex surface when history and Composer are a
     /\.thread-conversation-surface > \.thread-view\s*\{[^}]*flex:\s*1;/,
   );
 });
+
+test("system operation histories are explicit, read-only, and show actual operation selection", async () =>
+  dom(async (root) => {
+    const calls: Array<string | undefined> = [];
+    const operationItems = [
+      {
+        type: "thread_metadata",
+        id: "metadata",
+        threadId: "probe",
+        createdAt: "2026-01-01T00:00:00Z",
+        cwd: "/probe",
+        purpose: "image-capability-probe",
+        providerProfileId: "container-default",
+        modelId: "container-model",
+        sandbox: "workspace-write",
+        approvalPolicy: "never",
+      },
+      {
+        type: "model_operation",
+        id: "operation",
+        threadId: "probe",
+        createdAt: "2026-01-01T00:00:01Z",
+        kind: "image-capability-probe",
+        sourceItemIds: ["metadata"],
+        selection: {
+          providerProfileId: "actual-draft-profile",
+          modelId: "actual-probe-model",
+          reasoningEffort: null,
+        },
+      },
+      {
+        type: "context_message",
+        id: "context",
+        threadId: "probe",
+        createdAt: "2026-01-01T00:00:01Z",
+        role: "user",
+        origin: "host",
+        purpose: "image-capability-probe",
+        sourceItemIds: ["operation"],
+        variant: "fixture",
+        compilerPolicyVersion: 1,
+        content: [{ type: "text", text: "exact canonical probe input" }],
+      },
+      {
+        type: "model_operation_completed",
+        id: "done",
+        threadId: "probe",
+        createdAt: "2026-01-01T00:00:02Z",
+        operationItemId: "operation",
+        status: "failed",
+        error: "synthetic failure",
+      },
+    ] as import("../../../src/item.js").CanonicalItem[];
+    Object.assign(window, {
+      zenx: {
+        modelOperationHistory: async (id?: string) => {
+          calls.push(id);
+          return id
+            ? { threadId: id, items: operationItems }
+            : {
+                summaries: [
+                  {
+                    threadId: "probe",
+                    name: "Synthetic probe",
+                    createdAt: "2026-01-01T00:00:00Z",
+                  },
+                ],
+              };
+        },
+      },
+    });
+    await act(async () =>
+      root.render(
+        createElement(ThreadDebugger, { thread, items, localModelDebug: true }),
+      ),
+    );
+    assert.equal(calls.length, 0);
+    const click = async (text: string) => {
+      const button = [
+        ...document.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((node) => node.textContent?.includes(text));
+      assert(button, text);
+      await act(async () => button.click());
+    };
+    await click("System operation histories");
+    assert.deepEqual(calls, [undefined]);
+    await click("Synthetic probe");
+    assert.deepEqual(calls, [undefined, "probe"]);
+    assert.match(
+      document.querySelector('[data-item-id="operation"]')!.textContent!,
+      /actual-draft-profile.*actual-probe-model/s,
+    );
+    assert.match(
+      document.querySelector('[data-item-id="context"]')!.textContent!,
+      /exact canonical probe input/,
+    );
+    assert.match(
+      document.querySelector('[data-item-id="done"]')!.textContent!,
+      /Host diagnostic/,
+    );
+    assert.equal(document.querySelector('[role="switch"]'), null);
+    assert.equal(
+      document.querySelectorAll(".operation-history-panel").length,
+      1,
+    );
+  }));
+
+test("nested history owns message inspection even when the outer Thread reuses the same Item id", async () =>
+  dom(async (root) => {
+    const { MessageContextDebugContext } =
+      await import("../src/renderer/src/MessageContextDebug.js");
+    const outer = {
+      type: "user_message" as const,
+      id: "shared-item",
+      threadId: "outer-thread",
+      turnId: "outer-turn",
+      createdAt: "2026-01-01T00:00:00Z",
+      text: "WRONG OUTER CONTENT",
+    };
+    const inner = {
+      ...outer,
+      threadId: "inner-thread",
+      turnId: "inner-turn",
+      text: "CORRECT INNER CONTENT",
+    };
+    Object.assign(window, { zenx: {} });
+    await act(async () =>
+      root.render(
+        createElement(
+          MessageContextDebugContext.Provider,
+          {
+            value: {
+              threadId: outer.threadId,
+              items: new Map([[outer.id, outer]]),
+              captureAvailable: true,
+            },
+          },
+          createElement(ThreadDebugger, {
+            thread: { ...thread, id: inner.threadId },
+            items: [inner],
+            localModelDebug: false,
+          }),
+        ),
+      ),
+    );
+    const action = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Inspect message input"]',
+    );
+    assert(action);
+    await act(async () => action.click());
+    const dialog = document.querySelector(".message-context-debug");
+    assert(dialog);
+    assert.match(dialog.textContent!, /CORRECT INNER CONTENT/);
+    assert.doesNotMatch(
+      dialog.textContent!,
+      /WRONG OUTER CONTENT|Optional: observed provider message/,
+    );
+    const raw = dialog.querySelector<HTMLDetailsElement>(
+      ".message-context-debug-raw",
+    );
+    assert(raw);
+    await act(async () => {
+      raw.open = true;
+      raw.dispatchEvent(new window.Event("toggle"));
+    });
+    assert.equal(
+      JSON.parse(raw.querySelector("pre")!.textContent!).threadId,
+      "inner-thread",
+    );
+  }));

@@ -19,21 +19,35 @@ import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
 import {
   JsonThreadSummaryProjection,
   isNativeThreadSummary,
+  type ThreadSummaryProjection,
+  type NativeThreadSummary,
 } from "../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 import { isTurnEndItem, turnEndPosition } from "../src/turn-end.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 
+const serversByDirectory = new Map<string, ZenAppServer[]>();
+async function drainSummaries(directory: string): Promise<void> {
+  for (const server of serversByDirectory.get(directory) ?? [])
+    assert.equal(await server.flushThreadSummaryProjection(), true);
+}
+async function removeDirectory(directory: string): Promise<void> {
+  await drainSummaries(directory);
+  serversByDirectory.delete(directory);
+  await rm(directory, { recursive: true, force: true });
+}
+
 function createServer(
   directory: string,
   journal?: ThreadJournal,
   model: ModelAdapter = new FakeModel(),
+  projection?: ThreadSummaryProjection,
 ): ZenAppServer {
   const modelCatalog = new StaticModelCatalog([
     { id: "fake", isDefault: true, contextWindow: 32_768 },
     { id: "other", contextWindow: 32_768 },
   ]);
-  return new ZenAppServer({
+  const server = new ZenAppServer({
     journal: journal ?? new JsonlThreadJournal(path.join(directory, "threads")),
     runtime: new AgentRuntime({
       toolEnvironment: new ToolEnvironment({
@@ -50,9 +64,11 @@ function createServer(
     threadMetadata: new JsonlThreadMetadataStore(
       path.join(directory, "thread-metadata.jsonl"),
     ),
-    threadSummaryProjection: new JsonThreadSummaryProjection(
-      path.join(directory, "thread-summaries.json"),
-    ),
+    threadSummaryProjection:
+      projection ??
+      new JsonThreadSummaryProjection(
+        path.join(directory, "thread-summaries.json"),
+      ),
     defaults: {
       cwd: directory,
       providerProfileId: model.provider,
@@ -62,6 +78,11 @@ function createServer(
       approvalPolicy: "never",
     },
   });
+  serversByDirectory.set(directory, [
+    ...(serversByDirectory.get(directory) ?? []),
+    server,
+  ]);
+  return server;
 }
 
 test("rebuilds native summaries and follows canonical and product metadata changes", async () => {
@@ -97,12 +118,14 @@ test("rebuilds native summaries and follows canonical and product metadata chang
       status: "idle",
     });
 
+    await drainSummaries(directory);
     await unlink(path.join(directory, "thread-summaries.json"));
     const rebuilt = await createServer(directory).listThreadSummaries({
       archived: true,
     });
     assert.deepEqual(rebuilt, archived);
 
+    await drainSummaries(directory);
     const projectionFile = path.join(directory, "thread-summaries.json");
     const staleProjection = JSON.parse(
       await readFile(projectionFile, "utf8"),
@@ -114,13 +137,14 @@ test("rebuilds native summaries and follows canonical and product metadata chang
     });
     assert.deepEqual(authoritative, archived);
 
+    await drainSummaries(directory);
     await writeFile(projectionFile, "not valid json", "utf8");
     const recovered = await createServer(directory).listThreadSummaries({
       archived: true,
     });
     assert.deepEqual(recovered, archived);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -192,7 +216,7 @@ test("a real tool turn publishes canonical end evidence only after it stops", as
     assert.deepEqual(reloaded.lastTurnEnd, completed.lastTurnEnd);
   } finally {
     releaseApproval();
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -402,7 +426,7 @@ for (const outcome of [
         recovery.close();
       }
     } finally {
-      await rm(directory, { recursive: true, force: true });
+      await removeDirectory(directory);
     }
   });
 }
@@ -455,13 +479,14 @@ test("Turn sort timestamp changes only at a new Turn and survives projection reb
       await createServer(directory).listThreadSummaries(),
       await server.listThreadSummaries(),
     );
+    await drainSummaries(directory);
     await unlink(path.join(directory, "thread-summaries.json"));
     assert.deepEqual(
       await createServer(directory).listThreadSummaries(),
       await server.listThreadSummaries(),
     );
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -493,7 +518,7 @@ test("queued input only advances sort key when its Turn actually starts", async 
     }
     assert.equal(completed, true);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -534,7 +559,7 @@ test("fork uses its own creation instead of inherited Turn recency", async () =>
       )?.createdAt,
     );
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -621,7 +646,7 @@ test("running-source forks and side chats do not notify for synthetic snapshot c
   } finally {
     release();
     await done;
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -643,7 +668,7 @@ test("Codex summary adapter maps native list state without defining it", async (
     assert.deepEqual(projected.status, { type: "idle" });
     assert.deepEqual(projected.turns, []);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -688,7 +713,7 @@ test("native summary status follows the current in-process Turn", async () => {
     assert.equal((await server.listThreadSummaries())[0]?.status, "idle");
   } finally {
     releaseApproval();
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -740,7 +765,7 @@ test("replacement successor lacking its initial message remains incomplete", asy
       1,
     );
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -775,7 +800,7 @@ test("reader never retries a tool whose side effect happened but result is unkno
       0,
     );
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -824,7 +849,7 @@ test("another live Host reading the same journal never signs its owner's Turn", 
     );
   } finally {
     release();
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -878,7 +903,7 @@ test("parallel cold reads never write a terminal or consume queued input", async
       0,
     );
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
   }
 });
 
@@ -923,12 +948,122 @@ test("message summaries follow canonical user/Agent messages, not metadata or tr
     assert(renamed && renamed.status !== "systemError");
     assert.deepEqual(renamed.lastMessage, summary.lastMessage);
     assert.deepEqual(renamed.lastAgentMessage, summary.lastAgentMessage);
+    await drainSummaries(directory);
     await unlink(path.join(directory, "thread-summaries.json"));
     const [rebuilt] = await createServer(directory).listThreadSummaries();
     assert(rebuilt && rebuilt.status !== "systemError");
     assert.deepEqual(rebuilt.lastMessage, summary.lastMessage);
     assert.deepEqual(rebuilt.lastAgentMessage, summary.lastAgentMessage);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectory(directory);
+  }
+});
+
+test("slow disposable persistence never blocks other canonical writes and coalesces pending snapshots", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-summary-held-"));
+  let release!: () => void;
+  let enter!: () => void;
+  let held = false;
+  let writes = 0;
+  let last: readonly NativeThreadSummary[] = [];
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const projection: ThreadSummaryProjection = {
+    async load() {
+      return undefined;
+    },
+    async replace(summaries) {
+      writes++;
+      if (held) {
+        enter();
+        await gate;
+      }
+      last = structuredClone(summaries);
+    },
+  };
+  try {
+    const server = createServer(
+      directory,
+      undefined,
+      new FakeModel(),
+      projection,
+    );
+    const a = await server.startThread();
+    const b = await server.startThread();
+    await drainSummaries(directory);
+    const initialWrites = writes;
+    held = true;
+    await server.setThreadName(a.id, "Held cache");
+    await entered;
+    for (let i = 0; i < 10; i++)
+      await server.updateThreadSettings(b.id, {
+        model: i % 2 ? "other" : "fake",
+      });
+    const current = (await server.listThreadSummaries()).find(
+      (s) => s.threadId === b.id,
+    );
+    assert(current && current.status !== "systemError");
+    assert.equal(current.currentMetadata.model, "other");
+    assert.equal(
+      (await server.readThread(b.id)).items.at(-1)?.type,
+      "thread_configuration_changed",
+    );
+    assert.equal(writes - initialWrites, 1);
+    assert.equal(await server.flushThreadSummaryProjection(0), false);
+    held = false;
+    release();
+    assert.equal(await server.flushThreadSummaryProjection(), true);
+    assert.equal(writes - initialWrites, 2);
+    assert.deepEqual(
+      last,
+      [...(await server.listThreadSummaries())].sort((a, b) =>
+        a.threadId.localeCompare(b.threadId),
+      ),
+    );
+  } finally {
+    held = false;
+    release();
+    await removeDirectory(directory);
+  }
+});
+
+test("rejected projection writes leave canonical mutations and current summaries available", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-summary-reject-"),
+  );
+  let attempts = 0;
+  const projection: ThreadSummaryProjection = {
+    async load() {
+      return undefined;
+    },
+    async replace() {
+      attempts++;
+      throw new Error("synthetic cache failure");
+    },
+  };
+  try {
+    const server = createServer(
+      directory,
+      undefined,
+      new FakeModel(),
+      projection,
+    );
+    const thread = await server.startThread();
+    await server.updateThreadSettings(thread.id, { model: "other" });
+    await server.setThreadName(thread.id, "Still current");
+    assert.equal(await server.flushThreadSummaryProjection(), true);
+    const [summary] = await server.listThreadSummaries();
+    assert(summary && summary.status !== "systemError");
+    assert.equal(summary.name, "Still current");
+    assert.equal(summary.currentMetadata.model, "other");
+    assert(attempts > 0);
+    const rebuilt = await createServer(directory).listThreadSummaries();
+    assert.deepEqual(rebuilt, [summary]);
+  } finally {
+    await removeDirectory(directory);
   }
 });

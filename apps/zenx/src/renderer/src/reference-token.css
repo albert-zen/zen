@@ -20,13 +20,21 @@
   margin-bottom: 7px;
   max-width: 100%;
 }
+/* Keep the fixed intrinsic cap separate from the available-width constraint.
+   A percentage max on the token itself lets its hidden label size the bubble. */
+.reference-token-wrap {
+  display: inline-flex;
+  vertical-align: middle;
+  min-width: 0;
+  max-width: 100%;
+}
 .reference-token {
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
   width: fit-content;
   min-width: 0;
-  max-width: min(300px, 100%);
+  max-width: 300px;
   height: 28px;
   box-sizing: border-box;
   border: 1px solid var(--color-border-subtle);

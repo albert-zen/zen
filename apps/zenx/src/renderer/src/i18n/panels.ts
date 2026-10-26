@@ -1,4 +1,25 @@
 export const en = {
+  externalFileOpen: "Open file externally",
+  externalTextEditor: "Text editor",
+  externalCustomApp: "Custom application",
+  externalRevealFinder: "Reveal in Finder",
+  externalRevealExplorer: "Reveal in File Explorer",
+  externalRevealManager: "Reveal in file manager",
+  externalDefaultApp: "Open in default application",
+  externalSaveFirst: "Save or resolve changes before opening the disk version.",
+  externalOpenWith: "Open with {{app}}",
+  externalNotConfigured: "Not detected. Choose an application below.",
+  externalChooseApp: "Choose application for {{app}}…",
+  externalResetCustom: "Remove custom application",
+  externalManageApps: "Manage applications…",
+  externalManageTitle: "Applications for opening files",
+  externalManageClose: "Close",
+  externalManagePersistence:
+    "Each application selection or removal saves immediately on this computer. Cancelling the file picker leaves the current choice unchanged.",
+  externalManageBusy: "Waiting for application selection…",
+  externalApplicationPath: "Application path",
+
+  openMessageFile: "Open file",
   browserOperationFailed:
     "The browser operation failed or its outcome is uncertain. Check the tool result before continuing.",
   externalReadOnly: "External · read-only",
@@ -347,9 +368,9 @@ export const en = {
   anEarlierTriggerSaveReturnedAnUncertain:
     "An earlier Trigger save returned an uncertain outcome after its form was left. Inspect definitions before retrying; no Host cancellation was implied.",
   hostSchedulesIndependentlyOfThisPanel:
-    "Host schedules independently of this panel.",
+    "Runs while ZenX is open, even if you leave this panel.",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host schedules while running, even when this page is closed.",
+    "Runs while ZenX is open, even if you leave this page.",
   schedulingAndRecovery: "Scheduling and recovery",
   setUpReplies: "Set up replies",
   editTrigger: "Edit trigger",
@@ -877,6 +898,10 @@ export const en = {
     "Use /threads and /pick to continue a work conversation directly; this mode mirrors its model replies. /new clears the selection. PAW mode currently supports text; native read receipts, quotes, and reactions depend on future channel adapters.",
   save: "Save",
   imageUnavailablePrefix: "Image unavailable:",
+  triggerOnce: "Once",
+  triggerEveryHours: "Every {{count}} hours",
+  triggerEveryHours_one: "Every hour",
+  triggerEveryHours_other: "Every {{count}} hours",
   everyMinutes: "Every {{count}} min",
   onceAt: "Once · {{time}}",
   everyMinutesAt: "Every {{count}} min · {{time}}",
@@ -951,6 +976,27 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  externalFileOpen: "在外部打开文件",
+  externalTextEditor: "文本编辑器",
+  externalCustomApp: "自定义应用",
+  externalRevealFinder: "在 Finder 中显示",
+  externalRevealExplorer: "在文件资源管理器中显示",
+  externalRevealManager: "在文件管理器中显示",
+  externalDefaultApp: "使用默认应用打开",
+  externalSaveFirst: "请先保存或解决冲突，再打开磁盘上的文件。",
+  externalOpenWith: "使用 {{app}} 打开",
+  externalNotConfigured: "未检测到应用。请在下方选择。",
+  externalChooseApp: "选择 {{app}} 应用…",
+  externalResetCustom: "移除自定义应用",
+  externalManageApps: "管理应用…",
+  externalManageTitle: "用于打开文件的应用",
+  externalManageClose: "关闭",
+  externalManagePersistence:
+    "每次选择或移除应用后会立即保存在此电脑上。取消文件选择器不会更改当前选择。",
+  externalManageBusy: "正在等待应用选择…",
+  externalApplicationPath: "应用路径",
+
+  openMessageFile: "打开文件",
   browserOperationFailed: "浏览器操作失败或结果不确定。继续前请检查工具结果。",
   externalReadOnly: "外部 · 只读",
   browserAgentWorking: "Agent 正在操作此页面",
@@ -1264,9 +1310,10 @@ export const zhCN = {
     "之前创建会话的结果尚未确认。重试前请检查会话列表；离开表单并未取消 Host 请求。",
   anEarlierTriggerSaveReturnedAnUncertain:
     "之前保存触发器的结果尚未确认。重试前请检查定义；离开表单并未取消 Host 请求。",
-  hostSchedulesIndependentlyOfThisPanel: "Host 独立于此面板执行调度。",
+  hostSchedulesIndependentlyOfThisPanel:
+    "ZenX 运行时，离开面板也会按计划执行。",
   hostSchedulesWhileRunningEvenWhenThis:
-    "Host 运行期间会继续调度，即使此页面已关闭。",
+    "ZenX 运行时，离开页面也会按计划执行。",
   schedulingAndRecovery: "调度与恢复",
   setUpReplies: "设置回复",
   editTrigger: "编辑触发器",
@@ -1756,6 +1803,10 @@ export const zhCN = {
     "/threads 和 /pick 继续直接工作会话；这个模式会同步该线程的模型回复。/new 清除选择。PAW 模式目前支持文字，平台原生已读、引用和表情取决于后续渠道适配。",
   save: "保存",
   imageUnavailablePrefix: "图片不可用：",
+  triggerOnce: "执行一次",
+  triggerEveryHours: "每 {{count}} 小时",
+  triggerEveryHours_one: "每 1 小时",
+  triggerEveryHours_other: "每 {{count}} 小时",
   everyMinutes: "每 {{count}} 分钟",
   onceAt: "一次 · {{time}}",
   everyMinutesAt: "每 {{count}} 分钟 · {{time}}",

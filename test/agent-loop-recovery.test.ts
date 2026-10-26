@@ -11,6 +11,7 @@ import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import { readThreadHistory } from "../src/thread-history.js";
 import { Thread } from "../src/thread.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
+import { recoveryDiagnostic } from "../src/loop-recovery.js";
 import { png1x1 } from "./fixtures.js";
 import { ZenAppServer } from "../src/app-server.js";
 import { decodeCanonicalItem, type CanonicalItem } from "../src/item.js";
@@ -224,7 +225,7 @@ test("provider rejecting a media request receives an explicit text diagnostic wh
   );
   const original = result.items.find((item) => item.type === "user_message");
   assert.equal(
-    original?.type === "user_message" && original.content?.[1]?.type,
+    original?.type === "user_message" && original.content?.[2]?.type,
     "image",
   );
   assert.deepEqual(
@@ -1419,3 +1420,67 @@ function recoveryGate() {
   });
   return { promise, resolve };
 }
+
+for (const status of [400, 401, 403, 422]) {
+  test(`non-retryable provider HTTP ${status} is not replayed as tool-output recovery`, async () => {
+    let calls = 0;
+    const adapter = new OpenAiCompatibleModel({
+      baseUrl: "https://synthetic.invalid/v1",
+      apiKey: "synthetic-private-key",
+      fetch: async () => {
+        calls++;
+        return new Response(
+          JSON.stringify({
+            error: {
+              type: "invalid_request_error",
+              code: "invalid_parameter_error",
+              message:
+                "InvalidParameter: assistant tool_calls must be followed by tool messages synthetic-private-key",
+            },
+          }),
+          { status },
+        );
+      },
+    });
+    const f = fixture(adapter.stream.bind(adapter));
+    const thread = await f.server.startThread();
+    await (
+      await f.server.startTurn(thread.id, "synthetic request")
+    ).done;
+    const result = await f.server.readThread(thread.id);
+    assert.equal(calls, 1);
+    assert.doesNotMatch(JSON.stringify(result.items), /synthetic-private-key/);
+    assert.deepEqual(f.waits, []);
+    assert.equal(result.turns[0]?.status, "failed");
+    assert.equal(
+      result.items.filter((item) => item.type === "failure" && item.recovery)
+        .length,
+      0,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(result.items),
+      /model produced an invalid or incomplete tool call/,
+    );
+  });
+}
+
+test("HTTP admission diagnostic takes precedence over misleading tool words", () => {
+  const error = Object.assign(
+    new Error(
+      "InvalidParameter: assistant tool_calls must be followed by tool messages synthetic-private-key",
+    ),
+    {
+      status: 400,
+      retryable: false,
+      recoveryDetails: {
+        type: "invalid_request_error",
+        code: "invalid_parameter_error",
+      },
+    },
+  );
+  const diagnostic = recoveryDiagnostic(error);
+  assert.match(diagnostic, /model request failed at the provider/);
+  assert.match(diagnostic, /invalid_request_error/);
+  assert.match(diagnostic, /HTTP status: 400/);
+  assert.doesNotMatch(diagnostic, /model produced an invalid/);
+});

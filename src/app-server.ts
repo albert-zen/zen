@@ -1,4 +1,13 @@
 import {
+  compileModelOperationMessage,
+  MODEL_PROBE_IMAGE_BASE64,
+} from "./model-operations.js";
+import {
+  planContextMaterialization,
+  assertCommittedModelContent,
+} from "./context-materialization.js";
+import { projectModelMessages } from "./model-content.js";
+import {
   matchesSkillInputSnapshot,
   prepareSkillInput,
   type RequestedUserInput,
@@ -71,7 +80,7 @@ import type {
   QueuedUserMessageEditedItem,
 } from "./item.js";
 import {
-  contentFromUserMessage,
+  originalUserInput,
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
   validateUserInput,
@@ -84,11 +93,20 @@ import {
 } from "./journal.js";
 import {
   compileModelMessages,
+  materializeCanonicalInput,
+  sourceModelMessage,
+  modelMessageSource,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
 } from "./model.js";
-import { estimateModelMessageInputTokens } from "./model-usage.js";
+import {
+  estimateModelMessageInputTokens,
+  estimateModelInput,
+  projectModelUsage,
+  type ModelUsageProjection,
+  type ModelInputEstimate,
+} from "./model-usage.js";
 import {
   ProviderRegistryError,
   type ProviderModel,
@@ -128,6 +146,24 @@ export interface AppServerDefaults {
   reasoningEffort: string | null;
   sandbox: SandboxMode;
   approvalPolicy: ApprovalPolicy;
+}
+
+export type RunModelOperationInput =
+  | {
+      kind: "title";
+      threadId: string;
+      sourceItemId: string;
+      selection: ProviderSelectionInput;
+      titleTemplate?: string;
+    }
+  | { kind: "image-capability-probe"; selection: ProviderSelectionInput };
+export interface ModelOperationResult {
+  threadId: string;
+  operationItemId: string;
+  status: "completed" | "failed" | "cancelled";
+  content?: UserInput;
+  error?: string;
+  probeOutcome?: "supported" | "unsupported" | "inconclusive";
 }
 
 export interface StartThreadInput {
@@ -442,6 +478,8 @@ export class ZenAppServer {
   #threadSummaries: Map<string, NativeThreadSummary> | undefined;
   #threadSummaryLoad: Promise<void> | undefined;
   #threadSummaryWrites: Promise<void> = Promise.resolve();
+  #threadSummaryPersistence: Promise<void> | undefined;
+  #threadSummaryDirty = false;
 
   constructor(options: {
     journal: ThreadJournal;
@@ -569,6 +607,7 @@ export class ZenAppServer {
   async closeRuntimeConfiguration(): Promise<void> {
     this.#acceptingRootOperations = false;
     await this.#providerRegistry.close();
+    await this.flushThreadSummaryProjection();
   }
 
   beginHostOperation(
@@ -641,6 +680,11 @@ export class ZenAppServer {
   }
 
   async startThread(input: StartThreadInput = {}): Promise<ThreadSnapshot> {
+    if ("purpose" in input)
+      throw new AppServerError(
+        "operation_forbidden",
+        "System operation purpose is Host-only",
+      );
     return await this.#startThread(input);
   }
 
@@ -763,6 +807,7 @@ export class ZenAppServer {
             if (
               (entry.type === "user_message" &&
                 ("content" in entry ||
+                  "contentAuthority" in entry ||
                   "clientId" in entry ||
                   "deliveryAfter" in entry)) ||
               (entry.type === "reasoning" && "reasoningContent" in entry) ||
@@ -930,6 +975,7 @@ export class ZenAppServer {
   async #startThread(
     input: StartThreadInput,
     parentThreadId?: string,
+    purpose?: "image-capability-probe",
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("turn", "thread/start");
     try {
@@ -944,6 +990,7 @@ export class ZenAppServer {
         createdAt: this.#now(),
         type: "thread_metadata",
         workspaceInstructionPolicy: "repo-root-on-first-message",
+        ...(purpose === undefined ? {} : { purpose }),
         cwd: path.resolve(input.cwd ?? defaults.cwd),
         ...(parentThreadId === undefined ? {} : { parentThreadId }),
         ...selection,
@@ -964,10 +1011,311 @@ export class ZenAppServer {
         throw error;
       }
       const snapshot = await this.#snapshot(thread);
-      this.#emit({ type: "thread_started", threadId, thread: snapshot });
+      if (purpose === undefined)
+        this.#emit({ type: "thread_started", threadId, thread: snapshot });
       return snapshot;
     } finally {
       admission.release();
+    }
+  }
+
+  /** Trusted Host-local API only: deliberately absent from native/model/Fleet method maps. */
+  async runModelOperation(
+    input: RunModelOperationInput,
+    signal = new AbortController().signal,
+    /** Trusted Host-only borrowed execution resource; never accepted by public protocols. */
+    execution?: ResolvedProviderSelection,
+  ): Promise<ModelOperationResult> {
+    signal.throwIfAborted();
+    if (input.kind !== "title" && input.kind !== "image-capability-probe")
+      throw new AppServerError(
+        "invalid_operation_input",
+        "Unknown model operation kind",
+      );
+    if (
+      execution !== undefined &&
+      (execution.model.id !== execution.selection.modelId ||
+        execution.selection.providerProfileId !==
+          input.selection.providerProfileId ||
+        execution.selection.modelId !== input.selection.modelId ||
+        (input.selection.reasoningEffort !== undefined &&
+          execution.selection.reasoningEffort !==
+            input.selection.reasoningEffort))
+    )
+      throw new AppServerError(
+        "invalid_operation_input",
+        "Borrowed execution resource does not match the admitted selection",
+      );
+    if (execution !== undefined) {
+      const effort = execution.selection.reasoningEffort;
+      if (
+        input.kind === "title" &&
+        (execution.model.contextWindow === null ||
+          execution.model.supportedReasoningEfforts === null ||
+          (effort === null
+            ? execution.model.supportedReasoningEfforts.length !== 0
+            : !execution.model.supportedReasoningEfforts.includes(effort)))
+      )
+        throw new AppServerError(
+          "invalid_operation_input",
+          "Title execution requires known supported model capabilities",
+        );
+      if (
+        input.kind === "image-capability-probe" &&
+        effort !== execution.model.defaultReasoningEffort
+      )
+        throw new AppServerError(
+          "invalid_operation_input",
+          "Image probe must use its model metadata reasoning default",
+        );
+    }
+    const admission =
+      execution === undefined
+        ? this.#admitProviderOperation(
+            "provider",
+            `model-operation/${input.kind}`,
+            input.selection,
+          )
+        : {
+            provider: { ...execution, release() {} },
+            operation: this.beginHostOperation(
+              "provider",
+              `model-operation/${input.kind}`,
+            ),
+          };
+    const resolved = admission.provider;
+    let thread: Thread | undefined;
+    let operation: import("./item.js").ModelOperationItem | undefined;
+    let text = "";
+    try {
+      if (input.kind === "image-capability-probe") {
+        const snapshot = await this.#startThread(
+          execution === undefined ? { selection: resolved.selection } : {},
+          undefined,
+          "image-capability-probe",
+        );
+        thread = await this.#requireThread(snapshot.id);
+      } else {
+        thread = await this.#requireThread(input.threadId);
+        const source = thread.items.find(
+          (item) => item.id === input.sourceItemId,
+        );
+        if (source?.type !== "user_message")
+          throw new AppServerError(
+            "invalid_operation_source",
+            "Title source must be an existing canonical human message",
+          );
+        if (
+          input.titleTemplate !== undefined &&
+          (input.titleTemplate.length > 32768 ||
+            !input.titleTemplate.includes("{{request}}"))
+        )
+          throw new AppServerError(
+            "invalid_operation_input",
+            "Title template must include {{request}} and fit the configured limit",
+          );
+      }
+      const target = thread;
+      operation = await this.#withThreadMutation(target.id, async () => {
+        signal.throwIfAborted();
+        if (!target.items.some((item) => item.type === "context_format"))
+          await this.#commit(target, {
+            type: "context_format",
+            contentVersion: 1,
+            id: this.#id(),
+            threadId: target.id,
+            createdAt: this.#now(),
+          });
+        const item: import("./item.js").ModelOperationItem = {
+          type: "model_operation",
+          id: this.#id(),
+          threadId: target.id,
+          createdAt: this.#now(),
+          kind: input.kind,
+          sourceItemIds:
+            input.kind === "title"
+              ? [input.sourceItemId]
+              : [target.items[0]!.id],
+          selection: {
+            providerProfileId: resolved.selection.providerProfileId,
+            modelId: resolved.selection.modelId,
+            reasoningEffort: resolved.selection.reasoningEffort,
+          },
+          ...(input.kind === "image-capability-probe"
+            ? { maxOutputTokens: 1 }
+            : {}),
+        };
+        await this.#commit(target, item);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item });
+        return item;
+      });
+      const admitted = operation;
+      const probeAttachment =
+        input.kind === "image-capability-probe"
+          ? await this.#attachments.importBytes(
+              Buffer.from(MODEL_PROBE_IMAGE_BASE64, "base64"),
+              "image/png",
+            )
+          : undefined;
+      const prepared = await this.#withThreadMutation(target.id, async () => {
+        signal.throwIfAborted();
+        const message = compileModelOperationMessage(admitted, target.items, {
+          ...(input.kind === "title" && input.titleTemplate !== undefined
+            ? { titleTemplate: input.titleTemplate }
+            : {}),
+          ...(probeAttachment === undefined ? {} : { probeAttachment }),
+        });
+        const plan = planContextMaterialization({
+          items: target.items,
+          messages: [message],
+          threadId: target.id,
+          instructions: resolved.adapter.contextInstructions,
+          instructionsSourceItemId: admitted.id,
+          inputModalities:
+            input.kind === "image-capability-probe"
+              ? ["text", "image"]
+              : ["text"],
+          id: this.#id,
+          now: this.#now,
+        });
+        for (const item of plan.pending) {
+          await this.#commit(target, item);
+          if (input.kind === "title")
+            this.#emit({ type: "item_completed", item });
+        }
+        const result = plan.resolve(target.items);
+        assertCommittedModelContent(
+          target.items,
+          result.messages,
+          result.instructions,
+          result.instructionsItemId,
+        );
+        if (
+          resolved.model.contextWindow !== null &&
+          estimateModelInput(result.messages, [], result.instructions).total >=
+            resolved.model.contextWindow
+        )
+          throw new AppServerError(
+            "context_window_exceeded",
+            "Committed model operation input exceeds the selected context window",
+          );
+        return { ...result, contextBoundaryItemId: target.items.at(-1)!.id };
+      });
+      signal.throwIfAborted();
+      for await (const event of resolved.adapter.stream({
+        model: resolved.selection.modelId,
+        reasoningEffort: resolved.selection.reasoningEffort,
+        messages: prepared.messages,
+        ...(prepared.instructions === undefined
+          ? {}
+          : { instructions: prepared.instructions }),
+        ...(admitted.maxOutputTokens === undefined
+          ? {}
+          : { maxOutputTokens: admitted.maxOutputTokens }),
+        tools: [],
+        signal,
+        debugContext: {
+          threadId: target.id,
+          purpose: "operation",
+          turnId: null,
+          sampleId: admitted.id,
+          contextBoundaryItemId: prepared.contextBoundaryItemId,
+          sampleAttempt: 1,
+        },
+      })) {
+        signal.throwIfAborted();
+        if (event.type === "text_delta") text += event.delta;
+        if (event.type === "tool_call")
+          throw new Error("Auxiliary model operations must not call tools");
+      }
+      signal.throwIfAborted();
+      const completed: import("./item.js").ModelOperationCompletedItem = {
+        type: "model_operation_completed",
+        id: this.#id(),
+        threadId: target.id,
+        createdAt: this.#now(),
+        operationItemId: admitted.id,
+        status: "completed",
+        ...(text ? { content: [{ type: "text", text }] } : {}),
+        ...(input.kind === "image-capability-probe"
+          ? { probeOutcome: "supported" }
+          : {}),
+      };
+      await this.#withThreadMutation(target.id, async () => {
+        await this.#commit(target, completed);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item: completed });
+      });
+      return {
+        threadId: target.id,
+        operationItemId: admitted.id,
+        status: "completed",
+        ...(completed.content ? { content: completed.content } : {}),
+        ...(completed.probeOutcome
+          ? { probeOutcome: completed.probeOutcome }
+          : {}),
+      };
+    } catch (error) {
+      if (
+        error instanceof ThreadJournalAppendOutcomeUnknownError ||
+        !thread ||
+        !operation
+      )
+        throw error;
+      const status = signal.aborted
+        ? ("cancelled" as const)
+        : ("failed" as const);
+      const candidate = error as {
+        kind?: string;
+        status?: number;
+        explicitlyRejectsImageInput?: boolean;
+      };
+      const unsupported =
+        !signal.aborted &&
+        candidate.kind === "http" &&
+        candidate.explicitlyRejectsImageInput === true &&
+        ![401, 402, 403, 404, 408, 409, 429].includes(candidate.status ?? 0) &&
+        (candidate.status ?? 500) < 500;
+      const result: import("./item.js").ModelOperationCompletedItem = {
+        type: "model_operation_completed",
+        id: this.#id(),
+        threadId: thread.id,
+        createdAt: this.#now(),
+        operationItemId: operation.id,
+        status,
+        error:
+          status === "cancelled"
+            ? "Model operation cancelled"
+            : error instanceof AppServerError
+              ? error.message
+              : candidate.kind === "http"
+                ? `Model operation HTTP failure (${String(candidate.status ?? "unknown")})`
+                : "Model operation failed",
+        ...(text
+          ? { content: [{ type: "text", text }], incomplete: true }
+          : {}),
+        ...(input.kind === "image-capability-probe"
+          ? { probeOutcome: unsupported ? "unsupported" : "inconclusive" }
+          : {}),
+      };
+      const target = thread;
+      await this.#withThreadMutation(target.id, async () => {
+        await this.#commit(target, result);
+        if (input.kind === "title")
+          this.#emit({ type: "item_completed", item: result });
+      });
+      return {
+        threadId: target.id,
+        operationItemId: operation.id,
+        status,
+        error: result.error!,
+        ...(result.content ? { content: result.content } : {}),
+        ...(result.probeOutcome ? { probeOutcome: result.probeOutcome } : {}),
+      };
+    } finally {
+      admission.provider.release();
+      admission.operation.release();
     }
   }
 
@@ -1139,14 +1487,22 @@ export class ZenAppServer {
   }
 
   async listThreads(
-    options: { archived?: boolean } = {},
+    options: { archived?: boolean; includeOperations?: boolean } = {},
   ): Promise<ThreadListEntry[]> {
     const threadIds = await this.#journal.listThreadIds();
     const snapshots: ThreadListEntry[] = [];
     for (const threadId of threadIds) {
       try {
         const thread = await this.#loadThread(threadId);
-        if (thread !== undefined && thread.deletion === undefined) {
+        if (
+          thread !== undefined &&
+          thread.deletion === undefined &&
+          (options.includeOperations === true ||
+            !thread.items.some(
+              (item) =>
+                item.type === "thread_metadata" && item.purpose !== undefined,
+            ))
+        ) {
           snapshots.push(await this.#snapshot(thread));
         }
       } catch (error) {
@@ -1167,7 +1523,12 @@ export class ZenAppServer {
     const archived = options.archived ?? false;
     return structuredClone(
       [...this.#threadSummaries!.values()]
-        .filter((summary) => summary.archived === archived)
+        .filter(
+          (summary) =>
+            summary.archived === archived &&
+            (options.includeOperations === true ||
+              summary.purpose === undefined),
+        )
         .sort((left, right) => left.threadId.localeCompare(right.threadId)),
     );
   }
@@ -1498,7 +1859,7 @@ export class ZenAppServer {
           );
     const priorInput =
       prior?.type === "user_message"
-        ? contentFromUserMessage(prior)
+        ? originalUserInput(prior)
         : prior?.type === "user_message_queued"
           ? prior.input
           : prior?.type === "turn_replacement_requested"
@@ -1702,7 +2063,7 @@ export class ZenAppServer {
         if (
           !sameUserInput(
             legacy.type === "user_message"
-              ? contentFromUserMessage(legacy)
+              ? originalUserInput(legacy)
               : legacy.input,
             content,
           )
@@ -3123,6 +3484,17 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (
+        thread.items.some(
+          (item) =>
+            item.type === "thread_metadata" && item.purpose !== undefined,
+        )
+      )
+        throw new AppServerError(
+          "operation_forbidden",
+          "System model-operation history cannot accept conversation messages",
+        );
+
       const admitting = this.#activeTurns.get(threadId);
       if (
         internal.expectedTerminalTurnId !== undefined &&
@@ -3211,7 +3583,7 @@ export class ZenAppServer {
           if (
             !matchesSkillInputSnapshot(
               requestedInput,
-              contentFromUserMessage(duplicate),
+              originalUserInput(duplicate),
             )
           ) {
             throw new AppServerError(
@@ -3444,6 +3816,7 @@ export class ZenAppServer {
                   sandbox: configuration.sandbox,
                   approvalPolicy: configuration.approvalPolicy,
                   inputModalities: resolved.model.inputModalities,
+                  contextWindow: resolved.model.contextWindow,
                   ...(admitted.configuration.contextCompaction.agenticEnabled &&
                   resolved.model.contextWindow !== null
                     ? {
@@ -3589,9 +3962,9 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
-                    const messages = compileModelMessages(
-                      items,
-                      resolved.selection,
+                    const messages = projectModelMessages(
+                      compileModelMessages(items, resolved.selection),
+                      resolved.model.inputModalities,
                     );
                     const notice =
                       active.contextCompactionNotice !== undefined &&
@@ -3599,20 +3972,53 @@ export class ZenAppServer {
                         ? active.contextCompactionNotice
                         : undefined;
                     if (notice !== undefined) {
-                      active.contextCompactionNoticeIssued = true;
+                      const source = items.findLast(
+                        (item) =>
+                          item.type !== "context_message" &&
+                          item.turnId === turnId,
+                      );
+                      if (!source)
+                        throw new Error(
+                          "Compaction notice has no canonical source",
+                        );
+                      messages.push(
+                        sourceModelMessage(
+                          { role: "user", text: notice },
+                          {
+                            itemIds: [source.id],
+                            purpose: "compaction-notice",
+                            origin: "host",
+                          },
+                        ),
+                      );
                     }
+                    const plan = planContextMaterialization({
+                      items,
+                      messages,
+                      threadId,
+                      turnId,
+                      instructions: resolved.adapter.contextInstructions,
+                      inputModalities: resolved.model.inputModalities,
+                      id: this.#id,
+                      now: this.#now,
+                    });
+                    for (const item of plan.pending) {
+                      await this.#commit(thread, item);
+                      this.#emit({ type: "item_completed", item });
+                    }
+                    const prepared = plan.resolve(thread.items);
+                    assertCommittedModelContent(
+                      thread.items,
+                      prepared.messages,
+                      prepared.instructions,
+                      prepared.instructionsItemId,
+                    );
+                    if (notice !== undefined)
+                      active.contextCompactionNoticeIssued = true;
                     return {
-                      messages:
-                        notice === undefined
-                          ? messages
-                          : [
-                              ...messages,
-                              {
-                                role: "user" as const,
-                                text: notice,
-                              },
-                            ],
-                      contextBoundaryItemId,
+                      ...prepared,
+                      contextBoundaryItemId:
+                        thread.items.at(-1)?.id ?? contextBoundaryItemId,
                     };
                   }),
                 commitFinal: async (message, modelResponseId) =>
@@ -4047,7 +4453,7 @@ export class ZenAppServer {
         if (duplicate !== undefined) {
           if (
             duplicate.turnId === expectedTurnId &&
-            sameUserInput(contentFromUserMessage(duplicate), input)
+            sameUserInput(originalUserInput(duplicate), input)
           ) {
             const duplicateActive = this.#activeTurns.get(threadId);
             return {
@@ -4124,6 +4530,73 @@ export class ZenAppServer {
     await active.done;
   }
 
+  #estimateContext(
+    items: readonly CanonicalItem[],
+    resolved: ResolvedProviderSelection,
+    contextCompaction: ResolvedContextCompactionConfig,
+  ): ModelInputEstimate {
+    return this.#runtime.estimateContextInput({
+      threadId: items[0]?.threadId ?? "",
+      items,
+      messages: projectModelMessages(
+        compileModelMessages(items, resolved.selection),
+        resolved.model.inputModalities,
+      ),
+      tools: this.#runtime.projectToolPresentation(
+        items,
+        contextCompaction.agenticEnabled &&
+          resolved.model.contextWindow !== null,
+      ).modelTools,
+      adapter: resolved.adapter,
+      selection: resolved.selection,
+      inputModalities: resolved.model.inputModalities,
+    });
+  }
+
+  /** Read-only current request projection, using current resolved tools rather than last usage. */
+  async readModelUsage(threadId: string): Promise<ModelUsageProjection> {
+    const thread = await this.#requireThread(threadId);
+    let resolved: ResolvedProviderSelection;
+    try {
+      resolved = this.#requireSelection(thread.effectiveConfiguration());
+    } catch (error) {
+      // Removed host configuration must not make historical usage unreadable.
+      // No partial estimate or old provider count may masquerade as current input.
+      if (
+        !(error instanceof AppServerError) ||
+        (error.code !== "provider_unavailable" &&
+          error.code !== "model_unavailable")
+      )
+        throw error;
+      return projectModelUsage(thread.items, {
+        contextWindow: null,
+        providerContextUsageCompatible: false,
+      });
+    }
+    const latestUsage = thread.items.findLast(
+      (item) => item.type === "model_usage",
+    );
+    const selection = thread.items.find(
+      (item) =>
+        item.type === "turn_started" && item.turnId === latestUsage?.turnId,
+    );
+    return projectModelUsage(thread.items, {
+      contextWindow: resolved.model.contextWindow,
+      estimate: this.#estimateContext(
+        thread.items,
+        resolved,
+        this.#runtimeConfiguration.contextCompaction,
+      ),
+      providerContextUsageCompatible:
+        selection?.type === "turn_started" &&
+        selection.selection?.providerProfileId ===
+          resolved.selection.providerProfileId &&
+        selection.selection?.modelId === resolved.selection.modelId &&
+        selection.selection?.reasoningEffort ===
+          resolved.selection.reasoningEffort,
+    });
+  }
+
   async #handleActiveTurnCompaction(options: {
     threadId: string;
     turnId: string;
@@ -4145,9 +4618,25 @@ export class ZenAppServer {
       // are appended afterwards, so estimate the complete projection that is
       // about to be sampled as well. This closes the gap where a large result
       // crosses the window between two Provider usage reports.
-      const estimatedInputTokens = estimateModelMessageInputTokens(
-        compileModelMessages(thread.items, options.resolved.selection),
+      const estimate = this.#estimateContext(
+        thread.items,
+        options.resolved,
+        options.contextCompaction,
       );
+      const estimatedInputTokens = estimate.total;
+      if (
+        estimate.toolDefinitions +
+          estimateModelInput(
+            [],
+            [],
+            options.resolved.adapter.contextInstructions,
+          ).total >=
+        contextWindow
+      )
+        throw new AppServerError(
+          "context_window_exceeded",
+          "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
+        );
       const observedInputTokens = Math.max(
         inputTokens ?? 0,
         estimatedInputTokens,
@@ -4209,9 +4698,11 @@ export class ZenAppServer {
             options.contextCompaction.targetPercent,
           ),
           estimateRetainedTokens: (retainedItems) =>
-            estimateModelMessageInputTokens(
-              compileModelMessages(retainedItems, options.resolved.selection),
-            ),
+            this.#estimateContext(
+              retainedItems,
+              options.resolved,
+              options.contextCompaction,
+            ).total,
           retention: options.contextCompaction.retention,
           allowOpenTurns: true,
         });
@@ -4457,10 +4948,23 @@ export class ZenAppServer {
             },
       ),
     ];
+    const estimate = this.#estimateContext(
+      previewItems,
+      options.resolved,
+      options.contextCompaction,
+    );
     if (
-      estimateModelMessageInputTokens(
-        compileModelMessages(previewItems, options.resolved.selection),
-      ) <
+      estimate.toolDefinitions +
+        estimateModelInput([], [], options.resolved.adapter.contextInstructions)
+          .total >=
+      contextWindow
+    )
+      throw new AppServerError(
+        "context_window_exceeded",
+        "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
+      );
+    if (
+      estimate.total <
       contextCompactionTokenBudget(
         contextWindow,
         options.contextCompaction.triggerPercent,
@@ -4502,9 +5006,12 @@ export class ZenAppServer {
     signal: AbortSignal;
     allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
-    const sourceMessages = compileModelMessages(
-      options.thread.items.slice(0, options.boundary.index + 1),
-      options.selection.selection,
+    const sourceMessages = projectModelMessages(
+      compileModelMessages(
+        options.thread.items.slice(0, options.boundary.index + 1),
+        options.selection.selection,
+      ),
+      options.selection.model.inputModalities,
     );
     const summary = await generateContextCompactionSummary({
       debugThreadId: options.thread.id,
@@ -4513,6 +5020,30 @@ export class ZenAppServer {
       model: options.selection.selection.modelId,
       reasoningEffort: options.selection.selection.reasoningEffort,
       messages: sourceMessages,
+      prepare: async (messages) => {
+        options.signal.throwIfAborted();
+        const plan = planContextMaterialization({
+          items: options.thread.items,
+          messages,
+          threadId: options.thread.id,
+          instructions: options.selection.adapter.contextInstructions,
+          inputModalities: options.selection.model.inputModalities,
+          id: this.#id,
+          now: this.#now,
+        });
+        for (const item of plan.pending) {
+          await this.#commit(options.thread, item);
+          this.#emit({ type: "item_completed", item });
+        }
+        const prepared = plan.resolve(options.thread.items);
+        assertCommittedModelContent(
+          options.thread.items,
+          prepared.messages,
+          prepared.instructions,
+          prepared.instructionsItemId,
+        );
+        return prepared;
+      },
       summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
@@ -4571,18 +5102,17 @@ export class ZenAppServer {
         // budget the actual proposed projection, not retained Items alone.
         retainedTokenBudget: targetTokenBudget,
         estimateRetainedTokens: (retainedItems) =>
-          estimateModelMessageInputTokens(
-            compileModelMessages(
-              [
-                ...options.thread.items,
-                {
-                  ...item,
-                  retainedItemIds: retainedItems.map((retained) => retained.id),
-                },
-              ],
-              options.selection.selection,
-            ),
-          ),
+          this.#estimateContext(
+            [
+              ...options.thread.items,
+              {
+                ...item,
+                retainedItemIds: retainedItems.map((retained) => retained.id),
+              },
+            ],
+            options.selection,
+            options.contextCompaction,
+          ).total,
         retention: options.contextCompaction.retention,
         ...(options.allowOpenTurns === undefined
           ? {}
@@ -4601,12 +5131,11 @@ export class ZenAppServer {
       );
     }
     item.retainedItemIds = boundedBoundary.retainedItemIds;
-    const projectedTokens = estimateModelMessageInputTokens(
-      compileModelMessages(
-        [...options.thread.items, item],
-        options.selection.selection,
-      ),
-    );
+    const projectedTokens = this.#estimateContext(
+      [...options.thread.items, item],
+      options.selection,
+      options.contextCompaction,
+    ).total;
     if (projectedTokens > targetTokenBudget) {
       throw new AppServerError(
         "compaction_budget_exceeded",
@@ -4725,6 +5254,16 @@ export class ZenAppServer {
 
   /** Call under the same mutation lock used by setThreadArchived. */
   async #requireUnarchived(threadId: string): Promise<void> {
+    const thread = await this.#requireThread(threadId);
+    if (
+      thread.items.some(
+        (item) => item.type === "thread_metadata" && item.purpose !== undefined,
+      )
+    )
+      throw new AppServerError(
+        "operation_forbidden",
+        "System model-operation history cannot accept conversation messages",
+      );
     if ((await this.#threadMetadata.read(threadId)).archived === true) {
       throw new AppServerError(
         "operation_forbidden",
@@ -4742,6 +5281,27 @@ export class ZenAppServer {
       );
     }
     await this.#ensureThreadSummaries();
+    if (
+      item.type === "user_message" &&
+      !thread.items.some((prior) => prior.type === "context_format")
+    ) {
+      const marker: CanonicalItem = {
+        type: "context_format",
+        contentVersion: 1,
+        id: this.#id(),
+        threadId: thread.id,
+        createdAt: this.#now(),
+      };
+      await this.#commit(thread, marker);
+      this.#emit({ type: "item_completed", item: marker });
+    }
+    const materialized = materializeCanonicalInput(item, thread.items);
+    // Keep the caller's Item identity: item_completed must expose exactly the
+    // content committed below, never a pre-compilation admission object.
+    if (materialized !== item) {
+      if (item.type === "user_message") delete item.text;
+      Object.assign(item, materialized);
+    }
     thread.validateAppend(item);
     try {
       await this.#journal.append(item);
@@ -4865,7 +5425,7 @@ export class ZenAppServer {
       persistedForRestart === undefined ||
       !sameSummaries(persistedForRestart, [...rebuilt.values()])
     ) {
-      await this.#persistThreadSummaries();
+      this.#scheduleThreadSummaryPersistence();
     }
   }
 
@@ -4875,7 +5435,7 @@ export class ZenAppServer {
       if (thread.deletion === undefined)
         summaries.set(thread.id, await this.#summary(thread));
       else summaries.delete(thread.id);
-      await this.#saveThreadSummaries(summaries);
+      this.#scheduleThreadSummaryPersistence();
     });
     this.#threadSummaryWrites = update.catch(() => undefined);
     await update;
@@ -4889,13 +5449,42 @@ export class ZenAppServer {
     }
   }
 
-  async #persistThreadSummaries(): Promise<void> {
-    const summaries = this.#threadSummaries!;
-    const update = this.#threadSummaryWrites.then(async () => {
-      await this.#saveThreadSummaries(summaries);
+  // Disposable cache only: never hold canonical commits on projection I/O.
+  // One active snapshot and a dirty bit bound pending persistence under load.
+  #scheduleThreadSummaryPersistence(): void {
+    this.#threadSummaryDirty = true;
+    if (this.#threadSummaryPersistence !== undefined) return;
+    const flush = Promise.resolve().then(async () => {
+      while (this.#threadSummaryDirty) {
+        this.#threadSummaryDirty = false;
+        await this.#saveThreadSummaries(this.#threadSummaries!);
+      }
     });
-    this.#threadSummaryWrites = update.catch(() => undefined);
-    await update;
+    this.#threadSummaryPersistence = flush;
+    void flush.finally(() => {
+      this.#threadSummaryPersistence = undefined;
+      if (this.#threadSummaryDirty) this.#scheduleThreadSummaryPersistence();
+    });
+  }
+
+  /** Best-effort cache drain for shutdown/tests; timeout never weakens journal durability. */
+  async flushThreadSummaryProjection(timeoutMs = 1_000): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        (async () => {
+          await this.#threadSummaryWrites;
+          while (this.#threadSummaryPersistence !== undefined)
+            await this.#threadSummaryPersistence;
+          return true;
+        })(),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async #saveThreadSummaries(
@@ -4978,6 +5567,7 @@ export class ZenAppServer {
       threadId: thread.id,
       lastItemId: items.at(-1)!.id,
       currentMetadata: configuration,
+      ...(metadata.purpose === undefined ? {} : { purpose: metadata.purpose }),
       ...(metadata.parentThreadId === undefined
         ? {}
         : { parentThreadId: metadata.parentThreadId }),
@@ -5070,7 +5660,7 @@ export class ZenAppServer {
   }
 
   #admitProviderOperation(
-    kind: "turn" | "compaction",
+    kind: "turn" | "compaction" | "provider",
     label: string,
     selection: ProviderSelectionInput,
   ): {
@@ -5329,6 +5919,24 @@ function forkablePrefix(
       item.type !== "thread_configuration_changed" &&
       item.type !== "thread_deleted" &&
       item.type !== "thread_restored" &&
+      !(
+        (item.type === "context_message" || item.type === "model_operation") &&
+        item.turnId === undefined &&
+        item.sourceItemIds.every((id) =>
+          items.slice(0, end).some((source) => source.id === id),
+        )
+      ) &&
+      !(
+        item.type === "model_operation_completed" &&
+        item.turnId === undefined &&
+        items
+          .slice(0, end)
+          .some(
+            (source) =>
+              source.type === "model_operation" &&
+              source.id === item.operationItemId,
+          )
+      ) &&
       !(item.type === "context_compaction" && item.turnId === undefined)
     ) {
       break;
@@ -5439,6 +6047,10 @@ function remapForkItems(
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
+    if (copied.type === "context_message" || copied.type === "model_operation")
+      copied.sourceItemIds = copied.sourceItemIds.map(remap);
+    if (copied.type === "model_operation_completed")
+      copied.operationItemId = remap(copied.operationItemId);
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
@@ -5631,6 +6243,9 @@ async function generateContextCompactionSummary(options: {
   model: string;
   reasoningEffort: string | null;
   messages: ModelMessage[];
+  prepare: (
+    messages: ModelMessage[],
+  ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
   summaryInstruction: string;
   inputTokenBudget: number | null;
   signal: AbortSignal;
@@ -5647,7 +6262,8 @@ async function generateContextCompactionSummary(options: {
   const chunks = contextCompactionSummaryChunks(
     options.messages,
     options.summaryInstruction,
-    options.inputTokenBudget,
+    options.inputTokenBudget -
+      estimateModelInput([], [], options.adapter.contextInstructions).total,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
@@ -5657,8 +6273,24 @@ async function generateContextCompactionSummary(options: {
       let text = "";
       const messages: ModelMessage[] = [
         ...chunk,
-        { role: "user", text: options.summaryInstruction },
+        sourceModelMessage(
+          { role: "user", text: options.summaryInstruction },
+          {
+            itemIds: [options.debugBoundaryItemId],
+            purpose: "compaction-instruction",
+            origin: "host",
+          },
+        ),
       ];
+      const prepared = await options.prepare(messages);
+      if (
+        estimateModelInput(prepared.messages, [], prepared.instructions).total >
+        options.inputTokenBudget
+      )
+        throw new AppServerError(
+          "compaction_budget_exceeded",
+          "Committed compaction input exceeds the model context budget; no request was dispatched",
+        );
       for await (const event of options.adapter.stream({
         debugContext: {
           threadId: options.debugThreadId,
@@ -5670,7 +6302,10 @@ async function generateContextCompactionSummary(options: {
         },
         model: options.model,
         reasoningEffort: options.reasoningEffort,
-        messages,
+        messages: prepared.messages,
+        ...(prepared.instructions === undefined
+          ? {}
+          : { instructions: prepared.instructions }),
         tools: [],
         signal: options.signal,
       })) {
@@ -5810,10 +6445,24 @@ function fitSummaryMessageGroup(
   const excerpts: ModelMessage[][] = [];
   for (let offset = 0; offset < source.length; offset += payloadCharacters) {
     excerpts.push([
-      {
-        role: "user",
-        text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
-      },
+      sourceModelMessage(
+        {
+          role: "user",
+          text: `${prefix}${source.slice(offset, offset + payloadCharacters)}`,
+        },
+        {
+          itemIds: [
+            ...new Set(
+              group.flatMap(
+                (message) => modelMessageSource(message)?.itemIds ?? [],
+              ),
+            ),
+          ],
+          purpose: "compaction-excerpt",
+          variant: `${offset}:${payloadCharacters}`,
+          origin: "host",
+        },
+      ),
     ]);
   }
   return excerpts;

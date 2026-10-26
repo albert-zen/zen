@@ -174,7 +174,7 @@ test("compaction omission never claims attribution and retained input does", () 
   );
   assert.deepEqual(
     sources.map((source) => source.itemId),
-    ["keep"],
+    ["keep", "compact"],
   );
 });
 
@@ -271,7 +271,7 @@ test("unattributed custom adapter remains unavailable", async () => {
   );
 });
 
-test("Host and peer input retain their own authoritative wrappers, not synthetic/system entries", () => {
+test("Host, peer and instruction input retain exact canonical source identities", () => {
   const items = [
     {
       type: "thread_instruction",
@@ -319,6 +319,7 @@ test("Host and peer input retain their own authoritative wrappers, not synthetic
       )
       .map((source) => [source.itemId, source.index]),
     [
+      ["system", 0],
       ["host", 1],
       ["peer", 2],
     ],
@@ -461,4 +462,47 @@ test("media capability projection keeps attribution but never mutates canonical 
     ]);
   }
   assert.equal(JSON.stringify(compiled), before);
+});
+
+test("materialized user field maps to committed context Item and retains its source link", async () => {
+  const { planContextMaterialization, copyCommittedMessageBinding } =
+    await import("../src/context-materialization.js");
+  const source: CanonicalItem = {
+    type: "host_message",
+    id: "host-source",
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-01-01T00:00:00Z",
+    sender: "host",
+    mode: "start",
+    clientId: "host-client",
+    source: "trigger",
+    text: "synthetic wakeup",
+  };
+  const messages = compileModelMessages([source]);
+  let sequence = 0;
+  const plan = planContextMaterialization({
+    items: [source],
+    messages,
+    threadId: "thread",
+    turnId: "turn",
+    id: () => `context-${++sequence}`,
+    now: () => source.createdAt,
+  });
+  assert.equal(plan.pending.length, 1);
+  const resolved = plan.resolve([source, ...plan.pending]);
+  const projected = projectModelMessages(resolved.messages);
+  projected.forEach((message, index) =>
+    copyCommittedMessageBinding(resolved.messages[index]!, message),
+  );
+  const mapping = serializedMessageSource(projected[0]!, "messages", 0);
+  assert.deepEqual(mapping, [
+    {
+      itemId: plan.pending[0]!.id,
+      sourceItemIds: [source.id],
+      container: "messages",
+      index: 0,
+    },
+  ]);
+  assert.equal(JSON.stringify(projected).includes("sourceItemIds"), false);
 });

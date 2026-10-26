@@ -1,3 +1,11 @@
+import {
+  externalApplicationCatalog,
+  externalApplicationIds,
+  launchExternalApplication,
+  openWorkspaceExternally,
+  validateExternalApplication,
+  type ExternalApplicationId,
+} from "./workspace-external-open.js";
 import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
@@ -397,6 +405,15 @@ async function bootstrapZenX(): Promise<void> {
     process.env["ZENX_DATA_DIR"] ?? join(app.getPath("home"), ".zen"),
   );
   const skills = new SkillsService(zenDataDirectory);
+  ipcMain.handle(
+    ipcChannels.modelOperationHistory,
+    (_event, threadId: unknown) => {
+      if (threadId !== undefined && typeof threadId !== "string")
+        throw new Error("Invalid operation history target");
+      if (!appServerManager) throw new Error("Local Host unavailable");
+      return appServerManager.modelOperationHistory(threadId);
+    },
+  );
   ipcMain.handle(ipcChannels.modelRequestDebug, (_event, input: unknown) => {
     if (appServerManager === undefined)
       throw new Error("Local Host unavailable");
@@ -799,7 +816,10 @@ async function bootstrapZenX(): Promise<void> {
       store: new ZenXThreadTitleStore(
         join(userDataDirectory, "thread-title-projections.json"),
       ),
-      inference: new ZenXConfiguredTitleInference(settingsService),
+      inference: new ZenXConfiguredTitleInference(
+        settingsService,
+        appServerManager,
+      ),
       titleModel: () => settingsService!.configuredTitleModel(),
       setNativeName: async (threadId, name) => {
         await appServerManager!.request("thread/name/set", {
@@ -815,6 +835,7 @@ async function bootstrapZenX(): Promise<void> {
       titleCoordinator,
       projectProjection,
       imageAttachments,
+      settingsService!,
     );
     const marketplace = new MarketplaceCatalogService(
       new JsonFileMarketplaceCatalogTransport(
@@ -1331,7 +1352,58 @@ function installProtocolIpc(
   titles: ZenXThreadTitleCoordinator,
   projects: ZenXProjectProjection,
   attachments: FileAttachmentStore,
+  settings: ZenXSettingsService,
 ): void {
+  const applications = async () =>
+    externalApplicationCatalog(
+      (await settings.publicSettings()).profile.externalApplications ?? {},
+    );
+  ipcMain.handle(ipcChannels.workspaceFilesApplications, applications);
+  ipcMain.handle(
+    ipcChannels.workspaceFilesConfigureApplication,
+    async (event, id: unknown, reset: unknown) => {
+      if (
+        !externalApplicationIds.includes(id as ExternalApplicationId) ||
+        typeof reset !== "boolean"
+      )
+        throw new Error("Invalid application choice");
+      if (reset) {
+        await settings.setExternalApplication(
+          id as ExternalApplicationId,
+          undefined,
+        );
+        return applications();
+      }
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner) throw new Error("Application window unavailable");
+      const result = await dialog.showOpenDialog(owner, {
+        properties: ["openFile"],
+        ...(process.platform === "win32"
+          ? { filters: [{ name: "Applications", extensions: ["exe"] }] }
+          : {}),
+      });
+      if (result.canceled || !result.filePaths[0]) return applications();
+      const application = result.filePaths[0];
+      await validateExternalApplication(application);
+      await settings.setExternalApplication(
+        id as ExternalApplicationId,
+        application,
+      );
+      return applications();
+    },
+  );
+  ipcMain.handle(
+    ipcChannels.workspaceFilesExternalOpen,
+    async (_event, input: unknown) =>
+      openWorkspaceExternally(input, {
+        readLocalThread: async (threadId) =>
+          (await manager.request("thread/read", { threadId })).thread,
+        applications: async () => (await applications()).applications,
+        openPath: (file) => shell.openPath(file),
+        reveal: (file) => shell.showItemInFolder(file),
+        launch: launchExternalApplication,
+      }),
+  );
   for (const [channel, read] of [
     [ipcChannels.workspaceFilesList, listWorkspaceFiles],
     [ipcChannels.workspaceFilesRead, readWorkspaceFile],
@@ -2170,6 +2242,10 @@ function installSettingsIpc(
         providerProfileId,
         modelId,
         {
+          runModelOperation: async (request, signal) => {
+            if (!appServerManager) throw new Error("Local Host unavailable");
+            return await appServerManager.runModelOperation(request, signal);
+          },
           resolveTransport: async (profile) =>
             await zenXProviderDiscoveryTransport(
               profile,

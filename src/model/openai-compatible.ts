@@ -147,6 +147,25 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
     const messageSources: SerializedMessageSource[] = [];
+    // Chat tool replies are a contiguous batch. Supplemental user-role media
+    // follows the entire batch, never another tool's still-pending reply.
+    const pendingToolMedia: Array<{
+      content: NonNullable<
+        Extract<ModelMessage, { role: "tool" }>["modelContent"]
+      >;
+      encoded: Readonly<Record<string, unknown>>;
+    }> = [];
+    const flushToolMedia = () => {
+      for (const media of pendingToolMedia) {
+        recordMediaPaths(
+          mediaPaths,
+          `messages[${messages.length}]`,
+          media.content,
+        );
+        messages.push(media.encoded);
+      }
+      pendingToolMedia.length = 0;
+    };
     let pendingReasoning = "";
     for (const message of request.messages) {
       if (message.role === "reasoning") {
@@ -157,6 +176,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         }
         continue;
       }
+      if (message.role !== "tool") flushToolMedia();
       const encoded = await toChatMessage(message, this.#attachments);
       if (pendingReasoning.length > 0) {
         if (shouldReplayReasoning(reasoningPolicy.replay, message)) {
@@ -188,16 +208,16 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         );
       messages.push(encoded);
       if (message.role === "tool" && message.modelContent !== undefined) {
-        recordMediaPaths(
-          mediaPaths,
-          `messages[${messages.length}]`,
-          message.modelContent,
-        );
-        messages.push(
-          await toChatUserContent(message.modelContent, this.#attachments),
-        );
+        pendingToolMedia.push({
+          content: message.modelContent,
+          encoded: await toChatUserContent(
+            message.modelContent,
+            this.#attachments,
+          ),
+        });
       }
     }
+    flushToolMedia();
     if (
       pendingReasoning.length > 0 &&
       reasoningPolicy.replay === "all-assistant"
@@ -210,6 +230,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
       model: requiredLabel(request.model, "model"),
       messages,
       n: 1,
@@ -695,7 +718,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 

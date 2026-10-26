@@ -38,6 +38,15 @@ try {
         await evaluate(
           "document.querySelector('.message-copy').focus(); document.querySelector('.message-copy').click()",
         );
+        await delay(150);
+        assert.equal(
+          await evaluate("window.messageDebugFixture.commands.length"),
+          0,
+        );
+        await screenshot(`canonical-content-${lang}-${theme}-${width}.png`);
+        await evaluate(
+          "document.querySelector('.message-context-debug > details').open = true",
+        );
         for (let attempt = 0; attempt < 100; attempt++) {
           if (
             await evaluate(
@@ -52,12 +61,12 @@ try {
         );
         await delay(150);
         const measured = await evaluate(
-          `(() => { const dialog = document.querySelector('.message-context-debug'); const rect = dialog.getBoundingClientRect(); const pre = [...dialog.querySelectorAll('pre')]; return { appearance: document.documentElement.dataset.appearance, colorScheme: getComputedStyle(document.documentElement).colorScheme, role: dialog.getAttribute('role'), preCount: pre.length, saved: pre[0]?.textContent, captured: pre[1]?.textContent, overflow: document.documentElement.scrollWidth > innerWidth, bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, focused: dialog.contains(document.activeElement), commands: window.messageDebugFixture.commands }; })()`,
+          `(() => { const dialog = document.querySelector('.message-context-debug'); const rect = dialog.getBoundingClientRect(); const pre = [...dialog.querySelectorAll('pre')]; return { appearance: document.documentElement.dataset.appearance, colorScheme: getComputedStyle(document.documentElement).colorScheme, role: dialog.getAttribute('role'), preCount: pre.length, saved: dialog.querySelector(".canonical-message-content")?.textContent, captured: pre.at(-1)?.textContent, overflow: document.documentElement.scrollWidth > innerWidth, bounds: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }, focused: dialog.contains(document.activeElement), commands: window.messageDebugFixture.commands }; })()`,
         );
         assert.equal(measured.role, "dialog");
         assert.equal(measured.appearance, theme);
         assert.equal(measured.colorScheme, theme);
-        assert.equal(measured.preCount, 2);
+        assert.equal(measured.preCount, 3);
         assert.equal(measured.overflow, false);
         assert.ok(
           measured.bounds.left >= 0 &&
@@ -99,6 +108,51 @@ try {
           ),
           true,
         );
+        await send("Page.navigate", {
+          url: `${url}/message-debug.html?lang=${lang}&theme=${theme}&mode=history`,
+        });
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (
+            await evaluate(
+              "!!document.querySelector('[data-item-id=synthetic-context]')",
+            )
+          )
+            break;
+          await delay(50);
+        }
+        assert.ok(
+          await evaluate(
+            "document.querySelector('.thread-debug-items').textContent.includes('received_at')",
+          ),
+        );
+        assert.ok(
+          await evaluate(
+            "document.querySelector('[data-item-id=synthetic-operation]').textContent.includes('Synthetic probe model')",
+          ),
+        );
+        await screenshot(`canonical-history-${lang}-${theme}-${width}.png`);
+        await evaluate(
+          "document.querySelectorAll('.thread-debug-tabs > button')[2].click()",
+        );
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (
+            await evaluate(
+              "!!document.querySelector('.operation-history-panel .message-context-debug-records button')",
+            )
+          )
+            break;
+          await delay(50);
+        }
+        await evaluate(
+          "document.querySelector('.operation-history-panel .message-context-debug-records button').click()",
+        );
+        await delay(200);
+        assert.ok(
+          await evaluate(
+            "!!document.querySelector('.operation-history-panel [data-item-id=synthetic-context]')",
+          ),
+        );
+        await screenshot(`operation-history-${lang}-${theme}-${width}.png`);
         evidence.cases.push({
           lang,
           theme,

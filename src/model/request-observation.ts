@@ -57,6 +57,9 @@ export function observeRequestBody(
           : messageSources.map((source) => ({
               ...source,
               itemId: scrub(source.itemId),
+              ...(source.sourceItemIds
+                ? { sourceItemIds: source.sourceItemIds.map(scrub) }
+                : {}),
             })),
       provider: safeProvider,
       model: safeModel,

@@ -1,3 +1,6 @@
+import { ThreadDebugger } from "../src/renderer/src/ThreadDebugger.js";
+import type { Thread } from "../src/protocol-client/index.js";
+import type { CanonicalItem } from "../../../src/item.js";
 /** Actual experimental action/dialog, synthetic message scaffold and local-memory capture API. */
 import React from "react";
 import { createRoot } from "react-dom/client";
@@ -35,8 +38,63 @@ const item = {
   threadId: "synthetic-thread",
   turnId: "synthetic-turn",
   createdAt: "2026-10-25T05:00:00Z",
-  text,
+  contentAuthority: { version: 1 as const, hostTextPartIndices: [0] },
+  content: [
+    {
+      type: "text" as const,
+      text: '[Zen recorded user-message metadata: received_at="2026-10-25T05:00:00.000Z"]',
+    },
+    { type: "text" as const, text },
+  ],
 };
+const historyItems: CanonicalItem[] = [
+  item,
+  {
+    type: "model_operation",
+    id: "synthetic-operation",
+    threadId: item.threadId,
+    createdAt: item.createdAt,
+    kind: "image-capability-probe",
+    sourceItemIds: [item.id],
+    selection: {
+      providerProfileId: "Synthetic draft provider",
+      modelId: "Synthetic probe model",
+      reasoningEffort: null,
+    },
+  },
+  {
+    type: "context_message",
+    id: "synthetic-context",
+    threadId: item.threadId,
+    createdAt: item.createdAt,
+    compilerPolicyVersion: 1,
+    sourceItemIds: ["synthetic-operation"],
+    role: "user",
+    origin: "host",
+    purpose: "image-capability-probe",
+    variant: "synthetic",
+    content: [
+      { type: "text", text: "Describe the synthetic image in one word." },
+    ],
+  },
+  {
+    type: "model_operation_completed",
+    id: "synthetic-completed",
+    threadId: item.threadId,
+    createdAt: item.createdAt,
+    operationItemId: "synthetic-operation",
+    status: "completed",
+    probeOutcome: "supported",
+    content: [{ type: "text", text: "Blue" }],
+  },
+];
+const historyThread = {
+  id: item.threadId,
+  cwd: "/synthetic",
+  turns: [],
+  status: { type: "idle" },
+  canonicalItems: historyItems,
+} as unknown as Thread;
 const result: ModelRequestDebugResult = {
   sessionId: "synthetic-session",
   generation: 1,
@@ -77,6 +135,18 @@ const result: ModelRequestDebugResult = {
 const commands: ModelRequestDebugCommand[] = [];
 Object.assign(window, {
   zenx: {
+    modelOperationHistory: async (threadId?: string) =>
+      threadId
+        ? { threadId, items: historyItems }
+        : {
+            summaries: [
+              {
+                threadId: item.threadId,
+                name: "Synthetic image probe",
+                createdAt: item.createdAt,
+              },
+            ],
+          },
     modelRequestDebug: {
       request: async (command: ModelRequestDebugCommand) => {
         commands.push(command);
@@ -84,7 +154,7 @@ Object.assign(window, {
           throw new Error("Fixture must not enable capture");
         const response = structuredClone(result);
         if (command.action === "read") {
-          const text = JSON.stringify(
+          const payloadText = JSON.stringify(
             {
               role: "user",
               content: [
@@ -92,7 +162,7 @@ Object.assign(window, {
                   type: "text",
                   text: '[Zen recorded user-message metadata: received_at="2026-10-25T05:00:00.000Z"]',
                 },
-                { type: "text", text: item.text },
+                { type: "text", text },
               ],
             },
             null,
@@ -101,10 +171,10 @@ Object.assign(window, {
           response.page = {
             record: response.records![0]!,
             view: "message",
-            text,
+            text: payloadText,
             offset: 0,
             nextOffset: null,
-            totalCharacters: text.length,
+            totalCharacters: payloadText.length,
           };
         }
         return response;
@@ -115,26 +185,47 @@ Object.assign(window, {
 });
 void i18n.changeLanguage(lang).then(() =>
   createRoot(document.getElementById("root")!).render(
-    <main style={{ maxWidth: 760, margin: "48px auto", padding: 20 }}>
-      <p>
-        {lang === "zh-CN"
-          ? "合成示例 · 不连接真实模型或 Host"
-          : "Synthetic fixture · no model or Host connection"}
-      </p>
-      <MessageContextDebugContext.Provider
-        value={{ threadId: item.threadId, items: new Map([[item.id, item]]) }}
+    query.get("mode") === "history" ? (
+      <main
+        style={{
+          height: "100vh",
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
-        <article className="user-row">
-          <div className="user-bubble">
-            {lang === "zh-CN"
-              ? "解释这段引用，再与另一个线程比较。"
-              : "Explain this reference, then compare with the other thread."}
-          </div>
-          <div className="message-actions user-message-actions">
-            <MessageContextDebugAction itemId={item.id} />
-          </div>
-        </article>
-      </MessageContextDebugContext.Provider>
-    </main>,
+        <ThreadDebugger
+          thread={historyThread}
+          items={historyItems}
+          localModelDebug
+        />
+      </main>
+    ) : (
+      <main style={{ maxWidth: 760, margin: "48px auto", padding: 20 }}>
+        <p>
+          {lang === "zh-CN"
+            ? "合成示例 · 不连接真实模型或 Host"
+            : "Synthetic fixture · no model or Host connection"}
+        </p>
+        <MessageContextDebugContext.Provider
+          value={{
+            threadId: item.threadId,
+            items: new Map([[item.id, item]]),
+            captureAvailable: true,
+          }}
+        >
+          <article className="user-row">
+            <div className="user-bubble">
+              {lang === "zh-CN"
+                ? "解释这段引用，再与另一个线程比较。"
+                : "Explain this reference, then compare with the other thread."}
+            </div>
+            <div className="message-actions user-message-actions">
+              <MessageContextDebugAction itemId={item.id} />
+            </div>
+          </article>
+        </MessageContextDebugContext.Provider>
+      </main>
+    ),
   ),
 );

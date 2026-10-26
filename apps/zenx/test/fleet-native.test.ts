@@ -1452,3 +1452,277 @@ test("Fleet Host message recovery rejects missing or invented source metadata", 
     }
   }
 });
+
+test(
+  "watch recovers a fast terminal hidden behind a redacted-event snapshot watermark",
+  { timeout: 5000 },
+  async () => {
+    let resumes = 0;
+    const controller = new AbortController();
+    let socket!: WebSocket;
+    const nextStart = { ...started, id: "start-fast", turnId: "turn-fast" };
+    const nextComplete = {
+      ...completed,
+      id: "complete-fast",
+      turnId: "turn-fast",
+    };
+    const f = await fixture((rpc, ws) => {
+      if (rpc.method === "zen/remote/resume") {
+        socket = ws;
+        resumes++;
+        if (resumes === 1) return recovery("completed", 2);
+        return {
+          ...recovery("completed", 5),
+          entries: [
+            ...recovery().entries,
+            {
+              kind: "item",
+              item: nextStart,
+              turn: { id: "turn-fast", status: "completed" },
+            },
+            { kind: "item", item: nextComplete },
+            {
+              kind: "item",
+              item: { ...nextStart, id: "start-later", turnId: "turn-later" },
+              turn: { id: "turn-later", status: "completed" },
+            },
+            {
+              kind: "item",
+              item: {
+                ...nextComplete,
+                id: "complete-later",
+                turnId: "turn-later",
+              },
+            },
+          ],
+        };
+      }
+    });
+    let stop: (() => void) | undefined;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await f.enrolled();
+      const emitted: unknown[] = [];
+      let complete!: () => void;
+      const completedWatch = new Promise<void>((resolve, reject) => {
+        complete = resolve;
+        guard = setTimeout(
+          () => reject(new Error("Fast canonical completion was lost")),
+          2000,
+        );
+      });
+      stop = await f.client.subscribeThread(
+        f.peer,
+        undefined,
+        "thread-full",
+        {
+          onTurn(turn) {
+            emitted.push(turn);
+            controller.abort();
+            complete();
+          },
+          onError(error) {
+            assert.fail(error.message);
+          },
+        },
+        controller.signal,
+      );
+      assert.deepEqual(emitted, []);
+      // A harmless event starts recovery before the fast Turn's start/end frames
+      // are consumed. The canonical response already includes its terminal.
+      socket.send(
+        JSON.stringify({
+          method: "zen/remote/thread/event",
+          params: {
+            processEpoch: "epoch-one",
+            threadId: "thread-full",
+            watermark: 3,
+            event: { type: "redacted" },
+          },
+        }),
+      );
+      await completedWatch;
+      assert.equal(resumes, 2);
+      assert.deepEqual(emitted, [
+        { threadId: "thread-full", turnId: "turn-fast", status: "completed" },
+      ]);
+    } finally {
+      if (guard) clearTimeout(guard);
+      stop?.();
+      await f.close();
+    }
+  },
+);
+
+test(
+  "watch frontier suppresses repeated and reconnected terminal snapshots without replaying baseline history",
+  { timeout: 8000 },
+  async () => {
+    let resumes = 0;
+    let socket!: WebSocket;
+    const f = await fixture((rpc, ws) => {
+      if (rpc.method === "zen/remote/hello")
+        return {
+          version: 1,
+          hostId: "host-one",
+          processEpoch: resumes >= 3 ? "epoch-two" : "epoch-one",
+          capabilities: ["workspaces", "threads", "resume"],
+        };
+      if (rpc.method === "zen/remote/resume") {
+        socket = ws;
+        resumes++;
+        if (resumes === 1) return recovery("completed", 2);
+        const snapshot = {
+          ...recovery("completed", resumes >= 3 ? 6 : 5),
+          processEpoch: resumes >= 4 ? "epoch-two" : "epoch-one",
+          entries: [
+            ...recovery().entries,
+            {
+              kind: "item",
+              item: { ...started, id: "start-new", turnId: "turn-new" },
+              turn: { id: "turn-new", status: "completed" },
+            },
+            {
+              kind: "item",
+              item: { ...completed, id: "end-new", turnId: "turn-new" },
+            },
+          ],
+        };
+        if (resumes === 3) {
+          ws.send(JSON.stringify({ id: rpc.id, result: snapshot }), () =>
+            ws.close(1001, "test reconnect"),
+          );
+          return null;
+        }
+        return snapshot;
+      }
+    });
+    let stop: (() => void) | undefined;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await f.enrolled();
+      const emitted: unknown[] = [];
+      const errors: string[] = [];
+      let ready = 0;
+      let finish!: () => void;
+      const reconnected = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        guard = setTimeout(
+          () => reject(new Error("Watch did not reconnect")),
+          5000,
+        );
+      });
+      stop = await f.client.subscribeThread(
+        f.peer,
+        undefined,
+        "thread-full",
+        {
+          onTurn(turn) {
+            emitted.push(turn);
+            socket.send(
+              JSON.stringify({
+                method: "zen/remote/thread/event",
+                params: {
+                  processEpoch: "epoch-one",
+                  threadId: "thread-full",
+                  watermark: 6,
+                  event: { type: "redacted" },
+                },
+              }),
+            );
+          },
+          onReady() {
+            if (++ready === 2) finish();
+          },
+          onError(error) {
+            errors.push(error.message);
+          },
+        },
+        signal(),
+      );
+      assert.deepEqual(emitted, []);
+      socket.send(
+        JSON.stringify({
+          method: "zen/remote/thread/event",
+          params: {
+            processEpoch: "epoch-one",
+            threadId: "thread-full",
+            watermark: 3,
+            event: { type: "redacted" },
+          },
+        }),
+      );
+      await reconnected;
+      assert.deepEqual(emitted, [
+        { threadId: "thread-full", turnId: "turn-new", status: "completed" },
+      ]);
+      assert.equal(resumes, 4);
+      assert.equal(errors.length, 1);
+      assert.match(errors[0]!, /disconnected/);
+    } finally {
+      if (guard) clearTimeout(guard);
+      stop?.();
+      await f.close();
+    }
+  },
+);
+
+test(
+  "watch rejects a snapshot that loses its append-only observation frontier",
+  { timeout: 5000 },
+  async () => {
+    let resumes = 0;
+    let socket!: WebSocket;
+    const f = await fixture((rpc, ws) => {
+      if (rpc.method === "zen/remote/resume") {
+        socket = ws;
+        return ++resumes === 1
+          ? recovery()
+          : { ...recovery("completed", 3), entries: [] };
+      }
+    });
+    let stop: (() => void) | undefined;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await f.enrolled();
+      let fail!: (error: Error) => void;
+      const failure = new Promise<Error>((resolve, reject) => {
+        fail = resolve;
+        guard = setTimeout(
+          () => reject(new Error("Missing observation frontier was accepted")),
+          2000,
+        );
+      });
+      stop = await f.client.subscribeThread(
+        f.peer,
+        undefined,
+        "thread-full",
+        {
+          onTurn() {
+            assert.fail(
+              "History must not be replayed after losing the frontier",
+            );
+          },
+          onError: fail,
+        },
+        signal(),
+      );
+      socket.send(
+        JSON.stringify({
+          method: "zen/remote/thread/event",
+          params: {
+            processEpoch: "epoch-one",
+            threadId: "thread-full",
+            watermark: 3,
+            event: { type: "redacted" },
+          },
+        }),
+      );
+      assert.match((await failure).message, /lost its observation boundary/);
+    } finally {
+      if (guard) clearTimeout(guard);
+      stop?.();
+      await f.close();
+    }
+  },
+);

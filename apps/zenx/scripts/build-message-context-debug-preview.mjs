@@ -37,10 +37,12 @@ const css = output
 assert.ok(js && css);
 await writeFile(
   path.join(directory, "message-debug.html"),
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>Message input · synthetic experiment</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'"><title>Message input · synthetic canonical inspection</title><style>${css}</style></head><body><div id="root"></div><script>${js.replaceAll("</script", "<\\/script")}</script></body></html>`,
 );
 const sources = [
   "src/renderer/src/MessageContextDebug.tsx",
+  "src/renderer/src/ThreadDebugger.tsx",
+  "src/renderer/src/ModelRequestDebugDialog.tsx",
   "src/renderer/src/ThreadView.tsx",
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",

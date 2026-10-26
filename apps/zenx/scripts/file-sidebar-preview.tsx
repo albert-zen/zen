@@ -1,5 +1,9 @@
+import type {
+  ExternalApplicationId,
+  ExternalOpenRequest,
+} from "../src/main/workspace-external-open.js";
 /** Actual workspace components with synthetic, memory-only file data. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { WorkspaceTextFile } from "../src/main/workspace-files.js";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
@@ -7,6 +11,7 @@ import {
   WorkspaceFileDrafts,
   fileDraftKey,
 } from "../src/renderer/src/workspace-file-drafts.js";
+import { Markdown, MessageLinkContext } from "../src/renderer/src/Markdown.js";
 import { ZenXBrand } from "../src/renderer/src/ZenXBrand.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
@@ -14,6 +19,9 @@ import "../src/renderer/src/styles.css";
 
 const search = new URLSearchParams(location.search);
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
+const diagnosticPreview = search.get("diagnostic") === "true";
+const previewPlatform = diagnosticPreview ? "darwin" : "linux";
+const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";
 const workspace = "/synthetic/file-sidebar-preview";
@@ -25,14 +33,19 @@ const source =
     (_, index) =>
       `export const line${String(index + 1).padStart(3, "0")} = ${index + 1}; // ${"A wide synthetic source line keeps horizontal navigation measurable. ".repeat(4)}`,
   ).join("\n") + "\n// LAST_SOURCE_LINE: end of the synthetic source file.\n";
-const markdown =
-  "# Long file reading preview\n\n" +
-  Array.from(
-    { length: 100 },
-    (_, index) =>
-      `## Section ${index + 1}\n\nThis is synthetic Markdown for checking a bounded editor viewport. Reading should scroll the editor, not move its breadcrumbs or the workspace tab row.\n\n- Item ${index + 1}: **bold content** and an inline \`code sample\`.\n- Another item with enough ordinary text to wrap naturally in a narrow pane.\n\n`,
-  ).join("") +
-  "## LAST_MARKDOWN_SECTION\n\nEnd of the synthetic Markdown file.\n";
+const markdown = diagnosticPreview
+  ? Array.from(
+      { length: 100 },
+      (_, index) =>
+        `## 合成诊断段落 ${index + 1}\n\n${"这里是完全合成的中文长段落，用来检查文件树保持开启时窄正文区域能否正确换行与滚动，不包含任何用户文件内容。".repeat(10)}\n\n`,
+    ).join("") + "## LAST_MARKDOWN_SECTION\n\n合成内容结束。\n"
+  : "# Long file reading preview\n\n" +
+    Array.from(
+      { length: 100 },
+      (_, index) =>
+        `## Section ${index + 1}\n\nThis is synthetic Markdown for checking a bounded editor viewport. Reading should scroll the editor, not move its breadcrumbs or the workspace tab row.\n\n- Item ${index + 1}: **bold content** and an inline \`code sample\`.\n- Another item with enough ordinary text to wrap naturally in a narrow pane.\n\n`,
+    ).join("") +
+    "## LAST_MARKDOWN_SECTION\n\nEnd of the synthetic Markdown file.\n";
 const files = new Map<string, WorkspaceTextFile>([
   [
     sourcePath,
@@ -58,12 +71,55 @@ const record = (method: string, owner: string, path: string) => {
 document.documentElement.lang = language;
 document.documentElement.dataset.appearance = appearance;
 document.documentElement.dataset.themePreset = "graphite";
-document.documentElement.dataset.platform = "linux";
+document.documentElement.dataset.platform = previewPlatform;
 void i18n.changeLanguage(language);
+const externalCalls: unknown[] = [];
+const externalState = {
+  rejectRemote: false,
+  rejectConfigure: false,
+  cancelConfigure: false,
+};
+const applications: Partial<Record<ExternalApplicationId, string>> = {
+  vscode: "/synthetic/apps/VS Code",
+  cursor: "/synthetic/apps/Cursor",
+  editor: "/synthetic/apps/Text Editor",
+};
 Object.assign(window, {
   zenx: {
-    platform: "linux",
+    platform: previewPlatform,
     workspaceFiles: {
+      applications: async () => ({
+        platform: "linux",
+        applications: { ...applications },
+      }),
+      configureApplication: async (
+        id: ExternalApplicationId,
+        reset: boolean,
+      ) => {
+        externalCalls.push({ operation: "synthetic-picker", id, reset });
+        if (externalState.rejectConfigure)
+          throw new Error("Synthetic application selection failed. Try again.");
+        // Model the real API cancellation receipt: return the unchanged catalog.
+        // This is memory-only configuration, never a native application picker.
+        if (externalState.cancelConfigure)
+          return { platform: "linux", applications: { ...applications } };
+        if (reset) delete applications[id];
+        else applications[id] = "/synthetic/apps/Chosen Editor";
+        return { platform: "linux", applications: { ...applications } };
+      },
+      openExternal: async (input: ExternalOpenRequest) => {
+        if (
+          input.host !== "local" ||
+          input.threadId !== threadId ||
+          !files.has(input.path)
+        )
+          throw new Error("Invalid synthetic file identity");
+        if (externalState.rejectRemote)
+          throw new Error(
+            "External opening supports local Host files only. No local fallback was attempted.",
+          );
+        externalCalls.push({ operation: "synthetic-open", ...input });
+      },
       read: async (owner: string, path: string) => {
         record("read", owner, path);
         const file = files.get(path);
@@ -114,6 +170,8 @@ Object.assign(window, {
     markdownPath,
     threadId,
     calls,
+    externalCalls,
+    externalState,
     synthetic: true,
   },
 });
@@ -125,7 +183,13 @@ function Preview() {
     `file:${markdownPath}`,
     "custom:overview",
   ]);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!linkPreview);
+  const sequence = useRef(0);
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    id: number;
+    kind: "file" | "browser";
+    value: string;
+  } | null>(null);
   const [workspacePanelWidth, setWorkspacePanelWidth] = useState(0);
   useEffect(() => {
     let active = true;
@@ -170,9 +234,36 @@ function Preview() {
             editors. Synthetic long source and Markdown only. No Host, private
             files or external access.
           </p>
+          {linkPreview && (
+            <div data-local-path-preview style={{ maxWidth: 480 }}>
+              <MessageLinkContext.Provider
+                value={(target) => {
+                  if (target.kind === "browser") {
+                    // Record the existing message navigation callback only;
+                    // this renderer fixture must never visit a real endpoint.
+                    record("browser", threadId, target.value);
+                    return;
+                  }
+                  setMessageLinkRequest({ ...target, id: ++sequence.current });
+                  setOpen(true);
+                }}
+              >
+                <Markdown
+                  text={
+                    (language === "zh-CN"
+                      ? "请查看 docs/long-notes.md，然后检查 `src/long-source.ts`。\n\n绝对路径也可以：`/synthetic/file-sidebar-preview/docs/long-notes.md`。\n\n没有自动访问文件，只有点击后才打开右侧文件栏。\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```"
+                      : "Read docs/long-notes.md, then inspect `src/long-source.ts`.\n\nAbsolute paths work too: `/synthetic/file-sidebar-preview/docs/long-notes.md`.\n\nFiles are opened in the right sidebar only when you click.\n\n```text\n/synthetic/file-sidebar-preview/src/long-source.ts\n```") +
+                    "\n\n合成 URL / Synthetic URLs: `http://127.0.0.1:40123/review?q=one#details` · `https://example.test/report`"
+                  }
+                />
+              </MessageLinkContext.Provider>
+            </div>
+          )}
         </section>
         <AuxiliaryPanel
           threadId={threadId}
+          messageLinkRequest={messageLinkRequest}
+          onMessageLinkRequestHandled={() => setMessageLinkRequest(null)}
           title="Synthetic file review"
           open={open}
           onOpenChange={setOpen}

@@ -79,6 +79,11 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  modelOperationHistory: (
+    threadId?: string,
+  ): Promise<
+    import("../main/model-operation-messages.js").HostModelOperationHistory
+  > => ipcRenderer.invoke(ipcChannels.modelOperationHistory, threadId),
   modelRequestDebug: {
     request: (
       input: ModelRequestDebugCommand,
@@ -169,6 +174,20 @@ contextBridge.exposeInMainWorld("zenx", {
     },
   },
   workspaceFiles: {
+    applications: async () =>
+      ipcRenderer.invoke(ipcChannels.workspaceFilesApplications),
+    configureApplication: async (
+      id: import("../main/workspace-external-open.js").ExternalApplicationId,
+      reset = false,
+    ) =>
+      ipcRenderer.invoke(
+        ipcChannels.workspaceFilesConfigureApplication,
+        id,
+        reset,
+      ),
+    openExternal: async (
+      input: import("../main/workspace-external-open.js").ExternalOpenRequest,
+    ) => ipcRenderer.invoke(ipcChannels.workspaceFilesExternalOpen, input),
     search: async (threadId: string, query: string) =>
       await ipcRenderer.invoke(
         ipcChannels.workspaceFilesSearch,

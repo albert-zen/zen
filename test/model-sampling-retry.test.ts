@@ -359,7 +359,9 @@ test("unexpected errors get bounded feedback; cooldown, model token limits and s
       const { model, requests } = compatible(response);
       const f = fixture(model);
       const result = await f.run();
-      const blocked = ["cooldown", "content filter"].includes(name);
+      const blocked = ["authentication", "cooldown", "content filter"].includes(
+        name,
+      );
       assert.equal(requests.length, blocked ? 1 : 3);
       assert.deepEqual(f.waits, blocked ? [] : [1000, 2000]);
       assert.equal(f.executions(), 0);

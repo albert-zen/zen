@@ -23,13 +23,12 @@ import {
 } from "./capability-tool-executor.js";
 import type { ZenXCapabilityGenerationSnapshot } from "./capabilities/types.js";
 import { projectThreadAttachments } from "./image-attachments.js";
-import { compileModelMessages } from "../../../../src/model.js";
-import {
-  estimateModelMessageInputTokens,
-  projectModelUsage,
-} from "../../../../src/model-usage.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
+const modelOperations = new Map<
+  string,
+  { controller: AbortController; settled: Promise<void> }
+>();
 let fleetHost: FleetHostService | undefined;
 const roomListeners = new Set<
   (event: { roomId: string; threadId: string }) => void
@@ -79,6 +78,77 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "model-operation/cancel") {
+    modelOperations
+      .get(command.requestId)
+      ?.controller.abort(new Error("Model operation cancelled"));
+    return;
+  }
+  if (command.type === "model-operation/history") {
+    try {
+      if (!appServer) throw new Error("Local Host unavailable");
+      const result =
+        command.threadId === undefined
+          ? {
+              summaries: (
+                await appServer.listThreadSummaries({ includeOperations: true })
+              ).filter((entry) => entry.purpose !== undefined),
+            }
+          : {
+              threadId: command.threadId,
+              items: (await appServer.readThread(command.threadId)).items,
+            };
+      send({
+        type: "model-operation/history-result",
+        requestId: command.requestId,
+        result,
+      });
+    } catch (error) {
+      send({
+        type: "model-operation/history-result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+  if (command.type === "model-operation/run") {
+    const controller = new AbortController();
+    let settle!: () => void;
+    const operation = {
+      controller,
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    try {
+      if (!appServer || shuttingDown) throw new Error("Local Host unavailable");
+      if (modelOperations.has(command.requestId))
+        throw new Error("Duplicate model operation request");
+      modelOperations.set(command.requestId, operation);
+      const result = await appServer.runConfiguredModelOperation(
+        command.request.input,
+        command.request.profile,
+        controller.signal,
+      );
+      send({
+        type: "model-operation/result",
+        requestId: command.requestId,
+        result,
+      });
+    } catch (error) {
+      send({
+        type: "model-operation/result",
+        requestId: command.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (modelOperations.get(command.requestId) === operation)
+        modelOperations.delete(command.requestId);
+      settle();
+    }
+    return;
+  }
   if (command.type === "model-debug/request") {
     try {
       if (!appServer) throw new Error("Local Host unavailable");
@@ -424,40 +494,10 @@ async function handleCommand(command: HostCommand): Promise<void> {
       return;
     }
     try {
-      const snapshot = await appServer.readThread(command.threadId);
-      const selection = {
-        providerProfileId: snapshot.providerProfileId,
-        modelId: snapshot.modelId,
-        reasoningEffort: snapshot.reasoningEffort,
-      };
-      const contextWindow =
-        appServer
-          .listModels()
-          .find(
-            (entry) =>
-              entry.providerProfileId === selection.providerProfileId &&
-              entry.model.id === selection.modelId,
-          )?.model.contextWindow ?? null;
-      const latestUsage = snapshot.items.findLast(
-        (item) => item.type === "model_usage",
-      );
-      const usageSelection = snapshot.turns.find(
-        (turn) => turn.id === latestUsage?.turnId,
-      )?.selection;
       send({
         type: "thread-usage/result",
         requestId: command.requestId,
-        usage: projectModelUsage(snapshot.items, {
-          contextWindow,
-          estimatedInputTokens: estimateModelMessageInputTokens(
-            compileModelMessages(snapshot.items, selection),
-          ),
-          providerContextUsageCompatible:
-            usageSelection !== undefined &&
-            usageSelection.providerProfileId === selection.providerProfileId &&
-            usageSelection.modelId === selection.modelId &&
-            usageSelection.reasoningEffort === selection.reasoningEffort,
-        }),
+        usage: await appServer.readModelUsage(command.threadId),
       });
     } catch (error) {
       send({
@@ -548,6 +588,9 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  const auxiliaryOperations = [...modelOperations.values()];
+  for (const operation of auxiliaryOperations)
+    operation.controller.abort(new Error("Host shutting down"));
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {
@@ -570,6 +613,9 @@ async function shutdown(): Promise<void> {
   await cleanup(() => server?.close());
   server = undefined;
   await toolCleanup;
+  await cleanup(() =>
+    Promise.all(auxiliaryOperations.map((operation) => operation.settled)),
+  );
   if (appServer !== undefined) {
     await cleanup(() => appServer!.closeHostResources());
   } else {

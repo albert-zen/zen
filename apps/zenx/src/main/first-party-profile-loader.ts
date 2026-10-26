@@ -143,7 +143,9 @@ export function createDelegatingFirstPartyProfileLoader(
     // Capture the selected service for this runtime generation. Provider
     // replacement stages a different candidate without redirecting calls from
     // the still-published generation before the Catalog commit.
-    const selectedService = service();
+    const selectedPackage = service();
+    const selectedService =
+      selectedPackage.createRuntime?.() ?? selectedPackage;
     const create = module["createZenXTrustedPlugin"];
     if (typeof create !== "function")
       throw new Error("Bundled first-party runtime factory is missing");

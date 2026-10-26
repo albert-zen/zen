@@ -83,6 +83,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     this.#attachments = options.attachments;
   }
 
+  get contextInstructions(): string {
+    return this.#instructions;
+  }
+
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
     const tools = request.tools.map(toResponsesTool);
@@ -143,7 +147,10 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       model: requiredLabel(request.model, "model"),
       store: false,
       stream: true,
-      instructions: this.#instructions,
+      instructions: request.instructions ?? "",
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_output_tokens: request.maxOutputTokens }),
       input,
       include: ["reasoning.encrypted_content"],
       text: { verbosity: "low" },
@@ -364,11 +371,9 @@ async function toResponsesInput(
       } else {
         const attachment = part.attachment;
         if (part.type !== "image") {
-          content.push({
-            type: "input_text",
-            text: `Audio input is not supported by this Responses transport. Attachment: ${attachment.sha256} (${attachment.mediaType}, ${attachment.byteLength} bytes).`,
-          });
-          continue;
+          throw new Error(
+            "Unsupported audio must be materialized by the context compiler before Responses encoding",
+          );
         }
         if (attachments === undefined) {
           throw new Error(
@@ -395,7 +400,7 @@ async function toResponsesInput(
           message.exitCode === null
             ? historicalCallId(message.callId)
             : providerCallId(message.callId),
-        output: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+        output: message.text,
       },
     ];
     if (message.modelContent !== undefined) {

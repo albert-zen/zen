@@ -21,6 +21,22 @@ import { ToolEnvironment, type ToolRuntime } from "../src/tool.js";
 import { ViewImageToolRuntime } from "../src/view-image.js";
 import { png1x1 } from "./fixtures.js";
 
+// A restarted fixture Host uses the same durable ID domain, like production UUIDs.
+const journalSequences = new WeakMap<
+  InMemoryThreadJournal,
+  { value: number }
+>();
+function receivedAt(at: string | undefined) {
+  assert(at !== undefined);
+  return {
+    type: "text" as const,
+    text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(at)}]`,
+  };
+}
+function receivedContent(text: string, at: string | undefined) {
+  return [receivedAt(at), { type: "text" as const, text }];
+}
+
 function createServer(
   model: ModelAdapter,
   options: {
@@ -29,8 +45,9 @@ function createServer(
     tools?: ToolRuntime[];
   } = {},
 ) {
-  let sequence = 0;
   const journal = options.journal ?? new InMemoryThreadJournal();
+  const sequence = journalSequences.get(journal) ?? { value: 0 };
+  journalSequences.set(journal, sequence);
   const attachments = options.attachments ?? new InMemoryAttachmentStore();
   return new ZenAppServer({
     journal,
@@ -64,8 +81,8 @@ function createServer(
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
-    idFactory: () => `id-${String(++sequence)}`,
-    now: () => new Date(1_000 + sequence).toISOString(),
+    idFactory: () => `id-${String(++sequence.value)}`,
+    now: () => new Date(1_000 + sequence.value).toISOString(),
   });
 }
 
@@ -114,6 +131,9 @@ test("forked history keeps image payloads replayable and authorized", async () =
     userTimestamp: fork.items.find((item) => item.type === "user_message")
       ?.createdAt,
     content: [
+      receivedAt(
+        fork.items.find((item) => item.type === "user_message")?.createdAt,
+      ),
       { type: "text", text: "remember this image" },
       { type: "image", attachment: image },
     ],
@@ -197,13 +217,13 @@ test("fork copies a replayable prefix and both Threads continue independently", 
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "first question" }],
+      content: receivedContent("first question", userTimestamps[0]),
       userTimestamp: userTimestamps[0],
     },
     { role: "assistant", text: "answer-1" },
     {
       role: "user",
-      content: [{ type: "text", text: "fork path" }],
+      content: receivedContent("fork path", userTimestamps[1]),
       userTimestamp: userTimestamps[1],
     },
   ]);
@@ -279,6 +299,34 @@ test("fork preserves effective compaction context with remapped references", asy
     workspace: { type: "same-directory" },
   });
   assert.equal(calls, 2, "copying compacted history must not resummarize");
+  assert.deepEqual(
+    await server.readThread(source.id),
+    compactedSource,
+    "fork must not rewrite the source history",
+  );
+  const sourceContexts = compactedSource.items.filter(
+    (item) => item.type === "context_message",
+  );
+  const copiedContexts = fork.items.filter(
+    (item) => item.type === "context_message",
+  );
+  assert(
+    sourceContexts.length > 0,
+    "summary request inputs were materialized after the completed Turn",
+  );
+  assert.deepEqual(
+    copiedContexts.map((item) => item.content),
+    sourceContexts.map((item) => item.content),
+    "fork preserves frozen context text instead of regenerating wrappers",
+  );
+  for (const context of copiedContexts) {
+    assert(
+      context.sourceItemIds.every((id) =>
+        fork.items.some((item) => item.id === id),
+      ),
+      "copied content references resolve within the fork",
+    );
+  }
   const selection = {
     providerProfileId: source.providerProfileId,
     modelId: source.modelId,
@@ -467,14 +515,22 @@ test("exact-item fork copies only the selected message prefix across rename and 
   assert.deepEqual(requests.at(-1), [
     {
       role: "user",
-      content: [{ type: "text", text: "original question" }],
+      content: receivedContent(
+        "original question",
+        before.items.find((item) => item.type === "user_message")!.createdAt,
+      ),
       userTimestamp: before.items.find((item) => item.type === "user_message")!
         .createdAt,
     },
     { role: "assistant", text: "selected message" },
     {
       role: "user",
-      content: [{ type: "text", text: "explicit fork question" }],
+      content: receivedContent(
+        "explicit fork question",
+        (await server.readThread(fork.id)).items.findLast(
+          (item) => item.type === "user_message",
+        )!.createdAt,
+      ),
       userTimestamp: (await server.readThread(fork.id)).items.findLast(
         (item) => item.type === "user_message",
       )!.createdAt,

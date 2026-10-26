@@ -1,3 +1,5 @@
+import { originalUserInput } from "../../../../../src/item.js";
+import { triggerMessagePresentation } from "./trigger-message-presentation.js";
 import {
   MessageContextDebugAction,
   MessageContextDebugContext,
@@ -226,8 +228,7 @@ function goToMessageQuoteSource(
 }
 
 interface ThreadViewProps {
-  /** Source-development/fixture experiment only; no capture side effects. */
-  experimentalMessageContextDebug?: boolean;
+  /** Local-owned Host capability; available in packaged builds, never enables capture. */
   localModelDebug?: boolean;
   debugMode?: boolean;
   onExitDebug?(): void;
@@ -304,19 +305,18 @@ interface ThreadViewProps {
 }
 
 export function ThreadView(props: ThreadViewProps) {
-  const messageDebug =
-    props.localModelDebug &&
-    (props.experimentalMessageContextDebug ??
-      (import.meta.env?.DEV &&
-        import.meta.env?.VITE_ZENX_MESSAGE_CONTEXT_DEBUG === "1"));
   const messageDebugItems = useMemo(
     () =>
       new Map(
         (props.thread?.canonicalItems ?? [])
           .filter((item): item is DebugInput =>
-            ["user_message", "thread_message", "host_message"].includes(
-              item.type,
-            ),
+            [
+              "user_message",
+              "thread_message",
+              "host_message",
+              "context_message",
+              "model_operation_completed",
+            ].includes(item.type),
           )
           .map((item) => [item.id, item]),
       ),
@@ -388,8 +388,12 @@ export function ThreadView(props: ThreadViewProps) {
   return (
     <MessageContextDebugContext.Provider
       value={
-        messageDebug && props.thread
-          ? { threadId: props.thread.id, items: messageDebugItems }
+        props.thread
+          ? {
+              threadId: props.thread.id,
+              items: messageDebugItems,
+              captureAvailable: props.localModelDebug === true,
+            }
           : null
       }
     >
@@ -2617,7 +2621,6 @@ function TurnBlock({
     disclosureKey("turn", turn.id),
   );
   const [protectedOpen, setProtectedOpen] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
   // before a terminal render could remove the user's selected/focused node.
@@ -2633,16 +2636,15 @@ function TurnBlock({
           !!active.closest(".turn-history") &&
           !!sectionRef.current?.contains(active)))
     ) {
-      setInspecting(true);
       setProtectedOpen(true);
     }
   }
+  // Selecting/copying the visible answer is not a request to reveal history.
+  // Only preserve an already-visible selection at the running → terminal edge.
   const expanded =
     protectedOpen ||
     (expandedOverride ??
-      (turn.status === "failed" ||
-        turn.status === "interrupted" ||
-        inspecting));
+      (turn.status === "failed" || turn.status === "interrupted"));
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&
@@ -2650,25 +2652,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  useEffect(() => {
-    const preserve = () => {
-      const active = document.activeElement;
-      setInspecting(
-        transcriptHasSelection(sectionRef.current) ||
-          (active instanceof Element &&
-            !!active.closest(".turn-history") &&
-            !!sectionRef.current?.contains(active)),
-      );
-    };
-    document.addEventListener("selectionchange", preserve);
-    document.addEventListener("focusin", preserve);
-    document.addEventListener("focusout", preserve);
-    return () => {
-      document.removeEventListener("selectionchange", preserve);
-      document.removeEventListener("focusin", preserve);
-      document.removeEventListener("focusout", preserve);
-    };
-  }, []);
   const reviewActivity = () => {
     setExpanded(true);
     requestAnimationFrame(() => {
@@ -2712,7 +2695,12 @@ function TurnBlock({
         turn={turn}
       />
     ) : (
-      <WakeupCard entry={wakeup} key={item.id} />
+      <TriggerMessageBubble
+        text={item.content.map((part) => part.text).join("\n")}
+        sourceId={wakeup.triggerId}
+        key={item.id}
+        turn={turn}
+      />
     );
   };
   return (
@@ -3200,7 +3188,7 @@ export function ContextUsageIndicator({
             aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>{i18n.t("shell:contextWindowUsed")}</span>
+              <span>{i18n.t("shell:contextCompactTitle")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -3212,9 +3200,50 @@ export function ContextUsageIndicator({
               aria-valuenow={visualPercent}
               aria-valuetext={contextLabel}
             >
-              <span style={{ width: `${String(visualPercent)}%` }} />
+              {context.estimate ? (
+                (
+                  [
+                    "instructions",
+                    "toolDefinitions",
+                    "pluginContext",
+                    "conversation",
+                  ] as const
+                ).map((category) => (
+                  <span
+                    key={category}
+                    data-category={category}
+                    style={{
+                      width: `${context.estimate!.total > 0 ? (visualRatio * 100 * context.estimate![category]) / context.estimate!.total : 0}%`,
+                    }}
+                  />
+                ))
+              ) : (
+                <span style={{ width: `${String(visualPercent)}%` }} />
+              )}
             </div>
             <p>{tokenUsage}</p>
+            {context.estimate ? (
+              <>
+                <dl className="context-usage-breakdown">
+                  {(
+                    [
+                      "instructions",
+                      "toolDefinitions",
+                      "pluginContext",
+                      "conversation",
+                    ] as const
+                  ).map((category) => (
+                    <div key={category} data-category={category}>
+                      <dt>
+                        <i aria-hidden="true" />
+                        {i18n.t(`shell:contextCategory.${category}`)}
+                      </dt>
+                      <dd>{formatTokenCount(context.estimate![category])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
             <button
               className="context-usage-compact"
@@ -3815,11 +3844,9 @@ function InputMessage({
   const article = useRef<HTMLElement>(null);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
   const parts = canonical
-    ? canonical.text !== undefined
-      ? [canonical.text]
-      : canonical.content.flatMap((part) =>
-          part.type === "text" ? [part.text] : [],
-        )
+    ? originalUserInput(canonical).flatMap((part) =>
+        part.type === "text" ? [part.text] : [],
+      )
     : item.content.map((part) => part.text);
   const clientId = canonical ? canonical.clientId : item.clientId;
   const presentation =
@@ -4132,6 +4159,38 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
   );
 }
 
+/** Full readable prompt/context; canonical ID, never text, owns navigation. */
+function TriggerMessageBubble({
+  text,
+  sourceId,
+  turn,
+}: {
+  text: string;
+  sourceId?: string;
+  turn: Turn;
+}) {
+  const presentation = triggerMessagePresentation(text, sourceId);
+  return (
+    <article className="user-row thread-message-row trigger-message-row">
+      <MessageSourceLink
+        target={{ kind: "trigger", id: sourceId ?? "" }}
+        label={presentation.name || i18n.t("shell:hostMessageTrigger")}
+        className="host-message-source"
+      />
+      <div className="user-bubble">
+        <Markdown text={presentation.text} />
+      </div>
+      <MessageActions
+        className="user-message-actions"
+        copyLabel={i18n.t("shell:copyHostMessage")}
+        copiedLabel={i18n.t("shell:copiedHostMessage")}
+        text={presentation.text}
+        turn={turn}
+      />
+    </article>
+  );
+}
+
 function WakeupCard(
   props:
     | { entry: TriggerHistoryEntry }
@@ -4143,6 +4202,14 @@ function WakeupCard(
 ) {
   if ("item" in props) {
     const { item, entry, turn } = props;
+    if (item.source === "trigger")
+      return (
+        <TriggerMessageBubble
+          text={item.text}
+          sourceId={item.sourceId}
+          turn={turn}
+        />
+      );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent

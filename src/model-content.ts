@@ -1,4 +1,3 @@
-import { copyMessageSource } from "./model/message-provenance.js";
 import {
   decodeMediaDataUri,
   validateAttachmentRef,
@@ -11,8 +10,12 @@ import {
   type UserInput,
   type UserInputPart,
 } from "./item.js";
-import type { ModelMessage } from "./model.js";
-import { deduplicateMediaContent } from "./media-content.js";
+import { copyModelMessageContextCategory, type ModelMessage } from "./model.js";
+import {
+  deduplicateMediaContent,
+  canonicalMediaPart,
+  linkCanonicalMediaPart,
+} from "./media-content.js";
 
 export { deduplicateMediaContent } from "./media-content.js";
 
@@ -102,23 +105,23 @@ export function projectModelMessages(
     deduplicateMediaContent(content).map((part) => {
       if (part.type === "text" || supported.has(part.type)) {
         const projected = structuredClone(part);
-        if (part.type !== "text") onMediaProjected?.(part, projected);
+        if (part.type !== "text") {
+          linkCanonicalMediaPart(part, projected);
+          onMediaProjected?.(canonicalMediaPart(part), projected);
+        }
         return projected;
       }
       return { type: "text", text: mediaReceipt(part.type, part.attachment) };
     });
   return messages.map((message) => {
-    if (message.role === "user" && "content" in message)
-      return copyMessageSource(message, {
-        ...message,
-        content: project(message.content),
-      });
-    if (message.role === "tool" && message.modelContent !== undefined)
-      return copyMessageSource(message, {
-        ...message,
-        modelContent: project(message.modelContent),
-      });
-    return copyMessageSource(message, structuredClone(message));
+    const projected: ModelMessage =
+      message.role === "user" && "content" in message
+        ? { ...message, content: project(message.content) }
+        : message.role === "tool" && message.modelContent !== undefined
+          ? { ...message, modelContent: project(message.modelContent) }
+          : structuredClone(message);
+    copyModelMessageContextCategory(message, projected);
+    return projected;
   });
 }
 
@@ -131,11 +134,13 @@ function referencedAttachments(
 ): AttachmentRef[] {
   return items.flatMap((item) => {
     const content =
-      item.type === "user_message"
-        ? contentFromUserMessage(item)
-        : item.type === "tool_result"
-          ? item.modelContent
-          : undefined;
+      item.type === "context_message"
+        ? item.content
+        : item.type === "user_message"
+          ? contentFromUserMessage(item)
+          : item.type === "tool_result"
+            ? item.modelContent
+            : undefined;
     return (content ?? []).flatMap((part) =>
       part.type === "text" ? [] : [part.attachment],
     );

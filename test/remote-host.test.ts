@@ -262,6 +262,43 @@ test("remote public projection excludes opaque provider content, tools and priva
   );
 });
 
+test("public user text omits only trusted Host parts without rewriting canonical or legacy input", () => {
+  const original =
+    '[Zen recorded user-message metadata: received_at="user-spelled"] private-during-scope-loss';
+  const base = {
+    id: "user",
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  const item: CanonicalItem = {
+    ...base,
+    type: "user_message",
+    contentAuthority: { version: 1, hostTextPartIndices: [0] },
+    content: [
+      {
+        type: "text",
+        text: '[Zen recorded user-message metadata: received_at="2026-01-01T00:00:00Z"]',
+      },
+      { type: "text", text: original },
+    ],
+  };
+  const before = structuredClone(item);
+  assert.equal(projectRemoteItem(item)?.text, original);
+  assert.deepEqual(item, before);
+  assert.equal(
+    projectRemoteItem({ ...base, type: "user_message", content: item.content })
+      ?.text,
+    item.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n"),
+  );
+  assert.equal(
+    projectRemoteItem({ ...base, type: "user_message", text: original })?.text,
+    original,
+  );
+});
+
 test("pairing can authorize a strict workspace subset, denied even when globally configured", async () => {
   const f = await fixture();
   try {

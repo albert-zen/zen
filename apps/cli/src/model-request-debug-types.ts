@@ -5,7 +5,7 @@ export interface ModelRequestDebugSummary {
   messageSources?: SerializedMessageSource[];
   capturedAt: string;
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "operation";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;
