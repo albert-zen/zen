@@ -32,3 +32,10 @@ This is Electron input acceptance, not physical trackpad/keyboard acceptance.
 A synthetic macOS pass remains a negative reproduction result; actual installed
 build/version, input device/mode, zoom and OS settings may still differ. Do not
 close the user's bug solely on that basis.
+
+The CI screen is 1024×768. The owned diagnostic window explicitly enables
+Electron's macOS `enableLargerThanScreen` option so its asserted 1400px desktop
+viewport is not clamped into the product's <=1099px full-width layout (whose
+outer splitter is intentionally hidden). This changes only this temporary
+window, never the system display resolution. Input and capture remain Electron
+owned-surface operations, not physical input to offscreen desktop coordinates.

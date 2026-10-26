@@ -35,8 +35,13 @@ const evidence = {
   blockedRequests: [],
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const evaluate = (expression) =>
-  window.webContents.executeJavaScript(expression);
+const evaluate = async (expression) => {
+  const result = await window.webContents.executeJavaScript(
+    `(() => { try { return {ok:true,value:(${expression})}; } catch(error) { return {ok:false,error:String(error.stack||error)}; } })()`,
+  );
+  if (!result.ok) throw new Error(result.error);
+  return result.value;
+};
 async function until(expression, label) {
   for (let i = 0; i < 100; i++) {
     if (await evaluate(expression)) return;
@@ -134,15 +139,25 @@ async function runCase(width, precise) {
     `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
     "integrated titlebar settled",
   );
+  receipt.phase = "desktop-viewport";
+  receipt.viewport = await evaluate("({width:innerWidth,height:innerHeight})");
+  assert.equal(
+    receipt.viewport.width,
+    1400,
+    "CI window must preserve desktop CSS viewport",
+  );
+  receipt.phase = "select-markdown";
   await click('.auxiliary-heading [id="aux-tab-file:docs/long-notes.md"]');
   await until(
     `document.querySelector(${JSON.stringify(selector)})?.id==='aux-content-file:docs/long-notes.md'`,
     "Markdown active",
   );
+  receipt.phase = "resize-panel";
   await click(".auxiliary-panel > .browser-panel-resizer");
   for (let i = 0; i < 4; i++) await key("Left");
   await pause(300);
   const beforeResize = await evaluate(measure);
+  receipt.phase = "resize-tree";
   const handle = await pointFor(".workspace-file-resizer");
   const end = {
     x: Math.round(handle.x + beforeResize.scroller.width - width),
@@ -168,6 +183,7 @@ async function runCase(width, precise) {
   );
   bounded(receipt.before);
   await screenshot(`${receipt.name}-before`);
+  receipt.phase = "wheel";
   await wheel(precise);
   receipt.unfocusedWheel = await evaluate(measure);
   assert.ok(
@@ -186,6 +202,7 @@ async function runCase(width, precise) {
     "Editor truly focused",
   );
   await screenshot(`${receipt.name}-focused`);
+  receipt.phase = "wheel";
   await wheel(precise);
   receipt.scrolled = await evaluate(measure);
   assert.ok(
@@ -195,6 +212,7 @@ async function runCase(width, precise) {
   );
   bounded(receipt.scrolled);
   await screenshot(`${receipt.name}-scrolled`);
+  receipt.phase = "meta-down";
   await key("Down", ["meta"]);
   await pause(500);
   receipt.end = await evaluate(measure);
@@ -259,6 +277,9 @@ const watchdog = setTimeout(
     width: 1400,
     height: 900,
     useContentSize: true,
+    // Keep the requested desktop layout on CI's 1024px display without
+    // changing display resolution or any macOS setting. Owned window only.
+    enableLargerThanScreen: true,
     show: false,
     backgroundColor: "#0b0d10",
     title: "ZenX synthetic file diagnostic",
@@ -283,9 +304,8 @@ const watchdog = setTimeout(
       callback({ cancel: true });
     },
   );
-  window.webContents.on("console-message", (_event, details) => {
-    if (details.level === "error")
-      evidence.rendererErrors.push(details.message);
+  window.webContents.on("console-message", (event) => {
+    if (event.level === "error") evidence.rendererErrors.push(event.message);
   });
   window.webContents.on(
     "render-process-gone",
