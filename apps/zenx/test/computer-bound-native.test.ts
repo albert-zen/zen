@@ -11,6 +11,7 @@ import { MAC_BOUND_TARGET_SOURCE } from "../src/main/capabilities/computer-provi
 // errors and JSONL dispatch are the shipped Swift implementation. No OS events.
 const platform = `
 import Foundation
+import CoreGraphics
 var fixtureOperation = ""
 let mode = ProcessInfo.processInfo.environment["FIXTURE_MODE"] ?? "normal"
 var posted = 0
@@ -35,7 +36,7 @@ let kCGWindowNumber = "number"
 let kCGWindowOwnerPID = "owner"
 let kCGNullWindowID = 0
 enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
-func CGWindowListCopyWindowInfo(_ options: [WindowListOption], _ id: Int) -> Any? {
+func fixtureWindowList(_ options: [WindowListOption], _ id: Int) -> Any? {
   let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
   if mode == "pointer-missing" { return [] }
   if mode == "pointer-ambiguous" { return [["alpha": 1.0]] }
@@ -98,7 +99,7 @@ final class NSWorkspace {
     return NSRunningApplication(processIdentifier: 42)
   }
 }
-func usleep(_ value: UInt32) {}
+func fixtureSleep(_ value: UInt32) {}
 typealias CGKeyCode = UInt16
 enum CGMouseButton { case left, right }
 enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseUp, rightMouseDown, rightMouseUp }
@@ -146,6 +147,8 @@ test(
       .replace("import AppKit\nimport ApplicationServices", platform)
       .replaceAll(" as CFString", "")
       .replaceAll("CFEqual(", "fixtureEqual(")
+      .replaceAll("usleep(", "fixtureSleep(")
+      .replaceAll("CGWindowListCopyWindowInfo(", "fixtureWindowList(")
       .replace(
         "CFGetTypeID(window) == AXUIElementGetTypeID()",
         "window is AXUIElement",
