@@ -46,6 +46,9 @@ Object.assign(window, {
     platform: "linux",
     threadSidebar: api,
     workspaceFiles: {
+      // External-open toolbar is mounted by the production file panel.
+      // The catalog is synthetic and empty; no native application is launched.
+      applications: async () => ({ platform: "linux", applications: {} }),
       read: async (threadId: string, path: string) => {
         calls.push({ method: "read", threadId });
         return {

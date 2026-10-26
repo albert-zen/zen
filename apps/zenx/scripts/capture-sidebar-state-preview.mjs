@@ -11,9 +11,10 @@ const directory = path.resolve(process.argv[2] ?? ".sidebar-state-preview");
 const cases = [];
 await withPreviewBrowser(
   directory,
-  async ({ send, evaluate, url, screenshot }) => {
+  async ({ send, evaluate, url, screenshot, errors }) => {
     const waitFor = async (expression) => {
       for (let i = 0; i < 200; i++) {
+        assert.deepEqual(errors, [], "Sidebar renderer exceptions");
         if (await evaluate(expression)) return;
         await delay(50);
       }
