@@ -30,8 +30,26 @@ const cases = [
     payload({ ...ref, excerpt: ref.excerpt.replaceAll("\n", " ") }),
   ],
 ];
+cases.push([
+  "两条引用与 Markdown 混排",
+  '[zenx-reference-message:v3;clientId="' +
+    clientId +
+    '"]\n**比较** [ZenX reference: ' +
+    JSON.stringify(ref) +
+    "] 与 [ZenX reference: " +
+    JSON.stringify({
+      ...ref,
+      id: "synthetic-second-reference",
+      excerpt: "短引用",
+    }) +
+    "]，再看 \`code\`。",
+]);
+cases.push([
+  "长无空格摘录",
+  payload({ ...ref, excerpt: "reference".repeat(80) }),
+]);
 const code = `import React from 'react'; import {createRoot} from 'react-dom/client'; import {InlineReferenceContent} from '${src}/InlineReferenceContent.tsx'; import {parseSentReferenceContent} from '${src}/reference-draft.ts'; import {i18n} from '${src}/i18n.ts'; import '${src}/theme.css'; import '${src}/styles.css';
-i18n.changeLanguage('zh-CN'); const cases=${JSON.stringify(cases)}; createRoot(document.getElementById('root')).render(<main>{cases.map(([name,payload],i)=>{const p=parseSentReferenceContent(payload,${JSON.stringify(clientId)});return <section key={i} data-case={i}><h2>{name}</h2><article className="user-row"><div className="user-bubble"><InlineReferenceContent text={p.text} references={p.references}/></div></article></section>})}<button id="measure" onClick={()=>measure()}>测量当前盒模型</button><pre id="metrics"/></main>); function measure(){const data=[...document.querySelectorAll('section')].map(s=>({name:s.querySelector('h2').textContent,boxes:[...s.querySelectorAll('.user-bubble,.inline-reference-content,.markdown-body,p,.reference-token,.reference-token-details')].map(e=>({class:e.className||e.tagName,x:e.getBoundingClientRect().x,width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height,scrollWidth:e.scrollWidth}))}));document.querySelector('#metrics').textContent=JSON.stringify(data,null,2);window.layoutMetrics=data;} setTimeout(measure,500); window.addEventListener('resize',measure);`;
+i18n.changeLanguage('zh-CN'); const cases=${JSON.stringify(cases)}; createRoot(document.getElementById('root')).render(<main>{cases.map(([name,payload],i)=>{const p=parseSentReferenceContent(payload,${JSON.stringify(clientId)});return <section key={i} data-case={i}><h2>{name}</h2><article className="user-row"><div className="user-bubble"><InlineReferenceContent text={p.text} references={p.references}/></div></article></section>})}<button id="measure" onClick={()=>measure()}>测量当前盒模型</button><pre id="metrics"/></main>); window.referenceExcerpt=${JSON.stringify(ref.excerpt)}; function measure(){const data=[...document.querySelectorAll('section')].map(s=>({name:s.querySelector('h2').textContent,boxes:[...s.querySelectorAll('.user-bubble,.inline-reference-content,.markdown-body,p,.reference-token,.reference-token-details')].map(e=>({class:e.className||e.tagName,x:e.getBoundingClientRect().x,width:e.getBoundingClientRect().width,right:e.getBoundingClientRect().right,clientWidth:e.clientWidth,height:e.getBoundingClientRect().height,scrollWidth:e.scrollWidth}))}));document.querySelector('#metrics').textContent=JSON.stringify(data,null,2);window.layoutMetrics=data;} setTimeout(measure,500); window.addEventListener('resize',measure);`;
 (async () => {
   const r = await esbuild.build({
     stdin: { contents: code, resolveDir: repo, loader: "tsx" },
