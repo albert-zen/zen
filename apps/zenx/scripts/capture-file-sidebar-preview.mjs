@@ -553,6 +553,78 @@ try {
       : "failed";
   }
 
+  for (const lang of ["en", "zh-CN"]) {
+    const receipt = { name: `local-paths-${lang}`, checks: [] };
+    evidence.cases.push(receipt);
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1100,
+      height: 760,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const destination = `${url}/file-sidebar.html?${new URLSearchParams({ lang, theme: lang === "en" ? "dark" : "light", links: "true" })}`;
+    await send("Page.navigate", { url: destination });
+    await waitFor(
+      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('[data-local-path-preview] a')`,
+    );
+    await screenshot(`local-paths-${lang}-before.png`);
+    check(
+      receipt,
+      "links-use-existing-file-flow",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] a').length===3`,
+      ),
+    );
+    const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
+    await delay(250);
+    check(
+      receipt,
+      "render-does-not-read-files",
+      await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
+    );
+    await clickSelector("[data-local-path-preview] a");
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
+    );
+    receipt.after = await evaluate(measure);
+    await screenshot(`local-paths-${lang}-opened.png`);
+    check(
+      receipt,
+      "click-opens-requested-markdown-file",
+      receipt.after.activeId.includes("long-notes"),
+    );
+    check(
+      receipt,
+      "same-thread-file-ownership",
+      receipt.after.calls.every(
+        (call) => call.threadId === "synthetic-file-sidebar-thread",
+      ),
+    );
+    await clickSelector(
+      "[data-local-path-preview] .markdown-code-actions button",
+    );
+    await waitFor(
+      `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+    );
+    check(
+      receipt,
+      "text-path-action-opens-requested-file",
+      await evaluate(
+        `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
+      ),
+    );
+    check(
+      receipt,
+      "text-path-copy-remains-separate",
+      await evaluate(
+        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
+      ),
+    );
+    await screenshot(`local-paths-${lang}-text-block-opened.png`);
+    receipt.status = receipt.checks.every((check) => check.status === "passed")
+      ? "passed"
+      : "failed";
+  }
   // Diagnostic-only matrix: real components, no production-style overrides.
   // Darwin is a renderer marker; this remains Linux Chromium, not macOS acceptance.
   for (const targetWidth of [256, 384]) {
@@ -573,6 +645,26 @@ try {
     await waitFor(
       `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('.auxiliary-content:not([hidden]) .cm-scroller')`,
     );
+    const titlebarLayout = `(() => {
+      const bar=document.querySelector('.window-titlebar');
+      const session=document.querySelector('.window-titlebar-session');
+      const panel=document.querySelector('.auxiliary-panel');
+      const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+      return {bar:rect(bar),session:rect(session),panel:rect(panel),workspaceWidth:getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'),transitionDuration:getComputedStyle(bar).transitionDuration};
+    })()`;
+    receipt.titlebarBeforeReady = await evaluate(titlebarLayout);
+    // Wait for actual layout animation settlement, retaining pointer hit tests.
+    await waitFor(`(() => {
+      const bar=document.querySelector('.window-titlebar').getBoundingClientRect();
+      const panel=document.querySelector('.auxiliary-panel').getBoundingClientRect();
+      const session=document.querySelector('.window-titlebar-session').getBoundingClientRect();
+      const width=parseFloat(getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'));
+      const last=window.__fileTitlebarReady;
+      const stable=bar.right<=panel.left+1 && session.right<=panel.left+1 && Math.abs(width-panel.width)<=1 && last && Math.abs(last.right-bar.right)<0.5;
+      window.__fileTitlebarReady={right:bar.right,count:stable?last.count+1:0};
+      return window.__fileTitlebarReady.count>=3;
+    })()`);
+    receipt.titlebarAfterReady = await evaluate(titlebarLayout);
     await selectTab(markdownId);
     // Resize through the actual public separator, never mutate CSS or scrollTop.
     await clickSelector(".auxiliary-panel > .browser-panel-resizer");
@@ -678,78 +770,6 @@ try {
     check(receipt, "tree-still-open-after-navigation", receipt.end.treeVisible);
     bounded(receipt, "end", receipt.end);
     await screenshot(`${receipt.name}-end.png`);
-    receipt.status = receipt.checks.every((check) => check.status === "passed")
-      ? "passed"
-      : "failed";
-  }
-  for (const lang of ["en", "zh-CN"]) {
-    const receipt = { name: `local-paths-${lang}`, checks: [] };
-    evidence.cases.push(receipt);
-    await send("Emulation.setDeviceMetricsOverride", {
-      width: 1100,
-      height: 760,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-    const destination = `${url}/file-sidebar.html?${new URLSearchParams({ lang, theme: lang === "en" ? "dark" : "light", links: "true" })}`;
-    await send("Page.navigate", { url: destination });
-    await waitFor(
-      `location.href===${JSON.stringify(destination)} && document.body?.dataset.previewReady==='true' && document.querySelector('[data-local-path-preview] a')`,
-    );
-    await screenshot(`local-paths-${lang}-before.png`);
-    check(
-      receipt,
-      "links-use-existing-file-flow",
-      await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] a').length===3`,
-      ),
-    );
-    const before = await evaluate(`window.__fileSidebarPreview.calls.length`);
-    await delay(250);
-    check(
-      receipt,
-      "render-does-not-read-files",
-      await evaluate(`window.__fileSidebarPreview.calls.length===${before}`),
-    );
-    await clickSelector("[data-local-path-preview] a");
-    await waitFor(
-      `document.querySelector('.auxiliary-content:not([hidden]) .cm-editor') && document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-notes')`,
-    );
-    receipt.after = await evaluate(measure);
-    await screenshot(`local-paths-${lang}-opened.png`);
-    check(
-      receipt,
-      "click-opens-requested-markdown-file",
-      receipt.after.activeId.includes("long-notes"),
-    );
-    check(
-      receipt,
-      "same-thread-file-ownership",
-      receipt.after.calls.every(
-        (call) => call.threadId === "synthetic-file-sidebar-thread",
-      ),
-    );
-    await clickSelector(
-      "[data-local-path-preview] .markdown-code-actions button",
-    );
-    await waitFor(
-      `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
-    );
-    check(
-      receipt,
-      "text-path-action-opens-requested-file",
-      await evaluate(
-        `document.querySelector('.auxiliary-content:not([hidden])')?.id.includes('long-source')`,
-      ),
-    );
-    check(
-      receipt,
-      "text-path-copy-remains-separate",
-      await evaluate(
-        `document.querySelectorAll('[data-local-path-preview] .markdown-code-actions button').length===2 && document.querySelector('[data-local-path-preview] pre code').textContent==='/synthetic/file-sidebar-preview/src/long-source.ts'`,
-      ),
-    );
-    await screenshot(`local-paths-${lang}-text-block-opened.png`);
     receipt.status = receipt.checks.every((check) => check.status === "passed")
       ? "passed"
       : "failed";
