@@ -52,7 +52,7 @@ async function until(expression, label) {
 const selector = '.auxiliary-content[role="tabpanel"]:not([hidden])';
 const measure = `(() => {
   const root=document.querySelector(${JSON.stringify(selector)});
-  const style=e=>{if(!e)return null;const s=getComputedStyle(e),r=e.getBoundingClientRect();return {tag:e.tagName,className:e.className,x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,scrollTop:e.scrollTop,scrollLeft:e.scrollLeft,overflowX:s.overflowX,overflowY:s.overflowY,outline:s.outline,border:s.border,focusVisible:e.matches(':focus-visible')};};
+  const style=e=>{if(!e)return null;const s=getComputedStyle(e),r=e.getBoundingClientRect();return {tag:e.tagName,className:e.className,x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,scrollTop:e.scrollTop,scrollLeft:e.scrollLeft,overflowX:s.overflowX,overflowY:s.overflowY,outline:s.outline,border:s.border,inlineStyle:e.getAttribute("style"),navigationWidth:s.getPropertyValue("--file-navigation-width"),workspaceWidth:s.getPropertyValue("--workspace-panel-width"),focusVisible:e.matches(':focus-visible')};};
   const scroller=root?.querySelector('.cm-scroller'),r=scroller?.getBoundingClientRect();
   const nodes=[...root?.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')||[]].map(style);
   const ancestors=[];for(let e=scroller?.parentElement;e;e=e.parentElement)ancestors.push(style(e));
@@ -175,6 +175,20 @@ async function runCase(width, precise) {
   await pause(300);
   await evaluate(
     `(() => {window.__nativeFileWheelEvents=[];document.addEventListener('wheel',event=>{const e={target:event.target?.className,deltaX:event.deltaX,deltaY:event.deltaY,deltaMode:event.deltaMode,defaultPreventedAtCapture:event.defaultPrevented};window.__nativeFileWheelEvents.push(e);setTimeout(()=>e.defaultPreventedAfterDispatch=event.defaultPrevented,0);},{capture:true,passive:true});})()`,
+  );
+  receipt.afterResize = await evaluate(measure);
+  receipt.nativeWindow = {
+    focused: window.isFocused(),
+    visible: window.isVisible(),
+    minimized: window.isMinimized(),
+    bounds: window.getBounds(),
+    contentBounds: window.getContentBounds(),
+  };
+  // React/ResizeObserver/Chromium layout must converge before checking geometry.
+  // Preserve the exact width contract; a timeout retains all pre-wait evidence.
+  await until(
+    `Math.abs(document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').getBoundingClientRect().width-${width})<=3`,
+    "resized editor layout committed",
   );
   receipt.before = await evaluate(measure);
   assert.ok(
