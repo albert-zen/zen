@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import type { Parent, Root } from "mdast";
 import type {
@@ -17,6 +18,7 @@ import type {
   Text as HtmlText,
   RootContent,
 } from "hast";
+import { isLocalPath, remarkLocalPaths } from "./local-path-links.js";
 import { MarkdownImage } from "./MarkdownImage.js";
 import { classifyImageSource } from "../../image-source.js";
 import { classifyMessageLink } from "../../external-link-policy.js";
@@ -77,9 +79,72 @@ export function Markdown({
       (out, token) => out.split(token.marker).join(token.copyText),
       value,
     );
+  const localPathPlugins: PluggableList = onOpen
+    ? [
+        [
+          remarkLocalPaths,
+          { markers: inlineTokens.map((token) => token.marker) },
+        ],
+      ]
+    : [];
+  // Code delimiters preserve styling, but a complete web address remains an
+  // explicit navigation target. Never inspect fenced code or nested links.
+  const inlineWebLinks = () => (tree: Root) => {
+    const visit = (parent: Parent) => {
+      parent.children = parent.children.map((node) => {
+        if (
+          ["link", "linkReference", "image", "imageReference"].includes(
+            node.type,
+          )
+        )
+          return node;
+        if (
+          node.type === "inlineCode" &&
+          /^https?:\/\/[^\s<>]+$/iu.test(node.value) &&
+          !inlineTokens.some((token) => node.value.includes(token.marker))
+        ) {
+          const target = classifyMessageLink(node.value);
+          if (target.kind === "browser")
+            return { type: "link", url: target.value, children: [node] };
+        }
+        if ("children" in node) visit(node as Parent);
+        return node;
+      }) as Parent["children"];
+    };
+    visit(tree);
+  };
   const components: Components = {
     ...markdownComponents,
     a: messageAnchor(onOpen),
+    pre: ({ children, node }) => {
+      const child = Children.only(children);
+      if (isValidElement(child)) {
+        const props = child.props as {
+          className?: string;
+          children?: unknown;
+        };
+        const language = props.className?.match(/language-(\S+)/u)?.[1] ?? "";
+        return (
+          <CodeBlock
+            block={{
+              type: "code",
+              language,
+              text: String(props.children ?? "").replace(/\n$/u, ""),
+              closed: true,
+            }}
+            renderText={renderText}
+            copyText={copyText}
+            filePathAllowed={
+              closedTopLevelFence(text, node) &&
+              !inlineTokens.some((token) =>
+                String(props.children ?? "").includes(token.marker),
+              )
+            }
+          />
+        );
+      }
+      return <pre>{children}</pre>;
+    },
     ...(inlineTokens.length
       ? ({
           span: ({ node, children }) => {
@@ -95,30 +160,6 @@ export function Markdown({
               {typeof children === "string" ? renderText(children) : children}
             </code>
           ),
-          pre: ({ children }) => {
-            const child = Children.only(children);
-            if (isValidElement(child)) {
-              const props = child.props as {
-                className?: string;
-                children?: unknown;
-              };
-              const language =
-                props.className?.match(/language-(\S+)/u)?.[1] ?? "";
-              return (
-                <CodeBlock
-                  block={{
-                    type: "code",
-                    language,
-                    text: String(props.children ?? "").replace(/\n$/u, ""),
-                    closed: true,
-                  }}
-                  renderText={renderText}
-                  copyText={copyText}
-                />
-              );
-            }
-            return <pre>{children}</pre>;
-          },
         } satisfies Components)
       : {}),
   };
@@ -220,6 +261,8 @@ export function Markdown({
           remarkPlugins={[
             remarkGfm,
             remarkBareAutolinkResidue,
+            inlineWebLinks,
+            ...localPathPlugins,
             ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
           ]}
           components={components}
@@ -243,6 +286,8 @@ export function Markdown({
         remarkPlugins={[
           remarkGfm,
           remarkBareAutolinkResidue,
+          inlineWebLinks,
+          ...localPathPlugins,
           ...(inlineTokens.length ? [referenceSyntaxPlugin] : []),
         ]}
         components={components}
@@ -430,16 +475,56 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks;
 }
 
+// Only a source-confirmed, top-level closed fence may expose a file action.
+// ReactMarkdown also renders unfinished nested fences; their existence is not
+// evidence that the model has finished emitting the path.
+function closedTopLevelFence(
+  source: string,
+  node: HtmlElement | undefined,
+): boolean {
+  const start = node?.position?.start.line;
+  const end = node?.position?.end.line;
+  if (!start || !end || end <= start) return false;
+  const lines = source.replace(/\r\n?/gu, "\n").split("\n");
+  const opening = /^ {0,3}(`{3,}|~{3,})(?:text|plaintext)\s*$/iu.exec(
+    lines[start - 1] ?? "",
+  );
+  if (!opening) return false;
+  const marker = opening[1]!;
+  return new RegExp(
+    `^ {0,3}${escapeRegExp(marker[0]!)}{${marker.length},}\\s*$`,
+    "u",
+  ).test(lines[end - 1] ?? "");
+}
+
 function CodeBlock({
   block,
   renderText = (value) => value,
   copyText = (value) => value,
+  filePathAllowed = false,
 }: {
   block: Extract<MarkdownBlock, { type: "code" }>;
   renderText?(value: string): ReactNode;
   copyText?(value: string): string;
+  filePathAllowed?: boolean;
 }) {
   useTranslation("panels");
+  const onOpen = useContext(MessageLinkContext);
+  // A separate explicit action, never syntax highlighting/linkification of code.
+  // Keep whitespace and command-like payloads inert rather than guessing intent.
+  const fileTarget =
+    onOpen &&
+    filePathAllowed &&
+    block.closed &&
+    /^(?:text|plaintext)$/iu.test(block.language) &&
+    !/[\s;&|<>`$]/u.test(block.text) &&
+    isLocalPath(block.text)
+      ? classifyMessageLink(
+          /^file:\/\//iu.test(block.text)
+            ? new URL(block.text).toString()
+            : encodeURI(block.text),
+        )
+      : null;
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(copyText(block.text));
@@ -450,9 +535,16 @@ function CodeBlock({
     <div className={`markdown-code${block.closed ? "" : " streaming"}`}>
       <div className="markdown-code-header">
         <span>{block.language || "text"}</span>
-        <button type="button" onClick={() => void copy()}>
-          {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
-        </button>
+        <span className="markdown-code-actions">
+          {fileTarget?.kind === "file" && (
+            <button type="button" onClick={() => onOpen?.(fileTarget)}>
+              {i18n.t("panels:openMessageFile")}
+            </button>
+          )}
+          <button type="button" onClick={() => void copy()}>
+            {copied ? i18n.t("panels:copied") : i18n.t("panels:copy")}
+          </button>
+        </span>
       </div>
       <pre>
         <code>{renderText(block.text)}</code>

@@ -122,7 +122,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
         continue;
       }
       if (message.role === "tool") {
-        const receipt = `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${message.exitCode}`}\n${message.text}`;
+        const receipt = message.text;
         const content: UserInput = [
           { type: "text", text: receipt },
           ...(message.modelContent ?? []),
@@ -173,6 +173,10 @@ export class OpenAiResponsesModel implements ModelAdapter {
     const body = JSON.stringify({
       ...this.#params,
       model: request.model.trim(),
+      instructions: request.instructions ?? "",
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_output_tokens: request.maxOutputTokens }),
       input,
       store: false,
       stream: true,

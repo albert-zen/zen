@@ -347,6 +347,10 @@ export class PluginRuntimeSupervisor {
     });
   }
 
+  activationFailure(pluginId: string): string | undefined {
+    return this.#active.get(pluginId)?.bundle.activationFailure;
+  }
+
   /** Human/plugin-product path: routes directly and creates no AppServer Turn. */
   async invoke(
     pluginId: string,
@@ -428,6 +432,7 @@ class SupervisedPluginBundle implements ToolBundle {
   #prepared = 0;
   #hostGenerationLeases = 0;
   #closePromise: Promise<void> | undefined;
+  #activationFailure: string | undefined;
   readonly #retirementObservers = new Set<{
     resolve(): void;
     reject(error: unknown): void;
@@ -457,8 +462,19 @@ class SupervisedPluginBundle implements ToolBundle {
     return this.#runtime.activate !== undefined;
   }
 
+  get activationFailure(): string | undefined {
+    return this.#activationFailure;
+  }
+
   activate(previousRetired: Promise<void>): void {
-    this.#runtime.activate?.(previousRetired);
+    try {
+      this.#runtime.activate?.(previousRetired);
+    } catch (error) {
+      // Catalog, bundle and storage publication already committed. Never turn
+      // this into a rollback that can overwrite this generation's writes.
+      this.#activationFailure = `Plugin ${this.identity.id} committed but activation failed: ${asError(error).message.slice(0, 2000)}`;
+      console.warn(this.#activationFailure);
+    }
   }
 
   async #execute(
@@ -530,6 +546,8 @@ class SupervisedPluginBundle implements ToolBundle {
       );
     }
     invocation.signal.throwIfAborted();
+    if (this.#activationFailure !== undefined)
+      throw new Error(this.#activationFailure);
     const operation = this.#runtime.invoke(invocation);
     this.#active.add(operation);
     try {
@@ -1214,6 +1232,7 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
   ) => PluginRuntimeRegistration;
   readonly #hostSdkFor?: (registration: RegisteredZenXCapability) => Promise<{
     sdk: ZenXPluginHostSdkV1;
+    publish?(): void;
     rollback?(): Promise<void>;
   }>;
 
@@ -1224,6 +1243,7 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
     ): PluginRuntimeRegistration;
     hostSdkFor?(registration: RegisteredZenXCapability): Promise<{
       sdk: ZenXPluginHostSdkV1;
+      publish?(): void;
       rollback?(): Promise<void>;
     }>;
   }) {
@@ -1250,7 +1270,10 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
         options,
       );
       return {
-        publish: () => stage.publish(),
+        publish: () => {
+          prepared?.publish?.();
+          stage.publish();
+        },
         rollback: async () => {
           let runtimeError: unknown;
           try {
@@ -1266,6 +1289,10 @@ export class CatalogPluginRuntimeLifecycle implements ZenXPluginRuntimeLifecycle
       await prepared?.rollback?.();
       throw error;
     }
+  }
+
+  activationFailure(pluginId: string): string | undefined {
+    return this.#supervisor.activationFailure(pluginId);
   }
 
   async stop(pluginId: string): Promise<void> {

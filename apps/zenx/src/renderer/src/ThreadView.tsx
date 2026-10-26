@@ -2585,7 +2585,6 @@ function TurnBlock({
     disclosureKey("turn", turn.id),
   );
   const [protectedOpen, setProtectedOpen] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
   // before a terminal render could remove the user's selected/focused node.
@@ -2601,16 +2600,15 @@ function TurnBlock({
           !!active.closest(".turn-history") &&
           !!sectionRef.current?.contains(active)))
     ) {
-      setInspecting(true);
       setProtectedOpen(true);
     }
   }
+  // Selecting/copying the visible answer is not a request to reveal history.
+  // Only preserve an already-visible selection at the running → terminal edge.
   const expanded =
     protectedOpen ||
     (expandedOverride ??
-      (turn.status === "failed" ||
-        turn.status === "interrupted" ||
-        inspecting));
+      (turn.status === "failed" || turn.status === "interrupted"));
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&
@@ -2618,25 +2616,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  useEffect(() => {
-    const preserve = () => {
-      const active = document.activeElement;
-      setInspecting(
-        transcriptHasSelection(sectionRef.current) ||
-          (active instanceof Element &&
-            !!active.closest(".turn-history") &&
-            !!sectionRef.current?.contains(active)),
-      );
-    };
-    document.addEventListener("selectionchange", preserve);
-    document.addEventListener("focusin", preserve);
-    document.addEventListener("focusout", preserve);
-    return () => {
-      document.removeEventListener("selectionchange", preserve);
-      document.removeEventListener("focusin", preserve);
-      document.removeEventListener("focusout", preserve);
-    };
-  }, []);
   const reviewActivity = () => {
     setExpanded(true);
     requestAnimationFrame(() => {

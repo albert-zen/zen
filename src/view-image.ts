@@ -108,10 +108,12 @@ function referencedImages(
   items: Awaited<ReturnType<Pick<ThreadJournal, "read">["read"]>>,
 ): AttachmentRef[] {
   return items.flatMap((item) => {
-    if (item.type === "user_message") {
-      return contentFromUserMessage(item).flatMap((part) =>
-        part.type === "image" ? [part.attachment] : [],
-      );
+    if (item.type === "user_message" || item.type === "context_message") {
+      return (
+        item.type === "context_message"
+          ? item.content
+          : contentFromUserMessage(item)
+      ).flatMap((part) => (part.type === "image" ? [part.attachment] : []));
     }
     if (item.type === "tool_result" && item.modelContent !== undefined) {
       return item.modelContent.flatMap((part) =>

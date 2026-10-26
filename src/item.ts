@@ -27,6 +27,10 @@ export interface WorkspaceInstructionFile {
 }
 
 export type ItemType =
+  | "model_operation"
+  | "model_operation_completed"
+  | "context_format"
+  | "context_message"
   | "thread_metadata"
   | "thread_forked"
   | "thread_instruction"
@@ -57,6 +61,10 @@ export type ItemType =
   | "failure";
 
 const CANONICAL_ITEM_TYPES = {
+  model_operation: true,
+  model_operation_completed: true,
+  context_format: true,
+  context_message: true,
   thread_metadata: true,
   thread_forked: true,
   thread_instruction: true,
@@ -95,7 +103,48 @@ export interface ItemBase {
   type: ItemType;
 }
 
+export type ModelOperationKind = "title" | "image-capability-probe";
+/** Actual Host admission; never a queued task or automatically resumed work. */
+export interface ModelOperationItem extends ItemBase {
+  type: "model_operation";
+  kind: ModelOperationKind;
+  sourceItemIds: string[];
+  selection: CanonicalProviderSelection;
+  maxOutputTokens?: number;
+}
+/** Complete observed outcome; diagnostic is Host-authored, content is model output. */
+export interface ModelOperationCompletedItem extends ItemBase {
+  type: "model_operation_completed";
+  operationItemId: string;
+  status: "completed" | "failed" | "cancelled";
+  content?: UserInput;
+  incomplete?: true;
+  error?: string;
+  probeOutcome?: "supported" | "unsupported" | "inconclusive";
+}
+
+/** One append-only format gate; older Hosts must not write new content histories. */
+export interface ContextFormatItem extends ItemBase {
+  type: "context_format";
+  contentVersion: 1;
+}
+
+/** A source-linked, once-materialized message, never a request/history snapshot. */
+export interface ContextMessageItem extends ItemBase {
+  type: "context_message";
+  compilerPolicyVersion: 1;
+  sourceItemIds: string[];
+  role: "user" | "assistant" | "tool" | "reasoning" | "system";
+  origin: "human" | "agent" | "host" | "model" | "tool";
+  purpose: string;
+  /** Stable semantic digest, not a sample identity or transport encoding. */
+  variant: string;
+  content: UserInput;
+}
+
 interface ThreadMetadataItemBase extends ItemBase {
+  /** Trusted Host-only non-conversation history; never accepted from public start/import. */
+  purpose?: "image-capability-probe";
   importedFrom?: ThreadImportOrigin;
   type: "thread_metadata";
   cwd: string;
@@ -259,6 +308,8 @@ export type UserInputPart =
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
+  /** Compiler-owned positions; incoming user parts cannot claim Host provenance. */
+  contentAuthority?: { version: 1; hostTextPartIndices: number[] };
   type: "user_message";
   turnId: string;
   clientId?: string;
@@ -587,6 +638,10 @@ export interface CodeStateItem extends ItemBase {
 }
 
 export type CanonicalItem =
+  | ModelOperationItem
+  | ModelOperationCompletedItem
+  | ContextFormatItem
+  | ContextMessageItem
   | HostMessageItem
   | QueuedHostMessageItem
   | HostMessageCancelledItem
@@ -642,6 +697,13 @@ export function contentFromUserMessage(item: UserMessageItem): UserInput {
   return item.content ?? [{ type: "text", text: item.text }];
 }
 
+/** Original admission/ordinary UI only. Model compilation must use full content. */
+export function originalUserInput(item: UserMessageItem): UserInput {
+  const content = contentFromUserMessage(item);
+  const hostParts = new Set(item.contentAuthority?.hostTextPartIndices ?? []);
+  return content.filter((_part, index) => !hostParts.has(index));
+}
+
 export function textFromUserInput(input: UserInput): string {
   return input
     .filter((part): part is TextUserInputPart => part.type === "text")
@@ -665,7 +727,7 @@ export function previewFromUserInput(input: UserInput): string {
 }
 
 export function previewFromUserMessage(item: UserMessageItem): string {
-  return item.text ?? previewFromUserInput(item.content);
+  return previewFromUserInput(originalUserInput(item));
 }
 
 export function sameUserInput(left: UserInput, right: UserInput): boolean {
@@ -722,6 +784,80 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
   }
 
   switch (type) {
+    case "model_operation":
+      requireNoTurnId(item);
+      requireEnum(
+        item.kind,
+        ["title", "image-capability-probe"],
+        "model_operation.kind",
+      );
+      requireStringArray(item.sourceItemIds, "model_operation.sourceItemIds");
+      validateSelection(
+        requireRecord(item.selection, "model_operation.selection"),
+        "model_operation.selection",
+      );
+      if (item.maxOutputTokens !== undefined) {
+        requireSafeInteger(
+          item.maxOutputTokens,
+          "model_operation.maxOutputTokens",
+        );
+        if (Number(item.maxOutputTokens) < 1)
+          throw new Error("Invalid operation output limit");
+      }
+      break;
+    case "model_operation_completed":
+      requireNoTurnId(item);
+      requireNonEmptyString(
+        item.operationItemId,
+        "model_operation_completed.operationItemId",
+      );
+      requireEnum(
+        item.status,
+        ["completed", "failed", "cancelled"],
+        "model_operation_completed.status",
+      );
+      if (item.content !== undefined)
+        validateUserInput(item.content, "model_operation_completed.content");
+      if (item.error !== undefined)
+        requireString(item.error, "model_operation_completed.error");
+      if (item.incomplete !== undefined && item.incomplete !== true)
+        throw new Error("Invalid operation partial-output flag");
+      if (item.probeOutcome !== undefined)
+        requireEnum(
+          item.probeOutcome,
+          ["supported", "unsupported", "inconclusive"],
+          "model_operation_completed.probeOutcome",
+        );
+      break;
+    case "context_format":
+      if (item.contentVersion !== 1)
+        throw new Error("Unsupported canonical content format");
+      break;
+    case "context_message":
+      if (item.compilerPolicyVersion !== 1)
+        throw new Error("Unsupported compiler policy version");
+      requireStringArray(item.sourceItemIds, "context_message.sourceItemIds");
+      if (
+        new Set(item.sourceItemIds as string[]).size !==
+        (item.sourceItemIds as string[]).length
+      )
+        throw new Error("Duplicate context source identity");
+      if ((item.sourceItemIds as string[]).length === 0)
+        throw new Error("Context message requires a canonical source");
+      requireEnum(
+        item.role,
+        ["user", "assistant", "tool", "reasoning", "system"],
+        "context_message.role",
+      );
+      requireEnum(
+        item.origin,
+        ["human", "agent", "host", "model", "tool"],
+        "context_message.origin",
+      );
+      requireNonEmptyString(item.purpose, "context_message.purpose");
+      requireNonEmptyString(item.variant, "context_message.variant");
+      validateUserInput(item.content, "context_message.content");
+      break;
     case "thread_metadata":
       requireNoTurnId(item);
       if (item.importedFrom !== undefined) {
@@ -777,6 +913,12 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
           throw new Error("Invalid import provenance");
       }
       requireNonEmptyString(item.cwd, "thread_metadata.cwd");
+      if (item.purpose !== undefined)
+        requireEnum(
+          item.purpose,
+          ["image-capability-probe"],
+          "thread_metadata.purpose",
+        );
       if (item.parentThreadId !== undefined) {
         requireNonEmptyString(
           item.parentThreadId,
@@ -1120,6 +1262,33 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (hasOwn(item, "text"))
         requireNonEmptyString(item.text, `${type}.text`);
       else validateUserInput(item.content, `${type}.content`);
+      if (item.contentAuthority !== undefined) {
+        const authority = requireRecord(
+          item.contentAuthority,
+          `${type}.contentAuthority`,
+        );
+        if (
+          authority.version !== 1 ||
+          !Array.isArray(authority.hostTextPartIndices)
+        )
+          throw new Error("Invalid canonical content authority");
+        if (!Array.isArray(item.content) || hasOwn(item, "text"))
+          throw new Error("Canonical content authority requires typed content");
+        const indices = authority.hostTextPartIndices;
+        if (
+          new Set(indices).size !== indices.length ||
+          indices.some(
+            (index) =>
+              !Number.isSafeInteger(index) ||
+              index < 0 ||
+              !Array.isArray(item.content) ||
+              item.content[index]?.type !== "text",
+          )
+        )
+          throw new Error(
+            "Host content provenance must reference unique text parts",
+          );
+      }
       break;
     case "agent_message":
       requireTurnId(item, type);

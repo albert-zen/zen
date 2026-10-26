@@ -442,7 +442,9 @@ ThreadView
 
 - Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。外部 provider 的每个目标在同一 tab strip 中以“外部 · 只读”页面展示，固定其 backend/connection/session/observer 身份；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。不再单设 Agent Browser / Attached browser 入口。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
+- 内置浏览器的空白页（精确 `about:blank`）跟随 App 明确的浅/深外观，而不是系统外观；仅空白文档设置背景与 color-scheme，实际网站保留自身样式与系统媒体查询，不通过全局 nativeTheme 或覆盖层伪装。导航到外站前后的异步外观更新不得污染外站。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
+- macOS 同行标题栏的 traffic lights 与左侧栏开关拥有独立、共享的 leading 安全区；右栏展开、左侧栏收起或布局动画不能让工作区 Tab、滚动轨道和拖动命中区侵入。安全区约束整个 Tab 容器，不依赖首个 Tab 的名称或顺序；窄屏仍沿用独立标题行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
 - 文件选择器提供按需展开的文件树，以及覆盖当前 Thread 精确 cwd 的文件名/相对路径搜索；搜索不会退化成当前已展开目录的过滤。文件名是主标签，搜索结果的父路径单独显示，完整路径保留在 tooltip 和文件头。方向键导航树、左右展开/折叠，Enter 打开，Escape 清除搜索；输入法组合期间不提交。返回、切换 Thread、更新查询和刷新后，旧读取不能回填。显式“打开输入的路径”保留已知相对路径入口，仍经同一 Host 校验。
@@ -744,6 +746,15 @@ A compact release-notes icon sits at the right of Settings in the same Sidebar f
 ### Explicit API protocol (Responses draft)
 
 The existing compatible Provider dialog offers a shared Select for Chat Completions or Responses. Missing protocol remains Chat Completions without a migration. The hint states that Responses requires endpoint support and never silently falls back. This choice affects model sampling, title generation and explicitly requested image capability checks; it does not trigger a model call when changed or saved.
+
 ### Context pressure details
 
 上下文圆圈 hover/click 默认只展示彩色分段占用条、系统/工具/插件/对话四个短标签及数值；颜色与文字一一对应，不依赖颜色独自传达含义。分项之和等于估算总数，剩余窗口保留底色。面板仅展示产品的单一统计，不显示说明段落、估算详情或第二个历史值；缓存项写全“线程缓存命中率”。工具项包含已披露插件 SDK；插件项是注入消息，不重复计算。当前沿用字符启发式而非 tokenizer，对中文等内容可能明显偏差；媒体和协议开销也不是精确计费，不能把估算称为准确值。不展示不存在的 MCP 分类，不因 hover/click 向外发送历史或草稿进行网络计数。
+
+### Message file-path links
+
+Message Markdown may render clear local paths as keyboard-focusable links. Activation opens the existing right-side file viewer for the Thread's runtime Host workspace, not the browser client's machine, an external app, or an executable. Rendering does not probe files; unavailable, outside-workspace and permission-denied targets retain the existing explicit error flow. UNC/network authority links are not supported.
+
+Unquoted automatic paths require a directory and file extension; paths containing spaces must be quoted or inline-code delimited. Extensionless automatic paths additionally require an absolute path or an explicit `./` or `../` prefix (for example, `./docs/README`); a quoted bare relative `docs/README` remains inert. Fenced code, ordinary standalone filenames and ambiguous prose are not auto-linked. Existing explicit Markdown links remain supported. Windows drive paths and local file URLs use the same Host containment checks. Conventional `#L12`, `#L12C4`, `:12` or `:12:4` suffixes on file paths open the underlying file; this does not claim exact-line scrolling. Percent-encoded filename punctuation remains literal. Canonical content and copy text are unchanged.
+
+A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.

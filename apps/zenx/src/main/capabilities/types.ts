@@ -388,6 +388,8 @@ export interface RegisteredZenXCapability {
 
 /** Optional ZP3 bridge used by the Catalog to publish/revoke a runtime provider. */
 export interface ZenXPluginRuntimeLifecycle {
+  /** Process-local postcommit failure; never a rollback instruction. */
+  activationFailure?(pluginId: string): string | undefined;
   stage(
     registration: RegisteredZenXCapability,
     options?: { replaceCurrent?: boolean },

@@ -21,7 +21,11 @@ import {
   referenceMessage,
 } from "../../src/renderer/src/reference-draft.js";
 import { applyNativeThreadEvent } from "../../src/renderer/src/thread-view-state.js";
-import { runtimeMessage, runtimeThread } from "./agent-runtime-data.js";
+import {
+  runtimeCommand,
+  runtimeMessage,
+  runtimeThread,
+} from "./agent-runtime-data.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
@@ -54,7 +58,12 @@ const sourceText = unified
   : "建议把执行细节留在对话里，但不要让日志成为页面的主角。\n\n完成后保留结果，具体命令和输出按需展开。\n\n选中文字后，复制不会改变输入框；引用则作为上下文，问题仍写在原来的输入框。\n\n```ts\nconst source = { threadId, messageId };\nconst excerpt = selection.toString();\n// 保留换行、缩进与准确来源\n```";
 const base: Thread = {
   ...runtimeThread(
-    [runtimeMessage("synthetic-answer", sourceText)],
+    [
+      ...(params.has("selection")
+        ? [runtimeCommand("selection-history", "npm test (synthetic history)")]
+        : []),
+      runtimeMessage("synthetic-answer", sourceText),
+    ],
     "completed",
     unified ? "synthetic-host-1" : "quote-thread",
   ),

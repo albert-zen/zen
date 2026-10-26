@@ -123,6 +123,11 @@ test("public Responses encodes multiple tool images natively without supplementa
   );
   assert.equal(body.input[2].call_id, "a");
   assert.equal(body.input[3].call_id, "b");
+  assert.deepEqual(body.input[2].output[0], {
+    type: "input_text",
+    text: "image A",
+  });
+  assert.equal(body.input[3].output, "done");
   assert.equal(body.input[2].output[1].type, "input_image");
   assert.equal(
     body.input[2].output[2].image_url,
@@ -632,7 +637,11 @@ test("public Responses static instructions match the exact wire value", async ()
     });
     await collect(adapter.stream(request()));
     assert.equal(adapter.contextInstructions, instructions ?? "");
-    assert.equal(body.instructions, instructions);
+    assert.equal(body.instructions, "");
+    await collect(
+      adapter.stream(request({ instructions: instructions ?? "" })),
+    );
+    assert.equal(body.instructions, instructions ?? "");
   }
 });
 
@@ -648,4 +657,23 @@ test("public Responses rejects non-string static instructions", () => {
       /instructions must be a string or null/,
     );
   }
+});
+
+test("public Responses forwards a compiler operation output-token limit without changing content", async () => {
+  let body: any;
+  const adapter = new OpenAiResponsesModel({
+    baseUrl,
+    apiKey,
+    defaultParams: { max_output_tokens: 99 },
+    fetch: async (_target, init) => {
+      body = JSON.parse(String(init?.body));
+      return sse();
+    },
+  });
+  await collect(adapter.stream(request({ maxOutputTokens: 1 })));
+  assert.equal(body.max_output_tokens, 1);
+  const limitedInput = body.input;
+  await collect(adapter.stream(request()));
+  assert.equal(body.max_output_tokens, 99);
+  assert.deepEqual(body.input, limitedInput);
 });
