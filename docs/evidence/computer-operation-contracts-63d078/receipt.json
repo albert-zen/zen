@@ -1,0 +1,10 @@
+{
+  "sourceHead": "63d0786320c5fe9ca6e22a8cb5664b22795b8d3f",
+  "sourceTree": "586270520b82c0a04ce52d39a16ecae19ae09fd2",
+  "testMergeCommit": "241ebf1aa62c9b73283fd60b2944ac760e4c0913",
+  "workflowRun": 40310675317,
+  "artifactId": 12644727234,
+  "rendererSourceHash": "02f2a019b44ab5903a720d77b6652e10dc6e60354b70a7d5d6e8c7332e2d5374",
+  "scope": "Production foregroundActivityHtml renderer in its existing synthetic fixture: active/stopping, Chinese/English. Static browser screenshots only; not OS focus, native Stop-click, display-sleep/lock or termination evidence. Lifecycle semantics are separately tested with production classes and synthetic children; no user computer, real app, profile or paid API.",
+  "review": "All four PNGs visually inspected: readable CJK, active Stop enabled, stopping state disabled. Static renderer only; native focus, sleep/lock and OS input not exercised."
+}

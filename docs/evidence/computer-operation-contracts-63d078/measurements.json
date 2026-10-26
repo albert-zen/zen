@@ -1,0 +1,69 @@
+{
+  "scope": "Production foregroundActivityHtml renderer in its existing synthetic fixture: active/stopping, Chinese/English. Static browser screenshots only; not OS focus, native Stop-click, display-sleep/lock or termination evidence. Lifecycle semantics are separately tested with production classes and synthetic children; no user computer, real app, profile or paid API.",
+  "browserSandboxDisabled": false,
+  "commit": "241ebf1aa62c9b73283fd60b2944ac760e4c0913",
+  "cases": [
+    {
+      "name": "active-zh",
+      "language": "zh-CN",
+      "stopping": "false",
+      "width": 1280,
+      "height": 800,
+      "label": "\n  \n  PAW正在使用你的电脑Esc 不可用，请点击停止\n  停止\n",
+      "disabled": false,
+      "sourceHash": "02f2a019b44ab5903a720d77b6652e10dc6e60354b70a7d5d6e8c7332e2d5374"
+    },
+    {
+      "name": "stopping-zh",
+      "language": "zh-CN",
+      "stopping": "true",
+      "width": 1280,
+      "height": 800,
+      "label": "\n  \n  PAW正在停止电脑操作正在等待操作结束\n  正在停止\n",
+      "disabled": true,
+      "sourceHash": "02f2a019b44ab5903a720d77b6652e10dc6e60354b70a7d5d6e8c7332e2d5374"
+    },
+    {
+      "name": "active-en-narrow",
+      "language": "en",
+      "stopping": "false",
+      "width": 390,
+      "height": 640,
+      "label": "\n  \n  PAWis using your computerEsc unavailable; click Stop\n  Stop\n",
+      "disabled": false,
+      "sourceHash": "02f2a019b44ab5903a720d77b6652e10dc6e60354b70a7d5d6e8c7332e2d5374"
+    },
+    {
+      "name": "stopping-en-narrow",
+      "language": "en",
+      "stopping": "true",
+      "width": 390,
+      "height": 640,
+      "label": "\n  \n  PAWStopping computer use…Waiting for the operation to stop\n  Stopping…\n",
+      "disabled": true,
+      "sourceHash": "02f2a019b44ab5903a720d77b6652e10dc6e60354b70a7d5d6e8c7332e2d5374"
+    }
+  ],
+  "rendererErrors": [],
+  "externalRequests": [],
+  "chrome": "/usr/bin/google-chrome",
+  "chromeVersion": "Google Chrome 155.0.8059.39",
+  "cjkFonts": [
+    "Noto Serif CJK JP",
+    "Noto Serif CJK KR",
+    "Noto Serif CJK HK",
+    "Noto Serif CJK SC",
+    "Noto Serif CJK TC",
+    "Noto Sans Mono CJK SC",
+    "Noto Sans Mono CJK TC",
+    "Noto Sans Mono CJK JP",
+    "Noto Sans Mono CJK HK",
+    "Noto Sans Mono CJK KR",
+    "Noto Sans CJK HK",
+    "Noto Sans CJK KR",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC"
+  ],
+  "status": "passed"
+}
