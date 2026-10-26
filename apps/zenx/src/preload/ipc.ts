@@ -21,6 +21,10 @@ export const ipcChannels = {
   workspaceBrowserFocusAddress: "zenx:workspace-browser:focus-address",
   workspaceFilesDirty: "zenx:workspace-files:dirty",
   workspaceFilesSave: "zenx:workspace-files:save",
+  workspaceFilesExternalOpen: "zenx:workspace-files:external-open",
+  workspaceFilesApplications: "zenx:workspace-files:applications",
+  workspaceFilesConfigureApplication:
+    "zenx:workspace-files:configure-application",
   workspaceFilesList: "zenx:workspace-files:list",
   workspaceFilesRead: "zenx:workspace-files:read",
   workspaceFilesSearch: "zenx:workspace-files:search",

@@ -435,6 +435,8 @@
   Attachment setup 从 attach 开始共享一个 10 秒总预算；Page/Runtime enable 各只发送一次，所有调用者等待同一
   setup barrier，且每个 CDP 响应必须匹配请求的精确 session route。该预算是有限启动等待契约，不承诺冻结 renderer
   会恢复；setup 过期/取消仍保留 unknown 并补偿 detach，导航/页代码/Input 的既有 2 秒 outcome deadline 不变。
+  在注册精确 route 与 lifecycle 状态后，两域并行订阅但共同结算后才发布 ready；任一失败由原 attachment
+  统一补偿一次 detach，各域已发送而未知的结果保持独立证据，迟到响应不恢复 readiness 或重发命令。
 - **ZenXWinAppCliComputerProvider** — ZenX Windows 产品层把 Microsoft WinApp CLI 的 HWND/UIA JSON
   投影为既有的有界 opaque observation 与按真实影响分类的 computer tools；外部 CLI 的安装、版本和进程生命周期
   不进入 Zen Core，缺失或协议错误只显式诊断且绝不降级成全局输入注入。
@@ -1432,6 +1434,8 @@ ZenX CI reporter 的 Linux 资源观测只在已有合法 dequeue 事件上按�
 ZenX's unified-reference v2 text envelope extends the existing client-ID-bound quote presentation with an ordered, strictly validated list of file/Thread pointers and explicit message excerpts; it remains one canonical text part, is model-visible verbatim, preserves legacy v1 reads, and adds no Core field, automatic resolver, or frontend-owned conversation state.
 
 ZenX inline-reference v3 is a strictly client-bound readable text projection: prose and self-describing typed reference markers retain their original positions in one canonical user text part. The existing CodeMirror Composer owns only ephemeral token offsets and editing history, never a second conversation journal or automatic resolver; legacy v1/v2 presentation remains readable.
+
+ZenX external file opening is a local desktop UI operation: the main process resolves a local Host Thread's workspace-relative file through the existing realpath boundary, then reveals it with the OS file manager or launches a chosen application with literal argv and no shell. Application paths are Settings-owned host-profile preferences, not Thread facts, tool approvals, or a remote execution route; Fleet locators are unsupported and never fall back to a same-path local file.
 
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
 
