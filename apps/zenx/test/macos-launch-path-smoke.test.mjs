@@ -1,3 +1,4 @@
+import ts from "typescript";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -133,6 +134,34 @@ test("strict AST observer inserts around the real main bootstrap without replaci
         'console.error("Stop failed", error)',
       ),
     mainSource,
+  );
+});
+
+test("strict AST observer preserves the production block shutdown reporter and its visible error dialog", async () => {
+  const source = ts.transpileModule(
+    await readFile(new URL("../src/main/index.ts", import.meta.url), "utf8"),
+    {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2023,
+        module: ts.ModuleKind.ESNext,
+      },
+    },
+  ).outputText;
+  const observed = instrumentLaunchPathEntry(source, "main");
+  assert.match(
+    observed,
+    /reportStopFailure: \(error\) => \{\s*__zenxLaunchPathObserver\.observeShutdownFailure\(error\);/,
+  );
+  assert.match(
+    observed,
+    /dialog\.showErrorBox\(nativeText\("quitStopUnconfirmed"\)/,
+  );
+  assert.equal(
+    observed
+      .replace(/^import \* as __zenxLaunchPathObserver.*\n/u, "")
+      .replace(/\n(?:await )?__zenxLaunchPathObserver\.[^\n]+\n/gu, ""),
+    source,
+    "instrumentation must retain the entire original production body, including typed failure handling",
   );
 });
 

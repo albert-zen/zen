@@ -156,18 +156,26 @@ export function instrumentLaunchPathEntry(source, entry) {
     assert(
       ts.isArrowFunction(failure) &&
         failure.parameters.length === 1 &&
-        ts.isIdentifier(failure.parameters[0].name) &&
-        !ts.isBlock(failure.body),
+        ts.isIdentifier(failure.parameters[0].name),
       "Host shutdown failure callback shape changed",
     );
 
     return applyInsertions(source, [
       [0, observerImport],
-      [
-        failure.body.getStart(file),
-        `(${observerName}.observeShutdownFailure(${failure.parameters[0].name.text}), `,
-      ],
-      [failure.body.end, ")"],
+      ...(ts.isBlock(failure.body)
+        ? [
+            [
+              failure.body.getStart(file) + 1,
+              `\n${observerName}.observeShutdownFailure(${failure.parameters[0].name.text});\n`,
+            ],
+          ]
+        : [
+            [
+              failure.body.getStart(file),
+              `(${observerName}.observeShutdownFailure(${failure.parameters[0].name.text}), `,
+            ],
+            [failure.body.end, ")"],
+          ]),
       [afterImports, `\n${observerName}.observeMain(app);\n`],
       [captureStatement.end, `\n${observerName}.observeCapture(shellPath);\n`],
       [
