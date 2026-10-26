@@ -1,3 +1,4 @@
+import { EditorView } from "@codemirror/view";
 import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
 import type { ComposerInput } from "../src/renderer/src/composer-input.js";
 /** Actual workspace components with synthetic, memory-only file data. */
@@ -24,6 +25,27 @@ const search = new URLSearchParams(
 const language = search.get("lang") === "zh-CN" ? "zh-CN" : "en";
 const diagnosticPreview = search.get("diagnostic") === "true";
 const previewPlatform = diagnosticPreview ? "darwin" : "linux";
+// Read-only fixture observation of the actual editor; never dispatches state.
+if (diagnosticPreview)
+  Object.assign(window, {
+    __nativeEditorState: () => {
+      const dom = document.querySelector(
+        '.auxiliary-content[role="tabpanel"]:not([hidden]) .cm-editor',
+      );
+      const view = dom ? EditorView.findFromDOM(dom as HTMLElement) : null;
+      return view
+        ? {
+            head: view.state.selection.main.head,
+            anchor: view.state.selection.main.anchor,
+            documentLength: view.state.doc.length,
+            viewport: view.viewport,
+            visibleRanges: view.visibleRanges,
+            hasFocus: view.hasFocus,
+          }
+        : null;
+    },
+  });
+
 const linkPreview = search.get("links") === "true";
 const appearance = search.get("theme") === "light" ? "light" : "dark";
 const threadId = "synthetic-file-sidebar-thread";

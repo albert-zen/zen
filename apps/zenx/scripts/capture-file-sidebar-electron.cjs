@@ -63,7 +63,7 @@ const measure = `(() => {
   const nodes=[...root?.querySelectorAll('.markdown-live-editor,.cm-editor,.cm-scroller,.cm-content')||[]].map(style);
   const ancestors=[];for(let e=scroller?.parentElement;e;e=e.parentElement)ancestors.push(style(e));
   const tree=document.querySelector('.workspace-file-navigation');
-  return {scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],keyEvents:window.__nativeFileKeyEvents||[],cspViolations:window.__fileCspViolations||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
+  return {editorState:window.__nativeEditorState?.(),scroller:style(scroller),nodes,ancestors,treeVisible:!!tree?.getClientRects().length,tree:style(tree),panel:style(document.querySelector('.auxiliary-panel')),heading:style(document.querySelector('.auxiliary-heading')),location:style(root?.querySelector('.file-location')),titlebar:style(document.querySelector('.window-titlebar')),titlebarSession:style(document.querySelector('.window-titlebar-session')),activeElement:document.activeElement?.outerHTML.slice(0,500),renderedTail:root?.querySelector('.cm-editor')?.textContent.slice(-600),hitStack:r?document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).map(e=>e.tagName+'.'+e.className):[],wheelEvents:window.__nativeFileWheelEvents||[],keyEvents:window.__nativeFileKeyEvents||[],cspViolations:window.__fileCspViolations||[],page:{width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,widthLimit:innerWidth,heightLimit:innerHeight},navigatorPlatform:navigator.platform,devicePixelRatio,platformMarker:document.documentElement.dataset.platform};
 })()`;
 function requireFocus() {
   assert.ok(window.isFocused(), "Owned BrowserWindow must have OS focus");
@@ -243,6 +243,10 @@ async function runCase(width, precise, productionCsp = false) {
     receipt.sourceBefore = await evaluate(measure);
     bounded(receipt.sourceBefore);
     await wheel(false);
+    await until(
+      `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-scroller').scrollTop>100`,
+      "Source native wheel layout committed",
+    );
     receipt.sourceAfter = await evaluate(measure);
     assert.ok(
       receipt.sourceAfter.scroller.scrollTop > 100,
@@ -371,7 +375,9 @@ async function runCase(width, precise, productionCsp = false) {
   bounded(receipt.scrolled);
   await screenshot(`${receipt.name}-scrolled`);
   receipt.phase = "meta-down";
+  receipt.beforeEnd = await evaluate(measure);
   await key("Down", ["command"]);
+  receipt.immediateEnd = await evaluate(measure);
   await until(
     `document.querySelector(${JSON.stringify(selector)}).querySelector('.cm-editor').textContent.includes('LAST_MARKDOWN_SECTION')`,
     "native document-end layout committed",
