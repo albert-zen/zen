@@ -587,6 +587,8 @@ During a live foreground Computer operation, the Host registers global Escape on
 
 The actual HTML renderer is also used by `test/fixtures/foreground-activity-visual.html`. Reduced motion removes animations; forced colors retain readable status and borders. Browser preview verifies presentation only. Native focus, physical pointer pass-through, fullscreen behavior and monitor changes need their own OS evidence. This slice covers explicit foreground tools, not every possible side effect of a provider currently declared background-safe; provider-specific activation must be fixed at its real admission/dispatch boundary, not hidden by a late glow.
 
+Peekaboo targeted press/value changes are not certified focus-isolated and therefore use the same explicit foreground permission and indicator admission as other foreground actions. No automatic background-to-foreground fallback is permitted. Native AX retains its separate targeted semantic contract; application-created dialogs/focus changes are not a guarantee of isolation. A successful tool dispatch and its optional visual pointer do not establish application effect. External-provider cancellation/timeout/output overflow shows stopping until actual child/pipe close, including failed kill requests; never shorten that lifecycle to make the indicator disappear.
+
 ### 2026-10-14: Per-tab Browser permission
 
 A single compact permission switch sits at the far right of the existing address toolbar, with the stable label “允许 Agent 操作此标签页” / “Allow Agent to operate this tab”. It indicates permission, never who is currently operating or whether the Agent is running. The user can always browse and sign in manually. Off blocks new Agent mutations on the exact tab; on only allows them again, retaining existing fresh-observation and unknown-outcome fences. Neither state starts a task, resumes a conversation or replays an action. The toolbar has no separate completion/continue action or persistent status row. Login and confirmation requests remain in the conversation.
@@ -764,6 +766,15 @@ Message Markdown may render clear local paths as keyboard-focusable links. Activ
 Unquoted automatic paths require a directory and file extension; paths containing spaces must be quoted or inline-code delimited. Extensionless automatic paths additionally require an absolute path or an explicit `./` or `../` prefix (for example, `./docs/README`); a quoted bare relative `docs/README` remains inert. Fenced code, ordinary standalone filenames and ambiguous prose are not auto-linked. Existing explicit Markdown links remain supported. Windows drive paths and local file URLs use the same Host containment checks. Conventional `#L12`, `#L12C4`, `:12` or `:12:4` suffixes on file paths open the underlying file; this does not claim exact-line scrolling. Percent-encoded filename punctuation remains literal. Canonical content and copy text are unchanged.
 
 A closed top-level `text` or `plaintext` fenced block containing exactly one whitespace-free local path offers a separate **Open file** header action alongside Copy. Code remains literal and copy remains unchanged; incomplete, multiline, command-like, reference-bearing and other-language blocks have no file action. Activation uses the same current-Thread Host workspace reader, never execution or an external app.
+
+### Unconfirmed provider shutdown
+
+If bootstrap join or Host cleanup cannot confirm completion within its reporting
+deadline, Quit remains blocked. Show the existing standard localized error dialog
+once for that shutdown attempt sequence; retain any existing stopping indicator
+and do not silently force termination or report a successful exit. Repeated Quit
+only observes the same pending cleanup, never restarts stop/input. Late completion
+does not automatically quit; the user may explicitly choose Quit again.
 
 ### Packaged editor style security
 

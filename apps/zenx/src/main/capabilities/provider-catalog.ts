@@ -1,3 +1,8 @@
+import {
+  LifecycleWaitUnconfirmedError,
+  waitForLifecycle,
+} from "../lifecycle-wait.js";
+
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 
@@ -138,6 +143,7 @@ export async function selectBrowserProvider(
         ],
       };
     } catch (error) {
+      if (error instanceof LifecycleWaitUnconfirmedError) throw error;
       return {
         manifest: userBrowserManifest(),
         diagnostics: [
@@ -326,6 +332,7 @@ export async function selectBrowserProvider(
       ],
     };
   } catch (error) {
+    if (error instanceof LifecycleWaitUnconfirmedError) throw error;
     return {
       backend: electronBrowserBackend(options),
       manifest: browserCapabilityManifest,
@@ -623,7 +630,7 @@ async function selectComputerProviderForId(
           interactionModes: ["background_safe", "foreground_required"],
           capabilities: [
             "accessibility.inspect",
-            "background.semantic_action",
+            "foreground.targeted_action",
             "window.capture",
             "foreground.global_input",
           ],
@@ -635,6 +642,7 @@ async function selectComputerProviderForId(
       ],
     };
   } catch (error) {
+    if (error instanceof LifecycleWaitUnconfirmedError) throw error;
     return {
       backend: new ElectronMacComputerBackend(),
       manifest: boundComputerCapabilityManifest,
@@ -653,6 +661,39 @@ async function selectComputerProviderForId(
   }
 }
 
+// Readiness may fail while a child/pipe remains live. Observe the existing
+// runner without releasing its lease or using a fallback provider. Its own
+// deadline requests termination; this reporting deadline allows 1s for close.
+async function runReadinessProbe(
+  runner: ExternalProviderProcessRunner,
+  executable: string,
+  args: readonly string[],
+  options: Parameters<ExternalProviderProcessRunner["run"]>[2],
+) {
+  const controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  try {
+    return await waitForLifecycle(
+      runner.run(executable, args, { ...options, signal }),
+      `${path.basename(executable)} readiness probe ${args.join(" ")}`,
+      options.timeoutMs + 1_000,
+    );
+  } catch (error) {
+    if (error instanceof LifecycleWaitUnconfirmedError) {
+      // Also fence preparation that has not reached spawn yet. This is one
+      // cancellation request on the original probe, never lease retirement.
+      controller.abort(
+        new Error(
+          "Provider readiness deadline expired; termination remains unconfirmed",
+        ),
+      );
+    }
+    throw error;
+  }
+}
+
 export async function probePlaywrightCli(
   executable: string,
   runner: ExternalProviderProcessRunner,
@@ -661,13 +702,18 @@ export async function probePlaywrightCli(
   bindBeforeSpawn?: () => Promise<() => Promise<void>>,
   verifyBeforeSpawn?: () => Promise<void>,
 ): Promise<string> {
-  const versionResult = await runner.run(executable, ["--json", "--version"], {
-    timeoutMs: 5_000,
-    maxOutputBytes: 32 * 1024,
-    runtimeExecutable,
-    bindBeforeSpawn,
-    verifyBeforeSpawn,
-  });
+  const versionResult = await runReadinessProbe(
+    runner,
+    executable,
+    ["--json", "--version"],
+    {
+      timeoutMs: 5_000,
+      maxOutputBytes: 32 * 1024,
+      runtimeExecutable,
+      bindBeforeSpawn,
+      verifyBeforeSpawn,
+    },
+  );
   const versionEnvelope = parseExternalJson(
     "playwright-cli",
     versionResult.stdout,
@@ -684,13 +730,18 @@ export async function probePlaywrightCli(
       `playwright-cli version ${version} does not match pinned version ${expectedVersion}`,
     );
   }
-  const listResult = await runner.run(executable, ["--json", "list"], {
-    timeoutMs: 5_000,
-    maxOutputBytes: 64 * 1024,
-    runtimeExecutable,
-    bindBeforeSpawn,
-    verifyBeforeSpawn,
-  });
+  const listResult = await runReadinessProbe(
+    runner,
+    executable,
+    ["--json", "list"],
+    {
+      timeoutMs: 5_000,
+      maxOutputBytes: 64 * 1024,
+      runtimeExecutable,
+      bindBeforeSpawn,
+      verifyBeforeSpawn,
+    },
+  );
   const listEnvelope = parseExternalJson("playwright-cli", listResult.stdout);
   if (
     !Array.isArray(listEnvelope.browsers) ||
@@ -707,10 +758,15 @@ export async function probePeekabooCli(
   executable: string,
   runner: ExternalProviderProcessRunner,
 ): Promise<{ version: string; permissionSummary: string }> {
-  const versionResult = await runner.run(executable, ["--version"], {
-    timeoutMs: 5_000,
-    maxOutputBytes: 32 * 1024,
-  });
+  const versionResult = await runReadinessProbe(
+    runner,
+    executable,
+    ["--version"],
+    {
+      timeoutMs: 5_000,
+      maxOutputBytes: 32 * 1024,
+    },
+  );
   const version = versionResult.stdout.match(/\b(\d+\.\d+\.\d+)\b/u)?.[1];
   if (version === undefined) {
     throw new Error("Peekaboo --version did not contain a semantic version");
@@ -721,10 +777,15 @@ export async function probePeekabooCli(
     MAX_PEEKABOO_EXCLUSIVE,
     "Peekaboo",
   );
-  const toolsResult = await runner.run(executable, ["tools", "--json"], {
-    timeoutMs: 10_000,
-    maxOutputBytes: 128 * 1024,
-  });
+  const toolsResult = await runReadinessProbe(
+    runner,
+    executable,
+    ["tools", "--json"],
+    {
+      timeoutMs: 10_000,
+      maxOutputBytes: 128 * 1024,
+    },
+  );
   const toolsEnvelope = parseExternalJson("peekaboo", toolsResult.stdout);
   const toolsData = asRecord(toolsEnvelope.data);
   const tools = toolsData?.tools;
@@ -743,7 +804,8 @@ export async function probePeekabooCli(
       throw new Error(`Peekaboo 3.x is missing required tool ${required}`);
     }
   }
-  const permissionsResult = await runner.run(
+  const permissionsResult = await runReadinessProbe(
+    runner,
     executable,
     ["permissions", "status", "--json"],
     { timeoutMs: 10_000, maxOutputBytes: 128 * 1024 },
@@ -820,13 +882,13 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
   };
 }
 
-function peekabooComputerManifest(): ZenXPluginManifestV2 {
+export function peekabooComputerManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(computerCapabilityManifest),
-    version: "1.0.1",
-    mainDocument: `${computerCapabilityManifest.mainDocument} This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target.`,
+    version: "1.0.2",
+    mainDocument: `${computerCapabilityManifest.mainDocument} This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target. Its targeted press/value mutations are not certified focus-isolated: they require explicit foreground control and cannot be used as a background fallback. Backend completion does not verify application effect.`,
     description:
-      "Peekaboo 3.x background-first macOS automation with bounded snapshots, explicit permissions, and foreground input only through labeled takeover tools.",
+      "Peekaboo 3.x targeted macOS automation. Mutations are not certified focus-isolated and require explicit foreground control with a visible activity indicator.",
     provider: {
       id: "peekaboo-cli",
       platforms: ["darwin"],
@@ -834,7 +896,7 @@ function peekabooComputerManifest(): ZenXPluginManifestV2 {
       capabilities: [
         "peekaboo.snapshot",
         "accessibility.inspect",
-        "background.semantic_action",
+        "foreground.targeted_action",
         "window.capture",
         "foreground.global_input",
       ],
@@ -843,11 +905,28 @@ function peekabooComputerManifest(): ZenXPluginManifestV2 {
       .filter((tool) => tool.name !== "computer_list_windows")
       .map((tool) => ({
         ...structuredClone(tool),
+        ...(tool.name === "computer_press" || tool.name === "computer_set_value"
+          ? {
+              interactionMode: "foreground_required" as const,
+              description: `Peekaboo targeted ${tool.name === "computer_press" ? "press" : "value change"}; may affect foreground focus/input. Requires explicit foreground control; never a background fallback. A successful dispatch does not verify application effect.`,
+            }
+          : {}),
         permissions:
-          tool.name === "computer_inspect"
-            ? [...tool.permissions, "computer.window.capture"]
-            : [...tool.permissions],
-        capabilities: ["peekaboo_cli", ...tool.capabilities],
+          tool.name === "computer_press" || tool.name === "computer_set_value"
+            ? [...tool.permissions, "computer.foreground.control"]
+            : tool.name === "computer_inspect"
+              ? [...tool.permissions, "computer.window.capture"]
+              : [...tool.permissions],
+        capabilities: [
+          "peekaboo_cli",
+          ...tool.capabilities.filter(
+            (capability) =>
+              !(
+                tool.name === "computer_press" ||
+                tool.name === "computer_set_value"
+              ) || capability !== "no_global_input",
+          ),
+        ],
       })),
   };
 }

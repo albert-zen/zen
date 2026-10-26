@@ -17,17 +17,15 @@ foreach ($name in @("Assert-SoleVisibleWindow", "Stop-Fixture", "Stop-OwnedFixtu
   . ([scriptblock]::Create($functions[0].Extent.Text))
 }
 Write-Phase "helpers-loaded"
-Write-Phase "add-type-start"
-Add-Type -TypeDefinition @'
-using System;
-public static class StartupWindows {
-  public static long[] Handles = new long[] { 42 };
-  public static bool Minimized = false;
-  public static long[] Visible(uint pid) { return Handles; }
-  public static bool IsIconic(IntPtr hwnd) { return Minimized; }
+# This is only the existing fake Win32 boundary, not native acceptance. Use
+# PowerShell's own type syntax instead of starting a C# compiler for four stubs.
+class StartupWindows {
+  static [long[]] $Handles = [long[]]@(42)
+  static [bool] $Minimized = $false
+  static [long[]] Visible([uint32] $ProcessId) { return [StartupWindows]::Handles }
+  static [bool] IsIconic([IntPtr] $WindowHandle) { return [StartupWindows]::Minimized }
 }
-'@
-Write-Phase "add-type-complete"
+Write-Phase "mock-boundary-ready"
 Write-Phase "assertions-start"
 function Assert-True($Value, $Message) { if (!$Value) { throw $Message } }
 function Assert-Throws([scriptblock] $Action, $Pattern) {

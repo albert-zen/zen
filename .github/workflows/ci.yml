@@ -68,6 +68,21 @@ jobs:
           retention-days: 14
       - name: Install CJK fonts for synthetic UI acceptance
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Capture foreground activity renderer (synthetic, not native OS acceptance)
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          mkdir -p "${{ runner.temp }}/zenx-foreground-activity"
+          node apps/zenx/scripts/preview-foreground-activity.mjs "${{ runner.temp }}/zenx-foreground-activity/foreground-activity.html" > "${{ runner.temp }}/zenx-foreground-activity/source.json"
+          node apps/zenx/scripts/capture-foreground-activity-preview.mjs "${{ runner.temp }}/zenx-foreground-activity"
+      - name: Retain foreground activity synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-foreground-activity-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-foreground-activity
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture compaction capsules (production components, synthetic records)
         run: |
           node apps/zenx/scripts/build-compaction-preview.mjs "${{ runner.temp }}/zenx-compaction"

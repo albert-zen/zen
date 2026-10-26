@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -323,11 +324,14 @@ test("unavailable Windows background frames fail without WinApp or foreground fa
         false,
       );
       assert.deepEqual(
-        await (await import("node:fs/promises")).readdir(directory),
+        (
+          await readdir(directory, { recursive: true, withFileTypes: true })
+        ).filter((entry) => !entry.isDirectory()),
         [],
       );
     } finally {
       await backend.close();
+      await rm(directory, { recursive: true, force: true });
     }
   }
 });
@@ -355,11 +359,14 @@ test("Windows capture rejects unconfirmed target identity and invalid PNG before
     try {
       await assert.rejects(backend.screenshot(target), /Background capture/u);
       assert.deepEqual(
-        await (await import("node:fs/promises")).readdir(directory),
+        (
+          await readdir(directory, { recursive: true, withFileTypes: true })
+        ).filter((entry) => !entry.isDirectory()),
         [],
       );
     } finally {
       await backend.close();
+      await rm(directory, { recursive: true, force: true });
     }
   }
 });
@@ -435,7 +442,10 @@ test("Windows screenshot artifact is host-owned and does not trust a helper outp
 
     const result = await backend.screenshot(target);
 
-    assert.equal(path.dirname(result.artifactPath), artifactDirectory);
+    assert.equal(
+      path.dirname(path.dirname(result.artifactPath)),
+      artifactDirectory,
+    );
     await backend.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
