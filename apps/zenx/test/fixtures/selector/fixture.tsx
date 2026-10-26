@@ -37,6 +37,20 @@ const skills = [
 (window as any).zenx = {
   skills: { list: async () => ({ skills, errors: [] }) },
   workspaceFiles: {
+    applications: async () => ({
+      platform: "darwin",
+      applications: {
+        vscode: "/Applications/Visual Studio Code.app",
+        cursor: "/Applications/Cursor.app",
+        editor: "/System/Applications/TextEdit.app",
+      },
+    }),
+    openExternal: async () => {
+      throw new Error("Synthetic preview: no application is launched");
+    },
+    configureApplication: async () => {
+      throw new Error("Synthetic preview: no native picker is opened");
+    },
     search: async (_id, query) => ({
       cwd: "D:/Work/zen",
       entries: files
