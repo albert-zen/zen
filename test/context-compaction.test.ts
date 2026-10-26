@@ -988,31 +988,48 @@ test("agentic compaction accepts a sample following an active settings change", 
  * Fixture Host setting switch. Its body runs between two model samples, so the
  * published revision lands while the Turn is already running.
  */
-function agenticSettingRuntime(
-  publish: (enabled: boolean) => void,
-): AgentRuntime {
-  return new AgentRuntime({
-    toolEnvironment: new ToolEnvironment({
-      runtimes: [
-        {
-          name: "toggle_agentic_setting",
-          executionMode: "parallel_safe",
-          specification: {
+class LiveSettingRuntime extends AgentRuntime {
+  constructor(toggle: (enabled: boolean) => void) {
+    super({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [
+          {
             name: "toggle_agentic_setting",
-            description: "Publish a Host agentic compaction setting revision",
-            inputSchema: {
-              type: "object",
-              properties: { enabled: { type: "boolean" } },
+            executionMode: "parallel_safe",
+            specification: {
+              name: "toggle_agentic_setting",
+              description: "Publish a Host agentic compaction setting revision",
+              inputSchema: {
+                type: "object",
+                properties: { enabled: { type: "boolean" } },
+              },
+            },
+            async execute(invocation) {
+              toggle(invocation.arguments.enabled === true);
+              return { output: "host setting published", exitCode: 0 };
             },
           },
-          async execute(invocation) {
-            publish(invocation.arguments.enabled === true);
-            return { output: "host setting published", exitCode: 0 };
-          },
-        },
-      ],
-    }),
-  });
+        ],
+      }),
+    });
+  }
+
+  // Tiny-window fixtures need short disclosed schemas, exactly like
+  // HistoryBudgetRuntime below.
+  override projectToolPresentation(
+    items: readonly CanonicalItem[],
+    agentic: boolean,
+  ) {
+    const snapshot = super.projectToolPresentation(items, agentic);
+    return {
+      ...snapshot,
+      modelTools: snapshot.modelTools.map((tool) => ({
+        name: tool.name,
+        description: "",
+        inputSchema: {},
+      })),
+    };
+  }
 }
 
 /** Publish a Host context-compaction revision against the same Provider profile. */
@@ -1083,7 +1100,7 @@ test("enabling agentic compaction reaches the next model sample of a running Tur
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog,
-    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+    runtime: new LiveSettingRuntime((enabled) => publish(enabled)),
   });
   publish = (enabled) =>
     publishContextCompaction(server, {
@@ -1160,7 +1177,7 @@ test("enabling agentic compaction mid-Turn replaces the Host trigger reset with 
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog,
-    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+    runtime: new LiveSettingRuntime((enabled) => publish(enabled)),
   });
   publish = (enabled) =>
     publishContextCompaction(server, {
@@ -1172,18 +1189,9 @@ test("enabling agentic compaction mid-Turn replaces the Host trigger reset with 
   await (
     await server.startTurn(thread.id, "seed request")
   ).done;
-  await (
-    await server.startTurn(thread.id, "active request")
-  ).done;
+  const active = await server.startTurn(thread.id, "active request");
+  await active.done;
 
-  const snapshot = await server.readThread(thread.id);
-  assert.equal(
-    snapshot.items.some(
-      (item) =>
-        item.type === "context_compaction" && item.initiator === "automatic",
-    ),
-    false,
-  );
   const notices = requests.filter((request) =>
     request.messages.some(
       (message) =>
@@ -1193,6 +1201,18 @@ test("enabling agentic compaction mid-Turn replaces the Host trigger reset with 
     ),
   );
   assert.equal(notices.length, 1);
+  const snapshot = await server.readThread(thread.id);
+  // The active Turn ended on its own after the notice: no Host reset replaced
+  // its context before that boundary. A later completed-Turn reset is allowed.
+  const completedAt = snapshot.items.findIndex(
+    (item) => item.type === "turn_completed" && item.turnId === active.id,
+  );
+  const resetAt = snapshot.items.findIndex(
+    (item) =>
+      item.type === "context_compaction" && item.initiator === "automatic",
+  );
+  assert(completedAt >= 0);
+  assert(resetAt === -1 || resetAt > completedAt);
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_started").length,
     2,
@@ -1243,7 +1263,7 @@ test("a sample that disclosed compact_context still executes it after the settin
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog,
-    runtime: agenticSettingRuntime((enabled) => publish(enabled)),
+    runtime: new LiveSettingRuntime((enabled) => publish(enabled)),
   });
   publish = (enabled) =>
     publishContextCompaction(server, {
