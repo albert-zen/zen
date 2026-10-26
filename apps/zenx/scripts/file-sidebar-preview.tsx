@@ -1,5 +1,6 @@
 import { StateEffect } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin } from "@codemirror/view";
+import { observeFileEditorGaps } from "./file-editor-gap-observer.js";
 import { InlineComposerEditor } from "../src/renderer/src/InlineComposerEditor.js";
 import type { ComposerInput } from "../src/renderer/src/composer-input.js";
 import type {
@@ -41,13 +42,23 @@ const activeNativeEditor = () => {
 };
 if (diagnosticPreview)
   Object.assign(window, {
-    __observeNativeEditor: () => {
+    __observeNativeEditor: (mode: "existing" | "off" | "gaps" = "existing") => {
       const view = activeNativeEditor();
       nativeEditorUpdates.length = 0;
-      if (!view || observedEditors.has(view)) return;
+      if (!view || mode === "off" || observedEditors.has(view)) return;
       observedEditors.add(view);
+      const append = (receipt: unknown) => {
+        nativeEditorUpdates.push(receipt);
+        if (nativeEditorUpdates.length > (mode === "gaps" ? 512 : 24))
+          nativeEditorUpdates.shift();
+      };
+      const gaps = mode === "gaps" ? observeFileEditorGaps(view, append) : null;
+      gaps?.record("observer-start");
       view.dispatch({
         effects: StateEffect.appendConfig.of([
+          ...(gaps
+            ? [ViewPlugin.define(() => ({ destroy: () => gaps.destroy() }))]
+            : []),
           EditorView.scrollHandler.of((view, range) => {
             const pos = view.domAtPos(range.head),
               element =
@@ -55,7 +66,7 @@ if (diagnosticPreview)
                   ? (pos.node as Element)
                   : pos.node.parentElement;
             const r = element?.getBoundingClientRect();
-            nativeEditorUpdates.push({
+            append({
               kind: "default-scroll-request",
               head: range.head,
               scrollTop: view.scrollDOM.scrollTop,
@@ -64,11 +75,14 @@ if (diagnosticPreview)
                 ? { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
                 : null,
             });
-            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+            gaps?.record("default-scroll-request-geometry", {
+              head: range.head,
+            });
+            gaps?.afterScrollRequest();
             return false; // Observe only; preserve CodeMirror default scrolling.
           }),
           EditorView.updateListener.of((update) => {
-            nativeEditorUpdates.push({
+            append({
               head: update.state.selection.main.head,
               documentLength: update.state.doc.length,
               selectionSet: update.selectionSet,
@@ -79,7 +93,10 @@ if (diagnosticPreview)
               ),
               scrollTop: update.view.scrollDOM.scrollTop,
             });
-            if (nativeEditorUpdates.length > 24) nativeEditorUpdates.shift();
+            gaps?.record("view-update-geometry", {
+              selectionSet: update.selectionSet,
+              viewportChanged: update.viewportChanged,
+            });
           }),
         ]),
       });

@@ -17,6 +17,21 @@ const {
 } = require("./file-editor-resize-readiness.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
+// Independent diagnostic only. Default scope and every navigation assertion stay intact.
+const navigationObserver =
+  process.env.ZENX_FILE_NAVIGATION_OBSERVER || "existing";
+assert.ok(
+  ["existing", "off", "gaps"].includes(navigationObserver),
+  "Known navigation observer mode",
+);
+assert.ok(
+  scope !== "scroll-security" || navigationObserver === "existing",
+  "Gap diagnostics must not change the scroll-security entry",
+);
+const observeEditor = () =>
+  evaluate(
+    `window.__observeNativeEditor(${JSON.stringify(navigationObserver)})`,
+  );
 
 assert.equal(
   process.platform,
@@ -39,6 +54,9 @@ let policyProbeActive = false;
 let originProbeUrl;
 const evidence = {
   diagnosticScope: scope,
+  navigationObserver,
+  observerEffect:
+    "Geometry reads may force browser layout. Compare the independent observer-off run; an observed pass is not a production fix. Original assertion polling/measurements remain in both runs.",
   navigationAssertionsIncluded: scope !== "scroll-security",
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
@@ -281,7 +299,7 @@ async function runColdEndCase(markdown) {
   if (markdown)
     await click('.auxiliary-heading [id="aux-tab-file:docs/long-notes.md"]');
   await click(`${selector} .cm-scroller`);
-  await evaluate("window.__observeNativeEditor()");
+  await observeEditor();
   receipt.before = await evaluate(measure);
   await key("Down", ["command"]);
   const marker = markdown ? "LAST_MARKDOWN_SECTION" : "LAST_SOURCE_LINE";
@@ -387,7 +405,7 @@ async function runCase(width, precise, productionCsp = false) {
     bounded(receipt.sourceFocusedWheel);
     await screenshot(`${receipt.name}-source-focused-scrolled`);
     if (scope !== "scroll-security") {
-      await evaluate("window.__observeNativeEditor()");
+      await observeEditor();
       await key("Down", ["command"]);
       try {
         await until(
@@ -516,7 +534,7 @@ async function runCase(width, precise, productionCsp = false) {
     return;
   }
   receipt.phase = "meta-down";
-  await evaluate("window.__observeNativeEditor()");
+  await observeEditor();
   receipt.beforeEnd = await evaluate(measure);
   await key("Down", ["command"]);
   receipt.immediateEnd = await evaluate(measure);

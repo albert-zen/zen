@@ -1,0 +1,53 @@
+name: File end-navigation diagnostic (not a release gate)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/file-end-navigation-diagnostic.yml
+      - apps/zenx/scripts/file-editor-gap-observer.ts
+      - apps/zenx/scripts/file-sidebar-preview.tsx
+      - apps/zenx/scripts/capture-file-sidebar-electron.cjs
+      - apps/zenx/test/file-editor-gap-observer.test.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: file-end-navigation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-navigation:
+    name: Native end-navigation observer ${{ matrix.observer }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        observer: [off, gaps]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build production renderer and synthetic fixture
+        run: |
+          npm --workspace apps/zenx run build
+          node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-end-navigation"
+      - name: Keep complete native navigation assertions, with independent observer-off control
+        timeout-minutes: 3
+        env:
+          ZENX_FILE_NAVIGATION_OBSERVER: ${{ matrix.observer }}
+        run: |
+          cd apps/zenx
+          npx --no-install electron scripts/capture-file-sidebar-electron.cjs "${{ runner.temp }}/zenx-end-navigation" --scope=end-navigation
+      - name: Retain failures and observer-effect comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-end-navigation-${{ matrix.observer }}-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-end-navigation
+          if-no-files-found: warn
+          retention-days: 14
