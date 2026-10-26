@@ -83,7 +83,7 @@ test("structured tool results survive canonical persistence without entering mod
       {
         role: "tool",
         callId: "fixture_cards-1",
-        text: "exact textual fallback",
+        text: "Exit code: 0\nexact textual fallback",
         exitCode: 0,
       },
     );
@@ -111,7 +111,7 @@ test("legacy tool results keep their exact serialized shape", () => {
     {
       role: "tool",
       callId: "call",
-      text: 'legacy bytes {"exact":true}',
+      text: 'Exit code: 7\nlegacy bytes {"exact":true}',
       exitCode: 7,
     },
   ]);

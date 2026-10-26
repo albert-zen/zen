@@ -102,14 +102,27 @@ test("fork child has its own relation while ordinary Copy clears inherited relat
           item.type === "thread_forked" && item.sourceThreadId === parent.id,
       ),
     );
-    assert(
-      child.items.some(
-        (item) =>
-          item.type === "user_message" &&
-          item.content?.[0]?.type === "text" &&
-          item.content[0].text === "parent history",
-      ),
+    const copiedUser = child.items.find((item) => item.type === "user_message");
+    const parentUser = (await host.readThread(parent.id)).items.find(
+      (item) => item.type === "user_message",
     );
+    assert(
+      copiedUser?.type === "user_message" &&
+        parentUser?.type === "user_message",
+    );
+    assert.deepEqual(copiedUser.content, [
+      {
+        type: "text",
+        text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(parentUser.createdAt)}]`,
+      },
+      { type: "text", text: "parent history" },
+    ]);
+    assert.deepEqual(
+      copiedUser.content,
+      parentUser.content,
+      "fork keeps committed text verbatim, including original admission time",
+    );
+    assert.deepEqual(copiedUser.contentAuthority, parentUser.contentAuthority);
     const nested = await host.createChildThread({
       parentThreadId: child.id,
       mode: "fork",

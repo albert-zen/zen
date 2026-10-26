@@ -221,6 +221,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
       model: requiredLabel(request.model, "model"),
       messages,
       n: 1,
@@ -705,7 +708,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 

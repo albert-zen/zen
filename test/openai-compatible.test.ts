@@ -190,7 +190,7 @@ test("maps Zen context and protects model execution fields", async () => {
       {
         role: "tool",
         tool_call_id: "call-1",
-        content: "Exit code: 0\n/workspace",
+        content: "/workspace",
       },
     ],
     n: 1,
@@ -262,7 +262,7 @@ test("encodes provider-specific reasoning replay contracts", async (t) => {
       {
         role: "tool",
         tool_call_id: "call-1",
-        content: "Exit code: 0\n/workspace",
+        content: "/workspace",
       },
       { role: "assistant", content: "done" },
     ]);

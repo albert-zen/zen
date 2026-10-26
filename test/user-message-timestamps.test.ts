@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CanonicalItem } from "../src/item.js";
-import { compileModelMessages, type ModelAdapter } from "../src/model.js";
+import {
+  compileModelMessages,
+  materializeCanonicalInput,
+  type ModelAdapter,
+} from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 
@@ -58,7 +62,7 @@ for (const provider of ["compatible", "subscription"] as const) {
         content: [{ type: "image", attachment: image }],
       } as CanonicalItem,
       { ...item, id: "legacy", createdAt: "", text: body },
-    ];
+    ].map((entry) => materializeCanonicalInput(entry, []));
     const original = JSON.stringify(input);
     const payloads: Array<Record<string, unknown>> = [];
     const fetcher: typeof fetch = async (_url, init) => {
@@ -340,17 +344,35 @@ test("live input, soft steer and edited queue retain their first recorded times 
     assert.deepEqual(users, [
       {
         role: "user",
-        content: [{ type: "text", text: "live" }],
+        content: [
+          {
+            type: "text",
+            text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(timestamp)}]`,
+          },
+          { type: "text", text: "live" },
+        ],
         userTimestamp: timestamp,
       },
       {
         role: "user",
-        content: [{ type: "text", text: "steer" }],
+        content: [
+          {
+            type: "text",
+            text: `[Zen recorded user-message metadata: received_at=${JSON.stringify("2026-10-14T05:43:00Z")}]`,
+          },
+          { type: "text", text: "steer" },
+        ],
         userTimestamp: "2026-10-14T05:43:00Z",
       },
       {
         role: "user",
-        content: [{ type: "text", text: "edited queue" }],
+        content: [
+          {
+            type: "text",
+            text: `[Zen recorded user-message metadata: received_at=${JSON.stringify("2026-10-14T05:41:00Z")}]`,
+          },
+          { type: "text", text: "edited queue" },
+        ],
         userTimestamp: "2026-10-14T05:41:00Z",
       },
     ]);
@@ -395,7 +417,7 @@ test("live input, soft steer and edited queue retain their first recorded times 
 });
 
 test("timestamp parts count toward the same provider-neutral context budget", () => {
-  const [message] = compileModelMessages([item]);
+  const [message] = compileModelMessages([materializeCanonicalInput(item, [])]);
   assert(message?.role === "user");
   assert.equal(
     estimateModelMessageInputTokens([message]),

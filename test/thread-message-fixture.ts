@@ -8,7 +8,23 @@ import { AgentRuntime } from "../src/runtime.js";
 import { ToolEnvironment, ShellToolRuntime } from "../src/tool.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { type ModelAdapter, type ModelEvent } from "../src/model.js";
+import {
+  modelMessageSource,
+  type ModelAdapter,
+  type ModelEvent,
+  type ModelMessage,
+} from "../src/model.js";
+
+/** Fake adapter control only: use compiler provenance, never strip text by its spelling. */
+export function fixtureHumanText(message: ModelMessage): string | undefined {
+  const source = modelMessageSource(message);
+  if (message.role !== "user" || source?.origin !== "human") return undefined;
+  if (!("content" in message)) return message.text;
+  const hostParts = new Set(source.hostTextPartIndices ?? []);
+  return textFromUserInput(
+    message.content.filter((_part, index) => !hostParts.has(index)),
+  );
+}
 
 export function deferred() {
   let resolve!: () => void;
@@ -37,12 +53,7 @@ export function fixture(
           provider: model.provider,
           async *stream(request): AsyncIterable<ModelEvent> {
             if (
-              request.messages.some(
-                (m) =>
-                  m.role === "user" &&
-                  ("content" in m ? textFromUserInput(m.content) : m.text) ===
-                    "source",
-              )
+              request.messages.some((m) => fixtureHumanText(m) === "source")
             ) {
               if (!request.messages.some((m) => m.role === "tool"))
                 yield {

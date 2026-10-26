@@ -19,6 +19,16 @@ LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
 5. 流式 delta 不写 journal；journal 每行一个完整的 canonical Item。
 6. LESSONS.md 的非目标清单在 review 时对照执行；需要其中某项时先改 LESSONS.md。
 7. 失败明确告知用户，不建自我修复的 durable 状态机。
+8. 模型消息的全部语义内容须由唯一上下文编译入口先物化为对应角色的 canonical
+   `content`（文本均为 text part），经现有 AppServer journal 提交确认后才可分派。
+   用户原文、来源与信任边界不变；不能把 system/assistant/tool 全塞成 user。
+9. Runtime/Host/provider adapter 在提交边界之后仅执行选择与协议/附件编码，不得
+   私加时间、指令、来源包装、恢复说明或媒体替代文案。工具领域输出不属于上下文包装。
+10. 旧 history 不回写；必要兼容内容按源事实一次追加并复用，不按 sample 复制历史、
+    不另建模型请求权威。Debug 直接展示同一 canonical history；请求捕获仅作观察校验。
+    工具 schema、协议 ID、采样参数属于结构化输入；凭证与连接配置绝不借此写入消息。
+11. 修改模型输入必须用生产 compiler/adapter + 假 transport 验证已提交内容闭包，
+    包括角色/工具配对、追加失败零分派、重试/取消、fork、导入与压缩旁路。
 
 ## 验证
 
