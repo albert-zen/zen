@@ -186,6 +186,51 @@ async function verifyOriginIsolation() {
     originProbeUrl = undefined;
   }
 }
+async function runColdEndCase(markdown) {
+  const receipt = {
+    editor: markdown ? "markdown" : "source",
+    wheelInputs: 0,
+    status: "running",
+  };
+  (evidence.coldEndCases ||= []).push(receipt);
+  await window.loadFile(
+    path.join(directory, "file-sidebar-production-csp.html"),
+  );
+  window.show();
+  window.focus();
+  window.webContents.focus();
+  await until(
+    "document.body?.dataset.previewReady==='true' && document.querySelector('.cm-scroller')",
+    "cold component ready",
+  );
+  await until(
+    `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
+    "cold titlebar settled",
+  );
+  if (markdown)
+    await click('.auxiliary-heading [id="aux-tab-file:docs/long-notes.md"]');
+  await click(`${selector} .cm-scroller`);
+  await evaluate("window.__observeNativeEditor()");
+  receipt.before = await evaluate(measure);
+  await key("Down", ["command"]);
+  const marker = markdown ? "LAST_MARKDOWN_SECTION" : "LAST_SOURCE_LINE";
+  try {
+    await until(
+      `(() => {const root=document.querySelector(${JSON.stringify(selector)}),scroller=root.querySelector('.cm-scroller').getBoundingClientRect();return Array.from(root.querySelectorAll('.cm-line')).some(line=>{const r=line.getBoundingClientRect();return line.textContent.includes(${JSON.stringify(marker)})&&r.bottom>scroller.top&&r.top<scroller.bottom;});})()`,
+      "cold native document end visible",
+    );
+    receipt.status = "passed";
+  } catch (error) {
+    receipt.status = "failed";
+    receipt.failure = String(error);
+  }
+  receipt.after = await evaluate(measure);
+  if (receipt.status === "failed")
+    receipt.failureCoordinates = await evaluate(
+      "window.__nativeEditorCoordinates()",
+    );
+  await screenshot(`macos-cold-${receipt.editor}-end`);
+}
 async function runCase(width, precise, productionCsp = false) {
   const receipt = {
     name: `macos-cjk-${width}-${precise ? "precise" : "wheel"}${productionCsp ? "-production-csp" : ""}`,
@@ -573,6 +618,8 @@ const watchdog = setTimeout(
   await verifyOriginIsolation();
   evidence.runtimeSecurity =
     "Production file handler, exact generated strict-CSP entry, fresh document style nonce";
+  await runColdEndCase(false);
+  await runColdEndCase(true);
   for (const width of [256, 384]) {
     for (const precise of [false, true]) {
       try {
