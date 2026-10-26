@@ -345,6 +345,7 @@ export function WorkspaceFilesPanel({
             ) : null}
             {markdown ? (
               <InlineMarkdownEditor
+                viewport={drafts.viewport(key!)}
                 findRequest={findRequest}
                 key={`${file.base.path}:${editorEpoch}`}
                 path={file.base.path}
@@ -355,6 +356,7 @@ export function WorkspaceFilesPanel({
               />
             ) : (
               <SourceEditor
+                viewport={drafts.viewport(key!)}
                 findRequest={findRequest}
                 key={`${file.base.path}:${editorEpoch}`}
                 path={file.base.path}

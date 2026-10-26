@@ -34,3 +34,7 @@ or with zenx_threads_configure. Creation accepts a configured project name/path 
 cwd. Project names and paths are discoverable via zenx_projects_list.
 
 For a compaction locator `zen-thread://THREAD/items?through=ITEM`, URL-decode its Thread and cutoff IDs and call `zenx_threads_read` with `threadId`, `throughItemId`, and optional `granularity: "items"` / `cursor`. Read an Item completely with `granularity: "item"`, `itemId` and the same cutoff; concatenate its `public_item_json` chunks using `nextCursor`. Every cursor stays bound to that reference. Missing/disabled references fail explicitly. This is a public view of the original journal, not a filesystem path; opaque provider payloads are not exposed.
+
+## Thread / Room sidebar
+
+`zenx_self_control_sidebar_read` resolves the trusted caller’s unique dedicated PAW Room binding, otherwise its private Thread. Explicit scope is limited to the caller’s own Thread or a live member Room. Ambiguous dedicated bindings require explicit scope. `sidebar_update` uses the read revision for compare-and-swap; reconsider conflicts rather than blindly retrying. Room resources bind to the caller Thread and preserved descriptors keep their original owner. State is presentation intent, not screen visibility evidence; background updates do not switch the foreground or materialize content. Dirty file drafts remain separately owned.

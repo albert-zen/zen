@@ -30,7 +30,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex App Server（CAS）compatibility mapping / claim 只覆盖 ZAS 中固定 0.146.0 可表达且已验收的子集；当前共用 endpoint/shape 不使 CAS 成为 ZenX 产品读取路径或产品模型权威。
 - Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
-- Thread 的名称与归档由 ZAS 产品元数据负责；当前选择、disclosure、草稿、打开的菜单和面板属于 renderer-local UI 状态。
+- Thread 的名称与归档由 ZAS 产品元数据负责；当前前台 Thread 选择、disclosure、草稿和打开的菜单属于 renderer-local UI 状态。Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个 main-process revision/CAS presentation store 持久化；它不是会话历史。后台更新只改变所属工作区，不抢占当前前台、焦点或读取文件/打开网页。Room 使用相同工作区界面，资源标签保留原 member Thread 归属，成员移除后不可借用其他成员执行。PAW 默认 Room 来自 trusted runtime 专属绑定，不与私有 Thread 侧栏双向同步。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
 - Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。Projects Sidebar 使用独立 Pinned section，其展示顺序就是 profile-local `pinnedThreadIds` 列表顺序：新 Pin 前置，用户可以在 Pinned section 内用拖拽或 Alt+方向键交换相邻行来调整顺序；排序只置换 `pinnedThreadIds`，不写入 Thread 的 Project 内排序偏好，也不是 canonical fact。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。

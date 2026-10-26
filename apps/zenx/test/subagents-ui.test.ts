@@ -1,4 +1,5 @@
 import "./dom-primitives.js";
+import { waitForFocus } from "./wait-for-focus.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
@@ -899,13 +900,14 @@ test("child visibility retry preserves same-panel model and effort creation choi
     await f.render("parent", "panel", children);
     await f.click(f.button("Side chat model settings"));
     await chooseCreationOption(f, "Child model", model.id);
+    // Finish each Select portal teardown before starting the next interaction.
+    await act(async () => waitForFocus(f.button("Child model")));
     await chooseCreationOption(f, "Reasoning effort", "high");
-    await f.click(f.button("Side chat model settings"));
-    // Radix restores the closed model popover's focus in a deferred task.
-    // Finish that interaction before focusing the next user-operated control.
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await act(async () => waitForFocus(f.button("Reasoning effort")));
+    const settings = f.button("Side chat model settings");
+    await f.click(settings);
+    // Popover close autofocus belongs to setup, before the sidebar interaction.
+    await act(async () => waitForFocus(settings));
     const toggle = f.button("Show in sidebar: child-a");
     toggle.focus();
     await act(async () => {

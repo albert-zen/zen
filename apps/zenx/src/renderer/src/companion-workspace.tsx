@@ -1,3 +1,7 @@
+import type {
+  ThreadSidebarState,
+  ThreadSidebarTab,
+} from "../../thread-sidebar-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import type { WorkspaceFileDrafts } from "./workspace-file-drafts.js";
@@ -21,6 +25,10 @@ export interface CompanionViewState {
 }
 
 export function CompanionWorkspace({
+  presentationState,
+  onFullscreenChange,
+  onRemoveTab,
+  onReplaceTab,
   room,
   threads,
   snapshot,
@@ -36,6 +44,13 @@ export function CompanionWorkspace({
   onRenameThread,
   triggerSourceRequest,
 }: {
+  presentationState?: ThreadSidebarState;
+  onFullscreenChange?(fullscreen: boolean): void;
+  onRemoveTab?(id: string): Promise<void> | void;
+  onReplaceTab?(
+    id: string,
+    tab: ThreadSidebarTab,
+  ): Promise<boolean> | boolean | void;
   triggerSourceRequest?: {
     threadId: string;
     triggerId: string;
@@ -541,6 +556,10 @@ export function CompanionWorkspace({
   ];
   return (
     <AuxiliaryPanel
+      presentationState={presentationState}
+      onFullscreenChange={onFullscreenChange}
+      onRemoveTab={onRemoveTab}
+      onReplaceTab={onReplaceTab}
       conversations={
         renderConversation
           ? (view.conversationThreadIds ?? []).map((threadId) => {
@@ -571,6 +590,18 @@ export function CompanionWorkspace({
         kind: "room",
         roomId: room.id,
         resourceThread: resource,
+        resourceThreads: room.members.map((member) => ({
+          threadId: member.threadId,
+          title: member.threadId,
+          workspacePath: (() => {
+            const thread = threads.find(
+              (thread) => thread.threadId === member.threadId,
+            );
+            return thread && thread.status !== "systemError"
+              ? thread.currentMetadata.cwd
+              : undefined;
+          })(),
+        })),
       }}
       title={room.name}
       open
