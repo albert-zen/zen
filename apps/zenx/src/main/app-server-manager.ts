@@ -1,3 +1,9 @@
+import {
+  validateHostModelOperationRequest,
+  type HostModelOperationRequest,
+  type HostModelOperationResult,
+  type HostModelOperationHistory,
+} from "./model-operation-messages.js";
 import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
@@ -175,7 +181,9 @@ export class AppServerManager {
         | "configuration/current"
         | "fleet/result"
         | "shell-panel/result"
-        | "model-debug/result";
+        | "model-debug/result"
+        | "model-operation/result"
+        | "model-operation/history-result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
     }
@@ -816,6 +824,70 @@ export class AppServerManager {
     );
   }
 
+  async runModelOperation(
+    request: HostModelOperationRequest,
+    signal = new AbortController().signal,
+  ): Promise<HostModelOperationResult> {
+    validateHostModelOperationRequest(request);
+    signal.throwIfAborted();
+    let requestId: string | undefined;
+    const cancel = () => {
+      if (requestId && this.#child?.connected)
+        this.#child.send({
+          type: "model-operation/cancel",
+          requestId,
+        } satisfies HostCommand);
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      return await this.#sendConfigurationRequest(
+        "model-operation/result",
+        (id) => {
+          requestId = id;
+          return { type: "model-operation/run", requestId: id, request };
+        },
+        (event) => {
+          if (
+            event.type !== "model-operation/result" ||
+            event.error !== undefined ||
+            event.result === undefined
+          )
+            throw new Error(
+              event.type === "model-operation/result"
+                ? (event.error ?? "Model operation failed")
+                : "Unexpected model operation response",
+            );
+          return event.result;
+        },
+        cancel,
+      );
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
+  }
+
+  async modelOperationHistory(
+    threadId?: string,
+  ): Promise<HostModelOperationHistory> {
+    return await this.#sendConfigurationRequest(
+      "model-operation/history-result",
+      (requestId) => ({
+        type: "model-operation/history",
+        requestId,
+        ...(threadId === undefined ? {} : { threadId }),
+      }),
+      (event) => {
+        if (
+          event.type !== "model-operation/history-result" ||
+          event.error !== undefined ||
+          event.result === undefined
+        )
+          throw new Error("Operation history unavailable");
+        return event.result;
+      },
+    );
+  }
+
   async modelRequestDebug(
     input: ModelRequestDebugCommand,
   ): Promise<ModelRequestDebugResult> {
@@ -858,7 +930,9 @@ export class AppServerManager {
       | "configuration/current"
       | "fleet/result"
       | "shell-panel/result"
-      | "model-debug/result",
+      | "model-debug/result"
+      | "model-operation/result"
+      | "model-operation/history-result",
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
@@ -1481,6 +1555,8 @@ export class AppServerManager {
       if (
         hostEvent?.type === "shell-panel/result" ||
         hostEvent?.type === "model-debug/result" ||
+        hostEvent?.type === "model-operation/result" ||
+        hostEvent?.type === "model-operation/history-result" ||
         hostEvent?.type === "fleet/result" ||
         hostEvent?.type === "configuration/prepared" ||
         hostEvent?.type === "configuration/published" ||

@@ -1023,6 +1023,8 @@ export class ZenAppServer {
   async runModelOperation(
     input: RunModelOperationInput,
     signal = new AbortController().signal,
+    /** Trusted Host-only borrowed execution resource; never accepted by public protocols. */
+    execution?: ResolvedProviderSelection,
   ): Promise<ModelOperationResult> {
     signal.throwIfAborted();
     if (input.kind !== "title" && input.kind !== "image-capability-probe")
@@ -1030,11 +1032,57 @@ export class ZenAppServer {
         "invalid_operation_input",
         "Unknown model operation kind",
       );
-    const admission = this.#admitProviderOperation(
-      "compaction",
-      `model-operation/${input.kind}`,
-      input.selection,
-    );
+    if (
+      execution !== undefined &&
+      (execution.model.id !== execution.selection.modelId ||
+        execution.selection.providerProfileId !==
+          input.selection.providerProfileId ||
+        execution.selection.modelId !== input.selection.modelId ||
+        (input.selection.reasoningEffort !== undefined &&
+          execution.selection.reasoningEffort !==
+            input.selection.reasoningEffort))
+    )
+      throw new AppServerError(
+        "invalid_operation_input",
+        "Borrowed execution resource does not match the admitted selection",
+      );
+    if (execution !== undefined) {
+      const effort = execution.selection.reasoningEffort;
+      if (
+        input.kind === "title" &&
+        (execution.model.contextWindow === null ||
+          execution.model.supportedReasoningEfforts === null ||
+          (effort === null
+            ? execution.model.supportedReasoningEfforts.length !== 0
+            : !execution.model.supportedReasoningEfforts.includes(effort)))
+      )
+        throw new AppServerError(
+          "invalid_operation_input",
+          "Title execution requires known supported model capabilities",
+        );
+      if (
+        input.kind === "image-capability-probe" &&
+        effort !== execution.model.defaultReasoningEffort
+      )
+        throw new AppServerError(
+          "invalid_operation_input",
+          "Image probe must use its model metadata reasoning default",
+        );
+    }
+    const admission =
+      execution === undefined
+        ? this.#admitProviderOperation(
+            "provider",
+            `model-operation/${input.kind}`,
+            input.selection,
+          )
+        : {
+            provider: { ...execution, release() {} },
+            operation: this.beginHostOperation(
+              "provider",
+              `model-operation/${input.kind}`,
+            ),
+          };
     const resolved = admission.provider;
     let thread: Thread | undefined;
     let operation: import("./item.js").ModelOperationItem | undefined;
@@ -1042,7 +1090,7 @@ export class ZenAppServer {
     try {
       if (input.kind === "image-capability-probe") {
         const snapshot = await this.#startThread(
-          { selection: resolved.selection },
+          execution === undefined ? { selection: resolved.selection } : {},
           undefined,
           "image-capability-probe",
         );
@@ -1236,7 +1284,14 @@ export class ZenAppServer {
         createdAt: this.#now(),
         operationItemId: operation.id,
         status,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          status === "cancelled"
+            ? "Model operation cancelled"
+            : error instanceof AppServerError
+              ? error.message
+              : candidate.kind === "http"
+                ? `Model operation HTTP failure (${String(candidate.status ?? "unknown")})`
+                : "Model operation failed",
         ...(text
           ? { content: [{ type: "text", text }], incomplete: true }
           : {}),
@@ -5605,7 +5660,7 @@ export class ZenAppServer {
   }
 
   #admitProviderOperation(
-    kind: "turn" | "compaction",
+    kind: "turn" | "compaction" | "provider",
     label: string,
     selection: ProviderSelectionInput,
   ): {
