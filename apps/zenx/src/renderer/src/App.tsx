@@ -3716,7 +3716,7 @@ function AppContent() {
   );
 }
 
-function WindowTitleBar({
+export function WindowTitleBar({
   children,
   mode,
   pendingApprovalCount,
