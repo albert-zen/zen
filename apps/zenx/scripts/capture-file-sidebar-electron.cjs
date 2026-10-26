@@ -1,6 +1,7 @@
 /** Native macOS Electron diagnostic, owned synthetic window/profile only. */
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const { mkdtempSync, mkdirSync } = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { createHash } = require("node:crypto");
@@ -239,7 +240,8 @@ const watchdog = setTimeout(
   90000,
 );
 (async () => {
-  profile = await fs.mkdtemp(path.join(os.tmpdir(), "zenx-file-editor-"));
+  profile = mkdtempSync(path.join(os.tmpdir(), "zenx-file-editor-"));
+  mkdirSync(path.join(profile, "session"));
   app.setPath("userData", profile);
   app.setPath("sessionData", path.join(profile, "session"));
   await app.whenReady();
