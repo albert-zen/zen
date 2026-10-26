@@ -64,9 +64,11 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
   }) {
     this.#executable = options.executable;
     this.#runner = options.runner;
-    this.#artifactDirectory =
+    this.#artifactDirectory = path.join(
       options.artifactDirectory ??
-      path.join(os.tmpdir(), `zenx-peekaboo-${String(process.pid)}`);
+        path.join(os.tmpdir(), `zenx-peekaboo-${String(process.pid)}`),
+      randomUUID(),
+    );
   }
 
   async inspect(

@@ -1256,9 +1256,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       `zenx-capability-artifacts-${String(process.pid)}`,
     ),
   ) {
-    this.#artifactDirectory = artifactDirectory;
-    this.#accessibility = new MacAccessibilityDriver(artifactDirectory);
-    this.#foregroundInput = new MacForegroundInputDriver(artifactDirectory);
+    this.#artifactDirectory = path.join(artifactDirectory, randomUUID());
+    this.#accessibility = new MacAccessibilityDriver(this.#artifactDirectory);
+    this.#foregroundInput = new MacForegroundInputDriver(
+      this.#artifactDirectory,
+    );
     let executable: Promise<string> | undefined;
     this.targetSession = new ComputerTargetSession(
       new NativeComputerTargetTransport(
@@ -1266,12 +1268,18 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
           (executable ??= resolveMacNativeHelperExecutable(
             "zenx-bound-target",
             async () => {
-              await mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
+              await mkdir(this.#artifactDirectory, {
+                recursive: true,
+                mode: 0o700,
+              });
               const source = path.join(
-                artifactDirectory,
+                this.#artifactDirectory,
                 "zenx-bound-target.swift",
               );
-              const binary = path.join(artifactDirectory, "zenx-bound-target");
+              const binary = path.join(
+                this.#artifactDirectory,
+                "zenx-bound-target",
+              );
               await writeFile(source, MAC_BOUND_TARGET_SOURCE, { mode: 0o600 });
               await runProcess(
                 "/usr/bin/swiftc",
