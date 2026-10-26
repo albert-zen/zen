@@ -577,3 +577,45 @@ test("computer observation budget preserves source order and prioritizes enabled
     ],
   );
 });
+
+test("native constructor failure preserves definite versus unknown wording at public invocation", async () => {
+  for (const detail of [
+    "could not construct keyboard press; no events dispatched",
+    "could not construct keyboard release; input partially dispatched; outcome unknown; do not retry automatically",
+  ]) {
+    const driver = new MacForegroundInputDriver("/unused", {
+      compile: async () => "/fake/helper",
+      runProcess: async (_command, _args, timeout, stdin, signal) =>
+        await runProcess(
+          process.execPath,
+          [
+            "-e",
+            `process.stdin.resume(); process.stdin.on('end', () => { process.stderr.write(${JSON.stringify(detail)}); process.exitCode = 1; });`,
+          ],
+          timeout,
+          stdin,
+          signal,
+        ),
+    });
+    const backend = computerBackend([]);
+    backend.foregroundKeyPress = async (key, signal) => {
+      await driver.run({ operation: "key", key }, signal);
+    };
+    const capability = new ComputerZenXCapabilityPackage(
+      backend,
+      computerCapabilityManifest,
+      true,
+    );
+    await assert.rejects(
+      capability.invoke(
+        "computer_foreground_key_press",
+        invocation({ key: "enter" }),
+      ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.ok(error.message.endsWith(detail));
+        return true;
+      },
+    );
+  }
+});

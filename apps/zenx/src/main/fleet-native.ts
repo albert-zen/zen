@@ -1816,6 +1816,7 @@ export class NativeFleetClient implements NativeFleetPort {
     }
     // These identities are observation fences, never a transcript or command ledger.
     const active = new Set<string>();
+    let observedThroughTurnId: string | undefined;
     const hinted = new Set<string>();
     let notifications: Notification[] = [];
     let bytes = 0;
@@ -1842,10 +1843,23 @@ export class NativeFleetClient implements NativeFleetPort {
       options.onTurn({ threadId, turnId: turn.id, status: turn.status });
     };
     const reconcile = (snapshot: Recovery) => {
-      for (const turn of snapshot.thread.turns) {
+      const boundary =
+        observedThroughTurnId === undefined
+          ? -1
+          : snapshot.thread.turns.findIndex(
+              (turn) => turn.id === observedThroughTurnId,
+            );
+      if (observedThroughTurnId !== undefined && boundary < 0)
+        throw new Error(
+          "Fleet watched Thread history lost its observation boundary",
+        );
+      for (const [index, turn] of snapshot.thread.turns.entries()) {
+        if (bounded.aborted) return;
         if (turn.status === "inProgress") active.add(turn.id);
-        else if (active.has(turn.id) || hinted.has(turn.id)) emit(turn);
+        else if (active.has(turn.id) || hinted.has(turn.id) || index > boundary)
+          emit(turn);
       }
+      observedThroughTurnId = snapshot.thread.turns.at(-1)?.id;
       // A finite Host history can only have one active turn, but bound malicious views too.
       if (active.size + hinted.size > 1024)
         throw new Error("Fleet active Turn observation exceeds limit");
@@ -1853,6 +1867,11 @@ export class NativeFleetClient implements NativeFleetPort {
     unsubscribe = attach();
     try {
       current = await recover(session, workspaceId, threadId, bounded);
+      // The initial complete snapshot is the historical baseline. Later newly
+      // observed terminal Turns completed within this watch, even when their
+      // start/end notifications were subsumed by a recovery watermark. Only the
+      // append-only snapshot frontier ID is retained, never an unbounded ID set.
+      observedThroughTurnId = current.thread.turns.at(-1)?.id;
       reconcile(current);
       if (options.includeCurrentTerminal) {
         const last = current.thread.turns.at(-1);
@@ -1873,6 +1892,7 @@ export class NativeFleetClient implements NativeFleetPort {
       notifications = [];
       active.clear();
       hinted.clear();
+      observedThroughTurnId = undefined;
     };
     // The owner receives immediate offline/error information. Read-only reconnect
     // does not resend any command or replay completions from unrelated history.

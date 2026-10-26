@@ -1,3 +1,4 @@
+import { triggerMessagePresentation } from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -1919,10 +1920,6 @@ function ThreadViewContent({
               <ContextUsageIndicator
                 context={threadUsage?.context}
                 threadCacheHitRate={threadUsage?.thread.cacheHitRate}
-                threadOutputRate={threadOutputRatePerSecond(
-                  thread ?? null,
-                  threadUsage,
-                )}
                 compactDisabled={
                   composerDisabled || runningTurn !== null || submitting
                 }
@@ -2588,7 +2585,6 @@ function TurnBlock({
     disclosureKey("turn", turn.id),
   );
   const [protectedOpen, setProtectedOpen] = useState(false);
-  const [inspecting, setInspecting] = useState(false);
   const previousStatus = useRef(turn.status);
   // selectionchange is queued by browsers. Observe the still-mounted history
   // before a terminal render could remove the user's selected/focused node.
@@ -2604,16 +2600,15 @@ function TurnBlock({
           !!active.closest(".turn-history") &&
           !!sectionRef.current?.contains(active)))
     ) {
-      setInspecting(true);
       setProtectedOpen(true);
     }
   }
+  // Selecting/copying the visible answer is not a request to reveal history.
+  // Only preserve an already-visible selection at the running → terminal edge.
   const expanded =
     protectedOpen ||
     (expandedOverride ??
-      (turn.status === "failed" ||
-        turn.status === "interrupted" ||
-        inspecting));
+      (turn.status === "failed" || turn.status === "interrupted"));
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&
@@ -2621,25 +2616,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  useEffect(() => {
-    const preserve = () => {
-      const active = document.activeElement;
-      setInspecting(
-        transcriptHasSelection(sectionRef.current) ||
-          (active instanceof Element &&
-            !!active.closest(".turn-history") &&
-            !!sectionRef.current?.contains(active)),
-      );
-    };
-    document.addEventListener("selectionchange", preserve);
-    document.addEventListener("focusin", preserve);
-    document.addEventListener("focusout", preserve);
-    return () => {
-      document.removeEventListener("selectionchange", preserve);
-      document.removeEventListener("focusin", preserve);
-      document.removeEventListener("focusout", preserve);
-    };
-  }, []);
   const reviewActivity = () => {
     setExpanded(true);
     requestAnimationFrame(() => {
@@ -2683,7 +2659,12 @@ function TurnBlock({
         turn={turn}
       />
     ) : (
-      <WakeupCard entry={wakeup} key={item.id} />
+      <TriggerMessageBubble
+        text={item.content.map((part) => part.text).join("\n")}
+        sourceId={wakeup.triggerId}
+        key={item.id}
+        turn={turn}
+      />
     );
   };
   return (
@@ -2973,66 +2954,14 @@ export function threadCacheUsageLabel(
       });
 }
 
-function outputWindowSeconds(turn: Turn): number | null {
-  const ms = turn.durationMs;
-  return turn.status === "completed" &&
-    ms !== null &&
-    Number.isFinite(ms) &&
-    ms > 0
-    ? ms / 1_000
-    : null;
-}
-
-/** Output tokens per second for one Turn. Unknown without usage telemetry or
- * a positive completed window; the UI never guesses from model names. */
-export function turnOutputRatePerSecond(
-  usage: ModelUsageAggregate | undefined,
-  turn: Turn,
-): number | null {
-  const seconds = outputWindowSeconds(turn);
-  if (usage === undefined || seconds === null) return null;
-  return usage.outputTokens > 0 ? usage.outputTokens / seconds : null;
-}
-
-/** Session rate over completed Turns with matched usage and known duration.
- * Idle gaps between Turns are excluded; tool/wait time within a Turn remains
- * part of its observed execution duration. */
-export function threadOutputRatePerSecond(
-  thread: Thread | null,
-  usage: ModelUsageProjection | undefined,
-): number | null {
-  if (thread === null || usage === undefined) return null;
-  let tokens = 0;
-  let seconds = 0;
-  for (const turn of thread.turns) {
-    const window = outputWindowSeconds(turn);
-    const turnUsage = usage.turns[turn.id];
-    if (window === null || turnUsage === undefined) continue;
-    tokens += turnUsage.outputTokens;
-    seconds += window;
-  }
-  if (tokens <= 0 || seconds <= 0) return null;
-  return tokens / seconds;
-}
-
-export function outputRateLabel(rate: number | null): string {
-  if (rate === null) return i18n.t("shell:outputRateUnknown");
-  const formatted = rate >= 10 ? String(Math.round(rate)) : rate.toFixed(1);
-  return i18n.t("shell:outputRate", { rate: formatted });
-}
-
 export function ContextUsageIndicator({
   context,
   threadCacheHitRate,
-  threadOutputRate,
   compactDisabled = false,
   onCompact,
 }: {
   context?: ModelContextUsageProjection;
   threadCacheHitRate?: number;
-  /** Session output rate in tokens/s; `null` renders Unknown. Omitted for
-   * Threads without usage data, where the line would always be noise. */
-  threadOutputRate?: number | null;
   compactDisabled?: boolean;
   onCompact?(): Promise<void>;
 }) {
@@ -3166,9 +3095,6 @@ export function ContextUsageIndicator({
   const tooltip = [
     contextLabel,
     threadCacheUsageLabel(threadCacheHitRate),
-    ...(threadOutputRate === undefined
-      ? []
-      : [outputRateLabel(threadOutputRate)]),
   ].join("\n");
   const radius = 7;
   return (
@@ -3226,7 +3152,7 @@ export function ContextUsageIndicator({
             aria-label={i18n.t("shell:contextDetails")}
           >
             <div className="context-usage-heading">
-              <span>{i18n.t("shell:contextWindowUsed")}</span>
+              <span>{i18n.t("shell:contextCompactTitle")}</span>
               <strong>{String(percent)}%</strong>
             </div>
             <div
@@ -3238,13 +3164,51 @@ export function ContextUsageIndicator({
               aria-valuenow={visualPercent}
               aria-valuetext={contextLabel}
             >
-              <span style={{ width: `${String(visualPercent)}%` }} />
+              {context.estimate ? (
+                (
+                  [
+                    "instructions",
+                    "toolDefinitions",
+                    "pluginContext",
+                    "conversation",
+                  ] as const
+                ).map((category) => (
+                  <span
+                    key={category}
+                    data-category={category}
+                    style={{
+                      width: `${context.estimate!.total > 0 ? (visualRatio * 100 * context.estimate![category]) / context.estimate!.total : 0}%`,
+                    }}
+                  />
+                ))
+              ) : (
+                <span style={{ width: `${String(visualPercent)}%` }} />
+              )}
             </div>
             <p>{tokenUsage}</p>
+            {context.estimate ? (
+              <>
+                <dl className="context-usage-breakdown">
+                  {(
+                    [
+                      "instructions",
+                      "toolDefinitions",
+                      "pluginContext",
+                      "conversation",
+                    ] as const
+                  ).map((category) => (
+                    <div key={category} data-category={category}>
+                      <dt>
+                        <i aria-hidden="true" />
+                        {i18n.t(`shell:contextCategory.${category}`)}
+                      </dt>
+                      <dd>{formatTokenCount(context.estimate![category])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </>
+            ) : null}
             <p>{threadCacheUsageLabel(threadCacheHitRate)}</p>
-            {threadOutputRate === undefined ? null : (
-              <p>{outputRateLabel(threadOutputRate)}</p>
-            )}
             <button
               className="context-usage-compact"
               type="button"
@@ -4078,9 +4042,7 @@ function MessageActions({
       {usage === undefined ? null : (
         <span
           className="message-cache"
-          title={`${i18n.t("shell:turnCacheTelemetry")} · ${outputRateLabel(
-            turnOutputRatePerSecond(usage, turn),
-          )}`}
+          title={i18n.t("shell:turnCacheTelemetry")}
         >
           {usageLabel(usage, i18n.t("shell:cache"))}
         </span>
@@ -4157,6 +4119,38 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
   );
 }
 
+/** Full readable prompt/context; canonical ID, never text, owns navigation. */
+function TriggerMessageBubble({
+  text,
+  sourceId,
+  turn,
+}: {
+  text: string;
+  sourceId?: string;
+  turn: Turn;
+}) {
+  const presentation = triggerMessagePresentation(text, sourceId);
+  return (
+    <article className="user-row thread-message-row trigger-message-row">
+      <MessageSourceLink
+        target={{ kind: "trigger", id: sourceId ?? "" }}
+        label={presentation.name || i18n.t("shell:hostMessageTrigger")}
+        className="host-message-source"
+      />
+      <div className="user-bubble">
+        <Markdown text={presentation.text} />
+      </div>
+      <MessageActions
+        className="user-message-actions"
+        copyLabel={i18n.t("shell:copyHostMessage")}
+        copiedLabel={i18n.t("shell:copiedHostMessage")}
+        text={presentation.text}
+        turn={turn}
+      />
+    </article>
+  );
+}
+
 function WakeupCard(
   props:
     | { entry: TriggerHistoryEntry }
@@ -4168,6 +4162,14 @@ function WakeupCard(
 ) {
   if ("item" in props) {
     const { item, entry, turn } = props;
+    if (item.source === "trigger")
+      return (
+        <TriggerMessageBubble
+          text={item.text}
+          sourceId={item.sourceId}
+          turn={turn}
+        />
+      );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent

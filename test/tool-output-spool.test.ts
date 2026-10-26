@@ -25,7 +25,11 @@ import {
 import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-import { renderToolOutput, ToolOutputSpool } from "../src/tool-output-spool.js";
+import {
+  renderToolOutput,
+  ToolOutputCapture,
+  ToolOutputSpool,
+} from "../src/tool-output-spool.js";
 import { DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES } from "../src/tool-output-spool.js";
 import {
   ShellToolRuntime,
@@ -36,6 +40,45 @@ import {
 } from "../src/tool.js";
 import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
+
+test("capture completion waits for gated spool instance initialization", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-ready-"));
+  const instance = path.join(root, "instance-gated");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const ready = gate.then(async () => {
+    await mkdir(instance);
+  });
+  const capture = new ToolOutputCapture({
+    ready,
+    filePath: path.join(instance, "probe.txt"),
+    previewBytes: 64,
+    maxCaptureBytes: 64,
+    register() {},
+    onSettled() {},
+  });
+  capture.write("capture-ready");
+  let finished = false;
+  const completion = capture.finish().then((result) => {
+    finished = true;
+    return result;
+  });
+  try {
+    // Deterministically reproduce the directory observation before readiness.
+    assert.deepEqual(await readdir(root), []);
+    assert.equal(finished, false);
+    release();
+    assert.equal((await completion).output, "capture-ready");
+    assert.equal(finished, true);
+    assert.deepEqual(await readdir(root), ["instance-gated"]);
+  } finally {
+    release();
+    await completion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("oversized shell output becomes a bounded receipt with readable full output", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-spool-test-"));

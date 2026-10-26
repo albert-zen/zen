@@ -245,7 +245,7 @@ test("Host steering preserves delivery anchors and separates trace batches", () 
   ]);
 });
 
-test("Host messages render compact source labels, private IDs only in details, with distinct copy actions", async () => {
+test("Trigger input uses a full bubble while other Host sources retain compact provenance and copy actions", async () => {
   for (const language of ["en", "zh-CN"]) {
     await i18n.changeLanguage(language);
     const html = renderToStaticMarkup(
@@ -266,18 +266,40 @@ test("Host messages render compact source labels, private IDs only in details, w
       const rows = [
         ...dom.window.document.querySelectorAll(".host-message-row"),
       ];
-      assert.equal(rows.length, 3);
+      assert.equal(rows.length, 2);
       assert.deepEqual(
         rows.map(
           (row) => row.querySelector(".host-message-source")!.textContent,
         ),
-        language === "en"
-          ? ["Host", "Trigger", "Room"]
-          : ["宿主", "触发器", "房间"],
+        language === "en" ? ["Host", "Room"] : ["宿主", "房间"],
       );
       assert.ok(rows.every((row) => !row.textContent!.includes("private-")));
+      const trigger = dom.window.document.querySelector(
+        ".trigger-message-row",
+      )!;
+      assert.ok(trigger);
+      assert.equal(
+        trigger.querySelector(".host-message-source")!.textContent,
+        language === "en" ? "Trigger" : "触发器",
+      );
+      assert.equal(
+        trigger.querySelector(".user-bubble")!.textContent,
+        "Wake from trigger",
+      );
+      assert.equal(trigger.querySelector(".host-message-toggle"), null);
+      assert.equal(trigger.textContent!.includes("private-"), false);
+      assert.equal(
+        trigger.querySelector(".message-actions")!.previousElementSibling
+          ?.className,
+        "user-bubble",
+      );
       assert.ok(
-        rows[1]!
+        trigger.querySelector(
+          `[aria-label="${i18n.t("shell:copyHostMessage")}"]`,
+        ),
+      );
+      assert.ok(
+        trigger
           .querySelector(".host-message-source")!
           .getAttribute("title")!
           .includes(i18n.t("shell:sourceNavigationUnavailable")),

@@ -34,8 +34,15 @@ test("ring feedback keeps its hit target and token arc still while hover, focus,
   assert.match(css, /scale: 0\.96;/u);
   assert.match(css, /scale var\(--motion-enter\) var\(--ease-standard\)/u);
   // Only paint scales: no changed geometry, fabricated usage, spin or bounce.
+  // The same stylesheet also owns the popover's segmented meter and legend.
+  // Geometry must remain fixed for the ring, not for unrelated help icons.
+  const ringRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
+    .filter((rule) => /\.context-usage-(?:indicator|trigger)\b/u.test(rule[1]))
+    .map((rule) => rule[2])
+    .join("\n");
+  assert.ok(ringRules.length > 0);
   assert.doesNotMatch(
-    css,
+    ringRules,
     /stroke-dash|rotate|infinite|(?:^|\n)\s*(?:width|height|position):/u,
   );
 });

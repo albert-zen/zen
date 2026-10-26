@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import type { AppServerEvent } from "../src/app-server.js";
+import { StaticModelCatalog } from "../src/model-catalog.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
-import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
+import {
+  NativeRecoveryProjection,
+  type NativeProjectionEvent,
+} from "../src/protocol/native/recovery.js";
+import { NativeConnection } from "../src/protocol/native/connection.js";
+import type { JsonRpcMessage } from "../src/protocol/codex/wire.js";
 import { serveCodexWebSocket } from "../src/protocol/codex/websocket.js";
 import { WebSocket } from "ws";
 
@@ -200,6 +207,249 @@ test("native resume replies before replaying only events newer than its watermar
   }
 });
 
+for (const fence of [
+  "none",
+  "first-resume",
+  "unsubscribe",
+  "close",
+  "delete",
+  "unsubscribe-while-draining",
+  "close-while-draining",
+] as const) {
+  test(`failed native resume preserves live continuity with ${fence} fence`, async () => {
+    const host = createHostedAppServer({
+      cwd: process.cwd(),
+      dataDirectory: "/tmp/unused-native-resume-failure",
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+      journal: new InMemoryThreadJournal(),
+    });
+    const projection = new NativeRecoveryProjection(host, {
+      processEpoch: "failed-resume-epoch",
+    });
+    const messages: JsonRpcMessage[] = [];
+    const connection = new NativeConnection({
+      projection,
+      send: (message) => {
+        messages.push(message);
+        if ("method" in message && message.method === "zen/thread/event") {
+          if (fence === "unsubscribe-while-draining")
+            connection.unsubscribe(
+              (message.params as { threadId: string }).threadId,
+            );
+          if (fence === "close-while-draining") connection.close();
+        }
+      },
+    });
+    const captured = deferred<void>();
+    const release = deferred<void>();
+    const readThread = host.readThread.bind(host);
+    const observed: NativeProjectionEvent[] = [];
+    const stopObserving = projection.subscribe((event) => observed.push(event));
+    try {
+      const thread = await host.startThread();
+      if (fence !== "first-resume")
+        await connection.receive({
+          id: 1,
+          method: "zen/thread/resume",
+          params: { threadId: thread.id },
+        });
+      messages.length = 0;
+      observed.length = 0;
+      // Delay only the snapshot read. Turn execution and projection compaction
+      // continue through the real Host and canonical journal while it is pending.
+      let reads = 0;
+      host.readThread = async (id) => {
+        reads += 1;
+        host.readThread = readThread;
+        await readThread(id);
+        captured.resolve();
+        await release.promise;
+        throw new Error("synthetic snapshot read failure");
+      };
+      const pending = connection.receive({
+        id: 2,
+        method: "zen/thread/resume",
+        params: { threadId: thread.id },
+      });
+      await captured.promise;
+      await (
+        await host.startTurn(thread.id, "buffered real completion")
+      ).done;
+      assert.equal(messages.length, 0);
+      if (fence === "unsubscribe") connection.unsubscribe(thread.id);
+      if (fence === "close") connection.close();
+      if (fence === "delete") {
+        await host.setThreadArchived(thread.id, true);
+        const current = await readThread(thread.id);
+        await host.deleteThread(thread.id, current.items.at(-1)!.id);
+      }
+      const expected = observed
+        .filter((entry) => entry.type === "thread_event")
+        .map((entry) => entry.event);
+      assert(expected.some((entry) => entry.event.type === "item_completed"));
+      assert(expected.some((entry) => entry.event.type === "turn_completed"));
+      release.resolve();
+      await pending;
+      assert.equal(reads, 1, "failed reads must not retry");
+      if (fence === "close") {
+        assert.deepEqual(messages, []);
+        return;
+      }
+      assert.deepEqual(messages[0], {
+        id: 2,
+        error: { code: -32603, message: "synthetic snapshot read failure" },
+      });
+      const delivered = messages.slice(1).map((message) => {
+        assert("method" in message && message.method === "zen/thread/event");
+        return message.params;
+      });
+      assert.deepEqual(
+        delivered,
+        fence === "none"
+          ? expected
+          : fence === "unsubscribe-while-draining" ||
+              fence === "close-while-draining"
+            ? expected.slice(0, 1)
+            : fence === "delete"
+              ? expected.filter(
+                  (entry) => entry.event.type === "thread_deleted_updated",
+                )
+              : [],
+      );
+      if (fence !== "delete") {
+        messages.length = 0;
+        observed.length = 0;
+        await (
+          await host.startTurn(thread.id, "later real completion")
+        ).done;
+        const later = observed
+          .filter((entry) => entry.type === "thread_event")
+          .map((entry) => entry.event);
+        assert.deepEqual(
+          messages.map((message) =>
+            "params" in message ? message.params : undefined,
+          ),
+          fence === "none" ? later : [],
+          "only an existing, still active subscription continues after failure",
+        );
+      }
+    } finally {
+      release.resolve();
+      host.readThread = readThread;
+      stopObserving();
+      connection.close();
+      projection.close();
+      await host.closeProviderTransport();
+    }
+  });
+}
+
+test("an obsolete failed resume cannot release or retire its replacement barrier", async () => {
+  const host = createHostedAppServer({
+    cwd: process.cwd(),
+    dataDirectory: "/tmp/unused-native-resume-replacement",
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    journal: new InMemoryThreadJournal(),
+  });
+  const projection = new NativeRecoveryProjection(host);
+  const messages: JsonRpcMessage[] = [];
+  const connection = new NativeConnection({
+    projection,
+    send: (message) => messages.push(message),
+  });
+  const readThread = host.readThread.bind(host);
+  const captured = deferred<void>();
+  const release = deferred<void>();
+  const replacementCaptured = deferred<void>();
+  const replacementRelease = deferred<void>();
+  try {
+    const thread = await host.startThread();
+    await connection.receive({
+      id: 1,
+      method: "zen/thread/resume",
+      params: { threadId: thread.id },
+    });
+    messages.length = 0;
+    host.readThread = async (id) => {
+      host.readThread = readThread;
+      await readThread(id);
+      captured.resolve();
+      await release.promise;
+      throw new Error("obsolete snapshot failure");
+    };
+    const pending = connection.receive({
+      id: 2,
+      method: "zen/thread/resume",
+      params: { threadId: thread.id },
+    });
+    await captured.promise;
+    await (
+      await host.startTurn(thread.id, "obsolete tail")
+    ).done;
+    connection.unsubscribe(thread.id);
+    host.readThread = async (id) => {
+      host.readThread = readThread;
+      const snapshot = await readThread(id);
+      replacementCaptured.resolve();
+      await replacementRelease.promise;
+      return snapshot;
+    };
+    const replacement = connection.receive({
+      id: 3,
+      method: "zen/thread/resume",
+      params: { threadId: thread.id },
+    });
+    await replacementCaptured.promise;
+    release.resolve();
+    await pending;
+    assert.deepEqual(messages, [
+      { id: 2, error: { code: -32603, message: "obsolete snapshot failure" } },
+    ]);
+    await (
+      await host.startTurn(thread.id, "replacement overlap")
+    ).done;
+    assert.equal(
+      messages.length,
+      1,
+      "replacement barrier must still buffer live events",
+    );
+    replacementRelease.resolve();
+    await replacement;
+    assert.equal(messages.length, 2);
+    const response = messages[1]!;
+    assert("result" in response);
+    const snapshot = response.result as Awaited<
+      ReturnType<typeof projection.resume>
+    >;
+    assert(
+      snapshot.events.some((entry) => entry.event.type === "turn_completed"),
+    );
+    messages.length = 0;
+    await (
+      await host.startTurn(thread.id, "after replacement")
+    ).done;
+    assert(
+      messages.some(
+        (message) =>
+          "method" in message && message.method === "zen/thread/event",
+      ),
+    );
+  } finally {
+    release.resolve();
+    replacementRelease.resolve();
+    host.readThread = readThread;
+    connection.close();
+    projection.close();
+    await host.closeProviderTransport();
+  }
+});
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (!predicate()) {
@@ -301,4 +551,131 @@ function deferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+for (const faultType of ["thread_event", "model_catalog_updated"] as const) {
+  test(`native recovery isolates a failing ${faultType} listener`, async (t) => {
+    const host = createHostedAppServer({
+      cwd: process.cwd(),
+      dataDirectory: "/tmp/unused-native-recovery-listener",
+      model: "fake",
+      models: ["fake"],
+      approvalPolicy: "never",
+      provider: { type: "fake" },
+      journal: new InMemoryThreadJournal(),
+    });
+    const recovery = new NativeRecoveryProjection(host, {
+      processEpoch: "epoch-listener",
+    });
+    const warnings = t.mock.method(console, "warn", () => {});
+    const readThread = t.mock.method(host, "readThread");
+    const originalEvents: AppServerEvent[] = [];
+    const unsubscribeHost = host.subscribe((event) =>
+      originalEvents.push(event),
+    );
+    const before: NativeProjectionEvent[] = [];
+    const after: NativeProjectionEvent[] = [];
+    const unsubscribeBefore = recovery.subscribe((event) => before.push(event));
+    let failures = 0;
+    const unsubscribeFailed = recovery.subscribe((event) => {
+      if (event.type === faultType) {
+        failures += 1;
+        throw new Error("private payload must not be logged");
+      }
+    });
+    const unsubscribeAfter = recovery.subscribe((event) => after.push(event));
+    const publishCatalog = () => {
+      const current = host.currentRuntimeConfiguration();
+      const { adapter, model } = current.providerSnapshot.resolve(
+        current.defaults,
+      );
+      host.publishRuntimeConfiguration(
+        host.prepareRuntimeConfiguration({
+          revision: current.revision + 1,
+          defaults: current.defaults,
+          providerProfiles: [
+            {
+              providerProfileId: current.defaults.providerProfileId,
+              adapter,
+              modelCatalog: new StaticModelCatalog([model]),
+            },
+          ],
+        }),
+      );
+    };
+    try {
+      if (faultType === "model_catalog_updated") publishCatalog();
+      const thread = await host.startThread();
+      // The throwing observer must not skip compaction at this canonical boundary.
+      assert(readThread.mock.callCount() > 0);
+      for (const input of ["first turn", "subsequent turn"]) {
+        await (
+          await host.startTurn(thread.id, input)
+        ).done;
+      }
+      publishCatalog();
+      publishCatalog();
+
+      assert.equal(failures, 1);
+      assert.deepEqual(before, after);
+      assert.deepEqual(
+        after.map((projected) =>
+          projected.type === "thread_event"
+            ? projected.event.event
+            : { type: projected.type, revision: projected.revision },
+        ),
+        originalEvents,
+      );
+      const completed = after.filter(
+        (event) =>
+          event.type === "thread_event" &&
+          event.event.event.type === "turn_completed",
+      );
+      assert.equal(completed.length, 2);
+      const watermarks = after.flatMap((event) =>
+        event.type === "thread_event" ? [event.event.watermark] : [],
+      );
+      assert.deepEqual(
+        watermarks,
+        watermarks.map((_, index) => index + 1),
+      );
+      assert.deepEqual(
+        warnings.mock.calls.map((call) => call.arguments),
+        [["Removed a failing native recovery event subscriber"]],
+      );
+
+      const canonical = await host.readThread(thread.id);
+      const resumed = await recovery.resume(thread.id);
+      assert.deepEqual(resumed.thread, canonical);
+      assert.equal(canonical.turns.length, 2);
+      assert(canonical.turns.every((turn) => turn.status === "completed"));
+      assert.equal(resumed.watermark, watermarks.at(-1));
+      assert.deepEqual(resumed.events, []);
+      assert.deepEqual(await host.readThread(thread.id), canonical);
+
+      unsubscribeFailed();
+      unsubscribeFailed();
+      unsubscribeBefore();
+      const beforeCount = before.length;
+      const afterCount = after.length;
+      publishCatalog();
+      assert.equal(before.length, beforeCount);
+      assert.equal(after.length, afterCount + 1);
+      recovery.close();
+      recovery.close();
+      publishCatalog();
+      await (
+        await host.startTurn(thread.id, "after close")
+      ).done;
+      assert.equal(after.length, afterCount + 1);
+      assert.equal(warnings.mock.callCount(), 1);
+    } finally {
+      unsubscribeBefore();
+      unsubscribeFailed();
+      unsubscribeAfter();
+      unsubscribeHost();
+      recovery.close();
+      await host.closeProviderTransport();
+    }
+  });
 }

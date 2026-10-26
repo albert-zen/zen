@@ -289,7 +289,7 @@ test("context usage renders beside the composer with concise usage and cache det
   );
   assert.match(
     html,
-    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 50%/u,
+    /class="context-usage-trigger"[^>]*aria-label="Open context details\. Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 50%/u,
   );
   assert.match(html, /aria-haspopup="dialog"/u);
   assert.match(html, /aria-expanded="false"/u);
@@ -595,7 +595,7 @@ test("context pressure above the configured window keeps the real percent in its
     }),
   );
   assert.match(html, /Context 216%/u);
-  assert.match(html, /Thread cache 96%/u);
+  assert.match(html, /Thread cache hit rate 96%/u);
   assert.match(html, /587\.5K \/ 272K tokens/u);
   assert.doesNotMatch(html, /last provider|configured window/u);
   assert.match(html, /stroke-dasharray="1 1"/u);
@@ -1114,7 +1114,7 @@ test("real compaction request rejection stays with its Thread, ignores stale com
   });
 });
 
-test("context tooltip exposes exact zero and unknown Thread cache rates", () => {
+test("context tooltip exposes exact zero and unknown Thread cache hit rate rates", () => {
   const zero = renderTurns(
     [],
     [],
@@ -1138,7 +1138,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     zero,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache 0%/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate 0%/u,
   );
 
   const unknown = renderTurns(
@@ -1159,7 +1159,7 @@ test("context tooltip exposes exact zero and unknown Thread cache rates", () => 
   );
   assert.match(
     unknown,
-    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache unknown/u,
+    /Context 30% · 78\.2K \/ 262K tokens[^"]*Thread cache hit rate unknown/u,
   );
 });
 
@@ -2098,7 +2098,7 @@ test("renders compact token-weighted cache usage for each Turn, not the message 
     },
   );
 
-  assert.doesNotMatch(html, /Thread cache 33% · 200 in · 25 out/u);
+  assert.doesNotMatch(html, /Thread cache hit rate 33% · 200 in · 25 out/u);
   assert.match(html, /Cache 40% · 150 in · 17 out/u);
   assert.match(html, /Cache unknown · 50 in · 8 out/u);
   assert.doesNotMatch(html, /Cache 0% · 50 in/u);
@@ -4380,18 +4380,16 @@ test("earlier shell rows inherit neutral settlement across separated trace group
   }
 });
 
-test("Turn and session output rates reach the message hover and context-ring telemetry", async () => {
-  const completed = turnWithItems(
-    "completed",
-    [user("ask"), agent("answer")],
-    1000,
-  );
-  assert.equal(completed.startedAt, 10);
-  assert.equal(completed.completedAt, 11);
-  const usageProjection: ModelUsageProjection = {
-    thread: { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+test("usage telemetry never turns tool waits into model output speed", async () => {
+  const usage: ModelUsageProjection = {
+    thread: { responseCount: 2, inputTokens: 300, outputTokens: 900 },
     turns: {
-      "turn-1": { responseCount: 1, inputTokens: 300, outputTokens: 900 },
+      "turn-1": {
+        responseCount: 2,
+        inputTokens: 300,
+        outputTokens: 900,
+        reasoningOutputTokens: 400,
+      },
     },
     context: {
       inputTokens: 120_000,
@@ -4400,120 +4398,121 @@ test("Turn and session output rates reach the message hover and context-ring tel
       ratio: 0.3,
     },
   };
-  const {
-    turnOutputRatePerSecond,
-    threadOutputRatePerSecond,
-    outputRateLabel,
-  } = await import("../src/renderer/src/ThreadView.js");
-
+  const telemetry: string[] = [];
+  // Identical model output and usage, differing only in the intervening tool
+  // wait. There is no canonical sample timing, so neither run can claim TPS.
+  for (const waitMs of [0, 60_000]) {
+    const tool = commandItem("wait", "wait for background task");
+    assert.equal(tool.type, "commandExecution");
+    const completed = turnWithItems(
+      "completed",
+      [
+        user("ask"),
+        reasoning("Thinking"),
+        agent("Checking"),
+        tool,
+        agent("answer"),
+      ],
+      1000 + waitMs,
+    );
+    const dom = new JSDOM(renderTurns([completed], [], undefined, {}, usage));
+    try {
+      const message = dom.window.document.querySelector(".message-cache")!;
+      const context = dom.window.document.querySelector(
+        ".context-usage-trigger",
+      )!;
+      assert.equal(message.getAttribute("title"), "Turn cache telemetry");
+      assert.match(message.textContent ?? "", /900/u);
+      assert.match(context.getAttribute("aria-label") ?? "", /Context 30%/u);
+      assert.doesNotMatch(
+        dom.serialize(),
+        /tok\/s|output speed|输出速度|NaN|Infinity/u,
+      );
+      telemetry.push(
+        message.outerHTML + context.outerHTML.replaceAll(/_R_[^" ]+/gu, "ID"),
+      );
+      assert.match(
+        dom.window.document.querySelector(".turn-toggle")?.textContent ?? "",
+        /Worked for/u,
+      );
+    } finally {
+      dom.window.close();
+    }
+  }
   assert.equal(
-    turnOutputRatePerSecond(usageProjection.turns["turn-1"], completed),
-    900,
-  );
-  assert.equal(turnOutputRatePerSecond(undefined, completed), null);
-  assert.equal(
-    turnOutputRatePerSecond(
-      usageProjection.turns["turn-1"],
-      turnWithItems("inProgress", []),
-    ),
-    null,
-    "running Turns never invent a rate",
-  );
-  assert.equal(
-    threadOutputRatePerSecond(thread([completed]), usageProjection),
-    900,
-  );
-  assert.equal(
-    threadOutputRatePerSecond(thread([completed]), {
-      ...usageProjection,
-      turns: {},
-    }),
-    null,
-    "turns without usage telemetry are excluded, not guessed",
-  );
-  assert.equal(
-    outputRateLabel(null),
-    "output speed unknown",
-    "Unknown mirrors the cache telemetry semantics",
-  );
-  assert.equal(outputRateLabel(45.2), "output 45 tok/s (Turn duration)");
-  assert.equal(outputRateLabel(3.26), "output 3.3 tok/s (Turn duration)");
-
-  const html = renderTurns([completed], [], undefined, {}, usageProjection);
-  assert.match(
-    html,
-    /class="message-cache" title="Turn cache telemetry[^"]*output 900 tok\/s/u,
-    "the final message hover carries its own Turn rate",
-  );
-  assert.match(
-    html,
-    /aria-label="[^"]*output 900 tok\/s[^"]*"/u,
-    "the context ring hover carries the session rate",
+    telemetry[0],
+    telemetry[1],
+    "tool waits cannot change usage telemetry",
   );
 
-  // A Thread whose Turn lacks usage keeps the ring honest.
-  const bare = renderTurns(
-    [completed],
-    [],
-    undefined,
-    {},
-    {
-      ...usageProjection,
-      turns: {},
-    },
-  );
-  assert.match(bare, /output speed unknown/u);
-  assert.doesNotMatch(bare, /message-cache/u);
+  // The opened context panel must not retain the old rate line either.
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ContextUsageIndicator, {
+          context: usage.context,
+          threadCacheHitRate: 0.5,
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-usage-trigger").click());
+    const panel = requiredElement('[role="dialog"]');
+    assert.match(panel.textContent ?? "", /120K \/ 400K tokens/u);
+    assert.match(panel.textContent ?? "", /50%/u);
+    assert.doesNotMatch(panel.outerHTML, /tok\/s|output speed|输出速度/u);
+  });
 });
 
-test("session throughput weights matched completed windows and excludes gaps, failures and missing telemetry", async () => {
-  const { threadOutputRatePerSecond, turnOutputRatePerSecond } =
-    await import("../src/renderer/src/ThreadView.js");
-  const one = { ...turnWithItems("completed", [], 250), id: "one" };
-  const two = {
-    ...turnWithItems("completed", [], 750),
-    id: "two",
-    startedAt: 86400,
-    completedAt: 86401,
-  };
-  const failed = { ...turnWithItems("failed", [], 1000), id: "failed" };
-  const unmeasured = {
-    ...turnWithItems("completed", [], 1000),
-    id: "unmeasured",
-  };
-  const untimed = {
-    ...turnWithItems("completed", [], 1000),
-    id: "untimed",
-    durationMs: null,
-  };
-  const usage: ModelUsageProjection = {
-    context: {
-      inputTokens: null,
-      inputTokenSource: null,
-      contextWindow: null,
-      ratio: null,
-    },
-    thread: { responseCount: 5, inputTokens: 100, outputTokens: 5000 },
-    turns: {
-      one: { responseCount: 1, inputTokens: 10, outputTokens: 50 },
-      two: { responseCount: 1, inputTokens: 10, outputTokens: 150 },
-      failed: { responseCount: 1, inputTokens: 10, outputTokens: 2000 },
-      untimed: { responseCount: 1, inputTokens: 10, outputTokens: 2800 },
-    },
-  };
-  assert.equal(
-    threadOutputRatePerSecond(
-      thread([one, two, failed, unmeasured, untimed]),
-      usage,
-    ),
-    200,
-  );
-  for (const durationMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.equal(
-      turnOutputRatePerSecond(usage.turns.one, { ...one, durationMs }),
+test("missing timing, partial usage and restored terminal output never invent TPS", async () => {
+  const { nativeRecoveryForThread } =
+    await import("./native-recovery-fixture.js");
+  const { projectNativeRecovery } =
+    await import("../src/renderer/src/thread-view-state.js");
+  for (const status of [
+    "completed",
+    "failed",
+    "interrupted",
+    "inProgress",
+  ] as const) {
+    for (const durationMs of [
       null,
-    );
+      0,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      250,
+    ]) {
+      const original = turnWithItems(
+        status,
+        [user("ask"), agent("partial or final")],
+        durationMs,
+      );
+      for (const usage of [
+        undefined,
+        usageProjection(),
+        {
+          ...usageProjection(),
+          turns: {
+            "turn-1": { responseCount: 1, inputTokens: 10, outputTokens: 2 },
+          },
+        },
+      ]) {
+        const html = renderTurns([original], [], undefined, {}, usage);
+        assert.doesNotMatch(html, /tok\/s|output speed|输出速度/u);
+      }
+    }
   }
+  const recovered = projectNativeRecovery(
+    nativeRecoveryForThread(
+      thread([
+        turnWithItems("completed", [user("ask"), agent("stored answer")], 1000),
+      ]),
+    ),
+  );
+  assert.doesNotMatch(
+    renderTurns(recovered.turns, [], undefined, {}, usageProjection()),
+    /tok\/s|output speed|输出速度/u,
+  );
 });
 
 test("pending wait sweeps while returned waits stay settled across groups", () => {

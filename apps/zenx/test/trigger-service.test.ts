@@ -15,6 +15,7 @@ import type {
   TriggerProgramRunResult,
   TriggerProgramRunner,
 } from "../src/main/trigger-program-runner.js";
+import { PluginStorageReplacementPendingError } from "../src/main/plugin-host-sdk.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 import type {
   ClientRequestParams,
@@ -1616,6 +1617,288 @@ test("long timers reschedule at the clamp boundary instead of firing early", asy
   } finally {
     await triggers.stop();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const outcome of ["publish", "rollback"] as const) {
+  test(`storage publication gate preserves due timers and reloads ${outcome} snapshot`, async () => {
+    const manager = new ControlledManager();
+    const store = memoryTriggerStore();
+    let now = 1_000;
+    let pending = 0;
+    const listeners = new Set<() => void>();
+    const scheduled: Array<{ callback(): void; cancelled: boolean }> = [];
+    const service = new ZenXTriggerService(manager, store, {
+      now: () => now,
+      schedule: (callback) => {
+        const task = { callback, cancelled: false };
+        scheduled.push(task);
+        return task;
+      },
+      cancelScheduled: (task) => {
+        (task as { cancelled: boolean }).cancelled = true;
+      },
+      wakeupGate: {
+        isOpen: () => pending === 0,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    });
+    const notify = () => {
+      for (const listener of listeners) listener();
+    };
+    try {
+      await service.start();
+      await service.create({
+        threadId: "target",
+        kind: "timer",
+        label: "original",
+        prompt: "once",
+        runAt: 1_100,
+      });
+      const oldTimer = scheduled.at(-1)!;
+      pending = 2;
+      notify();
+      assert.equal(oldTimer.cancelled, true);
+      now = 1_500;
+      oldTimer.callback();
+      await settle();
+      assert.equal(manager.requests.length, 0);
+      assert.equal(service.snapshot().history.length, 0);
+      pending = 1;
+      notify();
+      await settle();
+      assert.equal(scheduled.length, 1);
+      await service.stop();
+      assert.equal(listeners.size, 0);
+      const original = await store.read();
+      const candidate = structuredClone(original);
+      candidate.triggers[0]!.label = "candidate";
+      candidate.triggers[0]!.timer!.nextRunAt = 1_200;
+      await service.start(true, {
+        read: async () => structuredClone(candidate),
+        write: async () => {},
+      });
+      assert.equal(scheduled.length, 1);
+      if (outcome === "publish") await store.write(candidate);
+      pending = 0;
+      notify();
+      await settle();
+      assert.equal(
+        service.snapshot().triggers[0]?.label,
+        outcome === "publish" ? "candidate" : "original",
+      );
+      assert.equal(
+        service.snapshot().triggers[0]?.timer?.nextRunAt,
+        outcome === "publish" ? 1_200 : 1_100,
+      );
+      assert.equal(scheduled.length, 2);
+      scheduled.at(-1)!.callback();
+      await snapshotWhen(
+        service,
+        (value) => value.history[0]?.status === "running",
+      );
+      assert.equal(manager.requests.length, 1);
+      oldTimer.callback();
+      scheduled.at(-1)!.callback();
+      await settle();
+      assert.equal(manager.requests.length, 1);
+    } finally {
+      await service.stop();
+    }
+    assert.equal(listeners.size, 0);
+  });
+}
+
+for (const timing of [
+  "before-result",
+  "during-write",
+  "settled-before-rejection",
+  "retire",
+] as const) {
+  test(`already-issued wake result waits outside mutation slot across storage fence: ${timing}`, async () => {
+    const manager = new ControlledManager();
+    const request = manager.request.bind(manager);
+    const admitted = deferred<void>();
+    const resultReady = deferred<void>();
+    let first = true;
+    manager.request = async (method, params) => {
+      const result = await request(method, params);
+      if (first && method === "zen/turn/wake") {
+        first = false;
+        admitted.resolve();
+        await resultReady.promise;
+      }
+      return result;
+    };
+    const backing = memoryTriggerStore();
+    let pending = false;
+    let injectFence =
+      timing === "during-write" || timing === "settled-before-rejection";
+    const listeners = new Set<() => void>();
+    const notify = () => {
+      for (const listener of listeners) listener();
+    };
+    const store = {
+      read: () => backing.read(),
+      write: async (value: TriggerSnapshot) => {
+        if (
+          injectFence &&
+          value.history.some((entry) => entry.turnId !== null)
+        ) {
+          injectFence = false;
+          pending = true;
+          notify();
+          if (timing === "settled-before-rejection") {
+            pending = false;
+            notify();
+            throw new PluginStorageReplacementPendingError();
+          }
+        }
+        if (pending) throw new PluginStorageReplacementPendingError();
+        await backing.write(value);
+      },
+    };
+    const service = new ZenXTriggerService(manager, store, {
+      wakeupGate: {
+        isOpen: () => !pending,
+        isBlockedError: (error) =>
+          error instanceof PluginStorageReplacementPendingError,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    });
+    try {
+      await service.start();
+      await service.create({
+        threadId: "target",
+        kind: "signal",
+        label: "held",
+        prompt: "once",
+        signalName: "held",
+      });
+      const firing = service.signal("held", "once");
+      await admitted.promise;
+      if (timing === "before-result" || timing === "retire") {
+        pending = true;
+        notify();
+      }
+      resultReady.resolve();
+      await settle();
+      assert.equal(manager.requests.length, 1);
+      assert.equal(pending, timing !== "settled-before-rejection");
+      if (timing === "retire") {
+        await service.stop(backing);
+        await firing;
+        pending = false;
+        notify();
+        assert.equal(listeners.size, 0);
+        return;
+      }
+      pending = false;
+      notify();
+      await firing;
+      assert.equal(service.snapshot().history[0]?.turnId, "wakeup-turn-1");
+      assert.equal(service.snapshot().history[0]?.status, "running");
+      assert.equal(manager.requests.length, 1);
+      await service.create({
+        threadId: "target",
+        kind: "timer",
+        label: "later",
+        prompt: "later",
+        runAt: Date.now() + 20,
+      });
+      await snapshotWhen(
+        service,
+        (snapshot) =>
+          snapshot.history.length === 2 &&
+          snapshot.history.every((entry) => entry.turnId !== null),
+      );
+      assert.equal(manager.requests.length, 2);
+    } finally {
+      pending = false;
+      notify();
+      await service.stop();
+    }
+  });
+}
+
+test("completed local program result persists after a storage fence without executing again", async () => {
+  const manager = new ControlledManager();
+  const runner = new BlockingProgramRunner();
+  const backing = memoryTriggerStore();
+  let pending = false;
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  const service = new ZenXTriggerService(
+    manager,
+    {
+      read: () => backing.read(),
+      write: async (snapshot) => {
+        if (pending) throw new PluginStorageReplacementPendingError();
+        await backing.write(snapshot);
+      },
+    },
+    {
+      programs: runner,
+      wakeupGate: {
+        isOpen: () => !pending,
+        isBlockedError: (error) =>
+          error instanceof PluginStorageReplacementPendingError,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    },
+  );
+  try {
+    await service.start();
+    await service.create({
+      threadId: "target",
+      kind: "signal",
+      label: "action",
+      prompt: "once",
+      signalName: "action",
+      program: { action: { command: "fixture-action" } },
+    });
+    const firing = service.signal("action", "once");
+    await runner.started.promise;
+    pending = true;
+    notify();
+    runner.release();
+    await settle();
+    assert.equal(runner.calls, 1);
+    pending = false;
+    notify();
+    await firing;
+    assert.equal(
+      service.snapshot().history[0]?.programOutcome?.status,
+      "completed",
+    );
+    assert.equal(
+      service.snapshot().history[0]?.programOutcome?.output,
+      '{"ok":true}',
+    );
+    assert.equal(runner.calls, 1);
+    await service.create({
+      threadId: "target",
+      kind: "timer",
+      label: "later",
+      prompt: "later",
+      runAt: Date.now() + 20,
+    });
+    await snapshotWhen(service, (snapshot) => snapshot.history.length === 2);
+  } finally {
+    pending = false;
+    notify();
+    await service.stop();
   }
 });
 

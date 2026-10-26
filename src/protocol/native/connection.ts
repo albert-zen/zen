@@ -1080,12 +1080,19 @@ export class NativeConnection {
       });
       return;
     }
+    const wasSubscribed = this.#subscriptions.has(threadId);
+    const processEpoch = this.#projection.processEpoch;
+    let resumedWatermark: number | undefined;
     const buffered: NativeProjectedThreadEvent[] = [];
     this.#barriers.set(threadId, buffered);
     this.#subscriptions.add(threadId);
     try {
       const snapshot = await this.#projection.resume(threadId);
       if (this.#closed) return;
+      if (this.#barriers.get(threadId) !== buffered)
+        throw new Error("Thread subscription changed during resume");
+      if (snapshot.processEpoch !== processEpoch)
+        throw new Error("Host epoch changed during resume");
       if (
         buffered.some(
           (entry) =>
@@ -1098,14 +1105,7 @@ export class NativeConnection {
           "Thread was deleted during resume; refresh before opening it",
         );
       this.#send({ id: message.id, result: snapshot });
-      for (const event of buffered) {
-        if (
-          event.event.type !== "thread_deleted_updated" &&
-          event.processEpoch === snapshot.processEpoch &&
-          event.watermark > snapshot.watermark
-        )
-          this.#sendEvent(event);
-      }
+      resumedWatermark = snapshot.watermark;
     } catch (error) {
       if (!this.#closed) {
         this.#send({
@@ -1117,12 +1117,38 @@ export class NativeConnection {
         });
       }
     } finally {
-      this.#barriers.delete(threadId);
-      // A failed resume must still deliver lifecycle discovery to this client.
-      if (!this.#closed)
-        for (const event of buffered)
-          if (event.event.type === "thread_deleted_updated")
-            this.#sendEvent(event);
+      // Keep the barrier installed while draining, so reentrant observations
+      // cannot overtake its tail. Never retire a replacement subscription's gate.
+      if (this.#barriers.get(threadId) === buffered) {
+        const failed = resumedWatermark === undefined;
+        const deleted = buffered.some(
+          (entry) =>
+            entry.event.type === "thread_deleted_updated" &&
+            entry.event.deleted,
+        );
+        if (failed && !wasSubscribed) this.#subscriptions.delete(threadId);
+        try {
+          for (const event of buffered) {
+            if (this.#closed || this.#barriers.get(threadId) !== buffered)
+              break;
+            if (event.processEpoch !== processEpoch) continue;
+            // Failed snapshots do not replace an existing consumer's live
+            // stream. Deletion still fences ordinary replay, while lifecycle
+            // discovery remains visible even without a Thread subscription.
+            if (
+              event.event.type === "thread_deleted_updated" ||
+              (this.#subscriptions.has(threadId) &&
+                (resumedWatermark === undefined
+                  ? wasSubscribed && !deleted
+                  : event.watermark > resumedWatermark))
+            )
+              this.#sendEvent(event);
+          }
+        } finally {
+          if (this.#barriers.get(threadId) === buffered)
+            this.#barriers.delete(threadId);
+        }
+      }
     }
   }
 

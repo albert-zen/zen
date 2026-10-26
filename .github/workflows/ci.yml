@@ -56,6 +56,18 @@ jobs:
         id: zenx-dependencies
       - name: Install CJK fonts for synthetic UI acceptance
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Capture reference bubble width diagnostic (production components, synthetic identity)
+        run: |
+          node apps/zenx/scripts/build-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
+          node apps/zenx/scripts/capture-reference-width-preview.mjs "${{ runner.temp }}/zenx-reference-width"
+      - name: Retain reference width measurements and screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-reference-width-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-reference-width
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build and capture approved UI previews
         run: |
           node apps/zenx/scripts/build-approved-ui-preview.mjs "${{ runner.temp }}/zenx-approved-ui-preview"
@@ -85,6 +97,7 @@ jobs:
           node --import tsx apps/zenx/scripts/capture-inline-reference-context.mjs "${{ runner.temp }}/zenx-quote-preview/reference-context-v3"
           node apps/zenx/scripts/build-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
           node apps/zenx/scripts/capture-quote-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
+          ZENX_PREVIEW_DESKTOP_INPUT=1 node apps/zenx/scripts/capture-turn-selection-preview.mjs "${{ runner.temp }}/zenx-quote-preview"
       - name: Retain synthetic quote visual evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -105,6 +118,67 @@ jobs:
         with:
           name: zenx-whats-new-ui-${{ github.sha }}
           path: ${{ runner.temp }}/zenx-whats-new-preview
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build and capture trigger message bubble evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          npx tsc -p apps/zenx/tsconfig.trigger-message-preview.json --noEmit
+          node apps/zenx/scripts/build-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+          node apps/zenx/scripts/capture-trigger-message-preview.mjs "${{ runner.temp }}/zenx-trigger-message-preview"
+      - name: Retain trigger message synthetic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-trigger-message-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trigger-message-preview
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build and capture file sidebar actual-component preview
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
+          node apps/zenx/scripts/capture-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-sidebar-preview"
+      - name: Retain file sidebar synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-file-sidebar-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-file-sidebar-preview
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Capture read-only Settings audit evidence
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
+          node apps/zenx/scripts/capture-settings-audit-preview.mjs "${{ runner.temp }}/zenx-settings-audit"
+      - name: Retain Settings audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-settings-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-settings-audit
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Capture synthetic trigger management UI
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          git fetch --no-tags origin 98caf2f44ec697bd705909eb970036ce615ca664
+          npx tsc -p apps/zenx/tsconfig.trigger-preview.json --noEmit
+          node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/before" --baseline
+          node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/before"
+          node apps/zenx/scripts/build-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
+          node apps/zenx/scripts/capture-trigger-management-preview.mjs "${{ runner.temp }}/zenx-trigger-management/after"
+      - name: Retain synthetic trigger management UI
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-trigger-management-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trigger-management
           if-no-files-found: warn
           retention-days: 14
       - name: Check ZenX with bounded execution-order evidence
@@ -146,6 +220,20 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
       - name: Exercise shell lifecycle observations on macOS
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
+      - name: Verify macOS input construction without desktop input
+        env:
+          ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
+        run: node --import tsx --test apps/zenx/test/computer-native-dispatch.test.ts apps/zenx/test/computer-native-construction.test.ts
+      - name: Retain construction-only CoreGraphics metadata
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-event-construction-${{ github.sha }}
+          path: ${{ runner.temp }}/computer-event-construction.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Verify native static-text labeling with synthetic attributes
+        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts
       - name: Exercise macOS login-shell PATH and first tool execution
         run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
       - name: Verify native launch observer and hung-main cleanup contracts

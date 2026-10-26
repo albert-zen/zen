@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertOutputUsageObservation } from "./output-usage-preview-assertions.mjs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
@@ -8,6 +9,7 @@ const evidence = {
     "Real production components and CSS; synthetic fixtures only; Chrome desktop-input emulation on Linux CI, not physical macOS/Windows input; no Host actions or private data.",
   sidebar: [],
   context: [],
+  outputUsage: [],
 };
 const rect =
   "e => { const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}; }";
@@ -71,6 +73,72 @@ await withPreviewBrowser(
         windowsVirtualKeyCode: 27,
       });
     };
+    for (const [lang, theme, width] of [
+      ["en", "light", 1100],
+      ["zh-CN", "dark", 390],
+    ]) {
+      const scene = `output-usage-${lang}-${theme}-${width}`;
+      let observation;
+      try {
+        await navigate("output-usage", { lang, theme }, width, 760);
+        await waitFor(
+          "!!document.querySelector('.message-cache') && !!document.querySelector('.context-usage-trigger')",
+        );
+        // Keep the terminal response actions visible while hovering the context
+        // ring; focus changes presentation only and never invokes Copy.
+        await evaluate("document.querySelector('.message-copy').focus()");
+        const point = await evaluate(
+          "(() => { const r=document.querySelector('.context-usage-trigger').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()",
+        );
+        await move(point.x, point.y);
+        await waitFor("!!document.querySelector('.context-usage-popover')");
+        await delay(250);
+        observation = await evaluate(`(() => {
+        const message = document.querySelector('.message-cache');
+        const panel = document.querySelector('.context-usage-popover');
+        const header = document.querySelector('.turn-toggle');
+        return {message:message.textContent, title:message.title, panel:panel.textContent, header:header.textContent, contextLabel:document.querySelector('.context-usage-trigger').getAttribute('aria-label'), overflow:document.documentElement.scrollWidth>innerWidth};
+      })()`);
+        assertOutputUsageObservation(observation, lang);
+        evidence.outputUsage.push({ lang, theme, width, ...observation });
+        await screenshot(`${scene}.png`);
+        await writeFile(
+          path.join(directory, "output-usage-progress.json"),
+          JSON.stringify(evidence.outputUsage, null, 2) + "\n",
+        );
+      } catch (error) {
+        // Persist the failed scene before browser cleanup or later CI steps.
+        // Existing CDP calls are bounded; a screenshot failure never masks it.
+        const failure = {
+          scene,
+          lang,
+          theme,
+          width,
+          observation,
+          error: String(error),
+        };
+        console.error(JSON.stringify(failure));
+        try {
+          await writeFile(
+            path.join(directory, "output-usage-failure.json"),
+            JSON.stringify(failure, null, 2) + "\n",
+          );
+        } catch (writeError) {
+          console.error(
+            `Failure diagnostics unavailable: ${String(writeError)}`,
+          );
+        }
+        try {
+          await screenshot(`${scene}-failed.png`);
+        } catch (captureError) {
+          console.error(
+            `Failure screenshot unavailable: ${String(captureError)}`,
+          );
+        }
+        throw error;
+      }
+    }
+
     for (const options of [
       { width: 220, theme: "light", platform: "darwin", lang: "zh-CN" },
       { width: 360, theme: "dark", platform: "darwin", lang: "en" },
@@ -179,6 +247,33 @@ await withPreviewBrowser(
         );
         await delay(250);
         const hover = await evaluate(contextMeasure);
+        const breakdown = await evaluate(
+          `(() => ({ rows: [...document.querySelectorAll('.context-usage-breakdown > div')].map(row => row.textContent), helpPresent: !!document.querySelector('.context-usage-help'), segments: [...document.querySelectorAll('.context-usage-meter > span[data-category]')].map(s => ({category:s.dataset.category, width:parseFloat(s.style.width), color:getComputedStyle(s).backgroundColor})) }))()`,
+        );
+        assert.equal(
+          breakdown.rows.length,
+          4,
+          `${name}: all additive input categories shown`,
+        );
+        assert(
+          breakdown.rows.every((row) => !row.includes("contextCategory.")),
+          `${name}: translated category labels`,
+        );
+        assert.equal(
+          breakdown.helpPresent,
+          false,
+          `${name}: no explanatory UI`,
+        );
+        assert.equal(breakdown.segments.length, 4);
+        if (variant === "after")
+          assert.equal(new Set(breakdown.segments.map((s) => s.color)).size, 4);
+        assert(
+          Math.abs(
+            breakdown.segments.reduce((sum, s) => sum + s.width, 0) -
+              (51300 / 272000) * 100,
+          ) < 0.001,
+        );
+        hover.breakdown = breakdown;
         assert.deepEqual(
           hover.trigger,
           initial.trigger,
