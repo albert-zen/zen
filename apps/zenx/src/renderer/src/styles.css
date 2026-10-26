@@ -338,6 +338,7 @@ button:disabled {
   --product-row-height: 48px;
   --titlebar-height: var(--native-titlebar-height);
   --windows-control-region: 138px;
+  --native-leading-safe-area: 128px;
   position: relative;
   width: 100%;
   height: 100%;
@@ -453,7 +454,7 @@ button:disabled {
   left: 84px;
 }
 :root[data-platform="darwin"] .app-shell.sidebar-collapsed {
-  --titlebar-brand-track: 128px;
+  --titlebar-brand-track: var(--native-leading-safe-area);
 }
 :root[data-platform="darwin"]
   .app-shell.sidebar-collapsed
@@ -5253,6 +5254,10 @@ button:disabled {
   color: var(--text-3);
   font-size: var(--font-size-caption);
 }
+.markdown-code-actions {
+  display: inline-flex;
+  gap: 8px;
+}
 .markdown-code-header button {
   border: 0;
   background: transparent;
@@ -8165,7 +8170,19 @@ button:disabled {
     .app-shell:has(.auxiliary-panel[data-open="true"])
     > .window-titlebar {
     width: calc(100% - var(--workspace-panel-width, 0px));
+    min-width: var(--native-leading-safe-area);
     padding-right: 0;
+  }
+  /* The native controls own the leading viewport strip, independent of the
+     Sidebar and tab order. A right-aligned panel can enter that strip while
+     expanding or while the Sidebar animates; reserve only the intersecting
+     part. Percentages resolve against the actual panel width, not a delayed
+     ResizeObserver value. Narrow layouts keep their separate title row. */
+  :root[data-platform="darwin"] .auxiliary-heading {
+    padding-inline-start: max(
+      8px,
+      calc(var(--native-leading-safe-area) - 100vw + 100%)
+    );
   }
   :root[data-platform="darwin"]
     .workspace:has(> .auxiliary-panel[data-open="true"]) {

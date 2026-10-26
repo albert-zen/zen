@@ -430,3 +430,88 @@ test("conflicting evidence cannot silently enable an otherwise matching native d
   assert.equal(result.encoding, "user-after-tool-batch");
   assert.equal(result.reason, "conflicting-evidence");
 });
+
+import { compileModelMessages } from "../src/model.js";
+import {
+  planContextMaterialization,
+  assertCommittedModelContent,
+} from "../src/context-materialization.js";
+import type { CanonicalItem, ContextMessageItem } from "../src/item.js";
+
+test("native media serialization preserves compiler-materialized tool text and provenance exactly", async () => {
+  const items: CanonicalItem[] = [
+    {
+      type: "tool_call",
+      id: "call-item",
+      threadId: "t",
+      turnId: "r",
+      createdAt: "2026-10-26T08:00:00Z",
+      callId: "call",
+      name: "fixture",
+      arguments: {},
+    },
+    {
+      type: "tool_result",
+      id: "result-item",
+      threadId: "t",
+      turnId: "r",
+      createdAt: "2026-10-26T08:00:00Z",
+      callId: "call",
+      output: "receipt",
+      exitCode: 0,
+      modelContent: [{ type: "text", text: "caption" }, image],
+    },
+  ];
+  let id = 0;
+  const planned = planContextMaterialization({
+    items,
+    messages: compileModelMessages(items),
+    threadId: "t",
+    id: () => `materialized-${++id}`,
+    now: () => "2026-10-26T08:00:00Z",
+  });
+  items.push(...planned.pending);
+  const prepared = planned.resolve(items);
+  assertCommittedModelContent(items, prepared.messages);
+  const record = items.find(
+    (i): i is ContextMessageItem => i.type === "context_message",
+  );
+  assert(record);
+  assert.equal(record.origin, "tool");
+  assert.equal(record.role, "tool");
+  assert.deepEqual(record.sourceItemIds, ["result-item"]);
+  let called = false;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://synthetic.invalid/v1",
+    apiKey: "synthetic",
+    toolMediaCapabilities: [support],
+    attachments: { read: async () => new Uint8Array([1, 2, 3]) },
+    fetch: async (_url, init) => {
+      called = true;
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.messages.length, 2);
+      const tool = body.messages[1];
+      assert.equal(tool.role, "tool");
+      assert.deepEqual(
+        tool.content
+          .filter((p: any) => p.type === "text")
+          .map((p: any) => p.text),
+        record.content.filter((p) => p.type === "text").map((p) => p.text),
+      );
+      assert.equal(tool.content[0].text, "Exit code: 0\nreceipt");
+      assert.equal(tool.content[2].type, "image_url");
+      return new Response(
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      );
+    },
+  });
+  for await (const _ of adapter.stream({
+    model: "synthetic",
+    reasoningEffort: null,
+    messages: prepared.messages,
+    tools: [],
+    signal: new AbortController().signal,
+  })) {
+  }
+  assert(called);
+});

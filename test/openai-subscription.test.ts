@@ -168,7 +168,7 @@ test("maps canonical tool model content after its function output", async () => 
     {
       type: "function_call_output",
       call_id: "view-call",
-      output: "Exit code: 0\nViewed image",
+      output: "Viewed image",
     },
     {
       role: "user",
@@ -447,7 +447,7 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
     {
       type: "function_call_output",
       call_id: "call_1",
-      output: "Exit code: 0\nfirst",
+      output: "first",
     },
   ]);
   assert.equal(JSON.stringify(body.input).includes("encrypted_content"), false);
@@ -757,7 +757,7 @@ test("a fresh adapter replays existing reasoning history for a stateless tool ro
     {
       type: "function_call_output",
       call_id: "call_first",
-      output: "Exit code: 0\n/workspace",
+      output: "/workspace",
     },
   ]);
 });

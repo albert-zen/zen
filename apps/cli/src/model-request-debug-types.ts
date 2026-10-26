@@ -4,7 +4,7 @@ export interface ModelRequestDebugSummary {
   id: string;
   capturedAt: string;
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "operation";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;

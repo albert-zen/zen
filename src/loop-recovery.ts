@@ -1,3 +1,4 @@
+import { canonicalMediaPart } from "./media-content.js";
 import type {
   CanonicalItem,
   RecoveryMediaOccurrence,
@@ -347,9 +348,14 @@ export function sampledMediaOccurrences(
       const key = `${part.type}:${part.attachment.sha256}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (rejectedParts !== undefined && !rejectedParts.includes(part))
+      const canonicalPart = canonicalMediaPart(part);
+      if (
+        rejectedParts !== undefined &&
+        !rejectedParts.includes(part) &&
+        !rejectedParts.includes(canonicalPart)
+      )
         continue;
-      const origin = origins.get(part);
+      const origin = origins.get(canonicalPart);
       if (origin !== undefined) found.set(JSON.stringify(origin), origin);
     }
   }

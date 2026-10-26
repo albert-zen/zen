@@ -164,10 +164,34 @@ test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicat
         "host_message_queued",
         "turn_started",
         "host_message",
+        "context_message",
+        "context_message",
         "agent_message",
         "turn_completed",
       ],
     );
+    const compiled = snapshot.items.filter(
+      (item) => item.type === "context_message",
+    );
+    assert.deepEqual(
+      compiled.map((item) => item.purpose),
+      ["workspace-instructions", "host_message"],
+    );
+    assert.deepEqual(
+      compiled.map((item) => [item.role, item.origin]),
+      [
+        ["user", "host"],
+        ["user", "host"],
+      ],
+    );
+    assert.deepEqual(
+      compiled.map((item) => item.sourceItemIds),
+      [
+        [snapshot.items.find((item) => item.type === "turn_started")!.id],
+        [snapshot.items.find((item) => item.type === "host_message")!.id],
+      ],
+    );
+    for (const item of compiled) decodeCanonicalItem(item);
     const queued = snapshot.items.find(
       (item) => item.type === "host_message_queued",
     )!;

@@ -15,6 +15,7 @@ import {
 } from "../src/input-queue.js";
 import {
   decodeCanonicalItem,
+  originalUserInput,
   textFromUserInput,
   type CanonicalItem,
   type QueuedUserMessageEditedItem,
@@ -216,7 +217,7 @@ test("queued edits append latest text/images at the original identity and FIFO p
     delivered.map((item) => item.clientId),
     ["client-0", "client-1"],
   );
-  assert.deepEqual(delivered[1]!.content, [
+  assert.deepEqual(originalUserInput(delivered[1]!), [
     { type: "image", attachment: image },
   ]);
 });
@@ -468,7 +469,7 @@ test("JSONL reload retains edit revisions; original enqueue retry is read-only u
     assert.deepEqual(
       after.items
         .filter((item) => item.type === "user_message")
-        .map((item) => item.text ?? textFromUserInput(item.content)),
+        .map((item) => textFromUserInput(originalUserInput(item))),
       ["latest alpha", "beta"],
     );
     assert.equal(
@@ -541,7 +542,7 @@ for (const editedIndex of [0, 1])
       assert.deepEqual(
         after.items
           .filter((item) => item.type === "user_message")
-          .map((item) => item.text ?? textFromUserInput(item.content)),
+          .map((item) => textFromUserInput(originalUserInput(item))),
         editedIndex === 0 ? ["latest member", ""] : ["first", "latest member"],
       );
       assert.equal(failures, 0);
@@ -875,5 +876,6 @@ test("an edit holding the mutation lock forces an already-preflighted resume to 
     (item) => item.type === "user_message" && item.clientId === "client-0",
   );
   assert(user?.type === "user_message");
-  assert.deepEqual(user.content, requested);
+  assert.deepEqual(originalUserInput(user), requested);
+  assert.deepEqual(user.contentAuthority?.hostTextPartIndices, [0]);
 });

@@ -43,6 +43,8 @@
 }
 
 .inline-composer-editor .cm-content {
+  /* Atomic reference widgets must not set the flex item minimum on narrow editors. */
+  min-width: 0;
   min-height: 36px;
   padding: 0 8px 6px;
   caret-color: var(--color-text-primary);

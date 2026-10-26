@@ -225,7 +225,7 @@ test("provider rejecting a media request receives an explicit text diagnostic wh
   );
   const original = result.items.find((item) => item.type === "user_message");
   assert.equal(
-    original?.type === "user_message" && original.content?.[1]?.type,
+    original?.type === "user_message" && original.content?.[2]?.type,
     "image",
   );
   assert.deepEqual(

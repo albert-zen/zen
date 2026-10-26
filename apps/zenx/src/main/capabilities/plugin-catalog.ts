@@ -781,11 +781,15 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
         : enabled
           ? "enabled"
           : "installed";
-      const unavailableReason = entry.available
-        ? undefined
-        : this.#discoveryErrors
-            .findLast((message) => message.startsWith(`${manifest.id}: `))
-            ?.slice(manifest.id.length + 2);
+      const activationFailure =
+        this.#options.pluginRuntimeLifecycle?.activationFailure?.(manifest.id);
+      const unavailableReason =
+        activationFailure ??
+        (entry.available
+          ? undefined
+          : this.#discoveryErrors
+              .findLast((message) => message.startsWith(`${manifest.id}: `))
+              ?.slice(manifest.id.length + 2));
       return {
         id: manifest.id,
         displayName: manifest.name,
@@ -802,7 +806,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
             }),
         lifecycle,
         enabled,
-        available: entry.available,
+        available: entry.available && activationFailure === undefined,
         ...(enabled && this.#admissionIds.has(manifest.id)
           ? { admissionId: this.#admissionIds.get(manifest.id)! }
           : {}),
@@ -1159,6 +1163,9 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   #isToolExposed(capabilityId: string, tool: ZenXCapabilityTool): boolean {
     return (
       !this.#disabled.has(capabilityId) &&
+      this.#options.pluginRuntimeLifecycle?.activationFailure?.(
+        capabilityId,
+      ) === undefined &&
       this.#isProviderAvailable(
         this.#requireCapability(capabilityId).package.manifest,
       ) &&

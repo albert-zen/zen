@@ -38,7 +38,8 @@ receipt/exit status remains present. No image is silently discarded.
 Selection occurs before submission. A provider rejection does not silently change the
 selected format or resubmit the request. Existing explicit media-rejection handling and
 provider error classification are unchanged. The adapter maps provider content indices
-back to original media objects, accounting for its prepended receipt text.
+back to original media objects, accounting for the already materialized receipt text
+placed before media parts. The adapter does not construct receipt/exit-status wording.
 
 ## Current protocol evidence (checked 2026-10-25)
 
@@ -65,7 +66,8 @@ The Host factory now injects adapter-owned reviewed profiles. The native-capabil
 list is deliberately empty; two exact endpoint/model records identify conflicting
 documentation instead. Consequently existing configurations remain on compatibility
 encoding. Product native activation is blocked on evidence, not on a missing adapter
-boundary. A separate public Responses adapter remains a follow-up design decision.
+boundary. The separately selected public Responses adapter (#506) is independent;
+this framework is not functionally blocked by that transport.
 The draft is intentionally explicit about that limitation rather than hiding an unverified
 model-name workaround. Capability evidence must be reviewed when an endpoint/model
 contract changes; absence of evidence retains the compatibility encoding, not a probe.
@@ -164,3 +166,17 @@ are distinct native protocol mechanisms. Their existence does not enable them in
 product's current Chat-compatible and Codex-subscription adapters. Adding/selecting a
 new public Responses transport is a separate architecture and product decision, not a
 reason to send public Responses shapes to the subscription endpoint.
+
+## Canonical-content integration (2026-10-26)
+
+The context compiler materializes all model-facing semantic text, including tool
+receipt framing, media fallback notices and system instructions, before AppServer
+commits and dispatches. Adapters only encode those committed strings and typed
+media. A wire-level user-role compatibility supplement keeps tool provenance in
+canonical content; it does not become a human-authored message. This framework
+adds no second history, late semantic prefix, provider probe or fallback retry.
+
+The current integration regression passes real compiler output through the native
+Chat serializer and verifies exact committed text/order, source tool identity and
+image placement. This is synthetic encoding evidence only; the default native
+capability registry stays empty.
