@@ -596,6 +596,20 @@ jobs:
           CI: "1"
           ZENX_REQUIRE_PLAYWRIGHT: "1"
         run: npm --workspace apps/zenx run smoke:providers
+      - name: Diagnose file editor scrolling in native macOS Electron
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-file-sidebar-preview.mjs "${{ runner.temp }}/zenx-file-electron"
+          cd apps/zenx
+          npx --no-install electron scripts/capture-file-sidebar-electron.cjs "${{ runner.temp }}/zenx-file-electron"
+      - name: Retain synthetic native file editor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-file-editor-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-file-electron
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify Workspace browser storage across fresh Electron processes
         timeout-minutes: 2
         run: node apps/zenx/scripts/workspace-browser-persistence-smoke.mjs
