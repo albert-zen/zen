@@ -245,6 +245,21 @@ try {
         failures.push(error);
       }
     }
+    // TAP does not reliably render AggregateError.errors. Keep the original
+    // thrown failures, but expose bounded synthetic-runner diagnostics first.
+    if (failures.length > 0) {
+      for (const [index, error] of failures.slice(0, 4).entries()) {
+        t.diagnostic(
+          `Native sampler failure ${index + 1}: ${String(error).slice(0, 4000)}`,
+        );
+        if (error instanceof Error && error.cause !== undefined)
+          t.diagnostic(
+            `Native sampler cause ${index + 1}: ${String(error.cause).slice(0, 4000)}`,
+          );
+      }
+      t.diagnostic(`Native sampler stdout tail: ${stdout.slice(-2000)}`);
+      t.diagnostic(`Native sampler stderr tail: ${stderr.slice(-2000)}`);
+    }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1)
       throw new AggregateError(
