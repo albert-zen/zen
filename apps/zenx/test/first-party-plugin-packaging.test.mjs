@@ -48,7 +48,7 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.5.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-strict-1.2.0.tgz"],
   ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.8.tgz"],
-  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.0.1.tgz"],
+  ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.1.0.tgz"],
   ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.1.tgz"],
 ];
 

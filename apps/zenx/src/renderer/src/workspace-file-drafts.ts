@@ -26,6 +26,7 @@ export class WorkspaceFileDrafts {
   #timers = new Map<string, ReturnType<typeof setTimeout>>();
   #saving = new Set<string>();
   #pending = new Set<string>();
+  #closed = new Map<string, () => void>();
   readonly #debounceMs: number;
   constructor(debounceMs = 500) {
     this.#debounceMs = debounceMs;
@@ -67,17 +68,24 @@ export class WorkspaceFileDrafts {
     if (current === undefined || current.closing) return;
     this.set(key, { ...current, closing: true });
   }
-  closeAfterSave(key: string, save: WorkspaceFileSaver) {
+  closeAfterSave(key: string, save: WorkspaceFileSaver, onClosed?: () => void) {
     const current = this.#entries.get(key);
     if (current === undefined) return;
+    if (onClosed) this.#closed.set(key, onClosed);
     if (!isFileDirty(current) && !current.saving) {
-      this.remove(key);
+      this.#finishClose(key);
       return;
     }
     this.markClosing(key);
     this.flush(key, save);
   }
+  #finishClose(key: string) {
+    const done = this.#closed.get(key);
+    this.remove(key);
+    done?.();
+  }
   remove(key: string) {
+    this.#closed.delete(key);
     this.#clearTimer(key);
     this.#pending.delete(key);
     this.#entries = new Map(this.#entries);
@@ -122,6 +130,7 @@ export class WorkspaceFileDrafts {
       if (result.status === "conflict") {
         const next = { ...current };
         delete next.closing;
+        this.#closed.delete(key);
         this.set(key, {
           ...next,
           saving: false,
@@ -138,7 +147,7 @@ export class WorkspaceFileDrafts {
         saving: false,
       };
       if (current.closing && !isFileDirty(next)) {
-        this.remove(key);
+        this.#finishClose(key);
         return;
       }
       this.set(key, current.closing ? { ...next, closing: true } : next);
@@ -147,6 +156,7 @@ export class WorkspaceFileDrafts {
       if (current !== undefined) {
         const next = { ...current };
         delete next.closing;
+        this.#closed.delete(key);
         this.set(key, {
           ...next,
           saving: false,

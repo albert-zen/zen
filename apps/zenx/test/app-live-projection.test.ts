@@ -1,3 +1,10 @@
+import {
+  emptySidebarState,
+  applySidebarPatch,
+  type ThreadSidebarApi,
+  type ThreadSidebarState,
+  type ThreadSidebarPatch,
+} from "../src/thread-sidebar-state.js";
 import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
@@ -1400,6 +1407,7 @@ test("App observes a terminal event transferred in a valid resume response", asy
 });
 
 interface MountOptions {
+  sidebarApi?: ThreadSidebarApi;
   titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
   pluginSnapshot?: ZenXPluginSnapshot;
@@ -1451,6 +1459,7 @@ async function mountApp(options: MountOptions) {
     workspaceFiles: { read: options.readFile },
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
+    threadSidebar: options.sidebarApi,
     protocol: {
       getStatus: async (): Promise<AppServerHostStatus> => ({
         type: "ready",
@@ -2748,6 +2757,141 @@ test("trigger message source opens exact scoped sidebar without leaving the conv
         ["list", "threads", "workspaces"].includes(name),
       ),
     );
+  } finally {
+    await harness.unmount();
+    dispose();
+  }
+});
+
+test("full App consumes Room panel=open once; background collapse sticks and explicit same-route navigation reopens", async () => {
+  const route = "/plugins/zenx-rooms/rooms";
+  const room = {
+    id: "r",
+    name: "Review Room",
+    members: [],
+    messages: [],
+    createdAt: 0,
+  };
+  let navigate: ((route: string) => void) | undefined;
+  const dispose = pluginUiRegistry.registerTrusted("sidebar-room-review", {
+    overview: ({ sdk }) => {
+      navigate = sdk.navigation.navigate;
+      return createElement(RoomsPage, { sdk });
+    },
+  });
+  const pluginSnapshot = {
+    plugins: [
+      {
+        id: "zenx-rooms",
+        displayName: "Rooms",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        id: "rooms",
+        title: "Rooms",
+        route,
+        surfaceId: "overview",
+      },
+    ],
+    sidebar: [],
+    subroutes: [],
+    bundles: [
+      {
+        key: "zenx-rooms:main",
+        pluginId: "zenx-rooms",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "sidebar-room-review",
+      },
+    ],
+    surfaces: [
+      {
+        key: "zenx-rooms:overview",
+        pluginId: "zenx-rooms",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as unknown as ZenXPluginSnapshot;
+  let state = emptySidebarState({ kind: "room", id: "r" });
+  const listeners = new Set<(s: ThreadSidebarState) => void>();
+  const writes: ThreadSidebarPatch[] = [];
+  const sidebarApi: ThreadSidebarApi = {
+    read: async (owner) =>
+      typeof owner !== "string" && owner.kind === "room"
+        ? structuredClone(state)
+        : emptySidebarState(owner),
+    onChanged: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    update: async (request) => {
+      assert.equal(request.owner.id, "r");
+      if (request.expectedRevision !== state.revision)
+        return { applied: false, state: structuredClone(state) };
+      state = applySidebarPatch(state, request.patch);
+      writes.push(request.patch);
+      for (const listener of listeners) listener(structuredClone(state));
+      return { applied: true, state: structuredClone(state) };
+    },
+  };
+  const harness = await mountApp({
+    pluginSnapshot,
+    sidebarApi,
+    threads: async () => [],
+    request: async () => {
+      throw Error("No Thread request expected");
+    },
+    executeCommand: async (plugin, command) => {
+      if (plugin === "zenx-rooms" && command === "list")
+        return { rooms: [room] };
+      if (command === "list") return { triggers: [] };
+      throw Error(`Unexpected ${plugin}/${command}`);
+    },
+  });
+  try {
+    const row = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open room Review Room"]',
+      ),
+    );
+    await act(async () => row.click());
+    const toggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".room-title-actions-host #thread-browser-toggle",
+      ),
+    );
+    await act(async () => toggle.click());
+    await waitFor(() => document.querySelector(".auxiliary-panel"));
+    assert.equal(state.open, true);
+    assert.ok(navigate);
+    await act(async () => {
+      state = applySidebarPatch(state, { open: false });
+      for (const listener of listeners) listener(structuredClone(state));
+    });
+    await act(async () => new Promise((r) => setTimeout(r, 25)));
+    assert.equal(document.querySelector(".auxiliary-panel"), null);
+    assert.equal(state.open, false);
+    const count = writes.length;
+    await act(async () => navigate!(`${route}?roomId=r&panel=open`));
+    await waitFor(() => document.querySelector(".auxiliary-panel"));
+    assert.equal(state.open, true);
+    assert.ok(writes.length > count);
   } finally {
     await harness.unmount();
     dispose();

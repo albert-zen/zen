@@ -1,3 +1,5 @@
+import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
+import { useThreadSidebar } from "./use-thread-sidebar.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { type MessageSourceNavigator } from "./message-source-navigation.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
@@ -590,10 +592,48 @@ function AppContent() {
   const [browserSettingsFocusRequest, setBrowserSettingsFocusRequest] =
     useState(0);
   const fileDrafts = useWorkspaceFileDrafts();
-  const [panelTabs, setPanelTabs] = useState<Record<string, string>>({});
-  const [workspaceTabOrder, setWorkspaceTabOrder] = useState<
-    Record<string, string[]>
-  >({});
+  const sidebarState = useThreadSidebar();
+  async function replaceSidebarTab(
+    owner: import("../../thread-sidebar-state.js").SidebarOwner,
+    oldId: string,
+    tab: import("../../thread-sidebar-state.js").ThreadSidebarTab,
+  ) {
+    await sidebarState.controller.edit(owner, (state) => {
+      const tabs = state.tabs
+        .map((entry) => (sidebarTabId(entry) === oldId ? tab : entry))
+        .filter(
+          (entry, index, all) =>
+            all.findIndex(
+              (other) => sidebarTabId(other) === sidebarTabId(entry),
+            ) === index,
+        );
+      return {
+        tabs,
+        selectedTab:
+          state.selectedTab === oldId ? sidebarTabId(tab) : state.selectedTab,
+      };
+    });
+    return (
+      sidebarState.controller
+        .get(owner)
+        ?.tabs.some((entry) =>
+          [oldId, sidebarTabId(tab)].includes(sidebarTabId(entry)),
+        ) ?? false
+    );
+  }
+
+  const {
+    panelTabs,
+    setPanelTabs,
+    workspaceTabOrder,
+    setWorkspaceTabOrder,
+    browserPanels,
+    setBrowserPanels,
+    conversationPanels,
+    setConversationPanels,
+    roomWorkspaceStates,
+    setRoomWorkspaceStates,
+  } = sidebarState;
   useEffect(
     () =>
       window.zenx.panels.onOpen((request) => {
@@ -621,12 +661,7 @@ function AppContent() {
   const imzenxDrafts = useRef<Record<string, ImZenXDraft>>({});
   const [roomDrafts, setRoomDrafts] = useState<Record<string, string>>({});
   const roomDraftRevisions = useRef<Record<string, number>>({});
-  const [roomWorkspaceStates, setRoomWorkspaceStates] = useState<
-    Record<string, CompanionViewState>
-  >({});
-  const [browserPanels, setBrowserPanels] = useState<Record<string, boolean>>(
-    {},
-  );
+
   const messageLinkSequence = useRef(0);
   const [messageLinkRequest, setMessageLinkRequest] = useState<{
     id: number;
@@ -682,9 +717,12 @@ function AppContent() {
   });
   const [projectListLoaded, setProjectListLoaded] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [conversationPanels, setConversationPanels] = useState<
-    Record<string, string[]>
-  >({});
+  useEffect(() => {
+    if (selectedThreadId) void sidebarState.controller.load(selectedThreadId);
+  }, [selectedThreadId, sidebarState.controller]);
+  useEffect(() => {
+    if (sidebarState.error) setRequestError(sidebarState.error);
+  }, [sidebarState.error]);
   const [threadDetail, setThreadDetail] = useState<Thread | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
@@ -1719,6 +1757,33 @@ function AppContent() {
   const [roomHeaderTarget, setRoomHeaderTarget] =
     useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
+  const roomSidebarState = selectedRoomId
+    ? sidebarState.controller.get({ kind: "room", id: selectedRoomId })
+    : undefined;
+  useEffect(() => {
+    if (!selectedRoomId) return;
+    const owner = { kind: "room" as const, id: selectedRoomId };
+    let current = true;
+    void sidebarState.controller.load(owner).then(() => {
+      if (!current || !roomPanel) return;
+      void sidebarState.controller.edit(owner, (state) => {
+        const selectedTab =
+          roomPanel === "open"
+            ? (state.selectedTab ?? "custom:overview")
+            : `custom:${roomPanel}`;
+        return {
+          open: true,
+          selectedTab,
+          tabs: state.tabs.some((tab) => sidebarTabId(tab) === selectedTab)
+            ? state.tabs
+            : [...state.tabs, sidebarTabFromId(selectedTab)],
+        };
+      });
+    });
+    return () => {
+      current = false;
+    };
+  }, [selectedRoomId, roomPanel, sidebarState.controller]);
   const lastUsedWorkspace = lastUsedProjectWorkspace(projects);
 
   const configuredProjects = projects.projects.filter(
@@ -2513,6 +2578,15 @@ function AppContent() {
       void resumeThread(threadId);
       return;
     }
+    if (
+      next === page &&
+      selectedRoom &&
+      new URLSearchParams(next.split("?")[1] ?? "").has("panel")
+    )
+      void sidebarState.controller.edit(
+        { kind: "room", id: selectedRoom.id },
+        () => ({ open: true }),
+      );
     discardRecoverableDraft();
     if (projectPickerIntentRef.current !== null) closeProjectPicker();
     if (next !== "agent") abandonNewThreadDraft();
@@ -3515,10 +3589,32 @@ function AppContent() {
                 threadLoading={threadLoading}
               />
             )}
-            {selectedRoom && roomPanel && pluginSnapshot ? (
+            {selectedRoom &&
+            (roomSidebarState?.open ?? Boolean(roomPanel)) &&
+            pluginSnapshot ? (
               <CompanionWorkspace
                 key={selectedRoom.id}
                 room={selectedRoom}
+                presentationState={roomSidebarState}
+                onFullscreenChange={(fullscreen) => {
+                  void sidebarState.controller.edit(
+                    { kind: "room", id: selectedRoom.id },
+                    () => ({ fullscreen }),
+                  );
+                }}
+                onRemoveTab={(id) =>
+                  sidebarState.controller.remove(
+                    { kind: "room", id: selectedRoom.id },
+                    id,
+                  )
+                }
+                onReplaceTab={(oldId, tab) =>
+                  replaceSidebarTab(
+                    { kind: "room", id: selectedRoom.id },
+                    oldId,
+                    tab,
+                  )
+                }
                 triggerSourceRequest={
                   triggerSourceRequest?.viewportId === selectedRoom.id
                     ? triggerSourceRequest
@@ -3528,7 +3624,7 @@ function AppContent() {
                 renderConversation={renderSideConversation}
                 viewState={
                   roomWorkspaceStates[selectedRoom.id] ?? {
-                    selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
+                    selected: `custom:${!roomPanel || roomPanel === "open" ? "overview" : roomPanel}`,
                     tabs: [],
                     member: selectedRoom.assistant?.threadId ?? "",
                   }
@@ -3538,7 +3634,7 @@ function AppContent() {
                     ...current,
                     [selectedRoom.id]: update(
                       current[selectedRoom.id] ?? {
-                        selected: `custom:${roomPanel === "open" ? "overview" : roomPanel}`,
+                        selected: `custom:${!roomPanel || roomPanel === "open" ? "overview" : roomPanel}`,
                         tabs: [],
                         member: selectedRoom.assistant?.threadId ?? "",
                       },
@@ -3549,10 +3645,16 @@ function AppContent() {
                 onWidthChange={setWorkspacePanelWidth}
                 threads={[...activeSummaries, ...archivedSummaries]}
                 snapshot={pluginSnapshot}
-                section={roomPanel === "open" ? "" : roomPanel}
+                section={roomPanel === "open" ? "" : (roomPanel ?? "")}
                 sectionRequest={roomQuery.get("request") ?? undefined}
                 navigate={openPage}
-                onClose={() => openPage(roomConversationRoute(selectedRoom.id))}
+                onClose={async () => {
+                  await sidebarState.controller.edit(
+                    { kind: "room", id: selectedRoom.id },
+                    () => ({ open: false }),
+                  );
+                  openPage(roomConversationRoute(selectedRoom.id));
+                }}
               />
             ) : null}
             {page === "agent" &&
@@ -3597,6 +3699,22 @@ function AppContent() {
                 fileDrafts={fileDrafts}
                 workspacePath={threadDetail.cwd}
                 key={threadDetail.id}
+                presentationState={sidebarState.states[threadDetail.id]}
+                onFullscreenChange={(fullscreen) => {
+                  void sidebarState.controller.edit(threadDetail.id, () => ({
+                    fullscreen,
+                  }));
+                }}
+                onRemoveTab={(id) =>
+                  sidebarState.controller.remove(threadDetail.id, id)
+                }
+                onReplaceTab={(oldId, tab) =>
+                  replaceSidebarTab(
+                    { kind: "thread", id: threadDetail.id },
+                    oldId,
+                    tab,
+                  )
+                }
                 threadId={threadDetail.id}
                 title={
                   selectedSummary === null

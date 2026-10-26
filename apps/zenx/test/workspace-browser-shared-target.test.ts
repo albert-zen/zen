@@ -2243,3 +2243,43 @@ test("same-lease presentation and theme changes retain the captured observation"
     await f.close();
   }
 });
+
+test("native materialization is idempotent without reloading, owner isolated, and tombstoned", async () => {
+  const f = await sharedFixture();
+  try {
+    const create = (
+      owner: string,
+      intent: string,
+      url = "https://example.test/same",
+    ) =>
+      f.browser
+        .command(f.sender as never, owner, "materialize", intent, url)
+        .at(-1)!;
+    const first = create("thread-a", "room:r:intent-1");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.views.length, 1);
+    assert.equal(f.views[0]!.webContents.loadCalls.length, 1);
+    const replay = create("thread-a", "room:r:intent-1");
+    assert.equal(replay.id, first.id);
+    assert.equal(f.views.length, 1);
+    assert.equal(f.views[0]!.webContents.loadCalls.length, 1);
+    assert.throws(
+      () =>
+        create("thread-a", "room:r:intent-1", "https://example.test/changed"),
+      /URL changed/,
+    );
+    assert.equal(f.views.length, 1);
+    const duplicate = create("thread-a", "room:r:intent-2");
+    assert.notEqual(duplicate.id, first.id);
+    assert.equal(f.views.length, 2);
+    const privateIntent = create("thread-a", "thread:thread-a:intent-1");
+    assert.notEqual(privateIntent.id, first.id);
+    const otherOwner = create("thread-b", "room:r:intent-1");
+    assert.notEqual(otherOwner.id, first.id);
+    f.browser.command(f.sender as never, "thread-a", "close", first.id);
+    assert.throws(() => create("thread-a", "room:r:intent-1"), /was closed/);
+    assert.equal(create("thread-a", "room:r:intent-2").id, duplicate.id);
+  } finally {
+    await f.close();
+  }
+});

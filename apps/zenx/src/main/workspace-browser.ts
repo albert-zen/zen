@@ -9,7 +9,7 @@ import {
   type BrowserInputKey,
   type BrowserInputObservation,
 } from "./capabilities/browser-targeted-input.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BrowserWindow, WebContents, WebContentsView } from "electron";
 
 import {
@@ -64,6 +64,7 @@ export interface WorkspaceBrowserTab {
 export type WorkspaceBrowserCommand =
   | "list"
   | "new"
+  | "materialize"
   | "navigate"
   | "back"
   | "forward"
@@ -148,6 +149,8 @@ export function workspaceBrowserUrl(input: unknown): string {
 export class WorkspaceBrowser implements ZenXBrowserBackend {
   readonly #owners = new Map<number, Owner>();
   readonly #tabs = new Map<string, Tab>();
+  readonly #closedSidebarIntents = new Set<string>();
+  readonly #sidebarIntentUrls = new Map<string, string>();
   readonly #sessionThreads = new Map<string, string>();
   readonly #sessionIncarnations = new Map<string, string>();
   readonly #presentationWaits = new Map<string, Promise<void>>();
@@ -393,14 +396,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     this.#assertNavigationCurrent(tab, generation);
   }
 
-  #new(threadId: string, owner?: Owner): Tab {
+  #new(threadId: string, owner?: Owner, id: string = randomUUID()): Tab {
     if (this.#tabs.size >= 20)
       throw new Error(
         "Close a browser tab before opening another (20 tab limit)",
       );
     const view = this.#dependencies.createView();
     const tab: Tab = {
-      id: randomUUID(),
+      id,
       threadId,
       view,
       owner,
@@ -479,6 +482,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     });
     web.on("destroyed", () => {
       if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
+      if (this.#sidebarIntentUrls.has(tab.id))
+        this.#closedSidebarIntents.add(tab.id);
       this.#tabs.delete(tab.id);
       void this.#artifacts.clearScope(tab.id);
       publish();
@@ -497,9 +502,47 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       throw new Error("Invalid browser Thread");
     const owner = this.#owner(sender);
     if (command === "list") return this.#workspaceSnapshot(threadId);
-    if (command === "new") {
+    if (command === "new" || command === "materialize") {
       const safeUrl = workspaceBrowserUrl(url ?? "");
-      const tab = this.#new(threadId, owner);
+      // Materializing one sidebar descriptor is idempotent in the live resource
+      // service. An uncertain IPC reply or presentation CAS conflict must not
+      // create another page or reload an existing one on a later render.
+      if (
+        command === "materialize" &&
+        (typeof tabId !== "string" || !tabId || tabId.length > 1024)
+      )
+        throw new Error(
+          "Sidebar materialization requires its persisted intent ID",
+        );
+      const id =
+        command === "materialize"
+          ? `sidebar-${createHash("sha256")
+              .update(JSON.stringify([threadId, tabId]))
+              .digest("hex")}`
+          : undefined;
+      if (id && this.#closedSidebarIntents.has(id))
+        throw new Error(
+          "This sidebar website was closed. Create a new intent rather than reviving it.",
+        );
+      if (
+        id &&
+        this.#sidebarIntentUrls.has(id) &&
+        this.#sidebarIntentUrls.get(id) !== safeUrl
+      )
+        throw new Error("Sidebar intent URL changed; create a new intent.");
+      if (id && this.#tabs.has(id)) {
+        const tabs = this.#workspaceSnapshot(threadId);
+        return [
+          ...tabs.filter((tab) => tab.id !== id),
+          ...tabs.filter((tab) => tab.id === id),
+        ];
+      }
+      if (id && this.#sidebarIntentUrls.size >= 4096)
+        throw new Error(
+          "Sidebar browser intent limit reached for this session",
+        );
+      const tab = this.#new(threadId, owner, id);
+      if (id) this.#sidebarIntentUrls.set(id, safeUrl);
       void this.#load(tab, safeUrl).catch(() => undefined);
       this.#publish(threadId);
       return this.#workspaceSnapshot(threadId);
@@ -548,6 +591,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         web.reload();
         break;
       case "close":
+        if (this.#sidebarIntentUrls.has(tab.id))
+          this.#closedSidebarIntents.add(tab.id);
         this.#closeTab(tab);
         break;
       default:
@@ -1715,6 +1760,8 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       if (pending.tab === tab) pending.finish();
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
+    if (this.#sidebarIntentUrls.has(tab.id))
+      this.#closedSidebarIntents.add(tab.id);
     this.#tabs.delete(tab.id);
     tab.observation = undefined;
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();

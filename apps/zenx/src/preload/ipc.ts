@@ -1,4 +1,7 @@
 export const ipcChannels = {
+  threadSidebarRead: "zenx:thread-sidebar:read",
+  threadSidebarUpdate: "zenx:thread-sidebar:update",
+  threadSidebarChanged: "zenx:thread-sidebar:changed",
   modelRequestDebug: "zenx:model-request-debug",
   shellPanelRequest: "zenx:shell-panel:request",
   imzenxSetupInspect: "zenx:imzenx-setup:inspect",

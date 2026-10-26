@@ -149,6 +149,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-file-sidebar-preview
           if-no-files-found: warn
           retention-days: 14
+      - name: Build and capture thread and Room sidebar state preview
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
+          node apps/zenx/scripts/capture-sidebar-state-preview.mjs "${{ runner.temp }}/zenx-sidebar-state-preview"
+      - name: Retain sidebar state synthetic UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-sidebar-state-ui-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-sidebar-state-preview
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture read-only Settings audit evidence
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' }}
         timeout-minutes: 3
