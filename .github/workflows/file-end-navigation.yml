@@ -10,6 +10,7 @@ on:
       - apps/zenx/scripts/capture-file-sidebar-electron.cjs
       - apps/zenx/scripts/file-sidebar-preview.tsx
       - apps/zenx/scripts/file-editor-diagnostic-scope.cjs
+      - apps/zenx/scripts/file-editor-motion-preference.cjs
       - apps/zenx/scripts/file-editor-resize-readiness.cjs
       - apps/zenx/src/renderer/src/styles.css
       - apps/zenx/src/renderer/src/workspace-files.css
@@ -20,6 +21,7 @@ on:
       - apps/zenx/src/main/renderer-style-policy.ts
       - apps/zenx/src/renderer/index.html
       - apps/zenx/test/reduced-motion-layout.test.ts
+      - apps/zenx/test/file-editor-motion-preference.test.ts
 
 permissions:
   contents: read

@@ -15,6 +15,9 @@ const {
   fileEditorResizeState,
   fileEditorResizeEvents,
 } = require("./file-editor-resize-readiness.cjs");
+const {
+  prepareFileEditorMotion,
+} = require("./file-editor-motion-preference.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
 // Optional owned-renderer media emulation only; default/system behavior is unchanged.
@@ -39,6 +42,7 @@ assert.ok(process.versions.electron, "Requires the installed Electron runtime");
 const directory = path.resolve(process.argv[2] || "");
 assert.ok(process.argv[2], "Pass the built synthetic preview directory");
 let window;
+let fixtureDocumentLoaded = false;
 let profile;
 let finishing = false;
 let previousDocumentNonce;
@@ -283,9 +287,11 @@ async function runColdEndCase(markdown) {
     status: "running",
   };
   (evidence.coldEndCases ||= []).push(receipt);
+  fixtureDocumentLoaded = false;
   await window.loadFile(
     path.join(directory, "file-sidebar-production-csp.html"),
   );
+  fixtureDocumentLoaded = true;
   window.show();
   window.focus();
   window.webContents.focus();
@@ -331,6 +337,7 @@ async function runCase(width, precise, productionCsp = false) {
     status: "running",
   };
   evidence.cases.push(receipt);
+  fixtureDocumentLoaded = false;
   await window.loadFile(
     path.join(
       directory,
@@ -340,6 +347,7 @@ async function runCase(width, precise, productionCsp = false) {
       ? {}
       : { query: { lang: "zh-CN", theme: "light", diagnostic: "true" } },
   );
+  fixtureDocumentLoaded = true;
   window.show();
   window.focus();
   window.webContents.focus();
@@ -614,8 +622,13 @@ async function finish(error) {
   if (error) {
     evidence.failure = String(error.stack || error);
     try {
-      evidence.failureState = await evaluate(measure);
-      await screenshot("macos-file-failure");
+      if (fixtureDocumentLoaded) {
+        evidence.failureState = await evaluate(measure);
+        await screenshot("macos-file-failure");
+      } else {
+        evidence.captureSkipped =
+          "No synthetic fixture document loaded; failure metadata does not depend on renderer evaluation";
+      }
     } catch (captureError) {
       evidence.captureError = String(captureError);
     }
@@ -671,11 +684,16 @@ const watchdog = setTimeout(
     },
   });
   if (motionPreference) {
-    window.webContents.debugger.attach("1.3");
-    await window.webContents.debugger.sendCommand(
-      "Emulation.setEmulatedMedia",
-      {
-        features: [{ name: "prefers-reduced-motion", value: motionPreference }],
+    await prepareFileEditorMotion(
+      window.webContents,
+      motionPreference,
+      async (receipt) => {
+        evidence.motionSetup = receipt;
+        console.log("FILE_MOTION_SETUP " + JSON.stringify(receipt));
+        await fs.writeFile(
+          path.join(directory, "electron-motion-setup.json"),
+          JSON.stringify(receipt, null, 2) + "\n",
+        );
       },
     );
   }
