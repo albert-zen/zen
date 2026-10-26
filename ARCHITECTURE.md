@@ -874,7 +874,9 @@ generated compaction 的 prompt、trigger/target 百分比或 retention policy�
 
 开关是 Host 配置，不属于 admission 冻结的 Turn selection：每次模型采样都重新读取当前 revision，
 因此打开后运行中 Turn 的下一轮采样即可披露并调用 `compact_context`，关闭只影响之后的采样披露；
-已披露该入口的那次采样产生的调用仍按该采样的 disclosure 结算，不因中途关闭而失败。
+已披露该入口的那次采样产生的调用仍按该采样的 disclosure 结算，不因中途关闭而失败。关闭时 Host
+同时撤回尚未注入的 Host context notice，并回到同阈值的 provider-generated 压缩路径，避免提示模型
+调用一个该采样不再披露的入口。
 
 显式保留与 recent-items 选择是硬约束；Core 先取得它们，再让 budget 模式使用剩余预算选择后缀，
 不能为满足 target 静默删除所选 Item。任何被选中的 tool call、result、同一 model response 的

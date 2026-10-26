@@ -1238,81 +1238,94 @@ test("enabling agentic compaction mid-Turn replaces the Host trigger reset with 
   );
 });
 
-test("a pending agentic notice is dropped once the setting is disabled before that sample", async () => {
-  const requests: ModelRequest[] = [];
-  const modelCatalog = new StaticModelCatalog([
-    { id: "recording-model", isDefault: true, contextWindow: 1_000 },
-  ]);
-  let samples = 0;
-  let publish: (enabled: boolean) => void = () => {
-    throw new Error("Host configuration published before the server existed");
-  };
-  const model: ModelAdapter = {
-    provider: "recording",
-    async *stream(request): AsyncIterable<ModelEvent> {
-      requests.push(cloneRequest(request));
-      samples += 1;
-      if (samples === 1) {
-        yield { type: "text_delta", delta: "seed" };
-        yield { type: "usage", inputTokens: 5, outputTokens: 1 };
-        return;
-      }
-      if (samples === 2) {
-        yield {
-          type: "tool_call",
-          callId: "enable-at-threshold",
-          name: "toggle_agentic_setting",
-          arguments: { enabled: true },
+test("a pending agentic notice is dropped once the setting is disabled before that sample", async (t) => {
+  // Same fixture both ways: the control keeps the switch on and must deliver
+  // exactly one notice, so a threshold or usage change cannot silently turn the
+  // drop assertion into a tautology.
+  for (const keepsNotice of [true, false])
+    await t.test(
+      keepsNotice ? "setting stays on" : "setting turns off",
+      async () => {
+        const requests: ModelRequest[] = [];
+        const modelCatalog = new StaticModelCatalog([
+          { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+        ]);
+        let samples = 0;
+        let publish: (enabled: boolean) => void = () => {
+          throw new Error(
+            "Host configuration published before the server existed",
+          );
         };
-        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
-        return;
-      }
-      yield { type: "text_delta", delta: "continued without a notice" };
-      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
-    },
-  };
-  const server = createServer({
-    journal: new InMemoryThreadJournal(),
-    model,
-    modelCatalog,
-    runtime: new LiveSettingRuntime(
-      (enabled) => publish(enabled),
-      // The Host revision flips back before the sample that would carry the
-      // queued notice is prepared.
-      (sample) => {
-        if (sample === 2) publish(false);
-      },
-    ),
-  });
-  publish = (enabled) =>
-    publishContextCompaction(server, {
-      model,
-      modelCatalog,
-      contextCompaction: { agenticEnabled: enabled },
-    });
-  const thread = await server.startThread();
-  await (
-    await server.startTurn(thread.id, "seed request")
-  ).done;
-  await (
-    await server.startTurn(thread.id, "active request")
-  ).done;
+        const model: ModelAdapter = {
+          provider: "recording",
+          async *stream(request): AsyncIterable<ModelEvent> {
+            requests.push(cloneRequest(request));
+            samples += 1;
+            if (samples === 1) {
+              yield { type: "text_delta", delta: "seed" };
+              yield { type: "usage", inputTokens: 5, outputTokens: 1 };
+              return;
+            }
+            if (samples === 2) {
+              yield {
+                type: "tool_call",
+                callId: "enable-at-threshold",
+                name: "toggle_agentic_setting",
+                arguments: { enabled: true },
+              };
+              yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+              return;
+            }
+            yield { type: "text_delta", delta: "continued without a notice" };
+            yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+          },
+        };
+        const server = createServer({
+          journal: new InMemoryThreadJournal(),
+          model,
+          modelCatalog,
+          runtime: new LiveSettingRuntime(
+            (enabled) => publish(enabled),
+            // The Host revision flips back before the sample that would carry the
+            // queued notice is prepared.
+            (sample) => {
+              if (sample === 2 && !keepsNotice) publish(false);
+            },
+          ),
+        });
+        publish = (enabled) =>
+          publishContextCompaction(server, {
+            model,
+            modelCatalog,
+            contextCompaction: { agenticEnabled: enabled },
+          });
+        const thread = await server.startThread();
+        await (
+          await server.startTurn(thread.id, "seed request")
+        ).done;
+        await (
+          await server.startTurn(thread.id, "active request")
+        ).done;
 
-  assert.equal(
-    requests.filter((request) =>
-      request.messages.some(
-        (message) =>
-          message.role === "user" &&
-          "text" in message &&
-          message.text.startsWith("[Host context notice]"),
-      ),
-    ).length,
-    0,
-  );
-  assert.equal(
-    requests[1]?.tools.some((tool) => tool.name === "compact_context"),
-    false,
-  );
+        assert.equal(
+          requests.filter((request) =>
+            request.messages.some(
+              (message) =>
+                message.role === "user" &&
+                "text" in message &&
+                message.text.startsWith("[Host context notice]"),
+            ),
+          ).length,
+          keepsNotice ? 1 : 0,
+        );
+        // requests[2] is the active Turn's second sample: the one that would carry
+        // the queued notice.
+        assert.equal(
+          requests[2]?.tools.some((tool) => tool.name === "compact_context"),
+          keepsNotice,
+        );
+      },
+    );
 });
 
 test("a sample that disclosed compact_context still executes it after the setting is disabled", async () => {

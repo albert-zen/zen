@@ -3617,6 +3617,8 @@ export class ZenAppServer {
                     // can never point at a tool the sample does not carry.
                     if (!this.#currentContextCompaction().agenticEnabled) {
                       active.contextCompactionNotice = undefined;
+                      // Rewrite the paired flag as well so no future reader can
+                      // observe an issued notice that no longer exists.
                       active.contextCompactionNoticeIssued = false;
                     }
                     const notice =
