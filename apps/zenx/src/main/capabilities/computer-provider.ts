@@ -418,7 +418,13 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
       description:
         "Perform a native semantic press on one control returned by computer_inspect. Does not move the pointer, type keys, or activate the target app.",
       inputSchema: objectSchema(
-        { target: targetSchema(), control: controlSchema() },
+        {
+          target: targetSchema(),
+          control: controlSchema(),
+          observe: { type: "boolean" },
+          baseObservationId: { type: "string" },
+          full: { type: "boolean" },
+        },
         ["target", "control"],
       ),
       permissions: ["computer.accessibility.act"],
@@ -434,6 +440,9 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
           target: targetSchema(),
           control: controlSchema(),
           value: stringSchema(),
+          observe: { type: "boolean" },
+          baseObservationId: { type: "string" },
+          full: { type: "boolean" },
         },
         ["target", "control", "value"],
       ),
@@ -651,14 +660,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     this.#observationGeneration++;
     this.#presentation.invalidateAll();
     this.#backend.invalidateObservations?.();
-    this.#backend.targetSession?.invalidateCaptures();
-    // A selected binding must also be revoked by ComputerTargetSession's
-    // environment invalidation hook when that Host-owned target port exists.
-    const session = this.#backend.targetSession as unknown as
-      | { invalidateAll?: () => void; invalidateSelections?: () => void }
-      | undefined;
-    if (session?.invalidateAll) session.invalidateAll();
-    else session?.invalidateSelections?.();
+    this.#backend.targetSession?.invalidateSelections();
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
@@ -679,24 +681,27 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     const admitted = lease
       ? { ...invocation, signal: lease.signal }
       : invocation;
-    const activity = this.#threadObservation as ComputerThreadObservation & {
-      startActivity?: (
-        threadId: string,
-        invocationId: string,
-        target: ComputerTarget,
-        kind: "background-window" | "foreground" | "waiting-human" | "unknown",
-      ) => () => void;
-    };
     let settle: (() => void) | undefined;
     try {
       const candidate = admitted.arguments.target;
-      const target =
+      const explicitTarget =
         candidate && typeof candidate === "object" && !Array.isArray(candidate)
           ? requiredTarget(admitted.arguments)
           : undefined;
+      const expectedBindingId = admitted.arguments.bindingId;
+      const selectedTarget =
+        toolName.startsWith("computer_foreground_") &&
+        typeof expectedBindingId === "string" &&
+        this.#backend.targetSession
+          ? this.#backend.targetSession.selectedTarget(
+              requiredComputerOwner(admitted),
+              expectedBindingId,
+            )
+          : undefined;
+      const target = explicitTarget ?? selectedTarget;
       settle =
         admitted.threadId && target
-          ? activity.startActivity?.(
+          ? this.#threadObservation.startActivity(
               admitted.threadId,
               admitted.callId,
               target,
@@ -838,11 +843,16 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         };
         const focus = computerInspectionFocus(invocation.arguments, capture);
         capture = focus.capture;
-        if (focus.description !== undefined) header.focus = focus.description;
+        const presentedHeader: Record<string, unknown> = {
+          ...header,
+          ...(focus.description === undefined
+            ? {}
+            : { focus: focus.description }),
+        };
         result = this.#presentation.publish(
           key,
           inspected.observationId,
-          header,
+          presentedHeader,
           capture,
           options,
         );
@@ -966,7 +976,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           [OBSERVATION_CAPTURE]: captured,
           ...header
         } = inspected;
-        const capture: ObservationCapture<
+        let capture: ObservationCapture<
           ComputerInspection["controls"][number]
         > = captured ?? {
           scopeKey: computerTargetKey(inspected.target),
@@ -977,15 +987,30 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             reasons: ["backend_capture_coverage_unknown"],
           },
         };
+        const observationOptions = observationReadOptions(invocation.arguments);
+        if (observationOptions.cursor !== undefined)
+          throw new Error("Action follow-up cannot continue an old cursor");
+        const focused =
+          observationOptions.baseObservationId === undefined &&
+          observationOptions.full !== true;
+        let presentedHeader: Record<string, unknown> = header;
+        if (focused) {
+          const view = computerActionFollowupCapture(
+            capture,
+            requiredControl(invocation.arguments),
+          );
+          capture = view.capture;
+          presentedHeader = { ...header, focus: view.description };
+        }
         result = {
           ...completed,
           actionCompleted: true,
           after: this.#presentation.publish(
             key,
             inspected.observationId,
-            header,
+            presentedHeader,
             capture,
-            { full: true },
+            focused ? { full: true } : observationOptions,
           ),
         };
       } catch (error) {
@@ -1546,6 +1571,12 @@ function computerInspectionFocus(
   return {
     capture: {
       ...capture,
+      scopeKey: JSON.stringify([
+        capture.scopeKey,
+        "computer-inspect-focus",
+        query ?? null,
+        limit ?? null,
+      ]),
       entries,
       coverage: {
         ...capture.coverage,
@@ -1565,6 +1596,63 @@ function computerInspectionFocus(
       ...(limit === undefined ? {} : { limit: Number(limit) }),
       scanned: capture.entries.length,
       matched: matched.length,
+    },
+  };
+}
+
+/** Small, self-contained action follow-up. A fallback never claims the acted node was found. */
+function computerActionFollowupCapture(
+  capture: ObservationCapture<ComputerInspection["controls"][number]>,
+  acted: ComputerControlSelector,
+): {
+  capture: ObservationCapture<ComputerInspection["controls"][number]>;
+  description: {
+    kind: "action-followup";
+    match: "same-presented-control" | "first-captured-controls";
+    scanned: number;
+    returned: number;
+    inspectToExpand: true;
+  };
+} {
+  const index = capture.entries.findIndex(
+    ({ value }) => value.selector.targetId === acted.targetId,
+  );
+  const start =
+    index < 0
+      ? 0
+      : Math.min(
+          Math.max(0, index - 2),
+          Math.max(0, capture.entries.length - 5),
+        );
+  const entries = capture.entries.slice(start, start + 5);
+  const subset = entries.length < capture.entries.length;
+  return {
+    capture: {
+      ...capture,
+      scopeKey: JSON.stringify([
+        capture.scopeKey,
+        "computer-action-followup",
+        start,
+        entries.length,
+      ]),
+      entries,
+      coverage: {
+        ...capture.coverage,
+        scope: `${capture.coverage.scope}; action follow-up subset of captured controls`,
+        sourceComplete: subset ? false : capture.coverage.sourceComplete,
+        reasons: [
+          ...capture.coverage.reasons,
+          "action_followup_projection",
+          ...(subset ? ["action_followup_subset"] : []),
+        ],
+      },
+    },
+    description: {
+      kind: "action-followup",
+      match: index < 0 ? "first-captured-controls" : "same-presented-control",
+      scanned: capture.entries.length,
+      returned: entries.length,
+      inspectToExpand: true,
     },
   };
 }
@@ -1615,7 +1703,6 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
 
   invalidateObservations(): void {
     this.#observations.clear();
-    this.targetSession.invalidateCaptures();
   }
   #ocrExecutable?: Promise<string>;
 

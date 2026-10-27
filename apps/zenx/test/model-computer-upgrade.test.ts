@@ -248,6 +248,21 @@ test("focused Computer inspect reports the actual bounded captured scope", async
   assert.match(result.coverage.scope, /focused projection/);
   assert.equal(result.coverage.sourceComplete, false);
   assert.ok(result.coverage.reasons.includes("focus_limit"));
+  const changedScope = (await computer.invoke("computer_inspect", {
+    name: "computer_inspect",
+    callId: "call-2",
+    threadId: "owner",
+    cwd: ".",
+    arguments: {
+      target,
+      query: "cancel",
+      limit: 1,
+      baseObservationId: result.observationId,
+    },
+    signal: new AbortController().signal,
+  } as any)) as Record<string, any>;
+  assert.equal(changedScope.observation.format, "full");
+  assert.equal(changedScope.observation.resetReason, "scope-changed");
   await computer.close();
 });
 
@@ -307,6 +322,157 @@ test("completed semantic action reports failed follow-up observation without rep
   assert.equal(action.actionCompleted, true);
   assert.match(action.observationError, /AX timed out/);
   assert.equal(action.after, undefined);
+  await computer.close();
+});
+
+test("default action observation is a small honest subset; full explicitly reopens the captured first page", async () => {
+  const target = { pid: 431, windowTitle: "Messages" };
+  let observations = 0,
+    actions = 0;
+  const backend = {
+    inspect: async () => {
+      const observationId = `obs-${++observations}`;
+      return {
+        platform: "win32",
+        observationId,
+        target: { ...target, applicationName: "Example" },
+        controls: Array.from({ length: 12 }, (_, i) => ({
+          selector: { observationId, targetId: `node-${i}` },
+          role: "button",
+          title: `Button ${i}`,
+          enabled: true,
+          actions: ["press"],
+        })),
+        truncated: false,
+      };
+    },
+    press: async () => {
+      actions++;
+      return { target };
+    },
+    close: async () => {},
+  } as unknown as ZenXComputerBackend;
+  const computer = new ComputerZenXCapabilityPackage(backend);
+  const signal = new AbortController().signal;
+  const call = (name: string, arguments_: Record<string, unknown>) =>
+    computer.invoke(name, {
+      name,
+      callId: `${name}-${observations}-${actions}`,
+      threadId: "owner",
+      cwd: ".",
+      arguments: arguments_,
+      signal,
+    } as any) as Promise<Record<string, any>>;
+  const first = await call("computer_inspect", { target });
+  const focused = await call("computer_press", {
+    target,
+    control: first.controls[7].selector,
+    observe: true,
+  });
+  assert.equal(actions, 1);
+  assert.equal(focused.actionCompleted, true);
+  assert.equal(focused.after.controls.length, 5);
+  assert.equal(focused.after.focus.kind, "action-followup");
+  assert.equal(focused.after.focus.match, "same-presented-control");
+  assert.equal(focused.after.focus.inspectToExpand, true);
+  assert.equal(focused.after.coverage.sourceComplete, false);
+  assert.ok(focused.after.coverage.reasons.includes("action_followup_subset"));
+  assert.equal(
+    focused.after.controls.some((c: any) => c.title === "Button 7"),
+    true,
+  );
+  const complete = await call("computer_inspect", { target, full: true });
+  assert.equal(complete.controls.length, 12);
+  await computer.close();
+});
+
+test("two model-facing diffs replace every retained ref and permit an exact native action", async () => {
+  const target = { pid: 431, windowTitle: "Messages" };
+  let observations = 0,
+    pressed = "";
+  const backend = {
+    inspect: async () => {
+      const observationId = `obs-${++observations}`;
+      return {
+        platform: "win32",
+        observationId,
+        target: { ...target, applicationName: "Example" },
+        controls: Array.from({ length: 16 }, (_, i) => ({
+          selector: { observationId, targetId: `node-${i}` },
+          role: "button",
+          title:
+            i === 0 && observations >= 3
+              ? "Changed button"
+              : `Button ${i} with enough text for a useful native diff`,
+          enabled: true,
+          actions: ["press"],
+        })),
+        truncated: false,
+      };
+    },
+    press: async (
+      _target: unknown,
+      selector: { observationId: string; targetId: string },
+    ) => {
+      pressed = `${selector.observationId}/${selector.targetId}`;
+      return { target };
+    },
+    close: async () => {},
+  } as unknown as ZenXComputerBackend;
+  const computer = new ComputerZenXCapabilityPackage(backend);
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const signal = new AbortController().signal;
+  const call = async (name: string, modelArgs: Record<string, unknown>) => {
+    const native = decodeComputerArguments(name, modelArgs, refs, epoch);
+    const raw = (await computer.invoke(name, {
+      name,
+      callId: `${name}-${observations}`,
+      threadId: "owner",
+      cwd: ".",
+      arguments: native,
+      signal,
+    } as any)) as Record<string, unknown>;
+    return projectComputerResult(raw, native, refs, epoch);
+  };
+  const first = await call("computer_inspect", { target });
+  let state = new Map(
+    (first.controls as Array<Record<string, unknown>>).map((c) => [
+      c.ref as string,
+      c,
+    ]),
+  );
+  let previous = first;
+  for (let step = 0; step < 2; step++) {
+    const next = await call("computer_inspect", {
+      target: first.window,
+      since: previous.observation,
+    });
+    assert.equal((next.page as Record<string, unknown>).format, "diff");
+    const changes = next.controlChanges as Record<string, any>;
+    assert.equal(changes.replacements.length, 16);
+    for (const replacement of changes.replacements as Array<{
+      beforeRef: string;
+      ref: string;
+    }>) {
+      const old = state.get(replacement.beforeRef);
+      assert.ok(old, "each previous ref has an explicit fresh successor");
+      state.delete(replacement.beforeRef);
+      state.set(replacement.ref, { ...old, ref: replacement.ref });
+    }
+    for (const updated of changes.updated as Array<Record<string, unknown>>)
+      state.set(updated.ref as string, updated);
+    assert.deepEqual(changes.order, [...state.keys()]);
+    previous = next;
+  }
+  const retained = [...state.values()].find(
+    (c) => c.title === "Button 1 with enough text for a useful native diff",
+  )!;
+  await call("computer_press", {
+    control: retained.ref,
+    observation: previous.observation,
+    observe: false,
+  });
+  assert.equal(pressed, "obs-3/node-1");
   await computer.close();
 });
 
@@ -408,4 +574,42 @@ test("desktop invalidation retires model capture and native selector before next
   assert.equal(actions, 0);
   await computer.close();
   assert.equal(notify, undefined);
+});
+
+test("stale foreground binding never labels another selected window busy", async () => {
+  const selected = { pid: 432, windowTitle: "Selected" };
+  const events: Array<Record<string, any>> = [];
+  const backend = {
+    targetSession: {
+      selectedTarget: (_owner: string, expectedBindingId?: string) =>
+        expectedBindingId === "current" ? selected : undefined,
+      selectedBindingId: () => "current",
+    },
+    close: async () => {},
+  } as unknown as ZenXComputerBackend;
+  const computer = new ComputerZenXCapabilityPackage(backend, undefined, true);
+  const stop = computer.observeThread(
+    { threadId: "owner", frames: false },
+    (event) => events.push(event as Record<string, any>),
+  );
+  await assert.rejects(
+    computer.invoke("computer_foreground_key_press", {
+      name: "computer_foreground_key_press",
+      callId: "stale",
+      threadId: "owner",
+      cwd: ".",
+      arguments: { key: "enter", bindingId: "prior" },
+      signal: new AbortController().signal,
+    } as any),
+    /bindingId no longer matches/i,
+  );
+  assert.ok(
+    events.every(
+      (event) =>
+        event.type !== "targets" ||
+        event.targets.every((target: Record<string, any>) => !target.activity),
+    ),
+  );
+  stop();
+  await computer.close();
 });

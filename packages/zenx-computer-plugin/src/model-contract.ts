@@ -37,6 +37,9 @@ const targetTools = new Set([
 ]);
 const semanticActions = new Set(["computer_press", "computer_set_value"]);
 
+export const computerModelDocument =
+  "Read computer_environment for current session availability; lock/suspend never unlocks or auto-replays input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect.";
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -138,12 +141,19 @@ export function computerModelDefinition<T extends ComputerModelTool>(
   if (semanticActions.has(tool.name)) {
     const props = object(schema.properties);
     delete props.target;
+    delete props.baseObservationId;
     props.control = structuredClone(REF);
     props.observation = structuredClone(REF);
     props.observe = {
       type: "boolean",
       description:
-        "Return a fresh bounded observation after the action; defaults to true.",
+        "Return a fresh focused observation after the action; defaults to true.",
+    };
+    props.since = structuredClone(REF);
+    props.full = {
+      type: "boolean",
+      description:
+        "Return a self-contained full first page after the action. Omit for a small focused view.",
     };
     schema.required =
       tool.name === "computer_press" ? ["control"] : ["control", "value"];
@@ -211,6 +221,14 @@ export function decodeComputerArguments(
         throw Error("Observation belongs to another exact window target");
       args.control = { ...object(args.control), observationId: observation.id };
       delete args.observation;
+    }
+    if (args.since !== undefined) {
+      if (args.full === true) throw Error("Choose since or full, not both");
+      const since = object(refs.resolve(args.since, "observation"));
+      if (!sameTarget(since.target, args.target))
+        throw Error("Diff baseline belongs to another exact window target");
+      args.baseObservationId = since.id;
+      delete args.since;
     }
     if (args.observe === undefined) args.observe = true;
   }
@@ -306,15 +324,58 @@ export function projectComputerResult(
     output.controls = result.controls.map(controlRef);
   if (record(result.controlChanges)) {
     const changes = object(result.controlChanges);
+    const page = object(result.observation);
+    if (
+      typeof page.baseObservationId !== "string" ||
+      typeof result.observationId !== "string"
+    )
+      throw Error(
+        "Computer diff lacks exact observation provenance; inspect afresh",
+      );
+    const bindControl = (observationId: string, targetId: unknown) => {
+      if (typeof targetId !== "string" || !targetId)
+        throw Error("Computer diff lacks a stable presented control identity");
+      return refs.bind("control", {
+        target: windowTarget(target),
+        control: { observationId, targetId },
+      });
+    };
+    const added = Array.isArray(changes.added) ? changes.added : [];
+    const addedIds = new Set(
+      added.map((value) => object(object(value).selector).targetId),
+    );
+    const updated = Array.isArray(changes.updated) ? changes.updated : [];
+    const order = Array.isArray(changes.order) ? changes.order : undefined;
+    const retained = order?.filter((id) => !addedIds.has(id));
     output.controlChanges = {
-      added: Array.isArray(changes.added) ? changes.added.map(controlRef) : [],
-      updated: Array.isArray(changes.updated)
-        ? changes.updated.map(controlRef)
-        : [],
+      added: added.map(controlRef),
+      updated: updated.map((value) => ({
+        ...controlRef(value),
+        beforeRef: bindControl(
+          page.baseObservationId as string,
+          object(object(value).selector).targetId,
+        ),
+      })),
       removedFromView: Array.isArray(changes.removedFromView)
-        ? changes.removedFromView.length
-        : 0,
-      ...(Array.isArray(changes.order) ? { orderChanged: true } : {}),
+        ? changes.removedFromView.map((id) =>
+            bindControl(page.baseObservationId as string, id),
+          )
+        : [],
+      ...(retained === undefined
+        ? {}
+        : {
+            replacements: retained.map((id) => ({
+              beforeRef: bindControl(page.baseObservationId as string, id),
+              ref: bindControl(result.observationId as string, id),
+            })),
+          }),
+      ...(order === undefined
+        ? {}
+        : {
+            order: order.map((id) =>
+              bindControl(result.observationId as string, id),
+            ),
+          }),
     };
   }
   if (typeof result.nextCursor === "string" && target)
