@@ -154,3 +154,50 @@ test("OCR result keeps original capture ref and literal text without minting con
   assert.equal(result.capturedAt, screenshot.capturedAt);
   assert.equal(result.captureId, undefined);
 });
+
+test("background click accepts only one capture ref and restores its sole exact target authority", () => {
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const image = projectComputerResult(screenshot, { target }, refs, epoch);
+  assert.equal(isComputerModelTool("computer_background_click"), true);
+  assert.deepEqual(
+    decodeComputerArguments(
+      "computer_background_click",
+      { capture: image.capture, x: 20, y: 40 },
+      refs,
+      epoch,
+    ),
+    {
+      target,
+      bindingId: screenshot.bindingId,
+      captureId: screenshot.captureId,
+      x: 20,
+      y: 40,
+    },
+  );
+  for (const extra of [
+    { target },
+    { binding: "r1" },
+    { button: "right" },
+    { windowId: 7 },
+  ])
+    assert.throws(
+      () =>
+        decodeComputerArguments(
+          "computer_background_click",
+          { capture: image.capture, x: 20, y: 40, ...extra },
+          refs,
+          epoch,
+        ),
+      /only|omit|capture/,
+    );
+  assert.throws(
+    () =>
+      decodeComputerArguments(
+        "computer_background_click",
+        { x: 20, y: 40 },
+        refs,
+        epoch,
+      ),
+    /capture/,
+  );
+});

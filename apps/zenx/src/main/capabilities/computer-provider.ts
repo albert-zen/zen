@@ -180,8 +180,11 @@ export interface ComputerOcrInspection extends ComputerOcrRecognition {
 export interface ZenXComputerBackend {
   /** Host-native AX implementation only; never inferred from plugin manifest capabilities. */
   readonly nativeTargetedAccessibility?: true;
+  /** Explicit bundled native window-local implementation; no provider inference. */
+  readonly nativeWindowInput?: true;
   /** Invalidate provider-owned native selectors after desktop state changes. */
   invalidateObservations?(): void;
+  invalidateTargetObservations?(target: ComputerTarget): void;
   ocr?(
     target: ComputerTarget,
     captureId: string,
@@ -487,12 +490,47 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
     capabilities: [
       ...computerCapabilityManifest.provider!.capabilities,
       "window.ocr",
+      "window.background_click",
     ],
   },
   mainDocument:
     computerCapabilityManifest.mainDocument +
     " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop.",
+  permissions: [
+    ...computerCapabilityManifest.permissions,
+    {
+      id: "computer.window.background_click",
+      title: "Click inside a background window",
+      description:
+        "Send one left click to an exact captured window without desktop foreground or pointer takeover; application-internal focus may change.",
+      scope: "local-device",
+    },
+  ],
   tools: [
+    {
+      name: "computer_background_click",
+      description:
+        "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS active session only; uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+      inputSchema: objectSchema(
+        {
+          target: targetSchema(),
+          bindingId: stringSchema(),
+          captureId: stringSchema(),
+          x: { type: "number" },
+          y: { type: "number" },
+        },
+        ["target", "bindingId", "captureId", "x", "y"],
+      ),
+      permissions: ["computer.window.background_click"],
+      interactionMode: "background_safe",
+      capabilities: [
+        "window.background_click",
+        "app_targeted",
+        "no_global_input",
+        "capture_bound",
+        "cancellable",
+      ],
+    },
     ...computerCapabilityManifest.tools.map((tool) =>
       tool.name === "computer_foreground_click"
         ? {
@@ -844,6 +882,40 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       return await this.#invokeForeground(toolName, invocation);
     }
     const target = requiredTarget(invocation.arguments);
+    if (toolName === "computer_background_click") {
+      const session = this.#backend.targetSession;
+      if (!session || this.#backend.nativeWindowInput !== true)
+        throw new Error(
+          "This provider does not implement window-local background click; no input dispatched",
+        );
+      if (
+        !this.#environment ||
+        this.#environment.snapshot().sessionState !== "active"
+      )
+        throw new Error(
+          "Background click requires verified active desktop monitoring; no input dispatched",
+        );
+      this.#presentation.invalidate(
+        JSON.stringify([
+          invocation.threadId ?? null,
+          computerTargetKey(target),
+        ]),
+      );
+      this.#backend.invalidateTargetObservations?.(target);
+      const receipt = await session.backgroundClick(
+        requiredComputerOwner(invocation),
+        target,
+        requiredString(invocation.arguments, "bindingId"),
+        requiredString(invocation.arguments, "captureId"),
+        requiredFiniteNumber(invocation.arguments, "x"),
+        requiredFiniteNumber(invocation.arguments, "y"),
+        invocation.signal,
+      );
+      return {
+        action: "background_click",
+        ...(receipt as Record<string, unknown>),
+      };
+    }
     const key = JSON.stringify([
       invocation.threadId ?? null,
       computerTargetKey(target),
@@ -1764,6 +1836,7 @@ function boundedDesktopCaptureError(error: unknown): string {
 
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly nativeTargetedAccessibility = true;
+  readonly nativeWindowInput = true;
   readonly targetSession: ComputerTargetSession;
   readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
@@ -1774,6 +1847,9 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
 
   invalidateObservations(): void {
     this.#observations.clear();
+  }
+  invalidateTargetObservations(target: ComputerTarget): void {
+    this.#observations.beginObservation(computerTargetKey(target));
   }
   #ocrExecutable?: Promise<string>;
 
@@ -3643,6 +3719,47 @@ export const MAC_BOUND_TARGET_SOURCE = `import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
+import Darwin
+
+// SIGTERM cooperatively cancels this helper. No allocation or AppKit in handler.
+var targetCancelled: sig_atomic_t = 0
+signal(SIGTERM) { _ in targetCancelled = 1 }
+func emit(_ value: [String: Any]) {
+  if let data = try? JSONSerialization.data(withJSONObject: value) {
+    FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
+  }
+}
+typealias WindowLocationSetter = @convention(c) (CGEvent, CGPoint) -> Void
+let windowLocationLibrary = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_LOCAL)
+let windowLocationSetter: WindowLocationSetter? = windowLocationLibrary.flatMap { dlsym($0, "CGEventSetWindowLocation") }.map { unsafeBitCast($0, to: WindowLocationSetter.self) }
+func activeDesktop() throws {
+  guard targetCancelled == 0 else { try refuse("Background input cancelled") }
+  guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+        session[kCGSessionOnConsoleKey as String] as? Bool == true,
+        session["CGSSessionScreenIsLocked"] as? Bool != true,
+        CGDisplayIsAsleep(CGMainDisplayID()) == 0 else { try refuse("Background click requires an active unlocked desktop") }
+  guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { try refuse("Background click requires existing Accessibility and post-event permission") }
+}
+struct DesktopFence: Equatable {
+  let foreground: pid_t
+  let pointer: CGPoint
+  let windows: [Int]
+  init() throws {
+    guard let front = NSWorkspace.shared.frontmostApplication, let event = CGEvent(source: nil),
+          let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { try refuse("Desktop focus/pointer/window order unavailable") }
+    foreground = front.processIdentifier; pointer = event.location
+    windows = rows.filter { ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue }
+  }
+}
+func appStateEvent(_ subtype: Int16) throws -> CGEvent {
+  guard let native = NSEvent.otherEvent(with: .appKitDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: subtype, data1: 0, data2: 0), let event = native.cgEvent else { try refuse("Could not construct app-local preparation") }
+  return event
+}
+func postToTarget(_ event: CGEvent, _ pid: pid_t) {
+  event.timestamp = CGEvent(source: nil)?.timestamp ?? DispatchTime.now().uptimeNanoseconds
+  event.postToPid(pid)
+}
+
 
 struct TargetError: Error { let message: String }
 func refuse(_ message: String) throws -> Never { throw TargetError(message: message) }
@@ -3767,11 +3884,78 @@ final class Binding {
     guard CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
   }
   func receipt() -> [String: Any] {
-    return ["bindingId": id, "windowId": windowId,
+    return ["bindingId": id, "windowId": windowId, "windowLocalInputAvailable": windowLocationSetter != nil,
       "target": ["pid": Int(app.processIdentifier), "applicationName": app.localizedName ?? "", "bundleId": app.bundleIdentifier ?? "", "windowTitle": title],
       "bounds": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]]
   }
 }
+// Only this operation uses PID-scoped window-local packets. Foreground input below
+// retains its explicit global/activation semantics; there is no fallback between them.
+func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws {
+  var downPosted = false
+  var preparationPosted = false
+  var release: CGEvent?
+  var deactivation: CGEvent?
+  defer {
+    // Once down is possible, neither cancellation nor a stale window can skip up.
+    if downPosted, let release { postToTarget(release, binding.app.processIdentifier); posted += 1 }
+    if preparationPosted, let deactivation { postToTarget(deactivation, binding.app.processIdentifier) }
+    emit(["phase": "backgroundSettled", "release": downPosted ? "posted" : "not_needed"])
+  }
+  try activeDesktop()
+  guard let setter = windowLocationSetter else { try refuse("Window-local input primitive unavailable") }
+  guard let x = request["x"] as? Double, let y = request["y"] as? Double, x.isFinite, y.isFinite,
+        binding.bounds.contains(CGPoint(x: x, y: y)) else { try refuse("Invalid bound background click point") }
+  try binding.verify()
+  guard attribute(binding.window, kAXTitleAttribute as CFString) as? String == binding.title else { try refuse("Window title changed; recapture before background input") }
+  let baseline = try DesktopFence()
+  guard baseline.windows.contains(binding.windowId) else { try refuse("Selected window is not currently observable") }
+  let global = CGPoint(x: x, y: y)
+  let local = CGPoint(x: x - binding.bounds.minX, y: y - binding.bounds.minY)
+  let cocoa = CGPoint(x: local.x, y: binding.bounds.height - local.y)
+  func mouse(_ type: NSEvent.EventType) throws -> CGEvent {
+    guard let native = NSEvent.mouseEvent(with: type, location: cocoa, modifierFlags: [], timestamp: 0, windowNumber: binding.windowId, context: nil, eventNumber: 1, clickCount: 1, pressure: 1), let event = native.cgEvent else { try refuse("Could not construct window-local mouse pair") }
+    event.flags = []; event.location = global
+    event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+    event.setIntegerValueField(.mouseEventClickState, value: 1)
+    // Source-observed value; macOS exposes no public semantic name for value 3.
+    event.setIntegerValueField(.mouseEventSubtype, value: 3)
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(binding.windowId))
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(binding.windowId))
+    setter(event, local)
+    guard event.location == global else { try refuse("Window-local coordinate preparation changed global point") }
+    return event
+  }
+  let down = try mouse(.leftMouseDown)
+  release = try mouse(.leftMouseUp)
+  // Preparation changes only the target application's internal focus belief. It
+  // must not change OS foreground, pointer or external Z; those remain fenced.
+  if baseline.foreground != binding.app.processIdentifier {
+    let activation = try appStateEvent(1)
+    deactivation = try appStateEvent(2)
+    try activeDesktop(); try binding.verify()
+    guard try DesktopFence() == baseline else { try refuse("Desktop changed before app-local preparation") }
+    postToTarget(activation, binding.app.processIdentifier); preparationPosted = true
+    usleep(30_000)
+  }
+  try activeDesktop(); try binding.verify()
+  guard try DesktopFence() == baseline else { try refuse("Desktop changed before background input") }
+  // Both events are prebuilt; there are no AX/IPC/await calls between down and
+  // its unconditional deferred up, even if SIGTERM interrupts the short wait.
+  emit(["phase": "backgroundPairStarted"])
+  downPosted = true
+  postToTarget(down, binding.app.processIdentifier); posted += 1
+  usleep(30_000)
+}
+
+func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws {
+  let baseline = try DesktopFence()
+  try backgroundClickPair(binding, request, &posted)
+  usleep(30_000)
+  try activeDesktop()
+  guard try DesktopFence() == baseline else { try refuse("Desktop focus/pointer/window order changed after background posting") }
+}
+
 struct KeyboardLayout {
   let id: String
   let translate: (CGKeyCode, Bool) throws -> String
@@ -3852,6 +4036,10 @@ while let line = readLine() {
       guard let binding = bindings[owner], request["bindingId"] as? String == binding.id else { try refuse("Target binding expired; select again") }
       try binding.verify()
       if operation == "verify" { reply = ["result": binding.receipt()] }
+      else if operation == "backgroundClick" {
+        try backgroundClick(binding, request, &posted)
+        reply = ["result": ["dispatch": "posted", "applicationEffect": "unverified", "release": "posted", "internalFocusMayChange": true]]
+      }
       else {
         // All target activation occurs after the host's approval and foreground arbitration.
         try binding.activate()
@@ -3935,6 +4123,7 @@ while let line = readLine() {
   if let output = try? JSONSerialization.data(withJSONObject: reply) {
     FileHandle.standardOutput.write(output); FileHandle.standardOutput.write(Data([10]))
   } else { exit(1) }
+  if targetCancelled != 0 { exit(0) }
 }
 `;
 

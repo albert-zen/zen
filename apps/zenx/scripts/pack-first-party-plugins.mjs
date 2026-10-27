@@ -73,24 +73,24 @@ export const FIRST_PARTY_PLUGINS = Object.freeze([
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-macos-1.3.0.tgz",
+    "zenx-computer-plugin-macos-1.4.0.tgz",
   ),
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-peekaboo-1.3.0.tgz",
+    "zenx-computer-plugin-peekaboo-1.4.0.tgz",
     "variants/peekaboo.zenx.plugin.json",
   ),
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-win32-1.3.0.tgz",
+    "zenx-computer-plugin-win32-1.4.0.tgz",
     "variants/win32.zenx.plugin.json",
   ),
   plugin(
     "@zenx/computer-plugin",
     "zenx-computer-plugin",
-    "zenx-computer-plugin-win32-strict-1.3.0.tgz",
+    "zenx-computer-plugin-win32-strict-1.4.0.tgz",
     "variants/win32-strict.zenx.plugin.json",
   ),
   plugin("@zenx/rooms-plugin", "zenx-rooms-plugin", ZENX_ROOMS_TARBALL),

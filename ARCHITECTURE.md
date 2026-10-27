@@ -1483,6 +1483,8 @@ actual child/pipe close; only the native posted/unverified receipt records poste
 input, and closed sessions or invalidated in-flight captures cannot publish fresh
 bindings or screenshot authority.
 
+Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, active-session admission, PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
+
 The existing foreground presenter supplies only live, painted, mouse-ignoring
 edge-indicator native window IDs through a trusted main-only read projection;
 bound pointer input may ignore those exact windows only when native ownership

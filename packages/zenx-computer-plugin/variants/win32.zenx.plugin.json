@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   "provider": {
     "id": "microsoft-winapp-cli",

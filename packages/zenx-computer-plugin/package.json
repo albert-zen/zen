@@ -1,6 +1,6 @@
 {
   "name": "@zenx/computer-plugin",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "First-party ZenX Computer plugin",
   "type": "module",
   "files": [

@@ -24,6 +24,7 @@ const names = new Set([
   "computer_set_value",
   "computer_screenshot",
   "computer_ocr",
+  "computer_background_click",
   "computer_foreground_click",
   "computer_foreground_key_press",
   "computer_foreground_type",
@@ -38,7 +39,7 @@ const targetTools = new Set([
 const semanticActions = new Set(["computer_press", "computer_set_value"]);
 
 export const computerModelDocument =
-  "Read computer_environment for current session availability; native macOS AX may work while locked using fresh controls, but actual native failures remain failures. Locked actions include a fresh native readback; window images and foreground input require an active session. Session changes never unlock or auto-replay input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Strict Windows native UIA inspect omits the current text Value, including passwords; do not infer text from a control name. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. Native macOS and strict Windows set_value may report valueReadback.matchesRequested after exact native AXValue or ValuePattern readback without echoing the text; this verifies the immediate control value, not save or submit. Confirm broader application effects through a fresh app-visible state. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect.";
+  "Read computer_environment for current session availability; native macOS AX may work while locked using fresh controls, but actual native failures remain failures. Locked actions include a fresh native readback; window images and foreground input require an active session. Session changes never unlock or auto-replay input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Strict Windows native UIA inspect omits the current text Value, including passwords; do not infer text from a control name. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. Native macOS and strict Windows set_value may report valueReadback.matchesRequested after exact native AXValue or ValuePattern readback without echoing the text; this verifies the immediate control value, not save or submit. Confirm broader application effects through a fresh app-visible state. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect. Native macOS background_click consumes one exact screenshot capture ref and left-clicks its image-pixel x/y without desktop takeover; it requires an active session and separate window-input permission. Application-internal focus may change. Use a fresh screenshot after every click; never retry an uncertain action.";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -158,6 +159,11 @@ export function computerModelDefinition<T extends ComputerModelTool>(
     schema.required =
       tool.name === "computer_press" ? ["control"] : ["control", "value"];
   }
+  if (tool.name === "computer_background_click") {
+    delete object(schema.properties).target;
+    delete object(schema.properties).binding;
+    schema.required = ["capture", "x", "y"];
+  }
   if (tool.name === "computer_ocr") {
     delete object(schema.properties).target;
     schema.required = ["capture"];
@@ -173,6 +179,14 @@ export function decodeComputerArguments(
   refs: ComputerReferencePort,
 ): Record<string, unknown> {
   const args = structuredClone(input);
+  if (
+    name === "computer_background_click" &&
+    (args.capture === undefined ||
+      Object.keys(args).some((key) => !["capture", "x", "y"].includes(key)))
+  )
+    throw Error(
+      "Background click accepts only capture, x and y; omit target, binding and native IDs",
+    );
   for (const forbidden of ["bindingId", "captureId", "baseObservationId"])
     if (forbidden in args)
       throw Error(
@@ -251,12 +265,14 @@ export function decodeComputerArguments(
     if (args.bindingId !== undefined && args.bindingId !== bound.bindingId)
       throw Error("Capture belongs to a different selected binding");
     delete args.capture;
-    if (name === "computer_ocr") {
+    if (name === "computer_ocr" || name === "computer_background_click") {
       if (!bound.target)
         throw Error(
           "This capture ref has no original target; take a fresh screenshot for OCR",
         );
       args.target = windowTarget(bound.target);
+      if (name === "computer_background_click")
+        args.bindingId = bound.bindingId;
     } else args.bindingId = bound.bindingId;
     args.captureId = bound.captureId;
   }

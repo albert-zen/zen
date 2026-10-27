@@ -218,3 +218,99 @@ for (const killMode of ["false", "throw", "error", "true"] as const) {
     });
   }
 }
+
+test("background abort gives the owned helper time to release its pair before closing; no replay", async (t) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-background-release-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = path.join(directory, "fixture.cjs"),
+    released = path.join(directory, "released");
+  await writeFile(
+    executable,
+    `#!${process.execPath}
+const fs=require('node:fs');let down=false;
+process.on('SIGTERM',()=>{setTimeout(()=>{if(down) fs.writeFileSync(${JSON.stringify(released)},'up');process.exit(0)},50)});
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.operation==='select') console.log(JSON.stringify({result:{pid:process.pid}}));else {down=true; console.log(JSON.stringify({phase:'backgroundPairStarted'}));}});
+`,
+    { mode: 0o700 },
+  );
+  const transport = new NativeComputerTargetTransport(async () => executable);
+  t.after(() => transport.close());
+  await transport.request(
+    { operation: "select" },
+    new AbortController().signal,
+  );
+  const controller = new AbortController();
+  const pending = transport.request(
+    { operation: "backgroundClick" },
+    controller.signal,
+  );
+  setTimeout(() => controller.abort(), 100);
+  await assert.rejects(pending, /outcome unknown/);
+  const { readFile } = await import("node:fs/promises");
+  assert.equal(await readFile(released, "utf8"), "up");
+  await assert.rejects(
+    transport.request(
+      { operation: "backgroundClick" },
+      new AbortController().signal,
+    ),
+    /no input dispatched/,
+  );
+});
+
+test("background cleanup grace expiry blocks further background input even after explicit reselection", async (t) => {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const signals: string[] = [];
+  const child =
+    new EventEmitter() as import("node:child_process").ChildProcessWithoutNullStreams;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin.on("data", (chunk) => {
+    if (JSON.parse(chunk.toString()).operation === "select")
+      queueMicrotask(() =>
+        child.stdout.emit("data", '{"result":{"selected":true}}\n'),
+      );
+  });
+  child.kill = ((signal: string) => {
+    signals.push(signal);
+    return true;
+  }) as typeof child.kill;
+  const transport = new NativeComputerTargetTransport(
+    async () => "/synthetic",
+    (() => child) as unknown as typeof import("node:child_process").spawn,
+  );
+  const controller = new AbortController();
+  await transport.request({ operation: "select" }, controller.signal);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = transport.request(
+    { operation: "backgroundClick" },
+    controller.signal,
+  );
+  const rejection = assert.rejects(pending, /outcome unknown/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  child.stdout.emit("data", '{"phase":"backgroundPairStarted"}\n');
+  controller.abort();
+  assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(1_999);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(1);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  child.emit("close", 1);
+  await rejection;
+  await transport.request(
+    { operation: "select" },
+    new AbortController().signal,
+  );
+  await assert.rejects(
+    transport.request(
+      { operation: "backgroundClick" },
+      new AbortController().signal,
+    ),
+    /release is unknown.*no input dispatched/,
+  );
+  child.emit("close", 0);
+  await transport.close();
+});

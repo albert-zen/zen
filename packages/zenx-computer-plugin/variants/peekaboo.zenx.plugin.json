@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Peekaboo 3.x targeted macOS automation. Mutations are not certified focus-isolated and require explicit foreground control with a visible activity indicator.",
   "provider": {
     "id": "peekaboo-cli",

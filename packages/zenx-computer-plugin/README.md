@@ -188,3 +188,22 @@ English/CJK recognition and geometry; it does not certify DingTalk or WeCom.
 
 The Chinese-first requirement follows [Apple’s Vision language guidance](https://developer.apple.com/documentation/vision/recognizing-text-in-images)
 and [WWDC21’s explanation of script-model selection](https://developer.apple.com/videos/play/wwdc2021/10041/).
+
+Native macOS `computer_background_click` is a distinct left-click tool with the
+local-device `computer.window.background_click` permission. Supply only a current
+screenshot `capture` short reference and `x`/`y` pixels from that exact full-window
+image. The capture is consumed once. The native helper checks availability of its
+Apple window-local primitive and revalidates the original PID launch, retained
+window, bounds and desktop before posting. It never substitutes AXPress or global
+input. The initial implementation requires an active desktop; it is absent from
+Windows and Peekaboo variants and from the native locked AX whitelist.
+
+This operation does not activate/raise the desktop window or move the hardware
+pointer; application-internal focus may change. App-local deactivation is best
+effort. A posted receipt and matching release-post receipt leave application effect
+unverified. Observe afresh to confirm the effect, and never automatically replay an
+uncertain result. Cancellation asks the owned helper to stop cooperatively, always
+posting the prebuilt matching up after a possible down; the Host retains the
+process until real close and permits a two-second cleanup grace. Forced termination
+or missing cleanup proof makes release unknown and blocks further background input
+on that provider instance, even after reselection.

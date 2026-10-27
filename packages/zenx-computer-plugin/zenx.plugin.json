@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "computer",
   "name": "Computer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -26,7 +26,8 @@
       "foreground.pointer",
       "foreground.keyboard",
       "foreground.scroll",
-      "window.ocr"
+      "window.ocr",
+      "window.background_click"
     ]
   },
   "permissions": [
@@ -53,9 +54,77 @@
       "title": "Control the foreground desktop",
       "description": "Use global pointer, keyboard, focus, or scrolling. ZenX exposes these as explicitly labeled, cancellable foreground takeover.",
       "scope": "local-device"
+    },
+    {
+      "id": "computer.window.background_click",
+      "title": "Click inside a background window",
+      "description": "Send one left click to an exact captured window without desktop foreground or pointer takeover; application-internal focus may change.",
+      "scope": "local-device"
     }
   ],
   "tools": [
+    {
+      "name": "computer_background_click",
+      "description": "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS active session only; uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "applicationId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "windowTitle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": ["pid"]
+              },
+              {
+                "required": ["applicationId"]
+              },
+              {
+                "required": ["bundleId"]
+              }
+            ]
+          },
+          "bindingId": {
+            "type": "string"
+          },
+          "captureId": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": ["target", "bindingId", "captureId", "x", "y"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.window.background_click"],
+      "interactionMode": "background_safe",
+      "capabilities": [
+        "window.background_click",
+        "app_targeted",
+        "no_global_input",
+        "capture_bound",
+        "cancellable"
+      ]
+    },
     {
       "name": "computer_environment",
       "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
