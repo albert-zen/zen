@@ -1,3 +1,4 @@
+import { buildCodeRuntimeWorkerFixture } from "./code-runtime-worker-fixture.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -655,6 +656,8 @@ test("compiled run_code carries full Fleet receipts across nested dispatch, dura
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "fleet-semantic-runtime-"),
   );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const workerUrl = await buildCodeRuntimeWorkerFixture(directory);
   const f = await fixture(t);
   let phase = "nested",
     round = 0,
@@ -741,10 +744,7 @@ text(await tools.wait({task_id}));
       runtimes: [
         new RunCodeToolRuntime(
           new CodeRuntime({
-            workerUrl: new URL(
-              "../../../dist/src/code-runtime-worker.js",
-              import.meta.url,
-            ),
+            workerUrl,
           }),
         ),
       ],
