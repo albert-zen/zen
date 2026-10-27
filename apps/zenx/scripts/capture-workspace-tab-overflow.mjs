@@ -177,7 +177,7 @@ await withPreviewBrowser(
                 const interaction = { expanded };
                 item.interactionModes.push(interaction);
                 await evaluate(
-                  "window.__titlebarPreview.setSelected('custom:synthetic-0')",
+                  "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-0')",
                 );
                 await stable();
                 await click('[id="aux-tab-custom:synthetic-1"]');
