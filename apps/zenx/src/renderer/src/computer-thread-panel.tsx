@@ -82,11 +82,18 @@ export function ComputerThreadPanel({
       ? i18n.t("panels:computerWaitingForHuman")
       : activity.kind === "foreground"
         ? i18n.t("panels:computerForegroundActivity")
-        : activity.kind === "background-window"
-          ? i18n.t("panels:computerBackgroundActivity", {
-              window: followed?.target.windowTitle,
+        : activity.kind === "background-app"
+          ? i18n.t("panels:computerBackgroundAppActivity", {
+              application:
+                followed?.target.applicationName ??
+                followed?.target.bundleId ??
+                followed?.target.pid,
             })
-          : i18n.t("panels:computerActivityUnknown")
+          : activity.kind === "background-window"
+            ? i18n.t("panels:computerBackgroundActivity", {
+                window: followed?.target.windowTitle,
+              })
+            : i18n.t("panels:computerActivityUnknown")
     : targets.length > 0
       ? i18n.t("panels:computerNoCurrentActivity")
       : undefined;
@@ -98,7 +105,11 @@ export function ComputerThreadPanel({
     >
       <div className="computer-live-toolbar">
         <Select
-          aria-label={i18n.t("panels:computerWindow")}
+          aria-label={i18n.t(
+            followed && !followed.target.windowTitle
+              ? "panels:computerApplication"
+              : "panels:computerWindow",
+          )}
           value={targetId ?? "__follow__"}
           onValueChange={(value) =>
             setTargetId(value === "__follow__" ? undefined : value)
@@ -114,11 +125,18 @@ export function ComputerThreadPanel({
           <option value="__follow__">
             {targets.length === 0
               ? i18n.t("panels:followAgent")
-              : i18n.t("panels:followAgentLatestWindow")}
+              : i18n.t(
+                  followed && !followed.target.windowTitle
+                    ? "panels:followAgentLatestApplication"
+                    : "panels:followAgentLatestWindow",
+                )}
           </option>
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
-              {target.target.windowTitle ?? i18n.t("panels:window")}
+              {target.target.windowTitle ??
+                target.target.applicationName ??
+                target.target.bundleId ??
+                i18n.t("panels:computerApplication")}
             </option>
           ))}
         </Select>
@@ -130,6 +148,7 @@ export function ComputerThreadPanel({
             className="computer-activity"
             role="status"
             aria-live="polite"
+            aria-atomic="true"
             data-kind={activity?.kind ?? "idle"}
           >
             {activityMessage}

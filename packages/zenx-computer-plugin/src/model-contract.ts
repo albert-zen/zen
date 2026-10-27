@@ -25,6 +25,8 @@ const names = new Set([
   "computer_screenshot",
   "computer_ocr",
   "computer_background_click",
+  "computer_background_type",
+  "computer_background_key_press",
   "computer_foreground_click",
   "computer_foreground_key_press",
   "computer_foreground_type",
@@ -39,7 +41,8 @@ const targetTools = new Set([
 const semanticActions = new Set(["computer_press", "computer_set_value"]);
 
 export const computerModelDocument =
-  "Read computer_environment for current session availability; native macOS AX may work while locked using fresh controls, but actual native failures remain failures. Locked actions include a fresh native readback; only explicitly disclosed native exact-window capture/input may work while locked; foreground input requires an active session. Session changes never unlock or auto-replay input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Strict Windows native UIA inspect omits the current text Value, including passwords; do not infer text from a control name. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. Native macOS and strict Windows set_value may report valueReadback.matchesRequested after exact native AXValue or ValuePattern readback without echoing the text; this verifies the immediate control value, not save or submit. Confirm broader application effects through a fresh app-visible state. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect. Native macOS background_click consumes one exact screenshot capture ref and left-clicks its image-pixel x/y without desktop takeover; it requires fresh verified native full-window capture, a known console session and separate window-input permission. Only captureSource=native_sck_exact_window or native_window_server_exact_window with backgroundInputEligible=true carries window-input image proof; legacy read-only captures never authorize background click. OCR accepts source images up to 16 MP, bounds local recognition to 4 MP, and maps text boxes back to original capture pixels without renewing it. Display-bright capture uses SCK; observed display-asleep capture uses an exact single-window WindowServer primitive. Unknown errors never switch routes or wake the display. Application-internal focus may change. Use a fresh screenshot after every click; never retry an uncertain action.";
+  "Read computer_environment for current session availability; native macOS AX may work while locked using fresh controls, but actual native failures remain failures. Locked actions include a fresh native readback; only explicitly disclosed native exact-window capture/input may work while locked; foreground input requires an active session. Session changes never unlock or auto-replay input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Strict Windows native UIA inspect omits the current text Value, including passwords; do not infer text from a control name. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. Native macOS and strict Windows set_value may report valueReadback.matchesRequested after exact native AXValue or ValuePattern readback without echoing the text; this verifies the immediate control value, not save or submit. Confirm broader application effects through a fresh app-visible state. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect. Native macOS background_click consumes one exact screenshot capture ref and left-clicks its image-pixel x/y without desktop takeover; it requires fresh verified native full-window capture, a known console session and separate window-input permission. Only captureSource=native_sck_exact_window or native_window_server_exact_window with backgroundInputEligible=true carries window-input image proof; legacy read-only captures never authorize background click. OCR accepts source images up to 16 MP, bounds local recognition to 4 MP, and maps text boxes back to original capture pixels without renewing it. Display-bright capture uses SCK; observed display-asleep capture uses an exact single-window WindowServer primitive. Unknown errors never switch routes or wake the display. Application-internal focus may change. Use a fresh screenshot after every click; never retry an uncertain action." +
+  " Native macOS background_type and background_key_press use this owner’s binding only to derive application identity, then post to that application current focus. Internal focus may change; no original-window or control guarantee. Separate app keyboard permission and explicit helper support are required; no global takeover, clipboard, wake or automatic replay. Text is bounded to 1024 Unicode scalars; basic keys accept no modifiers.";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -169,7 +172,10 @@ export function computerModelDefinition<T extends ComputerModelTool>(
     schema.required = ["capture"];
   }
   tool.description +=
-    " Exact refs bind the original window and native observation. A retained control requires an explicit fresh observation ref before reuse. Native freshness and permissions are checked again; uncertain actions are never replayed.";
+    tool.name === "computer_background_type" ||
+    tool.name === "computer_background_key_press"
+      ? " The existing binding supplies the selected application identity only. Input goes to that application's current focus, which may change; no original-window guarantee. Native application identity and separate permission are checked again; uncertain actions are never replayed."
+      : " Exact refs bind the original window and native observation. A retained control requires an explicit fresh observation ref before reuse. Native freshness and permissions are checked again; uncertain actions are never replayed.";
   return tool;
 }
 
@@ -179,6 +185,20 @@ export function decodeComputerArguments(
   refs: ComputerReferencePort,
 ): Record<string, unknown> {
   const args = structuredClone(input);
+  if (
+    name === "computer_background_type" ||
+    name === "computer_background_key_press"
+  ) {
+    const field = name === "computer_background_type" ? "text" : "key";
+    if (
+      args.binding === undefined ||
+      typeof args[field] !== "string" ||
+      Object.keys(args).some((key) => !["binding", field].includes(key))
+    )
+      throw Error(
+        "Background app keyboard accepts only binding and text/key; omit raw target, PID, capture and modifiers",
+      );
+  }
   if (
     name === "computer_background_click" &&
     (args.capture === undefined ||

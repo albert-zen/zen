@@ -13,6 +13,7 @@ export interface AutomationEnvironmentSnapshot {
 export type ComputerSessionAccess =
   | "interactive-desktop"
   | "native-targeted-accessibility"
+  | "native-targeted-app"
   | "native-targeted-window";
 
 export interface ComputerEnvironmentPort {
@@ -167,6 +168,7 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       this.options.platform === "darwin" &&
       this.#state === "locked" &&
       (access === "native-targeted-accessibility" ||
+        access === "native-targeted-app" ||
         access === "native-targeted-window");
     if (this.#state !== "active" && !scopedLockedAccess)
       throw new Error(

@@ -219,45 +219,44 @@ for (const killMode of ["false", "throw", "error", "true"] as const) {
   }
 }
 
-test("background abort gives the owned helper time to release its pair before closing; no replay", async (t) => {
-  const directory = await mkdtemp(
-    path.join(os.tmpdir(), "zenx-background-release-"),
-  );
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const executable = path.join(directory, "fixture.cjs"),
-    released = path.join(directory, "released");
-  await writeFile(
-    executable,
-    `#!${process.execPath}
+for (const operation of [
+  "backgroundClick",
+  "backgroundType",
+  "backgroundKeyPress",
+])
+  test(`background ${operation} abort waits for owned release and close without replay`, async (t) => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-background-release-"),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "fixture.cjs"),
+      released = path.join(directory, "released");
+    await writeFile(
+      executable,
+      `#!${process.execPath}
 const fs=require('node:fs');let down=false;
 process.on('SIGTERM',()=>{setTimeout(()=>{if(down) fs.writeFileSync(${JSON.stringify(released)},'up');process.exit(0)},50)});
 require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.operation==='select') console.log(JSON.stringify({result:{pid:process.pid}}));else {down=true; console.log(JSON.stringify({phase:'backgroundPairStarted'}));}});
 `,
-    { mode: 0o700 },
-  );
-  const transport = new NativeComputerTargetTransport(async () => executable);
-  t.after(() => transport.close());
-  await transport.request(
-    { operation: "select" },
-    new AbortController().signal,
-  );
-  const controller = new AbortController();
-  const pending = transport.request(
-    { operation: "backgroundClick" },
-    controller.signal,
-  );
-  setTimeout(() => controller.abort(), 100);
-  await assert.rejects(pending, /outcome unknown/);
-  const { readFile } = await import("node:fs/promises");
-  assert.equal(await readFile(released, "utf8"), "up");
-  await assert.rejects(
-    transport.request(
-      { operation: "backgroundClick" },
+      { mode: 0o700 },
+    );
+    const transport = new NativeComputerTargetTransport(async () => executable);
+    t.after(() => transport.close());
+    await transport.request(
+      { operation: "select" },
       new AbortController().signal,
-    ),
-    /no input dispatched/,
-  );
-});
+    );
+    const controller = new AbortController();
+    const pending = transport.request({ operation }, controller.signal);
+    setTimeout(() => controller.abort(), 100);
+    await assert.rejects(pending, /outcome unknown/);
+    const { readFile } = await import("node:fs/promises");
+    assert.equal(await readFile(released, "utf8"), "up");
+    await assert.rejects(
+      transport.request({ operation }, new AbortController().signal),
+      /no input dispatched/,
+    );
+  });
 
 test("background cleanup grace expiry blocks further background input even after explicit reselection", async (t) => {
   const { EventEmitter } = await import("node:events");

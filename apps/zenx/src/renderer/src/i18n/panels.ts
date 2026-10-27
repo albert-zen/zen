@@ -37,6 +37,10 @@ export const en = {
   computerWaitingForHuman: "Waiting for you to take over this window",
   computerForegroundActivity: "Agent is using the current foreground app",
   computerBackgroundActivity: "Agent is working in {{window}}",
+  computerBackgroundAppActivity:
+    "Agent is typing into {{application}}'s current focus; app focus may change",
+  computerApplication: "Computer application",
+  followAgentLatestApplication: "Follow agent's latest application",
   computerActivityUnknown:
     "Computer operation in progress · target mode unknown",
   computerNoCurrentActivity: "No current Agent operation in this window",
@@ -1029,6 +1033,10 @@ export const zhCN = {
   computerWaitingForHuman: "等待你接管此窗口",
   computerForegroundActivity: "Agent 正在操作当前前台应用",
   computerBackgroundActivity: "Agent 正在后台操作 {{window}}",
+  computerBackgroundAppActivity:
+    "Agent 正在向 {{application}} 的当前焦点输入；应用内焦点可能变化",
+  computerApplication: "Computer 应用",
+  followAgentLatestApplication: "跟随 Agent 最近操作的应用",
   computerActivityUnknown: "电脑操作进行中 · 目标模式未知",
   computerNoCurrentActivity: "此窗口当前没有 Agent 操作",
   sideChatModelSettings: "侧会话模型设置",

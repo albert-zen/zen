@@ -260,3 +260,7 @@ windows with nonempty titles and valid geometry when AX windows are unavailable.
 The query is forwarded to native discovery; duplicate PID/title hints are not
 added. Discovery returns existing target hints only; selection still re-reads
 exact window uniqueness, identity and geometry before capture or input.
+
+## Background application keyboard
+
+Native macOS `computer_background_type` and `computer_background_key_press` derive the application identity from this thread’s existing selected binding. Input targets the application’s **current focus**, which may change inside the application; it is not scoped to the original window or control. The separate local-device `computer.app.background_keyboard` permission and an explicit new helper capability are required. Text accepts 1–1024 well-formed Unicode scalars in surrogate-safe chunks; basic keys have no modifiers or clipboard. There is no global activation, pointer movement, wake/unlock or fallback. Posted/release receipts do not prove application effect; partial/unknown input must never be replayed. Old helper capabilities fail before dispatch.

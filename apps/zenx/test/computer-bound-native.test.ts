@@ -167,6 +167,7 @@ test(
       MAC_BOUND_TARGET_SOURCE.slice(0, headerStart) +
       MAC_BOUND_TARGET_SOURCE.slice(headerEnd, windowStart) +
       `func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws { try refuse("Background input is outside the foreground stub fixture") }
+       func backgroundAppKeyboard(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws -> [String: Any] { try refuse("App keyboard is outside the foreground stub fixture") }
        func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] { try refuse("SCK is outside the foreground stub fixture") }
        func lockedSession() throws -> Bool { mode.hasPrefix("locked-") }
       ` +

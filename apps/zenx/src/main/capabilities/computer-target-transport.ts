@@ -48,7 +48,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
     onStopping?: () => void,
   ): Promise<unknown> {
     signal.throwIfAborted();
-    if (request.operation === "backgroundClick" && this.#backgroundUnsafe)
+    if (isBackgroundOperation(request.operation) && this.#backgroundUnsafe)
       throw new Error(
         "Background input release is unknown; replace this provider before further background input; no input dispatched",
       );
@@ -78,7 +78,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
         resolve,
         reject,
         onStopping,
-        background: request.operation === "backgroundClick",
+        background: isBackgroundOperation(request.operation),
         backgroundSettled: false,
         pairStarted: false,
         expectsInputReceipt: !["select", "verify", "capture"].includes(
@@ -268,4 +268,10 @@ export class NativeComputerTargetTransport implements TargetTransport {
       this.#terminate(this.#child, new Error("Computer target session closed"));
     await this.#exit;
   }
+}
+
+function isBackgroundOperation(operation: unknown): boolean {
+  return ["backgroundClick", "backgroundType", "backgroundKeyPress"].includes(
+    String(operation),
+  );
 }

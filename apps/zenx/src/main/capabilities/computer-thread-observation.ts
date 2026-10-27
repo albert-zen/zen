@@ -15,7 +15,12 @@ export interface ComputerThreadTarget {
   mode: "live" | "snapshot";
   pointer?: ComputerActionPointer;
   activity?: {
-    kind: "background-window" | "foreground" | "waiting-human" | "unknown";
+    kind:
+      | "background-window"
+      | "background-app"
+      | "foreground"
+      | "waiting-human"
+      | "unknown";
     count: number;
   };
 }
@@ -77,7 +82,8 @@ export class ComputerThreadObservation {
     target: ComputerTarget,
     kind: NonNullable<ComputerThreadTarget["activity"]>["kind"],
   ): () => void {
-    if (this.#closed || !target.windowTitle) return () => {};
+    if (this.#closed || (!target.windowTitle && kind !== "background-app"))
+      return () => {};
     const key = JSON.stringify([threadId, targetKey(target)]);
     const calls = this.#activities.get(key) ?? new Map();
     calls.set(invocationId, kind);
@@ -117,9 +123,11 @@ export class ComputerThreadObservation {
       ? "foreground"
       : kinds.includes("waiting-human")
         ? "waiting-human"
-        : kinds.includes("background-window")
-          ? "background-window"
-          : "unknown";
+        : kinds.includes("background-app")
+          ? "background-app"
+          : kinds.includes("background-window")
+            ? "background-window"
+            : "unknown";
     return { kind, count: calls.size };
   }
 
@@ -139,7 +147,11 @@ export class ComputerThreadObservation {
     pointer: ComputerActionPointer | undefined,
     freshObservation: boolean,
   ): void {
-    if (this.#closed || !target.windowTitle) return;
+    if (
+      this.#closed ||
+      (!target.windowTitle && !this.#activity(threadId, target))
+    )
+      return;
     const key = targetKey(target);
     const prior = this.#targets.get(threadId) ?? [];
     const existing = prior.find(
@@ -149,7 +161,8 @@ export class ComputerThreadObservation {
       id: existing?.id ?? randomUUID(),
       invocationId,
       target: { ...target },
-      mode: this.#backend.observeWindow ? "live" : "snapshot",
+      mode:
+        target.windowTitle && this.#backend.observeWindow ? "live" : "snapshot",
       ...(this.#activity(threadId, target)
         ? { activity: this.#activity(threadId, target) }
         : {}),
