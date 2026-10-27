@@ -1,3 +1,4 @@
+import { bundledLicenseNotices } from "./scripts/bundled-license-notices.mjs";
 import { readFileSync } from "node:fs";
 import { startupScreenHtml } from "./src/main/startup-screen.js";
 import { defineConfig } from "electron-vite";
@@ -110,6 +111,7 @@ function startupHtml(): string {
 
 export default defineConfig({
   main: {
+    plugins: [bundledLicenseNotices()],
     build: {
       rollupOptions: {
         input: {
@@ -152,6 +154,7 @@ export default defineConfig({
     },
   },
   preload: {
+    plugins: [bundledLicenseNotices()],
     build: {
       rollupOptions: {
         input: {
@@ -169,6 +172,11 @@ export default defineConfig({
     },
   },
   renderer: {
-    plugins: [viteDevelopmentCsp, startupPage, react()],
+    plugins: [
+      viteDevelopmentCsp,
+      startupPage,
+      react(),
+      bundledLicenseNotices(),
+    ],
   },
 });

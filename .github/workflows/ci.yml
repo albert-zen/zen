@@ -339,6 +339,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Prepare and verify the same ordinary macOS portable artifact
+        timeout-minutes: 8
+        env:
+          ZENX_CODESIGN_IDENTITY: "-"
+        run: node --import tsx apps/zenx/scripts/prepare-portable-delivery.mjs --output "${{ runner.temp }}/zenx-portable-delivery"
+      - name: Retain ordinary portable identity and validation only (not binaries)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-portable-identity-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/zenx-portable-delivery/portable-manifest.json
+            ${{ runner.temp }}/zenx-portable-delivery/portable-validation.json
+          if-no-files-found: error
+          retention-days: 14
+
   zenx-windows-computer-smoke:
     name: ZenX Windows WinApp adapter smoke
     runs-on: windows-latest
@@ -440,8 +455,18 @@ jobs:
           if (Test-Path -LiteralPath apps/zenx/out) {
             throw "smoke:packaged wrote shared apps/zenx/out"
           }
-      - name: Package the real ZenX portable app
-        run: npm --workspace apps/zenx run package:portable -- --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
+      - name: Package and verify the same ordinary ZenX portable app
+        timeout-minutes: 8
+        run: node --import tsx apps/zenx/scripts/prepare-portable-delivery.mjs --output "${{ runner.temp }}/zenx-portable-delivery" --downstream "${{ runner.temp }}/zenx-winapp-downstream" --downstream-sha256 "${{ steps.build-downstream.outputs.provenance-sha256 }}"
+      - name: Retain ordinary portable identity and validation only (not binaries)
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-portable-identity-windows-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/zenx-portable-delivery/portable-manifest.json
+            ${{ runner.temp }}/zenx-portable-delivery/portable-validation.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise packaged Chrome native host framing
         run: node apps/zenx/scripts/smoke-chrome-native-host.mjs
       - name: Inspect the portable app without launching it

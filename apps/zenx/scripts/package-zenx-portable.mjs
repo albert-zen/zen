@@ -808,6 +808,10 @@ export async function stagePackage(options) {
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
+    await cp(
+      path.join(options.rootDirectory, "LICENSE"),
+      path.join(options.appDirectory, "LICENSE"),
+    );
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])

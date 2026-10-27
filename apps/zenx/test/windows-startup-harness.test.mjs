@@ -69,8 +69,11 @@ test("native startup CI reuses the single downstream portable package and retain
   assert.equal(owners.length, 1);
   const owner = owners[0];
   assert.equal(owner["runs-on"], "windows-2025");
-  const packageIndex = owner.steps.findIndex((step) =>
-    step.run?.includes("run package:portable -- --downstream "),
+  const packageIndex = owner.steps.findIndex(
+    (step) =>
+      step.run?.includes("scripts/prepare-portable-delivery.mjs") &&
+      step.run.includes("--downstream ") &&
+      step.run.includes("--downstream-sha256 "),
   );
   const startupIndex = owner.steps.findIndex((step) =>
     step.run?.includes("windows-startup-acceptance.ps1"),

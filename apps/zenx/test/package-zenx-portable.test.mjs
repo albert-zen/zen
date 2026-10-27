@@ -932,6 +932,10 @@ test("stages the real app without modifying reusable build output", async () => 
       appDirectory,
       manifestSha256: "fixture-digest",
     });
+    assert.equal(
+      await readFile(path.join(appDirectory, "LICENSE"), "utf8"),
+      "Synthetic repository license",
+    );
 
     assert.equal(await readFile(fixture.integrityFile, "utf8"), placeholder);
     assert.equal(
@@ -1645,6 +1649,10 @@ test("Shell packaging retains platform native resources including Windows ConPTY
 async function writeStorageWriterFixture(rootDirectory) {
   const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
   await stageStorageWriter(realRoot, rootDirectory);
+  await writeFile(
+    path.join(rootDirectory, "LICENSE"),
+    "Synthetic repository license",
+  );
   await cp(
     path.join(realRoot, "package-lock.json"),
     path.join(rootDirectory, "package-lock.json"),

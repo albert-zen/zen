@@ -215,6 +215,11 @@ integrity-checked provider assembly used by `smoke:packaged`:
 npm --workspace apps/zenx run package:portable
 ```
 
+For source/tree/target binding, full-file hashes and validation of the **same
+extracted ordinary app**, see [portable artifact validation](../../docs/portable-artifact-validation.md).
+CI currently retains identity/validation JSON only; full binary redistribution
+remains blocked pending the documented bundled-browser permission decision.
+
 The result is an **unpacked portable directory**, not an installer or a
 single-file executable. On macOS it is signed during packaging with
 `ZENX_CODESIGN_IDENTITY` when configured, a machine-local identity from
