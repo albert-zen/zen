@@ -80,7 +80,7 @@ const providerVariants = new Map([
   ],
   [
     "zenx-computer-plugin-macos-1.4.0.tgz",
-    ["computer", "1.4.0", "macos-desktop", 14],
+    ["computer", "1.4.0", "macos-desktop", 16],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.4.0.tgz",
@@ -166,6 +166,11 @@ test("all packaged Browser and Computer manifests match their runtime observatio
   ]) {
     const manifest = JSON.parse(
       await readFile(path.join(repositoryRoot, "packages", relative), "utf8"),
+    );
+    assert.equal(
+      manifest.runtime.entry,
+      "./dist/runtime.js",
+      "package entry must remain a real bundled file, not the Host's virtual entry",
     );
     for (const field of [
       "version",
@@ -300,7 +305,24 @@ test("all prepared first-party plugins are self-contained ordinary npm tarballs"
             ])
           ).stdout,
         );
+        assert.equal(manifest.runtime.entry, "./dist/runtime.js");
+        assert(
+          files.includes(manifest.runtime.entry.replace(/^\.\//u, "")),
+          "tarball must contain its exact runtime entry",
+        );
         if (filename.includes("computer-plugin")) {
+          assert.equal(
+            manifest.tools.some(
+              ({ name }) => name === "computer_background_type",
+            ),
+            filename.includes("-macos-"),
+          );
+          assert.equal(
+            manifest.permissions.some(
+              ({ id }) => id === "computer.app.background_keyboard",
+            ),
+            filename.includes("-macos-"),
+          );
           assert.equal(
             manifest.tools.some(({ name }) => name === "computer_list_windows"),
             !filename.includes("peekaboo"),

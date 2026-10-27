@@ -15,7 +15,11 @@ import "./browser-computer-experience-visual.css";
 
 const visualParams = new URLSearchParams(location.search);
 const scenario = visualParams.get("scenario") ?? "browser-working";
-const nativeLocked = scenario === "environment-mac-locked";
+const appKeyboard = scenario === "computer-app-background";
+const nativeLocked =
+  scenario === "environment-mac-locked" ||
+  scenario === "computer-app-permission" ||
+  appKeyboard;
 const visualLanguage = visualParams.get("language") === "zh" ? "zh-CN" : "en";
 document.documentElement.dataset.appearance =
   visualParams.get("appearance") === "light" ? "light" : "dark";
@@ -54,21 +58,32 @@ const browserTab: WorkspaceBrowserTab = {
       queueMicrotask(() => {
         listener({
           type: "targets",
-          selectedId: "synthetic-window",
+          selectedId: appKeyboard
+            ? "synthetic-application"
+            : "synthetic-window",
           targets: [
             {
-              id: "synthetic-window",
+              id: appKeyboard ? "synthetic-application" : "synthetic-window",
               invocationId: "synthetic-call",
-              mode: "live",
-              target: { pid: 42, windowTitle: "Example editor" },
-              activity: { kind: "background-window", count: 1 },
+              mode: appKeyboard ? "snapshot" : "live",
+              target: appKeyboard
+                ? {
+                    pid: 42,
+                    applicationName: "Example Notes",
+                    bundleId: "dev.synthetic.notes",
+                  }
+                : { pid: 42, windowTitle: "Example editor" },
+              activity: {
+                kind: appKeyboard ? "background-app" : "background-window",
+                count: 1,
+              },
             },
           ],
         });
         listener({
           type: "status",
-          status: "live",
-          message: "Live window preview",
+          status: appKeyboard ? "idle" : "live",
+          message: appKeyboard ? "" : "Live window preview",
         });
       });
       return () => {};
@@ -118,11 +133,13 @@ void i18n.changeLanguage(visualLanguage).then(() => {
       ? "Browser · Agent working on a page"
       : scenario === "browser-human"
         ? "Browser · human has control"
-        : scenario === "computer-background"
-          ? "Computer · exact background window activity"
-          : nativeLocked || scenario === "environment-locked"
-            ? "Computer settings · locked session"
-            : "Computer settings · unknown session";
+        : appKeyboard
+          ? "Computer · application current-focus keyboard activity"
+          : scenario === "computer-background"
+            ? "Computer · exact background window activity"
+            : nativeLocked || scenario === "environment-locked"
+              ? "Computer settings · locked session"
+              : "Computer settings · unknown session";
   createRoot(root).render(
     <main className="synthetic-stage">
       <p className="synthetic-eyebrow">
@@ -136,7 +153,7 @@ void i18n.changeLanguage(visualLanguage).then(() => {
             tab={browserTab}
             open={true}
           />
-        ) : scenario === "computer-background" ? (
+        ) : scenario === "computer-background" || appKeyboard ? (
           <ComputerThreadPanel threadId="synthetic-thread" active={true} />
         ) : (
           <PluginAccessReview

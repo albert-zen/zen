@@ -9,7 +9,7 @@
   },
   "runtime": {
     "type": "bundled",
-    "entry": "zenx/computer"
+    "entry": "./dist/runtime.js"
   },
   "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Prefer a returned exact window ref with computer_inspect; providers without discovery accept an explicit native window target. Inspect coverage and follow nextCursor alone to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions use exact control refs and native revalidation. Pass since with a retained observation ref for a diff; omit since or set full:true after context compaction/lost context. For retained controls, pass the control ref with an explicit latest observation ref; native action checks still decide freshness. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click. Native background_type/background_key_press derive only the selected application identity from binding and target its current focus; no original-window guarantee. Separate app keyboard permission is required, internal focus may change, and unknown input is never replayed.",
   "provider": {
@@ -72,7 +72,7 @@
   "tools": [
     {
       "name": "computer_background_type",
-      "description": "Type 1–1024 Unicode scalars into this binding's selected application CURRENT FOCUS using target-PID Unicode events. Application-internal focus may change; no exact-window/control guarantee, desktop activation, pointer movement or clipboard. Separate app keyboard permission; native console session including locked. Partial or unknown input must not be replayed. Receipt does not prove application effect.",
+      "description": "Type 1\u20131024 Unicode scalars into this binding's selected application CURRENT FOCUS using target-PID Unicode events. Application-internal focus may change; no exact-window/control guarantee, desktop activation, pointer movement or clipboard. Separate app keyboard permission; native console session including locked. Partial or unknown input must not be replayed. Receipt does not prove application effect.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -197,7 +197,7 @@
     },
     {
       "name": "computer_environment",
-      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
+      "description": "Read the current desktop session and power availability. lockedTools names this provider\u2019s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},

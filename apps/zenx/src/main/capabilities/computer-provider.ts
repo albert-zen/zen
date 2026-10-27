@@ -965,6 +965,15 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       toolName === "computer_background_type" ||
       toolName === "computer_background_key_press"
     ) {
+      const field = toolName === "computer_background_type" ? "text" : "key";
+      if (
+        Object.keys(invocation.arguments).some(
+          (key) => !["bindingId", field].includes(key),
+        )
+      )
+        throw new Error(
+          "App keyboard accepts only bindingId and text/key; no input dispatched",
+        );
       const session = this.#backend.targetSession;
       if (
         !session ||
@@ -4461,7 +4470,7 @@ func backgroundAppKeyboard(_ binding: Binding, _ request: [String: Any], _ poste
   let operation = request["operation"] as? String ?? ""
   let payload = operation == "backgroundType" ? "text" : "key"
   guard Set(request.keys).isSubset(of: Set(["operation", "owner", "bindingId", payload])) else { try refuse("Unexpected app keyboard fields") }
-  let source = CGEventSource(stateID: .privateState)
+  guard let source = CGEventSource(stateID: .privateState) else { try refuse("Could not construct app keyboard event source") }
   var pairs: [(CGEvent, CGEvent, Int)] = []
   if operation == "backgroundType" {
     guard let text = request["text"] as? String else { try refuse("App typing text is required") }

@@ -12,6 +12,7 @@ import {
 import {
   ComputerZenXCapabilityPackage,
   boundComputerCapabilityManifest,
+  selectComputerWindows,
   type ZenXComputerBackend,
 } from "../src/main/capabilities/computer-provider.js";
 import {
@@ -137,11 +138,26 @@ test("model app input consumes only an existing typed binding ref, never raw rou
 
 test("locked Host package uses app lease and independent permission without foreground consent", async () => {
   const f = fixture();
-  await f.session.select("owner", { pid: 7 }, signal);
   const accesses: unknown[] = [];
   const backend = {
     targetSession: f.session,
     nativeAppKeyboard: true,
+    nativeTargetedAccessibility: true,
+    async listWindows(query?: string) {
+      // Synthetic native discovery output, passed through the actual Host's
+      // bounded projection. The independent CG discovery fixture covers UID/AX.
+      return selectComputerWindows(
+        [
+          {
+            pid: 7,
+            applicationName: "Owned",
+            bundleId: "owned.test",
+            windowTitle: "Original window",
+          },
+        ],
+        query,
+      );
+    },
   } as unknown as ZenXComputerBackend;
   const service = new ComputerZenXCapabilityPackage(
     backend,
@@ -164,15 +180,59 @@ test("locked Host package uses app lease and independent permission without fore
       },
     },
   );
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const invoke = (name: string, arguments_: Record<string, unknown>) =>
+    service.invoke(name, {
+      threadId: "owner",
+      callId: name,
+      arguments: arguments_,
+      signal,
+      cwd: "/synthetic",
+    } as never);
+  const listed = projectComputerResult(
+    (await invoke("computer_list_windows", { query: "Owned" })) as Record<
+      string,
+      unknown
+    >,
+    {},
+    refs,
+    "epoch",
+  );
+  const windowRef = (listed.windows as Array<{ ref: string }>)[0]!.ref;
+  const selectArgs = decodeComputerArguments(
+    "computer_select_target",
+    { target: windowRef },
+    refs,
+    "epoch",
+  );
+  const selected = projectComputerResult(
+    (await invoke("computer_select_target", selectArgs)) as Record<
+      string,
+      unknown
+    >,
+    selectArgs,
+    refs,
+    "epoch",
+  );
+  const appArgs = decodeComputerArguments(
+    "computer_background_type",
+    { binding: selected.binding, text: "中文🌙" },
+    refs,
+    "epoch",
+  );
   const result = (await service.invoke("computer_background_type", {
     threadId: "owner",
     callId: "call",
-    arguments: { bindingId: "owned", text: "中文🌙" },
+    arguments: appArgs,
     signal,
     cwd: "/synthetic",
   } as never)) as Record<string, unknown>;
   assert.equal(result.targetScope, "application_current_focus");
-  assert.deepEqual(accesses, ["native-targeted-app"]);
+  assert.deepEqual(accesses, [
+    "native-targeted-accessibility",
+    "native-targeted-accessibility",
+    "native-targeted-app",
+  ]);
   for (const name of [
     "computer_background_type",
     "computer_background_key_press",
