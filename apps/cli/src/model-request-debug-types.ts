@@ -78,6 +78,7 @@ export interface ModelRequestDebugResult {
   nextOffset?: number | null;
   page?: {
     record: ModelRequestDebugSummary;
+    timeline?: TraceTimeline;
     view: ModelRequestDebugView;
     text: string;
     encoding: "utf8" | "base64";
@@ -89,4 +90,23 @@ export interface ModelRequestDebugResult {
     endOffset?: number;
     totalBytes?: number;
   };
+}
+
+export interface TraceTimelinePoint {
+  stage: string;
+  clock: import("../../../src/trace.js").TraceClock | null;
+  recordId: string | null;
+  elapsedMs: number | null;
+  elapsedFrom: string | null;
+  outcome: string | null;
+}
+export interface TraceTimeline {
+  inputs: Array<{
+    requestId: string;
+    clientId: string | null;
+    activation: import("../../../src/trace.js").TraceClock | null;
+    received: import("../../../src/trace.js").TraceClock | null;
+    outcome: string;
+  }>;
+  stages: TraceTimelinePoint[];
 }

@@ -321,7 +321,8 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     const abortResult = abortedSnapshot.items.find(
       (item) => item.type === "tool_result" && item.callId === abortCall.callId,
     );
-    assert.equal(abortResult?.exitCode, 130);
+    assert(abortResult?.type === "tool_result");
+    assert.equal(abortResult.exitCode, 130);
 
     return {
       workerEntry: workerEntry.href,

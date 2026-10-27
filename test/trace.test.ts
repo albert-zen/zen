@@ -309,7 +309,9 @@ test("concurrent per-thread writes keep occurrences and shared content dedup ind
 test("acknowledged evidence survives abrupt process exit with explicit separate clock domains", async () => {
   const { root, store } = await fixture();
   try {
-    const moduleUrl = new URL("../src/trace.ts", import.meta.url).href;
+    const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
+    const moduleUrl = new URL(`../src/trace.${extension}`, import.meta.url)
+      .href;
     const script = `import{FileTraceStore}from ${JSON.stringify(moduleUrl)};const store=new FileTraceStore(${JSON.stringify(store.directory)});const ack=await store.record({threadId:'thread',type:'child',artifacts:[{name:'body',bytes:'acknowledged'}]});if(ack.durability!=='durable')process.exit(2);process.exit(0);`;
     const child = spawn(
       process.execPath,

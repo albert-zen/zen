@@ -3,6 +3,7 @@ import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
   ModelRequestDebugSummary,
+  TraceTimeline,
 } from "../../../cli/src/model-request-debug-types.js";
 import type { ContextItem } from "../../../../src/item-list.js";
 import type { CanonicalItem } from "../../../../src/item.js";
@@ -218,6 +219,7 @@ export function syntheticTraceReader(
       result.page = {
         record,
         view,
+        ...(view === "timeline" ? { timeline: syntheticTimeline(record) } : {}),
         text: text.slice(offset, offset + result.limits.pageCharacters),
         encoding: "utf8",
         availability: "available",
@@ -323,4 +325,60 @@ export function syntheticSemanticItems(
       ];
     return [];
   });
+}
+
+export function syntheticTimeline(
+  record: ModelRequestDebugSummary,
+): TraceTimeline {
+  const clock = (ms: number, domain = "synthetic-host") => ({
+    domain,
+    monotonicNs: String(ms * 1e6),
+    wallTime: new Date(Date.UTC(2026, 9, 27, 0, 10, 0, ms)).toISOString(),
+  });
+  const keys = [
+    "context_preparation_started",
+    "context_preparation_finished",
+    "context_materialize_started",
+    "context_materialize_finished",
+    "context_compile_started",
+    "context_compile_finished",
+    "model_sample_started",
+    "request_prepared",
+    "fetch_invoked",
+    "response_headers",
+    "first_response_bytes",
+    "first_exposed_reasoning",
+    "first_exposed_summary",
+    "first_exposed_text",
+    "model_sample_finished",
+    "raw_eof",
+  ];
+  const times = [
+    10, 84, 20, 65, 66, 80, 85, 90, 94, 210, 225, 250, 320, 375, 1300, 1312,
+  ];
+  return {
+    inputs: [
+      {
+        requestId: "synthetic-activation",
+        clientId: "synthetic-input",
+        activation: clock(4, "synthetic-renderer"),
+        received: clock(9),
+        outcome: "accepted",
+      },
+    ],
+    stages: keys.map((stage, n) => {
+      const missing =
+        (record.dispatch === "blocked" && n >= 8 && n !== 14) ||
+        (record.responseCapture !== "complete" && stage === "raw_eof");
+      return {
+        stage,
+        clock: missing ? null : clock(times[n]!),
+        recordId: missing ? null : `synthetic-stage-${n}`,
+        elapsedMs: !missing && n >= 9 && n !== 14 ? times[n]! - 94 : null,
+        elapsedFrom: n >= 9 && n !== 14 ? "fetch_invoked" : null,
+        outcome:
+          stage === "model_sample_finished" ? record.sampleOutcome : null,
+      };
+    }),
+  };
 }

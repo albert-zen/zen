@@ -423,3 +423,67 @@ test("changing artifact identity never labels old bytes as the newly selected ar
       "1",
     );
   }));
+
+test("production timeline shows compile failure and missing dispatch without inventing a sample", async () => {
+  await withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const trace = new InMemoryTraceStore();
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "prep",
+      type: "context_preparation_started",
+      data: { spanId: "prep" },
+    });
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "prep",
+      type: "context_compile_started",
+      data: { spanId: "compile" },
+    });
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "prep",
+      type: "context_compile_finished",
+      data: { spanId: "compile", outcome: "failed" },
+    });
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "prep",
+      type: "context_preparation_finished",
+      data: { spanId: "prep", outcome: "failed" },
+    });
+    const reader = new ModelRequestDebugStore(trace);
+    connect((command) => reader.control(command));
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
+      ),
+    );
+    await settle();
+    await click("context_preparation_started");
+    const compile = document.querySelector(
+      '[data-timing-stage="context_compile_finished"]',
+    );
+    assert(compile?.textContent?.includes("failed"));
+    assert(
+      document
+        .querySelector('[data-timing-stage="fetch_invoked"]')
+        ?.textContent?.includes("Unobserved"),
+    );
+    assert(
+      document
+        .querySelector('[data-timing-stage="model_sample_started"]')
+        ?.textContent?.includes("Unobserved"),
+    );
+    assert(
+      document
+        .querySelector(".trace-timeline")
+        ?.textContent?.includes("not synchronized"),
+    );
+    assert(
+      document
+        .querySelector(".trace-timeline")
+        ?.textContent?.includes("not hidden thinking"),
+    );
+  });
+});

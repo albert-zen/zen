@@ -1,3 +1,4 @@
+import { traceClock } from "../trace.js";
 import { inspect } from "node:util";
 import type { ModelRequest, ModelRequestObservation } from "../model.js";
 import type {
@@ -211,11 +212,13 @@ export async function fetchObservedModelResponse(options: {
     throw error;
   }
   let pending: Promise<Response>;
+  const invocationClock = traceClock();
   try {
     pending = fetch(url, init);
   } catch (error) {
     await emit({
       type: "request_dispatched",
+      observedClock: invocationClock,
       captureLayer: "fetch-invocation",
       transportAttempt,
     });
@@ -230,11 +233,12 @@ export async function fetchObservedModelResponse(options: {
   }
   // Install rejection handling before any asynchronous disk observation.
   const settled = pending.then(
-    (response) => ({ response }),
+    (response) => ({ response, receivedClock: traceClock() }),
     (error: unknown) => ({ error }),
   );
   await emit({
     type: "request_dispatched",
+    observedClock: invocationClock,
     captureLayer: "fetch-invocation",
     transportAttempt,
   });
@@ -252,6 +256,7 @@ export async function fetchObservedModelResponse(options: {
   const response = outcome.response;
   await emit({
     type: "response_headers",
+    observedClock: outcome.receivedClock,
     captureLayer: "fetch-response-body",
     transportAttempt,
     status: response.status,

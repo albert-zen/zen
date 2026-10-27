@@ -522,20 +522,13 @@ test("dispatch fence orders a concurrent permission edit after synchronous targe
   });
   await inFence.promise;
   const permissions = f.app.setThreadPermissions(f.thread.id, "read-only");
-  const rejection = assert.rejects(
-    permissions,
-    (error) =>
-      error instanceof Error && "code" in error && error.code === "thread_busy",
-  );
   release.resolve();
   const result = await executing;
-  await rejection;
+  await permissions;
   assert.equal(effects, 1);
   assert.equal(result.status, "running");
-  assert.equal(
-    (await f.app.readThread(f.thread.id)).sandbox,
-    "danger-full-access",
-  );
+  assert.equal((await f.app.readThread(f.thread.id)).sandbox, "read-only");
+  // Revocation affects future admission, not an already registered effect.
   assert.equal(f.app.activitySnapshot().activeToolTasks, 1);
   assert.equal(f.app.activitySnapshot().rootOperations.length, 0);
   finish.resolve();

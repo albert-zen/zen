@@ -733,7 +733,11 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         }
       }
       resolveSidebarScope(threadId, scope.effectiveScope, this.#sidebarRooms());
-      const result = await this.#sidebar.update(request, admit);
+      const result = await this.#sidebar.update(request, admit, {
+        kind: "tool",
+        threadId,
+        callId: invocation.callId,
+      });
       return {
         source: "zenx.sidebar-state",
         visibility: "not-observed",

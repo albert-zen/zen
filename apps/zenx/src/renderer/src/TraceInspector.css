@@ -201,3 +201,30 @@
     min-height: 44px;
   }
 }
+.trace-timeline {
+  min-width: 0;
+  margin-bottom: 20px;
+}
+.trace-timeline :is(p, dd, dt, time, small) {
+  overflow-wrap: anywhere;
+}
+.trace-timeline dl {
+  margin: 12px 0;
+}
+.trace-timeline dd {
+  margin: 4px 0 12px;
+}
+.trace-timeline dt {
+  font-weight: 600;
+}
+.trace-timeline small {
+  display: block;
+  color: var(--color-text-secondary);
+}
+.trace-timeline-stages > div {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-control);
+}
+.trace-timeline-input {
+  padding: 8px 0;
+}

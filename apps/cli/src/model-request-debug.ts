@@ -1,3 +1,9 @@
+import {
+  buildTraceTimeline,
+  observedTraceClock,
+  clockElapsed,
+  relatedTimelineRecords,
+} from "./trace-timeline.js";
 import type {
   TraceArtifactRef,
   TraceReader,
@@ -138,13 +144,7 @@ function indexRecords(records: TraceRecord[]): Index {
   return { records, byId, samples };
 }
 function elapsed(from?: TraceRecord, to?: TraceRecord): number | null {
-  if (!from || !to || from.clock.domain !== to.clock.domain) return null;
-  try {
-    const ns = BigInt(to.clock.monotonicNs) - BigInt(from.clock.monotonicNs);
-    return ns < 0n ? null : Number(ns) / 1e6;
-  } catch {
-    return null;
-  }
+  return clockElapsed(observedTraceClock(from), observedTraceClock(to));
 }
 function summarize(r: TraceRecord, index: Index): ModelRequestDebugSummary {
   const s = index.samples.get(sampleKey(r)),
@@ -306,6 +306,18 @@ export class ModelRequestDebugStore {
             r.type !== "model_request" &&
             r.type !== "model_input" &&
             !(
+              r.type === "context_preparation_started" &&
+              !index.samples
+                .get(sampleKey(r))
+                ?.records.some((x) =>
+                  [
+                    "model_request",
+                    "model_input",
+                    "model_dispatch_blocked",
+                  ].includes(x.type),
+                )
+            ) &&
+            !(
               r.type === "model_dispatch_blocked" &&
               !index.samples
                 .get(sampleKey(r))
@@ -421,6 +433,14 @@ export class ModelRequestDebugStore {
     result.page = {
       record: summarize(r, index),
       view,
+      ...(view === "timeline"
+        ? {
+            timeline: buildTraceTimeline(
+              r,
+              relatedTimelineRecords(r, index.records),
+            ),
+          }
+        : {}),
       ...payload,
       text: payload.text.slice(offset, end),
       offset,
@@ -541,7 +561,8 @@ export class ModelRequestDebugStore {
       text: JSON.stringify(value, null, 2),
       encoding: "utf8" as const,
     });
-    if (view === "timeline") return json(s?.records ?? [r]);
+    if (view === "timeline")
+      return json(relatedTimelineRecords(r, index.records));
     if (view === "configuration")
       return json({
         frozenSample: s?.start?.data ?? null,

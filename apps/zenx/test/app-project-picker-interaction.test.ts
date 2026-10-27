@@ -2459,11 +2459,11 @@ test("native queue admission failure belongs to its queued Item and latest attem
 });
 
 test("running queue, soft steer and hard steer each own one pending admission", async () => {
-  for (const [mode, method, label] of [
-    ["batch", "zen/turn/send", "Next turn"],
-    ["queue", "turn/queue", "Each turn"],
-    ["soft", "zen/turn/send", "Steer now"],
-    ["hard", "turn/replace", "Interrupt and send"],
+  for (const [mode, wireMode, label] of [
+    ["batch", "batch-next", "Next turn"],
+    ["queue", "queue", "Each turn"],
+    ["soft", undefined, "Steer now"],
+    ["hard", "replace", "Interrupt and send"],
   ] as const) {
     const response = deferred<unknown>();
     let calls = 0;
@@ -2472,14 +2472,12 @@ test("running queue, soft steer and hard steer each own one pending admission", 
       request: async (requestedMethod, params) => {
         if (requestedMethod === "zen/thread/resume")
           return resumed(runningThread());
-        if (requestedMethod === method) {
-          if (mode === "soft") {
-            assert.equal((params as { mode?: string }).mode, undefined);
-            assert.equal(
-              (params as { expectedTurnId?: string }).expectedTurnId,
-              undefined,
-            );
-          }
+        if (requestedMethod === "zen/turn/send") {
+          assert.equal((params as { mode?: string }).mode, wireMode);
+          assert.equal(
+            (params as { expectedTurnId?: string }).expectedTurnId,
+            mode === "hard" ? "turn-1" : undefined,
+          );
           calls += 1;
           return await response.promise;
         }
@@ -2504,6 +2502,86 @@ test("running queue, soft steer and hard steer each own one pending admission", 
       await unmountApp(harness);
     }
   }
+});
+
+test("passive UI activation pending or failed never gates admission or consumes another draft", async (t) => {
+  const diagnostic = t.mock.method(console, "error", () => {});
+  for (const capture of ["pending", "degraded", "rejected"] as const) {
+    const receipt = deferred<{ observed: boolean }>();
+    const admission = deferred<unknown>();
+    const activations: Array<{ observation: unknown }> = [];
+    const sends: Array<{
+      clientObservation: unknown;
+      clientUserMessageId: string;
+    }> = [];
+    const harness = await mountThreadApp({
+      observeActivation: async (params) => {
+        activations.push(params as { observation: unknown });
+        if (capture === "pending") return receipt.promise;
+        if (capture === "rejected") throw Error("synthetic Trace unavailable");
+        return { observed: false };
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") return resumed(runningThread());
+        assert.equal(method, "zen/turn/send");
+        assert.equal((params as { mode: string }).mode, "queue");
+        sends.push(params as (typeof sends)[number]);
+        return admission.promise;
+      },
+    });
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "original");
+      const button = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Each turn"]'),
+      );
+      await invokePrimarySubmit(button, 2);
+      assert.equal(
+        sends.length,
+        1,
+        "pending admission still deduplicates repeated submit",
+      );
+      assert.equal(
+        activations.length,
+        2,
+        "each actual handler activation is observed, not each admission",
+      );
+      assert.deepEqual(
+        sends[0]!.clientObservation,
+        activations[0]!.observation,
+      );
+      assert.equal(
+        composer.value,
+        "original",
+        "observation cannot consume a draft",
+      );
+      assert.equal(document.querySelector(".composer-error"), null);
+      await setTextareaValue(composer, "new draft");
+      await act(async () => {
+        admission.resolve({});
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      assert.equal(
+        composer.value,
+        "new draft",
+        "late admission keeps newer draft generation",
+      );
+      assert.equal(sends.length, 1, "failed observation never resends input");
+      assert.equal(document.querySelector(".composer-error"), null);
+    } finally {
+      await act(async () => {
+        receipt.resolve({ observed: true });
+        await Promise.resolve();
+      });
+      await unmountApp(harness);
+    }
+  }
+  assert.equal(
+    diagnostic.mock.callCount(),
+    4,
+    "both activations in each degraded/rejected case produce explicit diagnostics",
+  );
 });
 
 for (const path of [
@@ -2534,7 +2612,8 @@ for (const path of [
       },
       request: async (method, params) => {
         if (method === "zen/thread/resume") return resumed(runningThread());
-        if (method === "turn/queue") {
+        if (method === "zen/turn/send") {
+          assert.equal((params as { mode?: string }).mode, "queue");
           clientId = (params as { clientUserMessageId: string })
             .clientUserMessageId;
           return await response.promise;
@@ -3971,6 +4050,7 @@ async function mountApp(
       visible: boolean,
     ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string, params?: unknown): Promise<unknown>;
+    observeActivation?(params: unknown): Promise<{ observed: boolean }>;
     observeTitle?(): Promise<undefined>;
     pickImages?(): Promise<ZenXImageDraft[]>;
     threads?(archived: boolean): Promise<NativeThreadSummary[]>;
@@ -4009,6 +4089,10 @@ async function mountApp(
       getPendingApprovals: async () => [],
       request: async (method: string, params?: unknown) => {
         if (method === "zen/initialize") return { processEpoch: "test-host" };
+        // Passive evidence is not an input-admission call. Scenarios can fail or
+        // hold its reply independently without changing the native send mock.
+        if (method === "zen/trace/client-activation")
+          return options.observeActivation?.(params) ?? { observed: true };
         if (method === "model/list")
           return {
             data: options.models ?? [wireModel("fake", true)],

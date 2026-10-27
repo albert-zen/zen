@@ -10,6 +10,7 @@ import {
 } from "./workspace-external-open.js";
 import type { SidebarOwner } from "../thread-sidebar-state.js";
 import { ThreadSidebarStore } from "./thread-sidebar-store.js";
+import { FileTraceStore } from "../../../../src/trace.js";
 import { createModelRequestDebugHandler } from "./model-request-debug-ipc.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
@@ -234,6 +235,7 @@ if (nativeHostCaller !== undefined) {
 
 let mainWindowDiagnostics: OperationalDiagnosticLog | undefined;
 let appServerManager: AppServerManager | undefined;
+let threadSidebarStore: ThreadSidebarStore | undefined;
 let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
@@ -422,13 +424,16 @@ async function bootstrapZenX(): Promise<void> {
   const skills = new SkillsService(zenDataDirectory);
   const threadSidebar = new ThreadSidebarStore(
     join(zenDataDirectory, "product-state", "sidebars"),
+    undefined,
+    new FileTraceStore(join(zenDataDirectory, "trace")),
   );
+  threadSidebarStore = threadSidebar;
   ipcMain.handle(
     ipcChannels.threadSidebarRead,
     (_event, owner: SidebarOwner | string) => threadSidebar.read(owner),
   );
   ipcMain.handle(ipcChannels.threadSidebarUpdate, (_event, request) =>
-    threadSidebar.update(request),
+    threadSidebar.update(request, undefined, { kind: "ui" }),
   );
   threadSidebar.onChanged((state) => {
     for (const window of appWindows())
@@ -1314,6 +1319,11 @@ async function stopZenXHost(): Promise<void> {
   }
   try {
     await capabilityService?.close();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    await threadSidebarStore?.close();
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }

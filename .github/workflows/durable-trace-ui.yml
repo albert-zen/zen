@@ -5,6 +5,11 @@ on:
     paths:
       - .github/workflows/durable-trace-ui.yml
       - apps/cli/src/model-request-debug*.ts
+      - apps/cli/src/trace-timeline.ts
+      - src/trace-model.ts
+      - src/trace-observation.ts
+      - src/client-observation.ts
+      - src/model/request-observation.ts
       - apps/zenx/src/renderer/src/**
       - apps/zenx/src/main/model-request-debug-ipc.ts
       - apps/zenx/test/fixtures/durable-trace*.ts*

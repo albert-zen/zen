@@ -56,3 +56,38 @@ Accepted queue or cancellation is not model completion; ambiguous replies remain
 unknown. Malformed optional timing cannot change input authority. Capture failures
 are explicitly reported, but these passive observations neither authorize replay
 nor replace the durable control facts that govern admission.
+
+The timing reader pairs exact sample/span IDs and shows preparation, semantic
+materialization and compilation separately from adapter sampling. It associates
+admitted input client IDs without asserting that each input caused the sample.
+For one selected transport attempt it shows actual Fetch invocation, headers,
+first nonempty response bytes, first nonempty exposed reasoning/summary/text,
+sample finish and raw EOF independently. Empty deltas and opaque continuation are
+not exposed reasoning. Older missing markers stay unobserved. Fetch/header boundary
+clocks are captured before awaiting their recording; no observation await is placed
+between the final authorization check and Fetch. Same-clock intervals include local
+capture/processing and provider work, not DNS/TLS/server-queue decomposition or
+exact model token-generation timing.
+
+## Sidebar committed state facts
+
+The existing main-owned `ThreadSidebarStore` reads committed `sidebar_state_changed`
+patch/state facts from the same `.zen/trace` facility, in partitions derived from the
+existing typed Thread/Room owner key. These partitions are not Agent Threads. The
+existing revision is still only the sidebar CAS contract; no general version ledger,
+scheduler or model Item is added. The current map and tagged JSON snapshot are caches.
+Durable acknowledgement precedes cache publication and notifications. An unconfirmed
+append fails the request and invalidates its cached projection; the next read reconciles
+the exact log before another CAS decision, never automatically repeats a side effect.
+A corrupt/inconsistent log does not fall back to a snapshot. A cache write failure after
+a durable fact is diagnostic, not a rollback or failed state change.
+
+A pre-existing untagged sidebar snapshot seeds one `sidebar_state_imported` fact with
+its exact source bytes and explicit legacy-file provenance. Its original activation
+time is unavailable; the record clock is import time, not a fabricated historical UI
+click. A tagged cache cannot seed missing authority. UI IPC fixes source to `ui`, and
+self-control fixes source to `tool` plus its trusted invocation Thread/call IDs. Neither
+label claims a human actor; renderer payloads cannot submit arbitrary source facts.
+Owner isolation, Room scope checks, admission timing, tabs and stale-CAS behavior are
+unchanged. Shutdown fences new sidebar calls, drains admitted owner queues and flushes
+the same Trace writer before exit.

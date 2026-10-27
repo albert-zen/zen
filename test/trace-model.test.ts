@@ -252,3 +252,65 @@ test("capture failure warnings are bounded per continuous writer episode, not fe
     console.error = original;
   }
 });
+
+test("first content observations are nonempty exposed events with exact transport attempt", async () => {
+  const records: import("../src/trace.js").TraceEvent[] = [];
+  const trace: RuntimeTrace = {
+    async record(event) {
+      records.push(event);
+      return {
+        durability: "durable",
+        recordId: String(records.length),
+        sequence: records.length,
+        sync: "file",
+      };
+    },
+  };
+  const model = observeModelWithTrace(
+    {
+      provider: "synthetic",
+      async *stream(input) {
+        await input.onTransport?.({
+          type: "request_dispatched",
+          captureLayer: "fetch-invocation",
+          transportAttempt: 2,
+        });
+        yield { type: "text_delta", delta: "" };
+        yield {
+          type: "reasoning_content_delta",
+          reasoningId: "reason",
+          delta: "exposed",
+        };
+        yield {
+          type: "reasoning_summary_delta",
+          reasoningId: "reason",
+          delta: "summary",
+        };
+        yield { type: "text_delta", delta: "visible" };
+        yield {
+          type: "reasoning",
+          reasoningContent: "opaque continuation",
+          contentVisibility: "opaque",
+        };
+      },
+    },
+    trace,
+  );
+  for await (const _event of model.stream(request())) {
+    /* consume synthetic adapter */
+  }
+  const observed = records
+    .filter((r) => r.type === "model_event")
+    .map((r) => r.data as Record<string, unknown>);
+  assert(observed.every((r) => r.transportAttempt === 2));
+  assert.deepEqual(
+    observed.map((r) => [r.exposedText, r.exposedReasoning, r.exposedSummary]),
+    [
+      [false, false, false],
+      [false, true, false],
+      [false, false, true],
+      [true, false, false],
+      [false, false, false],
+    ],
+  );
+});

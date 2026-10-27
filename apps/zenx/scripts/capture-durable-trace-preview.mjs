@@ -102,6 +102,31 @@ await withPreviewBrowser(
             "document.querySelector('.trace-inspector-payload').textContent.includes('read-only')",
           );
           await screenshot(`${name}-frozen-settings.png`);
+          await activate(button(lang === "en" ? "Timeline" : "时间线"));
+          await wait(
+            "document.querySelectorAll('[data-timing-stage]').length === 16",
+          );
+          assert(
+            await evaluate(
+              "document.querySelector('[data-timing-stage=first_exposed_text]').textContent.includes('281.000 ms')",
+            ),
+          );
+          assert(
+            await evaluate(
+              "document.querySelector('.trace-timeline').textContent.includes('DNS/TLS')",
+            ),
+          );
+          assert(
+            await evaluate(
+              "document.documentElement.scrollWidth <= innerWidth",
+            ),
+          );
+          await screenshot(`${name}-timing-milestones.png`);
+          await evaluate(
+            "document.querySelector('[data-timing-stage=raw_eof]').scrollIntoView({block:'end'})",
+          );
+          await screenshot(`${name}-timing-first-content-eof.png`);
+
           await activate(
             button(lang === "en" ? "Back to records" : "返回记录"),
           );
@@ -136,6 +161,7 @@ await withPreviewBrowser(
             theme,
             rawEscaped: true,
             frozenSettings: true,
+            separateClocksAndFirstContent: true,
             dualOutcome: true,
             blockedNotSent: true,
             keyboardBackFocus: true,

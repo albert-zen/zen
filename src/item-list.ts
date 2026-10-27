@@ -149,6 +149,7 @@ const metadataKeys = new Set([
   "omittedMedia",
   "summaryOffset",
   "summaryLength",
+  "historicalSnapshot",
 ]);
 
 /** Strict at the writer boundary: unknown runtime variants/fields cannot leak into ItemList. */
@@ -182,6 +183,11 @@ export function decodeContextItem(value: unknown): ContextItem {
     for (const key of Object.keys(metadata))
       if (!metadataKeys.has(key))
         throw new Error(`Nonsemantic source metadata: ${key}`);
+    if (
+      metadata.historicalSnapshot !== undefined &&
+      (metadata.historicalSnapshot !== true || item.kind !== "tool_result")
+    )
+      throw Error("Invalid historical snapshot receipt metadata");
     for (const field of ["summaryOffset", "summaryLength"])
       if (
         metadata[field] !== undefined &&
@@ -471,7 +477,29 @@ export function compileItemList(
       !replaceableSources.has(item.source.kind) ||
       latestSources.get(item.source.kind) === item,
   );
-  selected = orderSteeredContext(selected);
+  const callKey = (
+    item: Extract<ContextItem, { kind: "tool_call" | "tool_result" }>,
+  ) => `${item.turnId}\0${item.content.callId}`;
+  const allCalls = new Set(
+    validated.flatMap((item) =>
+      item.kind === "tool_call" ? [callKey(item)] : [],
+    ),
+  );
+  const selectedCalls = new Set(
+    selected.flatMap((item) =>
+      item.kind === "tool_call" ? [callKey(item)] : [],
+    ),
+  );
+  // A fork closure follows the selection of its historical call, even if the
+  // closure fact itself was appended after the selected compaction boundary.
+  selected = selected.filter(
+    (item) =>
+      item.kind !== "tool_result" ||
+      item.source.metadata?.historicalSnapshot !== true ||
+      !allCalls.has(callKey(item)) ||
+      selectedCalls.has(callKey(item)),
+  );
+  selected = orderSteeredContext(orderSnapshotReceipts(selected));
   const selectedItemIds: string[] = [];
   const supportedMedia = new Set(
     options.inputModalities ?? ["text", "image", "audio"],
@@ -682,6 +710,57 @@ export {
   legacyItemFromContext,
   contextAnnotationFromLegacy,
 } from "./item-list-legacy.js";
+
+/** A copied non-executed closure belongs to its original call batch, not the fork tail. */
+function orderSnapshotReceipts(
+  items: readonly ContextItem[],
+): readonly ContextItem[] {
+  type Receipt = Extract<ContextItem, { kind: "tool_result" }>;
+  const receipts = items.filter(
+    (item): item is Receipt =>
+      item.kind === "tool_result" &&
+      item.source.metadata?.historicalSnapshot === true,
+  );
+  if (receipts.length === 0) return items;
+  const ids = new Set(receipts.map((item) => item.id));
+  const base = items.filter((item) => !ids.has(item.id));
+  const key = (
+    item: Extract<ContextItem, { kind: "tool_call" | "tool_result" }>,
+  ) => `${item.turnId}\0${item.content.callId}`;
+  const groups = new Map<string, { anchor: number; receipts: Receipt[] }>();
+  for (let index = 0; index < base.length; index++) {
+    if (base[index]?.kind !== "tool_call") continue;
+    const group = { anchor: index, receipts: [] as Receipt[] };
+    while (base[index]?.kind === "tool_call") {
+      const call = base[index]!;
+      if (call.kind === "tool_call") groups.set(key(call), group);
+      group.anchor = index++;
+    }
+    index--;
+  }
+  for (const [index, item] of base.entries()) {
+    if (item.kind !== "tool_result") continue;
+    const group = groups.get(key(item));
+    if (group) group.anchor = Math.max(group.anchor, index);
+  }
+  for (const receipt of receipts) {
+    const group = groups.get(key(receipt));
+    // Never drop a persisted receipt whose original call is outside this selection.
+    if (!group) return items;
+    group.receipts.push(receipt);
+  }
+  const insertions = new Map<number, Receipt[]>();
+  for (const group of new Set(groups.values()))
+    if (group.receipts.length)
+      insertions.set(group.anchor, [
+        ...(insertions.get(group.anchor) ?? []),
+        ...group.receipts,
+      ]);
+  return base.flatMap((item, index) => [
+    item,
+    ...(insertions.get(index) ?? []),
+  ]);
+}
 
 /** Select original persisted user contents after their observed assistant/tool boundary. */
 function orderSteeredContext(items: readonly ContextItem[]): ContextItem[] {

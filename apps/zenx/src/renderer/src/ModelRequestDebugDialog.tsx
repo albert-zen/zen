@@ -1,3 +1,4 @@
+import { TraceTimeline } from "./TraceTimeline.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -317,7 +318,12 @@ function TraceReaderPanel({ threadId = "", currentSettings, onClose }: Props) {
                 selectedButton.current = e.currentTarget;
                 focusDetail.current = true;
                 setOffsets([]);
-                select(r, mode === "events" ? "timeline" : "payload");
+                select(
+                  r,
+                  mode === "events" || r.type === "context_preparation_started"
+                    ? "timeline"
+                    : "payload",
+                );
               }}
             >
               <span>
@@ -405,7 +411,7 @@ function TraceReaderPanel({ threadId = "", currentSettings, onClose }: Props) {
                     ["tools", tr("Tool definitions", "工具定义")],
                     ["configuration", tr("Frozen settings", "冻结设置")],
                     ["output", tr("Response bytes", "响应字节")],
-                    ["timeline", tr("Sample events", "样本事件")],
+                    ["timeline", tr("Timeline & events", "时间线与事件")],
                     ["artifact", tr("Original artifact", "原始内容")],
                   ] as [ModelRequestDebugView, string][]
                 ).map(([view, label]) => (
@@ -474,6 +480,9 @@ function TraceReaderPanel({ threadId = "", currentSettings, onClose }: Props) {
                 </button>
               </div>
               <div className="trace-inspector-detail-scroll">
+                {page.view === "timeline" && page.timeline ? (
+                  <TraceTimeline timeline={page.timeline} zh={zh} />
+                ) : null}
                 <RequestContent
                   key={`${record.id}:${page.view}:${page.offset}:${artifactIndex}:${presentation}`}
                   text={page.text}

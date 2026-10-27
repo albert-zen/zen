@@ -1,3 +1,4 @@
+import type { TraceClock } from "../trace.js";
 /** Portable observation contracts. No Node or transport implementation imports. */
 export type ModelDispatchRevocationReason =
   "provider_revoked" | "account_changed" | "auth_session_changed";
@@ -32,7 +33,11 @@ export type ModelTransportObservation = Attempt &
         bodyType: string;
         offset: 0;
       }
-    | { type: "request_dispatched"; captureLayer: "fetch-invocation" }
+    | {
+        type: "request_dispatched";
+        captureLayer: "fetch-invocation";
+        observedClock?: TraceClock;
+      }
     | {
         type: "dispatch_blocked";
         captureLayer: "fetch-request-input";
@@ -42,6 +47,7 @@ export type ModelTransportObservation = Attempt &
       }
     | {
         type: "response_headers";
+        observedClock?: TraceClock;
         captureLayer: "fetch-response-body";
         status: number;
         statusText: string;

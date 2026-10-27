@@ -21,7 +21,7 @@ export class ModelReferenceBudgetError extends Error {
     this.name = "ModelReferenceBudgetError";
   }
 }
-const REF = /^[rs][1-9][0-9]*$/u;
+const REF = /^[rcst][1-9][0-9]*$/u;
 const fields = new Set([
   "ref",
   "ownerThreadId",

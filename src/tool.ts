@@ -396,6 +396,7 @@ export interface ToolTargetRouter {
 }
 
 interface PreparedRuntimeRegistration {
+  generation?: string;
   admission?: { policy: ToolPolicy; scope?: ToolApprovalScope };
   runtime?: ToolRuntime;
   route?: ToolTargetRoute;
@@ -828,6 +829,7 @@ export class ToolEnvironment {
     });
     this.#preparedRuntimes.set(prepared, {
       runtime: registration.runtime,
+      generation: registration.generation,
       release: registration.bundle.retainPreparedInvocation?.(),
       released: false,
     });
@@ -1058,6 +1060,7 @@ export class ToolEnvironment {
     const registration = this.#requirePrepared(prepared);
     const runtime = registration.runtime;
     let retained = false;
+    let invocationObserved: Promise<void> | undefined;
     try {
       prepared.invocation.signal.throwIfAborted();
       if (
@@ -1073,14 +1076,30 @@ export class ToolEnvironment {
           )} input required by ${prepared.invocation.name}`,
         );
       }
-      // Do not introduce an await(undefined) into the historical no-Trace launch path.
+      // Start passive capture without yielding the caller's final dispatch fence.
+      // Actual task registration/body launch must remain synchronous through its
+      // first await; join this observation before returning, not before launch.
       if (prepared.invocation.traceOutput)
-        await prepared.invocation.traceOutput.recordInvocation({
-          name: prepared.invocation.name,
-          arguments: prepared.invocation.arguments,
-          cwd: prepared.invocation.cwd,
-          sandbox: prepared.invocation.sandbox,
-        });
+        invocationObserved = prepared.invocation.traceOutput
+          .recordInvocation({
+            name: prepared.invocation.name,
+            arguments: prepared.invocation.arguments,
+            cwd: prepared.invocation.cwd,
+            sandbox: prepared.invocation.sandbox,
+            owner: { ...prepared.owner },
+            dispatch: registration.route === undefined ? "local" : "routed",
+            definitionName: prepared.definition.name,
+            executionMode: prepared.executionMode,
+            ...(registration.generation === undefined
+              ? {}
+              : { registrationGeneration: registration.generation }),
+            ...(prepared.approvalScope === undefined
+              ? {}
+              : { approvalScope: { ...prepared.approvalScope } }),
+          })
+          .catch((error) => {
+            console.error("Tool invocation Trace observation failed", error);
+          });
       if (registration.route !== undefined) {
         const result = await registration.route.execute();
         if (prepared.invocation.traceOutput)
@@ -1093,7 +1112,8 @@ export class ToolEnvironment {
             "Remote execution supports text/JSON results only",
           );
         try {
-          return registration.route.resultEnvelope === "tool-task"
+          return registration.route.resultEnvelope === "tool-task" &&
+            result.contentType === TOOL_TASK_CONTENT_TYPE
             ? normalizeTargetToolTaskResult(result, prepared.owner)
             : normalizeToolExecutionResult(result, prepared.owner);
         } catch (error) {
@@ -1172,6 +1192,7 @@ export class ToolEnvironment {
         throw error;
       }
     } finally {
+      if (invocationObserved !== undefined) await invocationObserved;
       if (!retained) this.#releasePrepared(prepared);
     }
   }

@@ -106,9 +106,12 @@ export function observeModelWithTrace(
           },
           "model-adapter-input",
         );
+      let transportAttempt: number | undefined;
       const observed: ModelRequest = {
         ...request,
         onTransport: async (event) => {
+          if (event.type === "request_dispatched")
+            transportAttempt = event.transportAttempt;
           await recordModelTransport(trace, context, event);
           if (request.onTransport)
             try {
@@ -135,6 +138,20 @@ export function observeModelWithTrace(
               type: "model_event",
               data: {
                 eventType: event.type,
+                ...(transportAttempt === undefined ? {} : { transportAttempt }),
+                exposedText:
+                  event.type === "text_delta" && event.delta.length > 0,
+                exposedReasoning:
+                  (event.type === "reasoning_content_delta" &&
+                    event.delta.length > 0) ||
+                  (event.type === "reasoning" &&
+                    event.contentVisibility === "public" &&
+                    event.reasoningContent.length > 0),
+                exposedSummary:
+                  (event.type === "reasoning_summary_delta" &&
+                    event.delta.length > 0) ||
+                  (event.type === "reasoning" &&
+                    (event.summary?.length ?? 0) > 0),
                 captureLayer: "model-adapter-event",
               },
             },

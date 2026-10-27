@@ -489,3 +489,62 @@ test("agentic reset persists exact source exclusions, keeps unseen steering and 
     "  exact continuation  ",
   );
 });
+
+test("historical fork receipts close their original batch before later context without rewriting stored Items", () => {
+  const facts: CanonicalItem[] = [
+    {
+      ...base,
+      id: "call-a",
+      type: "tool_call",
+      callId: "a",
+      name: "read",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "call-b",
+      type: "tool_call",
+      callId: "b",
+      name: "read",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "result-b",
+      type: "tool_result",
+      callId: "b",
+      output: "observed",
+      exitCode: 0,
+    },
+    {
+      ...base,
+      id: "later",
+      type: "agent_message",
+      text: "Later selected answer",
+    },
+    {
+      ...base,
+      id: "snapshot-a",
+      type: "tool_result",
+      callId: "a",
+      output: "Historical snapshot; not executed",
+      exitCode: null,
+      contentType: "zen.side-chat-tool-snapshot.v1",
+      structuredContent: { status: "snapshot", executed: false },
+    },
+  ];
+  const items = facts.flatMap((item, index) =>
+    contextItemsFromLegacy(item, facts.slice(0, index)),
+  );
+  const before = JSON.stringify(items);
+  const compiled = compileItemList(items);
+  assert.deepEqual(compiled.selectedItemIds, [
+    "call-a",
+    "call-b",
+    "result-b",
+    "snapshot-a",
+    "later",
+  ]);
+  assert.equal(JSON.stringify(items), before);
+  assert.equal(items.at(-1)?.source.metadata?.historicalSnapshot, true);
+});

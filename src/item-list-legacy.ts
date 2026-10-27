@@ -1,6 +1,8 @@
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 /** Explicit legacy boundary: these mixed Items are never written to the semantic store. */
 import {
   contentFromUserMessage,
+  SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   decodeCanonicalItem,
   textFromUserInput,
   type CanonicalItem,
@@ -141,6 +143,8 @@ export function contextItemsFromLegacy(
         }),
       ];
     case "tool_result": {
+      if (item.contentType === SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE)
+        metadata.historicalSnapshot = true;
       const call = previous.findLast(
         (candidate) =>
           candidate.type === "tool_call" &&
@@ -193,6 +197,28 @@ export function contextItemsFromLegacy(
           parent = parents.get(parent);
         }
         if (parent !== item.callId) continue;
+        const state = candidate.structuredContent;
+        if (
+          candidate.contentType === TOOL_TASK_CONTENT_TYPE &&
+          state !== null &&
+          typeof state === "object" &&
+          !Array.isArray(state) &&
+          "status" in state &&
+          [
+            "queued",
+            "running",
+            "cancel_requested",
+            "cancellation_unconfirmed",
+          ].includes(String(state.status))
+        ) {
+          // A terminated program cannot forward a still-observable child. The
+          // receipt's generated task handle is typed; never label it with a raw call ID.
+          parts.push({
+            type: "text",
+            text: `Nested tool remains observable:\n${candidate.output}`,
+          });
+          origins.push(null);
+        }
         for (const [index, part] of (candidate.modelContent ?? []).entries()) {
           if (
             part.type !== "text" &&
@@ -434,6 +460,7 @@ export function legacyItemFromContext(
     "originalModelContentLength",
     "summaryOffset",
     "summaryLength",
+    "historicalSnapshot",
   ])
     delete metadata[key];
   Object.assign(base, metadata, { type: kind });

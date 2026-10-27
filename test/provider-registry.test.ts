@@ -537,7 +537,7 @@ test("keeps opaque model keys stable and round-trippable", () => {
   );
 });
 
-test("freezes an active Turn selection while a concurrent change applies to the next Turn", async () => {
+test("freezes an in-flight sample while a concurrent change applies to the next sample", async () => {
   const entered = deferred<void>();
   const release = deferred<void>();
   const requestsA: ModelRequest[] = [];
@@ -548,7 +548,12 @@ test("freezes an active Turn selection while a concurrent change applies to the 
       requestsA.push(request);
       entered.resolve();
       await release.promise;
-      yield { type: "text_delta", delta: "a" };
+      yield {
+        type: "tool_call",
+        callId: "first-sample-tool",
+        name: "shell",
+        arguments: { command: "printf first" },
+      };
     },
   };
   const adapterB = recordingAdapter("adapter-b", requestsB);
@@ -556,15 +561,33 @@ test("freezes an active Turn selection while a concurrent change applies to the 
     registry: duplicateModelRegistry(adapterA, adapterB),
   });
   const thread = await server.startThread();
-  const launching = server.startTurn(thread.id, "first");
-  const changing = server.updateThreadSettings(thread.id, {
-    selection: selection("profile-b", "high"),
-  });
-  const first = await launching;
-  await changing;
-  await entered.promise;
-  release.resolve();
+  const first = await server.startTurn(thread.id, "first");
+  try {
+    await expectStarted(entered.promise, first.done);
+    await server.updateThreadSettings(thread.id, {
+      selection: selection("profile-b", "high"),
+    });
+    assert.equal(requestsA.length, 1);
+    assert.equal(requestsB.length, 0);
+    assert.deepEqual(requestsA[0]?.debugContext?.configuration, {
+      cwd: process.cwd(),
+      providerProfileId: "profile-a",
+      model: "shared-model",
+      reasoningEffort: "low",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      inputModalities: ["text"],
+      contextWindow: 32_768,
+    });
+  } finally {
+    release.resolve();
+  }
   await first.done;
+  assert.equal(
+    (await server.readThread(thread.id)).turns[0]?.status,
+    "completed",
+  );
+  assert.equal(requestsB.length, 1);
   await (
     await server.startTurn(thread.id, "second")
   ).done;
@@ -575,12 +598,51 @@ test("freezes an active Turn selection while a concurrent change applies to the 
   );
   assert.deepEqual(
     requestsB.map((request) => request.reasoningEffort),
-    ["high"],
+    ["high", "high"],
   );
   assert.deepEqual(
     (await server.readThread(thread.id)).turns.map((turn) => turn.selection),
     [selection("profile-a", "low"), selection("profile-b", "high")],
   );
+});
+
+test("a selection changed before the first sample dispatches only the current Provider", async () => {
+  const requestsA: ModelRequest[] = [];
+  const requestsB: ModelRequest[] = [];
+  const server = createRegistryServer({
+    registry: duplicateModelRegistry(
+      recordingAdapter("adapter-a", requestsA),
+      recordingAdapter("adapter-b", requestsB),
+    ),
+  });
+  const thread = await server.startThread();
+  // Queue the change behind Turn admission, before its first sample can acquire
+  // the same Thread mutation boundary. No old-adapter handshake is expected.
+  const launching = server.startTurn(thread.id, "first");
+  const changing = server.updateThreadSettings(thread.id, {
+    selection: selection("profile-b", "high"),
+  });
+  const first = await launching;
+  await changing;
+  await first.done;
+
+  assert.equal(requestsA.length, 0);
+  assert.equal(requestsB.length, 1);
+  assert.equal(requestsB[0]?.reasoningEffort, "high");
+  assert.deepEqual(requestsB[0]?.debugContext?.configuration, {
+    cwd: process.cwd(),
+    providerProfileId: "profile-b",
+    model: "shared-model",
+    reasoningEffort: "high",
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    inputModalities: ["text"],
+    contextWindow: 32_768,
+  });
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  // The factual Turn admission remains unchanged; it is not sample authority.
+  assert.deepEqual(snapshot.turns[0]?.selection, selection("profile-a", "low"));
 });
 
 test("replays the same per-Turn selections after journal restart", async () => {
@@ -1245,8 +1307,8 @@ test("execution limits are pinned at final Turn admission", async () => {
     ]),
   });
   const thread = await server.startThread();
-  const oldTurnPromise = server.startTurn(thread.id, "old limit");
-  await firstSampleStarted.promise;
+  const oldTurn = await server.startTurn(thread.id, "old limit");
+  await expectStarted(firstSampleStarted.promise, oldTurn.done);
   server.publishRuntimeConfiguration(
     server.prepareRuntimeConfiguration({
       revision: 1,
@@ -1267,9 +1329,7 @@ test("execution limits are pinned at final Turn admission", async () => {
     }),
   );
   continueFirstSample.resolve();
-  await (
-    await oldTurnPromise
-  ).done;
+  await oldTurn.done;
 
   const next = await server.startTurn(thread.id, "new limit");
   await next.done;
@@ -1282,6 +1342,7 @@ test("execution limits are pinned at final Turn admission", async () => {
         item.message.includes("exceeded 1 tool rounds"),
     ),
   );
+  assert.equal(snapshot.turns[0]?.status, "completed");
   assert.equal(oldSamples, 3);
   assert.equal(newSamples, 2);
 });
@@ -1323,7 +1384,7 @@ test("manual compaction holds its admitted Provider through publication", async 
     await server.startTurn(thread.id, "history")
   ).done;
   const compacting = server.compactThread(thread.id);
-  await summaryStarted.promise;
+  await expectStarted(summaryStarted.promise, compacting);
   server.publishRuntimeConfiguration(
     server.prepareRuntimeConfiguration({
       revision: 1,
@@ -1459,6 +1520,18 @@ function createRegistryServer(options: {
       approvalPolicy: "never",
     },
   });
+}
+
+async function expectStarted(
+  started: Promise<void>,
+  operation: Promise<unknown>,
+): Promise<void> {
+  await Promise.race([
+    started,
+    operation.then(() =>
+      assert.fail("Operation completed before the expected adapter invocation"),
+    ),
+  ]);
 }
 
 function deferred<T>(): {

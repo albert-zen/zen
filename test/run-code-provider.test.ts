@@ -81,7 +81,7 @@ test("Responses offers custom JS and replays canonical history even when run_cod
       role: "assistant",
       toolCalls: [{ callId: "call-1", name: "run_code", arguments: { code } }],
     },
-    { role: "tool", callId: "call-1", text: "你好", exitCode: 0 },
+    { role: "tool", callId: "call-1", text: "Exit code: 0\n你好", exitCode: 0 },
   ];
   for (const tools of [[tool], []]) {
     let body: any;
@@ -334,7 +334,7 @@ test("tool catalog shares disclosed ordinary definitions without exposing orches
   assert.equal(catalog[0]!.description, "Visible");
 });
 
-test("audio uses Chat input_audio and honest Responses text references, including tool output", async () => {
+test("audio uses native Chat input_audio; unsupported Responses rejects rather than inventing semantic text", async () => {
   for (const [mediaType, format] of [
     ["audio/wav", "wav"],
     ["audio/mpeg", "mp3"],
@@ -389,18 +389,16 @@ test("audio uses Chat input_audio and honest Responses text references, includin
         { type: "input_audio", input_audio: { data: "AQID", format } },
       ]);
     }
-    let responses: any;
-    await collect(
-      subscription([terminal], (body) => {
-        responses = body;
-      }).stream(request({ messages })),
+    let dispatched = false;
+    await assert.rejects(
+      collect(
+        subscription([terminal], () => {
+          dispatched = true;
+        }).stream(request({ messages })),
+      ),
+      /does not support audio input; media was not replaced or submitted/i,
     );
-    for (const message of [responses.input[0], responses.input[3]]) {
-      assert.equal(message.content[0].type, "input_text");
-      assert.match(message.content[0].text, /audio.*not supported/i);
-      assert.ok(message.content[0].text.includes("a".repeat(64)));
-      assert.ok(message.content[0].text.includes(mediaType));
-    }
+    assert.equal(dispatched, false);
     assert.equal(messages[0]!.role, "user");
     assert.equal(audio.type, "audio");
   }
