@@ -1,3 +1,8 @@
+import {
+  attachBrowserModelRoute,
+  attachBrowserSidebarTargets,
+  readBrowserModelTargets,
+} from "./capabilities/model-browser-metadata.js";
 import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
@@ -828,9 +833,7 @@ export class AppServerManager {
           event.error !== undefined ||
           event.result === undefined
         )
-          throw new Error(
-            "Local model debug request failed or capture expired",
-          );
+          throw new Error("Local durable Trace read failed");
         return event.result;
       },
     );
@@ -1720,21 +1723,26 @@ export class AppServerManager {
         return;
       }
       const controller = new AbortController();
+      const nativeInvocation = {
+        ...hostEvent.invocation,
+        signal: controller.signal,
+      };
+      if (hostEvent.browserModelRoute)
+        attachBrowserModelRoute(nativeInvocation, hostEvent.browserModelRoute);
+      if (hostEvent.browserSidebarTargets)
+        attachBrowserSidebarTargets(
+          nativeInvocation,
+          hostEvent.browserSidebarTargets,
+        );
       const execution = Promise.resolve()
         .then(
           async () =>
             await (hostEvent.targetRoute === true
-              ? (host.executeTarget?.({
-                  ...hostEvent.invocation,
-                  signal: controller.signal,
-                }) ??
+              ? (host.executeTarget?.(nativeInvocation) ??
                 Promise.reject(
                   new Error("Fleet execution-target transport is unavailable"),
                 ))
-              : host.execute(
-                  { ...hostEvent.invocation, signal: controller.signal },
-                  hostEvent.generationToken,
-                )),
+              : host.execute(nativeInvocation, hostEvent.generationToken)),
         )
         .then((result) => {
           if (this.#child === child && child.connected) {
@@ -1742,6 +1750,7 @@ export class AppServerManager {
               type: "capability/result",
               invocationId: hostEvent.invocationId,
               generationToken: hostEvent.generationToken,
+              browserModelTargets: readBrowserModelTargets(result),
               output: result.output,
               exitCode: result.exitCode,
               ...(result.contentType === undefined

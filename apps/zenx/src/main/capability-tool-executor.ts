@@ -1,3 +1,20 @@
+import {
+  isBrowserModelTool,
+  decodeBrowserArguments,
+  browserApprovalScope,
+} from "./capabilities/model-browser-facade.js";
+import {
+  attachBrowserModelTargets,
+  readBrowserModelRoute,
+  readBrowserSidebarTargets,
+} from "./capabilities/model-browser-metadata.js";
+import { ModelReferenceRegistry } from "../../../../src/model-references.js";
+import {
+  invokeModelToolFacade,
+  modelToolDefinition,
+  modelPluginDocument,
+  isModelCallableTool,
+} from "./capabilities/model-tool-facade.js";
 import { desktopShellPty } from "./shell-pty.js";
 import {
   trackWindowsShellProcess,
@@ -22,8 +39,6 @@ import {
   PluginDiscoveryToolRuntime,
 } from "./plugin-discovery.js";
 
-import { browserConnectionScopeKey } from "./capabilities/browser-connections.js";
-
 interface PendingInvocation {
   resolve(result: ToolExecutionResult): void;
   reject(error: Error): void;
@@ -33,6 +48,7 @@ interface PendingInvocation {
 }
 
 interface CapabilityInvocationState {
+  references?: ModelReferenceRegistry;
   pending: Map<string, PendingInvocation>;
 }
 
@@ -45,6 +61,7 @@ export class ZenXHostToolBundle implements ToolBundle {
   readonly #send: (event: HostEvent) => void;
   readonly #state: CapabilityInvocationState;
   readonly #generationToken: string;
+  readonly #modelReferenceEpoch = randomUUID();
   readonly #drainWaiters = new Set<() => void>();
   #prepared = 0;
   #retiring = false;
@@ -63,45 +80,69 @@ export class ZenXHostToolBundle implements ToolBundle {
               Object.freeze(structuredClone(value)),
             ]),
           );
-    this.tools = options.capabilities.definitions.map((definition) => ({
-      name: definition.name,
-      specification: structuredClone(definition),
-      ...(browserConnections !== undefined &&
-      definition.name.startsWith("browser_connected_")
-        ? {
-            approvalScope: (invocation: ToolInvocation) => {
-              const id = invocation.arguments.connectionId;
-              if (typeof id !== "string")
-                throw new Error("An explicit browser connectionId is required");
-              const connection = browserConnections.get(id);
-              if (connection?.state !== "connected")
-                throw new Error(
-                  "Browser connection is unavailable in this tool catalog; refresh the catalog",
-                );
-              return {
-                key: browserConnectionScopeKey(id),
-                label: connection.label,
-                generation: connection.generation,
-              };
-            },
-          }
-        : {}),
-      ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
-      !(
-        browserConnections !== undefined &&
-        definition.name.startsWith("browser_connected_")
+    const resolveBrowser = (invocation: ToolInvocation): ToolInvocation => {
+      if (
+        invocation.trustedPluginUi ||
+        !invocation.threadId ||
+        !isBrowserModelTool(invocation.name)
       )
-        ? { remoteExecution: "text-json" as const }
-        : {}),
-      ...hostedResourcePolicy(
-        definition.name,
-        options.capabilities.plugins?.find((plugin) =>
-          plugin.tools.some((tool) => tool.name === definition.name),
-        )?.id,
-      ),
-      execute: async (invocation: ToolInvocation) =>
-        await this.#execute(definition.name, invocation),
-    }));
+        return invocation;
+      const refs = (this.#state.references ??=
+        new ModelReferenceRegistry()).scope(
+        invocation.threadId,
+        invocation.modelReferences,
+      );
+      return {
+        ...invocation,
+        arguments: decodeBrowserArguments(
+          invocation.name,
+          invocation.arguments,
+          refs,
+          this.#modelReferenceEpoch,
+          browserConnections,
+        ),
+      };
+    };
+    this.tools = options.capabilities.definitions
+      .filter(isModelCallableTool)
+      .map((definition) => ({
+        name: definition.name,
+        specification: modelToolDefinition(definition),
+        ...(browserConnections !== undefined &&
+        definition.name.startsWith("browser_connected_")
+          ? {
+              approvalScope: (invocation: ToolInvocation) => {
+                return browserApprovalScope(
+                  resolveBrowser(invocation).arguments,
+                  browserConnections,
+                );
+              },
+            }
+          : {}),
+        ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
+        !(
+          browserConnections !== undefined &&
+          definition.name.startsWith("browser_connected_")
+        )
+          ? { remoteExecution: "text-json" as const }
+          : {}),
+        ...hostedResourcePolicy(
+          definition.name,
+          options.capabilities.plugins?.find((plugin) =>
+            plugin.tools.some((tool) => tool.name === definition.name),
+          )?.id,
+          resolveBrowser,
+        ),
+        execute: async (invocation: ToolInvocation) =>
+          await invokeModelToolFacade({
+            invocation,
+            epoch: this.#modelReferenceEpoch,
+            browserConnections,
+            references: (this.#state.references ??=
+              new ModelReferenceRegistry()),
+            dispatch: (resolved) => this.#execute(definition.name, resolved),
+          }),
+      }));
     this.#send = options.send;
     this.#state = options.state ?? { pending: new Map() };
     this.#generationToken = options.capabilities.generationToken ?? "legacy";
@@ -126,7 +167,12 @@ export class ZenXHostToolBundle implements ToolBundle {
   async executeTarget(
     invocation: ToolInvocation,
   ): Promise<ToolExecutionResult> {
-    return await this.#execute(invocation.name, invocation, true);
+    return await invokeModelToolFacade({
+      invocation,
+      epoch: this.#modelReferenceEpoch,
+      references: (this.#state.references ??= new ModelReferenceRegistry()),
+      dispatch: (resolved) => this.#execute(resolved.name, resolved, true),
+    });
   }
 
   async #execute(
@@ -161,6 +207,12 @@ export class ZenXHostToolBundle implements ToolBundle {
       invocation.signal.addEventListener("abort", abort, { once: true });
       this.#send({
         type: "capability/invoke",
+        ...(readBrowserModelRoute(invocation)
+          ? { browserModelRoute: readBrowserModelRoute(invocation) }
+          : {}),
+        ...(readBrowserSidebarTargets(invocation)
+          ? { browserSidebarTargets: readBrowserSidebarTargets(invocation) }
+          : {}),
         ...(targetRoute ? { targetRoute: true as const } : {}),
         invocationId,
         generationToken: this.#generationToken,
@@ -208,7 +260,7 @@ export class ZenXHostToolBundle implements ToolBundle {
     this.#state.pending.delete(command.invocationId);
     pending.signal.removeEventListener("abort", pending.abort);
     if (command.error === undefined) {
-      pending.resolve({
+      const result: ToolExecutionResult = {
         output: command.output ?? "",
         exitCode: command.exitCode ?? 1,
         ...(command.contentType === undefined
@@ -220,7 +272,12 @@ export class ZenXHostToolBundle implements ToolBundle {
         ...(command.sourceTruncated === undefined
           ? {}
           : { sourceTruncated: command.sourceTruncated }),
-      });
+      };
+      pending.resolve(
+        command.browserModelTargets
+          ? attachBrowserModelTargets(result, command.browserModelTargets)
+          : result,
+      );
     } else {
       pending.reject(new Error(command.error));
     }
@@ -255,7 +312,11 @@ export class ZenXHostToolBundle implements ToolBundle {
 // BrowserThreadObservation namespaces public sessions by thread; tab IDs then
 // identify one page within that session. Keep keys stable across generations so
 // retiring calls remain fenced while a new snapshot is published.
-function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
+function hostedResourcePolicy(
+  toolName: string,
+  pluginId: string | undefined,
+  resolveBrowser?: (invocation: ToolInvocation) => ToolInvocation,
+) {
   const namespace = /^browser_(workspace|connected)_/u.exec(toolName)?.[1];
   const browserToolName = toolName.replace(
     /^browser_(?:workspace|connected)_/u,
@@ -284,6 +345,7 @@ function hostedResourcePolicy(toolName: string, pluginId: string | undefined) {
       executionMode: "parallel_safe" as const,
       taskPolicy: { resourceQueue: "fifo" as const, yieldTimeMs: 30_000 },
       resourceClaims: (invocation: ToolInvocation) => {
+        invocation = resolveBrowser?.(invocation) ?? invocation;
         const sessionId = invocation.arguments.sessionId;
         const tabId = invocation.arguments.tabId;
         // Invalid arguments still reach normal schema/provider validation under
@@ -400,7 +462,14 @@ export function createZenXHostToolEnvironment(options: {
   toolEnvironment.setTargetRouter(targetRouter);
   let capabilities = structuredClone(options.capabilities);
   const catalog = {
-    availablePlugins: () => structuredClone(capabilities.plugins ?? []),
+    availablePlugins: () =>
+      (capabilities.plugins ?? []).map((plugin) => ({
+        ...structuredClone(plugin),
+        mainDocument: modelPluginDocument(plugin.id, plugin.mainDocument),
+        tools: plugin.tools
+          .filter(isModelCallableTool)
+          .map(modelToolDefinition),
+      })),
     pluginSummaries: () => {
       if (capabilities.pluginReadiness === undefined)
         throw new Error("Plugin readiness catalog is unavailable");

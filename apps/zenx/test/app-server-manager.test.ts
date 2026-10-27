@@ -4,7 +4,9 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { JsonlThreadJournal } from "../../../src/journal.js";
+import { FileTraceStore } from "../../../src/trace.js";
+import { decodeCanonicalItem } from "../../../src/item.js";
+import type { ModelReferenceBinding } from "../../../src/model-references.js";
 
 import {
   AppServerManager,
@@ -19,6 +21,8 @@ import type {
   ZenXCapabilityHostSnapshot,
 } from "../src/main/capabilities/types.js";
 import { ZenXAutomationControlCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
+import { ZenXSelfControlCapabilityPackage } from "../src/main/capabilities/self-control-package.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
 import { ZenXTriggerService } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
 
@@ -275,10 +279,15 @@ test("hosts a real App Server and removes its private token on shutdown", async 
       backwardsCursor: null,
     });
     const started = await manager.request("thread/start", {});
-    const journal = new JsonlThreadJournal(
-      path.join(directory, "data", "threads"),
-    );
-    const lastItem = (await journal.read(started.thread.id)).at(-1);
+    const trace = new FileTraceStore(path.join(directory, "data", "trace"));
+    const observed = await trace.read(started.thread.id);
+    assert.equal(observed.completeness, "complete");
+    const lastItem = observed.records
+      .filter((record) => record.type === "runtime_item")
+      .map((record) =>
+        decodeCanonicalItem((record.data as { item: unknown }).item),
+      )
+      .at(-1);
     assert.ok(lastItem, "the Host persisted the new Thread's canonical tail");
     const summaries = await manager.listThreadSummaries();
     assert.equal(summaries.length, 1);
@@ -1167,23 +1176,46 @@ test("bridges all Agent Room tools through the real child App Server", async () 
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-room-capability-host-"),
   );
+  const automationActions = [
+    "zenx_rooms_create",
+    "zenx_rooms_list",
+    "zenx_rooms_rename",
+    "zenx_rooms_add_member",
+    "zenx_rooms_remove_member",
+    "zenx_rooms_post_message",
+    "zenx_rooms_delete",
+    "zenx_triggers_create",
+    "zenx_triggers_list",
+    "zenx_triggers_update",
+    "zenx_triggers_cancel",
+    "zenx_triggers_delete",
+  ];
   let automationPackage!: ZenXAutomationControlCapabilityPackage;
+  let selfControl!: ZenXSelfControlCapabilityPackage;
   const capabilityHost: ZenXCapabilityHost = {
     hostSnapshot: () => ({
-      definitions: automationPackage.manifest.tools.map(
-        ({ name, description, inputSchema }) => ({
-          name,
-          description,
-          inputSchema: structuredClone(inputSchema),
-        }),
-      ),
+      definitions: [
+        ...automationPackage.manifest.tools.filter((tool) =>
+          automationActions.includes(tool.name),
+        ),
+        ...selfControl.manifest.tools.filter(
+          (tool) => tool.name === "zenx_threads_list",
+        ),
+      ].map(({ name, description, inputSchema }) => ({
+        name,
+        description,
+        inputSchema: structuredClone(inputSchema),
+      })),
       plugins: [],
     }),
     execute: async (invocation) => ({
-      output: JSON.stringify({
-        capabilityId: automationPackage.manifest.id,
-        result: await automationPackage.invoke(invocation.name, invocation),
-      }),
+      output: JSON.stringify(
+        await (
+          invocation.name === "zenx_threads_list"
+            ? selfControl
+            : automationPackage
+        ).invoke(invocation.name, invocation),
+      ),
       exitCode: 0,
     }),
   };
@@ -1207,10 +1239,18 @@ test("bridges all Agent Room tools through the real child App Server", async () 
     new ZenXTriggerStore(path.join(directory, "triggers.json")),
   );
   automationPackage = new ZenXAutomationControlCapabilityPackage(triggers);
+  selfControl = new ZenXSelfControlCapabilityPackage({
+    appServer: {
+      projectProjection: new ZenXProjectProjection(),
+      request: (method, params) => manager.request(method, params),
+    },
+  });
   try {
     await manager.start();
     await triggers.start();
     const thread = (await manager.request("thread/start", {})).thread;
+    const monitor = (await manager.request("thread/start", {})).thread;
+    const successfulActions: string[] = [];
     const turns: string[] = [];
     const dispose = manager.onNotification((method, params) => {
       if (method === "turn/completed") {
@@ -1219,41 +1259,127 @@ test("bridges all Agent Room tools through the real child App Server", async () 
     });
     const runTool = async (name: string, args: Record<string, unknown>) => {
       const before = turns.length;
-      await manager.request("turn/start", {
+      const started = await manager.request("turn/start", {
         threadId: thread.id,
         input: [
           { type: "text", text: `!tool ${name} ${JSON.stringify(args)}` },
         ],
       });
       await waitFor(() => turns.length > before);
+      const snapshot = (
+        await manager.request("zen/thread/read", { threadId: thread.id })
+      ).thread;
+      const call = snapshot.items.find(
+        (item) =>
+          item.type === "tool_call" &&
+          item.turnId === started.turn.id &&
+          item.name === name,
+      );
+      assert(
+        call?.type === "tool_call",
+        `${name} must dispatch through the child Runtime`,
+      );
+      const result = snapshot.items.find(
+        (item) =>
+          item.type === "tool_result" &&
+          item.turnId === started.turn.id &&
+          item.callId === call.callId,
+      );
+      assert(
+        result?.type === "tool_result",
+        `${name} must retain its accepted result`,
+      );
+      assert.equal(result.exitCode, 0, `${name}: ${result.output}`);
+      assert.equal(result.executionStatus, "completed", name);
+      successfulActions.push(name);
+      return {
+        output: result.output,
+        bindings: result.referenceBindings ?? [],
+      };
     };
-    await runTool("zenx_rooms_create", {
+    const acceptedRef = (
+      receipt: {
+        output: string;
+        bindings: readonly ModelReferenceBinding[];
+      },
+      namespace: string,
+      kind: string,
+      id: string,
+    ) => {
+      const binding = receipt.bindings.find(
+        (binding) =>
+          binding.ownerThreadId === thread.id &&
+          binding.namespace === namespace &&
+          binding.kind === kind &&
+          typeof binding.value === "object" &&
+          binding.value !== null &&
+          !Array.isArray(binding.value) &&
+          "id" in binding.value &&
+          binding.value.id === id,
+      );
+      assert(
+        binding,
+        `${namespace}/${kind} must be published by the accepted discovery result`,
+      );
+      assert.match(binding.ref, /^r[1-9][0-9]*$/u);
+      assert(
+        receipt.output.includes(JSON.stringify(binding.ref)),
+        "the ref must actually be visible in the result",
+      );
+      return binding.ref;
+    };
+    const discovered = await runTool("zenx_threads_list", {});
+    const threadRef = acceptedRef(discovered, "threads", "thread", thread.id);
+    const monitorRef = acceptedRef(discovered, "threads", "thread", monitor.id);
+    const createdRoom = await runTool("zenx_rooms_create", {
       name: "release",
-      members: [{ name: "Bot", threadId: thread.id }],
+      members: [{ name: "Bot", thread: threadRef }],
     });
+    const roomId = triggers.snapshot().rooms[0]!.id;
+    assert.deepEqual(triggers.snapshot().rooms[0]!.members, [
+      { name: "Bot", threadId: thread.id },
+    ]);
+    const roomRef = acceptedRef(createdRoom, "rooms", "room", roomId);
     await runTool("zenx_rooms_list", {});
     await runTool("zenx_rooms_rename", {
-      roomId: triggers.snapshot().rooms[0]!.id,
+      room: roomRef,
       name: "ship",
     });
+    assert.equal(triggers.snapshot().rooms[0]!.name, "ship");
     await runTool("zenx_rooms_add_member", {
-      roomId: triggers.snapshot().rooms[0]!.id,
+      room: roomRef,
       name: "Monitor",
-      threadId: "monitor-thread",
+      thread: monitorRef,
     });
+    assert(
+      triggers
+        .snapshot()
+        .rooms[0]!.members.some(
+          (member) =>
+            member.name === "Monitor" && member.threadId === monitor.id,
+        ),
+    );
     await runTool("zenx_rooms_remove_member", {
-      roomId: triggers.snapshot().rooms[0]!.id,
-      threadId: "monitor-thread",
+      room: roomRef,
+      thread: monitorRef,
     });
+    assert.deepEqual(triggers.snapshot().rooms[0]!.members, [
+      { name: "Bot", threadId: thread.id },
+    ]);
     await runTool("zenx_rooms_post_message", {
-      roomId: triggers.snapshot().rooms[0]!.id,
+      room: roomRef,
       text: "agent note",
     });
+    assert.equal(
+      triggers.snapshot().rooms[0]!.messages.at(-1)?.text,
+      "agent note",
+    );
     await runTool("zenx_rooms_delete", {
-      roomId: triggers.snapshot().rooms[0]!.id,
+      room: roomRef,
     });
-    await runTool("zenx_triggers_create", {
-      threadId: thread.id,
+    assert.equal(triggers.snapshot().rooms.length, 0);
+    const createdTrigger = await runTool("zenx_triggers_create", {
+      thread: threadRef,
       kind: "signal",
       label: "Deploy",
       prompt: "Inspect deploy.",
@@ -1263,18 +1389,36 @@ test("bridges all Agent Room tools through the real child App Server", async () 
       },
     });
     const triggerId = triggers.snapshot().triggers[0]!.id;
+    assert.equal(triggers.snapshot().triggers[0]!.threadId, thread.id);
+    assert.equal(triggers.snapshot().triggers[0]!.label, "Deploy");
+    const triggerRef = acceptedRef(
+      createdTrigger,
+      "triggers",
+      "trigger",
+      triggerId,
+    );
     await runTool("zenx_triggers_list", {});
     await runTool("zenx_triggers_update", {
-      id: triggerId,
-      threadId: thread.id,
+      trigger: triggerRef,
+      thread: threadRef,
       kind: "signal",
       label: "Updated deploy",
       prompt: "Inspect updated deploy.",
       signalName: "deploy-updated",
     });
-    await runTool("zenx_triggers_cancel", { triggerId });
-    await runTool("zenx_triggers_delete", { triggerId });
+    assert.equal(triggers.snapshot().triggers[0]!.label, "Updated deploy");
+    assert.equal(
+      triggers.snapshot().triggers[0]!.prompt,
+      "Inspect updated deploy.",
+    );
+    await runTool("zenx_triggers_cancel", { trigger: triggerRef });
+    assert.equal(triggers.snapshot().triggers[0]!.active, false);
+    await runTool("zenx_triggers_delete", { trigger: triggerRef });
     dispose();
+    assert.deepEqual(successfulActions, [
+      "zenx_threads_list", // One trusted discovery, additional to the original 12 actions.
+      ...automationActions,
+    ]);
     assert.equal(triggers.snapshot().rooms.length, 0);
     assert.equal(triggers.snapshot().triggers.length, 0);
     const read = await manager.request("thread/read", {
@@ -1286,7 +1430,8 @@ test("bridges all Agent Room tools through the real child App Server", async () 
         turn.items.some(
           (item) =>
             item.type === "commandExecution" &&
-            item.command.startsWith("zenx_"),
+            (item.command.startsWith("zenx_rooms_") ||
+              item.command.startsWith("zenx_triggers_")),
         ),
       ).length,
       12,

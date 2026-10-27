@@ -101,6 +101,11 @@ export const subagentsManifest = {
       inputSchema: {
         type: "object",
         properties: {
+          threadId: {
+            type: "string",
+            description:
+              "Exact Thread identity; alternative to semantic target.",
+          },
           target: {
             type: "string",
             description:
@@ -120,7 +125,8 @@ export const subagentsManifest = {
             type: "string",
           },
         },
-        required: ["target", "text"],
+        required: ["text"],
+        oneOf: [{ required: ["target"] }, { required: ["threadId"] }],
         additionalProperties: false,
       },
       permissions: ["zenx-subagents.write"],
@@ -135,6 +141,11 @@ export const subagentsManifest = {
       inputSchema: {
         type: "object",
         properties: {
+          threadId: {
+            type: "string",
+            description:
+              "Exact Thread identity; alternative to semantic target.",
+          },
           target: {
             type: "string",
             description:
@@ -168,7 +179,7 @@ export const subagentsManifest = {
             maximum: 25,
           },
         },
-        required: ["target"],
+        oneOf: [{ required: ["target"] }, { required: ["threadId"] }],
         additionalProperties: false,
       },
       permissions: ["zenx-subagents.read"],

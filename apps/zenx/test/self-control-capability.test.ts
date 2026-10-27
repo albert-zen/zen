@@ -19,6 +19,7 @@ import {
   type ModelAdapter,
   type ModelRequest,
   type ModelEvent,
+  type ToolResultModelMessage,
 } from "../../../src/model.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
@@ -849,7 +850,7 @@ class TracerBulletModel implements ModelAdapter {
         });
         return;
       case 3: {
-        const target = selfControlResult(results[2]!.text);
+        const target = selfControlResult(results[2]!);
         yield call("zenx_threads_send", {
           threadId: target.threadId,
           text: "Child initial prompt.",
@@ -858,12 +859,12 @@ class TracerBulletModel implements ModelAdapter {
       }
       case 4: {
         await new Promise((resolve) => setTimeout(resolve, 20));
-        const target = selfControlResult(results[2]!.text);
+        const target = selfControlResult(results[2]!);
         yield call("zenx_threads_status", { threadId: target.threadId });
         return;
       }
       case 5: {
-        const target = selfControlResult(results[2]!.text);
+        const target = selfControlResult(results[2]!);
         yield call("zenx_threads_read", {
           threadId: target.threadId,
           maxTurns: 2,
@@ -872,7 +873,7 @@ class TracerBulletModel implements ModelAdapter {
         return;
       }
       case 6: {
-        const target = selfControlResult(results[2]!.text);
+        const target = selfControlResult(results[2]!);
         yield call("zenx_threads_send", {
           threadId: target.threadId,
           text: "Child follow-up prompt.",
@@ -1100,8 +1101,21 @@ function waitForManagerTurnCompleted(
   });
 }
 
-function selfControlResult(text: string): { threadId: string } {
-  const envelope = JSON.parse(text) as {
+function selfControlResult(message: ToolResultModelMessage): {
+  threadId: string;
+} {
+  assert.equal(message.exitCode, 0);
+  const text = message.modelContent
+    ?.filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  const prefix = "Exit code: 0\n";
+  if (!text)
+    assert(
+      message.text.startsWith(prefix),
+      "Expected compiled successful tool-result prefix",
+    );
+  const envelope = JSON.parse(text || message.text.slice(prefix.length)) as {
     capabilityId: string;
     result: { threadId: string };
   };
@@ -1159,3 +1173,29 @@ function completedSubscriptionResponse(): Response {
     },
   );
 }
+
+test("tracer fixture reads successful semantic tool text without treating its status prefix as JSON", () => {
+  const body = JSON.stringify({
+    capabilityId: ZENX_SELF_CONTROL_CAPABILITY_ID,
+    result: { threadId: "synthetic-target" },
+  });
+  const message: ToolResultModelMessage = {
+    role: "tool",
+    callId: "fixture",
+    exitCode: 0,
+    text: `Exit code: 0\n${body}`,
+  };
+  assert.equal(selfControlResult(message).threadId, "synthetic-target");
+  assert.equal(
+    selfControlResult({
+      ...message,
+      modelContent: [{ type: "text", text: body }],
+    }).threadId,
+    "synthetic-target",
+  );
+  assert.throws(() => selfControlResult({ ...message, exitCode: 1 }));
+  assert.throws(
+    () => selfControlResult({ ...message, text: body }),
+    /successful tool-result prefix/,
+  );
+});

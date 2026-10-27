@@ -1,3 +1,8 @@
+import {
+  observeSendActivation,
+  reportSendActivation,
+} from "./send-observation.js";
+import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { triggerMessagePresentation } from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
@@ -294,6 +299,7 @@ interface ThreadViewProps {
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ): Promise<void>;
 }
 
@@ -373,7 +379,13 @@ export function ThreadView(props: ThreadViewProps) {
                 <ThreadDebugger
                   key={props.thread.id}
                   thread={props.thread}
-                  items={items}
+                  items={props.thread.itemList}
+                  currentSettings={{
+                    provider: props.thread.modelProvider,
+                    model: props.selectedModel,
+                    effort: props.selectedReasoningEffort,
+                    permission: props.permissionMode,
+                  }}
                   localModelDebug={props.localModelDebug}
                   onExit={props.onExitDebug}
                   onOpenMessageLink={props.onOpenMessageLink}
@@ -883,7 +895,9 @@ function ThreadViewContent({
       return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
-    void onSubmit(intent, runningTurn?.id ?? null);
+    const observation = observeSendActivation();
+    reportSendActivation(observation, thread?.id);
+    void onSubmit(intent, runningTurn?.id ?? null, observation);
   };
 
   const interrupt = async () => {

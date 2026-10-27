@@ -1,3 +1,6 @@
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import { compileItemList } from "../src/item-list.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -84,7 +87,7 @@ test("view_image imports a cwd-relative file and sends its image content to the 
     assert.deepEqual(requests[1]?.at(-1), {
       role: "tool",
       callId: "view-1",
-      text: result.output,
+      text: `Exit code: ${result.exitCode}\n${result.output}`,
       exitCode: 0,
       modelContent: result.modelContent,
     });
@@ -244,8 +247,9 @@ test("view_image executes for text-only and unknown models without capability ad
 
 test("runs typed image input through AttachmentRef to provider and replays it after restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-multimodal-"));
-  const journal = new JsonlThreadJournal(path.join(root, "threads"));
   const attachments = new FileAttachmentStore(path.join(root, "attachments"));
+  const journal = domainJournal(root, attachments);
+  let restartedJournal: DomainThreadJournal | undefined;
   const localPath = path.join(root, "temporary-input.png");
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -288,7 +292,7 @@ test("runs typed image input through AttachmentRef to provider and replays it af
       [
         {
           type: "text",
-          text: `[Zen recorded user-message metadata: received_at=${JSON.stringify(firstUser.createdAt)}]`,
+          text: `[Message received at ${firstUser.createdAt}]`,
         },
         { type: "text", text: "describe this" },
         {
@@ -301,7 +305,7 @@ test("runs typed image input through AttachmentRef to provider and replays it af
     );
 
     const journalText = await readFile(
-      path.join(root, "threads", `${thread.id}.jsonl`),
+      path.join(root, "threads", "items", `${thread.id}.jsonl`),
       "utf8",
     );
     assert.equal(journalText.includes(localPath), false);
@@ -321,15 +325,21 @@ test("runs typed image input through AttachmentRef to provider and replays it af
     assert(journalText.includes(ref.sha256));
 
     const beforeRestart = await first.readThread(thread.id);
+    assert(beforeRestart.itemList);
     const initialHistory = beforeRestart.items.slice(
       0,
       beforeRestart.items.findIndex((item) => item.type === "user_message") + 1,
     );
-    const projectedBefore = compileModelMessages(initialHistory);
+    const initialIds = new Set(initialHistory.map((item) => item.id));
+    const projectedBefore = compileItemList(
+      beforeRestart.itemList.filter((item) => initialIds.has(item.id)),
+    ).messages;
 
     const replayBodies: Array<Record<string, unknown>> = [];
+    await journal.close();
+    restartedJournal = domainJournal(root, attachments);
     const restarted = createServer({
-      journal,
+      journal: restartedJournal,
       attachments: new FileAttachmentStore(path.join(root, "attachments")),
       model: capturingCompatibleModel(
         new FileAttachmentStore(path.join(root, "attachments")),
@@ -337,9 +347,10 @@ test("runs typed image input through AttachmentRef to provider and replays it af
       ),
     });
     const replayed = await restarted.readThread(thread.id);
-    const projectedAfter = compileModelMessages(
-      replayed.items.slice(0, initialHistory.length),
-    );
+    assert(replayed.itemList);
+    const projectedAfter = compileItemList(
+      replayed.itemList.filter((item) => initialIds.has(item.id)),
+    ).messages;
     assert.deepEqual(projectedAfter, projectedBefore);
     await drainModel(
       capturingCompatibleModel(
@@ -350,6 +361,8 @@ test("runs typed image input through AttachmentRef to provider and replays it af
     );
     assert.deepEqual(replayBodies[0], bodies[0]);
   } finally {
+    await restartedJournal?.close();
+    await journal.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -461,7 +474,7 @@ test("Unknown image capability is attempted while unsupported fails before a Tur
   }
 });
 
-test("soft steer validates image input against the active Turn's frozen model", async () => {
+test("soft steer validates image input against the in-flight model while next sample uses current capabilities", async () => {
   const attachments = new InMemoryAttachmentStore();
   const firstSampleStarted = deferred<void>();
   const releaseFirstSample = deferred<void>();
@@ -493,12 +506,36 @@ test("soft steer validates image input against the active Turn's frozen model", 
   await turn.done;
 
   assert.equal(requests.length, 2);
-  assert(
+  assert.equal(
     requests[1]?.some(
       (message) =>
         message.role === "user" &&
         "content" in message &&
         message.content.some((part) => part.type === "image"),
+    ),
+    false,
+  );
+  assert.match(JSON.stringify(requests[1]), /image|unavailable|cannot/i);
+  const snapshot = await server.readThread(thread.id);
+  assert(snapshot.itemList);
+  assert(
+    snapshot.items.some(
+      (item) =>
+        item.type === "user_message" &&
+        item.content?.some(
+          (part) =>
+            part.type === "image" && part.attachment.sha256 === ref.sha256,
+        ),
+    ),
+  );
+  assert(
+    snapshot.itemList.some(
+      (item) =>
+        item.kind === "message" &&
+        item.content.parts.some(
+          (part) =>
+            part.type === "image" && part.attachment.sha256 === ref.sha256,
+        ),
     ),
   );
 });
@@ -673,18 +710,14 @@ test("nested view_image content follows the visible parent tool result", async (
 
 test("retained AttachmentRefs survive compaction projection and restart", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-compaction-image-"));
-  const journal = new JsonlThreadJournal(path.join(root, "threads"));
   const attachments = new FileAttachmentStore(path.join(root, "attachments"));
+  const journal = domainJournal(root, attachments);
+  let restartedJournal: DomainThreadJournal | undefined;
   const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "image-provider",
     async *stream(request): AsyncIterable<ModelEvent> {
-      const latest = request.messages.at(-1);
-      if (
-        latest?.role === "user" &&
-        "text" in latest &&
-        latest.text.includes("ZEN_CONTEXT_COMPACTION_V1")
-      ) {
+      if (request.debugContext?.purpose === "compaction") {
         yield { type: "text_delta", delta: "image context summary" };
         return;
       }
@@ -704,13 +737,15 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     ).done;
     await first.compactThread(thread.id);
     const beforeRestart = await first.readThread(thread.id);
-    const projectedBefore = compileModelMessages(beforeRestart.items);
-    assert.deepEqual(projectedBefore[0], {
+    assert(beforeRestart.itemList);
+    const projectedBefore = compileItemList(beforeRestart.itemList).messages;
+    assert.deepEqual(projectedBefore[1], {
       role: "user",
-      userTimestamp: beforeRestart.items.find(
-        (item) => item.type === "user_message",
-      )?.createdAt,
       content: [
+        {
+          type: "text",
+          text: `[Message received at ${beforeRestart.items.find((item) => item.type === "user_message")?.createdAt}]`,
+        },
         { type: "text", text: "remember this image" },
         { type: "image", attachment: ref },
       ],
@@ -719,13 +754,17 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     const restartedAttachments = new FileAttachmentStore(
       path.join(root, "attachments"),
     );
+    await journal.close();
+    restartedJournal = domainJournal(root, restartedAttachments);
     const restarted = createServer({
-      journal: new JsonlThreadJournal(path.join(root, "threads")),
+      journal: restartedJournal,
       attachments: restartedAttachments,
       model,
     });
     const replayed = await restarted.readThread(thread.id);
-    const projectedAfter = compileModelMessages(replayed.items);
+    assert(replayed.itemList);
+    const projectedAfter = compileItemList(replayed.itemList).messages;
+    assert.deepEqual(replayed.itemList, beforeRestart.itemList);
     assert.equal(
       JSON.stringify(projectedAfter),
       JSON.stringify(projectedBefore),
@@ -754,13 +793,18 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
       ...projectedBefore,
       {
         role: "user",
-        content: [{ type: "text", text: "continue" }],
-        userTimestamp: (await restarted.readThread(thread.id)).items.findLast(
-          (item) => item.type === "user_message",
-        )?.createdAt,
+        content: [
+          {
+            type: "text",
+            text: `[Message received at ${(await restarted.readThread(thread.id)).items.findLast((item) => item.type === "user_message")?.createdAt}]`,
+          },
+          { type: "text", text: "continue" },
+        ],
       },
     ]);
   } finally {
+    await restartedJournal?.close();
+    await journal.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -876,4 +920,13 @@ function deferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function domainJournal(root: string, attachments: AttachmentStore) {
+  return new DomainThreadJournal({
+    directory: path.join(root, "threads"),
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata: new InMemoryThreadMetadataStore(),
+    attachments,
+  });
 }

@@ -1,0 +1,59 @@
+name: Durable Trace UI acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/durable-trace-ui.yml
+      - apps/cli/src/model-request-debug*.ts
+      - apps/cli/src/trace-timeline.ts
+      - src/trace-model.ts
+      - src/trace-observation.ts
+      - src/client-observation.ts
+      - src/model/request-observation.ts
+      - apps/zenx/src/renderer/src/**
+      - apps/zenx/src/main/model-request-debug-ipc.ts
+      - apps/zenx/test/fixtures/durable-trace*.ts*
+      - apps/zenx/scripts/*durable-trace*.mjs
+      - apps/zenx/test/model-request-debug*.test.*
+      - apps/zenx/test/thread-debugger*.test.ts
+      - test/model-request-debug*.test.ts
+      - package-lock.json
+permissions:
+  contents: read
+concurrency:
+  group: durable-trace-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  durable-trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace @zenx/plugin-sdk
+      - name: Production reader and component contracts
+        run: node --import tsx --test test/model-request-debug*.test.ts apps/zenx/test/model-request-debug*.test.* apps/zenx/test/thread-debugger*.test.ts apps/zenx/test/semantic-item-projection.test.ts
+      - name: Resolve authenticated CJK font package
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs resolve "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Install and verify CJK fonts
+        timeout-minutes: 4
+        run: node apps/zenx/scripts/prepare-cjk-fonts.mjs install "${{ runner.temp }}/zenx-cjk-fonts"
+      - name: Build and capture exact production components
+        timeout-minutes: 4
+        run: |
+          node apps/zenx/scripts/build-durable-trace-preview.mjs "${{ runner.temp }}/durable-trace"
+          cp "${{ runner.temp }}/zenx-cjk-fonts/package.json" "${{ runner.temp }}/durable-trace/cjk-package.json"
+          fc-match ':lang=zh' > "${{ runner.temp }}/durable-trace/cjk-font.txt"
+          node apps/zenx/scripts/capture-durable-trace-preview.mjs "${{ runner.temp }}/durable-trace"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: durable-trace-${{ github.sha }}
+          path: ${{ runner.temp }}/durable-trace
+          if-no-files-found: warn
+          retention-days: 14

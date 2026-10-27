@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "acorn": "8.18.0",
+    "fs-native-extensions": "1.4.5",
     "undici": "^7.29.0",
     "ws": "^8.18.3",
     "yaml": "^2.9.1"

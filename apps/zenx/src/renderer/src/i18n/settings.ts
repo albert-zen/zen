@@ -849,6 +849,9 @@ export const en = {
     "Choose a replacement title model",
   "settingsView.displayName": "Display name",
   "settingsView.providerName": "Provider name",
+  "settingsView.apiProtocol": "API protocol",
+  "settingsView.apiProtocolHint":
+    "Select Responses only for an endpoint that supports it. Existing profiles default to Chat Completions; no automatic probe or fallback. Other-protocol encrypted reasoning cannot be reused.",
   "settingsView.baseUrl": "Base URL",
   "settingsView.apiKey": "API key",
   "settingsView.apiKeySavedLeaveBlankToKeep":
@@ -2110,6 +2113,9 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.chooseAReplacementTitleModel": "选择一个替换标题模型",
   "settingsView.displayName": "显示名称",
   "settingsView.providerName": "服务商名称",
+  "settingsView.apiProtocol": "API 协议",
+  "settingsView.apiProtocolHint":
+    "仅在端点支持时选择 Responses。已有配置默认 Chat Completions，不会自动探测或回退；其他协议的加密思考不能直接续接。",
   "settingsView.baseUrl": "基础 URL",
   "settingsView.apiKey": "API 密钥",
   "settingsView.apiKeySavedLeaveBlankToKeep": "API 密钥已保存—留空以保留",

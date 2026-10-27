@@ -11,6 +11,7 @@ import type {
   ModelEvent,
   ModelRequest,
   ModelTool,
+  ToolResultModelMessage,
 } from "../../../src/model.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
@@ -370,13 +371,13 @@ class DiscoveryFlowModel implements ModelAdapter {
       return;
     }
     if (latest.callId === "invoke") {
-      assert.equal(latest.text, exactOutput);
+      assert.equal(semanticToolOutput(latest), exactOutput);
       assert.equal(latest.exitCode, 7);
       yield { type: "text_delta", delta: "done" };
       return;
     }
     assert(["discover", "read"].includes(latest.callId));
-    const result = parseRecord(latest.text);
+    const result = parseRecord(semanticToolOutput(latest));
     assert.equal(result.operation, latest.callId);
     if (result.operation === "discover") {
       yield toolCall("read", "zenx_plugin", {
@@ -631,3 +632,36 @@ function parseRecord(value: string): Record<string, unknown> {
   );
   return parsed as Record<string, unknown>;
 }
+
+function semanticToolOutput(message: ToolResultModelMessage): string {
+  const prefix =
+    message.exitCode === null
+      ? "Outcome: unknown\n"
+      : `Exit code: ${message.exitCode}\n`;
+  assert(
+    message.text.startsWith(prefix),
+    "Expected the compiler's exact tool outcome prefix",
+  );
+  return message.text.slice(prefix.length);
+}
+
+test("discovery fixture reads exact semantic tool body without parsing its outcome prefix as JSON", () => {
+  const body = '{"operation":"read","literal":"Exit code: 7"}';
+  assert.equal(
+    semanticToolOutput({
+      role: "tool",
+      callId: "fixture",
+      exitCode: 7,
+      text: `Exit code: 7\n${body}`,
+    }),
+    body,
+  );
+  assert.throws(() =>
+    semanticToolOutput({
+      role: "tool",
+      callId: "fixture",
+      exitCode: 7,
+      text: `Exit code: 0\n${body}`,
+    }),
+  );
+});

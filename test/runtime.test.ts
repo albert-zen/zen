@@ -34,7 +34,6 @@ import {
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
 import {
   FakeModel,
-  compileModelMessages,
   retryableModelSampleError,
   type ModelAdapter,
   type ModelEvent,
@@ -65,6 +64,9 @@ import {
   type ToolRuntime,
 } from "../src/tool.js";
 import { Thread } from "../src/thread.js";
+import { compileItemList } from "../src/item-list.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
 import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 
 function createServer(
@@ -397,19 +399,18 @@ test("persists opaque reasoning semantics and derives replay selection", async (
       },
     ]);
     assert.equal(
-      compileModelMessages(replayed.items, {
-        providerProfileId: "other-profile",
-        modelId: "fake",
-        reasoningEffort: "medium",
-      }).some((message) => message.role === "reasoning"),
+      compileItemList(replayed.itemList!, {
+        selection: { providerProfileId: "other-profile", modelId: "fake" },
+      }).messages.some((message) => message.role === "reasoning"),
       false,
     );
     assert.equal(
-      compileModelMessages(replayed.items, {
-        providerProfileId: "openai-codex",
-        modelId: "other-model",
-        reasoningEffort: "medium",
-      }).some((message) => message.role === "reasoning"),
+      compileItemList(replayed.itemList!, {
+        selection: {
+          providerProfileId: "openai-codex",
+          modelId: "other-model",
+        },
+      }).messages.some((message) => message.role === "reasoning"),
       false,
     );
   } finally {
@@ -538,14 +539,18 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(requestedMessages[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "first" }],
-      userTimestamp: userTimestamps[0],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[0]}]` },
+        { type: "text", text: "first" },
+      ],
     },
     { role: "assistant", text: "model-one" },
     {
       role: "user",
-      content: [{ type: "text", text: "second" }],
-      userTimestamp: userTimestamps[1],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[1]}]` },
+        { type: "text", text: "second" },
+      ],
     },
   ]);
   assert.deepEqual(
@@ -1420,7 +1425,7 @@ test("runs a deterministic in-memory turn from append-only items", async () => {
   assert.equal(snapshot.turns[0]?.status, "completed");
   assert.equal(
     snapshot.items.find((item) => item.type === "agent_message")?.text,
-    "Echo: hello",
+    `Echo: [Message received at ${snapshot.items.find((item) => item.type === "user_message")!.createdAt}]\nhello`,
   );
   assert(events.some((event) => event.type === "item_delta"));
   assert.equal(events.at(-1)?.type, "turn_completed");
@@ -1750,7 +1755,7 @@ test("failed reasoning samples preserve incomplete traces without replaying them
   );
   for (const [index, messages] of [
     ...requests,
-    compileModelMessages(snapshot.items),
+    compileItemList(snapshot.itemList!).messages,
   ].entries()) {
     assert.equal(
       messages.some((message) => message.role === "reasoning"),
@@ -1940,7 +1945,7 @@ test("HTTP credentials crossing the message bound never reach the journal or lat
     false,
   );
   assert.equal(
-    JSON.stringify(compileModelMessages(snapshot.items)).includes(
+    JSON.stringify(compileItemList(snapshot.itemList!).messages).includes(
       key.slice(0, -1),
     ),
     false,
@@ -2036,7 +2041,7 @@ test("retryable model stream failures are replayed within the turn", async () =>
     2,
   );
   // Superseded partial output never re-enters the model context.
-  const messages = compileModelMessages(snapshot.items);
+  const messages = compileItemList(snapshot.itemList!).messages;
   const assistantMessages = messages.filter(
     (message) => message.role === "assistant",
   );
@@ -2295,7 +2300,9 @@ test("subscription transport credentials never reach retry logs or durable failu
   assert.equal(JSON.stringify(warnings).includes(token), false);
   assert.equal(JSON.stringify(snapshot.items).includes(token), false);
   assert.equal(
-    JSON.stringify(compileModelMessages(snapshot.items)).includes(token),
+    JSON.stringify(compileItemList(snapshot.itemList!).messages).includes(
+      token,
+    ),
     false,
   );
 });
@@ -2447,7 +2454,7 @@ test("canonical items and exposed snapshots are immutable at runtime", async () 
   );
 });
 
-test("derives an interrupted turn after restart without writing a synthetic record", async () => {
+test("cold inspection is read-only and explicit continuation durably closes the interrupted Turn", async () => {
   const journal = new InMemoryThreadJournal();
   const threadId = "recovered_thread";
   const oldTurnId = "old_turn";
@@ -2480,15 +2487,28 @@ test("derives an interrupted turn after restart without writing a synthetic reco
   });
   await journal.append(user);
 
+  const persistedBeforeRead = await journal.read(threadId);
   const server = createServer({ journal });
   const recovered = await server.readThread(threadId);
   assert.equal(recovered.turns[0]?.status, "interrupted");
+  assert.deepEqual(await journal.read(threadId), persistedBeforeRead);
+  assert(!recovered.items.some((item) => item.type === "turn_aborted"));
 
   const next = await server.startTurn(threadId, "continue");
   await next.done;
   const snapshot = await server.readThread(threadId);
   assert.equal(snapshot.turns[0]?.status, "interrupted");
-  assert(!snapshot.items.some((item) => item.type === "turn_aborted"));
+  const closures = snapshot.items.filter(
+    (item) => item.type === "turn_aborted",
+  );
+  assert.equal(closures.length, 1);
+  assert.equal(closures[0]!.turnId, oldTurnId);
+  assert.match(closures[0]!.reason, /No previous operation was replayed/);
+  assert.deepEqual(
+    snapshot.items.slice(0, persistedBeforeRead.length),
+    persistedBeforeRead,
+  );
+  assert.deepEqual(await journal.read(threadId), snapshot.items);
   assert.equal(snapshot.turns[1]?.status, "completed");
 });
 
@@ -3462,19 +3482,25 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "initial request" }],
-      userTimestamp: userTimestamps[0],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[0]}]` },
+        { type: "text", text: "initial request" },
+      ],
     },
     { role: "assistant", text: "first answer" },
     {
       role: "user",
-      content: [{ type: "text", text: "follow this correction" }],
-      userTimestamp: userTimestamps[1],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[1]}]` },
+        { type: "text", text: "follow this correction" },
+      ],
     },
     {
       role: "user",
-      content: [{ type: "text", text: "then preserve the tests" }],
-      userTimestamp: userTimestamps[2],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[2]}]` },
+        { type: "text", text: "then preserve the tests" },
+      ],
     },
   ]);
   const snapshot = await server.readThread(thread.id);
@@ -3567,8 +3593,10 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "use a tool" }],
-      userTimestamp: userTimestamps[0],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[0]}]` },
+        { type: "text", text: "use a tool" },
+      ],
     },
     {
       role: "assistant",
@@ -3580,11 +3608,18 @@ test("soft steer waits behind a tool result and does not cancel approval", async
         },
       ],
     },
-    { role: "tool", callId: "steer-call", text: "tool complete", exitCode: 0 },
+    {
+      role: "tool",
+      callId: "steer-call",
+      text: "Exit code: 0\ntool complete",
+      exitCode: 0,
+    },
     {
       role: "user",
-      content: [{ type: "text", text: "change the final response" }],
-      userTimestamp: userTimestamps[1],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[1]}]` },
+        { type: "text", text: "change the final response" },
+      ],
     },
   ]);
 });
@@ -3974,28 +4009,34 @@ test("failed sample trace survives journal reload without executing a queued too
   }
 });
 
-test("opted-in queued messages share one next Turn without losing canonical identity", async () => {
+test("opted-in queued messages share one next Turn without losing canonical identity", async (t) => {
   const entered = testDeferred<void>();
   const release = testDeferred<void>();
   const finished = testDeferred<void>();
-  const sampled: string[][] = [];
+  const sampled: ModelMessage[][] = [];
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-semantic-queue-"));
+  const directory = path.join(root, "threads");
+  const trace = new FileTraceStore(path.join(root, "trace"));
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new DomainThreadJournal({ directory, trace, metadata });
+  t.after(async () => {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
   const model: ModelAdapter = {
     provider: "queue-batch-test",
     async *stream(request): AsyncIterable<ModelEvent> {
-      sampled.push(
-        request.messages.flatMap((message) =>
-          message.role !== "user"
-            ? []
-            : [
-                "text" in message
-                  ? message.text
-                  : message.content
-                      .filter((part) => part.type === "text")
-                      .map((part) => part.text)
-                      .join("\n"),
-              ],
-        ),
+      assert.deepEqual(
+        compileItemList(
+          await journal.readItemList(request.debugContext!.threadId),
+          {
+            inputModalities: ["text", "image"],
+          },
+        ).messages,
+        request.messages,
+        "every sample is compiled from already durable semantic input",
       );
+      sampled.push(structuredClone(request.messages));
       if (sampled.length === 1) {
         entered.resolve();
         await release.promise;
@@ -4004,6 +4045,8 @@ test("opted-in queued messages share one next Turn without losing canonical iden
     },
   };
   const server = createServer({
+    journal,
+    threadMetadata: metadata,
     model,
     modelCatalog: new StaticModelCatalog([
       {
@@ -4051,7 +4094,30 @@ test("opted-in queued messages share one next Turn without losing canonical iden
       .map((item) => item.clientId),
     [undefined, "batch-0", "batch-1", "batch-2"],
   );
-  assert.deepEqual(sampled[1]?.slice(-3), ["same", "same", "third"]);
+  const queued = snapshot.items.filter(
+    (item) => item.type === "user_message_queued",
+  );
+  assert.deepEqual(
+    sampled[1]?.filter((message) => message.role === "user").slice(-3),
+    queued.map((item) => ({
+      role: "user",
+      content: [
+        { type: "text", text: `[Message received at ${item.createdAt}]` },
+        ...item.input,
+      ],
+    })),
+  );
+  const finalAnswer = snapshot.items.findLast(
+    (item) => item.type === "agent_message",
+  )!;
+  const admitted = snapshot.itemList!.slice(
+    0,
+    snapshot.itemList!.findIndex((item) => item.id === finalAnswer.id),
+  );
+  assert.deepEqual(
+    sampled[1],
+    compileItemList(admitted, { inputModalities: ["text", "image"] }).messages,
+  );
   assert.deepEqual(
     snapshot.items.filter((item) => item.type === "user_message").at(-1)
       ?.content,
@@ -4061,6 +4127,29 @@ test("opted-in queued messages share one next Turn without losing canonical iden
     ],
   );
   assert.equal(pendingQueuedMessages(snapshot.items).length, 0);
+  const persisted = await journal.readItemList(thread.id);
+  assert.deepEqual(persisted, snapshot.itemList);
+  assert.deepEqual(await journal.read(thread.id), snapshot.items);
+  await journal.close();
+  const coldTrace = new FileTraceStore(path.join(root, "trace"));
+  const coldJournal = new DomainThreadJournal({
+    directory,
+    trace: coldTrace,
+    metadata,
+  });
+  try {
+    const cold = createServer({ journal: coldJournal, model });
+    const recovered = await cold.readThread(thread.id);
+    assert.deepEqual(recovered.itemList, persisted);
+    assert.deepEqual(recovered.items, snapshot.items);
+    assert.equal(
+      sampled.length,
+      2,
+      "cold inspection must not replay the queued batch",
+    );
+  } finally {
+    await coldJournal.close();
+  }
 });
 
 test("live same-thread projection clears each identical queue entry only on canonical acceptance", async () => {

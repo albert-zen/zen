@@ -1,11 +1,20 @@
 import {
+  selectChatToolMediaTransport,
+  type ChatToolMediaCapability,
+  type ChatToolMediaEvidenceConflict,
+} from "./tool-media-transport.js";
+import {
   safeProviderErrorIdentity,
   safeProviderErrorParameter,
   providerRecoveryBlocked,
   recordMediaPaths,
   rejectedMediaParts,
 } from "../loop-recovery.js";
-import { observeRequestBody } from "./request-observation.js";
+import {
+  fetchObservedModelResponse,
+  ModelDispatchRevokedError,
+  MODEL_RESPONSE_TERMINAL,
+} from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
@@ -13,7 +22,7 @@ import {
   isTransientTransportError,
 } from "./request-retry.js";
 import { randomUUID } from "node:crypto";
-import { modelUserContent } from "../model.js";
+import { contextUserContent } from "./context-content.js";
 import type {
   ModelAdapter,
   ModelEvent,
@@ -21,6 +30,7 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
+import type { ToolMediaTransportSummary } from "./transport-types.js";
 import type { AttachmentStore } from "../attachment.js";
 
 export interface ModelStreamDiagnostic {
@@ -42,6 +52,9 @@ export interface ModelStreamDiagnostic {
 export interface OpenAiCompatibleModelOptions {
   onStreamFailure?: (event: ModelStreamDiagnostic) => Promise<void>;
 
+  /** Explicit exact-target transport support; absent means compatibility encoding. */
+  toolMediaCapabilities?: readonly ChatToolMediaCapability[];
+  toolMediaEvidenceConflicts?: readonly ChatToolMediaEvidenceConflict[];
   baseUrl: string;
   apiKey: string;
   provider?: string;
@@ -111,6 +124,8 @@ export class OpenAiCompatibleModel implements ModelAdapter {
   readonly requestPayloadFormat = "chat-completions" as const;
 
   readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
+  readonly #toolMediaCapabilities: readonly ChatToolMediaCapability[];
+  readonly #toolMediaEvidenceConflicts: readonly ChatToolMediaEvidenceConflict[];
   readonly #apiKey: string;
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
@@ -119,6 +134,12 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
   constructor(options: OpenAiCompatibleModelOptions) {
     this.#endpoint = chatCompletionsEndpoint(options.baseUrl);
+    this.#toolMediaCapabilities = (options.toolMediaCapabilities ?? []).map(
+      (entry) => ({ ...entry, media: [...entry.media] }),
+    );
+    this.#toolMediaEvidenceConflicts = (
+      options.toolMediaEvidenceConflicts ?? []
+    ).map((entry) => ({ ...entry }));
     this.#apiKey = requiredSecret(options.apiKey);
     this.provider = requiredLabel(
       options.provider ?? "openai-compatible",
@@ -132,6 +153,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
+    const model = requiredLabel(request.model, "model");
     const tools = request.tools.map(toChatTool);
     const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
     const reasoningPolicy = compatibleReasoningPolicy({
@@ -142,6 +164,14 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
+    const toolMediaTransport: ToolMediaTransportSummary = {
+      nativeToolContent: 0,
+      compatibilitySupplement: 0,
+      unknownTarget: 0,
+      undeclaredMedia: 0,
+      nativeSupportUnverified: 0,
+      conflictingEvidence: 0,
+    };
     // Chat tool replies are a contiguous batch. Supplemental user-role media
     // follows the entire batch, never another tool's still-pending reply.
     const pendingToolMedia: Array<{
@@ -172,7 +202,42 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         continue;
       }
       if (message.role !== "tool") flushToolMedia();
-      const encoded = await toChatMessage(message, this.#attachments);
+      let encoded = await toChatMessage(message, this.#attachments);
+      const decision =
+        message.role === "tool" && message.modelContent !== undefined
+          ? selectChatToolMediaTransport(
+              this.#toolMediaCapabilities,
+              this.#endpoint,
+              model,
+              message.modelContent,
+              this.#toolMediaEvidenceConflicts,
+            )
+          : undefined;
+      const nativeToolMedia = decision?.encoding === "native-tool-content";
+      if (decision !== undefined) {
+        if (nativeToolMedia) toolMediaTransport.nativeToolContent++;
+        else toolMediaTransport.compatibilitySupplement++;
+        if (decision.reason === "conflicting-evidence")
+          toolMediaTransport.conflictingEvidence++;
+        if (decision.reason === "unknown-target")
+          toolMediaTransport.unknownTarget++;
+        if (decision.reason === "undeclared-media")
+          toolMediaTransport.undeclaredMedia++;
+      }
+      let nativeContent: import("../item.js").UserInput | undefined;
+      if (
+        nativeToolMedia &&
+        message.role === "tool" &&
+        message.modelContent !== undefined
+      ) {
+        const content = [
+          { type: "text" as const, text: String(encoded.content) },
+          ...message.modelContent,
+        ];
+        const media = await toChatUserContent(content, this.#attachments);
+        encoded = { ...encoded, content: media.content };
+        nativeContent = content;
+      }
       if (pendingReasoning.length > 0) {
         if (shouldReplayReasoning(reasoningPolicy.replay, message)) {
           messages.push({ ...encoded, reasoning_content: pendingReasoning });
@@ -191,14 +256,24 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         }
         pendingReasoning = "";
       }
+      if (nativeContent !== undefined)
+        recordMediaPaths(
+          mediaPaths,
+          `messages[${messages.length}]`,
+          nativeContent,
+        );
       if (message.role === "user")
         recordMediaPaths(
           mediaPaths,
           `messages[${messages.length}]`,
-          modelUserContent(message),
+          contextUserContent(message),
         );
       messages.push(encoded);
-      if (message.role === "tool" && message.modelContent !== undefined) {
+      if (
+        message.role === "tool" &&
+        message.modelContent !== undefined &&
+        !nativeToolMedia
+      ) {
         pendingToolMedia.push({
           content: message.modelContent,
           encoded: await toChatUserContent(
@@ -221,10 +296,13 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     }
     const body = serializeRequest({
       ...this.#defaultParams,
-      model: requiredLabel(request.model, "model"),
+      model,
       messages,
       n: 1,
       stream: true,
+      ...(request.maxOutputTokens === undefined
+        ? {}
+        : { max_tokens: request.maxOutputTokens }),
       ...(reasoningPolicy.supportsUsageInStreaming &&
       !Object.hasOwn(this.#defaultParams, "stream_options")
         ? { stream_options: { include_usage: true } }
@@ -247,30 +325,31 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     let response: Response;
     try {
       response = await fetchModelResponse(
-        () => {
-          observeRequestBody(
+        () =>
+          fetchObservedModelResponse({
             request,
-            body,
-            this.requestPayloadFormat,
-            this.provider,
-            ++transportAttempt,
-            [this.#apiKey],
-          );
-          return this.#fetch(this.#endpoint, {
-            method: "POST",
-            signal: request.signal,
-            headers: {
-              accept: "text/event-stream",
-              authorization: `Bearer ${this.#apiKey}`,
-              "content-type": "application/json",
+            fetch: this.#fetch,
+            url: this.#endpoint,
+            format: this.requestPayloadFormat,
+            provider: this.provider,
+            transportAttempt: ++transportAttempt,
+            toolMediaTransport,
+            init: {
+              method: "POST",
+              signal: request.signal,
+              headers: {
+                accept: "text/event-stream",
+                authorization: `Bearer ${this.#apiKey}`,
+                "content-type": "application/json",
+              },
+              body,
             },
-            body,
-          });
-        },
+          }),
         request.signal,
         { allowRetries: request.isSamplingRetry !== true },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ModelDispatchRevokedError) throw error;
       request.signal.throwIfAborted();
       throw modelError(
         "transport",
@@ -508,7 +587,7 @@ function compatibleReasoningPolicy(options: {
 function compatibleDefaultParams(
   value: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  const snapshot = { ...value };
+  const snapshot = structuredClone(value);
   for (const control of ["reasoning_effort", "thinking_budget"] as const) {
     if (Object.hasOwn(snapshot, control)) {
       throw modelError(
@@ -705,7 +784,7 @@ async function toChatMessage(
         message.exitCode === null
           ? historicalCallId(message.callId)
           : requiredLabel(message.callId, "tool call id"),
-      content: `${message.exitCode === null ? "Historical tool result; execution outcome unknown." : `Exit code: ${String(message.exitCode)}`}\n${message.text}`,
+      content: message.text,
     };
   }
 
@@ -728,11 +807,8 @@ async function toChatMessage(
     };
   }
 
-  if (
-    message.role === "user" &&
-    ("content" in message || message.userTimestamp !== undefined)
-  ) {
-    return await toChatUserContent(modelUserContent(message), attachments);
+  if (message.role === "user" && "content" in message) {
+    return await toChatUserContent(contextUserContent(message), attachments);
   }
 
   return { role: message.role, content: message.text };
@@ -938,7 +1014,9 @@ async function* parseChatCompletionStream(
     }
   } finally {
     if (!reachedEof) {
-      await reader.cancel().catch(() => undefined);
+      await reader
+        .cancel(state.doneSeen ? MODEL_RESPONSE_TERMINAL : undefined)
+        .catch(() => undefined);
     }
     reader.releaseLock();
   }

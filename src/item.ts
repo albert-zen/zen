@@ -1,3 +1,7 @@
+import {
+  validateModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 import type {
   ImportedToolCallOrigin,
   ThreadImportOrigin,
@@ -404,6 +408,28 @@ export interface ModelUsageItem extends ItemBase {
   reasoningOutputTokens?: number;
 }
 
+export interface OpaqueReasoningReplayProvenance {
+  version: 1;
+  adapter: "public-responses";
+  endpointSha256: string;
+}
+export function validateOpaqueReplayProvenance(
+  value: unknown,
+): OpaqueReasoningReplayProvenance {
+  const object = requireRecord(value, "opaqueReplayProvenance");
+  if (
+    Object.keys(object).some(
+      (key) => !["version", "adapter", "endpointSha256"].includes(key),
+    ) ||
+    object.version !== 1 ||
+    object.adapter !== "public-responses" ||
+    typeof object.endpointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(object.endpointSha256)
+  )
+    throw new Error("Invalid opaque reasoning replay provenance");
+  return structuredClone(object) as unknown as OpaqueReasoningReplayProvenance;
+}
+
 export type ReasoningItem =
   | (ItemBase & {
       type: "reasoning";
@@ -415,6 +441,9 @@ export type ReasoningItem =
       contentVisibility: "public" | "opaque";
       /** Stable provider identity retained only when its adapter requires replay. */
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
+      /** Exact producing sample selection, not the mutable current Turn choice. */
+      selection?: CanonicalProviderSelection;
     })
   /** Existing summary-only journals remain readable without a rewrite. */
   | (ItemBase & {
@@ -424,6 +453,7 @@ export type ReasoningItem =
       reasoningContent?: never;
       contentVisibility?: never;
       providerItemId?: never;
+      opaqueReplayProvenance?: never;
       incomplete?: never;
     });
 
@@ -442,14 +472,16 @@ export interface ToolCallItem extends ItemBase {
 }
 
 export interface ToolResultItem extends ItemBase {
+  /** Trusted exact bindings; not serialized into model/program output. */
+  referenceBindings?: readonly ModelReferenceBinding[];
   type: "tool_result";
   turnId: string;
   callId: string;
   output: string;
-  /** null is reserved for imported historical observations with unknown outcome. */
+  /** null denotes an explicit unknown outcome, including imported observations. */
   exitCode: number | null;
   /** Runtime-owned execution fact; absent on legacy Items. */
-  executionStatus?: "completed" | "failed" | "declined";
+  executionStatus?: "completed" | "failed" | "declined" | "unknown";
   /** Optional provider-neutral data for product rendering; absent on legacy Items. */
   contentType?: string;
   structuredContent?: JsonValue;
@@ -1135,8 +1167,18 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "reasoning":
       requireTurnId(item, type);
+      if (item.selection !== undefined)
+        validateSelection(
+          requireRecord(item.selection, "reasoning.selection"),
+          "reasoning.selection",
+        );
       if (item.incomplete !== undefined && item.incomplete !== true) {
         throw new Error("reasoning.incomplete must be true when present");
+      }
+      if (item.opaqueReplayProvenance !== undefined) {
+        if (item.contentVisibility !== "opaque")
+          throw new Error("Opaque replay provenance requires opaque content");
+        validateOpaqueReplayProvenance(item.opaqueReplayProvenance);
       }
       if (hasOwn(item, "reasoningContent")) {
         requireString(item.reasoningContent, `${type}.reasoningContent`);
@@ -1193,13 +1235,16 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     case "tool_result": {
+      if (item.referenceBindings !== undefined)
+        validateModelReferenceBindings(item.referenceBindings);
       requireTurnId(item, type);
       requireNonEmptyString(item.callId, `${type}.callId`);
       requireString(item.output, `${type}.output`);
       if (item.exitCode === null) {
         if (
-          item.contentType !== IMPORTED_TOOL_RESULT_CONTENT_TYPE ||
-          item.executionStatus !== undefined
+          item.executionStatus !== "unknown" &&
+          (item.contentType !== IMPORTED_TOOL_RESULT_CONTENT_TYPE ||
+            item.executionStatus !== undefined)
         )
           throw new Error(
             "Unknown exit status requires an imported historical result",
@@ -1208,7 +1253,7 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (item.executionStatus !== undefined) {
         requireEnum(
           item.executionStatus,
-          ["completed", "failed", "declined"],
+          ["completed", "failed", "declined", "unknown"],
           `${type}.executionStatus`,
         );
       }

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { FileTraceStore } from "../../../src/trace.js";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import {
   ThreadSidebarStore,
   sidebarOwnerFile,
+  sidebarTracePartition,
 } from "../src/main/thread-sidebar-store.js";
 import {
   resolveSidebarScope,
@@ -86,9 +88,13 @@ test("failed persistence does not notify/commit, queue recovers", async () => {
   const dir = await mkdtemp(join(tmpdir(), "sidebar-review-"));
   let fail = true;
   let notifications = 0;
-  const store = new ThreadSidebarStore(dir, async (file, data) => {
-    if (fail) throw Error("disk");
-    await writeFile(file, data);
+  const trace = new FileTraceStore(join(dir, "trace"));
+  const store = new ThreadSidebarStore(dir, undefined, {
+    read: trace.read.bind(trace),
+    record: async (event) => {
+      if (fail) throw Error("disk");
+      return trace.record(event);
+    },
   });
   store.onChanged(() => notifications++);
   try {
@@ -210,6 +216,21 @@ test("self-control uses trusted invocation scope and reports CAS conflicts witho
     })) as { applied: boolean; state: { selectedTab: string } };
     assert.equal(updated.applied, true);
     assert.equal(updated.state.selectedTab, "file:@a:README.md");
+    const facts = await new FileTraceStore(join(dir, "trace")).read(
+      sidebarTracePartition({ kind: "room", id: "r" }),
+    );
+    assert.deepEqual((facts.records[0]!.data as { source: unknown }).source, {
+      kind: "tool",
+      threadId: "a",
+      callId: "fixture",
+    });
+    await assert.rejects(
+      invoke("zenx_self_control_sidebar_update", {
+        expectedRevision: 1,
+        patch: { open: false },
+        source: { kind: "ui" },
+      }),
+    );
     const stale = (await invoke("zenx_self_control_sidebar_update", {
       expectedRevision: 0,
       patch: { open: false },

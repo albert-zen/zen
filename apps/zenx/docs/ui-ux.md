@@ -28,9 +28,9 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - 目标 ZenX Host 同时拥有并列的 ZAS/AppServer 与 Plugin Host 服务。Plugin Host 负责插件生命周期、UI/tool 注册与 Runtime 路由，但不拥有 Agent、Thread、Turn 或 transcript；人类直接操作插件 UI 不创建 Turn，只有显式 **Run Agent** 才调用 AppServer。
 - ZenX Host 通过稳定的私有 descriptor 暴露唯一 ZAS 的带认证 loopback endpoint。关闭最后一个窗口只关闭 UI，不停止 ZenX Host、active Turn 或外部连接；activation 重建窗口，显式 Quit 在 macOS、Windows、Linux 都撤销发现入口并停止 Host / ZAS。本阶段仍不做 OS daemon。
 - Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex App Server（CAS）compatibility mapping / claim 只覆盖 ZAS 中固定 0.146.0 可表达且已验收的子集；当前共用 endpoint/shape 不使 CAS 成为 ZenX 产品读取路径或产品模型权威。
-- Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
+- 持久日志是事实与恢复真相源，当前权限、队列等只是日志投影/缓存；关键 queue/config/control 变更未持久成功不得 ACK。ItemList 仅承载模型语义上下文；Trace 记录真实输入、输出、工具及运行观察，流式显示不能成为第二份可编辑历史。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
-- Thread 的名称与归档由 ZAS 产品元数据负责；当前前台 Thread 选择、disclosure、草稿和打开的菜单属于 renderer-local UI 状态。Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个 main-process revision/CAS presentation store 持久化；它不是会话历史。后台更新只改变所属工作区，不抢占当前前台、焦点或读取文件/打开网页。Room 使用相同工作区界面，资源标签保留原 member Thread 归属，成员移除后不可借用其他成员执行。PAW 默认 Room 来自 trusted runtime 专属绑定，不与私有 Thread 侧栏双向同步。
+- Thread 的名称与归档由 ZAS 产品元数据负责；当前前台 Thread 选择、disclosure、草稿和打开的菜单属于 renderer-local UI 状态。Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个 main-process revision/CAS presentation store 从已提交 Trace 事实恢复，JSON 仅作缓存；它不是会话历史。后台更新只改变所属工作区，不抢占当前前台、焦点或读取文件/打开网页。Room 使用相同工作区界面，资源标签保留原 member Thread 归属，成员移除后不可借用其他成员执行。PAW 默认 Room 来自 trusted runtime 专属绑定，不与私有 Thread 侧栏双向同步。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
 - Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。Projects Sidebar 使用独立 Pinned section，其展示顺序就是 profile-local `pinnedThreadIds` 列表顺序：新 Pin 前置，用户可以在 Pinned section 内用拖拽或 Alt+方向键交换相邻行来调整顺序；排序只置换 `pinnedThreadIds`，不写入 Thread 的 Project 内排序偏好，也不是 canonical fact。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。
@@ -618,7 +618,7 @@ Delivered and queued Thread messages expose a compact source action using the ca
 
 ### 2026-10-14: Opt-in Thread debug mode
 
-Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an off-by-default switch in the last row of the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. The same panel stays open and anchored, with its toggle and keyboard focus in place so a second click exits debug mode. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode never enables Host request capture; that remains a separate explicit control with unchanged safety boundaries.
+Normal Agent and side conversations have no permanent Conversation / Debug navigation row. Debug mode is an off-by-default switch in the last row of the existing Sidebar Thread actions menu; selecting it opens that exact Thread in the main Agent viewport. The same panel stays open and anchored, with its toggle and keyboard focus in place so a second click exits debug mode. Ordinary Thread navigation exits debug mode, and side conversations remain normal conversations (expand to the main view to inspect them). The mode is transient renderer navigation state, never a profile preference or canonical Item. Debug mode retains Items and the existing local-only Actual requests tab, with an explicit Exit debug mode action in the same toolbar. Exiting restores the normal conversation layout and Composer focus. Opening the mode only reads the always-on durable Trace; it does not enable capture, start sampling or alter any execution/permission state. Legacy opt-in capture records remain historical evidence only.
 
 ### 2026-10-14: Compact request inspection
 
@@ -784,3 +784,33 @@ trusted style nonce for CodeMirror runtime styles. Packaged acceptance uses the
 actual renderer CSP, not a permissive preview policy; missing/incorrect nonce
 styles remain blocked. Fixing layout or focus must never broadly permit inline
 styles or scripts, and editor scrolling stays inside its bounded pane.
+
+### 持久 Trace 与模型上下文调试
+
+- 调试器是常开本机持久 Trace 的只读消费端，不拥有 capture、开关、清空或重放能力。关闭面板与重启不能删除记录；没有捕获的 actual transport 必须不可用，不能由 ItemList 反推伪造。
+- 普通会话渲染语义内容与日志派生的产品状态，ItemList 只呈现精确 role/content/provenance，不混入 runtime/control 日志。来源不是角色：Host 包裹的用户选择仍是 user 数据，不升级为 developer 指令；时间/引用可友好呈现但保留精确模型文本。
+- Model sample outcome、HTTP dispatch evidence、raw response EOF 是三个独立观察。模型已完成而 HTTP tail 未完，显示回复已完成且捕获未知；HTTP EOF 也不能遮蔽模型解析失败/取消。无终态的冷历史显示 unknown，不能假装仍在运行。
+- request_body 是准备字节；只有 model_request_dispatched 证明开始调用 fetch（不是提供方已接收）。blocked 显示未派发；不能把早先重试的 EOF/耗时用在当前尝试。整体 sample 耗时与逐 attempt 耗时分开，跨单调时钟域不能相减。
+- 所选详情显示同次读取的状态及字节；索引轮询不能悄悄用新状态覆盖旧详情。Thread 切换、作用域、查询、关闭、重复打开和重叠异步请求都有 freshness fence。窄面板 list/detail 分层，Back 返回同一行键盘焦点。
+- 当前 UI settings 与 frozen sample configuration 显式分开；改变当前模型/权限不会改变已捕获请求。内部 ID/headers/metadata 按需披露，不倒灌普通消息或模型上下文。
+- 本机原始内容仅省略认证 headers 的 API Key，不 broadly redact body；导出清理另行处理。元数据索引不声称已验证所有 artifacts，逐次读取校验原始 hash/length；部分/损坏/缺失显示未知与原因，同时保留已知事实。
+- Trace IPC 仅允许 owned ZenX window 的 main frame、精确 renderer URL，拒绝 webview/subframe/foreign window/origin。All local 范围明示含辅助 title/probe，不能为了日志制造假用户消息或隐藏 chat Thread。
+- UI 验收必须使用生产组件、合成数据、精确 source/bundle SHA 的真实截图与原始 lifecycle receipt。JSDOM、HTML bundle 和未运行 CI 不等于视觉通过；未完成截图不能合并。
+
+发送时间线保留 UI handler 在任何异步准备前取得的 renderer-reported activation，
+与 Host 实际收到请求的时刻分开。UI/tool 入口不等于已验证的“真人操作”。
+新建 Thread 前的点击只是一条本机 Trace 观察，不制造空 Thread、用户消息或模型请求。
+独立观察无法送达或写入失败须显式报告；没有 Host 收件/采样记录只能显示未观测。
+
+Trace「时间线与事件」显示准备/语义落盘/编译、实际 Fetch、首次收到响应字节、
+公开推理/摘要/文本、sample 结束与 raw EOF；不把空 delta、opaque continuation 当作
+已收到公开推理，不推测隐藏思考或 token 生成时间。缺失阶段显示未观测/未知，
+编译失败仍可独立查看，不伪造已发出的模型请求；重试只能用自身 attempt 的事实。
+
+### Sidebar log-derived state
+
+Sidebar 的已提交 patch/state 日志是恢复真相源；当前 map / JSON 只是可重建缓存，
+保留既有 Thread/Room scope、CAS revision、tab 与资源权限。未确认日志持久成功时
+不能 ACK 或通知成功；下一次读取先核对日志，不凭旧缓存重试。旧 JSON 仅一次显式
+legacy import，导入时间不是历史点击时间。UI/tool 来源由可信入口固定，不等同于
+真人操作；这些产品事实不进入模型 ItemList。缓存写失败不撤销已经持久的事实。

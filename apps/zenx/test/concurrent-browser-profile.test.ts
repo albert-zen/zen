@@ -1,3 +1,7 @@
+import {
+  attachBrowserModelRoute,
+  readBrowserModelTargets,
+} from "../src/main/capabilities/model-browser-metadata.js";
 import assert from "node:assert/strict";
 import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -114,6 +118,26 @@ async function title(
 ) {
   const result = await service.execute(invocation(name), generation);
   assert.equal(result.exitCode, 0, result.output);
+  // This passes the actual installed tarball's ProfileTrustedPluginPackage,
+  // supervisor validation and normalization, not just the bridge mock.
+  const metadata = readBrowserModelTargets(result);
+  assert.ok(
+    metadata,
+    "native Browser sideband must survive the real profile adapter",
+  );
+  assert.equal(metadata.route.ownerThreadId, "thread");
+  assert.notEqual(metadata.targets[0]?.tabId, metadata.targets[0]?.targetId);
+  assert.equal(result.output.includes(metadata.route.sessionEpoch), false);
+  await assert.rejects(
+    service.execute(
+      attachBrowserModelRoute(invocation(name), {
+        ...metadata.route,
+        sessionEpoch: "retired-synthetic-epoch",
+      }),
+      generation,
+    ),
+    /no longer current/,
+  );
   return (JSON.parse(result.output) as Array<{ title: string }>)[0]?.title;
 }
 

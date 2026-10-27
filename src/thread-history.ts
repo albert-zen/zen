@@ -90,7 +90,7 @@ export function readThreadHistory(
     const item = items.find((candidate) => candidate.id === options.itemId);
     if (item === undefined)
       throw new Error("Unknown itemId in this history snapshot");
-    const raw = JSON.stringify(publicItemValue(item));
+    const raw = JSON.stringify(publicItemValue(item, true));
     if (cursor.offset > raw.length)
       throw new Error("Invalid item cursor offset");
     const end = Math.min(raw.length, cursor.offset + 8000);
@@ -184,7 +184,7 @@ function previewItem(
   item: CanonicalItem,
   throughItemId?: string,
 ): PublicHistoryItem {
-  const projected = publicItemValue(item);
+  const projected = publicItemValue(item, true);
   const raw = JSON.stringify(projected);
   const truncated = raw.length > 500;
   // Render only the public projection. A structured opaque object never gains
@@ -214,6 +214,28 @@ function previewItem(
           mode: item.mode,
         }
       : {}),
+    ...(visible.contentVisibility !== "opaque" && item.type === "tool_result"
+      ? {
+          outcome: {
+            exitCode: item.exitCode,
+            ...(item.executionStatus === undefined
+              ? {}
+              : { executionStatus: item.executionStatus }),
+          },
+        }
+      : {}),
+    ...(visible.contentVisibility !== "opaque" && item.type === "failure"
+      ? {
+          failure: {
+            code: item.code,
+            message: item.message.slice(0, 500),
+            messageTruncated: item.message.length > 500,
+          },
+        }
+      : {}),
+    ...(visible.contentVisibility !== "opaque" && item.type === "turn_completed"
+      ? { status: item.status }
+      : {}),
     itemId: item.id,
     createdAt: item.createdAt,
     type: item.type,
@@ -234,8 +256,8 @@ function previewItem(
 }
 
 /** Respect structured visibility at every depth without interpreting text strings. */
-function publicItemValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(publicItemValue);
+function publicItemValue(value: unknown, root = false): unknown {
+  if (Array.isArray(value)) return value.map((child) => publicItemValue(child));
   if (value === null || typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
   const entries =
@@ -252,7 +274,14 @@ function publicItemValue(value: unknown): unknown {
         ]
           .filter((key) => Object.hasOwn(record, key))
           .map((key) => [key, record[key]] as const)
-      : Object.entries(record);
+      : Object.entries(record).filter(
+          ([key]) =>
+            !(
+              root &&
+              record.type === "tool_result" &&
+              key === "referenceBindings"
+            ),
+        );
   return Object.fromEntries(
     entries.map(([key, child]) => [key, publicItemValue(child)]),
   );
@@ -293,6 +322,15 @@ function decodeCursor(value: string, binding: string): HistoryCursor {
 }
 
 export interface PublicHistoryItem {
+  outcome?: {
+    exitCode: number | null;
+    executionStatus?: Extract<
+      CanonicalItem,
+      { type: "tool_result" }
+    >["executionStatus"];
+  };
+  failure?: { code: string; message: string; messageTruncated: boolean };
+  status?: Extract<CanonicalItem, { type: "turn_completed" }>["status"];
   itemId: string;
   createdAt: string;
   type: CanonicalItem["type"];

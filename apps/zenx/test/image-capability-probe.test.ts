@@ -1,10 +1,34 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { FileTraceStore } from "../../../src/trace.js";
+import { FileAttachmentStore } from "../../../src/attachment.js";
+import { FileItemListStore } from "../../../src/item-list-store.js";
+import { closeModelTrace } from "../../../src/trace-model.js";
+
+async function evidence(t: test.TestContext) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-probe-"));
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  t.after(async () => {
+    await closeModelTrace(trace);
+    await rm(directory, { recursive: true, force: true });
+  });
+  return {
+    trace,
+    itemListStore: new FileItemListStore(
+      path.join(directory, "context-bundles"),
+    ),
+    attachments: new FileAttachmentStore(path.join(directory, "attachments")),
+  };
+}
 
 import { probeOpenAiCompatibleImage } from "../src/main/image-capability-probe.js";
 
-test("explicit image probe uses the real adapter request and classifies supported, unsupported, and inconclusive", async () => {
+test("explicit image probe uses the real adapter request and classifies supported, unsupported, and inconclusive", async (t) => {
+  const captured = await evidence(t);
   const requests: Array<Record<string, unknown>> = [];
   const server = createServer((request, response) => {
     let body = "";
@@ -70,6 +94,7 @@ test("explicit image probe uses the real adapter request and classifies supporte
     ] as const) {
       assert.equal(
         await probeOpenAiCompatibleImage({
+          ...captured,
           baseUrl: base,
           apiKey: "probe-secret",
           provider: "fake-http-provider",
@@ -111,9 +136,11 @@ test("explicit image probe uses the real adapter request and classifies supporte
   }
 });
 
-test("probe transport failures are inconclusive", async () => {
+test("probe transport failures are inconclusive", async (t) => {
+  const captured = await evidence(t);
   assert.equal(
     await probeOpenAiCompatibleImage({
+      ...captured,
       baseUrl: "https://provider.example.test/v1",
       apiKey: "secret",
       provider: "provider",
@@ -124,4 +151,31 @@ test("probe transport failures are inconclusive", async () => {
     }),
     "inconclusive",
   );
+});
+
+test("probe context persistence failure is explicit rather than an inconclusive provider result", async (t) => {
+  const captured = await evidence(t);
+  let fetches = 0;
+  await assert.rejects(
+    probeOpenAiCompatibleImage({
+      ...captured,
+      trace: {
+        record: async () => ({
+          durability: "degraded",
+          error: "Synthetic disk failure",
+        }),
+      },
+      baseUrl: "https://synthetic.example.test/v1",
+      apiKey: "synthetic-key",
+      provider: "synthetic",
+      model: "synthetic",
+      fetch: async () => {
+        fetches++;
+        return new Response();
+      },
+    }),
+    /context source was not durable/u,
+  );
+  assert.equal(fetches, 0);
+  assert.deepEqual(await captured.itemListStore.listThreadIds(), []);
 });

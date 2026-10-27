@@ -4,6 +4,11 @@ import type {
   ToolRuntime,
 } from "./tool.js";
 import type { ToolTaskManager } from "./tool-task.js";
+import { resolveBuiltinTaskReference } from "./builtin-model-handles.js";
+import {
+  attachModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 
 /** A bounded, non-consuming view of one actual ToolTaskManager Shell task. */
 export interface ShellSessionSummary {
@@ -97,14 +102,49 @@ export class ShellSessionsRuntime implements ToolRuntime {
     const id = invocation.arguments.task_id;
     if (id !== undefined && (typeof id !== "string" || !id))
       throw new Error("Invalid shell task_id");
+    const nativeId =
+      typeof id === "string" && /^t[1-9][0-9]*$/u.test(id)
+        ? resolveBuiltinTaskReference(
+            invocation.threadId,
+            id,
+            invocation.modelReferences ?? [],
+          )
+        : id;
     const value =
-      id === undefined
+      nativeId === undefined
         ? this.manager.listShellSessions(invocation.threadId)
         : this.manager.readShellSession(
             invocation.threadId,
-            id,
+            nativeId,
             invocation.arguments.cursor,
           );
-    return { output: JSON.stringify(value), exitCode: 0 };
+    const raw = { output: JSON.stringify(value), exitCode: 0 };
+    if (
+      invocation.canonicalToolCallId === undefined ||
+      invocation.modelReferences === undefined
+    )
+      return raw;
+    const bindings: ModelReferenceBinding[] = [];
+    const project = (session: ShellSessionSummary) => {
+      const binding = this.manager.modelShellSessionReference(
+        invocation,
+        session.taskId,
+      )!;
+      bindings.push(binding);
+      const { threadId: _threadId, ...fields } = session;
+      return { ...fields, taskId: binding.ref };
+    };
+    const projected = Array.isArray(value)
+      ? value.map(project)
+      : { ...value, session: project(value.session) };
+    if (invocation.traceOutput)
+      await invocation.traceOutput.recordResult(
+        raw,
+        "shell-session-observation-before-projection",
+      );
+    return attachModelReferenceBindings(
+      { output: JSON.stringify(projected), exitCode: 0 },
+      bindings,
+    );
   }
 }

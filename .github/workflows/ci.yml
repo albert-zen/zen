@@ -674,6 +674,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify native Electron Trace frame ownership
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/smoke-durable-trace-electron.mjs "${{ runner.temp }}/zenx-trace-electron"
+      - name: Retain synthetic native Trace frame evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-trace-frame-gate-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trace-electron
+          if-no-files-found: warn
+          retention-days: 14
       - name: Install the official Playwright CLI and Chromium
         run: |
           npm install --global @playwright/cli@0.1.18

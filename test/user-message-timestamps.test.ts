@@ -10,7 +10,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryAttachmentStore } from "../src/attachment.js";
-import { JsonlThreadJournal } from "../src/journal.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import {
+  compileItemList,
+  contextItemsFromLegacy,
+  type ContextItem,
+} from "../src/item-list.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import {
@@ -23,6 +29,27 @@ import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ToolEnvironment } from "../src/tool.js";
 import { png1x1 } from "./fixtures.js";
+
+function semanticItems(history: readonly CanonicalItem[]): ContextItem[] {
+  const items: ContextItem[] = [];
+  for (const [index, fact] of history.entries())
+    items.push(
+      ...contextItemsFromLegacy(fact, history.slice(0, index), index, items),
+    );
+  return items;
+}
+function semanticMessages(history: readonly CanonicalItem[]): ModelMessage[] {
+  return compileItemList(semanticItems(history)).messages;
+}
+function humanMessage(text: string, receivedAt: string): ModelMessage {
+  return {
+    role: "user",
+    content: [
+      { type: "text", text: `[Message received at ${receivedAt}]` },
+      { type: "text", text },
+    ],
+  };
+}
 
 const timestamp = "2026-10-14T05:40:12.345Z";
 const body =
@@ -57,7 +84,7 @@ for (const provider of ["compatible", "subscription"] as const) {
         id: "image-only",
         content: [{ type: "image", attachment: image }],
       } as CanonicalItem,
-      { ...item, id: "legacy", createdAt: "", text: body },
+      { ...item, id: "legacy", createdAt: "not a time", text: body },
     ];
     const original = JSON.stringify(input);
     const payloads: Array<Record<string, unknown>> = [];
@@ -85,11 +112,16 @@ for (const provider of ["compatible", "subscription"] as const) {
             fetch: fetcher,
             attachments,
           });
-    for (const history of [input, JSON.parse(original) as CanonicalItem[]]) {
+    const semantic = semanticItems(input);
+    const persistedSemantic = JSON.stringify(semantic);
+    for (const history of [
+      semantic,
+      JSON.parse(persistedSemantic) as ContextItem[],
+    ]) {
       for await (const _event of adapter.stream({
         model: "test",
         reasoningEffort: "medium",
-        messages: compileModelMessages(history),
+        messages: compileItemList(history).messages,
         tools: [],
         signal: new AbortController().signal,
       })) {
@@ -105,14 +137,14 @@ for (const provider of ["compatible", "subscription"] as const) {
     }>;
     assert.equal(messages.length, 4);
     assert.equal(messages[0]!.content.length, 2);
-    assert.match(
-      messages[0]!.content[0]!.text!,
-      /received_at="2026-10-14T05:40:12\.345Z"/u,
+    assert.equal(
+      messages[0]!.content[0]!.text,
+      `[Message received at ${timestamp}]`,
     );
     assert.equal(messages[0]!.content[1]!.text, body);
-    assert.match(
-      messages[1]!.content[0]!.text!,
-      /received_at="2026-10-14T13:40:12\.345\+08:00"/u,
+    assert.equal(
+      messages[1]!.content[0]!.text,
+      "[Message received at 2026-10-14T13:40:12.345+08:00]",
     );
     assert.equal(messages[1]!.content[1]!.text, "unchanged\n  text");
     const encodedImage = `data:image/png;base64,${Buffer.from(png1x1()).toString("base64")}`;
@@ -123,12 +155,13 @@ for (const provider of ["compatible", "subscription"] as const) {
         : { type: "input_image", image_url: encodedImage },
     );
     assert.deepEqual(messages[2]!.content[1], messages[1]!.content[2]);
-    assert.match(
-      messages[3]!.content[0]!.text!,
-      /received_at=null \(unknown\)/u,
+    assert.equal(
+      messages[3]!.content[0]!.text,
+      "[Message receipt time unavailable]",
     );
     assert.equal(messages[3]!.content[1]!.text, body);
     assert.equal(JSON.stringify(input), original);
+    assert.equal(JSON.stringify(semantic), persistedSemantic);
   });
 }
 
@@ -173,10 +206,15 @@ test("queue and replacement timestamps use the earliest recorded human admission
     tokenUsage: { inputTokens: 1, outputTokens: 1 },
   };
   const history = [queued, edited, delivered, compacted];
-  const expected = { role: "user", text: body, userTimestamp: timestamp };
-  assert.deepEqual(compileModelMessages(history)[0], expected);
+  const expected = humanMessage(body, timestamp);
   assert.deepEqual(
-    compileModelMessages(JSON.parse(JSON.stringify(history)))[0],
+    semanticMessages(history).find((message) => "content" in message),
+    expected,
+  );
+  assert.deepEqual(
+    semanticMessages(JSON.parse(JSON.stringify(history))).find(
+      (message) => "content" in message,
+    ),
     expected,
   );
   const replacement: CanonicalItem = {
@@ -189,10 +227,10 @@ test("queue and replacement timestamps use the earliest recorded human admission
     createdAt: "2026-10-14T13:40:12.345+08:00",
     text: body,
   };
-  assert.deepEqual(compileModelMessages([replacement, delivered])[0], {
-    ...expected,
-    userTimestamp: replacement.createdAt,
-  });
+  assert.deepEqual(
+    semanticMessages([replacement, delivered])[0],
+    humanMessage(body, replacement.createdAt),
+  );
   assert.deepEqual(
     history,
     [queued, edited, delivered, compacted],
@@ -200,7 +238,7 @@ test("queue and replacement timestamps use the earliest recorded human admission
   );
 });
 
-test("missing, invalid and timezone-less recorded times are unknown, never inferred from text or a later delivery", () => {
+test("legacy missing, invalid and timezone-less recorded times are unknown, never inferred from text or a later delivery", () => {
   for (const createdAt of [
     undefined,
     "",
@@ -233,24 +271,41 @@ test("missing, invalid and timezone-less recorded times are unknown, never infer
 });
 
 test("synthetic host, agent and compaction context do not acquire human timestamps", () => {
-  const messages = compileModelMessages([
-    { ...item, type: "thread_instruction", text: "instructions" },
+  const messages = semanticMessages([
     {
       ...item,
+      id: "instruction",
+      type: "thread_instruction",
+      text: "instructions",
+    },
+    {
+      ...item,
+      id: "host",
       type: "host_message",
       sender: "host",
       source: "bootstrap",
       mode: "start",
       clientId: "wake",
     },
-    { ...item, type: "agent_message", text: "answer" },
+    { ...item, id: "agent", type: "agent_message", text: "answer" },
   ]);
   assert(messages.every((message) => !("userTimestamp" in message)));
+  assert.doesNotMatch(
+    JSON.stringify(messages),
+    /Message received at|Message receipt time unavailable/,
+  );
 });
 
-test("live input, soft steer and edited queue retain their first recorded times through retry, JSONL restart and fork", async () => {
+test("live input, soft steer and edited queue retain their first recorded times through retry, durable ItemList restart and fork", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zen-user-time-"));
-  const journal = new JsonlThreadJournal(path.join(root, "threads"));
+  const metadata = new InMemoryThreadMetadataStore();
+  const openJournal = () =>
+    new DomainThreadJournal({
+      directory: path.join(root, "threads"),
+      trace: new FileTraceStore(path.join(root, "trace")),
+      metadata,
+    });
+  let journal = openJournal();
   let now = timestamp;
   const requests: ModelMessage[][] = [];
   const started = deferred();
@@ -258,6 +313,12 @@ test("live input, soft steer and edited queue retain their first recorded times 
   const model: ModelAdapter = {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
+      assert.deepEqual(
+        request.messages,
+        compileItemList(
+          await journal.readItemList(request.debugContext!.threadId),
+        ).messages,
+      );
       requests.push(structuredClone(request.messages));
       if (requests.length === 1) {
         started.resolve();
@@ -334,25 +395,13 @@ test("live input, soft steer and edited queue retain their first recorded times 
     await queueFinished.promise;
     unsubscribe();
     const snapshot = await server.readThread(thread.id);
-    const users = compileModelMessages(snapshot.items).filter(
+    const users = compileItemList(snapshot.itemList!).messages.filter(
       (message) => message.role === "user",
     );
     assert.deepEqual(users, [
-      {
-        role: "user",
-        content: [{ type: "text", text: "live" }],
-        userTimestamp: timestamp,
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "steer" }],
-        userTimestamp: "2026-10-14T05:43:00Z",
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "edited queue" }],
-        userTimestamp: "2026-10-14T05:41:00Z",
-      },
+      humanMessage("live", timestamp),
+      humanMessage("steer", "2026-10-14T05:43:00Z"),
+      humanMessage("edited queue", "2026-10-14T05:41:00Z"),
     ]);
     assert.deepEqual(
       requests.at(-1)?.filter((message) => message.role === "user"),
@@ -366,10 +415,19 @@ test("live input, soft steer and edited queue retain their first recorded times 
       "delivery happened later than queue admission",
     );
     now = "2026-11-01T00:00:00Z";
+    const persisted = await journal.readItemList(thread.id);
+    assert.deepEqual(persisted, snapshot.itemList);
+    await journal.close();
+    journal = openJournal();
     const restarted = createServer();
     assert.deepEqual(
-      compileModelMessages((await restarted.readThread(thread.id)).items),
-      compileModelMessages(snapshot.items),
+      (await restarted.readThread(thread.id)).itemList,
+      persisted,
+    );
+    assert.deepEqual(
+      compileItemList((await restarted.readThread(thread.id)).itemList!)
+        .messages,
+      compileItemList(snapshot.itemList!).messages,
     );
     const fork = await restarted.forkThread({
       sourceThreadId: thread.id,
@@ -377,8 +435,8 @@ test("live input, soft steer and edited queue retain their first recorded times 
       workspace: { type: "same-directory" },
     });
     assert.deepEqual(
-      compileModelMessages(fork.items),
-      compileModelMessages(snapshot.items),
+      compileItemList(fork.itemList!).messages,
+      compileItemList(snapshot.itemList!).messages,
     );
     const beforeRetry = JSON.stringify(
       (await restarted.readThread(thread.id)).items,
@@ -390,12 +448,13 @@ test("live input, soft steer and edited queue retain their first recorded times 
     );
   } finally {
     release.resolve();
+    await journal.close();
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("timestamp parts count toward the same provider-neutral context budget", () => {
-  const [message] = compileModelMessages([item]);
+  const [message] = semanticMessages([item]);
   assert(message?.role === "user");
   assert.equal(
     estimateModelMessageInputTokens([message]),

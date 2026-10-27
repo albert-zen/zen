@@ -1,3 +1,4 @@
+import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
 import { i18n } from "./i18n.js";
@@ -316,6 +317,7 @@ export function ThreadConversationViewport({
   const submit = async (
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ) => {
     if (
       archived ||
@@ -357,8 +359,12 @@ export function ThreadConversationViewport({
       );
       return;
     }
-    const started = beginComposerSubmission(state, intent, expectedTurnId, () =>
-      crypto.randomUUID(),
+    const started = beginComposerSubmission(
+      state,
+      intent,
+      expectedTurnId,
+      () => crypto.randomUUID(),
+      clientObservation,
     );
     if (started === state || started.submission?.status !== "pending") return;
     updateComposer(() => started);

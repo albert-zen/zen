@@ -1,16 +1,66 @@
-# Agent debugger
+# Durable local Trace reader
 
-Open **Debug** in the Agent conversation view. **Items** shows canonical records in append order, including configuration, lifecycle, messages, reasoning and tool calls/results omitted or folded in conversation presentation. The list uses 50-Item pages; message and tool-output previews are bounded to8,192 characters with an explicit full-content expansion. Configuration summaries do not serialize hidden nested objects. Expand **Exact Item JSON** for the full record, identity fields and structured tool data. It reads the existing ItemList; it does not create a second trace or a diagnostics feed. Message Markdown and read-only tool-result fallback presentation are shared with Agent. Plugin result action surfaces and message Copy/Fork controls are not mounted in this read-only view.
+The debugger reads persisted evidence; it does not wrap adapters, enable capture,
+evict history, clear originals, replay tools, or own execution. Closing it and
+restarting the Host do not change the evidence source. Durable logs are the fact
+and recovery authority. Queue/configuration/current UI state are projections or
+caches, never another authority that can replace failed durable control writes.
 
-For local conversations, **Actual requests** is a separate tab. Capture is off by default. Read the privacy notice, then select **Enable capture** before sending a message. Selecting Debug or Items never enables capture. The displayed request list is filtered to the current conversation, while capture, when enabled, covers all eligible conversations on the local Host.
+## Three separate observations
 
-The viewer captures conversation and compaction requests from this machine only. Closing the viewer leaves capture enabled. **Disable and clear**, **Clear captures**, or restarting the Host removes the in-memory records. Capture never writes prompts to disk, changes the journal or uploads data. Treat screenshots and copied request text as private; prompts and tool results can contain secrets even after known provider credentials are removed.
+- **Sample outcome:** completed, failed, cancelled, consumer cancelled, unknown.
+- **Dispatch evidence:** prepared request bytes alone do not prove dispatch.
+  `model_request_dispatched` observes a fetch invocation, not provider receipt.
+  `model_dispatch_blocked` means the attempt did not invoke fetch.
+- **Raw response capture:** complete only with that attempt's explicit response
+  end; semantic model completion and HTTP EOF can happen at different times.
 
-- Chat Completions and ChatGPT Responses adapters capture the same serialized body passed to fetch, immediately before each HTTP attempt. This proves the dispatch-boundary input, not provider receipt or acceptance. Headers and URLs are never captured.
-- Sample attempts and HTTP attempts have separate counters. Each record carries its actual Thread, Turn, sample and canonical context boundary. A compaction summary request has its own sample ID and no invented Turn association.
-- **Raw body** preserves retained serialization. **Messages / input**, **Tools**, and **Instructions & settings** are derived from that captured body, never reconstructed from later chat history. Source attachment metadata is labeled separately from encoded image/audio content.
-- Unsupported adapters (including Fake) show **Model input only**, the normalized input supplied at sampling time. They do not pretend to expose a transport body. Title generation, capability probes, remote devices, requests sent before enabling and samples already in progress when capture was enabled are outside this capture scope.
-- Search scans retained payloads and IDs. Up to 64 requests / 16 MiB of body data are retained, evicting whole oldest requests. A body over 8 MiB retains an explicitly marked prefix; original and retained byte counts are shown and structured views are disabled. Each display page contains at most 65,536 characters (a surrogate pair is kept intact). Paging does not silently discard retained content.
-- Known provider credentials and credential-named fields are redacted before size limits. Such records are explicitly labeled as redacted copies. The debugger is not a general-purpose secret detector.
+Cold unfinished history is unknown, not running. A previous retry's EOF cannot
+close the next attempt. Whole-sample client elapsed time includes local capture
+and provider work. Attempt duration uses a single monotonic clock domain and
+labels preparation-to-block separately from invocation-to-capture-end.
 
-An empty list means no matching retained capture is available. It is not evidence that no request happened, and earlier requests cannot be reconstructed by this feature.
+## Read API
+
+`new ModelRequestDebugStore(traceReader).control(command)` is asynchronous:
+
+- `{action:'status'}` reads current writer health (not historical integrity).
+- `{action:'list',threadId,mode?:'requests'|'events',query?,offset?}` reads a
+  bounded metadata page. Empty threadId explicitly means all-local, including
+  auxiliary title/probe scopes. Search is metadata-only, not body search.
+- `{action:'read',threadId,id,view?,offset?,artifactIndex?}` reads only the selected
+  record's owned evidence. Views: payload, messages, tools, configuration,
+  output, timeline, artifact. No arbitrary path or caller-provided artifact ref.
+
+Actual request bodies are never reconstructed from semantic model inputs.
+Adapter input artifacts are labelled non-HTTP and available as original
+artifacts. Raw request/output/artifact pages are byte-addressed (`offsetUnit: bytes`,
+`endOffset`, `totalBytes`), retain only one bounded page in memory, and verify the
+source artifact hash. They preserve UTF-8 including BOM without splitting code
+points; undecodable bytes are reversible Base64 per page (decode each page
+separately). Structured views remain character-addressed and refuse bodies above
+4 MiB rather than exhausting memory; original byte pages remain available. Structured views are explicitly presentations.
+Only API-key auth headers are omitted locally. Bodies are not broadly redacted;
+export sanitization is a separate explicit action.
+
+Indices verify stored frames without loading every artifact. Every explicit
+artifact read verifies hash/length. Integrity gaps and unavailable bytes remain
+visible. Existing bytes and known model outcomes survive incomplete raw capture.
+
+## Desktop boundary and presentation
+
+The renderer IPC handler verifies owned app window + main frame + exact trusted
+renderer URL before validation/read. Webviews and foreign/subframes cannot read
+all-local traces. The Host IPC awaits disk reads. The UI displays current settings
+separately from frozen captured settings, ignores stale thread/navigation replies,
+and never upgrades old displayed bytes with a newer polled status. Reload selected
+evidence explicitly refreshes both. Raw content is escaped React text.
+
+## Acceptance
+
+Use synthetic fixtures only. Reader tests must reopen actual files, cover retries,
+lossless bytes, scopes, missing/corrupt evidence and separated completion states.
+Production-component interaction tests cover empty/error, close/reopen, focus,
+thread switching, stale async responses and tool/title scopes. Screenshot evidence
+must come from the actual component bundle at the accepted source SHA; a prepared
+HTML fixture or JSDOM pass does not establish visual acceptance.

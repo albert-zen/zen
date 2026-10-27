@@ -1,3 +1,12 @@
+import { recordTraceObservation } from "../../../src/trace-observation.js";
+import { FileItemListStore } from "../../../src/item-list-store.js";
+import { FileTraceStore, type RuntimeTrace } from "../../../src/trace.js";
+import {
+  observeModelWithTrace,
+  closeModelTrace,
+} from "../../../src/trace-model.js";
+import { TraceReadToolRuntime } from "../../../src/trace-tool.js";
+import { DomainThreadJournal } from "../../../src/domain-journal.js";
 import { ModelRequestDebugStore } from "./model-request-debug.js";
 import { SkillsService } from "./skills.js";
 import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
@@ -29,6 +38,11 @@ import {
   type ModelCatalogEntryInput,
 } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
+import { OpenAiResponsesModel } from "../../../src/model/openai-responses.js";
+import {
+  BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+  BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
+} from "../../../src/model/tool-media-profiles.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
@@ -51,7 +65,10 @@ import {
 } from "../../../src/tool-output-spool.js";
 import type { ToolPresentation } from "../../../src/tool-presentation.js";
 import { ViewImageToolRuntime } from "../../../src/view-image.js";
-import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
+import {
+  OpenAiSubscriptionAuthProfile,
+  type SubscriptionSessionEvent,
+} from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
 export type HostProvider =
@@ -63,6 +80,7 @@ export type HostProvider =
   | {
       type: "openai-compatible";
       baseUrl: string;
+      protocol?: "chat-completions" | "responses";
       apiKey: string;
       name?: string;
       defaultParams?: Readonly<Record<string, unknown>>;
@@ -177,182 +195,233 @@ export function createHostedAppServer(
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
+  const trace = new FileTraceStore(path.join(options.dataDirectory, "trace"));
+  const threadMetadata =
+    options.threadMetadata ??
+    new JsonlThreadMetadataStore(
+      path.join(options.dataDirectory, "thread-metadata.jsonl"),
+    );
   const journal =
     options.journal ??
-    new JsonlThreadJournal(path.join(options.dataDirectory, "threads"));
-  const normalizedProfiles = normalizePreparedProviderProfiles(
-    options,
-    attachments,
-  );
-  const modelRequestDebug = new ModelRequestDebugStore();
-  const providerPreparation = createProviderProfiles(
-    normalizedProfiles,
-    attachments,
-    createModelDiagnosticWriter(
-      path.join(options.dataDirectory, "diagnostics"),
-    ),
-    modelRequestDebug,
-  );
-  const preparedProfiles = providerPreparation.profiles;
-  const defaultSelection = normalizeDefaultSelection(options, preparedProfiles);
-  const configuredDefault = preparedProfiles
-    .find(
-      (profile) =>
-        profile.providerProfileId === defaultSelection.providerProfileId,
-    )
-    ?.catalog.get(defaultSelection.modelId);
-  if (configuredDefault === undefined) {
-    throw new Error(
-      `Default model ${defaultSelection.modelId} is absent from provider profile ${defaultSelection.providerProfileId}`,
+    new DomainThreadJournal({
+      directory: path.join(options.dataDirectory, "threads"),
+      trace,
+      metadata: threadMetadata,
+      attachments,
+    });
+  let constructionResources: readonly ProviderResource[] = [];
+  try {
+    const normalizedProfiles = normalizePreparedProviderProfiles(
+      options,
+      attachments,
     );
-  }
-  const requestedPresentation = options.toolPresentation ?? "both";
-  const codeRuntime = prepareCodeRuntime({
-    existingDefinitions: options.toolEnvironment?.definitions ?? [],
-    requestedPresentation,
-    codeRuntimeOptions: options.codeRuntimeOptions,
-    warning: options.onToolPresentationWarning,
-  });
-  const toolOutputSpool =
-    options.toolOutputSpool ??
-    new ToolOutputSpool(options.toolOutputSpoolOptions);
-  const shellRuntime =
-    options.toolEnvironment === undefined
-      ? new ShellToolRuntime({
-          blockedEnvironmentVariables: options.secretEnvironmentVariables ?? [],
-          toolOutputSpool,
-          ...(options.experimentalRtk === undefined
-            ? {}
-            : {
-                experimentalOutputFilter: new RtkShellOutputFilter(
-                  options.experimentalRtk,
-                ),
-              }),
-        })
-      : undefined;
-  const toolEnvironment =
-    options.toolEnvironment ??
-    new ToolEnvironment({
-      runtimes: [shellRuntime!],
-      toolOutputSpool,
-      ...(options.maxConcurrentToolBodies === undefined
-        ? {}
-        : {
-            taskOptions: { maxRunningTasks: options.maxConcurrentToolBodies },
-          }),
-    });
-  toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
-    kind: "builtin",
-    id: "apply-patch",
-  });
-  toolEnvironment.registerRuntime(
-    new ViewImageToolRuntime({ attachments, journal }),
-    { kind: "builtin", id: "view-image" },
-  );
-  if (codeRuntime.runtime !== undefined) {
-    toolEnvironment.registerRuntime(codeRuntime.runtime, {
-      kind: "builtin",
-      id: "run-code",
-    });
-  }
-  const profiles = preparedProfiles.map((profile) => profile.registryProfile);
-  const appServer = new ZenAppServer({
-    skills: new SkillsService(options.dataDirectory),
-    journal,
-    attachments,
-    runtime: new AgentRuntime({
-      resolveCodeMedia: createMediaOutputConverter(attachments),
-      toolEnvironment,
-      toolPresentation: codeRuntime.presentation,
-      ...(options.toolDefinitionProjection === undefined
-        ? {}
-        : { toolDefinitionProjection: options.toolDefinitionProjection }),
-      ...(options.maxToolRounds === undefined
-        ? {}
-        : { maxToolRounds: options.maxToolRounds }),
-      ...(options.maxConcurrentToolBodies === undefined
-        ? {}
-        : { maxConcurrentToolBodies: options.maxConcurrentToolBodies }),
-      toolOutputSpool,
-    }),
-    providerRegistry: new ProviderRegistry(profiles, {
-      revision: options.configurationRevision ?? 0,
-      onRetirementError: (error) =>
-        console.error(
-          `[provider retirement] ${error instanceof Error ? error.message : String(error)}`,
-        ),
-    }),
-    threadMetadata:
-      options.threadMetadata ??
-      new JsonlThreadMetadataStore(
-        path.join(options.dataDirectory, "thread-metadata.jsonl"),
+    const modelRequestDebug = new ModelRequestDebugStore(trace);
+    const providerPreparation = createProviderProfiles(
+      normalizedProfiles,
+      attachments,
+      createModelDiagnosticWriter(
+        path.join(options.dataDirectory, "diagnostics"),
       ),
-    threadSummaryProjection:
-      options.threadSummaryProjection ??
-      new JsonThreadSummaryProjection(
-        path.join(options.dataDirectory, "thread-summaries.json"),
-      ),
-    defaults: {
-      cwd: path.resolve(options.cwd),
-      providerProfileId: defaultSelection.providerProfileId,
-      modelId: defaultSelection.modelId,
-      reasoningEffort: defaultReasoningEffort(
-        configuredDefault,
-        defaultSelection,
-      ),
-      sandbox: "danger-full-access",
-      approvalPolicy: options.approvalPolicy,
-    },
-    ...(options.contextCompaction === undefined
-      ? {}
-      : { contextCompaction: options.contextCompaction }),
-  });
-  const configuration = new HostRuntimeConfiguration({
-    appServer,
-    processEpoch: randomUUID(),
-    initialOptions: options,
-    initialRevision: options.configurationRevision ?? 0,
-    initialResources: providerPreparation.resources,
-    attachments,
-    modelRequestDebug,
-  });
-  let closeTransportPromise: Promise<void> | undefined;
-  const closeProviderTransport = async () => {
-    closeTransportPromise ??= (async () => {
-      modelRequestDebug.control({ action: "setEnabled", enabled: false });
-      const toolResults = await Promise.allSettled([toolEnvironment.close()]);
-      const results = [
-        ...toolResults,
-        ...(await Promise.allSettled([
-          configuration.close(),
-          toolOutputSpool.close(),
-        ])),
-      ];
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
+      trace,
+    );
+    constructionResources = providerPreparation.created;
+    const preparedProfiles = providerPreparation.profiles;
+    const defaultSelection = normalizeDefaultSelection(
+      options,
+      preparedProfiles,
+    );
+    const configuredDefault = preparedProfiles
+      .find(
+        (profile) =>
+          profile.providerProfileId === defaultSelection.providerProfileId,
+      )
+      ?.catalog.get(defaultSelection.modelId);
+    if (configuredDefault === undefined) {
+      throw new Error(
+        `Default model ${defaultSelection.modelId} is absent from provider profile ${defaultSelection.providerProfileId}`,
       );
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Could not close Host resources");
-      }
-    })();
-    await closeTransportPromise;
-  };
-  return Object.assign(appServer, {
-    modelRequestDebug,
-    processEpoch: configuration.processEpoch,
-    prepareConfiguration: async (
-      nextOptions: ZenHostOptions,
-      revision: number,
-      candidateToken?: string,
-    ) => await configuration.prepare(nextOptions, revision, candidateToken),
-    publishConfiguration: (candidate: HostConfigurationCandidate) =>
-      configuration.publish(candidate),
-    discardConfiguration: async (candidate: HostConfigurationCandidate) =>
-      await configuration.discard(candidate),
-    currentConfiguration: () => configuration.current(),
-    closeProviderTransport,
-    closeHostResources: closeProviderTransport,
-  });
+    }
+    const requestedPresentation = options.toolPresentation ?? "both";
+    const codeRuntime = prepareCodeRuntime({
+      existingDefinitions: options.toolEnvironment?.definitions ?? [],
+      requestedPresentation,
+      codeRuntimeOptions: options.codeRuntimeOptions,
+      warning: options.onToolPresentationWarning,
+    });
+    const toolOutputSpool =
+      options.toolOutputSpool ??
+      new ToolOutputSpool(options.toolOutputSpoolOptions);
+    const shellRuntime =
+      options.toolEnvironment === undefined
+        ? new ShellToolRuntime({
+            blockedEnvironmentVariables:
+              options.secretEnvironmentVariables ?? [],
+            toolOutputSpool,
+            ...(options.experimentalRtk === undefined
+              ? {}
+              : {
+                  experimentalOutputFilter: new RtkShellOutputFilter(
+                    options.experimentalRtk,
+                  ),
+                }),
+          })
+        : undefined;
+    const toolEnvironment =
+      options.toolEnvironment ??
+      new ToolEnvironment({
+        runtimes: [shellRuntime!],
+        toolOutputSpool,
+        ...(options.maxConcurrentToolBodies === undefined
+          ? {}
+          : {
+              taskOptions: { maxRunningTasks: options.maxConcurrentToolBodies },
+            }),
+      });
+    toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
+      kind: "builtin",
+      id: "apply-patch",
+    });
+    toolEnvironment.registerRuntime(
+      new ViewImageToolRuntime({ attachments, journal }),
+      { kind: "builtin", id: "view-image" },
+    );
+    if (codeRuntime.runtime !== undefined) {
+      toolEnvironment.registerRuntime(codeRuntime.runtime, {
+        kind: "builtin",
+        id: "run-code",
+      });
+    }
+    const profiles = preparedProfiles.map((profile) => profile.registryProfile);
+    const appServer = new ZenAppServer({
+      auxiliaryModel: {
+        trace,
+        itemListStore: new FileItemListStore(
+          path.join(options.dataDirectory, "context-bundles"),
+        ),
+      },
+      skills: new SkillsService(options.dataDirectory),
+      journal,
+      attachments,
+      runtime: new AgentRuntime({
+        trace,
+        traceInspection: true,
+        resolveCodeMedia: createMediaOutputConverter(attachments),
+        toolEnvironment,
+        toolPresentation: codeRuntime.presentation,
+        ...(options.toolDefinitionProjection === undefined
+          ? {}
+          : { toolDefinitionProjection: options.toolDefinitionProjection }),
+        ...(options.maxToolRounds === undefined
+          ? {}
+          : { maxToolRounds: options.maxToolRounds }),
+        ...(options.maxConcurrentToolBodies === undefined
+          ? {}
+          : { maxConcurrentToolBodies: options.maxConcurrentToolBodies }),
+        toolOutputSpool,
+      }),
+      providerRegistry: new ProviderRegistry(profiles, {
+        revision: options.configurationRevision ?? 0,
+        onRetirementError: (error) =>
+          console.error(
+            `[provider retirement] ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      }),
+      threadMetadata,
+      threadSummaryProjection:
+        options.threadSummaryProjection ??
+        new JsonThreadSummaryProjection(
+          path.join(options.dataDirectory, "thread-summaries.json"),
+        ),
+      defaults: {
+        cwd: path.resolve(options.cwd),
+        providerProfileId: defaultSelection.providerProfileId,
+        modelId: defaultSelection.modelId,
+        reasoningEffort: defaultReasoningEffort(
+          configuredDefault,
+          defaultSelection,
+        ),
+        sandbox: "danger-full-access",
+        approvalPolicy: options.approvalPolicy,
+      },
+      ...(options.contextCompaction === undefined
+        ? {}
+        : { contextCompaction: options.contextCompaction }),
+    });
+    const configuration = new HostRuntimeConfiguration({
+      appServer,
+      processEpoch: randomUUID(),
+      initialOptions: options,
+      initialRevision: options.configurationRevision ?? 0,
+      initialResources: providerPreparation.resources,
+      attachments,
+      trace,
+    });
+    let closeTransportPromise: Promise<void> | undefined;
+    const closeProviderTransport = async () => {
+      closeTransportPromise ??= (async () => {
+        const stopping = appServer.stopActiveTurns();
+        const toolResults = await Promise.allSettled([
+          toolEnvironment.close(),
+          stopping,
+        ]);
+        const results = [
+          ...toolResults,
+          ...(await Promise.allSettled([
+            configuration.close(),
+            toolOutputSpool.close(),
+          ])),
+        ];
+        results.push(...(await Promise.allSettled([closeModelTrace(trace)])));
+        results.push(...(await Promise.allSettled([trace.flush()])));
+        results.push(...(await Promise.allSettled([journal.close?.()])));
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Could not close Host resources");
+        }
+      })();
+      await closeTransportPromise;
+    };
+    toolEnvironment.bindTrace(trace, attachments);
+    toolEnvironment.registerRuntime(new TraceReadToolRuntime(trace), {
+      kind: "builtin",
+      id: "trace-reader",
+    });
+    return Object.assign(appServer, {
+      modelRequestDebug,
+      processEpoch: configuration.processEpoch,
+      prepareConfiguration: async (
+        nextOptions: ZenHostOptions,
+        revision: number,
+        candidateToken?: string,
+      ) => await configuration.prepare(nextOptions, revision, candidateToken),
+      publishConfiguration: (candidate: HostConfigurationCandidate) =>
+        configuration.publish(candidate),
+      discardConfiguration: async (candidate: HostConfigurationCandidate) =>
+        await configuration.discard(candidate),
+      currentConfiguration: () => configuration.current(),
+      closeProviderTransport,
+      closeHostResources: closeProviderTransport,
+    });
+  } catch (error) {
+    for (const resource of constructionResources)
+      void resource
+        .close()
+        .catch((closeError) =>
+          console.error(
+            "Host construction transport cleanup failed",
+            closeError,
+          ),
+        );
+    if (options.journal === undefined)
+      void journal
+        .close?.()
+        .catch((closeError) =>
+          console.error("Host construction journal cleanup failed", closeError),
+        );
+    throw error;
+  }
 }
 
 interface NormalizedProviderProfile extends HostProviderProfile {
@@ -439,7 +508,7 @@ function createProviderProfiles(
   profiles: readonly NormalizedProviderProfile[],
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
-  modelRequestDebug: ModelRequestDebugStore,
+  trace: RuntimeTrace,
   reusable: ReadonlyMap<string, ProviderResource> = new Map(),
 ): {
   profiles: PreparedProviderProfile[];
@@ -461,7 +530,7 @@ function createProviderProfiles(
               profile,
               attachments,
               onStreamFailure,
-              modelRequestDebug,
+              trace,
             );
       if (resource !== existing) created.push(resource);
       resources.set(profile.providerProfileId, resource);
@@ -487,9 +556,10 @@ function createProviderResource(
   profile: NormalizedProviderProfile,
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
-  modelRequestDebug: ModelRequestDebugStore,
+  trace: RuntimeTrace,
 ): ProviderResource {
   const fetch = createProviderFetch(profile.transport);
+  const authObservationId = `authentication-${randomUUID()}`;
   let closePromise: Promise<void> | undefined;
   try {
     const adapter = createModel(
@@ -497,12 +567,19 @@ function createProviderResource(
       fetch,
       attachments,
       onStreamFailure,
+      async (event) => {
+        await recordTraceObservation(trace, {
+          threadId: authObservationId,
+          type: "authentication_session_observed",
+          data: { providerProfileId: profile.providerProfileId, ...event },
+        });
+      },
     );
     return {
       providerProfileId: profile.providerProfileId,
       provider: profile.provider,
       transport: profile.transport,
-      adapter: modelRequestDebug.observe(adapter),
+      adapter: observeModelWithTrace(adapter, trace),
       close: async () => {
         closePromise ??= Promise.resolve(fetch.close?.()).then(() => undefined);
         await closePromise;
@@ -525,12 +602,59 @@ interface InternalConfigurationCandidate {
   readonly prepared: PreparedRuntimeConfiguration;
 }
 
+/** Nonsecret settings evidence; profile/credential stores retain external authority. */
+function observableHostConfiguration(
+  options: ZenHostOptions,
+): Record<string, unknown> {
+  const profiles =
+    options.providers ??
+    (options.provider === undefined
+      ? []
+      : [
+          {
+            providerProfileId: providerRuntimeIdentity(options.provider),
+            provider: options.provider,
+            model: options.model,
+            modelCatalog: options.modelCatalog,
+          },
+        ]);
+  return {
+    defaultSelection: options.defaultSelection ?? null,
+    approvalPolicy: options.approvalPolicy,
+    toolPresentation: options.toolPresentation ?? "both",
+    contextCompaction: options.contextCompaction ?? null,
+    maxToolRounds: options.maxToolRounds ?? null,
+    maxConcurrentToolBodies: options.maxConcurrentToolBodies ?? null,
+    providers: profiles.map((profile) => {
+      const provider = profile.provider;
+      const endpoint =
+        provider.type === "openai-compatible"
+          ? new URL(provider.baseUrl)
+          : undefined;
+      return {
+        providerProfileId: profile.providerProfileId,
+        type: provider.type,
+        protocol:
+          provider.type === "openai-compatible"
+            ? (provider.protocol ?? "chat-completions")
+            : null,
+        endpoint:
+          endpoint === undefined
+            ? null
+            : `${endpoint.origin}${endpoint.pathname}`,
+        model: profile.model ?? null,
+        modelIds: profile.modelCatalog?.map((model) => model.id) ?? [],
+      };
+    }),
+  };
+}
+
 class HostRuntimeConfiguration {
   readonly processEpoch: string;
   readonly #appServer: ZenAppServer;
   readonly #processOptions: ZenHostOptions;
   readonly #attachments: AttachmentStore;
-  readonly #modelRequestDebug: ModelRequestDebugStore;
+  readonly #trace: RuntimeTrace;
   readonly #onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>;
   readonly #published = new Map<
     string,
@@ -552,7 +676,7 @@ class HostRuntimeConfiguration {
     initialRevision: number;
     initialResources: Map<string, ProviderResource>;
     attachments: AttachmentStore;
-    modelRequestDebug: ModelRequestDebugStore;
+    trace: RuntimeTrace;
   }) {
     this.#appServer = options.appServer;
     this.processEpoch = options.processEpoch;
@@ -560,7 +684,7 @@ class HostRuntimeConfiguration {
     this.#currentOptions = options.initialOptions;
     this.#currentResources = options.initialResources;
     this.#attachments = options.attachments;
-    this.#modelRequestDebug = options.modelRequestDebug;
+    this.#trace = options.trace;
     this.#onStreamFailure = createModelDiagnosticWriter(
       path.join(options.initialOptions.dataDirectory, "diagnostics"),
     );
@@ -568,6 +692,14 @@ class HostRuntimeConfiguration {
       processEpoch: this.processEpoch,
       revision: options.initialRevision,
       pendingRestart: [],
+    });
+    void recordTraceObservation(this.#trace, {
+      threadId: `configuration-${this.processEpoch}`,
+      type: "host_configuration_observed",
+      data: {
+        phase: "startup",
+        configuration: observableHostConfiguration(options.initialOptions),
+      },
     });
   }
 
@@ -598,7 +730,7 @@ class HostRuntimeConfiguration {
       normalized,
       this.#attachments,
       this.#onStreamFailure,
-      this.#modelRequestDebug,
+      this.#trace,
       this.#currentResources,
     );
     try {
@@ -670,6 +802,16 @@ class HostRuntimeConfiguration {
       current: this.#current,
     });
     this.#pending = undefined;
+    void recordTraceObservation(this.#trace, {
+      threadId: `configuration-${this.processEpoch}`,
+      type: "host_configuration_published",
+      data: {
+        previous: observableHostConfiguration(previousOptions),
+        current: observableHostConfiguration(this.#currentOptions),
+        revision: this.#current.revision,
+        pendingRestart: this.#current.pendingRestart,
+      },
+    });
     return structuredClone(this.#current);
   }
 
@@ -962,6 +1104,7 @@ function createModel(
   fetch: typeof globalThis.fetch,
   attachments: AttachmentStore,
   onStreamFailure?: ReturnType<typeof createModelDiagnosticWriter>,
+  onSessionEvent?: (event: SubscriptionSessionEvent) => Promise<void>,
 ): ModelAdapter {
   if (provider.type === "fake") {
     return new FakeModel();
@@ -969,6 +1112,7 @@ function createModel(
   if (provider.type === "openai-subscription") {
     const profile = new OpenAiSubscriptionAuthProfile(provider.profilePath, {
       fetch,
+      ...(onSessionEvent === undefined ? {} : { onSessionEvent }),
     });
     return new OpenAiSubscriptionModel({
       acquireAccessLease: async (signal) =>
@@ -979,7 +1123,24 @@ function createModel(
       attachments,
     });
   }
-  return new OpenAiCompatibleModel({
+  if (
+    provider.protocol !== undefined &&
+    provider.protocol !== "chat-completions" &&
+    provider.protocol !== "responses"
+  )
+    throw new Error("Unknown compatible provider protocol");
+  const Adapter =
+    provider.protocol === "responses"
+      ? OpenAiResponsesModel
+      : OpenAiCompatibleModel;
+  return new Adapter({
+    ...(provider.protocol === "responses"
+      ? {}
+      : {
+          toolMediaCapabilities: BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+          toolMediaEvidenceConflicts:
+            BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
+        }),
     ...(onStreamFailure === undefined ? {} : { onStreamFailure }),
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,

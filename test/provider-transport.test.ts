@@ -32,12 +32,20 @@ test("rejects proxy credentials without echoing them", () => {
 test("an aborted proxied provider fetch terminates without leaking proxy state", async () => {
   const connected = deferred<void>();
   const sockets = new Set<Socket>();
+  let closing = false;
+  const controller = new AbortController();
+  let providerFetch: ReturnType<typeof createProviderFetch> | undefined;
+  let request: Promise<Response> | undefined;
   const server = createServer((_request, _response) => connected.resolve());
   server.on("connect", (_request, socket) => {
     connected.resolve();
     socket.once("error", () => undefined);
   });
   server.on("connection", (socket) => {
+    if (closing) {
+      socket.destroy();
+      return;
+    }
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
@@ -48,11 +56,10 @@ test("an aborted proxied provider fetch terminates without leaking proxy state",
   try {
     const address = server.address();
     assert(typeof address === "object" && address !== null);
-    const fetch = createProviderFetch({
+    providerFetch = createProviderFetch({
       proxyUrl: `http://127.0.0.1:${String(address.port)}`,
     });
-    const controller = new AbortController();
-    const request = fetch("http://provider.test/", {
+    request = providerFetch("http://provider.test/", {
       signal: controller.signal,
     });
     await Promise.race([
@@ -76,11 +83,20 @@ test("an aborted proxied provider fetch terminates without leaking proxy state",
         ),
       ),
     ]);
-    await fetch.close?.();
   } finally {
-    for (const socket of sockets) socket.destroy();
+    closing = true;
+    controller.abort(new DOMException("Test cleanup", "AbortError"));
+    // Stop new acceptance before destroying existing CONNECT sockets. In a
+    // loaded aggregate a connection may otherwise enter after the old sweep,
+    // leaving server.close waiting forever and hiding the original failure.
+    const closed = new Promise<void>((resolve) =>
+      server.close(() => resolve()),
+    );
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const socket of sockets) socket.destroy();
+    await request?.catch(() => undefined);
+    await providerFetch?.close?.();
+    await closed;
   }
 });
 

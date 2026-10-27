@@ -1,3 +1,4 @@
+import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 export type ComposerIntent =
   "start" | "batch-next" | "queue" | "steer" | "replace";
 
@@ -12,6 +13,7 @@ export interface ComposerDraft {
 }
 
 export interface ComposerSubmission {
+  clientObservation?: ClientSendObservation;
   intent: ComposerIntent;
   expectedTurnId: string | null;
   clientUserMessageId: string;
@@ -128,6 +130,7 @@ export function beginComposerSubmission(
   intent: ComposerIntent,
   expectedTurnId: string | null,
   createId: () => string,
+  clientObservation?: ClientSendObservation,
 ): ComposerState {
   if (
     state.submission?.status === "pending" ||
@@ -146,6 +149,7 @@ export function beginComposerSubmission(
     ...state,
     confirmedAdmission: undefined,
     submission: {
+      ...(clientObservation === undefined ? {} : { clientObservation }),
       intent,
       expectedTurnId,
       draftRevision: state.draftRevision,

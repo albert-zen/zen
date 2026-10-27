@@ -14,7 +14,7 @@ export const AGENTIC_CONTEXT_COMPACTION_TOOL_NAME = "compact_context";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
   name: AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
   description:
-    "Compact this active Turn. Supply your own continuation text; optionally retain canonical Items by recent count, Turn count, IDs or user-message category. A bounded, Host-owned original Thread reference is included by default. Call alone as a top-level tool; retention exceeding context capacity fails without reset.",
+    "Compact this active Turn. Supply your own continuation text; optionally retain canonical Items by recent count, Turn count, listed cN references or user-message category. A bounded, Host-owned original Thread reference is included by default. Call alone as a top-level tool; retention exceeding context capacity fails without reset.",
   inputSchema: Object.freeze({
     type: "object",
     properties: Object.freeze({
@@ -26,18 +26,21 @@ export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
       retention: Object.freeze({
         type: "object",
         description:
-          "Programmatic, bounded retention of existing canonical Items.",
+          "Programmatic, bounded retention of existing context Items. Explicit itemIds/fromItemId/toItemId accept only the cN references listed in this sample, never native IDs.",
         properties: Object.freeze({
           recentItemCount: { type: "integer", minimum: 1 },
           recentTurnCount: { type: "integer", minimum: 0 },
-          itemIds: { type: "array", items: { type: "string" } },
+          itemIds: {
+            type: "array",
+            items: { type: "string", pattern: "^c[1-9][0-9]*$" },
+          },
           itemRanges: {
             type: "array",
             items: {
               type: "object",
               properties: {
-                fromItemId: { type: "string" },
-                toItemId: { type: "string" },
+                fromItemId: { type: "string", pattern: "^c[1-9][0-9]*$" },
+                toItemId: { type: "string", pattern: "^c[1-9][0-9]*$" },
               },
               required: ["fromItemId", "toItemId"],
               additionalProperties: false,

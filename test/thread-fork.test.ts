@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import os from "node:os";
+import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
 import test from "node:test";
 
 import { AppServerError, ZenAppServer } from "../src/app-server.js";
 import { InMemoryAttachmentStore } from "../src/attachment.js";
 import { decodeCanonicalItem, type CanonicalItem } from "../src/item.js";
 import { pendingQueuedMessages } from "../src/input-queue.js";
-import { InMemoryThreadJournal } from "../src/journal.js";
+import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import { compileItemList } from "../src/item-list.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import {
-  compileModelMessages,
   type ModelAdapter,
   type ModelEvent,
   type ModelMessage,
@@ -24,7 +28,7 @@ import { png1x1 } from "./fixtures.js";
 function createServer(
   model: ModelAdapter,
   options: {
-    journal?: InMemoryThreadJournal;
+    journal?: ThreadJournal;
     attachments?: InMemoryAttachmentStore;
     tools?: ToolRuntime[];
   } = {},
@@ -111,9 +115,11 @@ test("forked history keeps image payloads replayable and authorized", async () =
   ).done;
   assert.deepEqual(requests[1]?.[0], {
     role: "user",
-    userTimestamp: fork.items.find((item) => item.type === "user_message")
-      ?.createdAt,
     content: [
+      {
+        type: "text",
+        text: `[Message received at ${fork.items.find((item) => item.type === "user_message")!.createdAt}]`,
+      },
       { type: "text", text: "remember this image" },
       { type: "image", attachment: image },
     ],
@@ -197,14 +203,18 @@ test("fork copies a replayable prefix and both Threads continue independently", 
   assert.deepEqual(requests[1], [
     {
       role: "user",
-      content: [{ type: "text", text: "first question" }],
-      userTimestamp: userTimestamps[0],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[0]}]` },
+        { type: "text", text: "first question" },
+      ],
     },
     { role: "assistant", text: "answer-1" },
     {
       role: "user",
-      content: [{ type: "text", text: "fork path" }],
-      userTimestamp: userTimestamps[1],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[1]}]` },
+        { type: "text", text: "fork path" },
+      ],
     },
   ]);
   assert.equal((await server.readThread(source.id)).turns.length, 1);
@@ -252,7 +262,7 @@ test("fork chooses the last closed Turn while the source has active and queued w
   await active.done;
 });
 
-test("fork preserves effective compaction context with remapped references", async () => {
+test("fork preserves exact compaction text and source ownership with only local identities remapped", async () => {
   let calls = 0;
   const model: ModelAdapter = {
     provider: "compacting",
@@ -284,10 +294,11 @@ test("fork preserves effective compaction context with remapped references", asy
     modelId: source.modelId,
     reasoningEffort: source.reasoningEffort,
   };
-  const forkMessages = compileModelMessages(fork.items, selection);
-  const sourceMessages = compileModelMessages(compactedSource.items, selection);
-  assert.deepEqual(forkMessages.slice(0, -1), sourceMessages.slice(0, -1));
-  assert.equal(sourceMessages.at(-1)?.role, "user");
+  const forkMessages = compileItemList(fork.itemList!, { selection }).messages;
+  const sourceMessages = compileItemList(compactedSource.itemList!, {
+    selection,
+  }).messages;
+  assert.deepEqual(forkMessages, sourceMessages);
   const sourceCompaction = compactedSource.items.find(
     (item) => item.type === "context_compaction",
   );
@@ -296,10 +307,30 @@ test("fork preserves effective compaction context with remapped references", asy
   );
   assert.ok(sourceCompaction);
   assert.ok(forkCompaction);
-  assert.deepEqual(forkMessages.at(-1), {
-    role: "user",
-    text: `[Zen compacted context]\n${forkCompaction.summary}\n[Original ItemList: zen-thread://${fork.id}/items?through=${forkCompaction.coveredThroughItemId}; logical reference, not a filesystem path. Read only through an available authorized history reader; do not infer hidden content]`,
-  });
+  const sourceSelection = compactedSource.itemList!.find(
+    (item) => item.kind === "selection",
+  )!;
+  const forkSelection = fork.itemList!.find(
+    (item) => item.kind === "selection",
+  )!;
+  assert(
+    sourceSelection.kind === "selection" && forkSelection.kind === "selection",
+  );
+  assert.equal(forkSelection.content.text, sourceSelection.content.text);
+  assert.deepEqual(
+    forkSelection.source.metadata?.referenceBindings,
+    sourceSelection.source.metadata?.referenceBindings,
+  );
+  assert.equal(
+    forkSelection.content.coveredThroughItemId,
+    forkCompaction.coveredThroughItemId,
+  );
+  assert.deepEqual(
+    forkSelection.content.retainedItemIds,
+    forkCompaction.retainedItemIds.filter((id) =>
+      fork.itemList!.some((item) => item.id === id),
+    ),
+  );
   assert.notEqual(
     forkCompaction.coveredThroughItemId,
     sourceCompaction.coveredThroughItemId,
@@ -467,17 +498,24 @@ test("exact-item fork copies only the selected message prefix across rename and 
   assert.deepEqual(requests.at(-1), [
     {
       role: "user",
-      content: [{ type: "text", text: "original question" }],
-      userTimestamp: before.items.find((item) => item.type === "user_message")!
-        .createdAt,
+      content: [
+        {
+          type: "text",
+          text: `[Message received at ${before.items.find((item) => item.type === "user_message")!.createdAt}]`,
+        },
+        { type: "text", text: "original question" },
+      ],
     },
     { role: "assistant", text: "selected message" },
     {
       role: "user",
-      content: [{ type: "text", text: "explicit fork question" }],
-      userTimestamp: (await server.readThread(fork.id)).items.findLast(
-        (item) => item.type === "user_message",
-      )!.createdAt,
+      content: [
+        {
+          type: "text",
+          text: `[Message received at ${(await server.readThread(fork.id)).items.findLast((item) => item.type === "user_message")!.createdAt}]`,
+        },
+        { type: "text", text: "explicit fork question" },
+      ],
     },
   ]);
   assert.equal(executions, 1, "fork continuation never replays a source tool");
@@ -679,7 +717,7 @@ test("exact-item fork refuses a streaming-only identity and accepts its interrup
   }
 });
 
-test("exact-item snapshot closures make copied tools, all queue kinds and replacement intent inert after reload", async () => {
+test("exact-item snapshot closures make copied tools, all queue kinds and replacement intent inert after reload", async (t) => {
   const requests: ModelMessage[][] = [];
   const model: ModelAdapter = {
     provider: "inert-prefix",
@@ -688,7 +726,17 @@ test("exact-item snapshot closures make copied tools, all queue kinds and replac
       yield { type: "text_delta", delta: "explicit answer" };
     },
   };
-  const journal = new InMemoryThreadJournal();
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-fork-semantic-"));
+  const directory = path.join(root, "threads");
+  const trace = new FileTraceStore(path.join(root, "trace"));
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new DomainThreadJournal({ directory, trace, metadata });
+  let coldJournal: DomainThreadJournal | undefined;
+  t.after(async () => {
+    await coldJournal?.close();
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
   const base = {
     threadId: "persisted-source",
     createdAt: "2026-10-14T00:00:00Z",
@@ -814,8 +862,18 @@ test("exact-item snapshot closures make copied tools, all queue kinds and replac
       decodeCanonicalItem(JSON.parse(JSON.stringify(item))),
       item,
     );
-  const restored = createServer(model, { journal });
-  assert.deepEqual((await restored.readThread(fork.id)).items, fork.items);
+  const persistedFork = await journal.readItemList(fork.id);
+  assert.deepEqual(persistedFork, fork.itemList);
+  await journal.close();
+  coldJournal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  const restored = createServer(model, { journal: coldJournal });
+  const coldFork = await restored.readThread(fork.id);
+  assert.deepEqual(coldFork.items, fork.items);
+  assert.deepEqual(coldFork.itemList, persistedFork);
   await restored.resumeQueue(fork.id);
   assert.equal(requests.length, 0);
   await (
@@ -837,5 +895,5 @@ test("exact-item snapshot closures make copied tools, all queue kinds and replac
     "synthetic closure projects at the original tool batch",
   );
   assert.deepEqual(await server.readThread(base.threadId), before);
-  assert.deepEqual(await journal.read(base.threadId), before.items);
+  assert.deepEqual(await coldJournal.read(base.threadId), before.items);
 });

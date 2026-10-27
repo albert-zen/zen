@@ -3,29 +3,20 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 
-test("capture switch centers its thumb when the coarse-pointer hit target grows", async () => {
+test("read-only Trace controls retain coarse targets and scoped CSS", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/TraceInspector.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /min-height:\s*44px/u);
+  assert.match(css, /trace-inspector\[data-narrow="true"\]/u);
+  assert(!css.includes(".model-debug-switch"));
   const styles = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
   );
-  const switchRule = styles.match(/\.model-debug-switch\s*\{([^}]+)\}/u)?.[1];
-  assert.ok(switchRule);
-  // The track expands from a 30px button to a 44px touch target. The thumb
-  // must center in the actual button, rather than retain its 8px top inset.
-  assert.match(switchRule, /display:\s*flex;/u);
-  assert.match(switchRule, /align-items:\s*center;/u);
-  assert.match(switchRule, /height:\s*30px;/u);
-  const coarse = styles.slice(
-    styles.indexOf(
-      "@media (pointer: coarse)",
-      styles.indexOf(".model-debug-panel"),
-    ),
-  );
-  assert.match(coarse, /min-height:\s*44px;/u);
-  assert.match(
-    coarse,
-    /\.model-debug-switch::before\s*\{\s*inset-block:\s*13px;/u,
-  );
+  assert(styles.startsWith('@import "./TraceInspector.css";'));
+  assert.match(styles, /transition-duration:\s*0s !important/u);
 });
 
 test("selected request metadata and hovered warnings remain readable in every theme", async () => {
@@ -36,10 +27,11 @@ test("selected request metadata and hovered warnings remain readable in every th
     ),
     readFile(new URL("../src/renderer/src/theme.css", import.meta.url), "utf8"),
   ]);
-  assert.match(
-    styles,
-    /\.model-debug-request\.selected \.model-debug-request-meta,\s*\.model-debug-request\.selected \.model-debug-request-heading time,\s*\.model-debug-request:is\(:hover, \.selected\)\s+\.model-debug-request-integrity\[data-warning="true"\]\s*\{\s*color:\s*var\(--color-text-primary\);/u,
+  const traceCss = await readFile(
+    new URL("../src/renderer/src/TraceInspector.css", import.meta.url),
+    "utf8",
   );
+  assert.match(traceCss, /color:\s*var\(--color-text-primary\)/u);
   const dom = new JSDOM("<!doctype html><html><head></head></html>");
   const style = dom.window.document.createElement("style");
   style.textContent = theme;

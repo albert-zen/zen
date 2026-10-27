@@ -149,3 +149,30 @@ test("program limits and unavailable captures are explicit without overwriting t
     assert.deepEqual(row.structuredContent, { business: true });
   }
 });
+
+test("worker receipt omits only reserved Fleet authority annotations, not literal user JSON", async () => {
+  const { programToolResult } = await import("../src/code-runtime-output.js");
+  const output =
+    '{"referenceBindings":"literal user value","deviceKey":"literal user text"}';
+  const result = await programToolResult({
+    output,
+    exitCode: 0,
+    contentType: "zen/fleet-tool-catalog-disclosure",
+    structuredContent: {
+      deviceKey: "private-routing-id",
+      targetThreadId: "private-thread-id",
+    },
+  });
+  assert.equal(result.output, output);
+  assert.equal(result.contentType, undefined);
+  assert.equal(result.structuredContent, undefined);
+  const ordinary = await programToolResult({
+    output,
+    exitCode: 0,
+    contentType: "application/json",
+    structuredContent: { deviceKey: "literal ordinary data" },
+  });
+  assert.deepEqual(ordinary.structuredContent, {
+    deviceKey: "literal ordinary data",
+  });
+});

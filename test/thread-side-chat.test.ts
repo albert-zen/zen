@@ -10,9 +10,16 @@ import {
   JsonlThreadJournal,
   type ThreadJournal,
 } from "../src/journal.js";
-import { decodeCanonicalItem } from "../src/item.js";
+import { decodeCanonicalItem, type CanonicalItem } from "../src/item.js";
 import {
-  compileModelMessages,
+  compileItemList,
+  contextItemsFromLegacy,
+  type ContextItem,
+} from "../src/item-list.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import { testToolRuntime } from "./tool-fixtures.js";
+import {
   type ModelAdapter,
   type ModelEvent,
   type ModelRequest,
@@ -23,6 +30,15 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ToolEnvironment, type ToolRuntime } from "../src/tool.js";
+
+function semanticMessages(history: readonly CanonicalItem[]) {
+  const context: ContextItem[] = [];
+  for (const [index, item] of history.entries())
+    context.push(
+      ...contextItemsFromLegacy(item, history.slice(0, index), index, context),
+    );
+  return compileItemList(context).messages;
+}
 
 function fixture(
   options: {
@@ -98,7 +114,7 @@ test("Side chat from an empty parent durably appends its identity instruction wi
     "thread_instruction",
   );
   assert.match(
-    JSON.stringify(compileModelMessages(child.items)),
+    JSON.stringify(compileItemList(child.itemList!).messages),
     /explicit user request/i,
   );
   assert.deepEqual((await f.server.readThread(parent.id)).items, parent.items);
@@ -282,7 +298,7 @@ test("Side chat inherits post-Turn configuration and its instruction survives re
       retention: { mode: "selected-items", itemIds: [] },
     });
     const snapshot = await f.server.readThread(child.id);
-    const messages = compileModelMessages(snapshot.items);
+    const messages = compileItemList(snapshot.itemList!).messages;
     assert.equal(
       messages.filter(
         (message) =>
@@ -438,7 +454,7 @@ test("a copied pending parent replacement is historical and cannot block the fir
   );
 });
 
-test("historical interrupted tool calls receive snapshot results before later conversation in the first child sample", async () => {
+test("copied accepted unknown-outcome receipts precede later conversation without replaying historical calls", async () => {
   const journal = new InMemoryThreadJournal();
   const f = fixture({ journal });
   const parent = await f.server.startThread();
@@ -462,10 +478,29 @@ test("historical interrupted tool calls receive snapshot results before later co
     type: "turn_aborted",
     reason: "parent interruption",
   });
-  const restored = fixture({ journal });
+  let executions = 0;
+  const restored = fixture({
+    journal,
+    tools: [
+      testToolRuntime({
+        name: "shell",
+        description: "count any unexpected historical dispatch",
+        async execute() {
+          executions++;
+          return { output: "must not run", exitCode: 0 };
+        },
+      }),
+    ],
+  });
   await (
     await restored.server.startTurn(parent.id, "later completed context")
   ).done;
+  const recoveredParent = await restored.server.readThread(parent.id);
+  const acceptedReceipt = recoveredParent.items.find(
+    (item) => item.type === "tool_result",
+  )!;
+  assert.equal(acceptedReceipt.exitCode, null);
+  assert.equal(acceptedReceipt.executionStatus, "unknown");
   const child = await restored.server.createChildThread({
     parentThreadId: parent.id,
     mode: "side-chat",
@@ -481,9 +516,16 @@ test("historical interrupted tool calls receive snapshot results before later co
   );
   assert(callIndex >= 0);
   assert.equal(messages[callIndex + 1]?.role, "tool");
-  assert.match(
-    JSON.stringify(messages[callIndex + 1]),
-    /not executed in the side chat/,
+  assert.deepEqual(messages[callIndex + 1], {
+    role: "tool",
+    callId: acceptedReceipt.callId,
+    text: `Outcome: unknown\n${acceptedReceipt.output}`,
+    exitCode: null,
+  });
+  assert.equal(executions, 0);
+  assert.deepEqual(
+    await restored.server.readThread(parent.id),
+    recoveredParent,
   );
   assert(
     messages.findIndex(
@@ -504,7 +546,7 @@ test("copied agentic reset tool receipts remain outside the effective compacted 
     turnId: "parent-active",
     createdAt: "2026-10-02T00:00:00Z",
   };
-  const messages = compileModelMessages([
+  const messages = semanticMessages([
     {
       ...base,
       id: "source",
@@ -581,7 +623,10 @@ test("generated compaction budgets the full pinned Side chat instructions before
       );
       yield {
         type: "text_delta",
-        delta: request.tools.length === 0 ? "summary ".repeat(300) : "answer",
+        delta:
+          request.debugContext?.purpose === "compaction"
+            ? "summary ".repeat(300)
+            : "answer",
       };
     },
   });
@@ -627,7 +672,7 @@ test("unretained historical calls and their Side chat receipts stay behind a gen
     turnId: "old-turn",
     createdAt: "2026-10-02T00:00:00Z",
   };
-  const messages = compileModelMessages([
+  const messages = semanticMessages([
     {
       ...base,
       id: "old-call",
@@ -709,8 +754,21 @@ function assertToolProtocol(
   assert.equal(pending.size, 0, "Unclosed tool-call batch");
 }
 
-test("generated selected-item compaction keeps snapshot tool closure in sampling order through restart and first send", async () => {
-  const journal = new InMemoryThreadJournal();
+test("generated selected-item compaction keeps snapshot tool closure in sampling order through restart and first send", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-side-chat-semantic-"));
+  const directory = path.join(root, "threads");
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  let coldJournal: DomainThreadJournal | undefined;
+  t.after(async () => {
+    await coldJournal?.close();
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
   const initial = fixture({ journal });
   const parent = await initial.server.startThread();
   const base = { threadId: parent.id, createdAt: "2026-10-02T00:00:00Z" };
@@ -778,6 +836,15 @@ test("generated selected-item compaction keeps snapshot tool closure in sampling
     request: ModelRequest,
   ): AsyncIterable<ModelEvent> {
     assertToolProtocol(request.messages);
+    if (request.debugContext?.purpose === "turn") {
+      const activeJournal = coldJournal ?? journal;
+      assert.deepEqual(
+        request.messages,
+        compileItemList(
+          await activeJournal.readItemList(request.debugContext.threadId),
+        ).messages,
+      );
+    }
     yield { type: "text_delta", delta: "reply" };
   };
   const f = fixture({ journal, stream: strictStream });
@@ -789,7 +856,7 @@ test("generated selected-item compaction keeps snapshot tool closure in sampling
     await f.server.startTurn(child.id, "explicit side question")
   ).done;
   const before = await f.server.readThread(child.id);
-  assertToolProtocol(compileModelMessages(before.items));
+  assertToolProtocol(compileItemList(before.itemList!).messages);
   const selected = before.items
     .filter((item) => item.type === "tool_call" || item.type === "user_message")
     .map((item) => item.id);
@@ -797,14 +864,24 @@ test("generated selected-item compaction keeps snapshot tool closure in sampling
     retention: { mode: "selected-items", itemIds: selected },
   });
   const after = await f.server.readThread(child.id);
-  const projection = compileModelMessages(after.items);
+  const projection = compileItemList(after.itemList!).messages;
   assertToolProtocol(projection);
   assert.match(JSON.stringify(projection), /old parent task/);
   assert.match(JSON.stringify(projection), /later parent task/);
-  const restored = fixture({ journal, stream: strictStream });
-  assertToolProtocol(
-    compileModelMessages((await restored.server.readThread(child.id)).items),
-  );
+  const persisted = await journal.readItemList(child.id);
+  assert.deepEqual(persisted, after.itemList);
+  await journal.close();
+  coldJournal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  const restored = fixture({ journal: coldJournal, stream: strictStream });
+  const coldChild = await restored.server.readThread(child.id);
+  assert.deepEqual(coldChild.itemList, persisted);
+  assert.deepEqual(coldChild.items, after.items);
+  assertToolProtocol(compileItemList(coldChild.itemList!).messages);
+  assert.equal(restored.requests.length, 0);
   await (
     await restored.server.startTurn(child.id, "next explicit question")
   ).done;

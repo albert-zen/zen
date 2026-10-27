@@ -1,3 +1,5 @@
+import { ModelReferenceRegistry } from "../../../src/model-references.js";
+import { invokeModelToolFacade } from "../src/main/capabilities/model-tool-facade.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -112,9 +114,19 @@ async function fixture(t: import("node:test").TestContext) {
     },
     () => {},
   );
-  const router = new FleetToolTargetRouter((invocation) =>
-    adapter.invoke(invocation),
-  );
+  const references = new ModelReferenceRegistry();
+  const bindings: import("../../../src/model-references.js").ModelReferenceBinding[] =
+    [];
+  const router = new FleetToolTargetRouter(async (invocation) => {
+    const result = await invokeModelToolFacade({
+      invocation,
+      references,
+      epoch: "fixture",
+      dispatch: (resolved) => adapter.invoke(resolved),
+    });
+    bindings.push(...(result.referenceBindings ?? []));
+    return result;
+  });
   const caller = new ToolEnvironment({
     targetRouter: router,
     runtimes: [
@@ -156,20 +168,28 @@ async function fixture(t: import("node:test").TestContext) {
     cwd,
     threadId: "source",
     signal: new AbortController().signal,
+    modelReferences: bindings,
   });
-  return { caller, adapter, context, invoke, timings };
+  const remoteTool = references
+    .scope("source")
+    .bind(
+      "fleet",
+      "tool",
+      { device: "remote", ...context, name: "shell" },
+      "fixture",
+    );
+  return { caller, adapter, context, invoke, timings, remoteTool };
 }
 const delayedPrint = `${JSON.stringify(process.execPath)} -e "setTimeout(()=>process.stdout.write('survived'),300)"`;
 
 test("ordinary remote shell preserves domain deadline and early yield", async (t) => {
-  const { caller, adapter, context, invoke, timings } = await fixture(t);
+  const { caller, invoke, timings, remoteTool } = await fixture(t);
   const prepared = caller.prepare(
     invoke("shell", {
       command: delayedPrint,
       timeout_ms: 25,
       yield_time_ms: 5,
-      device: "remote",
-      target_context: context,
+      remoteTool,
     }),
   );
   let response = await caller.execute(prepared);
@@ -177,20 +197,19 @@ test("ordinary remote shell preserves domain deadline and early yield", async (t
   assert.equal(timings[0]?.yieldTimeMs, 5);
   assert.equal(caller.taskManager.activeTaskCount, 0);
   for (;;) {
-    const data = response.structuredContent as {
+    const data = JSON.parse(response.output) as {
       status: string;
       task_id: string;
     };
     if (["timed_out", "cancelled", "failed", "completed"].includes(data.status))
       break;
-    response = await adapter.invoke(
-      invoke("wait", { task_id: data.task_id, yield_time_ms: 1000 }, "wait"),
+    response = await caller.execute(
+      caller.prepare(
+        invoke("wait", { task_id: data.task_id, yield_time_ms: 1000 }, "wait"),
+      ),
     );
   }
-  assert.equal(
-    (response.structuredContent as { status: string }).status,
-    "timed_out",
-  );
+  assert.equal(JSON.parse(response.output).status, "timed_out");
   assert.doesNotMatch(response.output, /survived/);
 });
 
@@ -218,17 +237,15 @@ test("generic facade honors smaller domain timing and explicit facade narrowing"
 
 test("unsupported domain timing rejects before any target body", async (t) => {
   const { adapter, context, invoke, timings } = await fixture(t);
-  await assert.rejects(
-    adapter.invoke(
-      invoke("zenx_fleet_execute", {
-        device: "remote",
-        ...context,
-        name: "shell",
-        arguments: { command: delayedPrint, timeout_ms: 120001 },
-      }),
-    ),
-    (error) =>
-      error instanceof Error && /remote supported range/.test(error.message),
+  const response = await adapter.invoke(
+    invoke("zenx_fleet_execute", {
+      device: "remote",
+      ...context,
+      name: "shell",
+      arguments: { command: delayedPrint, timeout_ms: 120001 },
+    }),
   );
+  assert.equal(JSON.parse(response.output).admission, "unknown");
+  assert.match(JSON.parse(response.output).error, /remote supported range/u);
   assert.equal(timings.length, 0);
 });

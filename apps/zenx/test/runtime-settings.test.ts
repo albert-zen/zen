@@ -199,7 +199,7 @@ test("auxiliary title lease prevents maintenance until released, and maintenance
   }
 });
 
-test("settings publish across multiple tool rounds: old connection and null effort finish, next turn uses the new identity and explicit effort", async () => {
+test("settings preserve the in-flight sample, reject unsupported effort before the next sample, and require explicit new selection", async () => {
   const { createHostedAppServer } = await import("../../cli/src/host.js");
   const { service, close } = await fixture();
   const originalFetch = globalThis.fetch;
@@ -333,10 +333,40 @@ test("settings publish across multiple tool rounds: old connection and null effo
     assert.equal(host.tryBeginMaintenance().accepted, false);
     releaseFirst();
     await running.done;
-    assert.equal(toolCalls, 2);
+    assert.equal(toolCalls, 1);
     assert.deepEqual(
       requests.map((request) => request.reasoning_effort),
-      [undefined, undefined, undefined],
+      [undefined],
+    );
+    const failed = await host.readThread(thread.id);
+    assert.equal(failed.turns[0]?.status, "failed");
+    const failure = failed.items.filter((item) => item.type === "failure");
+    assert.equal(
+      failure.length,
+      3,
+      "existing bounded sample recovery never dispatches an unsupported selection",
+    );
+    assert.deepEqual(
+      failure.map((item) => item.code),
+      ["loop_recovery", "loop_recovery", "runtime_error"],
+    );
+    for (const item of failure)
+      assert.equal(
+        item.message,
+        "An unexpected execution error interrupted the previous step.",
+      );
+    assert.equal(failure.at(-1)!.retried, 2);
+    assert.equal(
+      failure.filter((item) => item.recovery !== undefined).length,
+      2,
+    );
+    assert.equal(
+      failed.items.filter((item) => item.type === "tool_call").length,
+      1,
+    );
+    assert.equal(
+      failed.items.filter((item) => item.type === "tool_result").length,
+      1,
     );
     assert(
       identities.every(
@@ -359,9 +389,31 @@ test("settings publish across multiple tool rounds: old connection and null effo
     await (
       await host.startTurn(thread.id, "next")
     ).done;
-    assert.equal(requests[3]!.reasoning_effort, "high");
-    assert(identities[3]!.url.startsWith("https://new.example.test/v1/"));
-    assert.equal(identities[3]!.authorization, "Bearer updated-key");
+    assert.equal(toolCalls, 2);
+    assert.deepEqual(
+      requests.map((request) => request.model),
+      [model.id, model.id, model.id],
+    );
+    assert.deepEqual(
+      requests.map((request) => request.reasoning_effort),
+      [undefined, "high", "high"],
+    );
+    assert.equal(identities.length, 3);
+    assert(
+      identities
+        .slice(1)
+        .every(
+          (identity) =>
+            identity.url.startsWith("https://new.example.test/v1/") &&
+            identity.authorization === "Bearer updated-key",
+        ),
+    );
+    const after = await host.readThread(thread.id);
+    assert.deepEqual(after.items.slice(0, failed.items.length), failed.items);
+    assert.deepEqual(
+      after.turns.map((turn) => turn.status),
+      ["failed", "completed"],
+    );
     assert.deepEqual(
       (await host.readThread(thread.id)).turns.map(
         (turn) => turn.selection?.reasoningEffort,
