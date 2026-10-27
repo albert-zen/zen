@@ -1,12 +1,12 @@
 # Browser and Computer activity presentation
 
-The production code is based on integration commit
-`15db1ed65da79831ac719275d9279ec303670bdc` and rendered by the fixture
-`test/fixtures/browser-computer-experience-visual.tsx` at this README's Git
-revision. The five Browser/Computer/foreground images were captured at
-`68aab53edc7c71a997486825e73308bca713ab98`; the locked/unknown images
-were recaptured with the corrected idle-system-sleep text from this revision.
-No production component structure changed between those captures. The fixture mounts the
+The production components were recompiled from source commit
+`0091f1f24ae63124253a6a24ae154665521726de` using
+`apps/zenx/test/fixtures/browser-computer-experience-visual.tsx`. All seven
+scenarios were recaptured at that revision and compared pixel by pixel with
+the committed PNGs; every image was identical, so the existing files were
+retained. This includes the Browser and Computer muted-text token correction
+in `styles.css`. The fixture mounts the
 production `WorkspaceBrowserPanel`, `ComputerThreadPanel`, `PluginAccessReview`
 and `foregroundActivityHtml` renderer with synthetic Host facts. PNGs are
 1000 × 850 Chrome headless captures from an isolated synthetic browser profile.
