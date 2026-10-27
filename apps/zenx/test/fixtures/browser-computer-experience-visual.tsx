@@ -16,7 +16,7 @@ import "./browser-computer-experience-visual.css";
 const visualParams = new URLSearchParams(location.search);
 const scenario = visualParams.get("scenario") ?? "browser-working";
 const nativeLocked = scenario === "environment-mac-locked";
-const visualLanguage = visualParams.get("language") === "zh" ? "zh" : "en";
+const visualLanguage = visualParams.get("language") === "zh" ? "zh-CN" : "en";
 document.documentElement.dataset.appearance =
   visualParams.get("appearance") === "light" ? "light" : "dark";
 document.documentElement.dataset.themePreset = "graphite";
