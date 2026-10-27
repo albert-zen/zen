@@ -214,6 +214,10 @@ export interface ZenXComputerBackend {
     target: ComputerInspection["target"];
     control: ComputerControlSelector;
     characterCount: number;
+    valueReadback?: {
+      matchesRequested: true;
+      source: "native_value_pattern";
+    };
     pointer?: ComputerActionPointer;
   }>;
   screenshot(
