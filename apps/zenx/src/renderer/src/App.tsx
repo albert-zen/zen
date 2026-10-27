@@ -223,7 +223,7 @@ interface ThreadProjectionCacheEntry {
   watermark: number;
 }
 
-function replayThreadProjection(
+export function replayThreadProjection(
   thread: Thread,
   settings: SelectedThreadSettings,
   notifications: readonly BufferedProtocolNotification[],
@@ -390,7 +390,7 @@ function activeTurnNotificationTail(
   return tail;
 }
 
-function updateThreadProjectionCache(
+export function updateThreadProjectionCache(
   cache: Map<string, ThreadProjectionCacheEntry>,
   notification: BufferedProtocolNotification,
 ): ThreadProjectionCacheEntry | undefined {
@@ -398,6 +398,22 @@ function updateThreadProjectionCache(
   if (threadId === null) return undefined;
   const current = cache.get(threadId);
   if (current === undefined) return undefined;
+  if (
+    notification.method === "zen/thread/event" &&
+    current.processEpoch === null
+  ) {
+    // Creation still returns a compatibility view. Retain, but do not trust or
+    // apply, native events until resume establishes this Host's epoch/boundary.
+    const pending = {
+      ...current,
+      activeTurnNotifications: [
+        ...current.activeTurnNotifications,
+        notification,
+      ],
+    };
+    cache.set(threadId, pending);
+    return pending;
+  }
   if (
     notification.method === "zen/thread/event" &&
     (notification.params.processEpoch !== current.processEpoch ||
@@ -421,10 +437,11 @@ function updateThreadProjectionCache(
           : current.watermark,
     },
   );
-  const activeTurnNotifications = activeTurnNotificationTail([
-    ...current.activeTurnNotifications,
-    notification,
-  ]);
+  const notifications = [...current.activeTurnNotifications, notification];
+  const activeTurnNotifications =
+    current.processEpoch === null
+      ? notifications
+      : activeTurnNotificationTail(notifications);
   const next = { ...updated, activeTurnNotifications };
   cache.set(threadId, next);
   return next;
@@ -1920,6 +1937,42 @@ function AppContent() {
     threadId: string,
     submission: ComposerSubmission,
   ) => {
+    if (threadProjectionCacheRef.current.get(threadId)?.processEpoch === null) {
+      // Promote the draft before this read: a failed bootstrap must retry the
+      // same Thread, not create another one or send with unowned CAS history.
+      const recovery = await window.zenx.protocol.request("zen/thread/resume", {
+        threadId,
+      });
+      const current = threadProjectionCacheRef.current.get(threadId);
+      if (
+        current === undefined ||
+        recovery.threadId !== threadId ||
+        recovery.thread.id !== threadId
+      )
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
+      if (current.processEpoch === null) {
+        const projected = replayThreadProjection(
+          projectNativeRecovery(recovery),
+          settingsFromSnapshot(
+            threadId,
+            nativeSettingsSnapshot(recovery.thread),
+          ),
+          current.activeTurnNotifications,
+          {
+            processEpoch: recovery.processEpoch,
+            watermark: recovery.watermark,
+          },
+        );
+        threadProjectionCacheRef.current.set(threadId, projected);
+        endNotificationsRef.current?.recover(threadId, recovery);
+        if (selectedThreadIdRef.current === threadId) {
+          setThreadDetail(projected.thread);
+          setSelectedSettings(projected.settings);
+        }
+      } else if (current.processEpoch !== recovery.processEpoch) {
+        throw new Error(i18n.t("shell:theActiveTurnChangedBeforeSending"));
+      }
+    }
     const skillDraft = parseSkillDraft(submission.text);
     const messageText = referenceMessage(
       skillDraft.text,

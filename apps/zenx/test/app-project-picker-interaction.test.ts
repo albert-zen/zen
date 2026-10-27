@@ -344,6 +344,391 @@ test("New thread stays local, switches Project, and creates on first Send", asyn
   }
 });
 
+test("fresh Thread establishes native provenance before sending and only durable current-epoch messages can quote or fork", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const recovery = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  let starts = 0;
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => {
+      starts++;
+      return started(liveThread(), workspace);
+    },
+    recoverCreatedThread: async () => {
+      requests.push({
+        method: "zen/thread/resume",
+        params: { threadId: "thread-1" },
+      });
+      return recovery.promise;
+    },
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "zen/turn/send") return {};
+      if (method === "zen/thread/fork") return new Promise(() => undefined);
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  const emit = async (
+    watermark: number,
+    event: import("../../../src/app-server.js").AppServerEvent,
+    processEpoch = "fresh-native-epoch",
+    threadId = "thread-1",
+  ) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        processEpoch,
+        threadId,
+        watermark,
+        event,
+      }),
+    );
+  const message = {
+    type: "agent_message" as const,
+    id: "fresh-answer",
+    threadId: "thread-1",
+    turnId: "fresh-turn",
+    createdAt: "2026-10-27T00:00:02.000Z",
+    text: "Exact fresh native answer",
+  };
+  try {
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Start with native authority");
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+      2,
+    );
+    await waitFor(() =>
+      requests.some(({ method }) => method === "zen/thread/resume"),
+    );
+    assert.equal(starts, 1);
+    assert.equal(
+      requests.some(({ method }) => method === "zen/turn/send"),
+      false,
+    );
+    await act(async () =>
+      recovery.resolve(
+        nativeRecoveryForThread(liveThread(), {
+          processEpoch: "fresh-native-epoch",
+        }),
+      ),
+    );
+    await waitFor(() =>
+      requests.some(({ method }) => method === "zen/turn/send"),
+    );
+    assert.deepEqual(
+      requests.map(({ method }) => method),
+      ["zen/thread/resume", "zen/turn/send"],
+    );
+    await emit(1, {
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "fresh-turn",
+    });
+    await emit(2, {
+      type: "item_started",
+      threadId: "thread-1",
+      turnId: "fresh-turn",
+      itemId: message.id,
+      itemType: "agent_message",
+    });
+    await emit(3, {
+      type: "item_delta",
+      threadId: "thread-1",
+      turnId: "fresh-turn",
+      itemId: message.id,
+      delta: message.text,
+    });
+    await waitFor(() => document.querySelector(".agent-copy"));
+    assert.equal(
+      document.querySelector("[data-quote-item-id]"),
+      null,
+      "stream-only text has no source authority",
+    );
+    await emit(
+      4,
+      { type: "item_completed", item: message },
+      "stale-native-epoch",
+    );
+    await emit(
+      4,
+      {
+        type: "item_completed",
+        item: { ...message, threadId: "other-thread" },
+      },
+      "fresh-native-epoch",
+      "other-thread",
+    );
+    assert.equal(
+      document.querySelector("[data-quote-item-id]"),
+      null,
+      "stale and cross-thread completions cannot authorize a visible message",
+    );
+    await emit(4, { type: "item_completed", item: message });
+    await emit(5, {
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "fresh-turn",
+      status: "completed",
+    });
+    const owner = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        '[data-quote-item-id="fresh-answer"]',
+      ),
+    );
+    assert.equal(owner.dataset.quoteThreadId, "thread-1");
+    const fork = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    const paragraph = owner.querySelector("[data-message-quote-body] p")!;
+    await act(async () => {
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new window.Event("selectionchange"));
+    });
+    const quote = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.message-selection-actions [aria-keyshortcuts="Alt+Enter"]',
+      ),
+    );
+    await act(async () => quote.click());
+    await waitFor(() => document.querySelector(".composer .reference-token"));
+    assert.equal(
+      requests.filter(({ method }) => method === "zen/turn/send").length,
+      1,
+      "quoting never sends a Turn",
+    );
+    await act(async () => fork.click());
+    assert.deepEqual(
+      requests.find(({ method }) => method === "zen/thread/fork")?.params,
+      {
+        sourceThreadId: "thread-1",
+        through: { type: "item", itemId: "fresh-answer" },
+        workspace: { type: "same-directory" },
+      },
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("native bootstrap reconciles overlapping native events after legacy completion without trusting stale epochs or covered watermarks", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const recovery = deferred<ReturnType<typeof nativeRecoveryForThread>>();
+  let reading = false;
+  let sends = 0;
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => started(liveThread(), workspace),
+    recoverCreatedThread: async () => {
+      reading = true;
+      return recovery.promise;
+    },
+    request: async (method) => {
+      if (method === "zen/turn/send") {
+        sends++;
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  const message = {
+    type: "agent_message" as const,
+    id: "overlapping-answer",
+    threadId: "thread-1",
+    turnId: "overlapping-turn",
+    createdAt: "2026-10-27T00:00:03.000Z",
+    text: "Durable overlapping answer",
+  };
+  const native = (
+    watermark: number,
+    event: import("../../../src/app-server.js").AppServerEvent,
+    processEpoch = "fresh-native-epoch",
+  ) =>
+    notify?.("zen/thread/event", {
+      processEpoch,
+      threadId: "thread-1",
+      watermark,
+      event,
+    });
+  try {
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(
+      composer,
+      "Keep the send pending until native ownership is known",
+    );
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+    );
+    await waitFor(() => reading);
+    await act(async () => {
+      native(4, {
+        type: "item_completed",
+        item: {
+          ...message,
+          id: "covered-answer",
+          text: "Covered stale answer",
+        },
+      });
+      native(6, {
+        type: "turn_started",
+        threadId: "thread-1",
+        turnId: message.turnId,
+      });
+      native(7, { type: "item_completed", item: message });
+      native(8, {
+        type: "turn_completed",
+        threadId: "thread-1",
+        turnId: message.turnId,
+        status: "completed",
+      });
+      native(
+        9,
+        {
+          type: "item_completed",
+          item: {
+            ...message,
+            id: "wrong-epoch-answer",
+            text: "Wrong epoch answer",
+          },
+        },
+        "old-native-epoch",
+      );
+      notify?.("turn/completed", {
+        threadId: "thread-1",
+        turn: {
+          id: message.turnId,
+          status: "completed",
+          error: null,
+          startedAt: 1,
+          completedAt: 3,
+          durationMs: 2000,
+          itemsView: "full",
+          items: [
+            {
+              id: message.id,
+              type: "agentMessage",
+              text: message.text,
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+          ],
+        },
+      });
+    });
+    assert.equal(sends, 0);
+    assert.equal(
+      document.querySelector("[data-quote-item-id]"),
+      null,
+      "unbound native events cannot confer ownership before recovery",
+    );
+    await act(async () =>
+      recovery.resolve(
+        nativeRecoveryForThread(liveThread(), {
+          processEpoch: "fresh-native-epoch",
+          watermark: 5,
+        }),
+      ),
+    );
+    await waitFor(() => sends === 1);
+    const source = await waitFor(() =>
+      document.querySelector('[data-quote-item-id="overlapping-answer"]'),
+    );
+    assert.match(source.textContent ?? "", /Durable overlapping answer/);
+    assert.equal(
+      document.querySelector('[data-quote-item-id="covered-answer"]'),
+      null,
+    );
+    assert.equal(
+      document.querySelector('[data-quote-item-id="wrong-epoch-answer"]'),
+      null,
+    );
+    assert.ok(document.querySelector(".message-fork"));
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("failed fresh native bootstrap preserves the promoted draft and retries the same Thread before sending", async () => {
+  let starts = 0;
+  let recoveries = 0;
+  const sends: unknown[] = [];
+  const harness = await mountApp(oneProject(), {
+    startProjectThread: async (workspace) => {
+      starts++;
+      return started(liveThread(), workspace);
+    },
+    recoverCreatedThread: async () => {
+      recoveries++;
+      if (recoveries === 1) throw new Error("native bootstrap unavailable");
+      return nativeRecoveryForThread(liveThread(), {
+        processEpoch: "fresh-native-epoch",
+      });
+    },
+    request: async (method, params) => {
+      if (method === "zen/turn/send") {
+        sends.push(params);
+        return {};
+      }
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  try {
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(composer, "Keep this exact first message");
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+    );
+    await waitFor(() =>
+      /native bootstrap unavailable/.test(document.body.textContent ?? ""),
+    );
+    assert.equal(starts, 1);
+    assert.equal(sends.length, 0);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+      "Keep this exact first message",
+    );
+    await invokeButtonClick(
+      await waitFor(() =>
+        document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+      ),
+    );
+    await waitFor(() => sends.length === 1);
+    assert.equal(starts, 1, "recovery failure never creates a second Thread");
+    assert.equal(recoveries, 2);
+    assert.equal((sends[0] as { threadId: string }).threadId, "thread-1");
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("New thread sends its selected model, reasoning and file permissions to Project start", async () => {
   const starts: Array<{
     workspace: string;
@@ -4050,6 +4435,9 @@ async function mountApp(
       visible: boolean,
     ): Promise<ReturnType<typeof publicSettings>>;
     request?(method: string, params?: unknown): Promise<unknown>;
+    recoverCreatedThread?(
+      thread: Thread,
+    ): Promise<ReturnType<typeof nativeRecoveryForThread>>;
     observeActivation?(params: unknown): Promise<{ observed: boolean }>;
     observeTitle?(): Promise<undefined>;
     pickImages?(): Promise<ZenXImageDraft[]>;
@@ -4078,6 +4466,7 @@ async function mountApp(
   currentSettings.profile.composerSendMode =
     options.composerSendMode ?? "queue";
   Object.assign(currentSettings.profile, options.initialProfile);
+  const createdThreads = new Map<string, Thread>();
   const zenx = {
     panels: { onOpen: () => () => undefined },
     platform: "darwin",
@@ -4098,6 +4487,16 @@ async function mountApp(
             data: options.models ?? [wireModel("fake", true)],
             nextCursor: null,
           };
+        if (method === "zen/thread/resume") {
+          const created = createdThreads.get(
+            (params as { threadId: string }).threadId,
+          );
+          if (created)
+            return (
+              options.recoverCreatedThread?.(created) ??
+              nativeRecoveryForThread(created)
+            );
+        }
         if (options.request !== undefined) {
           const result = await options.request(method, params);
           // Keep older scenario setup concise while exposing the native resume
@@ -4178,7 +4577,16 @@ async function mountApp(
         if (options.startProjectThread === undefined) {
           throw new Error(`Unexpected Project Thread start: ${workspace}`);
         }
-        return await options.startProjectThread(workspace, selection);
+        const result = await options.startProjectThread(workspace, selection);
+        if (
+          typeof result === "object" &&
+          result !== null &&
+          "thread" in result
+        ) {
+          const thread = result.thread as Thread;
+          createdThreads.set(thread.id, thread);
+        }
+        return result;
       },
     },
     settings: {

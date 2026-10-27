@@ -1457,6 +1457,8 @@ ZenX external file opening is a local desktop UI operation: the main process res
 
 ZenX shared native connection delivery owns only generation-local event watermarks and coalesces identical in-flight Thread resume reads: validated resume overlap is synchronously fanned out at the raw response boundary before later frames, while callers retain the complete recovery snapshot and their existing epoch/watermark projection fences. Reconnect retains its separate ready-then-recovery publication boundary; no new Thread authority or durable state is introduced.
 
+ZenX promotes a newly created Thread's draft before establishing its native recovery epoch and canonical projection, and completes that read before first send; overlapping native notifications remain untrusted buffered input until the snapshot watermark fences replay, and a failed read retries the same Thread without a second creation or dispatch.
+
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
 
 ### Native Computer target sessions
