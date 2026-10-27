@@ -782,6 +782,14 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         throw new Error("This tool does not support Fleet");
       const device = requiredString(invocation.arguments.device, "device");
       if (device !== "local") {
+        if (
+          name === "zenx_threads_create" &&
+          (invocation.arguments.projectless !== undefined ||
+            invocation.arguments.directoryName !== undefined)
+        )
+          throw new Error(
+            "Projectless creation is available only on the local Host",
+          );
         if (!this.#fleet)
           throw new Error("Fleet is not configured on this Host");
         return await this.#fleet.invoke(

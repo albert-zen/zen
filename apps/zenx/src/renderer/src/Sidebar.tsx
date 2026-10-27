@@ -1167,13 +1167,14 @@ function ProjectsView({
   );
   if (
     projects.projects.length === 0 &&
+    (projects.projectlessThreadIds?.length ?? 0) === 0 &&
     projects.unavailableThreadIds.length === 0
   ) {
     return (
       <div className="projects-zero-state">
         <Icon name="folder" size={18} />
         <strong>{i18n.t("shell:noProjectsYet")}</strong>
-        <p>{i18n.t("shell:addAFolderBeforeStartingAThread")}</p>
+        <p>{i18n.t("shell:startWithoutProjectOrAddFolder")}</p>
       </div>
     );
   }

@@ -1,4 +1,6 @@
 export const en = {
+  startWithoutProjectOrAddFolder:
+    "Start a chat without a project, or add a folder.",
   noProject: "No project",
   projectlessDirectoryHint:
     "Creates an independent folder in Documents/ZenX when you first send.",
@@ -878,6 +880,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  startWithoutProjectOrAddFolder: "直接创建无项目会话，或添加一个项目文件夹。",
   noProject: "无项目",
   projectlessDirectoryHint:
     "首次发送后，在 Documents/ZenX 自动创建独立文件夹。",

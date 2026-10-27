@@ -169,7 +169,7 @@ const zenx = {
       archived
         ? []
         : [
-            summary(),
+            ...(params.has("noProjects") ? [] : [summary()]),
             ...(projectlessScene
               ? [summary("projectless-existing", "Trip planning")]
               : []),
@@ -196,37 +196,39 @@ const zenx = {
   },
   projects: {
     get: async () => ({
-      projects: [
-        {
-          key: "/work/zen",
-          workspace: "/work/zen",
-          name: "Zen",
-          configured: true,
-          isDefault: true,
-          threadIds: [
-            "thread-1",
-            ...(params.has("conversationTabs")
-              ? sideConversations.map((entry) => entry.threadId)
-              : []),
+      projects: params.has("noProjects")
+        ? []
+        : [
+            {
+              key: "/work/zen",
+              workspace: "/work/zen",
+              name: "Zen",
+              configured: true,
+              isDefault: true,
+              threadIds: [
+                "thread-1",
+                ...(params.has("conversationTabs")
+                  ? sideConversations.map((entry) => entry.threadId)
+                  : []),
+              ],
+            },
+            {
+              key: "/work/design-system",
+              workspace: "/work/design-system",
+              name: "Design system",
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
+            {
+              key: "/work/field-notes",
+              workspace: "/work/field-notes",
+              name: "Field notes",
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
           ],
-        },
-        {
-          key: "/work/design-system",
-          workspace: "/work/design-system",
-          name: "Design system",
-          configured: true,
-          isDefault: false,
-          threadIds: [],
-        },
-        {
-          key: "/work/field-notes",
-          workspace: "/work/field-notes",
-          name: "Field notes",
-          configured: true,
-          isDefault: false,
-          threadIds: [],
-        },
-      ],
       unavailableThreadIds: [],
       ...(projectlessScene
         ? { projectlessThreadIds: ["projectless-existing"] }

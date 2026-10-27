@@ -124,3 +124,43 @@ test("a grouped thread exposes its real working directory without changing its P
   assert.match(html, /Working directory: \/fixture\/linked/u);
   assert.match(html, /aria-label="New thread in Zen"/u);
 });
+
+test("projectless-only sidebar renders its durable chat after reload without any configured Project", async () => {
+  Object.assign(globalThis, { React });
+  const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
+  const thread: NativeThreadSummary = {
+    threadId: "owned",
+    name: "My independent chat",
+    preview: "",
+    archived: false,
+    status: "idle",
+    createdAt: "2026-10-27T00:00:00.000Z",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+    currentMetadata: {
+      cwd: "/synthetic/Documents/ZenX/date/report",
+      model: "fixture",
+      provider: "fixture",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    },
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(Sidebar, {
+      ...baseProps,
+      threads: [thread],
+      projects: {
+        projects: [],
+        projectlessThreadIds: ["owned"],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: null,
+      },
+    }),
+  );
+  assert.match(html, /My independent chat/u);
+  assert.match(html, /No project/u);
+  assert.doesNotMatch(html, /projects-zero-state/u);
+  assert.match(
+    html,
+    /Working directory: \/synthetic\/Documents\/ZenX\/date\/report/u,
+  );
+});

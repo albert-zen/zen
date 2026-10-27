@@ -101,3 +101,37 @@ test("explicit projectless does not broaden configured cwd authorization or sile
     assert.deepEqual(f.requests, []);
   }
 });
+
+test("remote projectless creation rejects before Fleet transport or local allocation", async () => {
+  let remoteCalls = 0;
+  let allocations = 0;
+  const pkg = new ZenXSelfControlCapabilityPackage({
+    appServer: {
+      projectProjection: new ZenXProjectProjection(),
+      request: async () => {
+        throw new Error("Unexpected native request");
+      },
+    },
+    fleet: {
+      invoke: async () => {
+        remoteCalls++;
+      },
+    } as unknown as import("../src/main/fleet.js").FleetRouter,
+    createProjectlessWorkspace: async () => {
+      allocations++;
+      return "/unexpected";
+    },
+  });
+  await assert.rejects(
+    pkg.invoke("zenx_threads_create", {
+      name: "zenx_threads_create",
+      callId: "remote-fixture",
+      cwd: "/caller",
+      arguments: { device: "remote", projectless: true },
+      signal: new AbortController().signal,
+    }),
+    /only on the local Host/u,
+  );
+  assert.equal(remoteCalls, 0);
+  assert.equal(allocations, 0);
+});
