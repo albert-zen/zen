@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+Native Computer diagnostics capture a bounded, allowlisted per-request observation context before transport enqueue and write into the invoking harness ToolTraceCapture; this context has no authority, result or replay semantics.
+
 - **Projectless workspaces** — The local Host exclusively allocates a persistent dated directory and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
@@ -1473,15 +1475,24 @@ ZenX trigger message bubbles are a disposable UI projection: only the exact know
 
 ZenX's native macOS Computer provider owns an ephemeral, thread-scoped target
 session in its native helper: explicit window selection and scoped window
-capture bind the same retained AX window, while foreground input revalidates
-that binding after existing approval/arbitration. This host device-control state
+capture bind the same fresh CG window and OS process birth, with a retained AX window additionally required for foreground input after existing approval/arbitration. This host device-control state
 is not conversation truth, is never journaled or restored, and cannot authorize
-input without the existing foreground consent. Helper termination invalidates
+foreground input without the existing foreground consent. Helper termination invalidates
 all bindings; uncertain input is never automatically replayed. Its existing
 process owner retains stopping activity through failed termination requests until
 actual child/pipe close; only the native posted/unverified receipt records posted
 input, and closed sessions or invalidated in-flight captures cannot publish fresh
 bindings or screenshot authority.
+
+Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, native scoped-session admission with fresh CG and verified native full-window geometry (including locked console sessions), PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
+
+Native Computer failures retain only a bounded static operation stage and sanitized NSError domain/code; native capture stderr progress uses static stages, monotonic time and thread affinity without target or image data, with an optional validated Host-only UUID retained immutably per capture callback; correlated stages and terminal replies share atomic JSONL frames, and plan-ready is distinct from completed image authority; private error descriptions and userInfo never enter tool results, and an error never grants retry or fallback authority.
+
+The existing native capture seam selects WindowServer single-window capture only from an observed asleep display, otherwise SCK; routes never retry each other on failure, and both must prove the same fresh owner/window geometry, permissions, source pixels and epoch before granting capture authority. SCK callbacks publish validated immutable capture plans; synchronous WindowServer image acquisition runs only on the original native request thread, without changing its metadata or permission authority.
+
+Computer window discovery retains AX results and supplements unique current-user CG window hints when AX is unavailable; discovery never grants a binding or input authority and the existing native target selection revalidates exact process/window identity.
+
+Exact Computer captures retain their trusted image source and background-input eligibility: explicitly unavailable SCK or pre-capture pixel-budget refusal may use the existing active-session-only window thumbnail route, but legacy pixels never authorize native background input and unknown capture failures never fall back.
 
 The existing foreground presenter supplies only live, painted, mouse-ignoring
 edge-indicator native window IDs through a trusted main-only read projection;

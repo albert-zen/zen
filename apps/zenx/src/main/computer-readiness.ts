@@ -118,7 +118,7 @@ export async function probeComputerAccess(
     screenCapture = {
       state: "unknown",
       detail:
-        "Window capture requires an active desktop session; unlock or resume and check again",
+        "Generic desktop preview verification is unavailable in this session; native window capture is checked per target",
     };
   } else {
     try {

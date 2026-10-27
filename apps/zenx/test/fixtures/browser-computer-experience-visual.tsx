@@ -8,14 +8,17 @@ import { foregroundActivityHtml } from "../../src/foreground-activity-view.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
 import type { ComputerThreadEvent } from "../../src/main/capabilities/computer-thread-observation.js";
 import type { WorkspaceBrowserTab } from "../../src/main/workspace-browser.js";
+import computerManifest from "../../../../packages/zenx-computer-plugin/zenx.plugin.json";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 import "./browser-computer-experience-visual.css";
 
-const scenario =
-  new URLSearchParams(location.search).get("scenario") ?? "browser-working";
+const visualParams = new URLSearchParams(location.search);
+const scenario = visualParams.get("scenario") ?? "browser-working";
 const nativeLocked = scenario === "environment-mac-locked";
-document.documentElement.dataset.appearance = "dark";
+const visualLanguage = visualParams.get("language") === "zh" ? "zh-CN" : "en";
+document.documentElement.dataset.appearance =
+  visualParams.get("appearance") === "light" ? "light" : "dark";
 document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = nativeLocked ? "darwin" : "win32";
 document.body.dataset.scenario = scenario;
@@ -93,7 +96,7 @@ const browserTab: WorkspaceBrowserTab = {
 };
 
 const root = document.getElementById("root")!;
-void i18n.changeLanguage("en").then(() => {
+void i18n.changeLanguage(visualLanguage).then(() => {
   if (scenario.startsWith("foreground-")) {
     const stopping = scenario === "foreground-stopping";
     root.innerHTML = `<div class="synthetic-desktop"><div class="synthetic-desktop-label">Synthetic desktop · no native input</div><div class="synthetic-window">Example editor window</div><iframe id="edge" title="Production edge indicator"></iframe><iframe id="status" title="Production foreground status"></iframe></div>`;
@@ -138,14 +141,18 @@ void i18n.changeLanguage("en").then(() => {
         ) : (
           <PluginAccessReview
             pluginId="computer"
-            permissions={[
-              {
-                id: "computer.window.capture",
-                title: "Capture a targeted window",
-                description: "Read the selected app window only.",
-                scope: "local-device",
-              },
-            ]}
+            permissions={
+              nativeLocked
+                ? computerManifest.permissions
+                : [
+                    {
+                      id: "computer.window.capture",
+                      title: "Capture a targeted window",
+                      description: "Read the selected app window only.",
+                      scope: "local-device",
+                    },
+                  ]
+            }
           />
         )}
       </div>

@@ -1,6 +1,6 @@
 {
   "id": "computer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   "provider": {
     "id": "microsoft-winapp-cli",
@@ -46,7 +46,7 @@
   "tools": [
     {
       "name": "computer_environment",
-      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
+      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},

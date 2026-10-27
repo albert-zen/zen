@@ -962,6 +962,7 @@ function macBundledDiagnostic(
       "semantic.press",
       "semantic.set_value",
       "window.capture",
+      "window.background_click",
       "global_input",
     ],
     ...(reason === undefined ? {} : { reason }),

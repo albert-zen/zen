@@ -3,6 +3,9 @@ import type { ComputerTarget } from "./computer-provider.js";
 
 export interface BoundComputerTarget {
   bindingId: string;
+  /** Native runtime capability, absent on older/missing-SPI helpers. */
+  windowLocalInputAvailable?: true;
+  exactWindowCaptureAvailable?: true;
   target: {
     pid: number;
     applicationName: string;
@@ -19,6 +22,11 @@ export interface ComputerCaptureImage {
   bytes?: number;
   imageSha256?: string;
   capturedAt?: string;
+  captureSource?:
+    | "native_sck_exact_window"
+    | "native_window_server_exact_window"
+    | "legacy_desktop_capturer";
+  backgroundInputEligible?: boolean;
   expiresAt?: string;
 }
 
@@ -154,7 +162,8 @@ export class ComputerTargetSession {
         this.#selected.get(owner) !== binding ||
         capture.captureId !== captureId ||
         capture.bindingId !== binding.bindingId ||
-        capture.targetKey !== captureTargetKey(target) ||
+        (capture.targetKey !== captureTargetKey(target) &&
+          captureTargetKey(binding.target) !== captureTargetKey(target)) ||
         !capture.image.expiresAt ||
         !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
         Date.parse(capture.image.expiresAt) <= Date.now()
@@ -177,6 +186,85 @@ export class ComputerTargetSession {
     );
     assertCurrent();
     return result;
+  }
+
+  /** One left click from the existing exact capture, never a new target lookup. */
+  async backgroundClick(
+    owner: string,
+    target: ComputerTarget,
+    bindingId: string,
+    captureId: string,
+    x: number,
+    y: number,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    signal.throwIfAborted();
+    const binding = this.#selected.get(owner),
+      capture = this.#captures.get(owner);
+    if (binding?.windowLocalInputAvailable !== true)
+      throw new Error(
+        "Selected native helper has no window-local input primitive; no input dispatched",
+      );
+    if (
+      this.#closed ||
+      !binding ||
+      !capture ||
+      binding.bindingId !== bindingId ||
+      capture.bindingId !== bindingId ||
+      capture.captureId !== captureId ||
+      (capture.targetKey !== captureTargetKey(target) &&
+        captureTargetKey(binding.target) !== captureTargetKey(target)) ||
+      !capture.image.expiresAt ||
+      !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
+      Date.parse(capture.image.expiresAt) <= Date.now()
+    )
+      throw new Error(
+        "Background click requires this owner's current unexpired exact-window capture; no input dispatched",
+      );
+    if (
+      capture.image.backgroundInputEligible !== true ||
+      ![
+        "native_sck_exact_window",
+        "native_window_server_exact_window",
+      ].includes(capture.image.captureSource ?? "")
+    )
+      throw new Error(
+        "This legacy/read-only capture is not eligible for background input; no input dispatched",
+      );
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      x < 0 ||
+      y < 0 ||
+      x >= capture.width ||
+      y >= capture.height
+    )
+      throw new Error("Click is outside captured image; no input dispatched");
+    // Consume before awaiting native work; no uncertain action can reuse this image.
+    this.#captures.delete(owner);
+    try {
+      const receipt = await this.transport.request(
+        {
+          operation: "backgroundClick",
+          owner,
+          bindingId,
+          x: binding.bounds.x + (x * binding.bounds.width) / capture.width,
+          y: binding.bounds.y + (y * binding.bounds.height) / capture.height,
+        },
+        signal,
+      );
+      if (
+        !isPostedComputerInputReceipt(receipt) ||
+        (receipt as { release?: unknown }).release !== "posted"
+      )
+        throw new Error(
+          "Invalid native input receipt; input outcome unknown; do not retry automatically",
+        );
+      return receipt;
+    } catch (error) {
+      if (this.#selected.get(owner) === binding) this.#selected.delete(owner);
+      throw error;
+    }
   }
 
   invalidateSelections(): void {

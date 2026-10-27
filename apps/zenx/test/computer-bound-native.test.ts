@@ -7,11 +7,15 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import { MAC_BOUND_TARGET_SOURCE } from "../src/main/capabilities/computer-provider.js";
 
-// Platform API doubles only. Binding, activation, focus fences, event sequencing,
-// errors and JSONL dispatch are the shipped Swift implementation. No OS events.
+// Foreground guard/partial-effect fixture only. Platform doubles never post OS
+// events. The separate real owned-window trial must verify background pair delivery.
 const platform = `
 import Foundation
 import CoreGraphics
+var targetCancelled: Int32 = 0
+var backgroundSettledForRequest = false
+let windowLocationSetter: Int? = nil
+@discardableResult func emit(_ value: [String: Any]) -> Bool { FileHandle.standardOutput.write(try! JSONSerialization.data(withJSONObject: value)); FileHandle.standardOutput.write(Data([10])); return true }
 var fixtureOperation = ""
 let mode = ProcessInfo.processInfo.environment["FIXTURE_MODE"] ?? "normal"
 var posted = 0
@@ -31,12 +35,21 @@ let kAXRoleAttribute = "role"
 let kAXWindowRole = "window"
 let kAXWindowAttribute = "window"
 let kCGWindowAlpha = "alpha"
+let kCGWindowLayer = "layer"
+let kCGWindowIsOnscreen = "onscreen"
+let kCGWindowName = "title"
 let kCGWindowBounds = "bounds"
 let kCGWindowNumber = "number"
 let kCGWindowOwnerPID = "owner"
-let kCGNullWindowID = 0
+let kCGNullWindowID = CGWindowID(0)
 enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
-func fixtureWindowList(_ options: [WindowListOption], _ id: Int) -> Any? {
+func fixtureWindowList(_ options: CGWindowListOption, _ id: CGWindowID) -> Any? {
+  var row: [String: Any] = ["owner": NSNumber(value: 42), "number": NSNumber(value: 17), "layer": NSNumber(value: 0), "onscreen": true, "title": "Fixture", "bounds": ["X": -100.0, "Y": 20.0, "Width": fixtureOperation != "select" && mode == "resize" ? 401.0 : 400.0, "Height": 200.0]]
+  if mode == "active-no-cg-title" || mode == "locked-no-cg-title" { row.removeValue(forKey: "title") }
+  if mode == "geometry-ambiguous" { var other = row; other["number"] = NSNumber(value: 18); return [row, other] }
+  return [row]
+}
+func fixtureWindowList(_ options: [WindowListOption], _ id: CGWindowID) -> Any? {
   let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
   if mode == "pointer-missing" { return [] }
   if mode == "pointer-ambiguous" { return [["alpha": 1.0]] }
@@ -73,6 +86,8 @@ func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
   return nil
 }
 func windows(_ app: AXUIElement) -> [AXUIElement] {
+  if mode == "locked-no-cg-title" { return [] }
+  if mode == "same-title-ambiguous" { return [original, replacement] }
   if fixtureOperation != "select" && mode == "closed" { return [] }
   if fixtureOperation != "select" && mode == "reused-id" { return [replacement] }
   return [original]
@@ -84,9 +99,9 @@ func cgId(_ app: NSRunningApplication, _ window: AXUIElement, _ bounds: CGRect) 
 final class NSRunningApplication {
   let processIdentifier: Int32
   init?(processIdentifier: Int32) { self.processIdentifier = processIdentifier }
-  var launchDate: Date? { Date(timeIntervalSince1970: fixtureOperation != "select" && mode == "restarted" ? 2 : 1) }
+  var launchDate: Date? { mode == "missing-launch-date" ? nil : Date(timeIntervalSince1970: fixtureOperation != "select" && mode == "restarted" ? 2 : 1) }
   var isTerminated: Bool { false }
-  var bundleIdentifier: String? { "fixture.app" }
+  var bundleIdentifier: String? { mode == "no-bundle" ? nil : "fixture.app" }
   var localizedName: String? { "Fixture" }
   enum ActivationOption { case activateIgnoringOtherApps }
   func activate(options: [ActivationOption]) -> Bool { mode != "activation-failed" }
@@ -137,12 +152,41 @@ test(
     t.after(() => rmSync(directory, { recursive: true, force: true }));
     const source = path.join(directory, "fixture.swift");
     const binary = path.join(directory, "fixture");
-    const start = MAC_BOUND_TARGET_SOURCE.indexOf("func attribute(");
-    const end = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
+    // Keep CoreGraphics.CGEvent's C ABI out of this foreground-only platform
+    // double. Do not make a fake CGEvent pretend to support the real window SPI.
+    const headerStart = MAC_BOUND_TARGET_SOURCE.indexOf(
+      "// SIGTERM cooperatively",
+    );
+    const headerEnd = MAC_BOUND_TARGET_SOURCE.indexOf("struct TargetError");
+    const windowStart = MAC_BOUND_TARGET_SOURCE.indexOf("func lockedSession()");
+    const windowEnd = MAC_BOUND_TARGET_SOURCE.indexOf("struct KeyboardLayout");
+    assert.ok(
+      headerStart > 0 && headerEnd > headerStart && windowEnd > windowStart,
+    );
+    let foregroundSource =
+      MAC_BOUND_TARGET_SOURCE.slice(0, headerStart) +
+      MAC_BOUND_TARGET_SOURCE.slice(headerEnd, windowStart) +
+      `func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws { try refuse("Background input is outside the foreground stub fixture") }
+       func captureDiagnosticRequestId(_ value: Any?) -> String? { nil }
+func captureWindow(_ binding: Binding, _ path: String, _ diagnosticRequestId: String? = nil) throws -> [String: Any] { try refuse("SCK is outside the foreground stub fixture") }
+       func lockedSession() throws -> Bool { mode.hasPrefix("locked-") }
+      ` +
+      MAC_BOUND_TARGET_SOURCE.slice(windowEnd);
+    // libproc is a platform observation too; never query a synthetic PID 42.
+    const birthStart = foregroundSource.indexOf("func processBirth(");
+    const birthEnd = foregroundSource.indexOf(
+      "final class Binding",
+      birthStart,
+    );
+    foregroundSource =
+      foregroundSource.slice(0, birthStart) +
+      `func processBirth(_ pid: pid_t) throws -> ProcessBirth { ProcessBirth(pid: UInt32(pid), uid: getuid(), seconds: fixtureOperation != "select" && mode == "restarted" ? 2 : 1, microseconds: 0) }\n` +
+      foregroundSource.slice(birthEnd);
+    const start = foregroundSource.indexOf("func attribute(");
+    const end = foregroundSource.indexOf("func pointerWindow(");
     assert.ok(start > 0 && end > start);
     const withoutPlatform = (
-      MAC_BOUND_TARGET_SOURCE.slice(0, start) +
-      MAC_BOUND_TARGET_SOURCE.slice(end)
+      foregroundSource.slice(0, start) + foregroundSource.slice(end)
     )
       .replace("import AppKit\nimport ApplicationServices", platform)
       .replaceAll(" as CFString", "")
@@ -174,7 +218,11 @@ test(
     }
     ` +
       withoutPlatform.slice(keyboardEnd)
-    ).replace("import Carbon", "");
+    )
+      .replace("import Carbon", "")
+      .replace("import ScreenCaptureKit", "")
+      .replace("import ImageIO", "")
+      .replace("import UniformTypeIdentifiers", "");
     writeFileSync(source, transformed);
     const compilation = spawnSync("/usr/bin/swiftc", [source, "-o", binary], {
       encoding: "utf8",
@@ -183,6 +231,12 @@ test(
     assert.equal(compilation.status, 0, compilation.stderr);
     for (const mode of [
       "normal",
+      "missing-launch-date",
+      "active-no-cg-title",
+      "no-bundle",
+      "locked-no-cg-title",
+      "same-title-ambiguous",
+      "geometry-ambiguous",
       "wrong-window",
       "closed",
       "reused-id",
@@ -226,7 +280,10 @@ test(
         const line = await lines.next();
         assert.equal(line.done, false, stderr);
         return JSON.parse(line.value!) as {
-          result?: { bindingId: string };
+          result?: {
+            bindingId: string;
+            target?: { pid: number; bundleId?: string };
+          };
           error?: string;
         };
       };
@@ -236,7 +293,30 @@ test(
           owner: "thread-a",
           target: { pid: 42, windowTitle: "Fixture" },
         });
+        if (
+          [
+            "locked-no-cg-title",
+            "same-title-ambiguous",
+            "geometry-ambiguous",
+          ].includes(mode)
+        ) {
+          assert.match(selected.error!, /available|ambiguous|title/i);
+          child.stdin.end();
+          await new Promise<void>((resolve) =>
+            child.once("close", () => resolve()),
+          );
+          assert.equal((stderr.match(/POST:/g) ?? []).length, 0);
+          continue;
+        }
         assert.ok(selected.result?.bindingId, JSON.stringify(selected));
+        if (mode === "no-bundle") {
+          assert.equal(selected.result.target?.pid, 42);
+          assert.equal(
+            "bundleId" in selected.result.target!,
+            false,
+            "missing bundle is omitted, never an empty target selector",
+          );
+        }
         if (mode === "normal") {
           const next = await request({
             operation: "select",
@@ -282,6 +362,9 @@ test(
         if (
           [
             "normal",
+            "missing-launch-date",
+            "active-no-cg-title",
+            "no-bundle",
             "typing",
             "shortcut-alt",
             "shortcut-option",
@@ -324,7 +407,14 @@ test(
               ? 1
               : mode === "pointer-late-overlay"
                 ? 2
-                : ["normal", "shortcut-alt", "shortcut-option"].includes(mode)
+                : [
+                      "normal",
+                      "missing-launch-date",
+                      "active-no-cg-title",
+                      "no-bundle",
+                      "shortcut-alt",
+                      "shortcut-option",
+                    ].includes(mode)
                   ? 2
                   : mode === "typing"
                     ? 4

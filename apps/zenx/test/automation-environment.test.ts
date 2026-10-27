@@ -255,3 +255,28 @@ test("native probe failure stays unknown and a late unlocked result cannot overw
   assert.equal(failed.snapshot().sessionState, "unknown");
   failed.close();
 });
+
+test("native exact-window lease admits locked console while ordinary foreground remains refused", async () => {
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "active",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+    nativeSessionProbe: async () => "locked",
+  });
+  await environment.refresh();
+  const lease = environment.acquire(
+    new AbortController().signal,
+    "native-targeted-window",
+  );
+  assert.equal(lease.signal.aborted, false);
+  assert.throws(
+    () => environment.acquire(new AbortController().signal),
+    /locked/,
+  );
+  monitor.emit("unlock-screen");
+  assert.equal(lease.signal.aborted, true);
+  lease.release();
+  environment.close();
+});

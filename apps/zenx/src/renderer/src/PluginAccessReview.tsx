@@ -238,7 +238,12 @@ export function PluginAccessReview({
             }
             detail={t(
               computer?.environment?.lockedUse === "provider-dependent"
-                ? "pluginAccessReview.sessionNativeDetail"
+                ? permissions.some(
+                    (permission) =>
+                      permission.id === "computer.window.background_click",
+                  )
+                  ? "pluginAccessReview.sessionNativeWindowDetail"
+                  : "pluginAccessReview.sessionNativeDetail"
                 : "pluginAccessReview.sessionDetail",
             )}
             action={null}

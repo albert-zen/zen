@@ -1,3 +1,5 @@
+import { withNativeComputerTrace } from "./computer-native-trace.js";
+import type { NativeImage } from "electron";
 import {
   COMPUTER_OCR_BUDGET_MS,
   COMPUTER_OCR_MAX_IMAGE_PIXELS,
@@ -6,7 +8,10 @@ import {
   parseComputerOcrRecognition,
   type ComputerOcrRecognition,
 } from "./computer-ocr.js";
-import { ComputerTargetSession } from "./computer-target-session.js";
+import {
+  ComputerTargetSession,
+  type ComputerCaptureImage,
+} from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
 import type { ForegroundActivityRunner } from "../foreground-activity.js";
 import type { ComputerEnvironmentPort } from "../automation-environment.js";
@@ -17,6 +22,7 @@ import {
   access,
   constants as fsConstants,
   mkdir,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -180,8 +186,11 @@ export interface ComputerOcrInspection extends ComputerOcrRecognition {
 export interface ZenXComputerBackend {
   /** Host-native AX implementation only; never inferred from plugin manifest capabilities. */
   readonly nativeTargetedAccessibility?: true;
+  /** Explicit bundled native window-local implementation; no provider inference. */
+  readonly nativeWindowInput?: true;
   /** Invalidate provider-owned native selectors after desktop state changes. */
   invalidateObservations?(): void;
+  invalidateTargetObservations?(target: ComputerTarget): void;
   ocr?(
     target: ComputerTarget,
     captureId: string,
@@ -240,6 +249,8 @@ export interface ZenXComputerBackend {
     height: number;
     bytes: number;
     expiresAt: string;
+    captureSource?: ComputerCaptureImage["captureSource"];
+    backgroundInputEligible?: boolean;
   }>;
   foregroundClick(
     x: number,
@@ -385,7 +396,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_environment",
       description:
-        "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
+        "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
       inputSchema: objectSchema({}, []),
       permissions: ["computer.accessibility.inspect"],
       interactionMode: "background_safe",
@@ -487,12 +498,47 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
     capabilities: [
       ...computerCapabilityManifest.provider!.capabilities,
       "window.ocr",
+      "window.background_click",
     ],
   },
   mainDocument:
     computerCapabilityManifest.mainDocument +
-    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop.",
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click.",
+  permissions: [
+    ...computerCapabilityManifest.permissions,
+    {
+      id: "computer.window.background_click",
+      title: "Click inside a background window",
+      description:
+        "Send one left click to an exact captured window without desktop foreground or pointer takeover; application-internal focus may change.",
+      scope: "local-device",
+    },
+  ],
   tools: [
+    {
+      name: "computer_background_click",
+      description:
+        "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS 14+ console session, including locked; requires a fresh verified native full-window screenshot (SCK when bright, WindowServer when asleep) and uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+      inputSchema: objectSchema(
+        {
+          target: targetSchema(),
+          bindingId: stringSchema(),
+          captureId: stringSchema(),
+          x: { type: "number" },
+          y: { type: "number" },
+        },
+        ["target", "bindingId", "captureId", "x", "y"],
+      ),
+      permissions: ["computer.window.background_click"],
+      interactionMode: "background_safe",
+      capabilities: [
+        "window.background_click",
+        "app_targeted",
+        "no_global_input",
+        "capture_bound",
+        "cancellable",
+      ],
+    },
     ...computerCapabilityManifest.tools.map((tool) =>
       tool.name === "computer_foreground_click"
         ? {
@@ -579,7 +625,7 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_ocr",
       description:
-        "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; requires an image at most 4 MP. Default languages zh-Hans then en-US; Chinese/English requests are normalized Chinese-first; returned languages report the effective order. Unsupported languages/combinations fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
+        "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; accepts an original image at most 16 MP and locally bounds recognition to 4 MP. Default languages zh-Hans then en-US; Chinese/English requests are normalized Chinese-first; returned languages report the effective order. Unsupported languages/combinations fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
       inputSchema: objectSchema(
         {
           target: targetSchema(),
@@ -682,6 +728,15 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    return withNativeComputerTrace(invocation.traceOutput, () =>
+      this.#invokeTraced(toolName, invocation),
+    );
+  }
+
+  async #invokeTraced(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     const foregroundAtStart =
       toolName.startsWith("computer_foreground_") ||
       this.manifest.tools.some(
@@ -697,7 +752,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     invocation.signal.throwIfAborted();
     // Derive actual locked capability from the selected Host backend, never from
     // a model argument or a background_safe plugin manifest alone.
-    const lockedTools =
+    const lockedTools: string[] =
       this.#backend.nativeTargetedAccessibility === true
         ? NATIVE_TARGETED_ACCESSIBILITY_TOOLS.filter(
             (name) =>
@@ -708,14 +763,23 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
               ),
           )
         : [];
+    if (this.#backend.nativeWindowInput === true)
+      lockedTools.push(
+        "computer_screenshot",
+        "computer_ocr",
+        "computer_background_click",
+      );
     if (toolName === "computer_environment") {
       const snapshot = this.#environment?.snapshot();
       return snapshot
         ? {
             ...snapshot,
-            lockedUse: lockedTools.length
-              ? "native-targeted-accessibility"
-              : "unsupported",
+            lockedUse:
+              this.#backend.nativeWindowInput === true
+                ? "native-targeted-window-and-accessibility"
+                : lockedTools.length
+                  ? "native-targeted-accessibility"
+                  : "unsupported",
             lockedTools,
           }
         : {
@@ -727,12 +791,21 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             reason: "Computer environment monitoring is unavailable",
           };
     }
+    const nativeWindow =
+      this.#backend.nativeWindowInput === true &&
+      [
+        "computer_screenshot",
+        "computer_ocr",
+        "computer_background_click",
+      ].includes(toolName);
     const nativeAccessibility = lockedTools.some((name) => name === toolName);
     const lease = this.#environment?.acquire(
       invocation.signal,
-      nativeAccessibility
-        ? "native-targeted-accessibility"
-        : "interactive-desktop",
+      nativeWindow
+        ? "native-targeted-window"
+        : nativeAccessibility
+          ? "native-targeted-accessibility"
+          : "interactive-desktop",
     );
     const lockedAccessibilityAction =
       nativeAccessibility &&
@@ -844,6 +917,46 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
       return await this.#invokeForeground(toolName, invocation);
     }
     const target = requiredTarget(invocation.arguments);
+    if (toolName === "computer_background_click") {
+      const session = this.#backend.targetSession;
+      if (
+        !session ||
+        this.#backend.nativeWindowInput !== true ||
+        !this.manifest.tools.some((tool) => tool.name === toolName)
+      )
+        throw new Error(
+          "This provider does not implement window-local background click; no input dispatched",
+        );
+      if (
+        !this.#environment ||
+        !["active", "locked"].includes(
+          this.#environment.snapshot().sessionState,
+        )
+      )
+        throw new Error(
+          "Background click requires verified native console session monitoring; no input dispatched",
+        );
+      this.#presentation.invalidate(
+        JSON.stringify([
+          invocation.threadId ?? null,
+          computerTargetKey(target),
+        ]),
+      );
+      this.#backend.invalidateTargetObservations?.(target);
+      const receipt = await session.backgroundClick(
+        requiredComputerOwner(invocation),
+        target,
+        requiredString(invocation.arguments, "bindingId"),
+        requiredString(invocation.arguments, "captureId"),
+        requiredFiniteNumber(invocation.arguments, "x"),
+        requiredFiniteNumber(invocation.arguments, "y"),
+        invocation.signal,
+      );
+      return {
+        action: "background_click",
+        ...(receipt as Record<string, unknown>),
+      };
+    }
     const key = JSON.stringify([
       invocation.threadId ?? null,
       computerTargetKey(target),
@@ -1764,16 +1877,21 @@ function boundedDesktopCaptureError(error: unknown): string {
 
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly nativeTargetedAccessibility = true;
+  readonly nativeWindowInput = true;
   readonly targetSession: ComputerTargetSession;
   readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
   readonly #accessibility: Pick<MacAccessibilityDriver, "run">;
   readonly #foregroundInput: MacForegroundInputDriver;
+  readonly #legacyWindowCapture?: (windowId: number) => Promise<NativeImage>;
   readonly #observations = new ComputerObservationLedger();
 
   invalidateObservations(): void {
     this.#observations.clear();
+  }
+  invalidateTargetObservations(target: ComputerTarget): void {
+    this.#observations.beginObservation(computerTargetKey(target));
   }
   #ocrExecutable?: Promise<string>;
 
@@ -1783,7 +1901,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       `zenx-capability-artifacts-${String(process.pid)}`,
     ),
     accessibility?: Pick<MacAccessibilityDriver, "run">,
+    platform: {
+      captureWindowId?: (windowId: number) => Promise<NativeImage>;
+    } = {},
   ) {
+    this.#legacyWindowCapture = platform.captureWindowId;
     this.#artifactDirectory = path.join(artifactDirectory, randomUUID());
     this.#accessibility =
       accessibility ?? new MacAccessibilityDriver(this.#artifactDirectory);
@@ -1831,6 +1953,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const targets = (await this.#accessibility.run(
       {
         operation: "listWindows",
+        ...(query === undefined ? {} : { query }),
       },
       signal,
     )) as ComputerInspection["target"][];
@@ -2062,6 +2185,8 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     height: number;
     bytes: number;
     expiresAt: string;
+    captureSource?: ComputerCaptureImage["captureSource"];
+    backgroundInputEligible?: boolean;
   }> {
     requireMacOs();
     if (owner !== undefined) {
@@ -2070,8 +2195,91 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
         target,
         signal,
         async (binding) => {
-          const image = await this.#captureWindowId(binding.windowId);
-          return await this.#saveScreenshot(binding.target, image);
+          const legacyCapture = async () => {
+            const assertActive = async () => {
+              const observed = (await this.#accessibility.run(
+                { operation: "sessionState" },
+                signal,
+              )) as { sessionState?: unknown };
+              signal.throwIfAborted();
+              if (observed.sessionState !== "active")
+                throw new Error(
+                  "Legacy window capture requires a fresh active session; exact SCK capture is unavailable",
+                );
+            };
+            await assertActive();
+            const image = await this.#captureWindowId(binding.windowId);
+            await assertActive();
+            return {
+              ...(await this.#saveScreenshot(binding.target, image)),
+              captureSource: "legacy_desktop_capturer" as const,
+              backgroundInputEligible: false,
+            };
+          };
+          if (binding.exactWindowCaptureAvailable !== true)
+            return await legacyCapture();
+          await mkdir(this.#artifactDirectory, {
+            recursive: true,
+            mode: 0o700,
+          });
+          const temporary = path.join(
+            this.#artifactDirectory,
+            `native-${randomUUID()}.png`,
+          );
+          try {
+            const result = (await this.targetSession.transport.request(
+              {
+                operation: "capture",
+                owner,
+                bindingId: binding.bindingId,
+                imagePath: temporary,
+              },
+              signal,
+            )) as {
+              width: number;
+              height: number;
+              coordinateSpace: string;
+              source: string;
+              reason?: string;
+            };
+            if (
+              result.source === "legacy_required" &&
+              result.reason === "image_budget"
+            )
+              return await legacyCapture();
+            if (
+              result.coordinateSpace !== "full_window_pixels_top_left" ||
+              ![
+                "screen_capture_kit_exact_window",
+                "window_server_exact_window",
+              ].includes(result.source)
+            )
+              throw new Error(
+                "Native full-window coordinate proof unavailable",
+              );
+            const { nativeImage } = await import("electron");
+            const image = nativeImage.createFromBuffer(
+              await readFile(temporary),
+            );
+            const size = image.getSize();
+            if (
+              image.isEmpty() ||
+              size.width !== result.width ||
+              size.height !== result.height
+            )
+              throw new Error("Native image dimensions changed while reading");
+            return {
+              ...(await this.#saveScreenshot(binding.target, image)),
+              captureSource:
+                result.source === "window_server_exact_window"
+                  ? ("native_window_server_exact_window" as const)
+                  : ("native_sck_exact_window" as const),
+              backgroundInputEligible:
+                binding.windowLocalInputAvailable === true,
+            };
+          } finally {
+            await rm(temporary, { force: true });
+          }
         },
       );
     }
@@ -2123,7 +2331,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
           image.width * image.height > COMPUTER_OCR_MAX_IMAGE_PIXELS
         )
           throw new Error(
-            "OCR requires an available bound screenshot of at most 4 megapixels",
+            "OCR requires an available bound screenshot of at most 16 megapixels",
           );
         const output = await runProcess(
           executable,
@@ -2228,6 +2436,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   }
 
   async #captureWindowId(windowId: number) {
+    if (this.#legacyWindowCapture) return this.#legacyWindowCapture(windowId);
     const { desktopCapturer } = await import("electron");
     const sources = await retryDesktopSourceEnumeration(() =>
       desktopCapturer.getSources({
@@ -2517,6 +2726,7 @@ export async function resolveMacNativeHelperExecutable(
 export const MAC_ACCESSIBILITY_SOURCE = `import AppKit
 import ApplicationServices
 import Foundation
+import Darwin
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\\n").utf8))
@@ -2718,6 +2928,50 @@ func frameFingerprint(_ element: AXUIElement) -> String {
   return String(format: "%.1f,%.1f,%.1f,%.1f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
 }
 
+// Discovery produces only existing target hints. Binding re-reads all OS identity,
+// uniqueness and geometry before it can authorize capture or mutation.
+func discoveryProcessIdentity(_ pid: pid_t) -> [UInt64]? {
+  guard pid > 0 else { return nil }
+  var info = proc_bsdinfo()
+  let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+  guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+        info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0 else { return nil }
+  return [UInt64(info.pbi_pid), UInt64(info.pbi_uid), info.pbi_start_tvsec, info.pbi_start_tvusec]
+}
+func discoveryCGTarget(_ row: [String: Any]) -> [String: Any]? {
+  guard let pid = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+        let birth = discoveryProcessIdentity(pid),
+        (row[kCGWindowNumber as String] as? NSNumber)?.intValue ?? 0 > 0,
+        (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+        let title = row[kCGWindowName as String] as? String, !title.isEmpty,
+        let rawBounds = row[kCGWindowBounds as String] as? [String: Any],
+        let bounds = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+        bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
+        bounds.width > 0, bounds.height > 0 else { return nil }
+  let app = NSRunningApplication(processIdentifier: pid)
+  var target: [String: Any] = ["pid": Int(pid), "applicationName": app?.localizedName ?? "", "windowTitle": title]
+  if let bundle = app?.bundleIdentifier, !bundle.isEmpty { target["bundleId"] = bundle }
+  guard discoveryProcessIdentity(pid) == birth else { return nil }
+  return target
+}
+func supplementWindowTargets(_ ax: [[String: Any]], _ cg: [[String: Any]], _ query: String?) -> [[String: Any]] {
+  func key(_ target: [String: Any]) -> String {
+    return String((target["pid"] as? NSNumber)?.intValue ?? 0) + "\\n" + (target["windowTitle"] as? String ?? "")
+  }
+  func matches(_ target: [String: Any]) -> Bool {
+    guard let query = query, !query.isEmpty else { return true }
+    let value = String((target["pid"] as? NSNumber)?.intValue ?? 0) + " " + (target["applicationName"] as? String ?? "") + " " + (target["windowTitle"] as? String ?? "")
+    return value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+  }
+  var result = ax.filter(matches)
+  let existing = Set(ax.map(key))
+  let counts = Dictionary(grouping: cg, by: key).mapValues { $0.count }
+  for target in cg where !existing.contains(key(target)) && counts[key(target)] == 1 && matches(target) {
+    result.append(target)
+  }
+  return result
+}
+
 let data = FileHandle.standardInput.readDataToEndOfFile()
 guard let raw = try? JSONSerialization.jsonObject(with: data),
       let request = raw as? [String: Any] else { fail("request must be JSON") }
@@ -2775,6 +3029,12 @@ if operation == "listWindows" {
       targets.append(target)
     }
   }
+  // CG supplements AX when a locked application's AX windows are unavailable.
+  // Do not infer focus or choose the first duplicate title. Foreign-user/dead
+  // processes and missing metadata never become discoverable target hints.
+  let rows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+  let cgTargets = rows.compactMap(discoveryCGTarget)
+  targets = supplementWindowTargets(targets, cgTargets, string(request["query"]))
   guard let output = try? JSONSerialization.data(withJSONObject: targets) else { fail("could not encode windows") }
   FileHandle.standardOutput.write(output)
   exit(0)
@@ -3643,8 +3903,71 @@ export const MAC_BOUND_TARGET_SOURCE = `import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
+import Darwin
+import ScreenCaptureKit
+import ImageIO
+import UniformTypeIdentifiers
+
+// SIGTERM cooperatively cancels this helper. No allocation or AppKit in handler.
+var targetCancelled: sig_atomic_t = 0
+var backgroundSettledForRequest = false
+signal(SIGTERM) { _ in targetCancelled = 1 }
+let nativeOutputLock = NSLock()
+@discardableResult
+func emit(_ value: [String: Any]) -> Bool {
+  // The signal handler only sets targetCancelled; it never takes this lock.
+  // Callback diagnostics and terminal responses share one atomic JSONL frame.
+  nativeOutputLock.lock(); defer { nativeOutputLock.unlock() }
+  guard var data = try? JSONSerialization.data(withJSONObject: value) else { return false }
+  data.append(10); FileHandle.standardOutput.write(data)
+  return true
+}
+typealias WindowLocationSetter = @convention(c) (CGEvent, CGPoint) -> Void
+let windowLocationLibrary = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_LOCAL)
+let windowLocationSetter: WindowLocationSetter? = windowLocationLibrary.flatMap { dlsym($0, "CGEventSetWindowLocation") }.map { unsafeBitCast($0, to: WindowLocationSetter.self) }
+func scopedDesktop() throws {
+  guard targetCancelled == 0 else { try refuse("Background input cancelled") }
+  guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+        session[kCGSessionOnConsoleKey as String] as? Bool == true else { try refuse("Scoped window operation requires a known local console session") }
+  // Sleep/lock do not substitute for fresh native capture or exact-window proof.
+  // The Host epoch still fences suspend/unknown; this check never wakes/unlocks.
+}
+func windowInputPermission() throws {
+  try scopedDesktop()
+  guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { try refuse("Background click requires existing Accessibility and post-event permission") }
+}
+struct DesktopFence: Equatable {
+  let foreground: pid_t
+  let pointer: CGPoint
+  let displayAsleep: Bool
+  let windows: [Int]
+  init() throws {
+    guard let front = NSWorkspace.shared.frontmostApplication, let event = CGEvent(source: nil),
+          let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { try refuse("Desktop focus/pointer/window order unavailable") }
+    foreground = front.processIdentifier; pointer = event.location
+    displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    windows = rows.filter { ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue }
+  }
+}
+func appStateEvent(_ subtype: Int16) throws -> CGEvent {
+  guard let native = NSEvent.otherEvent(with: .appKitDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: subtype, data1: 0, data2: 0), let event = native.cgEvent else { try refuse("Could not construct app-local preparation") }
+  return event
+}
+func postToTarget(_ event: CGEvent, _ pid: pid_t) {
+  event.timestamp = CGEvent(source: nil)?.timestamp ?? DispatchTime.now().uptimeNanoseconds
+  event.postToPid(pid)
+}
+
 
 struct TargetError: Error { let message: String }
+func nativeTargetFailure(_ error: Error, _ stage: String) -> String {
+  if let known = error as? TargetError { return known.message }
+  let failure = error as NSError
+  let domain = String(failure.domain.prefix(96)).map { character -> Character in
+    character.isASCII && (character.isLetter || character.isNumber || ".-_".contains(character)) ? character : "_"
+  }
+  return "Native target failed at " + stage + "; NSError domain=" + String(domain) + ", code=" + String(failure.code)
+}
 func refuse(_ message: String) throws -> Never { throw TargetError(message: message) }
 func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
   var value: CFTypeRef?
@@ -3710,68 +4033,377 @@ func pointerWindow(_ point: CGPoint, _ windowId: Int, _ appElement: AXUIElement,
   guard let window = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(window) == AXUIElementGetTypeID() else { try refuse("Pointer recipient window is ambiguous") }
   return window as! AXUIElement
 }
+func ownedRows(_ app: NSRunningApplication, _ exactId: Int? = nil) -> [[String: Any]] {
+  let options: CGWindowListOption = exactId == nil ? .optionAll : .optionIncludingWindow
+  let rows = CGWindowListCopyWindowInfo(options, exactId.map { CGWindowID($0) } ?? kCGNullWindowID) as? [[String: Any]] ?? []
+  // Foreign title/frame/content are never inspected for target discovery.
+  return rows.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == app.processIdentifier }
+}
+func windowBounds(_ row: [String: Any]) -> CGRect? {
+  guard let raw = row[kCGWindowBounds as String] as? [String: Any],
+        let value = CGRect(dictionaryRepresentation: raw as CFDictionary), value.minX.isFinite, value.minY.isFinite,
+        value.width.isFinite, value.height.isFinite, value.width > 0, value.height > 0 else { return nil }
+  return value
+}
+func liveWindow(_ row: [String: Any]) -> Bool {
+  return (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 && (row[kCGWindowIsOnscreen as String] as? Bool) == true
+}
+struct ProcessBirth: Equatable {
+  let pid: UInt32
+  let uid: UInt32
+  let seconds: UInt64
+  let microseconds: UInt64
+}
+func processBirth(_ pid: pid_t) throws -> ProcessBirth {
+  var info = proc_bsdinfo()
+  let expected = Int32(MemoryLayout<proc_bsdinfo>.size)
+  let count = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expected)
+  guard count == expected, info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0 else { try refuse("Fresh OS process launch identity unavailable") }
+  return ProcessBirth(pid: info.pbi_pid, uid: info.pbi_uid, seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
+}
 final class Binding {
   let id = UUID().uuidString
   let app: NSRunningApplication
   let appElement: AXUIElement
-  let window: AXUIElement
-  let launch: Date
+  let window: AXUIElement?
+  let launch: Date?
+  let birth: ProcessBirth
   let bounds: CGRect
   let windowId: Int
   let title: String
+  var capturedAt: Date?
+  var captureSession: Bool?
   init(_ target: [String: Any]) throws {
-    let apps = NSWorkspace.shared.runningApplications.filter { app in
+    let runningCandidates = (target["pid"] as? NSNumber).flatMap { NSRunningApplication(processIdentifier: $0.int32Value) }.map { [$0] } ?? NSWorkspace.shared.runningApplications
+    let apps = runningCandidates.filter { app in
       if let pid = target["pid"] as? NSNumber, app.processIdentifier != pid.int32Value { return false }
       if let bundle = (target["bundleId"] ?? target["applicationId"]) as? String, app.bundleIdentifier != bundle { return false }
       return target["pid"] != nil || target["bundleId"] != nil || target["applicationId"] != nil
     }
-    guard apps.count == 1, let app = apps.first, let launch = app.launchDate, !app.isTerminated else { try refuse("Application target is missing or ambiguous") }
+    guard apps.count == 1, let app = apps.first else { try refuse("Application target is missing or ambiguous") }
+    let launch = app.launchDate
+    let birth = try processBirth(app.processIdentifier)
+    guard !app.isTerminated else { try refuse("Application target has terminated") }
     let element = AXUIElementCreateApplication(app.processIdentifier)
-    let candidates = windows(element).filter { window in
-      guard let requested = target["windowTitle"] as? String else { return true }
-      return attribute(window, kAXTitleAttribute as CFString) as? String == requested
+    let requestedTitle = target["windowTitle"] as? String
+    let axCandidates = try lockedSession() ? [] : windows(element).filter { window in
+      guard attribute(window, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String else { return false }
+      return requestedTitle == nil || attribute(window, kAXTitleAttribute as CFString) as? String == requestedTitle
     }
-    // Application-only selection is permitted only when it has one unambiguous window.
-    guard candidates.count == 1, let window = candidates.first, let bounds = frame(window) else { try refuse("Select one exact available window") }
-    self.app = app; self.appElement = element; self.window = window; self.launch = launch; self.bounds = bounds
-    self.windowId = try cgId(app, window, bounds)
-    self.title = attribute(window, kAXTitleAttribute as CFString) as? String ?? ""
+    let selectedAX: AXUIElement?
+    let selectedRow: [String: Any]
+    let selectedBounds: CGRect
+    let selectedTitle: String
+    if !axCandidates.isEmpty {
+      guard axCandidates.count == 1, let window = axCandidates.first, let bounds = frame(window) else { try refuse("AX window selection is ambiguous or unavailable") }
+      let rows = ownedRows(app).filter { liveWindow($0) && windowBounds($0) == bounds }
+      guard rows.count == 1, let row = rows.first else { try refuse("AX to CG geometry mapping is ambiguous or unavailable") }
+      selectedAX = window; selectedRow = row; selectedBounds = bounds
+      selectedTitle = attribute(window, kAXTitleAttribute as CFString) as? String ?? ""
+    } else {
+      // No AX authority: require a fresh independent CG title, never first/main.
+      let rows = ownedRows(app).filter { row in
+        guard liveWindow(row), let title = row[kCGWindowName as String] as? String, !title.isEmpty else { return false }
+        return requestedTitle == nil || requestedTitle == title
+      }
+      guard rows.count == 1, let row = rows.first, let bounds = windowBounds(row), let title = row[kCGWindowName as String] as? String else { try refuse("Select one exact available window; independent CG title is missing or ambiguous") }
+      selectedAX = nil; selectedRow = row; selectedBounds = bounds; selectedTitle = title
+    }
+    guard let windowId = (selectedRow[kCGWindowNumber as String] as? NSNumber)?.intValue else { try refuse("Selected CG window identity unavailable") }
+    self.app = app; self.appElement = element; self.launch = launch; self.birth = birth
+    self.bounds = selectedBounds; self.windowId = windowId; self.title = selectedTitle; self.window = selectedAX
   }
   func verify() throws {
-    guard !app.isTerminated, let current = NSRunningApplication(processIdentifier: app.processIdentifier), current.launchDate == launch,
-          windows(appElement).contains(where: { CFEqual($0, window) }) else { try refuse("Selected window or application ended; reselect target") }
-    guard frame(window) == bounds else { try refuse("Window geometry changed; recapture or reselect before input") }
-    guard try cgId(app, window, bounds) == windowId else { try refuse("Window capture identity changed; reobserve") }
+    guard !app.isTerminated, let current = NSRunningApplication(processIdentifier: app.processIdentifier), current.launchDate == launch, try processBirth(current.processIdentifier) == birth,
+          current.bundleIdentifier == app.bundleIdentifier else { try refuse("Selected application ended; reselect target") }
+    let rows = ownedRows(app, windowId)
+    guard rows.count == 1, let row = rows.first, liveWindow(row), windowBounds(row) == bounds else { try refuse("Window identity or geometry changed; recapture or reselect before input") }
+    if let window {
+      guard windows(appElement).contains(where: { CFEqual($0, window) }), frame(window) == bounds,
+            attribute(window, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String,
+            (attribute(window, kAXTitleAttribute as CFString) as? String ?? "") == title else { try refuse("Retained AX window ended or changed; reobserve") }
+      let mapped = ownedRows(app).filter { liveWindow($0) && windowBounds($0) == bounds }
+      guard mapped.count == 1, (mapped[0][kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else { try refuse("AX to CG mapping is ambiguous or changed") }
+    } else {
+      guard row[kCGWindowName as String] as? String == title, !title.isEmpty else { try refuse("Independent CG window title changed; reobserve") }
+    }
   }
   func focused() -> Bool {
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+    guard let window, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
           let focused = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
     return CFEqual(focused, window)
   }
   func activate() throws {
     try verify()
+    guard let window, windows(appElement).contains(where: { CFEqual($0, window) }), frame(window) == bounds else { try refuse("Selected window AX identity unavailable for foreground input") }
     guard app.activate(options: [.activateIgnoringOtherApps]) else { try refuse("Could not activate selected application") }
     guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { try refuse("Could not raise selected window") }
-    for _ in 0..<30 {
-      try verify()
-      if focused() { return }
-      usleep(10_000)
-    }
+    for _ in 0..<30 { try verify(); if focused() { return }; usleep(10_000) }
     try refuse("Selected window did not acquire foreground focus; no input dispatched")
   }
-  func fence() throws {
-    try verify()
-    guard focused() else { try refuse("Foreground focus changed; reobserve target") }
-  }
+  func fence() throws { try verify(); guard focused() else { try refuse("Foreground focus changed; reobserve target") } }
   func pointerFence(_ point: CGPoint, _ passthrough: Set<Int>) throws {
-    guard CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
+    guard let window, CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
   }
   func receipt() -> [String: Any] {
-    return ["bindingId": id, "windowId": windowId,
-      "target": ["pid": Int(app.processIdentifier), "applicationName": app.localizedName ?? "", "bundleId": app.bundleIdentifier ?? "", "windowTitle": title],
+    var available = false
+    var captureAvailable = false
+    if #available(macOS 14.0, *) { captureAvailable = true; available = windowLocationSetter != nil }
+    var target: [String: Any] = ["pid": Int(app.processIdentifier), "applicationName": app.localizedName ?? "", "windowTitle": title]
+    if let bundle = app.bundleIdentifier, !bundle.isEmpty { target["bundleId"] = bundle }
+    return ["bindingId": id, "windowId": windowId, "windowLocalInputAvailable": available, "exactWindowCaptureAvailable": captureAvailable,
+      "target": target,
       "bounds": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]]
   }
 }
+func lockedSession() throws -> Bool {
+  try scopedDesktop()
+  guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { try refuse("Console session unknown") }
+  return session["CGSSessionScreenIsLocked"] as? Bool == true
+}
+enum NativeCaptureStage: String {
+  case contentRequested = "content-requested"
+  case callbackEntered = "callback-entered"
+  case metadataReady = "metadata-ready"
+  case slsEntered = "sls-entered"
+  case slsBefore = "sls-before"
+  case slsReturned = "sls-returned"
+  case planReady = "plan-ready"
+  case completed = "completed"
+  case timedOut = "timed-out"
+}
+func captureDiagnosticRequestId(_ raw: Any?) -> String? {
+  guard let value = raw as? String, value.utf8.count == 36, UUID(uuidString: value) != nil,
+        value.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) || $0 == 45 }) else { return nil }
+  return value
+}
+func captureProgress(_ stage: NativeCaptureStage, _ requestId: String? = nil) {
+  // No target, request payload, titles, pixel data or localized NSError content.
+  var value: [String: Any] = ["kind": "native-capture-progress", "stage": stage.rawValue,
+    "monotonicNs": String(DispatchTime.now().uptimeNanoseconds), "mainThread": Thread.isMainThread]
+  if let id = captureDiagnosticRequestId(requestId) {
+    value["requestId"] = id
+    emit(["phase": "diagnostic", "diagnostic": value])
+    return
+  }
+  // Old direct-helper callers retain local diagnostics, without correlation.
+  guard var data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
+  data.append(10); FileHandle.standardError.write(data)
+}
+struct CaptureImageBudgetExceeded: Error {}
+enum NativeWindowCapturePlan {
+  case image(CGImage)
+  case windowServer(width: Int, height: Int)
+}
+@available(macOS 14.0, *)
+final class WindowCaptureResult {
+  let lock = NSLock()
+  let diagnosticRequestId: String?
+  init(_ diagnosticRequestId: String? = nil) { self.diagnosticRequestId = diagnosticRequestId }
+  var result: Result<NativeWindowCapturePlan, Error>?
+  func finish(_ value: Result<NativeWindowCapturePlan, Error>) { lock.lock(); captureProgress(.planReady, diagnosticRequestId); result = value; lock.unlock() }
+  func read() -> Result<NativeWindowCapturePlan, Error>? { lock.lock(); defer { lock.unlock() }; return result }
+}
+func resolveNativeCapturePlan(_ plan: NativeWindowCapturePlan, _ windowServer: (Int, Int) throws -> CGImage) throws -> CGImage {
+  switch plan {
+  case .image(let image): return image
+  case .windowServer(let width, let height): return try windowServer(width, height)
+  }
+}
+typealias WindowServerImageFunction = @convention(c) (UInt32, UnsafePointer<UInt32>, UInt32, UInt32, CGRect) -> Unmanaged<CFArray>?
+typealias WindowServerConnectionFunction = @convention(c) () -> UInt32
+let windowServerLibrary = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_LOCAL)
+let windowServerImageFunction: WindowServerImageFunction? = windowServerLibrary.flatMap { dlsym($0, "SLSHWCaptureWindowListInRect") }.map { unsafeBitCast($0, to: WindowServerImageFunction.self) }
+let windowServerConnectionFunction: WindowServerConnectionFunction? = windowServerLibrary.flatMap { dlsym($0, "CGSMainConnectionID") }.map { unsafeBitCast($0, to: WindowServerConnectionFunction.self) }
+
+func normalizeWindowServerImage(_ image: CGImage, _ width: Int, _ height: Int) throws -> CGImage {
+  guard image.width == width, image.height == height, width > 0, height > 0,
+        width <= 8192, height <= 8192, width <= 16_000_000 / height else { try refuse("WindowServer image disagrees with bounded full-window pixels") }
+  guard let color = CGColorSpace(name: CGColorSpace.sRGB),
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: color,
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { try refuse("WindowServer image normalization unavailable") }
+  // Color conversion only: no flip, crop or resize; the context owns its buffer.
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  guard let data = context.data else { try refuse("WindowServer pixels unavailable") }
+  let bytes = data.assumingMemoryBound(to: UInt8.self)
+  guard stride(from: 3, to: width * height * 4, by: 4).contains(where: { bytes[$0] != 0 }) else { try refuse("WindowServer image is fully transparent; no input proof") }
+  // Opaque black is a legitimate window image, not an API error classifier.
+  guard let result = context.makeImage() else { try refuse("WindowServer image copy unavailable") }
+  return result
+}
+func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int, _ diagnosticRequestId: String? = nil) throws -> CGImage {
+  captureProgress(.slsEntered, diagnosticRequestId)
+  try binding.verify()
+  func sharingFence() throws {
+    let rows = ownedRows(binding.app, binding.windowId)
+    guard rows.count == 1, let sharing = (rows[0][kCGWindowSharingState as String] as? NSNumber)?.intValue,
+          sharing == 1 || sharing == 2 else { try refuse("Exact window sharing is disabled or unknown") }
+  }
+  try sharingFence()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(), CGDisplayIsAsleep(CGMainDisplayID()) != 0 else { try refuse("Asleep exact-window capture permission/display state changed") }
+  guard binding.windowId > 0, let capture = windowServerImageFunction, let mainConnection = windowServerConnectionFunction else { try refuse("WindowServer exact-window capture primitive unavailable") }
+  let connection = mainConnection()
+  guard connection != 0 else { try refuse("WindowServer main connection unavailable") }
+  let image: CGImage = try autoreleasepool {
+    let ids = [CGWindowID(binding.windowId)]
+    captureProgress(.slsBefore, diagnosticRequestId)
+    let returned = ids.withUnsafeBufferPointer { capture(connection, $0.baseAddress!, 1, 0x800, binding.bounds) }
+    captureProgress(.slsReturned, diagnosticRequestId)
+    guard let returned else { try refuse("WindowServer exact-window capture returned no image") }
+    // Apple primitive returns +0/autoreleased. Consume only our added +1; ARC
+    // releases it at pool scope. Never takeRetainedValue on the original +0.
+    let images = returned.retain().takeRetainedValue()
+    guard CFGetTypeID(images) == CFArrayGetTypeID(), CFArrayGetCount(images) == 1,
+          let raw = CFArrayGetValueAtIndex(images, 0) else { try refuse("WindowServer capture did not return exactly one image") }
+    let value = Unmanaged<CFTypeRef>.fromOpaque(raw).takeUnretainedValue()
+    guard CFGetTypeID(value) == CGImage.typeID else { try refuse("WindowServer capture element is not an image") }
+    // Keep the element independently alive while the array's retain is balanced.
+    let original = Unmanaged<CGImage>.fromOpaque(raw).retain().takeRetainedValue()
+    let result = try normalizeWindowServerImage(original, width, height)
+    withExtendedLifetime(images) {}
+    return result
+  }
+  try binding.verify(); try sharingFence()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(), CGDisplayIsAsleep(CGMainDisplayID()) != 0 else { try refuse("Asleep exact-window capture permission/display state changed") }
+  return image
+}
+@available(macOS 14.0, *)
+func captureWindow(_ binding: Binding, _ path: String, _ diagnosticRequestId: String? = nil) throws -> [String: Any] {
+  binding.capturedAt = nil; binding.captureSession = nil
+  guard CGPreflightScreenCaptureAccess() else { try refuse("Screen Recording permission is not granted; no prompt requested") }
+  try binding.verify()
+  let session = try lockedSession()
+  let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+  // Immutable request-local correlation is retained by each async callback.
+  let requestId = captureDiagnosticRequestId(diagnosticRequestId)
+  let completion = WindowCaptureResult(requestId)
+  captureProgress(.contentRequested, requestId)
+  SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
+    captureProgress(.callbackEntered, requestId)
+    guard let content, error == nil else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-shareable-content")) } ?? TargetError(message: "SCK content unavailable"))); return }
+    let matches = content.windows.filter { $0.windowID == CGWindowID(binding.windowId) && $0.owningApplication?.processID == binding.app.processIdentifier }
+    guard matches.count == 1, let window = matches.first, window.isActive, (displayAsleep || window.isOnScreen), window.frame == binding.bounds else { completion.finish(.failure(TargetError(message: "Fresh SCK exact window/geometry unavailable"))); return }
+    let filter = SCContentFilter(desktopIndependentWindow: window)
+    let scale = Double(filter.pointPixelScale)
+    guard filter.contentRect == binding.bounds, scale.isFinite, scale > 0, scale <= 4 else { completion.finish(.failure(TargetError(message: "SCK full-window coordinate mapping unavailable"))); return }
+    let width = Int((binding.bounds.width * scale).rounded()), height = Int((binding.bounds.height * scale).rounded())
+    guard width > 0, height > 0, abs(Double(width) - binding.bounds.width * scale) < 0.001, abs(Double(height) - binding.bounds.height * scale) < 0.001 else { completion.finish(.failure(TargetError(message: "Exact full-window image mapping is incoherent"))); return }
+    guard width <= 8192, height <= 8192, width * height <= 16_000_000 else { completion.finish(.failure(CaptureImageBudgetExceeded())); return }
+    captureProgress(.metadataReady, requestId)
+    if displayAsleep {
+      guard [1.0, 2.0, 3.0, 4.0].contains(scale) else { completion.finish(.failure(TargetError(message: "WindowServer full-window integer scale is unavailable"))); return }
+      // The callback only publishes immutable, validated metadata. Synchronous
+      // WindowServer work must run after the native request thread reads it.
+      completion.finish(.success(.windowServer(width: width, height: height)))
+      return
+    }
+    let config = SCStreamConfiguration(); config.width = width; config.height = height
+    config.showsCursor = false
+    if #available(macOS 15.0, *) { config.showMouseClicks = false }
+    config.ignoreShadowsSingleWindow = true; config.preservesAspectRatio = true; config.scalesToFit = true
+    config.captureResolution = .best; config.colorSpaceName = CGColorSpace.sRGB
+    SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
+      guard let image, error == nil, image.width == width, image.height == height else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-capture-image")) } ?? TargetError(message: "SCK image dimensions disagree with exact full-window mapping"))); return }
+      completion.finish(.success(.image(image)))
+    }
+  }
+  let deadline = Date().addingTimeInterval(8)
+  while completion.read() == nil && Date() < deadline && targetCancelled == 0 { RunLoop.current.run(until: Date().addingTimeInterval(0.005)) }
+  guard let result = completion.read() else { captureProgress(.timedOut, requestId); try refuse("Exact window capture timed out or cancelled") }
+  let image: CGImage
+  do {
+    let plan = try result.get()
+    image = try resolveNativeCapturePlan(plan) { width, height in
+      guard Thread.isMainThread else { try refuse("WindowServer capture requires native request thread") }
+      return try captureWindowServerImage(binding, width, height, requestId)
+    }
+  }
+  catch is CaptureImageBudgetExceeded {
+    try binding.verify()
+    guard try lockedSession() == session else { try refuse("Console session changed during capture readiness") }
+    return ["source": "legacy_required", "reason": "image_budget"]
+  }
+  try binding.verify()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else { try refuse("Exact window capture permission changed") }
+  guard try lockedSession() == session, (CGDisplayIsAsleep(CGMainDisplayID()) != 0) == displayAsleep else { try refuse("Console session/display state changed during capture") }
+  guard let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { try refuse("Could not create private screenshot") }
+  CGImageDestinationAddImage(destination, image, nil)
+  guard CGImageDestinationFinalize(destination) else { try refuse("Could not save private screenshot") }
+  chmod(path, 0o600)
+  binding.capturedAt = Date(); binding.captureSession = session
+  captureProgress(.completed, requestId)
+  return ["width": image.width, "height": image.height, "coordinateSpace": "full_window_pixels_top_left", "source": displayAsleep ? "window_server_exact_window" : "screen_capture_kit_exact_window"]
+}
+// Only this operation uses PID-scoped window-local packets. Foreground input below
+// retains its explicit global/activation semantics; there is no fallback between them.
+func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws {
+  var downPosted = false
+  var preparationPosted = false
+  var release: CGEvent?
+  var deactivation: CGEvent?
+  defer {
+    // Once down is possible, neither cancellation nor a stale window can skip up.
+    if downPosted, let release { postToTarget(release, binding.app.processIdentifier); posted += 1 }
+    if preparationPosted, let deactivation { postToTarget(deactivation, binding.app.processIdentifier) }
+    backgroundSettledForRequest = true
+    emit(["phase": "backgroundSettled", "release": downPosted ? "posted" : "not_needed"])
+  }
+  try windowInputPermission()
+  guard let setter = windowLocationSetter else { try refuse("Window-local input primitive unavailable") }
+  guard let x = request["x"] as? Double, let y = request["y"] as? Double, x.isFinite, y.isFinite,
+        binding.bounds.contains(CGPoint(x: x, y: y)) else { try refuse("Invalid bound background click point") }
+  try binding.verify()
+  guard let capturedAt = binding.capturedAt, Date().timeIntervalSince(capturedAt) < 300,
+        binding.captureSession == (try lockedSession()) else { try refuse("Fresh verified native exact-window capture required before background input") }
+  binding.capturedAt = nil; binding.captureSession = nil
+  let baseline = try DesktopFence()
+  guard baseline.windows.contains(binding.windowId) else { try refuse("Selected window is not currently observable") }
+  let global = CGPoint(x: x, y: y)
+  let local = CGPoint(x: x - binding.bounds.minX, y: y - binding.bounds.minY)
+  let cocoa = CGPoint(x: local.x, y: binding.bounds.height - local.y)
+  func mouse(_ type: NSEvent.EventType) throws -> CGEvent {
+    guard let native = NSEvent.mouseEvent(with: type, location: cocoa, modifierFlags: [], timestamp: 0, windowNumber: binding.windowId, context: nil, eventNumber: 1, clickCount: 1, pressure: 1), let event = native.cgEvent else { try refuse("Could not construct window-local mouse pair") }
+    event.flags = []; event.location = global
+    event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+    event.setIntegerValueField(.mouseEventClickState, value: 1)
+    // Source-observed value; macOS exposes no public semantic name for value 3.
+    event.setIntegerValueField(.mouseEventSubtype, value: 3)
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(binding.windowId))
+    event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(binding.windowId))
+    setter(event, local)
+    guard event.location == global else { try refuse("Window-local coordinate preparation changed global point") }
+    return event
+  }
+  let down = try mouse(.leftMouseDown)
+  release = try mouse(.leftMouseUp)
+  // Preparation changes only the target application's internal focus belief. It
+  // must not change OS foreground, pointer or external Z; those remain fenced.
+  if baseline.foreground != binding.app.processIdentifier {
+    let activation = try appStateEvent(1)
+    deactivation = try appStateEvent(2)
+    try windowInputPermission(); try binding.verify()
+    guard try DesktopFence() == baseline else { try refuse("Desktop changed before app-local preparation") }
+    postToTarget(activation, binding.app.processIdentifier); preparationPosted = true
+    usleep(30_000)
+  }
+  try windowInputPermission(); try binding.verify()
+  guard try DesktopFence() == baseline else { try refuse("Desktop changed before background input") }
+  // Both events are prebuilt; there are no AX/IPC/await calls between down and
+  // its unconditional deferred up, even if SIGTERM interrupts the short wait.
+  emit(["phase": "backgroundPairStarted"])
+  downPosted = true
+  postToTarget(down, binding.app.processIdentifier); posted += 1
+  usleep(30_000)
+}
+
+func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws {
+  let baseline = try DesktopFence()
+  try backgroundClickPair(binding, request, &posted)
+  usleep(30_000)
+  try windowInputPermission()
+  guard try DesktopFence() == baseline else { try refuse("Desktop focus/pointer/window order changed after background posting") }
+}
+
 struct KeyboardLayout {
   let id: String
   let translate: (CGKeyCode, Bool) throws -> String
@@ -3833,15 +4465,20 @@ let keyCodes: [String: CGKeyCode] = ["enter":36, "escape":53, "tab":48, "backspa
 var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
+  var backgroundRequest = false
+  var nativeStage = "request-decode"
+  backgroundSettledForRequest = false
   var owner = ""
   var expectedBindingId: String?
   var reply: [String: Any]
   do {
-    guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
     guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
+    nativeStage = ["select", "verify", "capture", "backgroundClick", "click", "key", "type", "shortcut", "scroll"].contains(operation) ? operation : "request-validate"
+    backgroundRequest = operation == "backgroundClick"
     owner = requestedOwner
     expectedBindingId = request["bindingId"] as? String
+    guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
     if operation == "select" {
       bindings.removeValue(forKey: owner)
       guard bindings.count < 32, let target = request["target"] as? [String: Any] else { try refuse("Target capacity reached or target missing") }
@@ -3852,6 +4489,15 @@ while let line = readLine() {
       guard let binding = bindings[owner], request["bindingId"] as? String == binding.id else { try refuse("Target binding expired; select again") }
       try binding.verify()
       if operation == "verify" { reply = ["result": binding.receipt()] }
+      else if operation == "capture" {
+        guard let path = request["imagePath"] as? String, path.hasPrefix("/"), !FileManager.default.fileExists(atPath: path) else { try refuse("Private capture destination unavailable") }
+        if #available(macOS 14.0, *) { reply = ["result": try captureWindow(binding, path, captureDiagnosticRequestId(request["diagnosticRequestId"]))] }
+        else { try refuse("Exact window capture requires macOS 14 or later") }
+      }
+      else if operation == "backgroundClick" {
+        try backgroundClick(binding, request, &posted)
+        reply = ["result": ["dispatch": "posted", "applicationEffect": "unverified", "release": "posted", "internalFocusMayChange": true]]
+      }
       else {
         // All target activation occurs after the host's approval and foreground arbitration.
         try binding.activate()
@@ -3928,13 +4574,15 @@ while let line = readLine() {
     if let expectedBindingId, bindings[owner]?.id == expectedBindingId {
       bindings.removeValue(forKey: owner)
     }
-    let message = (error as? TargetError)?.message ?? "Invalid native target request"
+    if backgroundRequest && !backgroundSettledForRequest {
+      emit(["phase": "backgroundSettled", "release": "not_needed"])
+    }
+    let message = nativeTargetFailure(error, nativeStage)
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
     reply = ["error": message + outcome]
   }
-  if let output = try? JSONSerialization.data(withJSONObject: reply) {
-    FileHandle.standardOutput.write(output); FileHandle.standardOutput.write(Data([10]))
-  } else { exit(1) }
+  if !emit(reply) { exit(1) }
+  if targetCancelled != 0 { exit(0) }
 }
 `;
 

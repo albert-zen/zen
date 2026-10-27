@@ -39,11 +39,18 @@ function fixture() {
       if (request.operation === "select")
         return {
           bindingId: `b${++serial}`,
+          windowLocalInputAvailable: true,
           target: { pid: 7, applicationName: "Fixture", windowTitle: "Window" },
           windowId: 17,
           bounds: { x: -100, y: 20, width: 400, height: 200 },
         };
-      return { dispatch: "posted", applicationEffect: "unverified" };
+      return {
+        dispatch: "posted",
+        applicationEffect: "unverified",
+        ...(request.operation === "backgroundClick"
+          ? { release: "posted" }
+          : {}),
+      };
     },
     async close() {},
   };
@@ -623,4 +630,279 @@ test("late failed input does not clear a newer explicit selection", async () => 
   reply.resolve({});
   await rejected;
   assert.equal(session.selectedBindingId("a"), next.bindingId);
+});
+
+test("background click consumes exact unexpired capture and maps Retina pixels independently of negative origin", async () => {
+  const { session, calls } = fixture();
+  const target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  await session.backgroundClick(
+    "a",
+    target,
+    image.bindingId,
+    image.captureId,
+    200,
+    100,
+    signal,
+  );
+  assert.deepEqual(calls.at(-1), {
+    operation: "backgroundClick",
+    owner: "a",
+    bindingId: image.bindingId,
+    x: 0,
+    y: 70,
+  });
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      200,
+      100,
+      signal,
+    ),
+    /current.*capture|unexpired|primitive/,
+  );
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    1,
+  );
+});
+
+for (const denial of [
+  "owner",
+  "target",
+  "binding",
+  "expired",
+  "coordinate",
+  "retired",
+] as const)
+  test(`background capture ${denial} refusal posts zero input`, async () => {
+    const { session, calls } = fixture();
+    const target = { pid: 7, windowTitle: "Window" };
+    const image = await session.capture("a", target, signal, async () => ({
+      width: 800,
+      height: 400,
+      expiresAt: new Date(
+        Date.now() + (denial === "expired" ? -1 : 60_000),
+      ).toISOString(),
+    }));
+    if (denial === "retired") session.invalidateSelections();
+    await assert.rejects(
+      session.backgroundClick(
+        denial === "owner" ? "b" : "a",
+        denial === "target" ? { pid: 8, windowTitle: "Window" } : target,
+        denial === "binding" ? "forged" : image.bindingId,
+        image.captureId,
+        denial === "coordinate" ? 800 : 1,
+        1,
+        signal,
+      ),
+      /no input dispatched/,
+    );
+    assert.equal(
+      calls.filter((r) => r.operation === "backgroundClick").length,
+      0,
+    );
+  });
+
+test("native window input has distinct permission and locked admission still requires its own capture", async () => {
+  const { ComputerZenXCapabilityPackage, boundComputerCapabilityManifest } =
+    await import("../src/main/capabilities/computer-provider.js");
+  const { AutomationEnvironment } =
+    await import("../src/main/automation-environment.js");
+  const { EventEmitter } = await import("node:events");
+  const { session, calls } = fixture();
+  const unsupported = async (): Promise<never> => {
+    throw new Error("unexpected backend dispatch");
+  };
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "locked",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "win32",
+    monitor,
+    blocker: { start: () => 1, stop: () => {} },
+  });
+  const capability = new ComputerZenXCapabilityPackage(
+    {
+      nativeWindowInput: true,
+      nativeTargetedAccessibility: true,
+      targetSession: session,
+      inspect: unsupported,
+      press: unsupported,
+      setValue: unsupported,
+      screenshot: unsupported,
+      foregroundClick: unsupported,
+      foregroundKeyPress: unsupported,
+      foregroundScroll: unsupported,
+      close: async () => {},
+    },
+    undefined,
+    false,
+    undefined,
+    environment,
+  );
+  const tool = boundComputerCapabilityManifest.tools.find(
+    (t) => t.name === "computer_background_click",
+  )!;
+  assert.deepEqual(tool.permissions, ["computer.window.background_click"]);
+  assert.equal(tool.interactionMode, "background_safe");
+  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+    capability.invoke(name, {
+      callId: "test",
+      name,
+      arguments: args,
+      cwd: "/",
+      threadId: "a",
+      signal,
+    });
+  const availability = (await invoke("computer_environment")) as {
+    lockedTools: string[];
+  };
+  assert.equal(
+    availability.lockedTools.includes("computer_background_click"),
+    true,
+  );
+  await assert.rejects(
+    invoke("computer_background_click", {
+      target: { pid: 7, windowTitle: "Window" },
+      bindingId: "x",
+      captureId: "x",
+      x: 1,
+      y: 1,
+    }),
+    /no input dispatched/i,
+  );
+  assert.equal(calls.length, 0);
+  await capability.close();
+  environment.close();
+});
+
+test("old or missing-SPI helper cannot receive a background operation or activate as an unknown-operation fallback", async () => {
+  const { session, transport, calls } = fixture();
+  const original = transport.request;
+  transport.request = async (...args) => {
+    const value = await original(...args);
+    if (args[0].operation === "select")
+      delete (value as { windowLocalInputAvailable?: true })
+        .windowLocalInputAvailable;
+    return value;
+  };
+  const target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      1,
+      1,
+      signal,
+    ),
+    /no window-local input primitive/,
+  );
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    0,
+  );
+});
+
+test("background native ACK without matching up receipt is unknown and consumes the capture", async () => {
+  const { session, transport } = fixture();
+  const original = transport.request;
+  const target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  transport.request = async (...args) =>
+    args[0].operation === "backgroundClick"
+      ? { dispatch: "posted", applicationEffect: "unverified" }
+      : original(...args);
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      1,
+      1,
+      signal,
+    ),
+    /outcome unknown/,
+  );
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      1,
+      1,
+      signal,
+    ),
+    /no input dispatched/,
+  );
+});
+
+test("verified WindowServer capture uses the same owner/capture one-shot authority as SCK", async () => {
+  const { session, calls } = fixture(),
+    target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_window_server_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  }));
+  await session.backgroundClick(
+    "a",
+    target,
+    image.bindingId,
+    image.captureId,
+    200,
+    100,
+    signal,
+  );
+  assert.deepEqual(calls.at(-1), {
+    operation: "backgroundClick",
+    owner: "a",
+    bindingId: image.bindingId,
+    x: 0,
+    y: 70,
+  });
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      200,
+      100,
+      signal,
+    ),
+    /unexpired|current/,
+  );
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    1,
+  );
 });

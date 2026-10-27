@@ -11,7 +11,9 @@ export interface AutomationEnvironmentSnapshot {
 
 /** Trusted Host backend selection; model arguments and plugin metadata never select this mode. */
 export type ComputerSessionAccess =
-  "interactive-desktop" | "native-targeted-accessibility";
+  | "interactive-desktop"
+  | "native-targeted-accessibility"
+  | "native-targeted-window";
 
 export interface ComputerEnvironmentPort {
   snapshot(): AutomationEnvironmentSnapshot;
@@ -158,13 +160,14 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       );
     // Poll before admission to cover a missed notification; never infer unlock from a failed probe.
     this.#refreshSession();
-    // Only the native AX path can request scoped work in a locked macOS user
-    // session. It still has to obtain actual AX data and revalidate its selectors;
+    // Only explicit native AX/window paths can request scoped work in a locked macOS user
+    // session. They still obtain fresh OS observations and revalidate exact targets;
     // this admission is not a claim that the target app will accept the operation.
     const scopedLockedAccess =
       this.options.platform === "darwin" &&
       this.#state === "locked" &&
-      access === "native-targeted-accessibility";
+      (access === "native-targeted-accessibility" ||
+        access === "native-targeted-window");
     if (this.#state !== "active" && !scopedLockedAccess)
       throw new Error(
         `Computer session is ${this.#state}; confirm the local desktop is available, then inspect again. No input dispatched.`,

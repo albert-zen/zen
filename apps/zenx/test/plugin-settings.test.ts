@@ -312,7 +312,7 @@ test("Browser setup keeps ZenX independent and recognizes an Edge-only connector
   await act(async () => root.unmount());
 });
 
-test("Computer access review treats locked, suspended, and unknown sessions as unavailable without changing access", async () => {
+test("Computer access review explains session and selected-provider limits without changing access", async () => {
   const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
   Object.assign(globalThis, {
     window: dom.window,
@@ -322,6 +322,7 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
   let sessionState: "active" | "locked" | "suspended" | "unknown" = "locked";
   let reads = 0;
   let nativeAccessibility = false;
+  let nativeWindowInput = false;
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
@@ -354,7 +355,16 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
       root.render(
         React.createElement(PluginAccessReview, {
           pluginId: "computer",
-          permissions: [],
+          permissions: nativeWindowInput
+            ? [
+                {
+                  id: "computer.window.background_click",
+                  title: "Background click",
+                  description: "Selected window only",
+                  scope: "local-device",
+                },
+              ]
+            : [],
         }),
       );
       await Promise.resolve();
@@ -431,6 +441,34 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
   assert.doesNotMatch(
     dom.window.document.body.textContent ?? "",
     /Locked use is unsupported/u,
+  );
+  nativeWindowInput = true;
+  await render();
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /read a selected window and attempt a separately authorized background click while locked/u,
+  );
+  assert.match(dom.window.document.body.textContent ?? "", /macOS 14\+/u);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Foreground control requires unlock/u,
+  );
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /window images require unlock/u,
+  );
+  nativeAccessibility = false;
+  await act(async () => {
+    refresh().click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Locked use is unsupported/u,
+  );
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /background click while locked/u,
   );
   await act(async () => root.unmount());
   dom.window.close();

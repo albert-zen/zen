@@ -2,7 +2,8 @@
 export const COMPUTER_OCR_BUDGET_MS = 10_000;
 export const COMPUTER_OCR_MAX_BOXES = 96;
 export const COMPUTER_OCR_MAX_TEXT_BYTES = 16_384;
-export const COMPUTER_OCR_MAX_IMAGE_PIXELS = 4_000_000;
+export const COMPUTER_OCR_MAX_IMAGE_PIXELS = 16_000_000;
+export const COMPUTER_OCR_MAX_RECOGNITION_PIXELS = 4_000_000;
 export const COMPUTER_OCR_DEFAULT_LANGUAGES = ["zh-Hans", "en-US"];
 
 export interface ComputerOcrText {
@@ -18,6 +19,8 @@ export interface ComputerOcrRecognition {
   height: number;
   texts: ComputerOcrText[];
   truncated: boolean;
+  recognitionSize?: { width: number; height: number };
+  downsampled?: boolean;
 }
 
 export function computerOcrLanguages(value: unknown): string[] {
@@ -100,6 +103,22 @@ export function parseComputerOcrRecognition(
   }
   if (textBytes > COMPUTER_OCR_MAX_TEXT_BYTES)
     throw new Error("Native OCR text exceeded its bounded output");
+  const size = result.recognitionSize;
+  if (
+    (size !== undefined &&
+      (!size ||
+        !Number.isSafeInteger(size.width) ||
+        !Number.isSafeInteger(size.height) ||
+        size.width <= 0 ||
+        size.height <= 0 ||
+        size.width > image.width ||
+        size.height > image.height ||
+        size.width * size.height > COMPUTER_OCR_MAX_RECOGNITION_PIXELS ||
+        result.downsampled !==
+          (size.width !== image.width || size.height !== image.height))) ||
+    (size === undefined && result.downsampled !== undefined)
+  )
+    throw new Error("Native OCR recognition image is invalid");
   // Project only observation fields; no selector or action can enter this result.
   return {
     engine: result.engine,
@@ -113,6 +132,12 @@ export function parseComputerOcrRecognition(
       box: { x: box.x, y: box.y, width: box.width, height: box.height },
     })),
     truncated: result.truncated,
+    ...(size === undefined
+      ? {}
+      : {
+          recognitionSize: { width: size.width, height: size.height },
+          downsampled: result.downsampled,
+        }),
   };
 }
 
@@ -150,11 +175,22 @@ guard imageData.count <= 16777216, digest == expectedDigest,
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let width = properties[kCGImagePropertyPixelWidth] as? Int,
       let height = properties[kCGImagePropertyPixelHeight] as? Int,
-      width > 0, height > 0, width <= 4000000 / height,
-      width == expectedWidth, height == expectedHeight,
-      let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+      width > 0, height > 0, width <= 16000000 / height,
+      width == expectedWidth, height == expectedHeight else {
   fail("OCR image unavailable, oversized, or mismatched with the original capture")
 }
+let image: CGImage
+if width <= 4000000 / height {
+  guard let decoded = CGImageSourceCreateImageAtIndex(source, 0, nil) else { fail("OCR image could not be decoded") }
+  image = decoded
+} else {
+  let scale = sqrt(4000000.0 / (Double(width) * Double(height)))
+  let maximum = Int((Double(max(width, height)) * scale).rounded(.down))
+  let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: maximum, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: false]
+  guard maximum > 0, let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { fail("OCR bounded recognition image unavailable") }
+  image = decoded
+}
+guard image.width > 0, image.height > 0, image.width <= width, image.height <= height, image.width <= 4000000 / image.height else { fail("OCR recognition image exceeds processing bound") }
 let recognize = VNRecognizeTextRequest()
 recognize.revision = VNRecognizeTextRequestRevision2
 recognize.recognitionLevel = .accurate
@@ -198,7 +234,8 @@ for observation in recognize.results ?? [] {
 }
 let result: [String: Any] = [
   "engine": "apple-vision", "revision": 2, "languages": languages,
-  "width": width, "height": height, "texts": texts, "truncated": truncated
+  "width": width, "height": height, "texts": texts, "truncated": truncated,
+  "recognitionSize": ["width": image.width, "height": image.height], "downsampled": image.width != width || image.height != height
 ]
 FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]))
 `;

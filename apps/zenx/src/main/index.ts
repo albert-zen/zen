@@ -2030,7 +2030,7 @@ function installSettingsIpc(
             automationEnvironment.snapshot().sessionState !== "active"
           )
             throw new Error(
-              "Window capture requires an active desktop session",
+              "Generic desktop preview verification is unavailable in this session; native window capture is checked per target",
             );
           const sources = await retryDesktopSourceEnumeration(() =>
             desktopCapturer.getSources({
