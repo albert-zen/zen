@@ -6,6 +6,7 @@ import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
+import { SideChatDraftContext } from "../src/renderer/src/subagents-ui.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 
@@ -24,6 +25,7 @@ for (const language of ["en", "zh-CN"]) {
     });
     const calls: unknown[][] = [];
     const routes: string[] = [];
+    const draftRequests: unknown[] = [];
     dom.window.zenx = {
       plugins: {
         executeCommand: async (...args: unknown[]) => {
@@ -49,7 +51,19 @@ for (const language of ["en", "zh-CN"]) {
     }
     const root = createRoot(document.getElementById("root")!);
     try {
-      await act(async () => root.render(React.createElement(Harness)));
+      await act(async () =>
+        root.render(
+          React.createElement(
+            SideChatDraftContext.Provider,
+            {
+              value: async (input) => {
+                draftRequests.push(input);
+              },
+            },
+            React.createElement(Harness),
+          ),
+        ),
+      );
       const rows = [
         ...document.querySelectorAll<HTMLElement>(".workspace-plugin-choice"),
       ];
@@ -90,14 +104,9 @@ for (const language of ["en", "zh-CN"]) {
         quickCreate.click();
         quickCreate.click();
       });
-      assert.deepEqual(calls, [
-        [
-          "zenx-subagents",
-          "create",
-          { parentThreadId: "parent", mode: "side-chat" },
-        ],
-      ]);
-      assert.deepEqual(routes, ["/threads/new-child?view=panel"]);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(draftRequests, [{ parentThreadId: "parent" }]);
+      assert.deepEqual(routes, []);
       assert.equal(document.querySelectorAll('[role="tab"]').length, 0);
     } finally {
       await act(async () => root.unmount());

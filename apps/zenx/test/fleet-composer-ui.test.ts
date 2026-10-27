@@ -250,6 +250,10 @@ test("machine selection is a compact composer-context control rather than a page
     const control = document.querySelector(".fleet-machine-context");
     assert.ok(control);
     assert.ok(control.closest(".new-thread-composer-context"));
+    assert.ok(
+      !control.querySelector('[data-icon="chevron-down"]'),
+      "machine trigger keeps its icon and label without a disclosure arrow",
+    );
     assert.equal(
       control
         .querySelector('button[aria-label="Run on"]')

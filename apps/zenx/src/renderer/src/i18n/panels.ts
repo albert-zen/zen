@@ -1,4 +1,9 @@
 export const en = {
+  sideChatCreationUnconfirmed:
+    "Unable to confirm side chat creation. Check the conversation list and reopen a side chat. Your input has been kept.",
+  reorderWorkspaceTab: "Reorder {{title}}",
+  moveWorkspaceTabLeft: "Move left",
+  moveWorkspaceTabRight: "Move right",
   externalFileOpen: "Open file externally",
   externalTextEditor: "Text editor",
   externalCustomApp: "Custom application",
@@ -976,6 +981,11 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  sideChatCreationUnconfirmed:
+    "无法确认旁聊是否创建，请检查会话列表后重新打开旁聊；输入已保留。",
+  reorderWorkspaceTab: "调整{{title}}顺序",
+  moveWorkspaceTabLeft: "向左移动",
+  moveWorkspaceTabRight: "向右移动",
   externalFileOpen: "在外部打开文件",
   externalTextEditor: "文本编辑器",
   externalCustomApp: "自定义应用",

@@ -281,6 +281,8 @@ export interface CreateChildThreadInput {
   mode: "fresh" | "fork" | "side-chat";
   selection?: ProviderSelectionInput;
   reasoningEffort?: string;
+  /** Exact append-only prefixes observed when the local side-chat draft opened. */
+  snapshot?: { itemId: string; contextItemId: string | null };
 }
 
 export interface SteerTurnOptions {
@@ -961,6 +963,25 @@ export class ZenAppServer {
         "invalid_request",
         "Child mode must be fresh, fork, or side-chat",
       );
+    if (input.snapshot !== undefined) {
+      const snapshot = input.snapshot;
+      if (
+        input.mode !== "side-chat" ||
+        snapshot === null ||
+        typeof snapshot !== "object" ||
+        typeof snapshot.itemId !== "string" ||
+        !snapshot.itemId.trim() ||
+        snapshot.itemId.length > 512 ||
+        (snapshot.contextItemId !== null &&
+          (typeof snapshot.contextItemId !== "string" ||
+            !snapshot.contextItemId.trim() ||
+            snapshot.contextItemId.length > 512))
+      )
+        throw new AppServerError(
+          "invalid_request",
+          "An exact side chat snapshot boundary is required",
+        );
+    }
     const parent = await this.#requireThread(input.parentThreadId);
     if (input.mode === "fork" || input.mode === "side-chat") {
       return await this.#forkThread(
@@ -1040,7 +1061,7 @@ export class ZenAppServer {
     fullContext = false,
     settings: Pick<
       CreateChildThreadInput,
-      "selection" | "reasoningEffort"
+      "selection" | "reasoningEffort" | "snapshot"
     > = {},
   ): Promise<ThreadSnapshot> {
     const admission = this.beginHostOperation("other", "thread/fork");
@@ -1087,8 +1108,34 @@ export class ZenAppServer {
             : "The selected completed agent message is unavailable in this Thread",
         );
       }
+      const snapshotIndex =
+        settings.snapshot === undefined
+          ? -1
+          : sourceItems.findIndex(
+              (item) => item.id === settings.snapshot!.itemId,
+            );
+      const sourceContext = source.itemList;
+      const contextIndex =
+        settings.snapshot?.contextItemId === null
+          ? -1
+          : sourceContext.findIndex(
+              (item) => item.id === settings.snapshot?.contextItemId,
+            );
+      if (
+        settings.snapshot !== undefined &&
+        (snapshotIndex < 0 ||
+          (settings.snapshot.contextItemId !== null && contextIndex < 0))
+      )
+        throw new AppServerError(
+          "fork_boundary_unavailable",
+          "Side chat snapshot boundary is unavailable in this parent",
+        );
       const terminal = fullContext
-        ? sourceItems.at(-1)!
+        ? sourceItems[
+            settings.snapshot === undefined
+              ? sourceItems.length - 1
+              : snapshotIndex
+          ]!
         : sourceItems[terminalIndex]!;
       if (itemId !== undefined && terminal.type !== "agent_message") {
         throw new AppServerError(
@@ -1101,7 +1148,9 @@ export class ZenAppServer {
         throw new Error("Closed Turn boundary is missing a Turn id");
       }
       const prefix = fullContext
-        ? sourceItems
+        ? settings.snapshot === undefined
+          ? sourceItems
+          : sourceItems.slice(0, snapshotIndex + 1)
         : itemId === undefined
           ? forkablePrefix(sourceItems, terminalIndex)
           : sourceItems.slice(0, terminalIndex + 1);
@@ -1115,7 +1164,11 @@ export class ZenAppServer {
           .filter((item) => prefixIds.has(item.id))
           .map((item) => item.source.sequence),
       );
-      const copiedContext = source.itemList
+      const copiedContext = (
+        settings.snapshot === undefined
+          ? sourceContext
+          : sourceContext.slice(0, contextIndex + 1)
+      )
         .filter(
           (item) => fullContext || item.source.sequence <= boundarySequence,
         )

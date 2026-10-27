@@ -259,6 +259,71 @@ test("native-only child creation returns the canonical snapshot and rejects inva
   }
 });
 
+test("native configured side chat honors an open-time empty-parent snapshot and rejects invalid boundaries", async () => {
+  const host = createHost();
+  const recovery = new NativeRecoveryProjection(host);
+  const messages: JsonRpcMessage[] = [];
+  const connection = new NativeConnection({
+    appServer: host,
+    projection: recovery,
+    send: (message) => messages.push(message),
+  });
+  try {
+    const parent = await host.startThread();
+    const snapshot = {
+      itemId: parent.items.at(-1)!.id,
+      contextItemId: parent.itemList!.at(-1)?.id ?? null,
+    };
+    await (
+      await host.startTurn(parent.id, "new parent work after draft creation")
+    ).done;
+    await connection.receive({ id: 1, method: "zen/initialize", params: {} });
+    await connection.receive({
+      id: 2,
+      method: "zen/thread/create-child-configured",
+      params: { parentThreadId: parent.id, mode: "side-chat", snapshot },
+    });
+    const response = messages.find(
+      (message) => "id" in message && message.id === 2,
+    )!;
+    assert("result" in response);
+    const child = (
+      response.result as {
+        thread: import("../src/app-server.js").ThreadSnapshot;
+      }
+    ).thread;
+    assert.equal(child.parentThreadId, parent.id);
+    assert.equal(child.turns.length, 0);
+    assert.doesNotMatch(JSON.stringify(child.items), /new parent work/);
+    assert.doesNotMatch(JSON.stringify(child.itemList), /new parent work/);
+    const count = (await host.listThreadSummaries()).length;
+    for (const [index, invalid] of [
+      null,
+      {},
+      { itemId: "missing", contextItemId: null },
+    ].entries()) {
+      await connection.receive({
+        id: 3 + index,
+        method: "zen/thread/create-child-configured",
+        params: {
+          parentThreadId: parent.id,
+          mode: "side-chat",
+          snapshot: invalid,
+        },
+      });
+      const rejected = messages.find(
+        (message) => "id" in message && message.id === 3 + index,
+      )!;
+      assert("error" in rejected);
+      assert.equal((await host.listThreadSummaries()).length, count);
+    }
+  } finally {
+    connection.close();
+    recovery.close();
+    await host.closeProviderTransport();
+  }
+});
+
 test("fresh child append failure is explicit and does not publish a child", async () => {
   class FailingJournal extends InMemoryThreadJournal {
     fail = false;

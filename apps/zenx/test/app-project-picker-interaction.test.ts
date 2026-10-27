@@ -14,6 +14,7 @@ import type { ZenXImageDraft } from "../src/main/image-attachments.js";
 import type { ZenXProjectProjectionSnapshot } from "../src/main/project-projection.js";
 import type { ModelSummary, Thread } from "../src/protocol-client/index.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
+import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import { parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
@@ -6431,6 +6432,227 @@ test("App persists per-child visibility independently of Pin and preserves open 
       children.map((child) => child.parentThreadId),
       ["thread-1", "thread-1", "child-a"],
     );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Side chat opening and closing mount a normal local Composer without native creation", async () => {
+  const calls: string[] = [];
+  const harness = await mountThreadApp({
+    plugins: {
+      get: async () => ({
+        ...workspaceLauncherSnapshot,
+        plugins: workspaceLauncherSnapshot.plugins.filter(
+          (plugin) => plugin.id === "zenx-subagents",
+        ),
+      }),
+      executeCommand: async () => ({ threads: [] }),
+    },
+    request: async (method) => {
+      calls.push(method);
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "zen/thread/read")
+        return { thread: resumed(liveThread()).thread };
+      throw new Error(`Unexpected request ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => open.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    await setTextareaValue(composer, "Unsent local input");
+    const tab = document.querySelector(
+      '[role="tab"][id*="custom:side-chat-draft-"]',
+    );
+    assert.ok(tab);
+    assert.equal(
+      calls.filter((method) => method.includes("create-child")).length,
+      0,
+    );
+    assert.equal(document.querySelectorAll(".subagent-tree-row").length, 0);
+    const close = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Close tab Side chat"]',
+      ),
+    );
+    await act(async () => close.click());
+    await waitFor(
+      () => document.querySelector('[id^="side-chat-draft-"]') === null,
+    );
+    assert.equal(
+      calls.filter((method) => method.includes("create-child")).length,
+      0,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Side chat first Send uses opening snapshot once and promotes to a real child tab", async () => {
+  const creates: unknown[] = [];
+  const sends: Array<{ threadId: string }> = [];
+  const parent = resumed(liveThread()).thread;
+  const childView = {
+    ...liveThread(),
+    id: "child",
+    sessionId: "child",
+    name: "Sent side chat",
+  };
+  const create = deferred<{ thread: typeof parent }>();
+  const harness = await mountThreadApp({
+    plugins: {
+      get: async () => ({
+        ...workspaceLauncherSnapshot,
+        plugins: workspaceLauncherSnapshot.plugins.filter(
+          (plugin) => plugin.id === "zenx-subagents",
+        ),
+      }),
+      executeCommand: async () => ({ threads: [] }),
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "child"
+            ? childView
+            : liveThread(),
+        );
+      if (method === "zen/thread/read") return { thread: parent };
+      if (method === "zen/thread/create-child-configured") {
+        creates.push(params);
+        return create.promise;
+      }
+      if (method === "zen/turn/send") {
+        sends.push(params as { threadId: string });
+        return {};
+      }
+      throw new Error(`Unexpected request ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => open.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    await setTextareaValue(composer, "First real message");
+    const send = composer
+      .closest("form")!
+      .querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    await invokePrimarySubmit(send, 2);
+    assert.deepEqual(creates, [
+      {
+        parentThreadId: "thread-1",
+        mode: "side-chat",
+        snapshot: { itemId: "thread-1-metadata", contextItemId: null },
+      },
+    ]);
+    await act(async () =>
+      create.resolve({ thread: resumed(childView).thread }),
+    );
+    await waitFor(() =>
+      document.querySelector('[role="tab"][id*="thread:child"]'),
+    );
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0]?.threadId, "child");
+    assert.equal(
+      document.querySelector('[role="tab"][id*="custom:side-chat-draft-"]'),
+      null,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Side chat drafts stay with their parent across actual Sidebar navigation", async () => {
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1", "thread-2"];
+  let creates = 0;
+  const harness = await mountApp(projects, {
+    threads: async (archived) =>
+      archived
+        ? []
+        : [summary(false), summary(false, "thread-2", "Thread two")],
+    plugins: {
+      get: async () => ({
+        ...workspaceLauncherSnapshot,
+        plugins: workspaceLauncherSnapshot.plugins.filter(
+          (plugin) => plugin.id === "zenx-subagents",
+        ),
+      }),
+      executeCommand: async () => ({ threads: [] }),
+    },
+    request: async (method, params) => {
+      const id = (params as { threadId: string }).threadId;
+      const thread = {
+        ...liveThread(),
+        id,
+        sessionId: id,
+        name: id === "thread-1" ? "Thread one" : "Thread two",
+      };
+      if (method === "zen/thread/resume") return resumed(thread);
+      if (method === "zen/thread/read")
+        return { thread: resumed(thread).thread };
+      if (method.includes("create-child")) creates++;
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => open.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    await setTextareaValue(composer, "Parent one only");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="thread-2"] .thread-row',
+        )!
+        .click(),
+    );
+    await waitFor(
+      () => document.querySelector('[id^="side-chat-draft-"]') === null,
+    );
+    assert.doesNotMatch(document.body.textContent ?? "", /Parent one only/);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="thread-1"] .thread-row',
+        )!
+        .click(),
+    );
+    const restored = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    assert.equal(restored.value, "Parent one only");
+    assert.equal(creates, 0);
   } finally {
     await unmountApp(harness);
   }

@@ -534,7 +534,7 @@ New PAW setup discloses an hourly heartbeat and model-quota use before Create. I
 - Subagents 的常规入口为右侧工作区加号菜单中的 Subagents Tab。Tab 内显示当前会话的子线程，选择后在右栏阅读/对话；不在主标题下重复铺设 Subagents 行或快捷标签。
 - 每个 Subagent / Side chat Thread 的左侧栏显隐独立保存到本机 Host profile，默认隐藏；Subagents 树每一行提供始终可见、可键盘/触控操作的“在侧栏显示”开关，显示/隐藏只影响该 Thread，不递归改变后代。隐藏后仍可从 Subagents 树访问，已打开的独立标签保持不变。
 - 显隐与 Pin/Unpin 完全独立：显示不会自动置顶，隐藏不会取消置顶；隐藏的已置顶子线程不进入 Pinned 列表，再次显示才恢复既有置顶位置。普通线程与独立 Fork 仍默认显示。旧全局 showSubagents 开关移除，既有 localStorage 值不迁移为逐线程显示授权。
-- Subagents Tab 提供 New side chat：以父会话完整上下文快照创建 fork 子线程，在上下文末尾追加明确的 side-chat 身份与等待用户请求的指令。创建本身不运行模型，不继承可执行待办队列，也不改变父会话执行。主动深入交互时可以全屏打开子线程。
+- Subagents Tab 提供 New side chat：点击新建时固定父会话的完整上下文边界并打开 renderer-local 草稿；首次有效 Send 才以该边界创建 fork 子线程并发送。未发送就关闭不创建真实 Thread，不进入子会话列表、Sidebar 或持久工作区。草稿在本次 renderer 内按精确父会话独立保留，导航与切换不串归属；模型与 effort 选择只属于该草稿。创建后的上下文末尾追加明确的 side-chat 身份与等待用户请求的指令，不继承可执行待办队列，也不改变父会话执行。创建已确认而发送失败时，同一草稿重用 child ID 和发送幂等键，不重复创建。主动深入交互时可以全屏打开真实子线程。
 - 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
 - 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
@@ -646,11 +646,17 @@ visible flags, so simultaneous anomalies are never collapsed into one status.
 
 ### 2026-10-15: Workspace launcher rows
 
-Subagents and Triggers use the same horizontal launcher surface and title/description hierarchy as Terminal, File and Browser, with concise localized descriptions and their distinct icons. Subagents keeps its independent quick-create action as a small circular plus inside the same row; the primary row opens the existing list, while the plus creates a side chat without starting a Turn. Touch/coarse-pointer use retains a 44px action target.
+Subagents and Triggers use the same horizontal launcher surface and title/description hierarchy as Terminal, File and Browser, with concise localized descriptions and their distinct icons. Subagents keeps its independent quick-create action as a small circular plus inside the same row; the primary row opens the existing list, while the plus opens a local side-chat draft without creating a Thread or starting a Turn. Touch/coarse-pointer use retains a 44px action target.
 
 ### 2026-10-15: Multiple side conversation tabs
 
 A Thread or Room workspace can keep several side conversations open at once. Each tab is identified by its target Thread ID, independently of its title or category; opening an existing target selects that tab, and opening another target preserves its siblings. Closing a tab changes only that workspace's tab order and selection, without closing or archiving the Thread. Main navigation retains each workspace's open tabs and selected target, while the existing App-owned draft and reading caches retain each Thread's local state. File and Browser tabs retain their existing path/tab-ID identity; a plugin's manager panel remains one contribution rather than becoming a generic multi-instance runtime.
+
+### 2026-10-27: Workspace tab order and selector consistency
+
+Thread and Room workspace tabs can be reordered by dragging their labels, with before/after insertion feedback; close buttons do not start a drag. Alt+Left/Right and the selected tab's Move left/right menu provide equivalent operations. Reordering keeps the current selection, content instances, file drafts and exact resource ownership. Real tab order uses the existing Host presentation revision/CAS store. Local side-chat drafts participate in the visible order but are never persisted as Thread/tab descriptors. Drop, dragend, Escape, blur and unmount clear drag feedback. Existing whole-leading-tab reveal behavior remains in effect after a completed reorder.
+
+The New Thread Composer's machine and Project controls share the same quiet trigger surface, sizing, hover/open treatment and keyboard focus ring. Both retain their existing accessible labels and menus; the machine trigger has no disclosure arrow.
 
 ### 2026-10-15: Stable Thread menu editing and compact Items
 
@@ -673,7 +679,7 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 
 ### 2026-10-15: Side chat creation settings
 
-The Subagents panel keeps one-click inherited side-chat creation and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Creation still starts no Turn. The workspace launcher plus remains the inherited one-click action.
+The Subagents panel keeps one-click inherited side-chat drafting and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Opening fixes the parent context boundary in renderer memory; first valid Send atomically creates the configured child before delivery. Closing an unsent draft leaves no Thread. The workspace launcher plus remains the inherited one-click drafting action.
 
 ### 2026-10-15: Unified Browser tabs and bounded Workspace presentation
 

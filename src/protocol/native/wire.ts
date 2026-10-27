@@ -82,7 +82,7 @@ export const NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD =
   "zen/thread/create-child-configured";
 export interface NativeCreateChildThreadParams extends Pick<
   CreateChildThreadInput,
-  "parentThreadId" | "mode"
+  "parentThreadId" | "mode" | "snapshot"
 > {
   model?: string;
   effort?: string;
