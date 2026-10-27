@@ -3902,10 +3902,15 @@ import UniformTypeIdentifiers
 var targetCancelled: sig_atomic_t = 0
 var backgroundSettledForRequest = false
 signal(SIGTERM) { _ in targetCancelled = 1 }
-func emit(_ value: [String: Any]) {
-  if let data = try? JSONSerialization.data(withJSONObject: value) {
-    FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
-  }
+let nativeOutputLock = NSLock()
+@discardableResult
+func emit(_ value: [String: Any]) -> Bool {
+  // The signal handler only sets targetCancelled; it never takes this lock.
+  // Callback diagnostics and terminal responses share one atomic JSONL frame.
+  nativeOutputLock.lock(); defer { nativeOutputLock.unlock() }
+  guard var data = try? JSONSerialization.data(withJSONObject: value) else { return false }
+  data.append(10); FileHandle.standardOutput.write(data)
+  return true
 }
 typealias WindowLocationSetter = @convention(c) (CGEvent, CGPoint) -> Void
 let windowLocationLibrary = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_LOCAL)
@@ -4146,13 +4151,54 @@ func lockedSession() throws -> Bool {
   guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { try refuse("Console session unknown") }
   return session["CGSSessionScreenIsLocked"] as? Bool == true
 }
+enum NativeCaptureStage: String {
+  case contentRequested = "content-requested"
+  case callbackEntered = "callback-entered"
+  case metadataReady = "metadata-ready"
+  case slsEntered = "sls-entered"
+  case slsBefore = "sls-before"
+  case slsReturned = "sls-returned"
+  case planReady = "plan-ready"
+  case completed = "completed"
+  case timedOut = "timed-out"
+}
+func captureDiagnosticRequestId(_ raw: Any?) -> String? {
+  guard let value = raw as? String, value.utf8.count == 36, UUID(uuidString: value) != nil,
+        value.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) || $0 == 45 }) else { return nil }
+  return value
+}
+func captureProgress(_ stage: NativeCaptureStage, _ requestId: String? = nil) {
+  // No target, request payload, titles, pixel data or localized NSError content.
+  var value: [String: Any] = ["kind": "native-capture-progress", "stage": stage.rawValue,
+    "monotonicNs": String(DispatchTime.now().uptimeNanoseconds), "mainThread": Thread.isMainThread]
+  if let id = captureDiagnosticRequestId(requestId) {
+    value["requestId"] = id
+    emit(["phase": "diagnostic", "diagnostic": value])
+    return
+  }
+  // Old direct-helper callers retain local diagnostics, without correlation.
+  guard var data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
+  data.append(10); FileHandle.standardError.write(data)
+}
 struct CaptureImageBudgetExceeded: Error {}
+enum NativeWindowCapturePlan {
+  case image(CGImage)
+  case windowServer(width: Int, height: Int)
+}
 @available(macOS 14.0, *)
 final class WindowCaptureResult {
   let lock = NSLock()
-  var result: Result<CGImage, Error>?
-  func finish(_ value: Result<CGImage, Error>) { lock.lock(); result = value; lock.unlock() }
-  func read() -> Result<CGImage, Error>? { lock.lock(); defer { lock.unlock() }; return result }
+  let diagnosticRequestId: String?
+  init(_ diagnosticRequestId: String? = nil) { self.diagnosticRequestId = diagnosticRequestId }
+  var result: Result<NativeWindowCapturePlan, Error>?
+  func finish(_ value: Result<NativeWindowCapturePlan, Error>) { lock.lock(); captureProgress(.planReady, diagnosticRequestId); result = value; lock.unlock() }
+  func read() -> Result<NativeWindowCapturePlan, Error>? { lock.lock(); defer { lock.unlock() }; return result }
+}
+func resolveNativeCapturePlan(_ plan: NativeWindowCapturePlan, _ windowServer: (Int, Int) throws -> CGImage) throws -> CGImage {
+  switch plan {
+  case .image(let image): return image
+  case .windowServer(let width, let height): return try windowServer(width, height)
+  }
 }
 typealias WindowServerImageFunction = @convention(c) (UInt32, UnsafePointer<UInt32>, UInt32, UInt32, CGRect) -> Unmanaged<CFArray>?
 typealias WindowServerConnectionFunction = @convention(c) () -> UInt32
@@ -4175,7 +4221,8 @@ func normalizeWindowServerImage(_ image: CGImage, _ width: Int, _ height: Int) t
   guard let result = context.makeImage() else { try refuse("WindowServer image copy unavailable") }
   return result
 }
-func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int) throws -> CGImage {
+func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int, _ diagnosticRequestId: String? = nil) throws -> CGImage {
+  captureProgress(.slsEntered, diagnosticRequestId)
   try binding.verify()
   func sharingFence() throws {
     let rows = ownedRows(binding.app, binding.windowId)
@@ -4189,7 +4236,9 @@ func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int) t
   guard connection != 0 else { try refuse("WindowServer main connection unavailable") }
   let image: CGImage = try autoreleasepool {
     let ids = [CGWindowID(binding.windowId)]
+    captureProgress(.slsBefore, diagnosticRequestId)
     let returned = ids.withUnsafeBufferPointer { capture(connection, $0.baseAddress!, 1, 0x800, binding.bounds) }
+    captureProgress(.slsReturned, diagnosticRequestId)
     guard let returned else { try refuse("WindowServer exact-window capture returned no image") }
     // Apple primitive returns +0/autoreleased. Consume only our added +1; ARC
     // releases it at pool scope. Never takeRetainedValue on the original +0.
@@ -4209,14 +4258,18 @@ func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int) t
   return image
 }
 @available(macOS 14.0, *)
-func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
+func captureWindow(_ binding: Binding, _ path: String, _ diagnosticRequestId: String? = nil) throws -> [String: Any] {
   binding.capturedAt = nil; binding.captureSession = nil
   guard CGPreflightScreenCaptureAccess() else { try refuse("Screen Recording permission is not granted; no prompt requested") }
   try binding.verify()
   let session = try lockedSession()
   let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
-  let completion = WindowCaptureResult()
+  // Immutable request-local correlation is retained by each async callback.
+  let requestId = captureDiagnosticRequestId(diagnosticRequestId)
+  let completion = WindowCaptureResult(requestId)
+  captureProgress(.contentRequested, requestId)
   SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
+    captureProgress(.callbackEntered, requestId)
     guard let content, error == nil else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-shareable-content")) } ?? TargetError(message: "SCK content unavailable"))); return }
     let matches = content.windows.filter { $0.windowID == CGWindowID(binding.windowId) && $0.owningApplication?.processID == binding.app.processIdentifier }
     guard matches.count == 1, let window = matches.first, window.isActive, (displayAsleep || window.isOnScreen), window.frame == binding.bounds else { completion.finish(.failure(TargetError(message: "Fresh SCK exact window/geometry unavailable"))); return }
@@ -4226,10 +4279,12 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
     let width = Int((binding.bounds.width * scale).rounded()), height = Int((binding.bounds.height * scale).rounded())
     guard width > 0, height > 0, abs(Double(width) - binding.bounds.width * scale) < 0.001, abs(Double(height) - binding.bounds.height * scale) < 0.001 else { completion.finish(.failure(TargetError(message: "Exact full-window image mapping is incoherent"))); return }
     guard width <= 8192, height <= 8192, width * height <= 16_000_000 else { completion.finish(.failure(CaptureImageBudgetExceeded())); return }
+    captureProgress(.metadataReady, requestId)
     if displayAsleep {
       guard [1.0, 2.0, 3.0, 4.0].contains(scale) else { completion.finish(.failure(TargetError(message: "WindowServer full-window integer scale is unavailable"))); return }
-      do { completion.finish(.success(try captureWindowServerImage(binding, width, height))) }
-      catch { completion.finish(.failure(error)) }
+      // The callback only publishes immutable, validated metadata. Synchronous
+      // WindowServer work must run after the native request thread reads it.
+      completion.finish(.success(.windowServer(width: width, height: height)))
       return
     }
     let config = SCStreamConfiguration(); config.width = width; config.height = height
@@ -4239,14 +4294,20 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
     config.captureResolution = .best; config.colorSpaceName = CGColorSpace.sRGB
     SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
       guard let image, error == nil, image.width == width, image.height == height else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-capture-image")) } ?? TargetError(message: "SCK image dimensions disagree with exact full-window mapping"))); return }
-      completion.finish(.success(image))
+      completion.finish(.success(.image(image)))
     }
   }
   let deadline = Date().addingTimeInterval(8)
   while completion.read() == nil && Date() < deadline && targetCancelled == 0 { RunLoop.current.run(until: Date().addingTimeInterval(0.005)) }
-  guard let result = completion.read() else { try refuse("Exact window capture timed out or cancelled") }
+  guard let result = completion.read() else { captureProgress(.timedOut, requestId); try refuse("Exact window capture timed out or cancelled") }
   let image: CGImage
-  do { image = try result.get() }
+  do {
+    let plan = try result.get()
+    image = try resolveNativeCapturePlan(plan) { width, height in
+      guard Thread.isMainThread else { try refuse("WindowServer capture requires native request thread") }
+      return try captureWindowServerImage(binding, width, height, requestId)
+    }
+  }
   catch is CaptureImageBudgetExceeded {
     try binding.verify()
     guard try lockedSession() == session else { try refuse("Console session changed during capture readiness") }
@@ -4260,6 +4321,7 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
   guard CGImageDestinationFinalize(destination) else { try refuse("Could not save private screenshot") }
   chmod(path, 0o600)
   binding.capturedAt = Date(); binding.captureSession = session
+  captureProgress(.completed, requestId)
   return ["width": image.width, "height": image.height, "coordinateSpace": "full_window_pixels_top_left", "source": displayAsleep ? "window_server_exact_window" : "screen_capture_kit_exact_window"]
 }
 // Only this operation uses PID-scoped window-local packets. Foreground input below
@@ -4419,7 +4481,7 @@ while let line = readLine() {
       if operation == "verify" { reply = ["result": binding.receipt()] }
       else if operation == "capture" {
         guard let path = request["imagePath"] as? String, path.hasPrefix("/"), !FileManager.default.fileExists(atPath: path) else { try refuse("Private capture destination unavailable") }
-        if #available(macOS 14.0, *) { reply = ["result": try captureWindow(binding, path)] }
+        if #available(macOS 14.0, *) { reply = ["result": try captureWindow(binding, path, captureDiagnosticRequestId(request["diagnosticRequestId"]))] }
         else { try refuse("Exact window capture requires macOS 14 or later") }
       }
       else if operation == "backgroundClick" {
@@ -4509,9 +4571,7 @@ while let line = readLine() {
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
     reply = ["error": message + outcome]
   }
-  if let output = try? JSONSerialization.data(withJSONObject: reply) {
-    FileHandle.standardOutput.write(output); FileHandle.standardOutput.write(Data([10]))
-  } else { exit(1) }
+  if !emit(reply) { exit(1) }
   if targetCancelled != 0 { exit(0) }
 }
 `;
