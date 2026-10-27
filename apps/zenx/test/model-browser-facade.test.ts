@@ -92,6 +92,44 @@ test("Browser action observes by default and accepts an exact short baseline", a
     await f.bridge.close();
   }
 });
+test("Browser consecutive diffs replace exact action refs while preserving the first-page target tree", async () => {
+  const f = await workspaceFixture();
+  try {
+    const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
+    const first = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
+    let current = first.targets as Array<{ ref: string; name: string }>;
+    let baseline = first.observation as string;
+    for (let i = 0; i < 2; i++) {
+      const result = await f.bridge.call("browser_workspace_click", { target: current[0]!.ref, since: baseline });
+      assert.equal(result.page.format, "diff");
+      const replacements = new Map<string, string>(result.targetChanges.replacements.map((pair: { beforeRef: string; ref: string }): [string, string] => [pair.beforeRef, pair.ref]));
+      current = current.map((item) => ({ ...item, ref: replacements.get(item.ref)! }));
+      assert.equal(current.every((item) => /^r[1-9][0-9]*$/u.test(item.ref)), true);
+      assert.deepEqual(current.map((item) => item.name), first.targets.map((item: { name: string }) => item.name));
+      baseline = result.observation;
+    }
+    await f.bridge.call("browser_workspace_click", { target: current[0]!.ref, observe: false });
+    assert.equal(f.calls.filter((call) => call.name === "click").length, 3);
+  } finally {
+    await f.bridge.close();
+  }
+});
+test("Browser action without a retained baseline returns a small self-contained focused capture", async () => {
+  const f = await workspaceFixture();
+  try {
+    const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
+    const first = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
+    const action = await f.bridge.call("browser_workspace_click", { target: first.targets[0].ref });
+    assert.equal(action.page.format, "full");
+    assert.equal(action.view.kind, "focused-capture");
+    assert.ok(action.targets.length > 0 && action.targets.length <= 7);
+    assert.equal(action.coverage.sourceComplete, false);
+    assert.match(action.coverage.scope, /subset/);
+    assert.match(action.nextAction, /inspect/i);
+  } finally {
+    await f.bridge.close();
+  }
+});
 test("Browser query searches captured target metadata, keeps actionable refs and continuation", async () => {
   const f = await workspaceFixture();
   try {

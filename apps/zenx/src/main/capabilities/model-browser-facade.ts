@@ -28,7 +28,9 @@ import {
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
 import { browserConnectionScopeKey } from "./browser-connections.js";
-import { browserOperations, browserOperation as operation, browserNamespace as namespace, browserModelDescriptions } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
+import { browserOperations, browserOperation as operation, browserNamespace as namespace, buildBrowserModelDefinition, sessionTools, targetTools, observationTools } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
+import { projectTargetChanges } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
+export { browserModelDocument } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
 export type BrowserModelConnections = ReadonlyMap<
   string,
   { connectionId: string; label: string; state: string; generation: string }
@@ -40,87 +42,8 @@ const names = new Set([
   ),
 ]);
 export const isBrowserModelTool = (name: string) => names.has(name);
-const sessionTools = new Set(["list_tabs", "open", "close_session"]);
-const targetTools = new Set(["click", "type", "select"]);
-const observationTools = new Set(["scroll", "pointer_click", "key_press"]);
-export const browserModelDocument =
-  "Browser refs bind an exact backend, tab, observation and owner. Inspect gives a bounded capture; query searches its captured targets only, and cursor continues that immutable capture. Actions observe by default; pass since with a retained observation ref for a diff, or full:true to resync. Human takeover requires fresh inspection after return. After actionCompleted plus observationError inspect again; never replay unknown effects.";
 export function browserModelDefinition<T extends ModelTool>(source: T): T {
-  const tool = structuredClone(source),
-    op = operation(tool.name),
-    fields: Record<string, unknown> = {},
-    required: string[] = [];
-  if (op !== "connections") {
-    if (sessionTools.has(op)) {
-      fields.session =
-        op === "close_session"
-          ? MODEL_REF
-          : {
-              type: "string",
-              description:
-                "Semantic session name or exact session ref; defaults to main.",
-            };
-      if (op === "close_session") required.push("session");
-      if (namespace(tool.name) === "connected") fields.connection = MODEL_REF;
-    } else {
-      const field = targetTools.has(op)
-        ? "target"
-        : observationTools.has(op)
-          ? "observation"
-          : "tab";
-      fields[field] = MODEL_REF;
-      if (op === "inspect") {
-        fields.cursor = MODEL_REF;
-        fields.query = { type: "string", minLength: 1, maxLength: 120 };
-      }
-      else required.push(field);
-      if (op === "navigate" || op === "close" || targetTools.has(op)) fields.observation = MODEL_REF;
-    }
-    const native = record(tool.inputSchema.properties) ?? {};
-    for (const key of [
-      "url",
-      "text",
-      "submit",
-      "option",
-      "direction",
-      "pixels",
-      "x",
-      "y",
-      "key",
-      "observe",
-      "full",
-    ])
-      if (native[key] !== undefined) fields[key] = native[key];
-    if (op === "inspect" || ["open", "navigate", "click", "type", "select", "scroll", "pointer_click", "key_press"].includes(op))
-      fields.since = { ...MODEL_REF, description: "Exact retained observation ref to compare with the new capture." };
-    for (const key of Array.isArray(tool.inputSchema.required)
-      ? tool.inputSchema.required
-      : [])
-      if (
-        [
-          "url",
-          "text",
-          "option",
-          "direction",
-          "pixels",
-          "x",
-          "y",
-          "key",
-        ].includes(String(key))
-      )
-        required.push(String(key));
-  }
-  tool.inputSchema = {
-    type: "object",
-    properties: fields,
-    required,
-    additionalProperties: false,
-    ...(op === "inspect"
-      ? { oneOf: [{ required: ["tab"] }, { required: ["cursor"] }] }
-      : {}),
-  };
-  tool.description = `${op}: ${browserModelDescriptions[op] ?? tool.description}`;
-  return tool;
+  return buildBrowserModelDefinition(source, MODEL_REF);
 }
 function routeFrom(value: Record<string, unknown>): BrowserModelRoute {
   if (!isBrowserModelRoute(value.route))
@@ -333,6 +256,7 @@ function projectBrowserResult(
   refs: ModelReferenceScope,
   epoch: string,
   connections?: BrowserModelConnections,
+  history: readonly { namespace: string; kind: string; value: unknown; ref: string; ownerThreadId: string; epoch?: string }[] = [],
 ): unknown {
   const op = operation(name),
     bind = (kind: string, value: unknown) =>
@@ -384,6 +308,7 @@ function projectBrowserResult(
         "visibleTextChange",
         "coverage",
         "search",
+        "view",
         "inputViewport",
         "focusedInputAvailable",
         "inputPolicy",
@@ -468,21 +393,28 @@ function projectBrowserResult(
         });
       if (record(v.targetChanges)) {
         const changes = object(v.targetChanges);
-        const projectTarget = (item: unknown, observationId: string) => {
-          const target = object(item);
+        const bindTarget = (targetId: string, observationId: string) =>
+          bind("target", { route, observationId, targetId });
+        const projectTarget = (target: Record<string, unknown>, observationId: string) => {
           return {
-            ref: bind("target", { route, observationId, targetId: target.targetId }),
+            ref: bindTarget(target.targetId as string, observationId),
             ...pick(target, ["role", "name", "actions", "value", "checked", "selected", "options", "optionsTruncated"]),
           };
         };
         const baseId = nativePage?.baseObservationId;
         if (typeof baseId !== "string") throw new ProjectionUnavailable();
-        out.targetChanges = {
-          added: Array.isArray(changes.added) ? changes.added.map((item) => projectTarget(item, v.observationId as string)) : [],
-          updated: Array.isArray(changes.updated) ? changes.updated.map((item) => projectTarget(item, v.observationId as string)) : [],
-          removedFromView: Array.isArray(changes.removedFromView) ? changes.removedFromView.map((id) => bind("target", { route, observationId: baseId, targetId: id })) : [],
-          ...(Array.isArray(changes.order) ? { order: changes.order.map((id) => bind("target", { route, observationId: v.observationId as string, targetId: id })) } : {}),
-        };
+        const oldIds: string[] = [];
+        for (const binding of history) {
+          if (binding.namespace !== "browser" || binding.kind !== "target" || binding.ownerThreadId !== refs.ownerThreadId || binding.epoch !== epoch) continue;
+          const old = record(binding.value);
+          if (old?.observationId !== baseId || typeof old.targetId !== "string" || !record(old.route) || JSON.stringify(old.route) !== JSON.stringify(route)) continue;
+          // Candidate provenance is still checked by the typed ref resolver.
+          refs.resolve(binding.ref, "browser", "target", epoch);
+          if (!oldIds.includes(old.targetId)) oldIds.push(old.targetId);
+        }
+        const itemCoverage = record(record(v.coverage)?.items);
+        const returned = typeof itemCoverage?.returned === "number" ? itemCoverage.returned : oldIds.length;
+        out.targetChanges = projectTargetChanges(changes, oldIds, returned, baseId, v.observationId, bindTarget, projectTarget);
       }
     }
     if (typeof v.nextCursor === "string") {
@@ -606,6 +538,7 @@ export async function invokeBrowserModelToolFacade(options: {
           refs,
           epoch,
           connections,
+          invocation.modelReferences,
         ),
       ),
     );
