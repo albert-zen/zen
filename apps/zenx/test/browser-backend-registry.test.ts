@@ -427,6 +427,14 @@ test("continuation and diff references remain scoped to the connected capture", 
 function tabFixture(label: string) {
   const value = fixture(label);
   const tabs: BrowserTabSummary[] = [];
+  const inspect = value.backend.inspect;
+  value.backend.inspect = async (sessionId, tabId, signal) => {
+    const tab = tabs.find(
+      (tab) => tab.sessionId === sessionId && tab.tabId === tabId,
+    );
+    assert.ok(tab, "inspection must preserve the exact opened page identity");
+    return { ...(await inspect(sessionId, tabId, signal)), ...tab };
+  };
   value.backend.open = async (sessionId, url) => {
     const tab = {
       sessionId,
