@@ -45,7 +45,9 @@ jobs:
   zenx:
     name: ZenX typecheck, tests, and build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Existing accepted workload takes about 19 minutes; add only the bounded
+    # six-minute normal/expanded tab acceptance step without reducing coverage.
+    timeout-minutes: 26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
