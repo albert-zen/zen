@@ -21,6 +21,59 @@ import {
   ZenXProjectProjection,
 } from "../src/main/project-projection.js";
 
+test("projectless membership uses exact canonical identity, includes children and yields to explicit Projects", async () => {
+  const projection = new ZenXProjectProjection("linux", async (value) =>
+    value === "/alias" ? "/generated/task" : value,
+  );
+  await projection.updateConfiguration([], null, null, {}, ["/generated/task"]);
+  const threads = [
+    { id: "parent", cwd: "/generated/task" },
+    { id: "child", cwd: "/alias" },
+    { id: "different", cwd: "/generated/task/child" },
+  ];
+  const snapshot = await projection.project(threads);
+  assert.deepEqual(snapshot.projectlessThreadIds, ["parent", "child"]);
+  assert.deepEqual(
+    snapshot.projects.map((entry) => entry.threadIds),
+    [["different"]],
+  );
+  assert.equal(await projection.configuredWorkspace("/generated/task"), null);
+  await projection.updateConfiguration(["/alias"], null, null, {}, [
+    "/generated/task",
+  ]);
+  const configured = await projection.project(threads.slice(0, 2));
+  assert.equal(configured.projectlessThreadIds, undefined);
+  assert.deepEqual(configured.projects[0]?.threadIds, ["parent", "child"]);
+  assert.equal(
+    await projection.configuredWorkspace("/generated/task"),
+    "/alias",
+  );
+});
+
+test("projectless Windows canonical membership preserves configured default and last-used offsets", async () => {
+  const projection = new ZenXProjectProjection("win32");
+  await projection.updateConfiguration(
+    ["C:\\Project"],
+    "C:\\Project",
+    "C:\\Project",
+    {},
+    ["D:\\Generated\\Task"],
+  );
+  const snapshot = await projection.project([
+    { id: "project", cwd: "c:\\project" },
+    { id: "projectless", cwd: "d:\\generated\\TASK" },
+  ]);
+  assert.deepEqual(snapshot.projectlessThreadIds, ["projectless"]);
+  assert.equal(snapshot.lastUsedWorkspace, "C:\\Project");
+  assert.deepEqual(
+    snapshot.projects.map((entry) => ({
+      threadIds: entry.threadIds,
+      isDefault: entry.isDefault,
+    })),
+    [{ threadIds: ["project"], isDefault: true }],
+  );
+});
+
 test("Project-scoped Thread start resolves the configured workspace and never falls back", async () => {
   const projection = new ZenXProjectProjection("win32");
   await projection.updateConfiguration(

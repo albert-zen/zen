@@ -230,6 +230,10 @@ declare global {
         forThread(threadId: string): Promise<ModelUsageProjection>;
       };
       projects: {
+        startProjectlessThread(
+          directoryName?: string,
+          selection?: import("../../main/project-projection.js").ProjectThreadStartOptions,
+        ): Promise<ClientRequestResults["thread/start"]>;
         get(
           options?: ThreadSummaryListOptions,
         ): Promise<ZenXProjectProjectionSnapshot>;

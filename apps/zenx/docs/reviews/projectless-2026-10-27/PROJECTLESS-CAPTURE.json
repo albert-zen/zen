@@ -1,0 +1,70 @@
+{
+  "source": "cb26d875504e33682e93c6b489ae39eeb3468421",
+  "scope": "Production App/Sidebar/selector; synthetic host data; no real profile, filesystem, native actions or model. Headless Chrome CDP pointer opened actual selector.",
+  "evidence": [
+    {
+      "theme": "light",
+      "width": 1280,
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 1,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      },
+      "screenshots": [
+        "projectless-light-1280.png",
+        "projectless-light-1280-menu.png"
+      ]
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 1,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      },
+      "screenshots": [
+        "projectless-light-390.png",
+        "projectless-light-390-menu.png"
+      ]
+    },
+    {
+      "theme": "dark",
+      "width": 1280,
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 1,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      },
+      "screenshots": [
+        "projectless-dark-1280.png",
+        "projectless-dark-1280-menu.png"
+      ]
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 1,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      },
+      "screenshots": [
+        "projectless-dark-390.png",
+        "projectless-dark-390-menu.png"
+      ]
+    }
+  ]
+}

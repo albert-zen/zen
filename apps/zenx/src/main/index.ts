@@ -25,6 +25,7 @@ import { restoreLoginShellPath } from "./login-shell-environment.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { FleetSettingsService } from "./fleet-settings.js";
+import { ZenXProjectlessWorkspaceAllocator } from "./projectless-workspace.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
 import { FleetProductService } from "./fleet-product.js";
@@ -645,6 +646,7 @@ async function bootstrapZenX(): Promise<void> {
       },
     );
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      createProjectlessWorkspace: allocateProjectlessWorkspace,
       browserTargetAdmission: (route, threadId) =>
         capabilityService!.assertBrowserModelTarget(route, threadId),
       sidebar: threadSidebar,
@@ -1590,6 +1592,27 @@ function installProtocolIpc(
     );
   });
   ipcMain.handle(
+    ipcChannels.projectlessThreadStart,
+    async (_event, directoryName: unknown, selection: unknown) => {
+      if (directoryName !== undefined && typeof directoryName !== "string")
+        throw new Error("Invalid projectless directory name");
+      const options = readProjectThreadStartOptions(selection);
+      const cwd = await allocateProjectlessWorkspace(directoryName);
+      return await manager.request("thread/start", {
+        cwd,
+        ...options,
+        ...(options.sandbox === undefined
+          ? {}
+          : {
+              approvalPolicy:
+                options.sandbox === "danger-full-access"
+                  ? "never"
+                  : "on-request",
+            }),
+      });
+    },
+  );
+  ipcMain.handle(
     ipcChannels.projectThreadStart,
     async (_event, workspace: unknown, selection: unknown) =>
       await startConfiguredProjectThread(
@@ -2339,6 +2362,20 @@ function installSettingsIpc(
   });
 }
 
+async function allocateProjectlessWorkspace(
+  directoryName?: string,
+): Promise<string> {
+  if (!settingsService) throw new Error("Host settings unavailable");
+  const settings = settingsService;
+  return await new ZenXProjectlessWorkspaceAllocator({
+    rootDirectory: join(app.getPath("documents"), "ZenX"),
+    registerWorkspace: async (cwd) => {
+      await settings.registerProjectlessWorkspace(cwd);
+      await syncProjectProjection(settings);
+    },
+  }).allocate(directoryName);
+}
+
 async function syncProjectProjection(
   settings: ZenXSettingsService,
 ): Promise<void> {
@@ -2351,6 +2388,7 @@ async function syncProjectProjection(
     profile.workspace,
     profile.lastUsedWorkspace,
     profile.projectNames,
+    profile.projectlessWorkspaces,
   );
 }
 

@@ -45,6 +45,29 @@ const profile: ZenXHostProfile = {
   sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
 };
 
+test("projectless workspace paths survive profile round trips without configuring Projects", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-projectless-profile-"),
+  );
+  try {
+    const store = new ZenXHostProfileStore(
+      path.join(directory, "profile.json"),
+    );
+    const cwd = path.join(directory, "Documents", "ZenX", "2026-10-27", "task");
+    await store.write({ ...profile, projectlessWorkspaces: [cwd, cwd] });
+    const loaded = (await store.readOptional())!;
+    assert.deepEqual(loaded.projectlessWorkspaces, [cwd]);
+    assert.deepEqual(loaded.workspaces, profile.workspaces);
+    assert.equal(validateHostProfile(profile).projectlessWorkspaces, undefined);
+    assert.throws(
+      () => validateHostProfile({ ...profile, projectlessWorkspaces: "wrong" }),
+      /workspace list/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 for (const legacyOwnershipMarker of [false, true]) {
   test(`loading a saved subscription catalog preserves deletions and metadata (legacy marker: ${legacyOwnershipMarker})`, async () => {
     const directory = await mkdtemp(

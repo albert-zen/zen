@@ -25,6 +25,7 @@ export interface ZenXProjectProjectionEntry {
 
 export interface ZenXProjectProjectionSnapshot {
   projects: ZenXProjectProjectionEntry[];
+  projectlessThreadIds?: string[];
   unavailableThreadIds: string[];
   lastUsedWorkspace: string | null;
 }
@@ -80,6 +81,7 @@ interface ProjectConfigurationSnapshot {
   readonly workspaces: readonly string[];
   readonly defaultWorkspace: string | null;
   readonly lastUsedWorkspace: string | null;
+  readonly projectlessWorkspaces: readonly string[];
 }
 
 const nodeProjectRealpath: ProjectRealpath = async (candidate) =>
@@ -105,6 +107,7 @@ export class ZenXProjectProjection {
     workspaces: Object.freeze([]),
     defaultWorkspace: null,
     lastUsedWorkspace: null,
+    projectlessWorkspaces: Object.freeze([]),
   });
   #configurationRevision = 0;
 
@@ -122,6 +125,7 @@ export class ZenXProjectProjection {
     defaultWorkspace: string | null,
     lastUsedWorkspace: string | null = null,
     names: Readonly<Record<string, string>> = {},
+    projectlessWorkspaces: readonly string[] = [],
   ): Promise<void> {
     const revision = ++this.#configurationRevision;
     const unique = new Map<string, ProjectPathIdentity>();
@@ -162,6 +166,7 @@ export class ZenXProjectProjection {
       workspaces: Object.freeze(nextWorkspaces),
       defaultWorkspace: nextDefaultWorkspace,
       lastUsedWorkspace: nextLastUsedWorkspace,
+      projectlessWorkspaces: Object.freeze([...projectlessWorkspaces]),
     });
   }
 
@@ -182,10 +187,12 @@ export class ZenXProjectProjection {
         ? undefined
         : configuration.workspaces.length +
           (defaultIndex === undefined ? 0 : 1);
-    const threadOffset =
+    const projectlessOffset =
       configuration.workspaces.length +
       (defaultIndex === undefined ? 0 : 1) +
       (lastUsedIndex === undefined ? 0 : 1);
+    const threadOffset =
+      projectlessOffset + configuration.projectlessWorkspaces.length;
     const identities = await this.#canonicalSnapshot([
       ...configuration.workspaces,
       ...(configuration.defaultWorkspace === null
@@ -194,11 +201,20 @@ export class ZenXProjectProjection {
       ...(configuration.lastUsedWorkspace === null
         ? []
         : [configuration.lastUsedWorkspace]),
+      ...configuration.projectlessWorkspaces,
       ...availableThreads.map((thread) => thread.cwd),
     ]);
     const configuredWorkspaces = identities.slice(
       0,
       configuration.workspaces.length,
+    );
+    const configuredKeys = new Set(
+      configuredWorkspaces.map((entry) => entry.key),
+    );
+    const projectlessKeys = new Set(
+      identities
+        .slice(projectlessOffset, threadOffset)
+        .map((entry) => entry.key),
     );
     const defaultKey =
       defaultIndex === undefined
@@ -233,6 +249,7 @@ export class ZenXProjectProjection {
       }
     }
     const unavailableThreadIds: string[] = [];
+    const projectlessThreadIds: string[] = [];
     let availableThreadIndex = 0;
     const resolvedThreads = threads.map((thread) => {
       if (thread.cwd === null || thread.cwd.trim().length === 0) {
@@ -245,6 +262,13 @@ export class ZenXProjectProjection {
     for (const { thread, identity } of resolvedThreads) {
       if (identity === null) {
         unavailableThreadIds.push(thread.id);
+        continue;
+      }
+      if (
+        !configuredKeys.has(identity.key) &&
+        projectlessKeys.has(identity.key)
+      ) {
+        projectlessThreadIds.push(thread.id);
         continue;
       }
       const git = gitGroups.get(identity.key);
@@ -279,6 +303,7 @@ export class ZenXProjectProjection {
         left.workspace.localeCompare(right.workspace),
       ),
       unavailableThreadIds,
+      ...(projectlessThreadIds.length === 0 ? {} : { projectlessThreadIds }),
       lastUsedWorkspace: resolvedLastUsedWorkspace,
     };
   }
