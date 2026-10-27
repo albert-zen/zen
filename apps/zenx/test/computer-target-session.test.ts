@@ -5,6 +5,31 @@ import {
   type TargetTransport,
 } from "../src/main/capabilities/computer-target-session.js";
 const signal = new AbortController().signal;
+
+test("session availability changes retire selected windows and cannot publish an in-flight old selection", async () => {
+  const { session, transport, calls } = fixture();
+  await session.select("owner", { pid: 7 }, signal);
+  session.invalidateSelections();
+  await assert.rejects(
+    session.input("owner", { operation: "key", key: "enter" }, signal),
+    /Select a Computer target/,
+  );
+  assert.equal(calls.length, 1, "no input may use the retired selection");
+  let complete!: (value: unknown) => void;
+  transport.request = () =>
+    new Promise((resolve) => {
+      complete = resolve;
+    });
+  const pending = session.select("owner", { pid: 7 }, signal);
+  session.invalidateSelections();
+  complete({
+    bindingId: "old",
+    target: { pid: 7, applicationName: "Fixture", windowTitle: "Window" },
+    windowId: 17,
+    bounds: { x: 0, y: 0, width: 400, height: 200 },
+  });
+  await assert.rejects(pending, /changed|retired/);
+});
 function fixture() {
   const calls: Record<string, unknown>[] = [];
   let serial = 0;

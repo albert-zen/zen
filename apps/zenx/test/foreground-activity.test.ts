@@ -85,6 +85,7 @@ test("foreground input waits for indicator rendering and cleans up on success", 
   await tick();
   assert.equal(started, false);
   assert.equal(states[0]?.activities[0]?.agentName, "Atlas");
+  assert.equal(states[0]?.activities[0]?.action, "click");
   painted.resolve();
   assert.equal(await result, 42);
   assert.equal(activity.snapshot.activities.length, 0);

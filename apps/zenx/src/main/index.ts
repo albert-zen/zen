@@ -13,6 +13,7 @@ import { ThreadSidebarStore } from "./thread-sidebar-store.js";
 import { FileTraceStore } from "../../../../src/trace.js";
 import { installModelRequestDebugIpc } from "./model-request-debug-electron.js";
 import { ForegroundActivity } from "./foreground-activity.js";
+import { AutomationEnvironment } from "./automation-environment.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
 import {
   foregroundAgentName,
@@ -41,6 +42,8 @@ import {
   ipcMain,
   globalShortcut,
   Menu,
+  powerMonitor,
+  powerSaveBlocker,
   safeStorage,
   screen,
   session,
@@ -239,6 +242,7 @@ let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let foregroundActivity: ForegroundActivity | undefined;
+let automationEnvironment: AutomationEnvironment | undefined;
 let imZenXSetupService: ImZenXSetupService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
@@ -715,8 +719,14 @@ async function bootstrapZenX(): Promise<void> {
       report: (error) =>
         console.error("Foreground computer activity failed", error),
     });
+    automationEnvironment = new AutomationEnvironment({
+      platform: process.platform,
+      monitor: powerMonitor,
+      blocker: powerSaveBlocker,
+    });
     capabilityService = new ZenXCapabilityService({
       foregroundActivity,
+      computerEnvironment: automationEnvironment,
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
@@ -1318,6 +1328,8 @@ async function stopZenXHost(): Promise<void> {
   }
   foregroundActivity?.close();
   foregroundActivity = undefined;
+  automationEnvironment?.close();
+  automationEnvironment = undefined;
   try {
     await chromeExtensionBridge?.close();
     chromeExtensionBridge = undefined;
@@ -1939,6 +1951,8 @@ function installSettingsIpc(
       screenRecording,
       foregroundControlEnabled: settings.computerForegroundControlEnabled(),
     });
+    if (automationEnvironment)
+      snapshot.environment = automationEnvironment.snapshot();
     const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
     if (verificationStatus !== status) computerVerification = undefined;
     const result =

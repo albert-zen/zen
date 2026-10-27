@@ -56,11 +56,13 @@ run_code/nested shell and the production Quote/Fork/Debug projection before and
 after compaction and Host restart. Those tests are not substitutes for the native
 GUI observations above.
 
-After capture, accepted provider-storage PR #546 (`c628b976`) was merged cleanly
-into this branch. No conflict resolution or Quote/Fork/Debug code change was
-needed; both independent architecture statements were preserved. The screenshots
-identify their exact pre-integration source rather than claiming a new capture.
-Final integrated-head CI is required before merge.
+After capture, provider-storage PR #546 (`c628b976`) and subsequently merged
+Browser/Computer PR #545 (`7e31a545`) were integrated cleanly into this branch.
+No conflict resolution or Quote/Fork/Debug code change was needed; the independent
+architecture statements were preserved. The screenshots identify their exact
+pre-integration source rather than claiming a new capture. Final integrated-head
+CI and the root acceptance task's combined native check are required before merge;
+this does not claim local Windows, locked-desktop, or user-computer acceptance.
 
 Linux Quit was not validated: the prior owned synthetic app was closed through
 its launching terminal with Ctrl+C because no Quit menu was available. This is

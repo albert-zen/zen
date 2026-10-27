@@ -58,6 +58,7 @@ import {
   decodeComputerArguments,
   projectComputerResult,
 } from "./model-computer-facade.js";
+import { computerModelDocument } from "../../../../../packages/zenx-computer-plugin/src/model-contract.js";
 
 export function hasModelToolFacade(name: string): boolean {
   return (
@@ -105,8 +106,7 @@ export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
 export function modelPluginDocument(id: string, original: string): string {
   if (id === "zenx-fleet") return fleetModelDocument;
   if (id === "browser") return browserModelDocument;
-  if (id === "computer")
-    return "Inspect an exact semantic window target for scoped control refs. Follow cursor alone for immutable continuation. Foreground tools may take focus. Native owner, permission, freshness, binding and capture checks remain authoritative. A ref never grants authority, selects the newest capture, or makes dispatch proof of effect. Refresh stale observations; never automatically repeat an uncertain action.";
+  if (id === "computer") return computerModelDocument;
   if (id === "zenx-subagents")
     return "Create/list native child Threads with exact parent refs. fresh/fork may receive an explicit task; side-chat snapshots parent context and waits for user input, so task is not allowed. Read/send use exact ref or semantic name. Creation remains true even if title/message follow-up fails; inspect status and preserve unknown outcomes rather than replaying mutations.";
   if (id === "zenx-self-control")
