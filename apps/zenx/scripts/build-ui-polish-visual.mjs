@@ -53,9 +53,9 @@ const template = await readFile(
 assert.equal(template.split("__ZENX_PREVIEW_CSS__").length, 2);
 assert.equal(template.split("__ZENX_PREVIEW_SCRIPT__").length, 2);
 const html = template
-  .replace("__ZENX_PREVIEW_CSS__", css)
-  .replace(
-    "__ZENX_PREVIEW_SCRIPT__",
+  // Replacement callbacks preserve CSS/JS `$&`, `$'` and `$`` byte-for-byte.
+  .replace("__ZENX_PREVIEW_CSS__", () => css)
+  .replace("__ZENX_PREVIEW_SCRIPT__", () =>
     javascript.replace(/<\/script/giu, "<\\/script"),
   );
 await writeFile(path.join(outputDirectory, "ui-polish-visual.html"), html);
