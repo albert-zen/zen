@@ -706,6 +706,8 @@ button:disabled {
   position: relative;
 }
 .new-thread-action {
+  /* The non-mac two-row caption overlaps this Sidebar control. */
+  -webkit-app-region: no-drag;
   width: 100%;
   min-height: 40px;
   display: grid;

@@ -112,3 +112,30 @@ test("macOS leading controls reserve one shared safe area outside workspace tabs
     /padding-inline-start:\s*max\(\s*8px,\s*calc\(var\(--native-leading-safe-area\) - 100vw \+ 100%\)\s*\)/u,
   );
 });
+
+test("global New thread excludes its hit target from the overlapping native caption drag region", async () => {
+  const styles = await readFile(new URL("styles.css", rendererRoot), "utf8");
+  // Windows/Linux's transparent two-row titlebar overlaps the first Sidebar
+  // action. DOM pointer-events:none does not subtract Electron drag regions;
+  // programmatic button.click() (including Ctrl+N) cannot cover this regression.
+  assert.match(
+    styles,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\)\s*\.window-titlebar\s*\{[^}]*grid-row:\s*1 \/ 3;[^}]*pointer-events:\s*none;/su,
+    "the non-mac titlebar still spans both native/conversation rows",
+  );
+  assert.match(
+    styles,
+    /:root:is\(\[data-platform="linux"\], \[data-platform="win32"\]\)\s*\.sidebar\s*\{[^}]*grid-row:\s*2 \/ -1;/su,
+    "the Sidebar retains its established second-row start",
+  );
+  assert.match(
+    styles,
+    /\.new-thread-action\s*\{[^}]*-webkit-app-region:\s*no-drag;/su,
+    "New thread needs a native no-drag rectangle, not only DOM pointer handling",
+  );
+  assert.match(
+    styles,
+    /\.window-titlebar-drag\s*\{[^}]*-webkit-app-region:\s*drag;/su,
+    "ordinary window dragging outside interactive controls remains available",
+  );
+});
