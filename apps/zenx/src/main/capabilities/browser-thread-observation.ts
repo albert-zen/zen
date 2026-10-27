@@ -1,3 +1,7 @@
+import type {
+  BrowserModelTargets,
+  BrowserModelRoute,
+} from "./model-browser-metadata.js";
 import { browserOperationOrder } from "./browser-operation-order.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import { randomUUID } from "node:crypto";
@@ -105,6 +109,45 @@ export class BrowserThreadObservation {
       this.#backend.bindThreadSession?.(session.providerSessionId, threadId);
     }
     return session;
+  }
+
+  /** Read-only lookup: never creates a session or a product target. */
+  modelTargets(
+    threadId: string,
+    sessionId: string,
+  ): BrowserModelTargets | undefined {
+    const session = this.#sessions.get(JSON.stringify([threadId, sessionId]));
+    if (this.#closed || !session) return;
+    return {
+      route: {
+        ownerThreadId: threadId,
+        sessionId,
+        sessionEpoch: session.providerSessionId,
+      },
+      targets: [...session.targets.values()].map(({ summary }) => ({
+        tabId: summary.tabId,
+        targetId: summary.id,
+      })),
+    };
+  }
+
+  assertModelTarget(
+    route: BrowserModelRoute,
+    threadId: string | undefined,
+  ): void {
+    const current = this.modelTargets(route.ownerThreadId, route.sessionId);
+    if (
+      threadId !== route.ownerThreadId ||
+      !current ||
+      current.route.sessionEpoch !== route.sessionEpoch ||
+      (route.tabId !== undefined &&
+        !current.targets.some(
+          (t) => t.tabId === route.tabId && t.targetId === route.targetId,
+        ))
+    )
+      throw Error(
+        "Browser reference is no longer current; list tabs and inspect again",
+      );
   }
 
   publish(

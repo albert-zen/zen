@@ -110,3 +110,35 @@ test("failed real apply_patch preflight cannot release private writer lock", asy
     owner.close();
   }
 });
+
+test("simultaneous first initialization publishes exactly one held owner", async () => {
+  const dir = await directory();
+  const children = Array.from({ length: 6 }, () => child(dir, "hold"));
+  try {
+    const results = await Promise.all(
+      children.map(
+        (p) =>
+          new Promise<{ p: typeof p; acquired: boolean; code?: number | null }>(
+            (resolve) => {
+              p.stdout!.once("data", () => resolve({ p, acquired: true }));
+              p.once("exit", (code) => resolve({ p, acquired: false, code }));
+            },
+          ),
+      ),
+    );
+    const owners = results.filter((result) => result.acquired);
+    assert.equal(owners.length, 1);
+    assert(
+      results
+        .filter((result) => !result.acquired)
+        .every((result) => result.code === 23),
+    );
+    const owner = owners[0]!.p;
+    owner.kill("SIGKILL");
+    await once(owner, "exit");
+    assert.equal(await run(dir), 0);
+  } finally {
+    for (const p of children)
+      if (p.exitCode === null && p.signalCode === null) p.kill("SIGKILL");
+  }
+});

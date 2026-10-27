@@ -313,3 +313,68 @@ test("explicit EOF with missing captured chunks is incomplete, not an empty resp
   ).page!;
   assert.equal(page.availability, "unavailable");
 });
+
+test("large originals use bounded verified byte ranges, never full artifact materialization", async (t) => {
+  const { store, add } = await fixture(t);
+  const body = '{"input":"' + "x".repeat(5 * 1024 * 1024) + '"}';
+  const receipt = await add({
+    type: "model_request",
+    artifacts: [{ name: "request_body", bytes: body }],
+  });
+  const ranges: number[] = [];
+  const reader = new ModelRequestDebugStore(
+    {
+      read: store.read.bind(store),
+      async readArtifact() {
+        throw new Error("full artifact read forbidden by test");
+      },
+      async readArtifactRange(ref, offset, limit) {
+        ranges.push(limit);
+        return store.readArtifactRange(ref, offset, limit);
+      },
+    },
+    { pageCharacters: 97 },
+  );
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: receipt.recordId!,
+    })
+  ).page!;
+  assert.equal(page.availability, "available");
+  assert.equal(page.offsetUnit, "bytes");
+  assert.equal(page.totalBytes, Buffer.byteLength(body));
+  assert.equal(page.totalCharacters, null);
+  assert.equal(page.text, body.slice(0, 97));
+  assert.equal(page.endOffset, 97);
+  assert(ranges.every((x) => x <= 97));
+  const structure = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: receipt.recordId!,
+      view: "messages",
+    })
+  ).page!;
+  assert.equal(structure.availability, "unavailable");
+  assert.match(structure.text, /4 MiB/u);
+});
+test("zero-byte artifacts still verify ownership and existence", async (t) => {
+  const { store, directory, add } = await fixture(t);
+  const receipt = await add({
+    type: "model_request",
+    artifacts: [{ name: "request_body", bytes: "" }],
+  });
+  const ref = (await store.read("thread-a")).records[0]!.artifacts[0]!.ref;
+  await rm(path.join(directory, "artifacts", ref.sha256));
+  const reader = new ModelRequestDebugStore(store);
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: receipt.recordId!,
+    })
+  ).page!;
+  assert.equal(page.availability, "unavailable");
+});

@@ -1,4 +1,4 @@
-import type { ContextItem } from "./item-list.js";
+import { contextItemsFromLegacy, type ContextItem } from "./item-list.js";
 import {
   compileWorkspaceInstructionMessages,
   filePermissionContext,
@@ -104,7 +104,14 @@ export function prepareSampleContext(options: {
       "developer",
       filePermissionContext(options.sandbox),
     );
-  const tools = structuredClone([...options.tools]);
+  const tools = options.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: structuredClone(tool.inputSchema),
+    ...(tool.rawSource === undefined
+      ? {}
+      : { rawSource: structuredClone(tool.rawSource) }),
+  }));
   const previousTools = options.itemList.findLast(
     (item) => item.kind === "tools",
   );
@@ -121,6 +128,38 @@ export function prepareSampleContext(options: {
     });
   if (options.notice !== undefined)
     addText("context_notice", "user", options.notice, true);
+  const ended = new Set(
+    options.items.flatMap((item) =>
+      item.type === "turn_completed" || item.type === "turn_aborted"
+        ? [item.turnId]
+        : [],
+    ),
+  );
+  const omittedOccurrences = options.items.flatMap((item) =>
+    item.type === "failure" &&
+    item.recovery !== undefined &&
+    (item.recovery.mediaScope === "exact" || !ended.has(item.turnId))
+      ? item.recovery.withheldMedia
+      : [],
+  );
+  if (omittedOccurrences.length) {
+    const text =
+      "Unavailable image/audio occurrences were withheld after a provider rejection. This diagnostic sample has not read its contents; original material and prior observations remain preserved. It is not proven damaged. Unattributed diagnostic withholding expires when that Turn ends. Do not guess the contents.";
+    result.push({
+      ...base(),
+      source: {
+        kind: "media_unavailable",
+        sequence,
+        metadata: {
+          onlySampleId: options.sampleId,
+          omittedMedia: omittedOccurrences.map((value) => ({ ...value })),
+        },
+      },
+      kind: "message",
+      role: "user",
+      content: { text, parts: [{ type: "text", text }] },
+    });
+  }
   const supported = new Set(options.inputModalities ?? ["text"]);
   const omitted = new Set<string>();
   for (const item of options.itemList)
@@ -136,4 +175,48 @@ export function prepareSampleContext(options: {
       true,
     );
   return result;
+}
+
+/** Existing committed semantics win; only prospective facts are materialized for estimates. */
+export function contextForFacts(
+  items: readonly CanonicalItem[],
+  existing: readonly ContextItem[],
+): ContextItem[] {
+  const ids = new Set(items.map((item) => item.id));
+  const boundary = Math.max(
+    -1,
+    ...existing
+      .filter((item) => ids.has(item.id))
+      .map((item) => item.source.sequence),
+  );
+  const contexts = existing.filter(
+    (item) =>
+      ids.has(item.id) ||
+      (![
+        "user_message",
+        "host_message",
+        "thread_message",
+        "thread_instruction",
+        "agent_message",
+        "tool_call",
+        "tool_result",
+        "reasoning",
+        "context_compaction",
+        "failure",
+      ].includes(item.source.kind) &&
+        item.source.sequence <= boundary),
+  );
+  const present = new Set(contexts.map((item) => item.id));
+  for (const [index, item] of items.entries())
+    if (!present.has(item.id)) {
+      const added = contextItemsFromLegacy(
+        item,
+        items.slice(0, index),
+        Math.max(index, boundary + 1),
+        contexts,
+      );
+      contexts.push(...added);
+      for (const item of added) present.add(item.id);
+    }
+  return contexts;
 }

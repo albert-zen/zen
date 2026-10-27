@@ -1,3 +1,7 @@
+import {
+  copyBrowserModelContext,
+  copyBrowserModelTargets,
+} from "./capabilities/model-browser-metadata.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -326,25 +330,27 @@ export class PluginRuntimeSupervisor {
         `Capability generation ${generationToken} does not own tool ${invocation.name}`,
       );
     }
-    return await bundle.invoke({
-      invocationId: invocation.callId,
-      tool: invocation.name,
-      arguments: invocation.arguments,
-      context: {
-        callId: invocation.callId,
-        ...(invocation.canonicalToolCallId === undefined
-          ? {}
-          : { canonicalToolCallId: invocation.canonicalToolCallId }),
-        cwd: invocation.cwd,
-        ...(invocation.approvalScope === undefined
-          ? {}
-          : { approvalScope: invocation.approvalScope }),
-        ...(invocation.threadId === undefined
-          ? {}
-          : { threadId: invocation.threadId }),
-      },
-      signal: invocation.signal,
-    });
+    return await bundle.invoke(
+      copyBrowserModelContext(invocation, {
+        invocationId: invocation.callId,
+        tool: invocation.name,
+        arguments: invocation.arguments,
+        context: {
+          callId: invocation.callId,
+          ...(invocation.canonicalToolCallId === undefined
+            ? {}
+            : { canonicalToolCallId: invocation.canonicalToolCallId }),
+          cwd: invocation.cwd,
+          ...(invocation.approvalScope === undefined
+            ? {}
+            : { approvalScope: invocation.approvalScope }),
+          ...(invocation.threadId === undefined
+            ? {}
+            : { threadId: invocation.threadId }),
+        },
+        signal: invocation.signal,
+      }),
+    );
   }
 
   activationFailure(pluginId: string): string | undefined {
@@ -486,25 +492,27 @@ class SupervisedPluginBundle implements ToolBundle {
         `Tool runtime ${toolName} received invocation for ${invocation.name}`,
       );
     }
-    return await this.invoke({
-      invocationId: invocation.callId,
-      tool: invocation.name,
-      arguments: invocation.arguments,
-      context: {
-        callId: invocation.callId,
-        ...(invocation.canonicalToolCallId === undefined
-          ? {}
-          : { canonicalToolCallId: invocation.canonicalToolCallId }),
-        cwd: invocation.cwd,
-        ...(invocation.approvalScope === undefined
-          ? {}
-          : { approvalScope: invocation.approvalScope }),
-        ...(invocation.threadId === undefined
-          ? {}
-          : { threadId: invocation.threadId }),
-      },
-      signal: invocation.signal,
-    });
+    return await this.invoke(
+      copyBrowserModelContext(invocation, {
+        invocationId: invocation.callId,
+        tool: invocation.name,
+        arguments: invocation.arguments,
+        context: {
+          callId: invocation.callId,
+          ...(invocation.canonicalToolCallId === undefined
+            ? {}
+            : { canonicalToolCallId: invocation.canonicalToolCallId }),
+          cwd: invocation.cwd,
+          ...(invocation.approvalScope === undefined
+            ? {}
+            : { approvalScope: invocation.approvalScope }),
+          ...(invocation.threadId === undefined
+            ? {}
+            : { threadId: invocation.threadId }),
+        },
+        signal: invocation.signal,
+      }),
+    );
   }
 
   retainPreparedInvocation(): () => void {
@@ -551,9 +559,10 @@ class SupervisedPluginBundle implements ToolBundle {
     const operation = this.#runtime.invoke(invocation);
     this.#active.add(operation);
     try {
-      return normalizeToolExecutionResult(
-        validateResult(await operation, this.identity.id),
-        this.identity,
+      const result = validateResult(await operation, this.identity.id);
+      return copyBrowserModelTargets(
+        result,
+        normalizeToolExecutionResult(result, this.identity),
       );
     } finally {
       this.#active.delete(operation);
@@ -1329,7 +1338,7 @@ export function bundledPackageRegistration(
             normalizePackageResult(
               await runtimePackage.invoke(
                 invocation.tool,
-                {
+                copyBrowserModelContext(invocation, {
                   callId: invocation.context.callId,
                   ...(invocation.context.trustedPluginUi === true
                     ? { trustedPluginUi: true as const }
@@ -1350,7 +1359,7 @@ export function bundledPackageRegistration(
                     ? {}
                     : { threadId: invocation.context.threadId }),
                   signal: invocation.signal,
-                },
+                }),
                 hostSdk,
               ),
             ),
@@ -1374,7 +1383,7 @@ function normalizePackageResult(value: unknown): ToolExecutionResult {
     typeof value.output === "string" &&
     Number.isSafeInteger(value.exitCode)
   ) {
-    return {
+    return copyBrowserModelTargets(value, {
       output: value.output,
       exitCode: value.exitCode as number,
       ...(Object.hasOwn(value, "contentType") ||
@@ -1385,10 +1394,13 @@ function normalizePackageResult(value: unknown): ToolExecutionResult {
               value.structuredContent as ToolExecutionResult["structuredContent"],
           }
         : {}),
-    };
+    });
   }
   const output = typeof value === "string" ? value : JSON.stringify(value);
-  return { output: output ?? String(value), exitCode: 0 };
+  return copyBrowserModelTargets(value, {
+    output: output ?? String(value),
+    exitCode: 0,
+  });
 }
 
 const HISTORICAL_SELF_CONTROL_TOOLS = new Set([
@@ -1472,7 +1484,7 @@ function validateResult(value: unknown, pluginId: string): ToolExecutionResult {
   ) {
     throw new Error(`Plugin runtime ${pluginId} returned an invalid result`);
   }
-  return {
+  return copyBrowserModelTargets(value, {
     output: value.output,
     exitCode: value.exitCode as number,
     ...(Object.hasOwn(value, "contentType") ||
@@ -1483,7 +1495,7 @@ function validateResult(value: unknown, pluginId: string): ToolExecutionResult {
             value.structuredContent as ToolExecutionResult["structuredContent"],
         }
       : {}),
-  };
+  });
 }
 
 function encodeMessage(value: unknown, maxBytes: number): string {

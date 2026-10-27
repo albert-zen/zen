@@ -1,3 +1,4 @@
+import type { ToolTraceCapture } from "../../../src/trace-tool.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -24,6 +25,22 @@ const signal = () => new AbortController().signal;
 type NativeService = {
   invoke(name: string, invocation: ToolInvocation): Promise<unknown>;
 };
+function syntheticTrace(
+  overrides: Partial<ToolTraceCapture>,
+): ToolTraceCapture {
+  return {
+    recordInvocation: async () => {},
+    recordReferenceBindings: async () => {},
+    recordResult: async () => ({ durability: "degraded", error: "synthetic" }),
+    recordAcceptedResult: async () => {},
+    write: async () => {},
+    end: async () => {},
+    flush: async () => {},
+    hasObservedResult: () => true,
+    hasAcceptedResult: () => false,
+    ...overrides,
+  };
+}
 function bridge(
   definitions: readonly ModelTool[],
   service: NativeService,
@@ -80,8 +97,8 @@ function bridge(
         arguments: args,
         signal: signal(),
         modelReferences: structuredClone(history),
-        traceOutput: {
-          recordResult: async (value: ToolExecutionResult, layer?: string) => {
+        traceOutput: syntheticTrace({
+          recordResult: async (value: unknown, layer?: string) => {
             trace.push({ layer, value: structuredClone(value) });
             return {
               durability: "durable",
@@ -98,7 +115,7 @@ function bridge(
           recordReferenceBindings: async (value: unknown) => {
             trace.push({ layer: "bindings", value: structuredClone(value) });
           },
-        },
+        }),
       };
       const result = await tool.execute(invocation);
       history.push(...(trustedModelReferenceBindings(result) ?? []));
@@ -739,7 +756,7 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
         modelReferences: seed.newBindings,
         ...(inspectable ? { modelTraceInspectionTool: "trace_read" } : {}),
         signal: signal(),
-        traceOutput: {
+        traceOutput: syntheticTrace({
           recordResult: async (value) => {
             trace.push(value);
             return {
@@ -751,7 +768,7 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
               },
             };
           },
-        },
+        }),
       },
       epoch: "epoch",
       references: registry,
@@ -1169,12 +1186,12 @@ test("degraded Trace capture never invents an inspection ref or loses known back
       arguments: { cwd: "/synthetic" },
       signal: signal(),
       modelTraceInspectionTool: "trace_read",
-      traceOutput: {
+      traceOutput: syntheticTrace({
         recordResult: async () => ({
           durability: "degraded",
           error: "Synthetic storage unavailable",
         }),
-      },
+      }),
     },
     epoch: "epoch",
     references: new ModelReferenceRegistry(),

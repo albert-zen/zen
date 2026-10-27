@@ -276,7 +276,11 @@ function MessageContent({
     first?.type === "text"
       ? /^\[Message received at (.+)\]$/u.exec(first.text)
       : null;
-  if (match && Number.isFinite(Date.parse(match[1]!))) {
+  if (
+    match &&
+    first?.type === "text" &&
+    Number.isFinite(Date.parse(match[1]!))
+  ) {
     const rest = item.content.parts
       .slice(1)
       .filter((part) => part.type === "text")
@@ -290,7 +294,7 @@ function MessageContent({
               {new Date(match[1]!).toLocaleString()}
             </time>
           </summary>
-          <pre>{first!.type === "text" ? first.text : ""}</pre>
+          <pre>{first.text}</pre>
         </details>
         <TextContent text={rest} />
       </>

@@ -1,6 +1,11 @@
-import { createToolTraceCapture, type ToolTraceCapture } from "./trace-tool.js";
-import type { RuntimeTrace } from "./trace.js";
 import {
+  createToolTraceCapture,
+  readKnownToolResult,
+  type ToolTraceCapture,
+} from "./trace-tool.js";
+import type { RuntimeTrace, TraceReader } from "./trace.js";
+import {
+  attachModelReferenceBindings,
   trustedModelReferenceBindings,
   validateModelReferenceBindings,
   type ModelReferenceBinding,
@@ -271,6 +276,98 @@ function assertPositiveExecutionLimit(value: number, label: string): void {
 
 export class AgentRuntime {
   readonly #contextCalibration = new ContextCalibration();
+
+  /** Explicit continuation only. Reading history never mutates or replays effects. */
+  async reconcileInterruptedHistory(
+    thread: Thread,
+    commit: (item: CanonicalItem) => Promise<void>,
+  ): Promise<void> {
+    const snapshot = thread.items;
+    const matched = new Set(
+      snapshot.flatMap((item) =>
+        item.type === "tool_result" ? [`${item.turnId}\0${item.callId}`] : [],
+      ),
+    );
+    const reader = this.#trace as
+      (RuntimeTrace & Partial<TraceReader>) | undefined;
+    for (const call of snapshot) {
+      if (
+        call.type !== "tool_call" ||
+        matched.has(`${call.turnId}\0${call.callId}`)
+      )
+        continue;
+      const known =
+        reader?.read !== undefined && reader.readArtifact !== undefined
+          ? await readKnownToolResult(
+              reader as TraceReader,
+              thread.id,
+              call.callId,
+              call.id,
+            )
+          : undefined;
+      const references = mergeReferenceBindings([
+        ...(known === undefined
+          ? []
+          : (trustedModelReferenceBindings(known) ?? [])),
+        ...(call.parentCallId === undefined
+          ? nestedReferenceBindings(thread.items, call)
+          : []),
+      ]);
+      const capture =
+        known === undefined || this.#toolOutputSpool === undefined
+          ? undefined
+          : await this.#toolOutputSpool.captureText(known.output);
+      await commit({
+        id: this.#id(),
+        threadId: thread.id,
+        turnId: call.turnId,
+        createdAt: this.#now(),
+        type: "tool_result",
+        callId: call.callId,
+        output:
+          known === undefined
+            ? "The prior tool call has no confirmed accepted result. Its external outcome is unknown; missing evidence does not mean it was not dispatched. Do not repeat side effects blindly. Reconcile the external state or ask the user before retrying."
+            : capture === undefined
+              ? known.output
+              : renderToolOutput(capture),
+        exitCode: known?.exitCode ?? null,
+        executionStatus:
+          known === undefined
+            ? "unknown"
+            : known.exitCode === 0
+              ? "completed"
+              : "failed",
+        ...(references.length === 0 ? {} : { referenceBindings: references }),
+        ...(known?.contentType === undefined
+          ? {}
+          : {
+              contentType: known.contentType,
+              structuredContent: known.structuredContent,
+            }),
+        ...(known?.modelContent === undefined
+          ? {}
+          : { modelContent: known.modelContent }),
+      });
+    }
+    const closed = new Set(
+      snapshot.flatMap((item) =>
+        item.type === "turn_completed" || item.type === "turn_aborted"
+          ? [item.turnId]
+          : [],
+      ),
+    );
+    for (const item of snapshot)
+      if (item.type === "turn_started" && !closed.has(item.turnId))
+        await commit({
+          id: this.#id(),
+          threadId: thread.id,
+          turnId: item.turnId,
+          createdAt: this.#now(),
+          type: "turn_aborted",
+          reason:
+            "The previous process stopped without a terminal observation. Known tool results were recovered from accepted facts; unmatched outcomes remain unknown. No previous operation was replayed.",
+        });
+  }
 
   estimateContextInput(request: ContextEstimateRequest) {
     return this.#contextCalibration.prepare(request).estimate;
@@ -1111,7 +1208,11 @@ export class AgentRuntime {
                   } | null
                 )?.recoveryRejectedMediaParts;
                 const originals = parts?.flatMap((part) =>
-                  mediaOrigins.has(part) ? [mediaOrigins.get(part)!] : [],
+                  prepared?.compiled
+                    ? [part]
+                    : mediaOrigins.has(part)
+                      ? [mediaOrigins.get(part)!]
+                      : [],
                 );
                 const exact = originals?.length
                   ? sampledMediaOccurrences(
@@ -1911,7 +2012,11 @@ export class AgentRuntime {
         String(state.status),
       );
     if (trace !== undefined && !trace.hasAcceptedResult() && !taskIsPending)
-      await trace.recordAcceptedResult(result);
+      await trace.recordAcceptedResult(
+        references.length === 0
+          ? result
+          : attachModelReferenceBindings({ ...result }, references),
+      );
     const originalCapture = capturedToolOutput(result);
     const capture =
       this.#toolOutputSpool !== undefined &&

@@ -44,7 +44,8 @@ export type Turn = Omit<CodexTurn, "items"> & {
   liveRecovery?: import("../../../../src/runtime.js").LiveTurnRecovery | null;
 };
 export type ThreadItem =
-  | CodexThreadItem
+  | Exclude<CodexThreadItem, { type: "commandExecution" }>
+  | CommandItem
   | {
       type: "hostMessage";
       id: string;
@@ -63,7 +64,10 @@ export type ThreadItem =
       content: Array<{ type: "text"; text: string; text_elements: [] }>;
       deliveryAfter?: string;
     };
-export type CommandItem = CodexCommandItem;
+export type CommandItem = Omit<CodexCommandItem, "status"> & {
+  /** Native-only honest recovery; CAS has no equivalent status. */
+  status: CodexCommandItem["status"] | "unknown";
+};
 
 export interface ClientInfo {
   name: string;

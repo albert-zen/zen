@@ -106,3 +106,32 @@ package provenance. OCR is not implemented by AX-budget work. Real locked/screen
 hardware, focus, and activity-indicator guarantees cannot be marked passed using
 synthetic tests alone. Explicitly label unimplemented, simulated, platform-limited,
 and untested gates. The user's machine is not a substitute cloud acceptance lab.
+
+## Typed model-visible identifier audit
+
+This is a typed-boundary audit, not a regex UUID scrub. Final serializer fixtures
+must be rerun on the integrated compact-ref/core commits; this table is not evidence
+that those unintegrated adapters already passed.
+
+| Boundary                                             | Preserve                                                | Compact or keep internal                                                              | Acceptance                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| User text, pasted code, paths, file hashes           | Exact authored bytes and role                           | Never rewrite ID-looking strings                                                      | Synthetic intentional UUID is preserved by migration/fact log |
+| Tool-call/result protocol pairing (`content.callId`) | Provider-required matching identity                     | Do not blindly shorten without explicit reversible protocol mapping                   | Serializer pairing regression required                        |
+| Generated selected-reference envelope                | Actual excerpts and trusted provenance                  | Scope-local stable semantic refs; host/thread/client routing IDs stay source metadata | Core generated-envelope tests + actual wire audit required    |
+| Computer target and screenshot/capture refs          | Exact target/capture binding and stale rejection        | Typed scoped aliases, never silently rebound                                          | Compact-ref owner + platform fixtures required                |
+| Room/thread routing and self-control list output     | User-relevant names/content and explicit tool selection | Tool-owned short refs; raw routing payload in Trace                                   | Tool projection and serializer fixtures required              |
+| Errors and cancellation receipts                     | Real outcome, unknown effect, actionable reason         | Avoid leaking unrelated routing UUIDs from generated wrappers                         | Accepted/unknown/retry E2E required                           |
+| Internal source ordinals/CAS edit revision           | Exact private pairing and real edit CAS                 | Never inject generic context revisions/expected versions into prompt text             | Inspect compiled messages, not global string replacement      |
+
+Fork/import preserves frozen source bindings; newly allocated refs use the existing
+scope high-water mark. A stale ref must fail explicitly rather than silently bind to
+a different target. Original full observed payloads stay in immutable Trace; there
+is no second mutable text or alias authority.
+
+Normal product upgrade, not OS-level prohibition: the old public binary's existing
+migrated-Thread `startTurn` path is verified to reject the format fence before any
+write or model call. That binary does not know the new ownership protocol and could
+still create a separate old-format Thread if deliberately run against the same
+profile. New/old simultaneous use is unsupported. The supported procedure is stop
+old writers, verify backup, replace the version, then migrate; no ACL or guardian is
+introduced to police arbitrary obsolete programs.

@@ -84,6 +84,9 @@ export interface ModelRequestDebugResult {
     availability: "available" | "unavailable";
     offset: number;
     nextOffset: number | null;
-    totalCharacters: number;
+    totalCharacters: number | null;
+    offsetUnit?: "bytes" | "characters";
+    endOffset?: number;
+    totalBytes?: number;
   };
 }

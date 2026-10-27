@@ -81,7 +81,10 @@ export function markThreadViewAwaitingRecovery(thread: Thread): Thread {
             items: turn.items.map((item) =>
               item.type === "reasoning" && item.status === "inProgress"
                 ? { ...item, status: "interrupted" as const }
-                : item,
+                : item.type === "commandExecution" &&
+                    item.status === "inProgress"
+                  ? { ...item, status: "unknown" as const }
+                  : item,
             ),
           }
         : turn,
@@ -482,7 +485,9 @@ export function applyThreadViewNotification(
       items: (existing?.items ?? event.turn.items).map((item) =>
         item.type === "reasoning" && item.status === "inProgress"
           ? { ...item, status: "interrupted" as const }
-          : item,
+          : item.type === "commandExecution" && item.status === "inProgress"
+            ? { ...item, status: "unknown" as const }
+            : item,
       ),
     };
     return {
@@ -645,7 +650,11 @@ function projectNativeThread(
         terminal === undefined ? null : seconds(terminal.createdAt);
       return {
         id: turn.id,
-        items: projectNativeItems(turn.items, snapshot.cwd),
+        items: projectNativeItems(
+          turn.items,
+          snapshot.cwd,
+          turn.status === "inProgress",
+        ),
         itemsView: "full",
         status: turn.status,
         error:
@@ -674,6 +683,7 @@ function projectNativeThread(
 function projectNativeItems(
   items: readonly CanonicalItem[],
   cwd: string,
+  live: boolean,
 ): ThreadItem[] {
   const projected: ThreadItem[] = [];
   const calls = new Map<string, { call: ToolCallItem; index: number }>();
@@ -697,7 +707,13 @@ function projectNativeItems(
     const result = projectNativeCompletedItem(item);
     if (result !== null) projected.push(result);
   }
-  return projected;
+  return live
+    ? projected
+    : projected.map((item) =>
+        item.type === "commandExecution" && item.status === "inProgress"
+          ? { ...item, status: "unknown" as const }
+          : item,
+      );
 }
 
 function projectNativeCompletedItem(item: CanonicalItem): ThreadItem | null {
@@ -826,7 +842,7 @@ export function projectNativeCommandCompleted(
 
 function nativeCommandExecutionStatus(
   result: ToolResultItem,
-): "completed" | "failed" | "declined" {
+): "completed" | "failed" | "declined" | "unknown" {
   if (result.executionStatus !== undefined) return result.executionStatus;
   if (
     (result.exitCode === 126 &&

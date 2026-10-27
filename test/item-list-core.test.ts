@@ -224,3 +224,68 @@ test("invalid historical dates are unknown, never synthesized as receipt time", 
     "[Message receipt time unavailable]",
   );
 });
+
+test("steered user contents select after the complete observed tool batch without rewriting source order", () => {
+  const facts: CanonicalItem[] = [
+    {
+      id: "user",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-10-27T00:00:00Z",
+      type: "user_message",
+      text: "initial",
+    },
+    {
+      id: "steer",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-10-27T00:00:01Z",
+      type: "user_message",
+      text: "steer",
+      deliveryAfter: "response",
+    },
+    {
+      id: "response",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-10-27T00:00:02Z",
+      type: "agent_message",
+      text: "calling",
+    },
+    {
+      id: "call",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-10-27T00:00:03Z",
+      type: "tool_call",
+      callId: "c",
+      modelResponseId: "response",
+      name: "observe",
+      arguments: {},
+    },
+    {
+      id: "result",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-10-27T00:00:04Z",
+      type: "tool_result",
+      callId: "c",
+      output: "seen",
+      exitCode: 0,
+    },
+  ];
+  const context = facts.flatMap((item, index) =>
+    contextItemsFromLegacy(item, facts.slice(0, index), index),
+  );
+  const serialized = JSON.stringify(context);
+  const compiled = compileItemList(context);
+  assert.deepEqual(compiled.selectedItemIds, [
+    "user",
+    "response",
+    "call",
+    "result",
+    "steer",
+  ]);
+  assert.equal(JSON.stringify(context), serialized);
+  assert.equal(compiled.messages.at(-1)?.role, "user");
+});

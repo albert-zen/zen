@@ -170,6 +170,45 @@ await withPreviewBrowser(
       "document.querySelector('.trace-inspector-payload').textContent.includes('Exact synthetic stdout')",
     );
     await screenshot("1280-en-light-tool-original.png");
+    for (const lang of ["en", "zh-CN"])
+      for (const theme of ["light", "dark"]) {
+        await send("Emulation.setDeviceMetricsOverride", {
+          width: 1280,
+          height: 1200,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        await send("Page.navigate", {
+          url: `${url}/protocol-settings.html?tab=models&language=${lang}&theme=${theme}`,
+        });
+        const edit = `document.querySelector('button[aria-label="${lang === "en" ? "Edit Alpha" : "编辑Alpha"}"]')`;
+        await wait(`Boolean(${edit})`);
+        await evaluate("document.fonts.ready");
+        await activate(edit);
+        await wait(
+          "Boolean(document.querySelector('[data-provider-protocol]'))",
+        );
+        assert.equal(
+          await evaluate(
+            "document.querySelector('[data-provider-protocol]').dataset.value",
+          ),
+          "chat-completions",
+        );
+        await screenshot(`1280-${lang}-${theme}-protocol-default-chat.png`);
+        await activate("document.querySelector('[data-provider-protocol]')");
+        await wait(
+          "Boolean(document.querySelector('[role=option][data-value=responses]'))",
+        );
+        await activate(
+          "document.querySelector('[role=option][data-value=responses]')",
+        );
+        await wait(
+          "document.querySelector('[data-provider-protocol]').dataset.value === 'responses'",
+        );
+        await screenshot(
+          `1280-${lang}-${theme}-protocol-explicit-responses.png`,
+        );
+      }
     assert.deepEqual(errors, []);
     await writeFile(
       path.join(directory, "evidence.json"),

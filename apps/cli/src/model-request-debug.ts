@@ -1,4 +1,5 @@
 import type {
+  TraceArtifactRef,
   TraceReader,
   TraceRecord,
   TraceStatus,
@@ -344,6 +345,41 @@ export class ModelRequestDebugStore {
     if (!r || r.threadId !== c.threadId)
       throw new Error("Trace record not found in selected scope");
     const view = c.view ?? "payload";
+    if (view === "payload" || view === "output" || view === "artifact") {
+      try {
+        const rawPage = await this.#rawPage(
+          r,
+          index,
+          view,
+          c.offset ?? 0,
+          c.artifactIndex ?? 0,
+        );
+        if (rawPage) {
+          result.page = { record: summarize(r, index), view, ...rawPage };
+          return result;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        result.completeness = "incomplete";
+        result.issues.push({
+          kind: "artifact_unavailable",
+          message,
+          threadId: c.threadId,
+          recordId: c.id,
+        });
+        result.page = {
+          record: summarize(r, index),
+          view,
+          text: `Unavailable: ${message}`,
+          encoding: "utf8",
+          availability: "unavailable",
+          offset: 0,
+          nextOffset: null,
+          totalCharacters: null,
+        };
+        return result;
+      }
+    }
     let payload: {
       text: string;
       encoding: "utf8" | "base64";
@@ -392,6 +428,105 @@ export class ModelRequestDebugStore {
       totalCharacters: payload.text.length,
     };
     return result;
+  }
+  /** Raw pagination is byte-addressed, hash-checked, and retains only one page in memory. */
+  async #rawPage(
+    r: TraceRecord,
+    index: Index,
+    view: "payload" | "output" | "artifact",
+    offset: number,
+    artifactIndex: number,
+  ): Promise<
+    | Omit<NonNullable<ModelRequestDebugResult["page"]>, "record" | "view">
+    | undefined
+  > {
+    const sample = index.samples.get(sampleKey(r)),
+      attempt = number(data(r).transportAttempt),
+      a = attempt === null ? undefined : sample?.attempts.get(attempt);
+    let refs: TraceArtifactRef[];
+    if (view === "artifact") {
+      const artifact = r.artifacts[artifactIndex];
+      if (!artifact) throw new Error("No artifact at this index");
+      refs = [artifact.ref];
+    } else if (view === "payload") {
+      const artifact = (a?.request ?? r).artifacts.find(
+        (x) => x.name === "request_body",
+      );
+      if (!artifact)
+        throw new Error(
+          "Actual HTTP request body was not captured; semantic input is not a substitute",
+        );
+      refs = [artifact.ref];
+    } else {
+      if (!a)
+        throw new Error(
+          "No HTTP response observation; inspect original artifacts instead",
+        );
+      refs = a.records.flatMap((event) =>
+        event.artifacts
+          .filter((x) => x.name === "response_body")
+          .map((x) => x.ref),
+      );
+      if (!refs.length && (!a.end || number(data(a.end).bytes) !== 0))
+        throw new Error(
+          "Response bytes were not captured; absence is not an empty response",
+        );
+    }
+    const total = refs.reduce((n, ref) => n + ref.byteLength, 0);
+    if (!Number.isSafeInteger(total) || offset > total)
+      throw new Error("Invalid Trace byte offset");
+    if (!this.#reader.readArtifactRange) {
+      if (total > 4 * 1024 * 1024)
+        throw new Error(
+          "This reader cannot provide bounded original-byte pages",
+        );
+      return undefined;
+    }
+    const chunks: Uint8Array[] = [];
+    let position = 0,
+      remaining = Math.min(
+        1024 * 1024,
+        Math.max(4, this.#limits.pageCharacters),
+      );
+    for (const ref of refs) {
+      if (ref.byteLength === 0 || (offset === total && ref === refs.at(-1)))
+        await this.#reader.readArtifactRange(ref, ref.byteLength, 1);
+      if (offset < position + ref.byteLength && remaining > 0) {
+        const start = Math.max(0, offset - position),
+          count = Math.min(remaining, ref.byteLength - start);
+        const bytes = await this.#reader.readArtifactRange(ref, start, count);
+        if (bytes.byteLength !== count)
+          throw new Error("Incomplete original-byte page");
+        chunks.push(bytes);
+        remaining -= count;
+      }
+      position += ref.byteLength;
+      if (remaining === 0) break;
+    }
+    let bytes = Buffer.concat(chunks),
+      decoded = decode(bytes);
+    if (decoded.encoding === "base64" && offset + bytes.length < total) {
+      // Do not cut a valid UTF-8 code point across display pages. Invalid binary stays Base64.
+      for (let suffix = 1; suffix <= 3 && suffix < bytes.length; suffix++) {
+        const candidate = decode(bytes.subarray(0, -suffix));
+        if (candidate.encoding === "utf8") {
+          bytes = bytes.subarray(0, -suffix);
+          decoded = candidate;
+          break;
+        }
+      }
+    }
+    const endOffset = offset + bytes.length;
+    return {
+      ...decoded,
+      availability: "available",
+      offset,
+      offsetUnit: "bytes",
+      endOffset,
+      nextOffset: endOffset < total ? endOffset : null,
+      totalBytes: total,
+      totalCharacters: null,
+    };
   }
   async #content(
     r: TraceRecord,
@@ -442,6 +577,10 @@ export class ModelRequestDebugStore {
     if (!artifact)
       throw new Error(
         "Actual HTTP request body was not captured; semantic input is not a substitute",
+      );
+    if (artifact.ref.byteLength > 4 * 1024 * 1024)
+      throw new Error(
+        "Structured view exceeds 4 MiB; use lossless original-byte pages",
       );
     const body = decode(await this.#reader.readArtifact(artifact.ref));
     if (view === "payload") return body;

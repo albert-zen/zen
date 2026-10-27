@@ -186,51 +186,54 @@ test("writer ownership is released only after accepted in-flight I/O drains", as
   await next.close();
 });
 
-test("original accepted result log survives real child crash before projection; native restart recompiles without effect replay", async () => {
-  const { spawn } = await import("node:child_process");
-  const { fileURLToPath } = await import("node:url");
-  const options = await setup();
-  const fixture = fileURLToPath(
-    new URL(
-      import.meta.url.endsWith(".ts")
-        ? "./domain-accepted-crash-child.ts"
-        : "./domain-accepted-crash-child.js",
-      import.meta.url,
-    ),
-  );
-  const child = spawn(
-    process.execPath,
-    [...process.execArgv, fixture, options.root],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  let stderr = "";
-  child.stderr.on("data", (data) => {
-    stderr += data;
+for (const phase of ["temporary", "published", "synced"] as const)
+  test(`original accepted result survives child crash ${phase}; restart never replays effect`, async () => {
+    const { spawn } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
+    const options = await setup();
+    const fixture = fileURLToPath(
+      new URL(
+        import.meta.url.endsWith(".ts")
+          ? "./domain-accepted-crash-child.ts"
+          : "./domain-accepted-crash-child.js",
+        import.meta.url,
+      ),
+    );
+    const child = spawn(
+      process.execPath,
+      [...process.execArgv, fixture, options.root, phase],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (data) => {
+      stderr += data;
+    });
+    const [code] = await once(child, "exit");
+    assert.equal(code, 91, stderr);
+    const cold = new DomainThreadJournal(options);
+    const original = await cold.read("t");
+    assert.equal(original.at(-1)?.type, "tool_result");
+    const before = await readFile(
+      path.join(options.directory, "items", "t.jsonl"),
+      "utf8",
+    );
+    if (phase === "temporary")
+      assert.doesNotMatch(before, /accepted exact effect/);
+    else assert.match(before, /accepted exact effect/);
+    const compiled = await cold.readItemList("t");
+    assert.equal(compiled.at(-1)?.source.kind, "tool_result");
+    assert.match(
+      JSON.stringify(compiled.at(-1)?.content),
+      /accepted exact effect result 中文/,
+    );
+    assert.equal(
+      await readFile(path.join(options.root, "effect-count"), "utf8"),
+      "1",
+    );
+    await cold.reconcileCompilation("t");
+    assert.deepEqual(await cold.readItemList("t"), compiled);
+    await cold.close();
   });
-  const [code] = await once(child, "exit");
-  assert.equal(code, 91, stderr);
-  const cold = new DomainThreadJournal(options);
-  const original = await cold.read("t");
-  assert.equal(original.at(-1)?.type, "tool_result");
-  const before = await readFile(
-    path.join(options.directory, "items", "t.jsonl"),
-    "utf8",
-  );
-  assert.doesNotMatch(before, /accepted exact effect/);
-  const compiled = await cold.readItemList("t");
-  assert.equal(compiled.at(-1)?.source.kind, "tool_result");
-  assert.match(
-    JSON.stringify(compiled.at(-1)?.content),
-    /accepted exact effect result 中文/,
-  );
-  assert.equal(
-    await readFile(path.join(options.root, "effect-count"), "utf8"),
-    "1",
-  );
-  await cold.reconcileCompilation("t");
-  assert.deepEqual(await cold.readItemList("t"), compiled);
-  await cold.close();
-});
 test("accepted semantic source failure does not publish a fabricated ItemList input", async () => {
   const options = await setup();
   const journal = new DomainThreadJournal({

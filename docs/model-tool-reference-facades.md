@@ -12,16 +12,17 @@ This is a fresh rebuild on public `81ff10d5`, not a recovery claim for vanished 
 
 ## Explicit surfaces
 
-| Surface         | Model contract                                              | Native authority retained                                                                                                                              |
-| --------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Threads/history | Semantic names; exact Thread/turn/item/cursor refs          | Original exact route and native history/cursor bounds; selected compaction source retains exact enabled prefix                                         |
-| Computer        | `control`, `binding`, `capture`; cursor-only continuation   | Exact original request target + observation/control or binding/capture tuple; native permission, owner, current observation, focus and geometry checks |
-| Rooms           | Room/member/message refs; workspace `snapshot`              | Original Room membership/message identity and exact room/revision CAS                                                                                  |
-| Workflows       | Immutable `snapshot`                                        | Original configuration CAS, never a mutable last-read baseline                                                                                         |
-| Sidebar         | Named scopes, exact existing-tab refs, immutable `snapshot` | Full original owner/resource descriptor and revision; native current membership and resource-owner checks                                              |
-| Triggers        | Trigger/history/Thread refs; definition/target `snapshot`   | Exact original revision and preview/process configuration fences; native source checks                                                                 |
-| Subagents       | Parent/child refs                                           | Native Thread relationships; creation and follow-up remain separate outcomes                                                                           |
-| Models/projects | Semantic model/workspace names plus exact refs              | Original opaque provider/model selection key; project stays a workspace projection                                                                     |
+| Surface         | Model contract                                                         | Native authority retained                                                                                                                                       |
+| --------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Threads/history | Semantic names; exact Thread/turn/item/cursor refs                     | Original exact route and native history/cursor bounds; selected compaction source retains exact enabled prefix                                                  |
+| Browser         | Semantic sessions; exact connection/tab/observation/target/cursor refs | Existing native owner/session epoch/product target identity, connection generation and observation freshness; approval and resource claims use the same decoder |
+| Computer        | `control`, `binding`, `capture`; cursor-only continuation              | Exact original request target + observation/control or binding/capture tuple; native permission, owner, current observation, focus and geometry checks          |
+| Rooms           | Room/member/message refs; workspace `snapshot`                         | Original Room membership/message identity and exact room/revision CAS                                                                                           |
+| Workflows       | Immutable `snapshot`                                                   | Original configuration CAS, never a mutable last-read baseline                                                                                                  |
+| Sidebar         | Named scopes, exact existing-tab refs, immutable `snapshot`            | Full original owner/resource descriptor and revision; native current membership and resource-owner checks                                                       |
+| Triggers        | Trigger/history/Thread refs; definition/target `snapshot`              | Exact original revision and preview/process configuration fences; native source checks                                                                          |
+| Subagents       | Parent/child refs                                                      | Native Thread relationships; creation and follow-up remain separate outcomes                                                                                    |
+| Models/projects | Semantic model/workspace names plus exact refs                         | Original opaque provider/model selection key; project stays a workspace projection                                                                              |
 
 For example, inspection yields `{ "controls": [{ "ref": "r1", "title": "Save", "role": "button" }] }`; `computer_press({ "control": "r1" })` resolves the exact observed pair before ordinary native dispatch. A receipt still says `applicationEffect: "unverified"` where the backend does; dispatch is not transformed into application success.
 
@@ -43,9 +44,15 @@ Synthetic tests exercise the real capability bridge and native product services:
 
 Not covered by this slice:
 
-- Browser connection/session/tab/observation/cursor projection. Browser approval resolves before execution and must retain connection generation.
-- New Browser sidebar descriptor creation. Existing Browser tabs roundtrip by exact preserved tab refs; the Browser boundary must supply new typed tab refs.
 - Fleet device/catalog/execution/task-handle projection. Routing may intercept before the capability facade; deviceKey, endpoint/workspace, process epoch, tool generation and qualified status handles must remain one exact authority tuple. Current remote device/workspace fields cannot be claimed fully compact or fully fenced by this slice.
 - File-editor read/write baseline guards and renderer layout. Sidebar presentation does not read, write, save or discard file contents.
 
 Plugin/panel names, semantic model names, paths/URLs and user-authored custom/note identifiers remain literal deliberately. This is not a universal annotation or redaction framework, and creates no fourth durable coordination/reference store.
+
+## Browser boundary
+
+Browser projection captures the native result before compact publication, including failure and completed-action/follow-up-observation distinctions. A cursor binds the immutable original session/tab and never recaptures or renews freshness. Generated native node, document, session and connection envelopes are not model prose; user text, page content, URLs, errors and artifact paths remain literal. The model uses full bounded first pages rather than a hidden retained diff baseline.
+
+Approval scopes and resource claims resolve exactly the same compact connection/target before execution. The captured catalog generation is checked again by the existing native connection registry. A private branded sideband carries the exact existing product target identity separately from native tab IDs through trusted Host IPC and bundled/profile adapters. Native ordered dispatch checks owner, session epoch and product target identity without creating a session during lookup. New sidebar Browser descriptors use this exact target and the current native admission callback; existing sidebar descriptors retain their original semantics. This introduces no durable alias/routing store and never replays unknown effects.
+
+Fresh rebuild tests cover synthetic native Browser/provider+registry, private sideband provenance, bounded paging, retired/recycled connections and tabs, predispatch approval/resource claims, bundled runtime adapter transport, raw capture before projection, bounded publication receipts and live sidebar admission. Real installed profile tarball tests also assert result sideband survives normalization and a retired session epoch rejects before native dispatch. Integration on Core checkpoint `42875b13` exercises compiled Worker `run_code` full receipts, literal user `referenceBindings` JSON, durable DomainThreadJournal/FileTrace compaction and cold reconstruction: old capability epochs reject without native dispatch or action replay, while raw native results remain readable in Trace. This is synthetic local verification, not an OS-process kill or real user browser/paid API test.

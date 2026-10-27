@@ -10,7 +10,7 @@ const journal = new DomainThreadJournal({
   trace: new FileTraceStore(path.join(root, "trace")),
   metadata: new InMemoryThreadMetadataStore(),
   onItemListAppendPhase(phase) {
-    if (armed && phase === "temporary") process.exit(91);
+    if (armed && phase === (process.argv[3] ?? "temporary")) process.exit(91);
   },
 });
 await journal.append({

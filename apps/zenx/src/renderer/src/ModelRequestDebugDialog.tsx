@@ -132,7 +132,12 @@ function TraceReaderPanel({ threadId = "", currentSettings, onClose }: Props) {
   ) => {
     setDetailOpen(true);
     setArtifactIndex(artifact);
-    if (page?.record.id !== record.id || page.view !== view) setPage(undefined);
+    if (
+      page?.record.id !== record.id ||
+      page.view !== view ||
+      (view === "artifact" && artifactIndex !== artifact)
+    )
+      setPage(undefined);
     void run({
       action: "read",
       threadId: record.threadId,
@@ -492,9 +497,12 @@ function TraceReaderPanel({ threadId = "", currentSettings, onClose }: Props) {
                   {tr("Previous page", "上一页")}
                 </button>
                 <span>
-                  {tr("Characters", "字符")}{" "}
+                  {page.offsetUnit === "bytes"
+                    ? tr("Bytes", "字节")
+                    : tr("Characters", "字符")}{" "}
                   {page.offset + (page.text.length ? 1 : 0)}–
-                  {page.offset + page.text.length} / {page.totalCharacters}
+                  {page.endOffset ?? page.offset + page.text.length} /{" "}
+                  {page.totalBytes ?? page.totalCharacters ?? "unknown"}
                 </span>
                 <button
                   disabled={busy || page.nextOffset === null}

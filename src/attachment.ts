@@ -9,6 +9,7 @@ import {
   rm,
 } from "node:fs/promises";
 import path from "node:path";
+import { syncDirectory } from "./storage-files.js";
 import {
   MAX_AUDIO_BYTES,
   MAX_IMAGE_BYTES,
@@ -156,9 +157,7 @@ export class FileAttachmentStore implements AttachmentStore {
         if (!isAlreadyExists(error)) throw error;
       }
 
-      if (!published) {
-        await this.read(ref);
-      }
+      if (published) await syncDirectory(hashRoot);
       await this.read(ref); // Validate published/deduplicated ownership before acknowledging a usable reference.
       return ref;
     } finally {

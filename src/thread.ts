@@ -177,7 +177,9 @@ export class Thread {
         );
         const source = this.#items[index];
         const content =
-          source?.type === "user_message" && occurrence.field === "content"
+          (source?.type === "user_message" ||
+            source?.type === "thread_message") &&
+          occurrence.field === "content"
             ? source.content
             : source?.type === "tool_result" &&
                 occurrence.field === "modelContent"
@@ -306,14 +308,16 @@ export class Thread {
     }
   }
 
-  append(item: CanonicalItem): void {
+  append(item: CanonicalItem, committedContext?: readonly ContextItem[]): void {
     this.validateAppend(item);
-    const context = contextItemsFromLegacy(
-      item,
-      this.#items,
-      this.#items.length,
-      this.#itemList,
-    );
+    const context =
+      committedContext ??
+      contextItemsFromLegacy(
+        item,
+        this.#items,
+        this.#items.length,
+        this.#itemList,
+      );
     this.#items.push(deepFreeze(structuredClone(item)));
     for (const semantic of context) this.appendContext(semantic);
   }

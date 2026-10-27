@@ -605,7 +605,10 @@ export class ZenXSettingsService {
     let declaredInputModalities: readonly DeclaredInputModalities[];
     try {
       const catalog = await discoverOpenAiCompatibleCatalog({
-        baseUrl: target.provider.baseUrl,
+        baseUrl:
+          target.provider.protocol === "responses"
+            ? target.provider.baseUrl.replace(/\/responses\/?$/u, "")
+            : target.provider.baseUrl,
         apiKey: target.apiKey,
         fetch,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -2260,6 +2263,9 @@ function profileFromLegacy(
             name: config.provider.name ?? "openai",
             displayName: config.provider.name ?? "OpenAI compatible",
             baseUrl: config.provider.baseUrl,
+            ...(config.provider.protocol === undefined
+              ? {}
+              : { protocol: config.provider.protocol }),
           };
   const providerProfileId =
     config.provider.type === "fake"

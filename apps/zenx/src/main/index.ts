@@ -647,6 +647,8 @@ async function bootstrapZenX(): Promise<void> {
       },
     );
     const selfControlPackage = new ZenXSelfControlCapabilityPackage({
+      browserTargetAdmission: (route, threadId) =>
+        capabilityService!.assertBrowserModelTarget(route, threadId),
       sidebar: threadSidebar,
       sidebarRooms: () =>
         automationService?.roomsAvailable()

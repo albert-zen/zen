@@ -34,8 +34,12 @@ labels preparation-to-block separately from invocation-to-capture-end.
 
 Actual request bodies are never reconstructed from semantic model inputs.
 Adapter input artifacts are labelled non-HTTP and available as original
-artifacts. Request/output pages preserve exact UTF-8 including BOM; undecodable
-bytes are reversible Base64. Structured views are explicitly presentations.
+artifacts. Raw request/output/artifact pages are byte-addressed (`offsetUnit: bytes`,
+`endOffset`, `totalBytes`), retain only one bounded page in memory, and verify the
+source artifact hash. They preserve UTF-8 including BOM without splitting code
+points; undecodable bytes are reversible Base64 per page (decode each page
+separately). Structured views remain character-addressed and refuse bodies above
+4 MiB rather than exhausting memory; original byte pages remain available. Structured views are explicitly presentations.
 Only API-key auth headers are omitted locally. Bodies are not broadly redacted;
 export sanitization is a separate explicit action.
 

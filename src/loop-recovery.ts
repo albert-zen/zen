@@ -1,3 +1,4 @@
+import { modelMediaOrigin } from "./model-media-origin.js";
 import type {
   CanonicalItem,
   RecoveryMediaOccurrence,
@@ -304,7 +305,10 @@ function occurrenceKey(entry: RecoveryMediaOccurrence): string {
 function itemContent(
   item: CanonicalItem,
 ): { field: RecoveryMediaOccurrence["field"]; content: UserInput } | undefined {
-  if (item.type === "user_message" && item.content !== undefined)
+  if (
+    (item.type === "user_message" || item.type === "thread_message") &&
+    item.content !== undefined
+  )
     return { field: "content", content: item.content };
   if (item.type === "tool_result" && item.modelContent !== undefined)
     return { field: "modelContent", content: item.modelContent };
@@ -349,7 +353,7 @@ export function sampledMediaOccurrences(
       seen.add(key);
       if (rejectedParts !== undefined && !rejectedParts.includes(part))
         continue;
-      const origin = origins.get(part);
+      const origin = modelMediaOrigin(part) ?? origins.get(part);
       if (origin !== undefined) found.set(JSON.stringify(origin), origin);
     }
   }

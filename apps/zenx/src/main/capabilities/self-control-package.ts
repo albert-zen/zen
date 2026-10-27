@@ -1,4 +1,8 @@
 import {
+  readBrowserSidebarTargets,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
+import {
   resolveSidebarScope,
   SidebarScopeChoiceRequired,
   bindSidebarResources,
@@ -611,6 +615,10 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly #fleet: FleetRouter | undefined;
   readonly #workflows: WorkflowConfigurationPort | undefined;
   readonly #sidebar: ThreadSidebarPort | undefined;
+  readonly #browserTargetAdmission?: (
+    route: BrowserModelRoute,
+    threadId: string,
+  ) => void;
   readonly #sidebarRooms: () => readonly SidebarRoom[];
   readonly #sendPreference: () => Promise<"queue" | "soft" | "hard">;
   readonly #sending = new Map<
@@ -622,6 +630,10 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     appServer: AppServerRequestPort;
     workflows?: WorkflowConfigurationPort;
     sidebar?: ThreadSidebarPort;
+    browserTargetAdmission?: (
+      route: BrowserModelRoute,
+      threadId: string,
+    ) => void;
     sidebarRooms?: () => readonly SidebarRoom[];
     fleet?: FleetRouter;
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
@@ -630,6 +642,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     this.#fleet = options.fleet;
     this.#workflows = options.workflows;
     this.#sidebar = options.sidebar;
+    this.#browserTargetAdmission = options.browserTargetAdmission;
     this.#sidebarRooms = options.sidebarRooms ?? (() => []);
     this.#sendPreference = options.sendPreference ?? (async () => "soft");
   }
@@ -675,6 +688,11 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       }
       const admit = () => {
         invocation.signal.throwIfAborted();
+        for (const route of readBrowserSidebarTargets(invocation) ?? []) {
+          if (!this.#browserTargetAdmission)
+            throw Error("Browser target admission is unavailable; refresh");
+          this.#browserTargetAdmission(route, threadId);
+        }
         resolveSidebarScope(
           threadId,
           scope.effectiveScope,

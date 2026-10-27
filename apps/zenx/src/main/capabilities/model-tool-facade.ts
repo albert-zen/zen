@@ -1,4 +1,12 @@
 import {
+  isBrowserModelTool,
+  browserModelDefinition,
+  browserModelDocument,
+  invokeBrowserModelToolFacade,
+  type BrowserModelConnections,
+} from "./model-browser-facade.js";
+import { copyBrowserModelContext } from "./model-browser-metadata.js";
+import {
   isTriggerModelTool,
   triggerModelDefinition,
   decodeTriggerArguments,
@@ -45,6 +53,7 @@ import {
 
 export function hasModelToolFacade(name: string): boolean {
   return (
+    isBrowserModelTool(name) ||
     isTriggerModelTool(name) ||
     isSidebarModelTool(name) ||
     isComputerModelTool(name) ||
@@ -53,6 +62,7 @@ export function hasModelToolFacade(name: string): boolean {
   );
 }
 export function modelToolDefinition<T extends ModelTool>(tool: T): T {
+  if (isBrowserModelTool(tool.name)) return browserModelDefinition(tool);
   if (isTriggerModelTool(tool.name)) return triggerModelDefinition(tool);
   if (isSidebarModelTool(tool.name)) return sidebarModelDefinition(tool);
   return isComputerModelTool(tool.name)
@@ -82,6 +92,7 @@ const UI_ONLY_ROOMS = new Set([
 export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
   !UI_ONLY_ROOMS.has(tool.name);
 export function modelPluginDocument(id: string, original: string): string {
+  if (id === "browser") return browserModelDocument;
   if (id === "computer")
     return "Inspect an exact semantic window target for scoped control refs. Follow cursor alone for immutable continuation. Foreground tools may take focus. Native owner, permission, freshness, binding and capture checks remain authoritative. A ref never grants authority, selects the newest capture, or makes dispatch proof of effect. Refresh stale observations; never automatically repeat an uncertain action.";
   if (id === "zenx-subagents")
@@ -174,9 +185,10 @@ export async function invokeModelToolFacade(options: {
   invocation: ModelFacadeInvocation;
   epoch: string;
   references: ModelReferenceRegistry;
+  browserConnections?: BrowserModelConnections;
   dispatch(invocation: ToolInvocation): Promise<ToolExecutionResult>;
 }): Promise<
-  ToolExecutionResult & { referenceBindings?: ModelReferenceBinding[] }
+  ToolExecutionResult & { referenceBindings?: readonly ModelReferenceBinding[] }
 > {
   const { invocation, epoch, references, dispatch } = options;
   if (
@@ -185,6 +197,11 @@ export async function invokeModelToolFacade(options: {
     !invocation.threadId
   )
     return await dispatch(invocation);
+  if (isBrowserModelTool(invocation.name))
+    return invokeBrowserModelToolFacade({
+      ...options,
+      connections: options.browserConnections,
+    });
   const refs = references.scope(
     invocation.threadId,
     invocation.modelReferences,
@@ -201,7 +218,9 @@ export async function invokeModelToolFacade(options: {
   });
   await invocation.traceOutput?.recordReferenceBindings?.(inputBindings);
   invocation.signal.throwIfAborted();
-  const raw = await dispatch({ ...invocation, arguments: args });
+  const raw = await dispatch(
+    copyBrowserModelContext(args, { ...invocation, arguments: args }),
+  );
   const capture = record(
     await invocation.traceOutput?.recordResult(
       raw,

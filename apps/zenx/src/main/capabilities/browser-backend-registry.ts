@@ -1,3 +1,10 @@
+import {
+  attachBrowserModelRoute,
+  attachBrowserModelTargets,
+  readBrowserModelRoute,
+  readBrowserModelTargets,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
 import { withBrowserOperationOrder } from "./browser-operation-order.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import {
@@ -308,6 +315,12 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       throw new Error(
         `Connected browser unavailable: ${this.#connectedUnavailable}`,
       );
+    const expected = readBrowserModelRoute(invocation);
+    if (expected) {
+      if (expected.backend !== backendId)
+        throw Error("Browser reference backend changed; read again");
+      this.assertModelTarget(expected, invocation.threadId);
+    }
     const args = { ...invocation.arguments };
     if (instance !== undefined) delete args.connectionId;
     for (const key of referenceKeys) {
@@ -318,11 +331,22 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       backendId.startsWith("connected") ? connectedPrefix : workspacePrefix,
       "browser_",
     );
-    const result = await selected.invoke(canonicalName, {
+    const nativeInvocation = {
       ...invocation,
       name: canonicalName,
       arguments: args,
-    });
+    };
+    if (expected)
+      attachBrowserModelRoute(nativeInvocation, {
+        ...expected,
+        ...(expected.tabId === undefined
+          ? {}
+          : {
+              tabId: unqualify(backendId, expected.tabId, "tabId"),
+              targetId: unqualify(backendId, expected.targetId!, "targetId"),
+            }),
+      });
+    const result = await selected.invoke(canonicalName, nativeInvocation);
     const threadId = invocation.threadId;
     if (
       !this.#closed &&
@@ -354,7 +378,65 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
         ? {}
         : { connectionId: invocation.arguments.connectionId }),
     });
-    return Array.isArray(result) ? result.map(project) : project(result);
+    const projected = Array.isArray(result)
+      ? result.map(project)
+      : project(result);
+    const metadata = readBrowserModelTargets(result);
+    return metadata
+      ? attachBrowserModelTargets(projected, {
+          route: {
+            ...metadata.route,
+            backend: backendId,
+            ...(instance
+              ? {
+                  connectionId: invocation.arguments.connectionId as string,
+                  generation: invocation.approvalScope!.generation!,
+                }
+              : {}),
+          },
+          targets: metadata.targets.map((t) => ({
+            tabId: qualify(backendId, t.tabId),
+            targetId: qualify(backendId, t.targetId),
+          })),
+        })
+      : projected;
+  }
+
+  /** Uses only the existing native registry; does not connect or create UI state. */
+  assertModelTarget(
+    route: BrowserModelRoute,
+    threadId: string | undefined,
+  ): void {
+    const backend = route.backend;
+    const capability = backend && this.#packages.get(backend);
+    if (
+      this.#closed ||
+      !capability ||
+      (route.connectionId !== undefined &&
+        !this.#source
+          ?.connections()
+          .some(
+            (c) =>
+              c.connectionId === route.connectionId &&
+              c.generation === route.generation &&
+              c.state === "connected",
+          ))
+    )
+      throw Error(
+        "Browser connection is unavailable; discover and inspect again",
+      );
+    capability.assertModelTarget(
+      {
+        ...route,
+        ...(route.tabId === undefined
+          ? {}
+          : {
+              tabId: unqualify(backend!, route.tabId, "tabId"),
+              targetId: unqualify(backend!, route.targetId!, "targetId"),
+            }),
+      },
+      threadId,
+    );
   }
 
   async readTargetUrl(threadId: string, targetId: string): Promise<string> {

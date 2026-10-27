@@ -430,3 +430,49 @@ test("Environment binds one Trace owner and advertises only its real registered 
   assert.equal(after.invocation.modelTraceInspectionTool, "trace_read");
   env.discard(after);
 });
+
+test("raw returned value is snapshotted before awaiting pending output persistence", async (t) => {
+  const { trace } = await fixture(t);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let held = true;
+  const writer: RuntimeTrace = {
+    async record(event) {
+      if (held && event.type === "tool_output_chunk") {
+        held = false;
+        await gate;
+      }
+      return trace.record(event);
+    },
+  };
+  const sink = createToolTraceCapture(writer, {
+    threadId: "thread",
+    callId: "call",
+  });
+  const pending = sink.write("stdout", "pending");
+  const raw = {
+    output: "at return",
+    exitCode: 0,
+    contentType: "fixture/value",
+    structuredContent: { value: "original" },
+  };
+  const result = sink.recordResult(raw, "returned");
+  raw.output = "mutated later";
+  raw.structuredContent.value = "changed";
+  release();
+  await pending;
+  await result;
+  const observed = (await trace.read("thread")).records.find(
+    (record) => record.type === "tool_result_observed",
+  )!;
+  assert.equal(
+    deserialize(await bytes(trace, observed, "raw_result")).output,
+    "at return",
+  );
+  assert.equal(
+    JSON.parse(
+      Buffer.from(await bytes(trace, observed, "result_json")).toString(),
+    ).structuredContent.value,
+    "original",
+  );
+});

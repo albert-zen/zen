@@ -1,3 +1,8 @@
+import { browserSidebarDescriptor } from "./model-browser-facade.js";
+import {
+  attachBrowserSidebarTargets,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
 import type { ModelTool } from "../../../../../src/model.js";
 import type { ModelReferenceScope } from "../../../../../src/model-references.js";
 import {
@@ -33,6 +38,8 @@ export function sidebarModelDefinition<T extends ModelTool>(source: T): T {
           "thread",
           "terminal",
           "computer",
+          "browser",
+          "external-browser",
           "custom",
         ],
       },
@@ -41,6 +48,7 @@ export function sidebarModelDefinition<T extends ModelTool>(source: T): T {
       pluginId: { type: "string" },
       panelId: { type: "string" },
       thread: MODEL_REF,
+      tab: MODEL_REF,
       id: {
         type: "string",
         description:
@@ -128,6 +136,7 @@ export function decodeSidebarArguments(
       throw Error("Sidebar tab belongs to another scope");
     return bound;
   };
+  const browserTargets: BrowserModelRoute[] = [];
   if (Array.isArray(patch.tabs))
     patch.tabs = patch.tabs.map((value) => {
       const tab = object(value);
@@ -135,11 +144,27 @@ export function decodeSidebarArguments(
         only(tab, ["ref"]);
         return tabBinding(tab.ref).tab;
       }
-      only(tab, ["kind", "path", "url", "pluginId", "panelId", "thread", "id"]);
-      if (["browser", "external-browser"].includes(String(tab.kind)))
-        throw Error(
-          "Preserve existing Browser sidebar tabs by their exact returned ref; new Browser descriptors need the Browser typed-ref boundary",
+      only(tab, [
+        "kind",
+        "path",
+        "url",
+        "pluginId",
+        "panelId",
+        "thread",
+        "id",
+        "tab",
+      ]);
+      if (["browser", "external-browser"].includes(String(tab.kind))) {
+        only(tab, ["kind", "tab"]);
+        const browser = browserSidebarDescriptor(
+          tab.tab,
+          tab.kind,
+          refs,
+          epoch,
         );
+        browserTargets.push(browser.route);
+        return browser.tab;
+      }
       if (tab.id !== undefined && tab.kind !== "custom")
         throw Error(
           "New webpage tabs mint their own identity; preserve existing tabs by ref",
@@ -154,7 +179,14 @@ export function decodeSidebarArguments(
     });
   if (patch.selectedTab !== undefined && patch.selectedTab !== null)
     patch.selectedTab = tabBinding(patch.selectedTab).id;
-  return { scope: baseline.owner, expectedRevision: baseline.revision, patch };
+  const output = {
+    scope: baseline.owner,
+    expectedRevision: baseline.revision,
+    patch,
+  };
+  return browserTargets.length
+    ? attachBrowserSidebarTargets(output, browserTargets)
+    : output;
 }
 export function projectSidebarResult(
   result: Record<string, unknown>,

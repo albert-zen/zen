@@ -6,6 +6,9 @@ import path from "node:path";
 import { FileTraceStore, type RuntimeTrace } from "../src/trace.js";
 import { observeModelWithTrace, closeModelTrace } from "../src/trace-model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
+import { OpenAiResponsesModel } from "../src/model/openai-responses.js";
+import { InMemoryAttachmentStore } from "../src/attachment.js";
+import { png1x1 } from "./fixtures.js";
 import type { ModelRequest } from "../src/model.js";
 import { ModelRequestDebugStore } from "../apps/cli/src/model-request-debug.js";
 const input = (): ModelRequest => ({
@@ -214,3 +217,72 @@ for (const duringCapture of [false, true])
       false,
     );
   });
+
+test("Responses native tool media and user/developer roles remain exact in restarted debug reader", async (t) => {
+  const { directory, trace } = await fixture(t),
+    attachments = new InMemoryAttachmentStore();
+  const bytes = png1x1(),
+    attachment = await attachments.importBytes(bytes);
+  let body = "";
+  const response =
+    'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\ndata: [DONE]\n\n';
+  const model = observeModelWithTrace(
+    new OpenAiResponsesModel({
+      baseUrl: "https://synthetic.invalid/v1",
+      apiKey: "synthetic-auth",
+      attachments,
+      fetch: async (_url, init) => {
+        body = String(init?.body);
+        return new Response(response);
+      },
+    }),
+    trace,
+  );
+  const request = input();
+  request.messages.push(
+    {
+      role: "assistant",
+      toolCalls: [{ callId: "call-image", name: "view_image", arguments: {} }],
+    },
+    {
+      role: "tool",
+      callId: "call-image",
+      text: "native tool image",
+      exitCode: 0,
+      modelContent: [
+        { type: "text", text: "native tool image" },
+        { type: "image", attachment },
+      ],
+    },
+  );
+  const original = structuredClone(request.messages);
+  await consume(model, request);
+  await closeModelTrace(trace);
+  assert.deepEqual(request.messages, original);
+  const parsed = JSON.parse(body) as {
+    input: Array<{
+      role?: string;
+      type?: string;
+      content?: unknown;
+      output?: unknown;
+    }>;
+  };
+  assert.match(
+    JSON.stringify(parsed.input.find((x) => x.role === "developer")?.content),
+    /trusted instruction/u,
+  );
+  assert.equal(parsed.input.filter((x) => x.role === "user").length, 1);
+  assert(
+    JSON.stringify(
+      parsed.input.find((x) => x.type === "function_call_output")!.output,
+    ).includes(Buffer.from(bytes).toString("base64")),
+  );
+  const reader = new ModelRequestDebugStore(new FileTraceStore(directory), {
+    pageCharacters: 97,
+  });
+  const r = (await reader.control({ action: "list", threadId: "thread" }))
+    .records![0]!;
+  assert.equal(r.format, "responses");
+  assert.equal(await full(reader, r.id, "payload"), body);
+  assert.equal(await full(reader, r.id, "output"), response);
+});

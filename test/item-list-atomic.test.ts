@@ -49,3 +49,27 @@ for (const phase of ["temporary", "published", "synced"] as const)
       phase === "temporary" ? 1 : 2,
     );
   });
+
+test("larger history publication preserves every prior byte (write amplification measured, not a latency promise)", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-items-large-"));
+  const store = new FileItemListStore(directory);
+  const history = Array.from({ length: 1500 }, (_, index) => {
+    const value = item(String(index));
+    if (value.kind === "message") {
+      value.content.text = "文".repeat(1000);
+      value.content.parts = [{ type: "text", text: value.content.text }];
+    }
+    return value;
+  });
+  await store.create("t", history);
+  const before = await readFile(path.join(directory, "t.jsonl"));
+  const start = performance.now();
+  await store.append("t", [item("last")]);
+  const elapsed = performance.now() - start;
+  const after = await readFile(path.join(directory, "t.jsonl"));
+  assert.deepEqual(after.subarray(0, before.length), before);
+  assert.equal((await store.read("t")).length, 1501);
+  t.diagnostic(
+    `${before.length} prior bytes rewritten atomically in ${elapsed.toFixed(1)}ms on this synthetic cloud run`,
+  );
+});

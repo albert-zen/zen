@@ -409,6 +409,7 @@ export function projectCommandCompleted(
 function commandExecutionStatus(
   result: ToolResultItem,
 ): "completed" | "failed" | "declined" {
+  if (result.executionStatus === "unknown") return "failed"; // CAS cannot express unknown; output retains the honest outcome.
   if (result.executionStatus !== undefined) return result.executionStatus;
   if (
     (result.exitCode === 126 &&

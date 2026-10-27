@@ -5,7 +5,6 @@ import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
 import {
   contextItemsFromLegacy,
   decodeContextItem,
-  legacyItemFromContext,
   type ContextItem,
 } from "./item-list.js";
 import { FileItemListStore } from "./item-list-store.js";
@@ -261,6 +260,10 @@ export class DomainThreadJournal implements ThreadJournal {
     const item = decodeContextItem(raw);
     return this.#operation(item.threadId, async () => {
       await this.#migrate(item.threadId);
+      if (this.#uncertain.has(item.threadId))
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Source fact durability unknown",
+        );
       if (
         (await this.#items.read(item.threadId)).some(
           (existing) => existing.id === item.id,
@@ -285,6 +288,10 @@ export class DomainThreadJournal implements ThreadJournal {
     );
   }
   async #reconcileCompilation(threadId: string): Promise<void> {
+    if (this.#uncertain.has(threadId))
+      throw new ThreadJournalAppendOutcomeUnknownError(
+        "Source fact durability unknown",
+      );
     const observed = await this.trace.read(threadId, {
       verifyArtifacts: false,
     });
@@ -337,12 +344,13 @@ export class DomainThreadJournal implements ThreadJournal {
       }
       seenFacts.set(item.id, JSON.stringify(item));
       // Frozen fork sources are authoritative compiler inputs for their exact IDs.
-      const encoded = frozen.has(item.id)
-        ? []
-        : contextItemsFromLegacy(item, previous, data.sequence, [
-            ...contexts,
-            ...missing,
-          ]);
+      const encoded =
+        present.has(item.id) || frozen.has(item.id)
+          ? []
+          : contextItemsFromLegacy(item, previous, data.sequence, [
+              ...contexts,
+              ...missing,
+            ]);
       for (const context of encoded)
         if (!present.has(context.id)) {
           missing.push(context);
@@ -359,7 +367,8 @@ export class DomainThreadJournal implements ThreadJournal {
   async readItemList(threadId: string): Promise<ContextItem[]> {
     if (!(await this.#items.exists(threadId)) && this.#owner !== undefined)
       await this.migrate(threadId);
-    if (this.#owner !== undefined) await this.reconcileCompilation(threadId);
+    if (this.#owner !== undefined && !this.#uncertain.has(threadId))
+      await this.reconcileCompilation(threadId);
     return this.#items.read(threadId);
   }
   async read(threadId: string): Promise<CanonicalItem[]> {
@@ -374,19 +383,9 @@ export class DomainThreadJournal implements ThreadJournal {
       const source = await this.#legacy(threadId);
       return source?.items ?? [];
     }
-    const contexts = await this.#items.read(threadId);
     const observed = await this.trace.read(threadId, {
       verifyArtifacts: false,
     });
-    const annotations = new Map<string, Record<string, unknown>>();
-    for (const record of observed.records)
-      if (record.type === "item_annotation") {
-        const data = record.data as {
-          itemId: string;
-          fields: Record<string, unknown>;
-        };
-        annotations.set(data.itemId, data.fields);
-      }
     const combined = new Map<
       string,
       { sequence: number; item: CanonicalItem }
@@ -405,12 +404,8 @@ export class DomainThreadJournal implements ThreadJournal {
           throw new Error("Conflicting runtime fact identity");
         combined.set(item.id, { sequence: data.sequence, item });
       }
-    for (const context of contexts) {
-      if (combined.has(context.id)) continue;
-      const item = legacyItemFromContext(context, annotations.get(context.id));
-      if (item !== undefined && !combined.has(item.id))
-        combined.set(item.id, { sequence: context.source.sequence, item });
-    }
+    // ItemList is a compiled artifact, not a substitute original fact journal.
+    // Missing original source stays unavailable; readonly callers can separately inspect ItemList.
     return [...combined.values()]
       .sort((a, b) => a.sequence - b.sequence)
       .map((entry) => entry.item);
@@ -501,13 +496,16 @@ export class DomainThreadJournal implements ThreadJournal {
     return { bytes, sha256: hash(bytes), items };
   }
   async preflight(threadId: string): Promise<MigrationPreflight> {
-    if (await this.#items.exists(threadId))
+    if (await this.#items.exists(threadId)) {
+      const source = await this.#legacy(threadId);
       return {
         threadId,
         status: "migrated",
-        sourceItems: 0,
+        ...(source === undefined ? {} : { sourceSha256: source.sha256 }),
+        sourceItems: source?.items.length ?? 0,
         semanticItems: (await this.#items.read(threadId)).length,
       };
+    }
     const source = await this.#legacy(threadId);
     if (!source)
       return { threadId, status: "absent", sourceItems: 0, semanticItems: 0 };

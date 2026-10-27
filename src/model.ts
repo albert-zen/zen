@@ -124,7 +124,7 @@ export type ReasoningEffort = string;
 /** Passive identity for a single Runtime sample, never replay state. */
 export interface ModelRequestDebugContext {
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "title" | "image-probe";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;

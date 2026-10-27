@@ -1,5 +1,13 @@
+import {
+  materializeAuxiliaryInputs,
+  streamAuxiliaryModel,
+  type AuxiliaryModelOptions,
+} from "./auxiliary-model.js";
 import { compileItemList, type ContextItem } from "./item-list.js";
-import { prepareSampleContext } from "./context-preparation.js";
+import {
+  prepareSampleContext,
+  contextForFacts,
+} from "./context-preparation.js";
 import { projectModelMessages } from "./model-content.js";
 import {
   matchesSkillInputSnapshot,
@@ -411,6 +419,8 @@ export class ZenAppServer {
   readonly #attachments: AttachmentStore;
   readonly #journal: ThreadJournal;
   readonly #runtime: AgentRuntime;
+  readonly #auxiliaryModel:
+    Pick<AuxiliaryModelOptions, "trace" | "itemListStore"> | undefined;
   readonly #providerRegistry: ProviderRegistry;
   readonly #threadMetadata: ThreadMetadataStore;
   readonly #threadSummaryProjection: ThreadSummaryProjection;
@@ -462,6 +472,7 @@ export class ZenAppServer {
     skills?: SkillInputLoader;
     attachments?: AttachmentStore;
     runtime: AgentRuntime;
+    auxiliaryModel?: Pick<AuxiliaryModelOptions, "trace" | "itemListStore">;
     providerRegistry: ProviderRegistry;
     threadMetadata: ThreadMetadataStore;
     threadSummaryProjection?: ThreadSummaryProjection;
@@ -474,6 +485,7 @@ export class ZenAppServer {
     this.#skills = options.skills;
     this.#attachments = options.attachments ?? new InMemoryAttachmentStore();
     this.#runtime = options.runtime;
+    this.#auxiliaryModel = options.auxiliaryModel;
     this.#providerRegistry = options.providerRegistry;
     this.#threadMetadata = options.threadMetadata;
     this.#threadSummaryProjection =
@@ -892,7 +904,7 @@ export class ZenAppServer {
           );
         await this.#ensureThreadSummaries();
         try {
-          await this.#journal.create(thread.items);
+          await this.#journal.create(thread.items, thread.itemList);
         } catch (error) {
           this.#threadSummaries = undefined;
           const recovered = await existing();
@@ -1067,7 +1079,20 @@ export class ZenAppServer {
           ? forkablePrefix(sourceItems, terminalIndex)
           : sourceItems.slice(0, terminalIndex + 1);
       const threadId = this.#id();
-      const copiedItems = remapForkItems(prefix, threadId, this.#id);
+      const copiedIds = new Map<string, string>();
+      const copiedItems = remapForkItems(prefix, threadId, this.#id, copiedIds);
+      const prefixIds = new Set(prefix.map((item) => item.id));
+      const boundarySequence = Math.max(
+        -1,
+        ...source.itemList
+          .filter((item) => prefixIds.has(item.id))
+          .map((item) => item.source.sequence),
+      );
+      const copiedContext = source.itemList
+        .filter(
+          (item) => fullContext || item.source.sequence <= boundarySequence,
+        )
+        .map((item) => remapForkContext(item, threadId, copiedIds, this.#id));
       if (parentThreadId !== undefined) {
         const metadata = copiedItems.find(
           (item) => item.type === "thread_metadata",
@@ -1087,7 +1112,7 @@ export class ZenAppServer {
         workspace: "same-directory",
         ...(fullContext ? { context: "full" as const } : {}),
       };
-      const thread = new Thread(threadId, copiedItems);
+      const thread = new Thread(threadId, copiedItems, copiedContext);
       const inherited = thread.effectiveConfiguration();
       const selection = this.#selectionFromInput(inherited, settings);
       if (!sameSelection(selection, inherited)) {
@@ -1117,7 +1142,7 @@ export class ZenAppServer {
           threadId,
           createdAt: this.#now(),
           type: "thread_instruction",
-          text: `This conversation is a side chat (Thread ${threadId}) forked from parent Thread ${source.id}. You are not the main thread. The inherited conversation is context, not a request to continue the parent's work. Wait for an explicit user request in this side chat. Do not begin work independently or execute inherited pending work.`,
+          text: `This conversation is a side chat forked from its parent. You are not the main thread. The inherited conversation is context, not a request to continue the parent's work. Wait for an explicit user request in this side chat. Do not begin work independently or execute inherited pending work.`,
         });
       }
       if (this.#journal.create === undefined) {
@@ -1128,7 +1153,7 @@ export class ZenAppServer {
       }
       await this.#ensureThreadSummaries();
       try {
-        await this.#journal.create(thread.items);
+        await this.#journal.create(thread.items, thread.itemList);
       } catch (error) {
         this.#threadSummaries = undefined;
         throw new ThreadJournalAppendOutcomeUnknownError(error);
@@ -3338,6 +3363,11 @@ export class ZenAppServer {
           `Thread ${threadId} has an unfinished replacement operation`,
         );
       }
+      await this.#journal.assertRecoverySafe?.(thread.id);
+      await this.#runtime.reconcileInterruptedHistory(thread, async (item) => {
+        await this.#commit(thread, item);
+        this.#emit({ type: "item_completed", item });
+      });
       const currentConfiguration = thread.effectiveConfiguration();
       const prospectiveSelection = this.#selectionFromInput(
         currentConfiguration,
@@ -4218,21 +4248,57 @@ export class ZenAppServer {
     resolved: ResolvedProviderSelection,
     contextCompaction: ResolvedContextCompactionConfig,
   ): ModelInputEstimate {
-    return this.#runtime.estimateContextInput({
-      threadId: items[0]?.threadId ?? "",
+    const threadId = items[0]?.threadId ?? "estimate";
+    const contexts = contextForFacts(
       items,
-      messages: projectModelMessages(
-        compileModelMessages(items, resolved.selection),
-        resolved.model.inputModalities,
-      ),
-      tools: this.#runtime.projectToolPresentation(
+      this.#threads.get(threadId)?.itemList ?? [],
+    );
+    const presentation = this.#runtime.projectToolPresentation(
+      items,
+      contextCompaction.agenticEnabled && resolved.model.contextWindow !== null,
+    );
+    const lastPermissions = items.findLast(
+      (item) =>
+        item.type === "thread_configuration_changed" && "permissions" in item,
+    );
+    const metadata = items.find((item) => item.type === "thread_metadata");
+    const sandbox =
+      lastPermissions?.type === "thread_configuration_changed" &&
+      "permissions" in lastPermissions
+        ? lastPermissions.permissions.to.sandbox
+        : metadata?.type === "thread_metadata"
+          ? metadata.sandbox
+          : "danger-full-access";
+    contexts.push(
+      ...prepareSampleContext({
+        threadId,
+        sampleId: "estimate",
         items,
-        contextCompaction.agenticEnabled &&
-          resolved.model.contextWindow !== null,
-      ).modelTools,
+        itemList: contexts,
+        sandbox,
+        ...(resolved.adapter.contextInstructions === undefined
+          ? {}
+          : { instructions: resolved.adapter.contextInstructions }),
+        tools: presentation.modelTools,
+        inputModalities: resolved.model.inputModalities,
+        id: this.#id,
+        now: this.#now,
+      }),
+    );
+    const compiled = compileItemList(contexts, {
+      sampleId: "estimate",
+      selection: resolved.selection,
+      inputModalities: resolved.model.inputModalities,
+    });
+    return this.#runtime.estimateContextInput({
+      threadId,
+      items,
+      messages: compiled.messages,
+      tools: compiled.tools,
       adapter: resolved.adapter,
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
+      instructionsMaterialized: true,
     });
   }
 
@@ -4679,6 +4745,74 @@ export class ZenAppServer {
     });
   }
 
+  async *#streamCompactionInput(
+    thread: Thread,
+    selection: ResolvedProviderSelection,
+    messages: ModelMessage[],
+    signal: AbortSignal,
+  ) {
+    const assertDispatchAllowed = () => {
+      this.#assertCurrentThreadAuthority(thread);
+      const lease = selection as Partial<ProviderSelectionLease>;
+      lease.assertDispatchAllowed?.();
+      signal.throwIfAborted();
+    };
+    if (this.#auxiliaryModel !== undefined) {
+      yield* streamAuxiliaryModel({
+        ...this.#auxiliaryModel,
+        adapter: selection.adapter,
+        purpose: "compaction",
+        instructionsMaterialized: true,
+        messages,
+        tools: [],
+        model: selection.selection.modelId,
+        reasoningEffort: selection.selection.reasoningEffort,
+        selection: selection.selection,
+        inputModalities: selection.model.inputModalities,
+        signal,
+        assertDispatchAllowed,
+      });
+      return;
+    }
+    // Direct AppServer embeddings own their supplied journal; production Host always supplies the auxiliary stores.
+    const sampleId = this.#id();
+    const inputs = materializeAuxiliaryInputs(
+      thread.id,
+      messages,
+      [],
+      selection.selection,
+    ).map((item) => ({
+      ...item,
+      source: {
+        ...item.source,
+        sequence: Math.max(0, thread.items.length - 1),
+        metadata: { ...item.source.metadata, onlySampleId: sampleId },
+      },
+    }));
+    for (const item of inputs) await this.#commitContext(thread, item);
+    const compiled = compileItemList(inputs, {
+      sampleId,
+      selection: selection.selection,
+      inputModalities: selection.model.inputModalities,
+    });
+    yield* selection.adapter.stream({
+      ...compiled,
+      model: selection.selection.modelId,
+      reasoningEffort: selection.selection.reasoningEffort,
+      signal,
+      assertDispatchAllowed,
+      debugContext: {
+        threadId: thread.id,
+        purpose: "compaction",
+        turnId: null,
+        sampleId,
+        contextBoundaryItemId: thread.items.at(-1)?.id ?? "",
+        sampleAttempt: 1,
+        selectedItemIds: compiled.selectedItemIds,
+      },
+    });
+  }
+
   async #appendContextCompaction(options: {
     thread: Thread;
     boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
@@ -4689,13 +4823,31 @@ export class ZenAppServer {
     signal: AbortSignal;
     allowOpenTurns?: boolean;
   }): Promise<ContextCompactionItem> {
-    const sourceMessages = projectModelMessages(
-      compileModelMessages(
-        options.thread.items.slice(0, options.boundary.index + 1),
-        options.selection.selection,
-      ),
-      options.selection.model.inputModalities,
+    const sourceContext = contextForFacts(
+      options.thread.items.slice(0, options.boundary.index + 1),
+      options.thread.itemList,
     );
+    sourceContext.push(
+      ...prepareSampleContext({
+        threadId: options.thread.id,
+        sampleId: "compaction-estimate",
+        items: options.thread.items.slice(0, options.boundary.index + 1),
+        itemList: sourceContext,
+        sandbox: options.thread.effectiveConfiguration().sandbox,
+        ...(options.selection.adapter.contextInstructions === undefined
+          ? {}
+          : { instructions: options.selection.adapter.contextInstructions }),
+        tools: [],
+        inputModalities: options.selection.model.inputModalities,
+        id: this.#id,
+        now: this.#now,
+      }),
+    );
+    const sourceMessages = compileItemList(sourceContext, {
+      sampleId: "compaction-estimate",
+      selection: options.selection.selection,
+      inputModalities: options.selection.model.inputModalities,
+    }).messages;
     const summary = await generateContextCompactionSummary({
       debugThreadId: options.thread.id,
       debugBoundaryItemId: options.boundary.item.id,
@@ -4706,6 +4858,13 @@ export class ZenAppServer {
       summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
       signal: options.signal,
+      stream: (messages) =>
+        this.#streamCompactionInput(
+          options.thread,
+          options.selection,
+          messages,
+          options.signal,
+        ),
     });
     const contextWindow = options.selection.model.contextWindow;
     if (contextWindow === null) {
@@ -4954,8 +5113,10 @@ export class ZenAppServer {
     }
     await this.#ensureThreadSummaries();
     thread.validateAppend(item);
+    let persistedContext: ContextItem[] | undefined;
     try {
       await this.#journal.append(item);
+      persistedContext = await this.#journal.readItemList?.(thread.id);
     } catch (error) {
       if (this.#threads.get(thread.id) === thread) {
         this.#threads.delete(thread.id);
@@ -4964,7 +5125,10 @@ export class ZenAppServer {
       throw new ThreadJournalAppendOutcomeUnknownError(error);
     }
     const before = new Set(thread.itemList.map((context) => context.id));
-    thread.append(item);
+    thread.append(
+      item,
+      persistedContext?.filter((context) => !before.has(context.id)),
+    );
     for (const context of thread.itemList)
       if (!before.has(context.id))
         this.#emit({
@@ -5659,6 +5823,7 @@ function remapForkItems(
   items: readonly CanonicalItem[],
   threadId: string,
   idFactory: () => string,
+  exportedIds?: Map<string, string>,
 ): CanonicalItem[] {
   const localIds = new Set(items.map((item) => item.id));
   for (const item of items) {
@@ -5685,6 +5850,7 @@ function remapForkItems(
     }
   }
   const ids = new Map([...localIds].map((id) => [id, idFactory()] as const));
+  for (const [from, to] of ids) exportedIds?.set(from, to);
   const remap = (id: string): string => ids.get(id) ?? id;
   return items.map((item) => {
     const copied = structuredClone(item) as CanonicalItem;
@@ -5735,6 +5901,43 @@ function remapForkItems(
     }
     return copied;
   });
+}
+
+/** Immutable snapshot remaps local addresses, never user prose or binding authority. */
+function remapForkContext(
+  item: ContextItem,
+  threadId: string,
+  ids: Map<string, string>,
+  idFactory: () => string,
+): ContextItem {
+  const remap = (id: string) => {
+    let value = ids.get(id);
+    if (value === undefined) {
+      value = idFactory();
+      ids.set(id, value);
+    }
+    return value;
+  };
+  const copied = structuredClone(item);
+  copied.id = remap(item.id);
+  copied.threadId = threadId;
+  if (copied.kind === "selection") {
+    copied.content.coveredThroughItemId =
+      ids.get(copied.content.coveredThroughItemId) ??
+      copied.content.coveredThroughItemId;
+    copied.content.retainedItemIds = copied.content.retainedItemIds.map(remap);
+  }
+  const metadata = copied.source.metadata;
+  if (metadata !== undefined)
+    for (const key of [
+      "deliveryAfter",
+      "modelResponseId",
+      "sourceModelResponseId",
+    ]) {
+      const value = metadata[key];
+      if (typeof value === "string") metadata[key] = ids.get(value) ?? value;
+    }
+  return copied;
 }
 
 function attachmentAppServerError(error: unknown): Error {
@@ -5884,6 +6087,9 @@ async function generateContextCompactionSummary(options: {
   summaryInstruction: string;
   inputTokenBudget: number | null;
   signal: AbortSignal;
+  stream(
+    messages: ModelMessage[],
+  ): AsyncIterable<import("./model.js").ModelEvent>;
 }): Promise<{
   text: string;
   tokenUsage: { inputTokens: number; outputTokens: number };
@@ -5897,8 +6103,7 @@ async function generateContextCompactionSummary(options: {
   const chunks = contextCompactionSummaryChunks(
     options.messages,
     options.summaryInstruction,
-    options.inputTokenBudget -
-      estimateModelInput([], [], options.adapter.contextInstructions).total,
+    options.inputTokenBudget,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
@@ -5908,23 +6113,9 @@ async function generateContextCompactionSummary(options: {
       let text = "";
       const messages: ModelMessage[] = [
         ...chunk,
-        { role: "user", text: options.summaryInstruction },
+        { role: "developer", text: options.summaryInstruction },
       ];
-      for await (const event of options.adapter.stream({
-        debugContext: {
-          threadId: options.debugThreadId,
-          purpose: "compaction",
-          turnId: null,
-          sampleId: randomUUID(),
-          contextBoundaryItemId: options.debugBoundaryItemId,
-          sampleAttempt: 1,
-        },
-        model: options.model,
-        reasoningEffort: options.reasoningEffort,
-        messages,
-        tools: [],
-        signal: options.signal,
-      })) {
+      for await (const event of options.stream(messages)) {
         options.signal.throwIfAborted();
         if (event.type === "text_delta") {
           text += event.delta;

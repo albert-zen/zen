@@ -40,8 +40,12 @@ export function fixture(
               request.messages.some(
                 (m) =>
                   m.role === "user" &&
-                  ("content" in m ? textFromUserInput(m.content) : m.text) ===
-                    "source",
+                  ("content" in m
+                    ? m.content.some(
+                        (part) =>
+                          part.type === "text" && part.text === "source",
+                      )
+                    : m.text === "source"),
               )
             ) {
               if (!request.messages.some((m) => m.role === "tool"))

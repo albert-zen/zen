@@ -226,6 +226,7 @@ test("instance bridge keeps equal tab IDs and pending commands local to Chrome a
       const run = async (name: string, arguments_: Record<string, unknown>) => {
         const signal = new AbortController().signal;
         const prepared = environment.prepare({
+          trustedPluginUi: true,
           name,
           arguments: { sessionId: "agent", ...arguments_ },
           callId: name,

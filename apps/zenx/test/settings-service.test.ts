@@ -2777,3 +2777,64 @@ test("external applications persist independently and concurrent choices do not 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("explicit Responses profile persists without probing and discovery targets only GET models", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-responses-protocol-"),
+  );
+  let requests: string[] = [];
+  try {
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault: new ZenXCredentialVault(
+        path.join(directory, "credentials.vault"),
+        encryption,
+      ),
+      subscription: inactiveSubscription(),
+      providerFetchFactory: () => async (url, init) => {
+        assert.equal(init?.method, "GET");
+        requests.push(String(url));
+        return Response.json({ data: [{ id: "responses-model" }] });
+      },
+    });
+    await service.initialize({});
+    const provider = compatibleProfile("responses").providerProfiles[0]!;
+    if (provider.type !== "openai-compatible") throw new Error("fixture");
+    await service.addProviderProfile(
+      {
+        ...provider,
+        protocol: "responses",
+        baseUrl: "https://synthetic.invalid/v1/responses",
+      },
+      "synthetic-key",
+    );
+    assert.equal(
+      requests.length,
+      0,
+      "saving never probes or silently infers a transport",
+    );
+    await service.discoverProviderModels("responses");
+    assert.deepEqual(requests, ["https://synthetic.invalid/v1/models"]);
+    const current = (
+      await service.publicSettings()
+    ).profile.providerProfiles.find(
+      (p) => p.providerProfileId === "responses",
+    )!;
+    assert.equal(current.type, "openai-compatible");
+    if (current.type !== "openai-compatible") throw new Error("fixture");
+    assert.equal(current.protocol, "responses");
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    const reloaded = (
+      await restarted.publicSettings()
+    ).profile.providerProfiles.find(
+      (p) => p.providerProfileId === "responses",
+    )!;
+    assert.equal(reloaded.type, "openai-compatible");
+    if (reloaded.type === "openai-compatible")
+      assert.equal(reloaded.protocol, "responses");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

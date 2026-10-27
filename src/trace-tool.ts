@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { serialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
 import { open } from "node:fs/promises";
 import type { AttachmentStore } from "./attachment.js";
 import {
@@ -207,8 +207,13 @@ export function createToolTraceCapture(
     async recordResult(result, layer) {
       observed = true;
       try {
-        if (streams.has("task-output")) await sink.end("task-output", true);
-        await sink.flush();
+        // Snapshot the observed value and Host-only spool metadata before the first await.
+        const originalCapture =
+          result && typeof result === "object"
+            ? capturedToolOutput(result as ToolExecutionResult)
+            : undefined;
+        const captured =
+          originalCapture === undefined ? undefined : { ...originalCapture };
         const artifacts: TraceArtifactInput[] = [];
         let error: string | undefined = [...streams.values()].some(
           (state) => state.loss,
@@ -216,9 +221,11 @@ export function createToolTraceCapture(
           ? "One or more output byte ranges were not retained"
           : undefined;
         try {
+          const raw = serialize(result);
+          result = deserialize(raw);
           artifacts.push({
             name: "raw_result",
-            bytes: serialize(result),
+            bytes: raw,
             mediaType: "application/vnd.node.v8",
             captureLayer: "tool-returned-js-value",
           });
@@ -235,6 +242,10 @@ export function createToolTraceCapture(
             captureLayer: "javascript-inspection-not-lossless",
           });
         }
+        if (streams.has("task-output")) await sink.end("task-output", true);
+        await sink.flush();
+        if ([...streams.values()].some((state) => state.loss))
+          error ??= "One or more output byte ranges were not retained";
         if (result && typeof result === "object") {
           const typed = result as ToolExecutionResult;
           // Portable projection is a viewer aid; raw_result preserves other fields and non-JSON values.
@@ -248,7 +259,6 @@ export function createToolTraceCapture(
           } catch {
             /* Raw V8 artifact remains the observed value. */
           }
-          const captured = capturedToolOutput(typed);
           if (captured && streams.size === 0) {
             if (captured.path) {
               let file;

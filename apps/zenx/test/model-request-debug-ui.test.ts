@@ -355,3 +355,71 @@ test("all-local title scope and original tool artifacts are explicit", async () 
       "exact-tool-output",
     );
   }));
+
+test("changing artifact identity never labels old bytes as the newly selected artifact while reading", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const { trace, store } = await fixture();
+    await trace.record({
+      threadId: "synthetic-thread",
+      type: "tool_result",
+      data: { model: "two-artifact-record" },
+      artifacts: [
+        { name: "first", bytes: "first artifact original" },
+        { name: "second", bytes: "second artifact original" },
+      ],
+    });
+    let release: (() => void) | undefined;
+    connect(async (input) => {
+      if (input.action === "read" && input.artifactIndex === 1)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      return store.control(input);
+    });
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
+      ),
+    );
+    await settle();
+    const evidence = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Evidence"]',
+    )!;
+    await act(async () => {
+      evidence.value = "events";
+      evidence.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    await settle();
+    await click("two-artifact-record");
+    await click("Original artifact");
+    assert.equal(
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      "first artifact original",
+    );
+    const select = document.querySelector<HTMLSelectElement>(
+      'select[aria-label="Artifact"]',
+    )!;
+    await act(async () => {
+      select.value = "1";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    assert(release);
+    assert.equal(document.querySelector(".trace-inspector-payload"), null);
+    assert.match(
+      document.querySelector(".trace-inspector-detail")!.textContent!,
+      /Reading/u,
+    );
+    await act(async () => release!());
+    await settle();
+    assert.equal(
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      "second artifact original",
+    );
+    assert.equal(
+      document.querySelector<HTMLSelectElement>(
+        'select[aria-label="Artifact"]',
+      )!.value,
+      "1",
+    );
+  }));

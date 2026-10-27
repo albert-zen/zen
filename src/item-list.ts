@@ -1,3 +1,4 @@
+import { bindModelMediaOrigin } from "./model-media-origin.js";
 import {
   validateUserInput,
   validateOpaqueReplayProvenance,
@@ -142,6 +143,7 @@ const metadataKeys = new Set([
   "generatedReference",
   "reasoningSummaryOnly",
   "mediaOccurrence",
+  "omittedMedia",
 ]);
 
 /** Strict at the writer boundary: unknown runtime variants/fields cannot leak into ItemList. */
@@ -175,6 +177,24 @@ export function decodeContextItem(value: unknown): ContextItem {
     for (const key of Object.keys(metadata))
       if (!metadataKeys.has(key))
         throw new Error(`Nonsemantic source metadata: ${key}`);
+    if (metadata.omittedMedia !== undefined) {
+      if (!Array.isArray(metadata.omittedMedia))
+        throw Error("Invalid semantic media selection");
+      for (const raw of metadata.omittedMedia) {
+        const entry = record(raw, "omittedMedia");
+        keys(entry, ["itemId", "field", "partIndex", "sha256"], "omittedMedia");
+        string(entry.itemId, "itemId", false);
+        if (entry.field !== "content" && entry.field !== "modelContent")
+          throw Error("Invalid media field");
+        if (
+          !Number.isSafeInteger(entry.partIndex) ||
+          Number(entry.partIndex) < 0 ||
+          typeof entry.sha256 !== "string" ||
+          !/^[a-f0-9]{64}$/.test(entry.sha256)
+        )
+          throw Error("Invalid media occurrence");
+      }
+    }
     json(metadata, "source.metadata");
   }
   const content = record(item.content, "content");
@@ -362,14 +382,55 @@ export function compileItemList(
       !replaceableSources.has(item.source.kind) ||
       latestSources.get(item.source.kind) === item,
   );
+  selected = orderSteeredContext(selected);
   const selectedItemIds: string[] = [];
   const supportedMedia = new Set(
     options.inputModalities ?? ["text", "image", "audio"],
   );
-  const projectParts = (content: UserInput) =>
-    content.filter(
-      (part) => part.type === "text" || supportedMedia.has(part.type),
-    );
+  const occurrenceKey = (value: unknown) => {
+    const entry = value as {
+      itemId: string;
+      field: string;
+      partIndex: number;
+      sha256: string;
+    };
+    return JSON.stringify([
+      entry.itemId,
+      entry.field,
+      entry.partIndex,
+      entry.sha256,
+    ]);
+  };
+  const omitted = new Set(
+    selected.flatMap((item) =>
+      Array.isArray(item.source.metadata?.omittedMedia)
+        ? item.source.metadata.omittedMedia.map(occurrenceKey)
+        : [],
+    ),
+  );
+  const projectParts = (item: ContextItem, content: UserInput): UserInput =>
+    content.flatMap<UserInput[number]>((part, index) => {
+      if (part.type === "text") return [structuredClone(part)];
+      const origin = {
+        itemId: item.id,
+        field:
+          item.kind === "tool_result"
+            ? ("modelContent" as const)
+            : ("content" as const),
+        partIndex:
+          index -
+          (item.kind === "message" &&
+          typeof item.source.metadata?.bodyStart === "number"
+            ? item.source.metadata.bodyStart
+            : 0),
+        sha256: part.attachment.sha256,
+      };
+      if (!supportedMedia.has(part.type) || omitted.has(occurrenceKey(origin)))
+        return [];
+      const projected = structuredClone(part);
+      bindModelMediaOrigin(projected, origin);
+      return [projected];
+    });
   const messages: ModelMessage[] = [];
   let tools: ModelTool[] = [];
   for (const item of selected) {
@@ -378,7 +439,7 @@ export function compileItemList(
         if (item.role === "user")
           messages.push({
             role: "user",
-            content: structuredClone(projectParts(item.content.parts)),
+            content: projectParts(item, item.content.parts),
           });
         else if (item.role === "assistant")
           messages.push({ role: "assistant", text: item.content.text });
@@ -403,7 +464,7 @@ export function compileItemList(
           ...(item.content.parts === undefined
             ? {}
             : {
-                modelContent: structuredClone(projectParts(item.content.parts)),
+                modelContent: projectParts(item, item.content.parts),
               }),
         });
         break;
@@ -529,3 +590,58 @@ export {
   legacyItemFromContext,
   contextAnnotationFromLegacy,
 } from "./item-list-legacy.js";
+
+/** Select original persisted user contents after their observed assistant/tool boundary. */
+function orderSteeredContext(items: readonly ContextItem[]): ContextItem[] {
+  const normal: Array<{ item: ContextItem; index: number }> = [];
+  const pending: Array<{ item: ContextItem; index: number; anchor: string }> =
+    [];
+  for (const [index, item] of items.entries()) {
+    const anchor = item.source.metadata?.deliveryAfter;
+    if (
+      item.kind === "message" &&
+      item.role === "user" &&
+      typeof anchor === "string"
+    )
+      pending.push({ item, index, anchor });
+    else normal.push({ item, index });
+  }
+  if (pending.length === 0) return [...items];
+  const boundaries = new Map<string, number>();
+  const calls = new Map<string, string>();
+  for (const [index, { item }] of normal.entries()) {
+    boundaries.set(item.id, index);
+    if (item.kind === "tool_call") {
+      const response = item.source.metadata?.modelResponseId;
+      if (typeof response === "string") {
+        boundaries.set(response, index);
+        calls.set(`${item.turnId}\0${item.content.callId}`, response);
+      }
+    }
+    if (item.kind === "tool_result") {
+      const response = calls.get(`${item.turnId}\0${item.content.callId}`);
+      if (response !== undefined) boundaries.set(response, index);
+    }
+  }
+  const after = new Map<number, ContextItem[]>();
+  const before = new Map<number, ContextItem[]>();
+  for (const entry of pending) {
+    const position = boundaries.get(entry.anchor);
+    const target =
+      position === undefined
+        ? normal.findIndex((item) => item.index > entry.index)
+        : position;
+    const map = position === undefined ? before : after;
+    const key = target < 0 ? normal.length : target;
+    const values = map.get(key) ?? [];
+    values.push(entry.item);
+    map.set(key, values);
+  }
+  return normal
+    .flatMap(({ item }, index) => [
+      ...(before.get(index) ?? []),
+      item,
+      ...(after.get(index) ?? []),
+    ])
+    .concat(before.get(normal.length) ?? []);
+}

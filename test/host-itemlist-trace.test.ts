@@ -184,3 +184,184 @@ test("actual Host logs source facts before semantic compile/dispatch and restart
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Host constructor failure releases writer ownership before immediate retry", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-host-construction-"),
+  );
+  const options: ZenHostOptions = {
+    toolPresentation: "direct",
+    approvalPolicy: "never",
+    cwd: directory,
+    dataDirectory: directory,
+    model: "synthetic",
+    provider: { type: "fake" },
+    modelCatalog: [{ id: "synthetic", isDefault: true, contextWindow: 32768 }],
+  };
+  try {
+    assert.throws(
+      () =>
+        createHostedAppServer({
+          ...options,
+          defaultSelection: {
+            providerProfileId: "missing",
+            modelId: "missing",
+          },
+        }),
+      /absent|Unknown/,
+    );
+    const host = createHostedAppServer(options);
+    try {
+      assert.ok((await host.startThread()).id);
+    } finally {
+      await host.closeHostResources();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("fork persists exact compiled source contents and tool definitions across restart", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-frozen-fork-"));
+  const options: ZenHostOptions = {
+    cwd: directory,
+    dataDirectory: directory,
+    model: "fake",
+    provider: { type: "fake" },
+    approvalPolicy: "never",
+    toolPresentation: "direct",
+  };
+  const host = createHostedAppServer(options);
+  try {
+    const parent = await host.startThread();
+    await (
+      await host.startTurn(parent.id, "literal parent text")
+    ).done;
+    const source = await host.readThread(parent.id);
+    const fork = await host.forkThread({
+      sourceThreadId: parent.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    assert.equal(fork.itemList?.length, source.itemList?.length);
+    assert.deepEqual(
+      fork.itemList?.map((item) => item.content),
+      source.itemList?.map((item) => item.content),
+    );
+    assert.ok(fork.itemList?.some((item) => item.kind === "tools"));
+    await host.closeHostResources();
+    const cold = createHostedAppServer(options);
+    try {
+      assert.deepEqual(
+        (await cold.readThread(fork.id)).itemList,
+        fork.itemList,
+      );
+    } finally {
+      await cold.closeHostResources();
+    }
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("manual compaction samples a durable semantic bundle and never rewrites original fact history", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-compaction-source-"));
+  const originalFetch = globalThis.fetch;
+  let summaryCalls = 0;
+  const options: ZenHostOptions = {
+    cwd: root,
+    dataDirectory: root,
+    provider: {
+      type: "openai-compatible",
+      baseUrl: "https://synthetic.invalid/v1",
+      apiKey: "synthetic",
+    },
+    model: "synthetic",
+    modelCatalog: [
+      {
+        id: "synthetic",
+        isDefault: true,
+        contextWindow: 32768,
+        inputModalities: ["text"],
+      },
+    ],
+    approvalPolicy: "never",
+    toolPresentation: "direct",
+  };
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const messages = body.messages as Array<{ role: string; content: unknown }>;
+    const summary = messages.some(
+      (message) =>
+        message.role === "developer" &&
+        String(message.content).includes("ZEN_CONTEXT_COMPACTION_V1"),
+    );
+    if (summary) {
+      summaryCalls++;
+      const trace = new FileTraceStore(path.join(root, "trace"));
+      const owners = (await trace.listThreadIds()).filter((id) =>
+        id.startsWith("auxiliary-"),
+      );
+      assert.equal(owners.length, 1);
+      const items = (
+        await readFile(
+          path.join(root, "context-bundles", `${owners[0]}.jsonl`),
+          "utf8",
+        )
+      )
+        .trim()
+        .split("\n")
+        .map((line) => decodeContextItem(JSON.parse(line)));
+      assert.ok(
+        items.some(
+          (item) =>
+            item.kind === "message" &&
+            item.role === "developer" &&
+            item.content.text.includes("ZEN_CONTEXT_COMPACTION_V1"),
+        ),
+      );
+      assert.ok(
+        (await trace.read(owners[0]!)).records.some(
+          (record) => record.type === "context_source",
+        ),
+      );
+    }
+    return response({
+      content: summary ? "retained exact summary" : "accepted answer",
+    });
+  };
+  const host = createHostedAppServer(options);
+  try {
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(thread.id, "original source")
+    ).done;
+    const before = (await host.readThread(thread.id)).items;
+    await host.compactThread(thread.id, { includeOriginalReference: false });
+    const after = await host.readThread(thread.id);
+    assert.equal(summaryCalls, 1);
+    assert.deepEqual(after.items.slice(0, before.length), before);
+    assert.ok(
+      after.itemList?.some(
+        (item) =>
+          item.kind === "selection" &&
+          item.content.text.includes("retained exact summary"),
+      ),
+    );
+    await host.closeHostResources();
+    const cold = createHostedAppServer(options);
+    try {
+      assert.deepEqual(
+        (await cold.readThread(thread.id)).itemList,
+        after.itemList,
+      );
+    } finally {
+      await cold.closeHostResources();
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    await host.closeHostResources();
+    await rm(root, { recursive: true, force: true });
+  }
+});

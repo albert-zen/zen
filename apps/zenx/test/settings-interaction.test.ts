@@ -4268,3 +4268,86 @@ for (const resolveBeforeSave of [false, true]) {
     }
   });
 }
+
+test("compatible protocol defaults to Chat, changes only explicitly, persists through edit, and never probes automatically", async () => {
+  let edited: ZenXProviderProfile | undefined,
+    discovers = 0,
+    probes = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    editProvider: async (_id, provider) => {
+      edited = provider;
+      return {
+        ...multiProviderSettings,
+        profile: {
+          ...multiProviderSettings.profile,
+          providerProfiles: multiProviderSettings.profile.providerProfiles.map(
+            (p) =>
+              p.providerProfileId === provider.providerProfileId ? provider : p,
+          ),
+        },
+      };
+    },
+    discoverProvider: async () => {
+      discovers++;
+      throw new Error("No automatic discovery");
+    },
+    probeProviderImage: async () => {
+      probes++;
+      throw new Error("No automatic probe");
+    },
+  });
+  try {
+    await click(await waitFor(() => labeledButton("Edit Alpha")));
+    const protocol = (await labeledSelect("API protocol"))!;
+    assert.equal(protocol.value, "chat-completions");
+    await changeControl(protocol, "responses");
+    assert.equal((await labeledSelect("API protocol"))!.value, "responses");
+    assert.equal(discovers, 0);
+    assert.equal(probes, 0);
+    assert.match(document.body.textContent!, /no automatic probe or fallback/u);
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => edited);
+    assert.equal(edited!.type, "openai-compatible");
+    assert.equal(
+      (edited as Extract<ZenXProviderProfile, { type: "openai-compatible" }>)
+        .protocol,
+      "responses",
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("changing protocol retires an in-flight discovery identity and stale results cannot populate the new editor", async () => {
+  let finish: ((value: ZenXProviderCatalogSnapshot) => void) | undefined;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    discoverProvider: async () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  });
+  try {
+    await click(await waitFor(() => labeledButton("Edit Alpha")));
+    await click(exactButtonRequired("Get available models"));
+    await waitFor(() => finish);
+    await changeControl((await labeledSelect("API protocol"))!, "responses");
+    await act(async () =>
+      finish!({
+        providerProfileId: "profile-alpha",
+        models: [
+          {
+            ...multiProviderSettings.profile.providerProfiles[0]!.models[0]!,
+            id: "stale-chat-model",
+            displayName: "Stale Chat discovery",
+          },
+        ],
+      } as ZenXProviderCatalogSnapshot),
+    );
+    assert(!document.body.textContent!.includes("Stale Chat discovery"));
+    assert.equal((await labeledSelect("API protocol"))!.value, "responses");
+  } finally {
+    await unmount(harness);
+  }
+});

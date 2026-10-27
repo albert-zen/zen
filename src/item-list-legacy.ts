@@ -38,7 +38,7 @@ export function contextItemsFromLegacy(
   item: CanonicalItem,
   previous: readonly CanonicalItem[] = [],
   sequence = previous.length,
-  _existingContext: readonly ContextItem[] = [],
+  existingContext: readonly ContextItem[] = [],
 ): ContextItem[] {
   const metadata: Record<string, JsonValue> = {};
   const raw = item as unknown as Record<string, JsonValue>;
@@ -188,13 +188,22 @@ export function contextItemsFromLegacy(
       ];
     }
     case "context_compaction": {
-      const coveredSequence = previous.findIndex(
+      const coveredIndex = previous.findIndex(
         (candidate) => candidate.id === item.coveredThroughItemId,
       );
-      if (coveredSequence < 0)
+      if (coveredIndex < 0)
         throw new Error(
           `Context compaction boundary does not exist: ${item.coveredThroughItemId}`,
         );
+      const coveredIds = new Set(
+        previous.slice(0, coveredIndex + 1).map((candidate) => candidate.id),
+      );
+      const coveredSequence = Math.max(
+        coveredIndex,
+        ...existingContext
+          .filter((candidate) => coveredIds.has(candidate.id))
+          .map((candidate) => candidate.source.sequence),
+      );
       for (const id of item.retainedItemIds)
         if (!previous.some((candidate) => candidate.id === id))
           throw new Error(`Retained context Item does not exist: ${id}`);

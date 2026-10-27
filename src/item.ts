@@ -476,10 +476,10 @@ export interface ToolResultItem extends ItemBase {
   turnId: string;
   callId: string;
   output: string;
-  /** null is reserved for imported historical observations with unknown outcome. */
+  /** null denotes an explicit unknown outcome, including imported observations. */
   exitCode: number | null;
   /** Runtime-owned execution fact; absent on legacy Items. */
-  executionStatus?: "completed" | "failed" | "declined";
+  executionStatus?: "completed" | "failed" | "declined" | "unknown";
   /** Optional provider-neutral data for product rendering; absent on legacy Items. */
   contentType?: string;
   structuredContent?: JsonValue;
@@ -1235,8 +1235,9 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireString(item.output, `${type}.output`);
       if (item.exitCode === null) {
         if (
-          item.contentType !== IMPORTED_TOOL_RESULT_CONTENT_TYPE ||
-          item.executionStatus !== undefined
+          item.executionStatus !== "unknown" &&
+          (item.contentType !== IMPORTED_TOOL_RESULT_CONTENT_TYPE ||
+            item.executionStatus !== undefined)
         )
           throw new Error(
             "Unknown exit status requires an imported historical result",
@@ -1245,7 +1246,7 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       if (item.executionStatus !== undefined) {
         requireEnum(
           item.executionStatus,
-          ["completed", "failed", "declined"],
+          ["completed", "failed", "declined", "unknown"],
           `${type}.executionStatus`,
         );
       }

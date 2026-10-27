@@ -85,6 +85,12 @@ export async function programToolResult(result: ToolExecutionResult): Promise<
   info.complete = output !== null;
   const diagnostic = toolOutputSuffix(result);
   const { referenceBindings: _hostOnlyReferences, ...programResult } = result;
+  // Reserved first-party discovery authority is a Host-only annotation, not program data.
+  // Never recursively rewrite user output or arbitrary structured JSON fields.
+  if (result.contentType === "zen/fleet-tool-catalog-disclosure") {
+    delete programResult.contentType;
+    delete programResult.structuredContent;
+  }
   return {
     ...programResult,
     output,
