@@ -111,8 +111,17 @@ test(
         }
       }
       child.stdin.write('{"tool":"exit"}\n');
-      child.stdin.end();
-      const code = await closed;
+      // The explicit exit request must work while an interactive caller keeps stdin open.
+      let exitTimer: ReturnType<typeof setTimeout> | undefined;
+      const code = await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => {
+          exitTimer = setTimeout(
+            () => reject(new Error("Runner did not close after exit request")),
+            10_000,
+          );
+        }),
+      ]).finally(() => clearTimeout(exitTimer));
       assert.equal(code, 0, stderr);
     } finally {
       if (child.exitCode === null) child.kill();

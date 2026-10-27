@@ -203,6 +203,9 @@ try {
   print({ fatal: error instanceof Error ? error.message : String(error) });
   process.exitCode = 1;
 } finally {
+  // An interactive caller may keep its terminal open after the explicit exit request.
+  // Stop owning stdin while native cleanup below is still awaited.
+  process.stdin.destroy();
   controller.abort();
   await computer?.close();
   if (fixture && !fixtureEnded) {
