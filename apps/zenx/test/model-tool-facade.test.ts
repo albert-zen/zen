@@ -15,7 +15,10 @@ import {
   type ZenXComputerBackend,
   type ComputerControlSelector,
 } from "../src/main/capabilities/computer-provider.js";
-import { ComputerTargetSession } from "../src/main/capabilities/computer-target-session.js";
+import {
+  ComputerTargetSession,
+  type BoundComputerTarget,
+} from "../src/main/capabilities/computer-target-session.js";
 import { invokeModelToolFacade } from "../src/main/capabilities/model-tool-facade.js";
 const UUID = "d7f5f6b1-44d2-4b36-9c49-1171700cc9b3",
   THREAD = "thread-" + UUID,
@@ -236,17 +239,24 @@ test("native capture and binding refs preserve exact pair and revoked foreground
     applicationName: "Synthetic",
     windowTitle: "Window",
   };
+  let binding: BoundComputerTarget | undefined;
   const session = new ComputerTargetSession({
     request: async (input) => {
-      if (input.operation === "select")
-        return {
+      if (input.operation === "select") {
+        binding = {
           bindingId: `binding-${++selected}-${UUID}`,
           target,
           windowId: 7,
           bounds: { x: 0, y: 0, width: 100, height: 100 },
         };
-      if (input.operation === "click") posted++;
-      return {};
+        return binding;
+      }
+      assert(binding);
+      assert.equal(input.bindingId, binding.bindingId);
+      if (input.operation === "verify") return binding;
+      assert.equal(input.operation, "click");
+      posted++;
+      return { dispatch: "posted", applicationEffect: "unverified" };
     },
     close: async () => {},
   });
@@ -275,6 +285,7 @@ test("native capture and binding refs preserve exact pair and revoked foreground
     }),
     /current.*captureId/,
   );
+  assert.equal(posted, 0);
   await app.call("computer_foreground_click", {
     capture: fresh.capture,
     x: 10,
@@ -289,6 +300,7 @@ test("native capture and binding refs preserve exact pair and revoked foreground
     }),
     /enable Foreground/,
   );
+  assert.equal(posted, 1);
 });
 test("failed raw outcomes and literal UUID text remain exact with resolved input provenance", async () => {
   const registry = new ModelReferenceRegistry(),

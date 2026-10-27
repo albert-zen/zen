@@ -6,6 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { ZenAppServer, type AppServerEvent } from "../../../src/app-server.js";
+import { contentFromUserMessage } from "../../../src/item.js";
 import { InMemoryThreadJournal } from "../../../src/journal.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import type {
@@ -100,17 +101,16 @@ class DeferredModel implements ModelAdapter {
     const lastUser = request.messages
       .filter((message) => message.role === "user")
       .at(-1);
-    const text =
-      lastUser === undefined
-        ? ""
-        : "text" in lastUser
-          ? lastUser.text
-          : "content" in lastUser
-            ? lastUser.content
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
-                .join("\n")
-            : "";
+    assert(lastUser && "content" in lastUser);
+    // Receipt metadata is its own semantic part, not the original IM body.
+    // Echo only the body; keep the routing assertions below exact.
+    const [receipt, ...input] = lastUser.content;
+    assert(receipt?.type === "text");
+    assert.match(receipt.text, /^\[Message received at [^\]\n]+\]$/);
+    const text = input
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
     if (
       request.messages.at(-1)?.role === "user" &&
       text.includes("needs-approval")
@@ -712,6 +712,37 @@ test(
       );
       assert.equal(started.length, 2);
       for (const item of started) await h.completed(item.turnId);
+      const users = canonical.items.filter(
+        (item) => item.type === "user_message",
+      );
+      assert.deepEqual(users.map(contentFromUserMessage), [
+        [{ type: "text", text: "paw-private-first" }],
+        [{ type: "text", text: "paw-private-last" }],
+      ]);
+      assert.deepEqual(
+        h.model.requests.map((request) =>
+          request.messages.findLast((message) => message.role === "user"),
+        ),
+        users.map((user) => {
+          const queued = canonical.items.find(
+            (item) =>
+              item.type === "user_message_queued" &&
+              item.clientId === user.clientId,
+          );
+          assert(queued?.type === "user_message_queued");
+          assert.deepEqual(queued.input, contentFromUserMessage(user));
+          return {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `[Message received at ${queued.createdAt}]`,
+              },
+              ...queued.input,
+            ],
+          };
+        }),
+      );
       const final = await h.probe.command({ action: "snapshot" });
       assert(
         final.deliveries.some(

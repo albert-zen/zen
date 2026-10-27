@@ -567,6 +567,7 @@ test("stopping a terminal closes its foreground fixture process", async () => {
 test("manual Shell dispatch is fenced against an in-flight permission downgrade", async () => {
   const { createHostedAppServer } = await import("../../cli/src/host.js");
   const { InMemoryThreadJournal } = await import("../../../src/journal.js");
+  const { FileTraceStore } = await import("../../../src/trace.js");
   const directory = await mkdtemp(path.join(os.tmpdir(), "zen-shell-fence-"));
   let releaseCommit!: () => void;
   const commitGate = new Promise<void>((resolve) => {
@@ -629,8 +630,18 @@ test("manual Shell dispatch is fenced against an in-flight permission downgrade"
     assert.equal((await app.readThread(thread.id)).sandbox, "read-only");
   } finally {
     releaseCommit();
-    await tools.close();
-    await app.closeRuntimeConfiguration();
+    // This is a hosted app, not a bare AppServer. Its startup configuration
+    // observation must drain before the fixture removes the Trace directory.
+    await app.closeHostResources();
+    const startup = await new FileTraceStore(
+      path.join(directory, "trace"),
+    ).read(`configuration-${app.processEpoch}`);
+    assert.equal(startup.completeness, "complete");
+    assert.ok(
+      startup.records.some(
+        (record) => record.type === "host_configuration_observed",
+      ),
+    );
     await rm(directory, {
       recursive: true,
       force: true,

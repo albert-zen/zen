@@ -11,7 +11,7 @@ import {
 import type { SidebarOwner } from "../thread-sidebar-state.js";
 import { ThreadSidebarStore } from "./thread-sidebar-store.js";
 import { FileTraceStore } from "../../../../src/trace.js";
-import { createModelRequestDebugHandler } from "./model-request-debug-ipc.js";
+import { installModelRequestDebugIpc } from "./model-request-debug-electron.js";
 import { ForegroundActivity } from "./foreground-activity.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
 import {
@@ -439,27 +439,17 @@ async function bootstrapZenX(): Promise<void> {
     for (const window of appWindows())
       window.webContents.send(ipcChannels.threadSidebarChanged, state);
   });
-  ipcMain.handle(
-    ipcChannels.modelRequestDebug,
-    createModelRequestDebugHandler<Electron.IpcMainInvokeEvent>({
-      rendererUrl:
-        process.env["ELECTRON_RENDERER_URL"] ??
-        pathToFileURL(join(__dirname, "../renderer/index.html")).href,
-      sender(event) {
-        const window = BrowserWindow.fromWebContents(event.sender);
-        return {
-          ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
-          mainFrame: event.senderFrame === event.sender.mainFrame,
-          url: event.senderFrame?.url ?? "",
-        };
-      },
-      async read(command) {
-        if (appServerManager === undefined)
-          throw new Error("Local Host unavailable");
-        return appServerManager.modelRequestDebug(command);
-      },
-    }),
-  );
+  installModelRequestDebugIpc({
+    rendererUrl:
+      process.env["ELECTRON_RENDERER_URL"] ??
+      pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+    ownedWindowIds: ownedAppWindowIds,
+    async read(command) {
+      if (appServerManager === undefined)
+        throw new Error("Local Host unavailable");
+      return appServerManager.modelRequestDebug(command);
+    },
+  });
   ipcMain.handle(ipcChannels.skillsList, () => skills.list());
   ipcMain.handle(ipcChannels.skillsImport, (_event, directory: unknown) => {
     if (typeof directory !== "string")
