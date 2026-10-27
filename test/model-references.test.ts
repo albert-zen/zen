@@ -124,3 +124,24 @@ test("producer exact publication budget never limits consumed refs or aggregated
   );
   assert.equal(tooLarge.newBindings.length, 0);
 });
+
+test("history cache rejects malformed provenance before any alias can resolve", () => {
+  const registry = new ModelReferenceRegistry();
+  assert.throws(
+    () =>
+      registry.scope("one", [
+        {
+          ref: "r1",
+          ownerThreadId: "one",
+          namespace: "threads",
+          kind: "thread",
+          value: undefined,
+        },
+      ] as never),
+    /Invalid model reference binding/,
+  );
+  assert.equal(
+    registry.scope("one").bind("threads", "thread", { id: "native" }),
+    "r1",
+  );
+});

@@ -110,7 +110,10 @@ export class ModelReferenceRegistry {
       state = { next: 1, bindings: new Map(), identities: new Map() };
       this.#owners.set(ownerThreadId, state);
     }
-    for (const binding of history) {
+    for (const source of history) {
+      // History may repeat exact bindings across independent receipts. Validate
+      // each source shape without imposing a late aggregate or duplicate cap.
+      const binding = validateModelReferenceBindings([source])[0]!;
       const index = REF.test(binding.ref) ? Number(binding.ref.slice(1)) : NaN;
       if (!Number.isSafeInteger(index))
         throw Error("Invalid reference provenance");

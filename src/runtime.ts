@@ -206,6 +206,11 @@ export interface RunTurnOptions {
     agenticCompaction: boolean;
   }) => Promise<void>;
   requestApproval?: ApprovalHandler;
+  /** Final live authority fence after all approvals/waits; launch must be synchronous. */
+  dispatchTool?: (
+    call: ToolCallItem,
+    launch: () => Promise<ToolExecutionResult>,
+  ) => Promise<ToolExecutionResult>;
 }
 
 export type ToolDefinitionProjection = (
@@ -1620,20 +1625,25 @@ export class AgentRuntime {
       run: async (): Promise<ScheduledToolOutcome> => {
         let outcome: ScheduledToolOutcome;
         try {
-          const operation = this.#tools.execute(
-            prepared,
-            this.#nestedPort(
-              turnId,
-              toolCall,
+          const launch = () =>
+            this.#tools.execute(
               prepared,
-              options,
-              execution.signal,
-              scheduler,
-              execution.nestedToolNames,
-              execution.codeTools,
-            ),
-            options.configuration.inputModalities,
-          );
+              this.#nestedPort(
+                turnId,
+                toolCall,
+                prepared,
+                options,
+                execution.signal,
+                scheduler,
+                execution.nestedToolNames,
+                execution.codeTools,
+              ),
+              options.configuration.inputModalities,
+            );
+          const operation =
+            options.dispatchTool === undefined
+              ? launch()
+              : options.dispatchTool(toolCall, launch);
           // The task manager bounds cancellation and owns the partial-output
           // receipt. Racing it here would discard its live wait handle.
           const result = await operation;

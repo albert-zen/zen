@@ -109,10 +109,22 @@
           },
           "text": {
             "type": "string"
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Exact Thread identity; alternative to semantic target."
           }
         },
-        "required": ["target", "text"],
-        "additionalProperties": false
+        "required": ["text"],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": ["zenx-subagents.write"],
       "interactionMode": "background_safe",
@@ -155,10 +167,22 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 25
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Exact Thread identity; alternative to semantic target."
           }
         },
-        "required": ["target"],
-        "additionalProperties": false
+        "required": [],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["target"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
       },
       "permissions": ["zenx-subagents.read"],
       "interactionMode": "background_safe",

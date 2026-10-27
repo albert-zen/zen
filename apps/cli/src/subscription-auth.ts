@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { openSync, fstatSync, readFileSync, closeSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -51,6 +52,8 @@ export interface OAuthCredential {
 }
 
 interface StoredProfile {
+  /** Current authentication session: login rotates it, same-account refresh does not. */
+  sessionId?: string;
   version: 1;
   provider: typeof providerId;
   credential: OAuthCredential;
@@ -63,7 +66,20 @@ export interface OpenAiSubscriptionStatus {
   accountId?: string;
 }
 
+/** Nonsecret observed external-auth facts, not credentials or authority to restore access. */
+export interface SubscriptionSessionEvent {
+  type:
+    | "login"
+    | "logout"
+    | "session_admitted"
+    | "account_changed"
+    | "token_refreshed";
+  sessionId?: string;
+  previousSessionId?: string;
+  accountId?: string;
+}
 export interface OpenAiSubscriptionAuthProfileOptions {
+  onSessionEvent?: (event: SubscriptionSessionEvent) => void | Promise<void>;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   tokenEndpoint?: string;
@@ -83,7 +99,9 @@ export class OpenAiSubscriptionAuthProfile {
     profilePath: string,
     options: OpenAiSubscriptionAuthProfileOptions = {},
   ) {
-    this.#store = new SubscriptionCredentialStore(profilePath);
+    this.#store = new SubscriptionCredentialStore(profilePath, {
+      onSessionEvent: options.onSessionEvent,
+    });
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#now = options.now ?? Date.now;
     this.#tokenEndpoint = options.tokenEndpoint ?? tokenUrl;
@@ -149,7 +167,7 @@ export class OpenAiSubscriptionAuthProfile {
         interaction.signal,
         this.#now,
       );
-      await this.#store.modify(async () => credential, interaction.signal);
+      await this.#store.replace(credential, interaction.signal);
     } finally {
       manualAbort.abort();
       callback?.close();
@@ -177,7 +195,7 @@ export class OpenAiSubscriptionAuthProfile {
     signal: AbortSignal,
   ): Promise<OpenAiSubscriptionAccessLease> {
     signal.throwIfAborted();
-    const credential = await this.#store.modify(async (current) => {
+    const lease = await this.#store.acquireLease(async (current) => {
       if (current === undefined) {
         throw new Error(
           "OpenAI subscription is not authenticated; run `zen auth login`",
@@ -195,12 +213,12 @@ export class OpenAiSubscriptionAuthProfile {
       );
     }, signal);
     signal.throwIfAborted();
-    if (credential === undefined) {
+    if (lease === undefined) {
       throw new Error(
         "OpenAI subscription is not authenticated; run `zen auth login`",
       );
     }
-    return { accessToken: credential.access };
+    return lease;
   }
 
   async renewAccessLease(
@@ -208,7 +226,7 @@ export class OpenAiSubscriptionAuthProfile {
     signal: AbortSignal,
   ): Promise<OpenAiSubscriptionAccessLease> {
     signal.throwIfAborted();
-    const credential = await this.#store.modify(async (current) => {
+    const lease = await this.#store.acquireLease(async (current) => {
       if (current === undefined) {
         throw new Error(
           "OpenAI subscription is not authenticated; run `zen auth login`",
@@ -226,21 +244,27 @@ export class OpenAiSubscriptionAuthProfile {
       );
     }, signal);
     signal.throwIfAborted();
-    if (credential === undefined) {
+    if (lease === undefined) {
       throw new Error(
         "OpenAI subscription is not authenticated; run `zen auth login`",
       );
     }
-    return { accessToken: credential.access };
+    return lease;
   }
 }
 
 export class SubscriptionCredentialStore {
   readonly #profilePath: string;
   #mutationTail: Promise<void> = Promise.resolve();
-
-  constructor(profilePath: string) {
+  readonly #onSessionEvent: OpenAiSubscriptionAuthProfileOptions["onSessionEvent"];
+  constructor(
+    profilePath: string,
+    options: {
+      onSessionEvent?: OpenAiSubscriptionAuthProfileOptions["onSessionEvent"];
+    } = {},
+  ) {
     this.#profilePath = path.resolve(profilePath);
+    this.#onSessionEvent = options.onSessionEvent;
   }
 
   async read(): Promise<OAuthCredential | undefined> {
@@ -253,31 +277,143 @@ export class SubscriptionCredentialStore {
     ) => Promise<OAuthCredential | undefined>,
     signal?: AbortSignal,
   ): Promise<OAuthCredential | undefined> {
-    return await this.#serialize(async () => {
-      return await this.#withProfileLock(async () => {
-        signal?.throwIfAborted();
-        const current = (await this.#readProfile())?.credential;
-        const next = await change(current);
-        if (next === undefined) {
-          return current;
-        }
-        assertOAuthCredential(next);
-        await this.#writeProfile({
-          version: 1,
-          provider: providerId,
-          credential: next,
-        });
-        return next;
-      }, signal);
-    }, signal);
+    return (await this.#modifyProfile(change, signal))?.credential;
+  }
+  /** New login is an explicit admission even when token/account text is identical. */
+  async replace(
+    credential: OAuthCredential,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.#modifyProfile(async () => credential, signal, true);
+  }
+  async acquireLease(
+    change: (
+      current: OAuthCredential | undefined,
+    ) => Promise<OAuthCredential | undefined>,
+    signal?: AbortSignal,
+  ): Promise<OpenAiSubscriptionAccessLease | undefined> {
+    const profile = await this.#modifyProfile(change, signal);
+    if (profile === undefined) return undefined;
+    const sessionId = profile.sessionId!;
+    const accountId = profile.credential.accountId;
+    return {
+      accessToken: profile.credential.access,
+      assertDispatchAllowed: () =>
+        this.#assertCurrentSession(sessionId, accountId),
+    };
+  }
+  async #modifyProfile(
+    change: (
+      current: OAuthCredential | undefined,
+    ) => Promise<OAuthCredential | undefined>,
+    signal?: AbortSignal,
+    newSession = false,
+  ): Promise<StoredProfile | undefined> {
+    return await this.#serialize(
+      async () =>
+        await this.#withProfileLock(async () => {
+          signal?.throwIfAborted();
+          const current = await this.#readProfile();
+          const changed = await change(current?.credential);
+          const credential = changed ?? current?.credential;
+          if (credential === undefined) return undefined;
+          assertOAuthCredential(credential);
+          const sessionId =
+            !newSession &&
+            current?.sessionId !== undefined &&
+            current.credential.accountId === credential.accountId
+              ? current.sessionId
+              : randomUUID();
+          const next: StoredProfile = {
+            version: 1,
+            provider: providerId,
+            sessionId,
+            credential,
+          };
+          if (changed !== undefined || current?.sessionId !== sessionId) {
+            await this.#writeProfile(next);
+            await this.#observeSession({
+              type: newSession
+                ? "login"
+                : current === undefined || current.sessionId === undefined
+                  ? "session_admitted"
+                  : current.credential.accountId !== credential.accountId
+                    ? "account_changed"
+                    : "token_refreshed",
+              sessionId,
+              accountId: credential.accountId,
+              ...(current?.sessionId === undefined
+                ? {}
+                : { previousSessionId: current.sessionId }),
+            });
+          }
+          return next;
+        }, signal),
+      signal,
+    );
+  }
+  #assertCurrentSession(sessionId: string, accountId: string): void {
+    let descriptor: number | undefined;
+    try {
+      // No awaited work between the transport's final guard and fetch invocation.
+      // Independent instances read the actual atomic current file, not a cached token.
+      descriptor = openSync(this.#profilePath, "r");
+      const metadata = fstatSync(descriptor);
+      if (
+        !metadata.isFile() ||
+        metadata.size > 1024 * 1024 ||
+        (process.platform !== "win32" && (metadata.mode & 0o044) !== 0)
+      )
+        throw new Error("Invalid current authentication state");
+      const current = decodeStoredProfile(readFileSync(descriptor, "utf8"));
+      if (
+        current.sessionId !== sessionId ||
+        current.credential.accountId !== accountId
+      )
+        throw new Error("Authentication session changed");
+    } catch {
+      // Never copy credentials, profile content or paths into diagnostics.
+      throw Object.assign(
+        new Error("Subscription authentication session is no longer current"),
+        { retryable: false, modelRecoveryBlocked: true },
+      );
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
   }
 
   async delete(): Promise<void> {
     await this.#serialize(async () => {
       await this.#withProfileLock(async () => {
+        let current: StoredProfile | undefined;
+        try {
+          current = await this.#readProfile();
+        } catch {
+          /* Invalid attribution metadata cannot prevent credential removal. */
+        }
         await removeOptionalFile(this.#profilePath);
+        await syncAuthDirectory(path.dirname(this.#profilePath));
+        await this.#observeSession({
+          type: "logout",
+          ...(current?.sessionId === undefined
+            ? {}
+            : { previousSessionId: current.sessionId }),
+          ...(current === undefined
+            ? {}
+            : { accountId: current.credential.accountId }),
+        });
       });
     });
+  }
+
+  async #observeSession(event: SubscriptionSessionEvent): Promise<void> {
+    try {
+      await this.#onSessionEvent?.(event);
+    } catch {
+      console.error(
+        "Subscription session observation failed; authentication state is unchanged by logging failure",
+      );
+    }
   }
 
   async #serialize<T>(
@@ -329,25 +465,7 @@ export class SubscriptionCredentialStore {
       await handle.close();
     }
 
-    let value: unknown;
-    try {
-      value = JSON.parse(contents);
-    } catch {
-      throw new Error("OpenAI subscription profile is invalid");
-    }
-    if (
-      !isRecord(value) ||
-      value.version !== 1 ||
-      value.provider !== providerId
-    ) {
-      throw new Error("OpenAI subscription profile is invalid");
-    }
-    assertOAuthCredential(value.credential);
-    return {
-      version: 1,
-      provider: providerId,
-      credential: value.credential,
-    };
+    return decodeStoredProfile(contents);
   }
 
   async #withProfileLock<T>(
@@ -406,12 +524,55 @@ export class SubscriptionCredentialStore {
         flag: "wx",
       });
       await restrictPermissions(temporaryPath);
+      const durable = await open(temporaryPath, "r");
+      try {
+        await durable.sync();
+      } finally {
+        await durable.close();
+      }
       await rename(temporaryPath, this.#profilePath);
       await restrictPermissions(this.#profilePath);
+      await syncAuthDirectory(directory);
     } catch (error) {
       await removeOptionalFile(temporaryPath).catch(() => undefined);
       throw error;
     }
+  }
+}
+
+function decodeStoredProfile(contents: string): StoredProfile {
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
+    throw new Error("OpenAI subscription profile is invalid");
+  }
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    value.provider !== providerId ||
+    (value.sessionId !== undefined &&
+      (typeof value.sessionId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+          value.sessionId,
+        )))
+  )
+    throw new Error("OpenAI subscription profile is invalid");
+  assertOAuthCredential(value.credential);
+  return {
+    version: 1,
+    provider: providerId,
+    ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId }),
+    credential: value.credential,
+  };
+}
+async function syncAuthDirectory(directory: string): Promise<void> {
+  if (process.platform === "win32") return; // Node cannot open Windows directory handles.
+  const handle = await open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 

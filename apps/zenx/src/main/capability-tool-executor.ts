@@ -1,3 +1,10 @@
+import { ModelReferenceRegistry } from "../../../../src/model-references.js";
+import {
+  invokeModelToolFacade,
+  modelToolDefinition,
+  modelPluginDocument,
+  isModelCallableTool,
+} from "./capabilities/model-tool-facade.js";
 import { desktopShellPty } from "./shell-pty.js";
 import {
   trackWindowsShellProcess,
@@ -33,6 +40,7 @@ interface PendingInvocation {
 }
 
 interface CapabilityInvocationState {
+  references?: ModelReferenceRegistry;
   pending: Map<string, PendingInvocation>;
 }
 
@@ -45,6 +53,7 @@ export class ZenXHostToolBundle implements ToolBundle {
   readonly #send: (event: HostEvent) => void;
   readonly #state: CapabilityInvocationState;
   readonly #generationToken: string;
+  readonly #modelReferenceEpoch = randomUUID();
   readonly #drainWaiters = new Set<() => void>();
   #prepared = 0;
   #retiring = false;
@@ -63,45 +72,55 @@ export class ZenXHostToolBundle implements ToolBundle {
               Object.freeze(structuredClone(value)),
             ]),
           );
-    this.tools = options.capabilities.definitions.map((definition) => ({
-      name: definition.name,
-      specification: structuredClone(definition),
-      ...(browserConnections !== undefined &&
-      definition.name.startsWith("browser_connected_")
-        ? {
-            approvalScope: (invocation: ToolInvocation) => {
-              const id = invocation.arguments.connectionId;
-              if (typeof id !== "string")
-                throw new Error("An explicit browser connectionId is required");
-              const connection = browserConnections.get(id);
-              if (connection?.state !== "connected")
-                throw new Error(
-                  "Browser connection is unavailable in this tool catalog; refresh the catalog",
-                );
-              return {
-                key: browserConnectionScopeKey(id),
-                label: connection.label,
-                generation: connection.generation,
-              };
-            },
-          }
-        : {}),
-      ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
-      !(
-        browserConnections !== undefined &&
+    this.tools = options.capabilities.definitions
+      .filter(isModelCallableTool)
+      .map((definition) => ({
+        name: definition.name,
+        specification: modelToolDefinition(definition),
+        ...(browserConnections !== undefined &&
         definition.name.startsWith("browser_connected_")
-      )
-        ? { remoteExecution: "text-json" as const }
-        : {}),
-      ...hostedResourcePolicy(
-        definition.name,
-        options.capabilities.plugins?.find((plugin) =>
-          plugin.tools.some((tool) => tool.name === definition.name),
-        )?.id,
-      ),
-      execute: async (invocation: ToolInvocation) =>
-        await this.#execute(definition.name, invocation),
-    }));
+          ? {
+              approvalScope: (invocation: ToolInvocation) => {
+                const id = invocation.arguments.connectionId;
+                if (typeof id !== "string")
+                  throw new Error(
+                    "An explicit browser connectionId is required",
+                  );
+                const connection = browserConnections.get(id);
+                if (connection?.state !== "connected")
+                  throw new Error(
+                    "Browser connection is unavailable in this tool catalog; refresh the catalog",
+                  );
+                return {
+                  key: browserConnectionScopeKey(id),
+                  label: connection.label,
+                  generation: connection.generation,
+                };
+              },
+            }
+          : {}),
+        ...(options.capabilities.remoteToolNames?.includes(definition.name) &&
+        !(
+          browserConnections !== undefined &&
+          definition.name.startsWith("browser_connected_")
+        )
+          ? { remoteExecution: "text-json" as const }
+          : {}),
+        ...hostedResourcePolicy(
+          definition.name,
+          options.capabilities.plugins?.find((plugin) =>
+            plugin.tools.some((tool) => tool.name === definition.name),
+          )?.id,
+        ),
+        execute: async (invocation: ToolInvocation) =>
+          await invokeModelToolFacade({
+            invocation,
+            epoch: this.#modelReferenceEpoch,
+            references: (this.#state.references ??=
+              new ModelReferenceRegistry()),
+            dispatch: (resolved) => this.#execute(definition.name, resolved),
+          }),
+      }));
     this.#send = options.send;
     this.#state = options.state ?? { pending: new Map() };
     this.#generationToken = options.capabilities.generationToken ?? "legacy";
@@ -400,7 +419,14 @@ export function createZenXHostToolEnvironment(options: {
   toolEnvironment.setTargetRouter(targetRouter);
   let capabilities = structuredClone(options.capabilities);
   const catalog = {
-    availablePlugins: () => structuredClone(capabilities.plugins ?? []),
+    availablePlugins: () =>
+      (capabilities.plugins ?? []).map((plugin) => ({
+        ...structuredClone(plugin),
+        mainDocument: modelPluginDocument(plugin.id, plugin.mainDocument),
+        tools: plugin.tools
+          .filter(isModelCallableTool)
+          .map(modelToolDefinition),
+      })),
     pluginSummaries: () => {
       if (capabilities.pluginReadiness === undefined)
         throw new Error("Plugin readiness catalog is unavailable");

@@ -159,6 +159,9 @@ function findControl(controls, role, title) {
 }
 
 function runHelper(executable, request) {
+  if (request.operation === "inspect") {
+    request = { ...request, inspectDeadlineUnixMs: Date.now() + 9_750 };
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [], { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];

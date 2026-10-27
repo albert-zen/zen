@@ -6,7 +6,11 @@ import {
   recordMediaPaths,
   rejectedMediaParts,
 } from "../loop-recovery.js";
-import { observeRequestBody } from "./request-observation.js";
+import {
+  fetchObservedModelResponse,
+  ModelDispatchRevokedError,
+  MODEL_RESPONSE_TERMINAL,
+} from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
@@ -25,6 +29,7 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
+import type { ModelTransportHooks } from "./transport-types.js";
 import type { AttachmentStore } from "../attachment.js";
 
 const defaultEndpoint = "https://chatgpt.com/backend-api/codex/responses";
@@ -36,6 +41,8 @@ export const DEFAULT_OPENAI_SUBSCRIPTION_MODEL = "gpt-5.6-terra";
 export interface OpenAiSubscriptionAccessLease {
   accessToken: string;
   signal?: AbortSignal;
+  /** Live Host identity check; never invalidates an already-dispatched response. */
+  assertDispatchAllowed?: () => void;
 }
 
 export interface OpenAiSubscriptionModelOptions {
@@ -155,20 +162,46 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     });
 
     let transportAttempt = 0;
-    const observedTokens = new Set<string>();
-    const observe = (accessToken: string) => {
-      observedTokens.add(accessToken);
-      observeRequestBody(
-        request,
-        body,
-        this.requestPayloadFormat,
-        this.provider,
-        ++transportAttempt,
-        [...observedTokens],
-      );
-    };
-    let lease = await this.#acquireAccessLease(request.signal);
+    const initialLease = await this.#acquireAccessLease(request.signal);
+    const initialAccountId = extractChatGptAccountId(
+      requiredSecret(initialLease.accessToken),
+    );
+    const initialLeaseGuardMethod = initialLease.assertDispatchAllowed;
+    const initialLeaseGuard = initialLeaseGuardMethod?.bind(initialLease);
+    const coreGuard = (
+      request as ModelRequest & ModelTransportHooks
+    ).assertDispatchAllowed?.bind(request);
+    let lease = initialLease;
     let accessToken = requiredSecret(lease.accessToken);
+    const requestForLease = (
+      current: OpenAiSubscriptionAccessLease,
+      token: string,
+    ): ModelRequest & ModelTransportHooks => {
+      const currentGuard =
+        current === initialLease &&
+        current.assertDispatchAllowed === initialLeaseGuardMethod
+          ? initialLeaseGuard
+          : current.assertDispatchAllowed?.bind(current);
+      return {
+        ...request,
+        assertDispatchAllowed() {
+          // Keep the original closures, even if a credential provider reuses a
+          // mutable lease object. Renewal is never permission to replace them.
+          assertSynchronousDispatchAllowed(coreGuard);
+          try {
+            assertSynchronousDispatchAllowed(initialLeaseGuard);
+            if (currentGuard !== initialLeaseGuard)
+              assertSynchronousDispatchAllowed(currentGuard);
+          } catch (error) {
+            throw new ModelDispatchRevokedError("auth_session_changed", {
+              cause: error,
+            });
+          }
+          if (extractChatGptAccountId(token) !== initialAccountId)
+            throw new ModelDispatchRevokedError("account_changed");
+        },
+      };
+    };
     let signal = accessLeaseSignal(request.signal, lease.signal);
     let response = await this.#request(
       body,
@@ -176,7 +209,8 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       accessToken,
       signal,
       request.isSamplingRetry !== true,
-      observe,
+      requestForLease(lease, accessToken),
+      () => ++transportAttempt,
     );
 
     if (response.status === 401 && this.#renewAccessLease !== undefined) {
@@ -191,7 +225,8 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         accessToken,
         signal,
         request.isSamplingRetry !== true,
-        observe,
+        requestForLease(lease, accessToken),
+        () => ++transportAttempt,
       );
     }
 
@@ -234,7 +269,8 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     accessToken: string,
     signal: AbortSignal,
     allowRetries: boolean,
-    observe: (accessToken: string) => void,
+    request: ModelRequest,
+    nextAttempt: () => number,
   ): Promise<Response> {
     signal.throwIfAborted();
     const headers = new Headers({
@@ -252,24 +288,42 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     }
     try {
       return await fetchModelResponse(
-        () => {
-          observe(accessToken);
-          return this.#fetch(this.#endpoint, {
-            method: "POST",
-            body,
-            headers,
-            signal,
-          });
-        },
+        () =>
+          fetchObservedModelResponse({
+            request,
+            fetch: this.#fetch,
+            url: this.#endpoint,
+            format: this.requestPayloadFormat,
+            provider: this.provider,
+            transportAttempt: nextAttempt(),
+            init: { method: "POST", body, headers, signal },
+          }),
         signal,
         { allowRetries },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ModelDispatchRevokedError) throw error;
       signal.throwIfAborted();
       throw new Error(
         "OpenAI subscription model request failed before receiving a response",
       );
     }
+  }
+}
+
+function assertSynchronousDispatchAllowed(
+  assertion: (() => void) | undefined,
+): void {
+  const result: unknown = assertion?.();
+  if (
+    result !== null &&
+    result !== undefined &&
+    (typeof result === "object" || typeof result === "function") &&
+    "then" in result &&
+    typeof result.then === "function"
+  ) {
+    void Promise.resolve(result).catch(() => undefined);
+    throw new Error("Dispatch assertions must be synchronous");
   }
 }
 
@@ -522,7 +576,7 @@ async function* parseResponsesStream(
     terminalSeen: false,
   };
 
-  for await (const payload of readSse(body, signal)) {
+  for await (const payload of readSse(body, signal, () => state.terminalSeen)) {
     if (payload === "[DONE]") {
       break;
     }
@@ -973,6 +1027,7 @@ function slotFor<T extends OutputSlot["type"]>(
 async function* readSse(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
+  terminalSeen: () => boolean,
 ): AsyncIterable<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -1053,7 +1108,9 @@ async function* readSse(
   } finally {
     signal.removeEventListener("abort", abort);
     if (!reachedEof) {
-      await reader.cancel().catch(() => undefined);
+      await reader
+        .cancel(terminalSeen() ? MODEL_RESPONSE_TERMINAL : undefined)
+        .catch(() => undefined);
     }
     reader.releaseLock();
   }

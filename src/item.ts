@@ -1,3 +1,7 @@
+import {
+  validateModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 import type {
   ImportedToolCallOrigin,
   ThreadImportOrigin,
@@ -442,6 +446,8 @@ export interface ToolCallItem extends ItemBase {
 }
 
 export interface ToolResultItem extends ItemBase {
+  /** Trusted exact bindings; not serialized into model/program output. */
+  referenceBindings?: readonly ModelReferenceBinding[];
   type: "tool_result";
   turnId: string;
   callId: string;
@@ -1193,6 +1199,8 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       }
       break;
     case "tool_result": {
+      if (item.referenceBindings !== undefined)
+        validateModelReferenceBindings(item.referenceBindings);
       requireTurnId(item, type);
       requireNonEmptyString(item.callId, `${type}.callId`);
       requireString(item.output, `${type}.output`);

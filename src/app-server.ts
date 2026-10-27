@@ -1,3 +1,4 @@
+import type { ContextItem } from "./item-list.js";
 import { projectModelMessages } from "./model-content.js";
 import {
   matchesSkillInputSnapshot,
@@ -148,6 +149,8 @@ export interface StartThreadInput {
 }
 
 export interface ThreadSnapshot {
+  /** Exact persisted semantic context; .items is compatibility history only. */
+  itemList?: readonly ContextItem[];
   id: string;
   parentThreadId?: string;
   items: readonly CanonicalItem[];
@@ -769,6 +772,11 @@ export class ZenAppServer {
                 "invalid_import",
                 "Unsupported historical Item",
               );
+            if ("referenceBindings" in entry || "queuedAdmission" in entry)
+              throw new AppServerError(
+                "invalid_import",
+                "Imported local authority provenance is not supported",
+              );
             // The adapter can carry only text and observed calls/results, not host media references or lifecycle ownership.
             if (
               (entry.type === "user_message" &&
@@ -1255,16 +1263,8 @@ export class ZenAppServer {
         current.approvalPolicy === approvalPolicy
       )
         return await this.#snapshot(thread);
-      if (
-        this.#activeTurns.has(threadId) ||
-        this.#pendingReplacement(thread) !== undefined ||
-        this.#runtime.hasActiveToolTasks(threadId)
-      ) {
-        throw new AppServerError(
-          "thread_busy",
-          "Wait for the running turn and tools to finish before changing permissions",
-        );
-      }
+      // Current revocation applies to future dispatch immediately. Already
+      // launched operations remain observed; changing policy does not undo them.
       await this.#commit(thread, {
         id: this.#id(),
         threadId,
@@ -3508,8 +3508,34 @@ export class ZenAppServer {
                     }
                   });
                 },
+                dispatchTool: async (_call, launch) => {
+                  const admitted = await this.#withThreadMutation(
+                    threadId,
+                    async () => {
+                      this.#assertCurrentThreadAuthority(thread);
+                      await this.#journal.assertRecoverySafe?.(threadId);
+                      this.#assertCurrentThreadAuthority(thread);
+                      const current = thread.effectiveConfiguration();
+                      if (
+                        current.sandbox !== configuration.sandbox ||
+                        current.approvalPolicy !== configuration.approvalPolicy
+                      )
+                        throw new AppServerError(
+                          "operation_forbidden",
+                          "Thread permissions changed before tool dispatch; request new admission",
+                        );
+                      controller.signal.throwIfAborted();
+                      // No await between the final authority check and actual launch.
+                      return { operation: launch() };
+                    },
+                  );
+                  return await admitted.operation;
+                },
                 prepareModelSample: async (modelResponseId) =>
                   await this.#withThreadMutation(threadId, async () => {
+                    this.#assertCurrentThreadAuthority(thread);
+                    await this.#journal.assertRecoverySafe?.(threadId);
+                    this.#assertCurrentThreadAuthority(thread);
                     const active = this.#activeTurns.get(threadId);
                     if (active?.turnId !== turnId) {
                       throw new AppServerError(
@@ -4800,7 +4826,8 @@ export class ZenAppServer {
     const load = (async () => {
       const items = await this.#journal.read(threadId);
       if (items.length === 0) return undefined;
-      const thread = new Thread(threadId, items);
+      const itemList = await this.#journal.readItemList?.(threadId);
+      const thread = new Thread(threadId, items, itemList);
       this.#threads.set(threadId, thread);
       return thread;
     })();
@@ -4841,6 +4868,15 @@ export class ZenAppServer {
         `Thread ${threadId} is archived. Unarchive it before sending a message`,
       );
     }
+  }
+
+  #assertCurrentThreadAuthority(thread: Thread): void {
+    if (this.#threads.get(thread.id) !== thread)
+      throw new ThreadJournalAppendOutcomeUnknownError(
+        new Error(
+          "Thread authority was invalidated by an uncertain log append; no new dispatch is allowed",
+        ),
+      );
   }
 
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
@@ -4892,6 +4928,7 @@ export class ZenAppServer {
       id: thread.id,
       ...(parentThreadId === undefined ? {} : { parentThreadId }),
       items,
+      itemList: thread.itemList,
       turns,
       cwd: configuration.cwd,
       providerProfileId: configuration.providerProfileId,
@@ -5007,7 +5044,8 @@ export class ZenAppServer {
     const flush = Promise.resolve().then(async () => {
       while (this.#threadSummaryDirty) {
         this.#threadSummaryDirty = false;
-        await this.#saveThreadSummaries(this.#threadSummaries!);
+        const summaries = this.#threadSummaries;
+        if (summaries !== undefined) await this.#saveThreadSummaries(summaries);
       }
     });
     this.#threadSummaryPersistence = flush;

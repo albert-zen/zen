@@ -5,7 +5,11 @@ import {
   recordMediaPaths,
   rejectedMediaParts,
 } from "../loop-recovery.js";
-import { observeRequestBody } from "./request-observation.js";
+import {
+  fetchObservedModelResponse,
+  ModelDispatchRevokedError,
+  MODEL_RESPONSE_TERMINAL,
+} from "./request-observation.js";
 import { historicalCallId, historicalToolName } from "./imported-history.js";
 import {
   fetchModelResponse,
@@ -247,30 +251,30 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     let response: Response;
     try {
       response = await fetchModelResponse(
-        () => {
-          observeRequestBody(
+        () =>
+          fetchObservedModelResponse({
             request,
-            body,
-            this.requestPayloadFormat,
-            this.provider,
-            ++transportAttempt,
-            [this.#apiKey],
-          );
-          return this.#fetch(this.#endpoint, {
-            method: "POST",
-            signal: request.signal,
-            headers: {
-              accept: "text/event-stream",
-              authorization: `Bearer ${this.#apiKey}`,
-              "content-type": "application/json",
+            fetch: this.#fetch,
+            url: this.#endpoint,
+            format: this.requestPayloadFormat,
+            provider: this.provider,
+            transportAttempt: ++transportAttempt,
+            init: {
+              method: "POST",
+              signal: request.signal,
+              headers: {
+                accept: "text/event-stream",
+                authorization: `Bearer ${this.#apiKey}`,
+                "content-type": "application/json",
+              },
+              body,
             },
-            body,
-          });
-        },
+          }),
         request.signal,
         { allowRetries: request.isSamplingRetry !== true },
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof ModelDispatchRevokedError) throw error;
       request.signal.throwIfAborted();
       throw modelError(
         "transport",
@@ -938,7 +942,9 @@ async function* parseChatCompletionStream(
     }
   } finally {
     if (!reachedEof) {
-      await reader.cancel().catch(() => undefined);
+      await reader
+        .cancel(state.doneSeen ? MODEL_RESPONSE_TERMINAL : undefined)
+        .catch(() => undefined);
     }
     reader.releaseLock();
   }

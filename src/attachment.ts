@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import path from "node:path";
 import {
   MAX_AUDIO_BYTES,
@@ -108,15 +116,21 @@ export class FileAttachmentStore implements AttachmentStore {
     const ref = inspectAttachment(bytes, declaredMediaType);
     const hashRoot = path.join(this.#directory, "sha256");
     const finalDirectory = path.join(hashRoot, ref.sha256);
-    const finalPath = path.join(finalDirectory, "payload");
+    await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+    await assertAttachmentDirectory(this.#directory);
     await mkdir(hashRoot, { recursive: true, mode: 0o700 });
+    await assertAttachmentDirectory(hashRoot);
 
     try {
-      const existing = await readFile(finalPath);
+      const existing = await this.read(ref);
       assertStoredBytes(existing, ref);
       return ref;
     } catch (error) {
-      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      if (!(
+        error instanceof AttachmentStoreError &&
+        error.code === "attachment_missing"
+      ))
+        throw error;
     }
 
     const temporaryDirectory = path.join(
@@ -143,9 +157,9 @@ export class FileAttachmentStore implements AttachmentStore {
       }
 
       if (!published) {
-        const existing = await readFile(finalPath);
-        assertStoredBytes(existing, ref);
+        await this.read(ref);
       }
+      await this.read(ref); // Validate published/deduplicated ownership before acknowledging a usable reference.
       return ref;
     } finally {
       if (!published) {
@@ -164,9 +178,24 @@ export class FileAttachmentStore implements AttachmentStore {
     validateAttachmentRef(ref);
     let bytes: Uint8Array;
     try {
-      bytes = await readFile(
-        path.join(this.#directory, "sha256", ref.sha256, "payload"),
+      await assertAttachmentDirectory(this.#directory);
+      await assertAttachmentDirectory(path.join(this.#directory, "sha256"));
+      await assertAttachmentDirectory(
+        path.join(this.#directory, "sha256", ref.sha256),
       );
+      const filename = path.join(
+        this.#directory,
+        "sha256",
+        ref.sha256,
+        "payload",
+      );
+      const stat = await lstat(filename);
+      if (!stat.isFile() || stat.nlink !== 1)
+        throw new AttachmentStoreError(
+          "attachment_corrupt",
+          "Attachment payload must be an unaliased regular file",
+        );
+      bytes = await readFile(filename);
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
         throw new AttachmentStoreError(
@@ -179,6 +208,14 @@ export class FileAttachmentStore implements AttachmentStore {
     assertStoredBytes(bytes, ref);
     return bytes;
   }
+}
+
+async function assertAttachmentDirectory(directory: string): Promise<void> {
+  if (!(await lstat(directory)).isDirectory())
+    throw new AttachmentStoreError(
+      "attachment_corrupt",
+      "Attachment directory must not be a symlink",
+    );
 }
 
 export function decodeMediaDataUri(value: string): {
