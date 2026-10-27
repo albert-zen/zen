@@ -67,7 +67,7 @@ test("transport shutdown during executable preparation cannot start a helper", a
   await rejected;
 });
 
-for (const response of ["not-json", "null", "{}"])
+for (const response of ["not-json", "null", "{}", '{"result":{}}'])
   test(`invalid native receipt ${response} settles only after child closure`, async (t) => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "zenx-target-invalid-"),
@@ -101,3 +101,120 @@ for (const response of ["not-json", "null", "{}"])
     )) as { pid: number };
     assert.notEqual(selected.pid, reselected.pid);
   });
+
+for (const killMode of ["false", "throw", "error", "true"] as const) {
+  for (const failure of [
+    "abort",
+    "malformed",
+    "missing-receipt",
+    "child-error",
+    "pipe-error",
+    "overflow",
+    "close",
+    "timeout",
+  ] as const) {
+    test(`native ${failure}, kill=${killMode}: activity remains stopping through exit and late reply until close`, async (t) => {
+      const { EventEmitter } = await import("node:events");
+      const { PassThrough } = await import("node:stream");
+      const { ForegroundActivity } =
+        await import("../src/main/foreground-activity.js");
+      let writes = 0,
+        kills = 0,
+        stopping = 0;
+      const child =
+        new EventEmitter() as import("node:child_process").ChildProcessWithoutNullStreams;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.stdin.on("data", (chunk: Buffer) => {
+        writes++;
+        if (JSON.parse(chunk.toString()).operation === "select")
+          queueMicrotask(() =>
+            child.stdout.emit("data", '{"result":{"selected":true}}\n'),
+          );
+      });
+      child.kill = () => {
+        kills++;
+        if (killMode === "throw") throw new Error("synthetic kill failure");
+        if (killMode === "error")
+          child.emit("error", new Error("synthetic kill error"));
+        return killMode === "true";
+      };
+      const transport = new NativeComputerTargetTransport(
+        async () => "/synthetic",
+        (() => child) as unknown as typeof import("node:child_process").spawn,
+      );
+      t.after(() => child.emit("close", 1));
+      const controller = new AbortController();
+      await transport.request({ operation: "select" }, controller.signal);
+      const activity = new ForegroundActivity({
+        presenter: { update: async () => {}, close() {} },
+        agentName: () => "Synthetic",
+        report() {},
+      });
+      if (failure === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
+      const operation = activity.run(
+        {
+          callId: "native-lifecycle",
+          name: "synthetic",
+          arguments: {},
+          cwd: "/synthetic",
+          signal: controller.signal,
+        },
+        (signal, onStopping) =>
+          transport.request({ operation: "key" }, signal, () => {
+            stopping++;
+            onStopping?.();
+          }),
+      );
+      const rejected = assert.rejects(operation, /outcome unknown/);
+      let settled = false;
+      void operation.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(writes, 2);
+      let closing: Promise<void> | undefined;
+      if (failure === "abort") controller.abort();
+      if (failure === "malformed") child.stdout.emit("data", "not-json\n");
+      if (failure === "missing-receipt")
+        child.stdout.emit("data", '{"result":{}}\n');
+      if (failure === "child-error")
+        child.emit("error", new Error("fixture native failure"));
+      if (failure === "pipe-error")
+        child.stdin.emit("error", new Error("fixture pipe failure"));
+      if (failure === "overflow") child.stdout.emit("data", "x".repeat(65537));
+      if (failure === "close") closing = transport.close();
+      if (failure === "timeout") t.mock.timers.tick(10_000);
+      assert.equal(activity.snapshot.activities.length, 1);
+      assert.equal(activity.snapshot.activities[0]?.stopping, true);
+      assert.equal(stopping, 1);
+      assert.equal(kills, 1);
+      child.emit("exit", 1);
+      child.stdout.emit(
+        "data",
+        JSON.stringify({
+          result: { dispatch: "posted", applicationEffect: "unverified" },
+        }) + "\n",
+      );
+      child.emit("error", new Error("later native error"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(settled, false);
+      assert.equal(activity.snapshot.activities.length, 1);
+      assert.equal(writes, 2, "no replacement/replay while stopping");
+      assert.equal(kills, 1, "no termination retry");
+      assert.equal(stopping, 1);
+      child.emit("close", 1);
+      await rejected;
+      await closing;
+      assert.equal(activity.snapshot.activities.length, 0);
+      await transport.close();
+      assert.equal(kills, 1);
+    });
+  }
+}
