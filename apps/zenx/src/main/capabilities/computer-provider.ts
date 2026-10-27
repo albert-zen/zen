@@ -10,6 +10,7 @@ import { ComputerTargetSession } from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
 import type { ForegroundActivityRunner } from "../foreground-activity.js";
 import type { ComputerEnvironmentPort } from "../automation-environment.js";
+import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -314,7 +315,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "computer",
   name: "Computer",
-  version: "1.0.2",
+  version: COMPUTER_PLUGIN_VERSION,
   description:
     "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -467,7 +468,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
 /** Native-only replacement; other providers retain their separate capability contract. */
 export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.2.0",
+  version: COMPUTER_PLUGIN_VERSION,
   provider: {
     ...computerCapabilityManifest.provider!,
     capabilities: [

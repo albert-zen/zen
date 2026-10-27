@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
   "provider": {
     "id": "playwright-cli",
@@ -73,7 +73,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -112,9 +112,13 @@
           "url": {
             "type": "string"
           },
+          "observationId": {
+            "type": "string",
+            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
+          },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -123,10 +127,6 @@
           "full": {
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
-          },
-          "observationId": {
-            "type": "string",
-            "description": "Required for a shared Workspace tab after human takeover: pass its latest browser_inspect observationId. Missing, stale, or pre-takeover references reject. Other backends do not require this field."
           }
         },
         "required": ["sessionId", "tabId", "url"],
@@ -154,12 +154,6 @@
           "tabId": {
             "type": "string"
           },
-          "query": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120,
-            "description": "Search role/name/value among backend-captured targets only; follow nextCursor for more matches."
-          },
           "cursor": {
             "type": "string",
             "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
@@ -171,6 +165,12 @@
           "full": {
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
           }
         },
         "required": ["sessionId", "tabId"],
@@ -206,7 +206,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -244,7 +244,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -294,7 +294,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -347,7 +347,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",

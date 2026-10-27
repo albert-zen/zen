@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
 import {
   ComputerObservationLedger,
@@ -32,7 +33,7 @@ import {
 
 export const windowsStrictUiaCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(windowsComputerCapabilityManifest),
-  version: "1.2.0",
+  version: COMPUTER_PLUGIN_VERSION,
   description:
     "Verified ZenX downstream UIA client with automatic focus disabled. Exact native controls support single semantic actions without requested activation; the target application may still change focus itself. Strict capture never restores or activates windows.",
   provider: {

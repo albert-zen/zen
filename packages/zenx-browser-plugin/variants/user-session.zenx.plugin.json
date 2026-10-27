@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "An explicit attachment to a user-opened Chrome, Edge, or Chromium CDP session that uses authenticated page state in place without exporting session material.",
   "provider": {
     "id": "user-browser-cdp",
@@ -73,7 +73,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -118,7 +118,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -154,12 +154,6 @@
           "tabId": {
             "type": "string"
           },
-          "query": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 120,
-            "description": "Search role/name/value among backend-captured targets only; follow nextCursor for more matches."
-          },
           "cursor": {
             "type": "string",
             "description": "Continue the exact immutable captured observation using its returned nextCursor. Does not recapture or renew action references. Omit to inspect afresh."
@@ -171,6 +165,12 @@
           "full": {
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
           }
         },
         "required": ["sessionId", "tabId"],
@@ -206,7 +206,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -247,7 +247,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -296,7 +296,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -353,7 +353,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -403,7 +403,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -456,7 +456,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",

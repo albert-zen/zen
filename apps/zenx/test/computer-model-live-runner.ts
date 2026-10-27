@@ -69,7 +69,7 @@ try {
     fixture!.once("close", () => resolve());
   });
   for (const stream of [fixture.stdout, fixture.stderr])
-    stream.on("data", (bytes: Buffer) => {
+    stream?.on("data", (bytes: Buffer) => {
       fixtureDiagnostic = (fixtureDiagnostic + bytes.toString("utf8")).slice(
         -8192,
       );

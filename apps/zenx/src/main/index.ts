@@ -1952,6 +1952,8 @@ function installSettingsIpc(
       screenRecording,
       foregroundControlEnabled: settings.computerForegroundControlEnabled(),
     });
+    if (automationEnvironment)
+      snapshot.environment = automationEnvironment.snapshot();
     const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
     if (verificationStatus !== status) computerVerification = undefined;
     const result =

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "computer",
   "name": "Computer",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Verified ZenX downstream UIA client with automatic focus disabled. Exact native controls support single semantic actions without requested activation; the target application may still change focus itself. Strict capture never restores or activates windows.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -201,9 +201,15 @@
             "additionalProperties": false,
             "required": ["observationId", "targetId"]
           },
-          "observe": { "type": "boolean" },
-          "baseObservationId": { "type": "string" },
-          "full": { "type": "boolean" }
+          "observe": {
+            "type": "boolean"
+          },
+          "baseObservationId": {
+            "type": "string"
+          },
+          "full": {
+            "type": "boolean"
+          }
         },
         "required": ["target", "control"],
         "additionalProperties": false
@@ -270,9 +276,15 @@
           "value": {
             "type": "string"
           },
-          "observe": { "type": "boolean" },
-          "baseObservationId": { "type": "string" },
-          "full": { "type": "boolean" }
+          "observe": {
+            "type": "boolean"
+          },
+          "baseObservationId": {
+            "type": "string"
+          },
+          "full": {
+            "type": "boolean"
+          }
         },
         "required": ["target", "control", "value"],
         "additionalProperties": false

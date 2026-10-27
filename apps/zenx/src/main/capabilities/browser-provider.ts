@@ -3,6 +3,7 @@ import {
   readBrowserModelRoute,
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
+import { BROWSER_PLUGIN_VERSION } from "../../../../../packages/zenx-browser-plugin/src/version.js";
 import { withBrowserOperationOrder } from "./browser-operation-order.js";
 import {
   assertBrowserInputSnapshot,
@@ -51,7 +52,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
-import { boundedBrowserQuery, focusCapturedTargets, searchCapturedTargets } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
+import {
+  boundedBrowserQuery,
+  focusCapturedTargets,
+  searchCapturedTargets,
+} from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -245,7 +250,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   schemaVersion: 2,
   id: "browser",
   name: "Browser",
-  version: "1.0.6",
+  version: BROWSER_PLUGIN_VERSION,
   description:
     "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
@@ -368,7 +373,16 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       name: "browser_inspect",
       description:
         "Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
-      inputSchema: browserTargetSchema({ ...observationReadProperties, query: { type: "string", minLength: 1, maxLength: 120, description: "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture." } }),
+      inputSchema: browserTargetSchema({
+        ...observationReadProperties,
+        query: {
+          type: "string",
+          minLength: 1,
+          maxLength: 120,
+          description:
+            "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture.",
+        },
+      }),
       permissions: ["browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.inspect"],
@@ -679,7 +693,9 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     toolName: string,
     invocation: ToolInvocation,
   ): Promise<unknown> {
-    const observe = optionalBoolean(invocation.arguments, "observe") ?? BROWSER_OBSERVABLE_ACTIONS.has(toolName);
+    const observe =
+      optionalBoolean(invocation.arguments, "observe") ??
+      BROWSER_OBSERVABLE_ACTIONS.has(toolName);
     const options = observationReadOptions(invocation.arguments);
     if (options.cursor !== undefined && toolName !== "browser_inspect")
       throw new Error("cursor is only supported by browser_inspect");
@@ -780,7 +796,9 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         options,
         undefined,
         options.baseObservationId === undefined && options.full !== true
-          ? typeof invocation.arguments.targetId === "string" ? invocation.arguments.targetId : ""
+          ? typeof invocation.arguments.targetId === "string"
+            ? invocation.arguments.targetId
+            : ""
           : undefined,
       );
     } catch (error) {
@@ -824,35 +842,87 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           reasons: ["backend_capture_coverage_unknown"],
         },
       };
-    const found = query === undefined ? undefined : searchCapturedTargets(capture.entries.map((entry) => entry.value), query, MAX_OBSERVATION_CAPTURE_ITEMS);
-    const focused = focusTargetId === undefined ? undefined : focusCapturedTargets(capture.entries.map((entry) => entry.value), capture.text, focusTargetId);
-    const presentedCapture = found === undefined ? focused === undefined ? capture : {
-      ...capture,
-      scopeKey: `${capture.scopeKey}:focused:${focusTargetId}`,
-      entries: capture.entries.filter((entry) => focused.targets.some((target) => target.targetId === entry.value.targetId)),
-      text: focused.text,
-      coverage: {
-        ...capture.coverage,
-        scope: `focused subset of ${capture.coverage.scope}`,
-        sourceComplete: false as const,
-        reasons: [...capture.coverage.reasons, "focused_subset_of_capture"],
-      },
-    } : {
-      ...capture,
-      scopeKey: `${capture.scopeKey}:query:${query}`,
-      entries: capture.entries.filter((entry) => found.matches.some((match) => match.targetId === entry.value.targetId)),
-      text: undefined,
-      coverage: {
-        ...capture.coverage,
-        scope: `query within ${capture.coverage.scope}`,
-        reasons: [...capture.coverage.reasons, "query_filters_captured_targets_only"],
-      },
-    };
+    const found =
+      query === undefined
+        ? undefined
+        : searchCapturedTargets(
+            capture.entries.map((entry) => entry.value),
+            query,
+            MAX_OBSERVATION_CAPTURE_ITEMS,
+          );
+    const focused =
+      focusTargetId === undefined
+        ? undefined
+        : focusCapturedTargets(
+            capture.entries.map((entry) => entry.value),
+            capture.text,
+            focusTargetId,
+          );
+    const presentedCapture =
+      found === undefined
+        ? focused === undefined
+          ? capture
+          : {
+              ...capture,
+              scopeKey: `${capture.scopeKey}:focused:${focusTargetId}`,
+              entries: capture.entries.filter((entry) =>
+                focused.targets.some(
+                  (target) => target.targetId === entry.value.targetId,
+                ),
+              ),
+              text: focused.text,
+              coverage: {
+                ...capture.coverage,
+                scope: `focused subset of ${capture.coverage.scope}`,
+                sourceComplete: false as const,
+                reasons: [
+                  ...capture.coverage.reasons,
+                  "focused_subset_of_capture",
+                ],
+              },
+            }
+        : {
+            ...capture,
+            scopeKey: `${capture.scopeKey}:query:${query}`,
+            entries: capture.entries.filter((entry) =>
+              found.matches.some(
+                (match) => match.targetId === entry.value.targetId,
+              ),
+            ),
+            text: undefined,
+            coverage: {
+              ...capture.coverage,
+              scope: `query within ${capture.coverage.scope}`,
+              reasons: [
+                ...capture.coverage.reasons,
+                "query_filters_captured_targets_only",
+              ],
+            },
+          };
     return this.#presentation.publish(
       this.#observationKey(result.sessionId, result.tabId),
       result.observationId,
-      found !== undefined ? { ...header, search: { query, matchedCapturedTargets: found.totalMatches, sourceScope: capture.coverage.scope } } :
-      focused !== undefined ? { ...header, view: { kind: "focused-capture", sourceScope: capture.coverage.scope, textOffset: focused.textOffset }, nextAction: "Call browser_inspect on this tab with full:true for the broader bounded capture." } : header,
+      found !== undefined
+        ? {
+            ...header,
+            search: {
+              query,
+              matchedCapturedTargets: found.totalMatches,
+              sourceScope: capture.coverage.scope,
+            },
+          }
+        : focused !== undefined
+          ? {
+              ...header,
+              view: {
+                kind: "focused-capture",
+                sourceScope: capture.coverage.scope,
+                textOffset: focused.textOffset,
+              },
+              nextAction:
+                "Call browser_inspect on this tab with full:true for the broader bounded capture.",
+            }
+          : header,
       presentedCapture,
       options,
     );

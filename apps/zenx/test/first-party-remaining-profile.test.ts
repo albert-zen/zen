@@ -63,12 +63,12 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const currentTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.2.0.tgz",
+      "zenx-computer-plugin-macos-1.3.0.tgz",
     );
     const oldTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.0.0.tgz",
+      "zenx-computer-plugin-macos-1.3.0.tgz",
     );
     await run("tar", ["-xf", currentTarball, "-C", staging]);
     for (const filename of ["package.json", "zenx.plugin.json"]) {
@@ -160,12 +160,12 @@ test("strict Windows Computer profile upgrades retain disablement and do not app
       const current = path.join(
         resources,
         "plugins",
-        "zenx-computer-plugin-win32-strict-1.2.0.tgz",
+        "zenx-computer-plugin-win32-strict-1.3.0.tgz",
       );
       const previous = path.join(
         resources,
         "plugins",
-        "zenx-computer-plugin-win32-1.1.5.tgz",
+        "zenx-computer-plugin-win32-1.3.0.tgz",
       );
       await run("tar", ["-xf", current, "-C", staging]);
       const manifest = {
@@ -574,7 +574,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-playwright-1.0.5.tgz",
+        "zenx-browser-plugin-playwright-1.1.0.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       playwrightCandidate,
@@ -606,7 +606,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       browserBackend("electron"),
     );
     await service.replaceBundledProviderVariant(
-      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.0.6.tgz"),
+      path.join(resources, "plugins", "zenx-browser-plugin-electron-1.1.0.tgz"),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
       electronCandidate,
     );
@@ -756,7 +756,7 @@ test("an uninstalled Browser reinstalls the current Host-selected App Resource v
     assert.equal(browser?.lifecycle, "enabled");
     assert.equal(
       path.basename(browser?.profileSource?.packageSpec ?? ""),
-      "zenx-browser-plugin-electron-1.0.6.tgz",
+      "zenx-browser-plugin-electron-1.1.0.tgz",
     );
     assert.equal(
       (
@@ -818,7 +818,7 @@ test("provider variant admission and Catalog failures retain the old backend and
   const electronTarball = path.join(
     resources,
     "plugins",
-    "zenx-browser-plugin-electron-1.0.6.tgz",
+    "zenx-browser-plugin-electron-1.1.0.tgz",
   );
   try {
     await service.initialize();
@@ -826,7 +826,7 @@ test("provider variant admission and Catalog failures retain the old backend and
       path.join(
         resources,
         "plugins",
-        "zenx-browser-plugin-user-session-1.0.6.tgz",
+        "zenx-browser-plugin-user-session-1.1.0.tgz",
       ),
       { pluginId: "browser", packageName: "@zenx/browser-plugin" },
     );
@@ -875,13 +875,13 @@ test("restart keeps a committed Browser backend isolated from a different curren
         name: "user-session-to-electron",
         initialMode: "user-session",
         selectedMode: "isolated",
-        initialTarball: "zenx-browser-plugin-user-session-1.0.6.tgz",
+        initialTarball: "zenx-browser-plugin-user-session-1.1.0.tgz",
       },
       {
         name: "electron-to-user-session",
         initialMode: "isolated",
         selectedMode: "user-session",
-        initialTarball: "zenx-browser-plugin-electron-1.0.6.tgz",
+        initialTarball: "zenx-browser-plugin-electron-1.1.0.tgz",
       },
     ] as const) {
       for (const outcome of [
@@ -1140,8 +1140,8 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.1.5.tgz"
-                  : "zenx-computer-plugin-macos-1.2.0.tgz",
+                  ? "zenx-computer-plugin-win32-1.3.0.tgz"
+                  : "zenx-computer-plugin-macos-1.3.0.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
             ),
