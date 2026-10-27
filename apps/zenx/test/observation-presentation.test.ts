@@ -125,6 +125,10 @@ test("unchanged view emits small diff while action references resolve to the fre
   const second = publish(p, "obs2", capture(2), { baseObservationId: "obs1" });
   assert.equal(second.observation.format, "diff");
   assert.equal(second.observation.unchanged, true);
+  assert.deepEqual(
+    second.targetChanges.order,
+    first.targets.map((item: Item) => item.targetId),
+  );
   assert.equal(second.visibleText, undefined);
   assert.equal(
     await p.resolveAction("owner/tab", "obs2", first.targets[0].targetId),

@@ -493,7 +493,10 @@ export class ObservationPresentation<T> {
       added,
       updated,
       removedFromView,
-      ...(changedOrder ? { order: [...nowItems.keys()] } : {}),
+      // A new observation also renews action refs for retained entries. The
+      // complete bounded order lets a model-facing adapter publish that exact
+      // correspondence without guessing which old refs survived prior diffs.
+      order: [...nowItems.keys()],
     };
     Object.assign(output.observation as object, {
       baseObservationId: previous.id,

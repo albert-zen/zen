@@ -718,6 +718,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
     throw unsupportedForeground();
   }
 
+  invalidateObservations(): void {
+    this.#observations.clear();
+  }
+
   async close(): Promise<void> {
     this.#observations.clear();
     for (const timer of this.#expiryTimers) clearTimeout(timer);

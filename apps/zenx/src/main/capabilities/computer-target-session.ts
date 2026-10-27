@@ -68,6 +68,7 @@ export class ComputerTargetSession {
   ): Promise<BoundComputerTarget> {
     signal.throwIfAborted();
     if (this.#closed) throw new Error("Computer target session is closed");
+    const generation = this.#captureGeneration;
     this.#selected.delete(owner);
     this.#captures.delete(owner);
     const result = (await this.transport.request(
@@ -76,6 +77,10 @@ export class ComputerTargetSession {
     )) as BoundComputerTarget;
     signal.throwIfAborted();
     if (this.#closed) throw new Error("Computer target session is closed");
+    if (generation !== this.#captureGeneration)
+      throw new Error(
+        "Computer selection retired while the desktop session changed; select again",
+      );
     this.#selected.set(owner, result);
     return result;
   }
@@ -172,6 +177,11 @@ export class ComputerTargetSession {
     );
     assertCurrent();
     return result;
+  }
+
+  invalidateSelections(): void {
+    this.#selected.clear();
+    this.invalidateCaptures();
   }
 
   invalidateCaptures(): void {
