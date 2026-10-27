@@ -6,12 +6,12 @@ The Host facts are synthetic: macOS, locked session, existing Accessibility/Scre
 
 The explanation names macOS 14+ for scoped native locked-window reads and separately authorized background clicks. Application support varies, app-internal focus can change, and foreground control still requires unlock. Generic preview readiness does not certify a particular native window. The image and input receipts do not assert application effect.
 
-| Appearance | Width / language | Capture |
-|---|---|---|
-| Light | 1280 / English | [Desktop](native-window-access-light-1280.png) |
-| Dark | 1280 / English | [Desktop](native-window-access-dark-1280.png) |
-| Light | 390 / Chinese | [Narrow](native-window-access-light-390.png) |
-| Dark | 390 / Chinese | [Narrow](native-window-access-dark-390.png) |
+| Appearance | Width / language | Capture                                        |
+| ---------- | ---------------- | ---------------------------------------------- |
+| Light      | 1280 / English   | [Desktop](native-window-access-light-1280.png) |
+| Dark       | 1280 / English   | [Desktop](native-window-access-dark-1280.png)  |
+| Light      | 390 / Chinese    | [Narrow](native-window-access-light-390.png)   |
+| Dark       | 390 / Chinese    | [Narrow](native-window-access-dark-390.png)    |
 
 ![Native macOS locked-window access, light desktop](native-window-access-light-1280.png)
 
