@@ -385,7 +385,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_environment",
       description:
-        "Read the current desktop session and power availability. Locked native macOS accessibility is provider-dependent: re-inspect for fresh controls; actual native access can fail. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
+        "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
       inputSchema: objectSchema({}, []),
       permissions: ["computer.accessibility.inspect"],
       interactionMode: "background_safe",
@@ -682,6 +682,19 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    const foregroundAtStart =
+      toolName.startsWith("computer_foreground_") ||
+      this.manifest.tools.some(
+        (tool) =>
+          tool.name === toolName &&
+          tool.interactionMode === "foreground_required",
+      )
+        ? this.#foregroundConsent.signal
+        : undefined;
+    if (foregroundAtStart) this.#assertForegroundControlAllowed(toolName);
+    if (this.#environment?.refresh) await this.#environment.refresh();
+    foregroundAtStart?.throwIfAborted();
+    invocation.signal.throwIfAborted();
     // Derive actual locked capability from the selected Host backend, never from
     // a model argument or a background_safe plugin manifest alone.
     const lockedTools =
@@ -1077,7 +1090,11 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         };
       }
     }
-    if (invocation.threadId !== undefined) {
+    if (
+      invocation.threadId !== undefined &&
+      observationGeneration === this.#observationGeneration &&
+      !invocation.signal.aborted
+    ) {
       const resolved =
         result && typeof result === "object" && "target" in result
           ? ((result as { target: ComputerTarget }).target ?? target)
@@ -2402,6 +2419,19 @@ export class MacAccessibilityDriver {
     this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
+  async sessionState(
+    signal?: AbortSignal,
+  ): Promise<"active" | "locked" | "unknown"> {
+    const observed = (await this.run(
+      { operation: "sessionState" },
+      signal,
+    )) as { sessionState?: unknown };
+    return observed.sessionState === "active" ||
+      observed.sessionState === "locked"
+      ? observed.sessionState
+      : "unknown";
+  }
+
   async run(
     request: Record<string, unknown>,
     signal?: AbortSignal,
@@ -2697,6 +2727,22 @@ if operation == "inspect" {
     fail("AX inspect requires the original host deadline")
   }
   inspectReadBudget = InspectReadBudget(deadlineUnixMs: deadline)
+}
+if operation == "sessionState" {
+  // A locked macOS session can report Electron idle=active at process startup.
+  // Read only this user's console session; do not infer from frontmost app/title.
+  var state = "unknown"
+  if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+     let onConsole = session[kCGSessionOnConsoleKey as String] as? Bool {
+    if let locked = session["CGSSessionScreenIsLocked"] as? Bool, locked {
+      state = "locked"
+    } else if onConsole {
+      state = "active"
+    }
+  }
+  let output = try! JSONSerialization.data(withJSONObject: ["sessionState": state])
+  FileHandle.standardOutput.write(output)
+  exit(0)
 }
 if operation == "desktopContext" {
   guard let frontmost = NSWorkspace.shared.frontmostApplication else { fail("frontmost application is unavailable") }

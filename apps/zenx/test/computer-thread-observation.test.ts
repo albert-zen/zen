@@ -298,6 +298,18 @@ test("session invalidation stops preview and fences late pixels until a fresh ac
     1,
     "unlock alone cannot revive old preview",
   );
+  const settle = observation.startActivity(
+    "thread-a",
+    "stale-selector-action",
+    windowTarget,
+    "background-window",
+  );
+  assert.equal(
+    backend.liveTargets.length,
+    1,
+    "admitted activity cannot certify fresh native observation",
+  );
+  settle();
   observation.publish("thread-a", "fresh-active-inspect", windowTarget);
   assert.equal(backend.liveTargets.length, 2);
   observation.observe({ threadId: "thread-b", frames: true }, (event) =>

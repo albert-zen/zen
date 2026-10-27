@@ -94,6 +94,15 @@ export async function probeComputerAccess(
     snapshot.screenRecording === "restricted"
   ) {
     screenCapture = { state: "needs-setup" };
+  } else if (
+    snapshot.environment &&
+    snapshot.environment.sessionState !== "active"
+  ) {
+    screenCapture = {
+      state: "unknown",
+      detail:
+        "Window capture requires an active desktop session; unlock or resume and check again",
+    };
   } else {
     try {
       await checks.screenCapture();

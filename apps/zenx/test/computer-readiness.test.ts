@@ -145,3 +145,30 @@ test("a failed Screen Recording status read does not become a capture failure", 
   );
   assert.equal(result.screenCapture.state, "unknown");
 });
+
+test("locked readiness never treats a possible black thumbnail as successful capture", async () => {
+  let captures = 0;
+  const snapshot = computerReadinessSnapshot({
+    platform: "darwin",
+    accessibilityTrusted: true,
+    screenRecording: "granted",
+    foregroundControlEnabled: false,
+  });
+  snapshot.environment = {
+    platform: "darwin",
+    sessionState: "locked",
+    revision: 1,
+    displayState: "unknown",
+    lockedUse: "provider-dependent",
+    keepAwake: "inactive",
+  };
+  const result = await probeComputerAccess(snapshot, {
+    accessibility: async () => {},
+    screenCapture: async () => {
+      captures++;
+    },
+    screenRecordingStatus: () => "granted",
+  });
+  assert.equal(captures, 0);
+  assert.equal(result.screenCapture.state, "unknown");
+});
