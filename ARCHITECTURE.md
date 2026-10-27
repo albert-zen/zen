@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+- **Projectless workspaces** — The local Host exclusively allocates a persistent dated directory and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
+
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
 - **Automation environment** — A Host-local OS observation port separates session locking, system suspend/resume and unknown display power; it retires native observations and aborts admitted calls on session changes, while an operation-lifetime application-suspension blocker never unlocks a device, prevents explicit sleep or creates durable task state.
 - **Local observation text changes** — A first-page diff may carry one Unicode-safe UTF-16 splice against its explicit retained baseline; scope changes, unavailable context and requested full views remain self-contained, and captured tails never become an implicit baseline.

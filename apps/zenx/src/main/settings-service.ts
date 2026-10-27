@@ -1468,6 +1468,33 @@ export class ZenXSettingsService {
     }
   }
 
+  async registerProjectlessWorkspace(cwd: string): Promise<void> {
+    const resolved = resolveProjectPath(cwd, this.#projectPlatform);
+    await this.#queueProfileOperation(async () => {
+      const current = this.#requireProfile();
+      const identities = await projectPathSnapshot(
+        [...(current.projectlessWorkspaces ?? []), resolved],
+        this.#projectPlatform,
+        this.#projectRealpath,
+      );
+      const candidate = identities.at(-1)!;
+      if (identities.slice(0, -1).some((entry) => entry.key === candidate.key))
+        return;
+      const next = validateHostProfile(
+        {
+          ...current,
+          projectlessWorkspaces: [
+            ...(current.projectlessWorkspaces ?? []),
+            candidate.displayPath,
+          ],
+        },
+        this.#projectPlatform,
+      );
+      await this.#persistProfile(next);
+      this.#profile = next;
+    });
+  }
+
   async addWorkspace(workspace: string): Promise<boolean> {
     const candidate = workspace.trim();
     if (candidate.length === 0) throw new Error("Workspace is required");

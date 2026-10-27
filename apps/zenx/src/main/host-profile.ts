@@ -73,6 +73,8 @@ export interface ZenXHostProfile {
   titleModel: ZenXModelReference;
   workspace: string | null;
   workspaces: string[];
+  /** Exact Host-allocated cwd membership; separate from configured Projects. */
+  projectlessWorkspaces?: string[];
   projectNames?: Record<string, string>;
   lastUsedWorkspace: string | null;
   approvalPolicy: "always" | "never";
@@ -444,6 +446,15 @@ export function validateHostProfile(
     titleModel,
     workspace,
     workspaces,
+    ...(value.projectlessWorkspaces === undefined
+      ? {}
+      : {
+          projectlessWorkspaces: normalizeWorkspaces(
+            value.projectlessWorkspaces,
+            null,
+            projectPlatform,
+          ),
+        }),
     ...(value.projectNames === undefined
       ? {}
       : {

@@ -35,12 +35,118 @@ import {
   SettingsDiagnosticLog,
 } from "../src/main/settings-diagnostic-log.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
+import { ZenXProjectProjection } from "../src/main/project-projection.js";
+import { ZenXProjectlessWorkspaceAllocator } from "../src/main/projectless-workspace.js";
 
 const encryption: LocalEncryption = {
   isEncryptionAvailable: () => true,
   encryptString: (value) => Buffer.from(`secure:${value}`),
   decryptString: (value) => value.toString().replace(/^secure:/u, ""),
 };
+
+test("projectless registration is serialized, survives restart and classifies only exact cwd", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-projectless-settings-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    const first = path.join(directory, "task-a");
+    const second = path.join(directory, "task-b");
+    await mkdir(first);
+    await mkdir(second);
+    const alias = path.join(directory, "task-a-alias");
+    await symlink(
+      first,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const before = (await service.publicSettings()).profile;
+    await Promise.all([
+      service.registerProjectlessWorkspace(first),
+      service.registerProjectlessWorkspace(second),
+      service.registerProjectlessWorkspace(first),
+      service.registerProjectlessWorkspace(alias),
+    ]);
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({ ZENX_PROVIDER: "fake" });
+    const saved = (await restarted.publicSettings()).profile;
+    assert.deepEqual(saved.projectlessWorkspaces, [first, second]);
+    assert.deepEqual(saved.workspaces, before.workspaces);
+    assert.equal(saved.workspace, before.workspace);
+    assert.equal(saved.lastUsedWorkspace, before.lastUsedWorkspace);
+    const projection = new ZenXProjectProjection();
+    await projection.updateConfiguration(
+      saved.workspaces,
+      saved.workspace,
+      saved.lastUsedWorkspace,
+      saved.projectNames,
+      saved.projectlessWorkspaces,
+    );
+    const snapshot = await projection.project([
+      { id: "parent", cwd: first },
+      { id: "child", cwd: first },
+      { id: "other", cwd: path.join(first, "nested") },
+    ]);
+    assert.deepEqual(snapshot.projectlessThreadIds, ["parent", "child"]);
+    assert.equal(await projection.configuredWorkspace(first), null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("projectless allocation cannot dispatch when the real profile writer rejects", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-projectless-settings-failure-"),
+  );
+  class RejectingStore extends ZenXHostProfileStore {
+    reject = false;
+    override async write(value: ZenXHostProfile): Promise<void> {
+      if (this.reject) throw new Error("synthetic profile disk failure");
+      await super.write(value);
+    }
+  }
+  try {
+    const store = new RejectingStore(path.join(directory, "host-profile.json"));
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      profileStore: store,
+      vault: new ZenXCredentialVault(path.join(directory, "vault"), encryption),
+      subscription: inactiveSubscription(),
+    });
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    store.reject = true;
+    const allocator = new ZenXProjectlessWorkspaceAllocator({
+      rootDirectory: path.join(directory, "Documents", "ZenX"),
+      now: () => new Date(2026, 9, 27, 12),
+      registerWorkspace: (cwd) => service.registerProjectlessWorkspace(cwd),
+    });
+    let dispatches = 0;
+    await assert.rejects(
+      (async () => {
+        await allocator.allocate("task");
+        dispatches++;
+      })(),
+      /synthetic profile disk failure/u,
+    );
+    assert.equal(dispatches, 0);
+    assert.equal(
+      (await service.publicSettings()).profile.projectlessWorkspaces,
+      undefined,
+    );
+    assert.equal(
+      (await store.readOptional())!.projectlessWorkspaces,
+      undefined,
+    );
+    assert.deepEqual(
+      await readdir(path.join(directory, "Documents", "ZenX", "2026-10-27")),
+      ["task"],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("subscription presets initialize a new profile but never refill a saved catalog", async () => {
   const directory = await mkdtemp(
