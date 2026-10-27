@@ -1,3 +1,5 @@
+import type { AutomationEnvironmentSnapshot } from "./automation-environment.js";
+
 export interface ZenXComputerAccessCheck {
   state: "ready" | "needs-setup" | "failed" | "unknown" | "not-applicable";
   detail?: string;
@@ -20,6 +22,7 @@ export interface ZenXComputerReadinessSnapshot {
     | "unknown"
     | "not-applicable";
   foregroundControlEnabled: boolean;
+  environment?: AutomationEnvironmentSnapshot;
   verification?: ZenXComputerAccessVerification;
 }
 
