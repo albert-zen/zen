@@ -196,11 +196,11 @@ image. The capture is consumed once. The native helper checks availability of it
 Apple window-local primitive and revalidates the original PID launch, retained
 window, bounds and desktop before posting. It never substitutes AXPress or global
 input. The native route supports known console sessions, including locked or display-off,
-when fresh exact OS geometry and full-window SCK capture are available. It never
+when fresh exact OS geometry and verified native full-window capture are available. It never
 unlocks or wakes a display. Unknown/suspended/off-console states fail closed.
 Windows and Peekaboo variants omit this tool; foreground takeover remains active-only.
-SCK requires macOS14+ and existing Screen Recording permission; older systems keep
-their existing AX/foreground path and refuse exact SCK capture explicitly.
+Verified native capture requires macOS14+ and existing Screen Recording permission; older systems keep
+their existing AX/foreground path and refuse the new verified native capture explicitly.
 
 This operation does not activate/raise the desktop window or move the hardware
 pointer; application-internal focus may change. App-local deactivation is best
@@ -215,9 +215,9 @@ on that provider instance, even after reselection.
 Native target identity is scoped to the current provider/session epoch, independently
 queried process birth (libproc PID/start time/UID), and fresh CG window ID/title/frame;
 macOS does not expose an immutable window-birth token. Same-app/title ambiguity,
-closed/offscreen/inactive windows, changed geometry and incoherent SCK image mapping
-are refused; the helper never chooses an arbitrary first/main window. OCR can read
-the existing exact SCK image while locked under the same native scope; it does not
+closed/inactive windows, changed geometry and incoherent full-window image mapping
+are refused; offscreen image capture still requires the actual asleep route and fresh OS scope. The helper never chooses an arbitrary first/main window. OCR can read
+the existing verified exact native image while locked under the same native scope; it does not
 recapture, renew its expiry or authorize input.
 
 Compatibility: on macOS12/13 (or an older helper without the SCK capability), a
@@ -238,3 +238,25 @@ result reports `recognitionSize` and `downsampled`; all text boxes, dimensions,
 hash, capture reference and time still describe the original capture. It never
 recaptures, renews expiry or changes input eligibility. The existing10-second,
 96-box and16KiB-text limits remain in force.
+
+The native route is selected from the actual display state before capture:
+SCK for a bright display, and an availability-checked Apple WindowServer
+single-window primitive for an asleep display. Both revalidate existing capture
+permission, process birth, exact window ID/frame, console session and unchanged
+display state. WindowServer additionally requires explicit readable sharing state,
+one typed image, coherent full-frame integer scale and the same16MP budget. Its
+source is `native_window_server_exact_window`; SCK remains
+`native_sck_exact_window`. Either must carry trusted `backgroundInputEligible:true`
+in the existing Host capture to authorize the new click. The model cannot supply
+or upgrade those flags. Color normalization preserves dimensions and orientation;
+fully transparent images are refused, while an opaque black window is legitimate.
+Errors do not switch capture routes, activate a desktop window or wake a display.
+Native failures retain bounded stage and NSError domain/code without private error
+descriptions or userInfo. Runtime private-primitive availability and real native
+errors remain decisive; this is not an arbitrary-app or every-OS guarantee.
+
+Window discovery keeps AX results and supplements current-user, live-process CG
+windows with nonempty titles and valid geometry when AX windows are unavailable.
+The query is forwarded to native discovery; duplicate PID/title hints are not
+added. Discovery returns existing target hints only; selection still re-reads
+exact window uniqueness, identity and geometry before capture or input.

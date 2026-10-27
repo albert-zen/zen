@@ -22,7 +22,10 @@ export interface ComputerCaptureImage {
   bytes?: number;
   imageSha256?: string;
   capturedAt?: string;
-  captureSource?: "native_sck_exact_window" | "legacy_desktop_capturer";
+  captureSource?:
+    | "native_sck_exact_window"
+    | "native_window_server_exact_window"
+    | "legacy_desktop_capturer";
   backgroundInputEligible?: boolean;
   expiresAt?: string;
 }
@@ -220,7 +223,10 @@ export class ComputerTargetSession {
       );
     if (
       capture.image.backgroundInputEligible !== true ||
-      capture.image.captureSource !== "native_sck_exact_window"
+      ![
+        "native_sck_exact_window",
+        "native_window_server_exact_window",
+      ].includes(capture.image.captureSource ?? "")
     )
       throw new Error(
         "This legacy/read-only capture is not eligible for background input; no input dispatched",

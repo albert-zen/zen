@@ -502,7 +502,7 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
   },
   mainDocument:
     computerCapabilityManifest.mainDocument +
-    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish native SCK input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click.",
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click.",
   permissions: [
     ...computerCapabilityManifest.permissions,
     {
@@ -517,7 +517,7 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_background_click",
       description:
-        "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS 14+ console session, including locked; requires a fresh full-window SCK screenshot and uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+        "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS 14+ console session, including locked; requires a fresh verified native full-window screenshot (SCK when bright, WindowServer when asleep) and uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
       inputSchema: objectSchema(
         {
           target: targetSchema(),
@@ -1943,6 +1943,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     const targets = (await this.#accessibility.run(
       {
         operation: "listWindows",
+        ...(query === undefined ? {} : { query }),
       },
       signal,
     )) as ComputerInspection["target"][];
@@ -2238,7 +2239,10 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
               return await legacyCapture();
             if (
               result.coordinateSpace !== "full_window_pixels_top_left" ||
-              result.source !== "screen_capture_kit_exact_window"
+              ![
+                "screen_capture_kit_exact_window",
+                "window_server_exact_window",
+              ].includes(result.source)
             )
               throw new Error(
                 "Native full-window coordinate proof unavailable",
@@ -2256,7 +2260,10 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
               throw new Error("Native image dimensions changed while reading");
             return {
               ...(await this.#saveScreenshot(binding.target, image)),
-              captureSource: "native_sck_exact_window" as const,
+              captureSource:
+                result.source === "window_server_exact_window"
+                  ? ("native_window_server_exact_window" as const)
+                  : ("native_sck_exact_window" as const),
               backgroundInputEligible:
                 binding.windowLocalInputAvailable === true,
             };
@@ -2709,6 +2716,7 @@ export async function resolveMacNativeHelperExecutable(
 export const MAC_ACCESSIBILITY_SOURCE = `import AppKit
 import ApplicationServices
 import Foundation
+import Darwin
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\\n").utf8))
@@ -2910,6 +2918,50 @@ func frameFingerprint(_ element: AXUIElement) -> String {
   return String(format: "%.1f,%.1f,%.1f,%.1f", frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
 }
 
+// Discovery produces only existing target hints. Binding re-reads all OS identity,
+// uniqueness and geometry before it can authorize capture or mutation.
+func discoveryProcessIdentity(_ pid: pid_t) -> [UInt64]? {
+  guard pid > 0 else { return nil }
+  var info = proc_bsdinfo()
+  let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+  guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+        info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0 else { return nil }
+  return [UInt64(info.pbi_pid), UInt64(info.pbi_uid), info.pbi_start_tvsec, info.pbi_start_tvusec]
+}
+func discoveryCGTarget(_ row: [String: Any]) -> [String: Any]? {
+  guard let pid = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+        let birth = discoveryProcessIdentity(pid),
+        (row[kCGWindowNumber as String] as? NSNumber)?.intValue ?? 0 > 0,
+        (row[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+        let title = row[kCGWindowName as String] as? String, !title.isEmpty,
+        let rawBounds = row[kCGWindowBounds as String] as? [String: Any],
+        let bounds = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+        bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite,
+        bounds.width > 0, bounds.height > 0 else { return nil }
+  let app = NSRunningApplication(processIdentifier: pid)
+  var target: [String: Any] = ["pid": Int(pid), "applicationName": app?.localizedName ?? "", "windowTitle": title]
+  if let bundle = app?.bundleIdentifier, !bundle.isEmpty { target["bundleId"] = bundle }
+  guard discoveryProcessIdentity(pid) == birth else { return nil }
+  return target
+}
+func supplementWindowTargets(_ ax: [[String: Any]], _ cg: [[String: Any]], _ query: String?) -> [[String: Any]] {
+  func key(_ target: [String: Any]) -> String {
+    return String((target["pid"] as? NSNumber)?.intValue ?? 0) + "\\n" + (target["windowTitle"] as? String ?? "")
+  }
+  func matches(_ target: [String: Any]) -> Bool {
+    guard let query = query, !query.isEmpty else { return true }
+    let value = String((target["pid"] as? NSNumber)?.intValue ?? 0) + " " + (target["applicationName"] as? String ?? "") + " " + (target["windowTitle"] as? String ?? "")
+    return value.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+  }
+  var result = ax.filter(matches)
+  let existing = Set(ax.map(key))
+  let counts = Dictionary(grouping: cg, by: key).mapValues { $0.count }
+  for target in cg where !existing.contains(key(target)) && counts[key(target)] == 1 && matches(target) {
+    result.append(target)
+  }
+  return result
+}
+
 let data = FileHandle.standardInput.readDataToEndOfFile()
 guard let raw = try? JSONSerialization.jsonObject(with: data),
       let request = raw as? [String: Any] else { fail("request must be JSON") }
@@ -2967,6 +3019,12 @@ if operation == "listWindows" {
       targets.append(target)
     }
   }
+  // CG supplements AX when a locked application's AX windows are unavailable.
+  // Do not infer focus or choose the first duplicate title. Foreign-user/dead
+  // processes and missing metadata never become discoverable target hints.
+  let rows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+  let cgTargets = rows.compactMap(discoveryCGTarget)
+  targets = supplementWindowTargets(targets, cgTargets, string(request["query"]))
   guard let output = try? JSONSerialization.data(withJSONObject: targets) else { fail("could not encode windows") }
   FileHandle.standardOutput.write(output)
   exit(0)
@@ -4096,6 +4154,60 @@ final class WindowCaptureResult {
   func finish(_ value: Result<CGImage, Error>) { lock.lock(); result = value; lock.unlock() }
   func read() -> Result<CGImage, Error>? { lock.lock(); defer { lock.unlock() }; return result }
 }
+typealias WindowServerImageFunction = @convention(c) (UInt32, UnsafePointer<UInt32>, UInt32, UInt32, CGRect) -> Unmanaged<CFArray>?
+typealias WindowServerConnectionFunction = @convention(c) () -> UInt32
+let windowServerLibrary = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_LOCAL)
+let windowServerImageFunction: WindowServerImageFunction? = windowServerLibrary.flatMap { dlsym($0, "SLSHWCaptureWindowListInRect") }.map { unsafeBitCast($0, to: WindowServerImageFunction.self) }
+let windowServerConnectionFunction: WindowServerConnectionFunction? = windowServerLibrary.flatMap { dlsym($0, "CGSMainConnectionID") }.map { unsafeBitCast($0, to: WindowServerConnectionFunction.self) }
+
+func normalizeWindowServerImage(_ image: CGImage, _ width: Int, _ height: Int) throws -> CGImage {
+  guard image.width == width, image.height == height, width > 0, height > 0,
+        width <= 8192, height <= 8192, width <= 16_000_000 / height else { try refuse("WindowServer image disagrees with bounded full-window pixels") }
+  guard let color = CGColorSpace(name: CGColorSpace.sRGB),
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: color,
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { try refuse("WindowServer image normalization unavailable") }
+  // Color conversion only: no flip, crop or resize; the context owns its buffer.
+  context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+  guard let data = context.data else { try refuse("WindowServer pixels unavailable") }
+  let bytes = data.assumingMemoryBound(to: UInt8.self)
+  guard stride(from: 3, to: width * height * 4, by: 4).contains(where: { bytes[$0] != 0 }) else { try refuse("WindowServer image is fully transparent; no input proof") }
+  // Opaque black is a legitimate window image, not an API error classifier.
+  guard let result = context.makeImage() else { try refuse("WindowServer image copy unavailable") }
+  return result
+}
+func captureWindowServerImage(_ binding: Binding, _ width: Int, _ height: Int) throws -> CGImage {
+  try binding.verify()
+  func sharingFence() throws {
+    let rows = ownedRows(binding.app, binding.windowId)
+    guard rows.count == 1, let sharing = (rows[0][kCGWindowSharingState as String] as? NSNumber)?.intValue,
+          sharing == 1 || sharing == 2 else { try refuse("Exact window sharing is disabled or unknown") }
+  }
+  try sharingFence()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(), CGDisplayIsAsleep(CGMainDisplayID()) != 0 else { try refuse("Asleep exact-window capture permission/display state changed") }
+  guard binding.windowId > 0, let capture = windowServerImageFunction, let mainConnection = windowServerConnectionFunction else { try refuse("WindowServer exact-window capture primitive unavailable") }
+  let connection = mainConnection()
+  guard connection != 0 else { try refuse("WindowServer main connection unavailable") }
+  let image: CGImage = try autoreleasepool {
+    let ids = [CGWindowID(binding.windowId)]
+    let returned = ids.withUnsafeBufferPointer { capture(connection, $0.baseAddress!, 1, 0x800, binding.bounds) }
+    guard let returned else { try refuse("WindowServer exact-window capture returned no image") }
+    // Apple primitive returns +0/autoreleased. Consume only our added +1; ARC
+    // releases it at pool scope. Never takeRetainedValue on the original +0.
+    let images = returned.retain().takeRetainedValue()
+    guard CFGetTypeID(images) == CFArrayGetTypeID(), CFArrayGetCount(images) == 1,
+          let raw = CFArrayGetValueAtIndex(images, 0) else { try refuse("WindowServer capture did not return exactly one image") }
+    let value = Unmanaged<CFTypeRef>.fromOpaque(raw).takeUnretainedValue()
+    guard CFGetTypeID(value) == CGImage.typeID else { try refuse("WindowServer capture element is not an image") }
+    // Keep the element independently alive while the array's retain is balanced.
+    let original = Unmanaged<CGImage>.fromOpaque(raw).retain().takeRetainedValue()
+    let result = try normalizeWindowServerImage(original, width, height)
+    withExtendedLifetime(images) {}
+    return result
+  }
+  try binding.verify(); try sharingFence()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted(), CGDisplayIsAsleep(CGMainDisplayID()) != 0 else { try refuse("Asleep exact-window capture permission/display state changed") }
+  return image
+}
 @available(macOS 14.0, *)
 func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
   binding.capturedAt = nil; binding.captureSession = nil
@@ -4107,13 +4219,19 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
   SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
     guard let content, error == nil else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-shareable-content")) } ?? TargetError(message: "SCK content unavailable"))); return }
     let matches = content.windows.filter { $0.windowID == CGWindowID(binding.windowId) && $0.owningApplication?.processID == binding.app.processIdentifier }
-    guard matches.count == 1, let window = matches.first, window.isActive, window.isOnScreen, window.frame == binding.bounds else { completion.finish(.failure(TargetError(message: "Fresh SCK exact window/geometry unavailable"))); return }
+    guard matches.count == 1, let window = matches.first, window.isActive, (displayAsleep || window.isOnScreen), window.frame == binding.bounds else { completion.finish(.failure(TargetError(message: "Fresh SCK exact window/geometry unavailable"))); return }
     let filter = SCContentFilter(desktopIndependentWindow: window)
     let scale = Double(filter.pointPixelScale)
     guard filter.contentRect == binding.bounds, scale.isFinite, scale > 0, scale <= 4 else { completion.finish(.failure(TargetError(message: "SCK full-window coordinate mapping unavailable"))); return }
     let width = Int((binding.bounds.width * scale).rounded()), height = Int((binding.bounds.height * scale).rounded())
     guard width > 0, height > 0, abs(Double(width) - binding.bounds.width * scale) < 0.001, abs(Double(height) - binding.bounds.height * scale) < 0.001 else { completion.finish(.failure(TargetError(message: "Exact full-window image mapping is incoherent"))); return }
     guard width <= 8192, height <= 8192, width * height <= 16_000_000 else { completion.finish(.failure(CaptureImageBudgetExceeded())); return }
+    if displayAsleep {
+      guard [1.0, 2.0, 3.0, 4.0].contains(scale) else { completion.finish(.failure(TargetError(message: "WindowServer full-window integer scale is unavailable"))); return }
+      do { completion.finish(.success(try captureWindowServerImage(binding, width, height))) }
+      catch { completion.finish(.failure(error)) }
+      return
+    }
     let config = SCStreamConfiguration(); config.width = width; config.height = height
     config.showsCursor = false
     if #available(macOS 15.0, *) { config.showMouseClicks = false }
@@ -4135,13 +4253,14 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
     return ["source": "legacy_required", "reason": "image_budget"]
   }
   try binding.verify()
+  guard CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() else { try refuse("Exact window capture permission changed") }
   guard try lockedSession() == session, (CGDisplayIsAsleep(CGMainDisplayID()) != 0) == displayAsleep else { try refuse("Console session/display state changed during capture") }
   guard let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { try refuse("Could not create private screenshot") }
   CGImageDestinationAddImage(destination, image, nil)
   guard CGImageDestinationFinalize(destination) else { try refuse("Could not save private screenshot") }
   chmod(path, 0o600)
   binding.capturedAt = Date(); binding.captureSession = session
-  return ["width": image.width, "height": image.height, "coordinateSpace": "full_window_pixels_top_left", "source": "screen_capture_kit_exact_window"]
+  return ["width": image.width, "height": image.height, "coordinateSpace": "full_window_pixels_top_left", "source": displayAsleep ? "window_server_exact_window" : "screen_capture_kit_exact_window"]
 }
 // Only this operation uses PID-scoped window-local packets. Foreground input below
 // retains its explicit global/activation semantics; there is no fallback between them.
@@ -4163,7 +4282,7 @@ func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted:
         binding.bounds.contains(CGPoint(x: x, y: y)) else { try refuse("Invalid bound background click point") }
   try binding.verify()
   guard let capturedAt = binding.capturedAt, Date().timeIntervalSince(capturedAt) < 300,
-        binding.captureSession == (try lockedSession()) else { try refuse("Fresh exact-window SCK capture required before background input") }
+        binding.captureSession == (try lockedSession()) else { try refuse("Fresh verified native exact-window capture required before background input") }
   binding.capturedAt = nil; binding.captureSession = nil
   let baseline = try DesktopFence()
   guard baseline.windows.contains(binding.windowId) else { try refuse("Selected window is not currently observable") }

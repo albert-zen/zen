@@ -862,3 +862,47 @@ test("background native ACK without matching up receipt is unknown and consumes 
     /no input dispatched/,
   );
 });
+
+test("verified WindowServer capture uses the same owner/capture one-shot authority as SCK", async () => {
+  const { session, calls } = fixture(),
+    target = { pid: 7, windowTitle: "Window" };
+  const image = await session.capture("a", target, signal, async () => ({
+    width: 800,
+    height: 400,
+    captureSource: "native_window_server_exact_window" as const,
+    backgroundInputEligible: true,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  }));
+  await session.backgroundClick(
+    "a",
+    target,
+    image.bindingId,
+    image.captureId,
+    200,
+    100,
+    signal,
+  );
+  assert.deepEqual(calls.at(-1), {
+    operation: "backgroundClick",
+    owner: "a",
+    bindingId: image.bindingId,
+    x: 0,
+    y: 70,
+  });
+  await assert.rejects(
+    session.backgroundClick(
+      "a",
+      target,
+      image.bindingId,
+      image.captureId,
+      200,
+      100,
+      signal,
+    ),
+    /unexpired|current/,
+  );
+  assert.equal(
+    calls.filter((r) => r.operation === "backgroundClick").length,
+    1,
+  );
+});

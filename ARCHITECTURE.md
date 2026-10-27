@@ -1482,9 +1482,13 @@ actual child/pipe close; only the native posted/unverified receipt records poste
 input, and closed sessions or invalidated in-flight captures cannot publish fresh
 bindings or screenshot authority.
 
-Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, native scoped-session admission with fresh CG/SCK full-window geometry (including locked console sessions), PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
+Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, native scoped-session admission with fresh CG and verified native full-window geometry (including locked console sessions), PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
 
 Native Computer failures retain only a bounded static operation stage and sanitized NSError domain/code; private error descriptions and userInfo never enter tool results, and an error never grants retry or fallback authority.
+
+The existing native capture seam selects WindowServer single-window capture only from an observed asleep display, otherwise SCK; routes never retry each other on failure, and both must prove the same fresh owner/window geometry, permissions, source pixels and epoch before granting capture authority.
+
+Computer window discovery retains AX results and supplements unique current-user CG window hints when AX is unavailable; discovery never grants a binding or input authority and the existing native target selection revalidates exact process/window identity.
 
 Exact Computer captures retain their trusted image source and background-input eligibility: explicitly unavailable SCK or pre-capture pixel-budget refusal may use the existing active-session-only window thumbnail route, but legacy pixels never authorize native background input and unknown capture failures never fall back.
 
