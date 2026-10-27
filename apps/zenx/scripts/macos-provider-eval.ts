@@ -1,7 +1,11 @@
 // Deterministic real-macOS provider evaluation. No model/API calls or global input.
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, copyFile, rm } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { runMacosStateWatch } from "./macos-state-watch.js";
+import { writeFile, copyFile, rm } from "node:fs/promises";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
+import { bounded, pause, evaluationDuration } from "./macos-eval-lifecycle.mjs";
 import path from "node:path";
 import os from "node:os";
 import { app, BrowserWindow, screen } from "electron";
@@ -16,119 +20,173 @@ import {
   ElectronMacComputerBackend,
 } from "../src/main/capabilities/computer-provider.js";
 
-const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-  encoding: "utf8",
-}).trim();
+let sourceRevision = "unavailable",
+  holdMs = 0,
+  durationMs = 300000;
 const evidence = process.env.ZENX_MACOS_EVAL_DIR;
-if (!evidence)
-  throw Error("Set ZENX_MACOS_EVAL_DIR to a fresh private output directory");
-await mkdir(evidence, { recursive: false, mode: 0o700 });
-const scratch = await mkdtemp(path.join(os.tmpdir(), "zenx-macos-eval-"));
-app.setPath("userData", path.join(scratch, "profile"));
-app.setActivationPolicy("accessory");
-app.on("window-all-closed", () => undefined);
-const server = createEvaluationServer();
-const records: any[] = [];
-const cases: any[] = [];
-const front = () =>
-  execFileSync(
-    "/usr/bin/swift",
-    [
-      "-e",
-      'import AppKit; print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown")',
-    ],
-    { encoding: "utf8", timeout: 20000 },
-  ).trim();
-const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
-void app.whenReady().then(async () => {
-  const browser = createElectronWorkspaceBrowser({
-    artifactDirectory: path.join(evidence, "browser"),
-  });
-  browser.bindThreadSession("macos-eval", "macos-eval-thread");
-  const capability = new BrowserZenXCapabilityPackage(browser);
-  const computer = new ComputerZenXCapabilityPackage(
-    new ElectronMacComputerBackend(path.join(evidence, "computer")),
+try {
+  if (!evidence)
+    throw Error("Set ZENX_MACOS_EVAL_DIR to a fresh private output directory");
+  sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+    timeout: 2000,
+  }).trim();
+  holdMs = evaluationDuration(
+    "ZENX_MACOS_FIXTURE_HOLD_MS",
+    process.env.ZENX_MACOS_FIXTURE_HOLD_MS,
+    0,
+    true,
   );
-  async function invoke(
-    name: string,
-    args: any,
-    signal = AbortSignal.timeout(60000),
-  ) {
-    const start = performance.now();
-    try {
-      const result: any = await (
-        name.startsWith("computer_") ? computer : capability
-      ).invoke(name, {
-        name,
-        callId: `mac-eval-${records.length}`,
-        cwd: scratch,
-        arguments: { sessionId: "macos-eval", ...args },
-        signal,
-      });
-      records.push({
-        name,
-        arguments: args,
-        milliseconds: performance.now() - start,
-        bytes: Buffer.byteLength(JSON.stringify(result)),
-        result,
-      });
-      return result;
-    } catch (error) {
-      records.push({
-        name,
-        arguments: args,
-        milliseconds: performance.now() - start,
-        error: describe(error),
-      });
-      throw error;
-    }
-  }
-  async function test(name: string, run: () => Promise<void>) {
-    const start = performance.now();
-    try {
-      await run();
-      cases.push({
-        name,
-        status: "pass",
-        milliseconds: performance.now() - start,
-      });
-    } catch (error) {
-      cases.push({
-        name,
-        status:
-          /accessibility.*permission|permission.*accessibility|not trusted|not authorized/i.test(
-            describe(error),
-          )
-            ? "blocked"
-            : "fail",
-        error: describe(error),
-        milliseconds: performance.now() - start,
-      });
-    }
-  }
-  async function open(page: string) {
-    return invoke("browser_open", { url: `${base}/${page}` });
-  }
-  async function inspect(tab: any) {
-    return invoke("browser_inspect", { tabId: tab.tabId, full: true });
-  }
-  async function action(name: string, tab: any, label: string, extras = {}) {
-    const obs = await inspect(tab);
-    const target = obs.targets.find((t: any) => t.name === label);
-    assert.ok(target, label);
-    return invoke(name, {
-      tabId: tab.tabId,
-      observationId: obs.observationId,
-      targetId: target.targetId,
-      ...extras,
-    });
-  }
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as any).port}`;
-  const frontBefore = front();
-  const cursorBefore = screen.getCursorScreenPoint();
+  durationMs = evaluationDuration(
+    "ZENX_MACOS_EVAL_TIMEOUT_MS",
+    process.env.ZENX_MACOS_EVAL_TIMEOUT_MS,
+    300000,
+  );
+} catch (error) {
+  console.error(String(error));
+  app.exit(2);
+}
+if (process.argv.includes("--state-watch")) {
+  void runMacosStateWatch();
+} else void main();
+async function main() {
+  const controller = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => controller.abort(new Error("Evaluation deadline reached")),
+    Math.min(durationMs, 280000),
+  );
+  let scratch: string | undefined;
+  let server: ReturnType<typeof createEvaluationServer> | undefined;
+  let capability: BrowserZenXCapabilityPackage | undefined;
   let fixture: BrowserWindow | undefined;
+  const records: any[] = [];
+  const cases: any[] = [];
+  const cleanup: any = { errors: [] };
+  const pending = new Set<Promise<unknown>>();
+  const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const front = async () =>
+    (
+      await promisify(execFile)(
+        "/usr/bin/swift",
+        [
+          "-e",
+          'import AppKit; print(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown")',
+        ],
+        { signal: controller.signal, timeout: 20000 },
+      )
+    ).stdout.trim();
   try {
+    mkdirSync(evidence!, { recursive: false, mode: 0o700 });
+    scratch = mkdtempSync(path.join(os.tmpdir(), "zenx-macos-eval-"));
+    cleanup.scratch = scratch;
+    app.setPath("userData", path.join(scratch, "profile"));
+    app.setActivationPolicy("accessory");
+    app.on("window-all-closed", () => undefined);
+    if (process.env.ZENX_MACOS_EVAL_FAIL_AT === "after-profile")
+      throw Error("Injected failure after profile");
+    server = createEvaluationServer();
+    await bounded(app.whenReady(), controller.signal);
+    const browser = createElectronWorkspaceBrowser({
+      artifactDirectory: path.join(evidence!, "browser"),
+    });
+    browser.bindThreadSession("macos-eval", "macos-eval-thread");
+    capability = new BrowserZenXCapabilityPackage(browser);
+    const computer = new ComputerZenXCapabilityPackage(
+      new ElectronMacComputerBackend(path.join(evidence!, "computer")),
+    );
+    async function invoke(
+      name: string,
+      args: any,
+      signal = AbortSignal.timeout(60000),
+    ) {
+      const start = performance.now();
+      try {
+        const operation = (
+          name.startsWith("computer_") ? computer : capability!
+        ).invoke(name, {
+          name,
+          callId: `mac-eval-${records.length}`,
+          cwd: scratch,
+          arguments: { sessionId: "macos-eval", ...args },
+          signal: AbortSignal.any([signal, controller.signal]),
+        });
+        pending.add(operation);
+        operation.then(
+          () => pending.delete(operation),
+          () => pending.delete(operation),
+        );
+        const result: any = await bounded(operation, controller.signal);
+        records.push({
+          name,
+          arguments: args,
+          milliseconds: performance.now() - start,
+          bytes: Buffer.byteLength(JSON.stringify(result)),
+          result,
+        });
+        return result;
+      } catch (error) {
+        records.push({
+          name,
+          arguments: args,
+          milliseconds: performance.now() - start,
+          error: describe(error),
+        });
+        throw error;
+      }
+    }
+    async function test(name: string, run: () => Promise<void>) {
+      const start = performance.now();
+      try {
+        await run();
+        cases.push({
+          name,
+          status: "pass",
+          milliseconds: performance.now() - start,
+        });
+      } catch (error) {
+        cases.push({
+          name,
+          status:
+            /accessibility.*permission|permission.*accessibility|not trusted|not authorized/i.test(
+              describe(error),
+            )
+              ? "blocked"
+              : "fail",
+          error: describe(error),
+          milliseconds: performance.now() - start,
+        });
+      }
+    }
+    async function open(page: string) {
+      return invoke("browser_open", { url: `${base}/${page}` });
+    }
+    async function inspect(tab: any) {
+      return invoke("browser_inspect", { tabId: tab.tabId, full: true });
+    }
+    async function action(name: string, tab: any, label: string, extras = {}) {
+      const obs = await inspect(tab);
+      const target = obs.targets.find((t: any) => t.name === label);
+      assert.ok(target, label);
+      return invoke(name, {
+        tabId: tab.tabId,
+        observationId: obs.observationId,
+        targetId: target.targetId,
+        ...extras,
+      });
+    }
+    await bounded(
+      new Promise<void>((resolve, reject) => {
+        server!.once("error", reject);
+        server!.listen(0, "127.0.0.1", resolve);
+      }),
+      controller.signal,
+    );
+    cleanup.port = (server.address() as any).port;
+    if (process.env.ZENX_MACOS_EVAL_FAIL_AT === "after-listen")
+      throw Error("Injected failure after listen");
+    const base = `http://127.0.0.1:${(server.address() as any).port}`;
+    const frontBefore = await front();
+    const cursorBefore = screen.getCursorScreenPoint();
     await test("B1 Unicode form via tool invoke", async () => {
       const tab = await open("form");
       await action("browser_type", tab, "Recipient", { text: "ZenX 测试" });
@@ -362,7 +420,7 @@ void app.whenReady().then(async () => {
         /not found|no matching|does not|unavailable|permission|Accessibility/i,
       );
     });
-    if (process.env.ZENX_MACOS_FIXTURE_HOLD_MS) {
+    if (holdMs > 0) {
       console.log(
         JSON.stringify({
           fixtureReady: true,
@@ -372,11 +430,9 @@ void app.whenReady().then(async () => {
           evidence,
         }),
       );
-      await new Promise((resolve) =>
-        setTimeout(resolve, Number(process.env.ZENX_MACOS_FIXTURE_HOLD_MS)),
-      );
+      await pause(holdMs, controller.signal);
     }
-    const frontAfter = front();
+    const frontAfter = await front();
     const cursorAfter = screen.getCursorScreenPoint();
     cases.push({
       name: "focus and system pointer isolation",
@@ -390,34 +446,75 @@ void app.whenReady().then(async () => {
       cursorBefore,
       cursorAfter,
     });
+  } catch (error) {
+    cases.push({
+      name: "harness/startup",
+      status: "blocked",
+      error: describe(error),
+    });
   } finally {
-    fixture?.destroy();
-    await capability.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await writeFile(
-      path.join(evidence, "results.json"),
-      JSON.stringify(
-        {
-          source: sourceRevision,
-          os: os.release(),
-          platform: process.platform,
-          arch: process.arch,
-          cases,
-          records,
-        },
-        null,
-        2,
+    clearTimeout(deadlineTimer);
+    controller.abort(new Error("Evaluation cleanup"));
+    const clean = async (name: string, operation: () => unknown) => {
+      try {
+        await bounded(
+          Promise.resolve().then(operation),
+          AbortSignal.timeout(2000),
+        );
+        cleanup[name] = true;
+      } catch (error) {
+        cleanup.errors.push({ name, error: describe(error) });
+      }
+    };
+    await clean("windowClosed", () => fixture?.destroy());
+    await clean("browserClosed", () => capability?.close());
+    await clean(
+      "serverClosed",
+      () =>
+        new Promise<void>((resolve) => {
+          if (!server?.listening) return resolve();
+          server.closeAllConnections();
+          server.close(() => resolve());
+        }),
+    );
+    await clean("operationsSettled", () => Promise.allSettled([...pending]));
+    cleanup.pendingOperations = pending.size;
+    if (scratch)
+      await clean("profileRemoved", () =>
+        rm(scratch!, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        }),
+      );
+    await clean("resultsWritten", () =>
+      writeFile(
+        path.join(evidence!, "results.json"),
+        JSON.stringify(
+          {
+            source: sourceRevision,
+            os: os.release(),
+            platform: process.platform,
+            arch: process.arch,
+            cases,
+            records,
+            cleanup,
+          },
+          null,
+          2,
+        ),
       ),
     );
-    console.log(JSON.stringify({ evidence, cases }));
-    await rm(scratch, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    }).catch((error) =>
-      console.error("Disposable profile cleanup:", describe(error)),
+    await clean("cleanupWritten", () =>
+      writeFile(
+        path.join(evidence!, "cleanup.json"),
+        JSON.stringify(cleanup, null, 2),
+      ),
     );
-    app.exit(cases.some((c) => c.status === "fail") ? 1 : 0);
+    console.log(JSON.stringify({ evidence, cases, cleanup }));
+    app.exit(
+      cases.some((c) => c.status !== "pass") || cleanup.errors.length ? 1 : 0,
+    );
   }
-});
+}
