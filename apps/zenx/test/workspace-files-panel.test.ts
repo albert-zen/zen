@@ -232,7 +232,7 @@ test("inline editors autosave real files, preserve in-flight input, and expose c
     await click("app.ts");
     assert.ok(document.querySelector(".file-source-editor .cm-editor"));
     await edit("export const value = 2;\n");
-    await settle();
+    await waitForSaved("app.ts", "export const value = 2;\n");
     assert.equal(
       (await readWorkspaceFile(workspace, "app.ts")).text,
       "export const value = 2;\n",
