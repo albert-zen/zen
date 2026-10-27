@@ -52,7 +52,12 @@ register(
 );
 
 function nativeBackend(t: TestContext, artifactDirectory?: string) {
-  const backend = new ElectronMacComputerBackend(artifactDirectory);
+  const backend = new ElectronMacComputerBackend(artifactDirectory, {
+    async run(request) {
+      assert.equal(request.operation, "sessionState");
+      return { sessionState: "active" };
+    },
+  });
   // Exercise the real target-session and screenshot writer with a fake native
   // transport, rather than replacing the production constructor or cleanup.
   t.mock.method(
