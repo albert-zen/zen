@@ -44,6 +44,7 @@ import {
   requestContextCompaction,
 } from "./compact-command.js";
 import { useWorkspaceFileDrafts } from "./workspace-file-drafts.js";
+import { SideChatDrafts } from "./side-chat-drafts.js";
 import { AuxiliaryPanel } from "./auxiliary-panel.js";
 import { SidebarResizer } from "./SidebarResizer.js";
 import { AgentReadinessNotice } from "./AgentReadinessNotice.js";
@@ -187,6 +188,7 @@ import {
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   SubagentCreationModelsContext,
+  SideChatDraftContext,
 } from "./subagents-ui.js";
 import { cancellationResultsFromItems } from "./queue-cancel-state.js";
 import type { WorkflowCommand } from "./workflow-commands.js";
@@ -450,16 +452,22 @@ export function updateThreadProjectionCache(
 function AppConversationProviders({
   models,
   modelCatalogError,
+  openSideChatDraft,
   ...actions
 }: React.ComponentProps<typeof ThreadViewActionsProvider> & {
   models: readonly ModelSummary[];
   modelCatalogError: string | null;
+  openSideChatDraft: NonNullable<
+    React.ContextType<typeof SideChatDraftContext>
+  >;
 }) {
   return (
     <SubagentCreationModelsContext.Provider
       value={{ models, error: modelCatalogError }}
     >
-      <ThreadViewActionsProvider {...actions} />
+      <SideChatDraftContext.Provider value={openSideChatDraft}>
+        <ThreadViewActionsProvider {...actions} />
+      </SideChatDraftContext.Provider>
     </SubagentCreationModelsContext.Provider>
   );
 }
@@ -526,6 +534,28 @@ function AppContent() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const archivingThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const composerStatesRef = useRef<Record<string, ComposerState>>({});
+  const [, refreshSideChatDrafts] = useState(0);
+  const [sideChatTabOrders, setSideChatTabOrders] = useState<
+    Record<string, string[]>
+  >({});
+  const sideChatTabOrdersRef = useRef(sideChatTabOrders);
+  sideChatTabOrdersRef.current = sideChatTabOrders;
+  const [sideChatSelections, setSideChatSelections] = useState<
+    Record<string, string>
+  >({});
+  const sideChatSelectionsRef = useRef(sideChatSelections);
+  sideChatSelectionsRef.current = sideChatSelections;
+  const sideChatDrafts = useRef(
+    new SideChatDrafts<{
+      itemId: string;
+      contextItemId: string | null;
+    }>(
+      () => refreshSideChatDrafts((revision) => revision + 1),
+      () => crypto.randomUUID(),
+      () => i18n.t("panels:sideChatCreationUnconfirmed"),
+    ),
+  ).current;
+
   const pinnedThreadIdsRef = useRef<string[]>([]);
   const sidebarOrderRef = useRef<ZenXSidebarOrder>(EMPTY_SIDEBAR_ORDER);
   const profilePreferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -544,6 +574,11 @@ function AppContent() {
       );
       composerStatesRef.current = states;
       setComposerStates(states);
+      for (const sideDraft of sideChatDrafts.entries())
+        sideChatDrafts.updateComposer(
+          sideDraft.id,
+          advanceComposerDraftRevision,
+        );
       const draft = newThreadDraftRef.current;
       if (draft !== null)
         confirmNewThreadDraft({
@@ -3073,6 +3108,226 @@ function AppContent() {
     }
   };
 
+  const openSideChatDraft: NonNullable<
+    React.ContextType<typeof SideChatDraftContext>
+  > = async (input) => {
+    const parent = input.parentThreadId;
+    const roomId = selectedRoom?.id;
+    const presentationOwner = roomId ? `room:${roomId}` : parent;
+    // Capture only authoritative prefix IDs, never a second copy of transcript semantics.
+    const { thread } = await window.zenx.protocol.request("zen/thread/read", {
+      threadId: parent,
+    });
+    const lastItem = thread.items.at(-1);
+    if (!lastItem)
+      throw new Error(i18n.t("panels:newConversationUnidentified"));
+    const draft = sideChatDrafts.open(
+      parent,
+      {
+        itemId: lastItem.id,
+        contextItemId: thread.itemList?.at(-1)?.id ?? null,
+      },
+      {
+        ...input,
+        ...(roomId ? { roomId } : {}),
+        inheritedModel: encodeModelKey(thread),
+        inheritedEffort: thread.reasoningEffort,
+      },
+    );
+    if (roomId) {
+      void sidebarState.controller.edit({ kind: "room", id: roomId }, () => ({
+        open: true,
+      }));
+    } else setBrowserPanels((current) => ({ ...current, [parent]: true }));
+    setSideChatSelections((current) => ({
+      ...current,
+      [presentationOwner]: `custom:side-chat-draft-${draft.id}`,
+    }));
+  };
+
+  const renderSideChatDraft = (id: string) => {
+    const draft = sideChatDrafts.get(id);
+    if (!draft) return null;
+    if (draft.threadId && draft.composer.submission === null)
+      return renderSideConversation(draft.threadId);
+    const model = draft.model ?? draft.inheritedModel;
+    const chosen = models.find((entry) => entry.id === model);
+    const effort =
+      draft.effort ??
+      (draft.model ? chosen?.defaultReasoningEffort : draft.inheritedEffort) ??
+      null;
+    const settings = model
+      ? {
+          threadId: id,
+          modelProvider: decodeModelKey(model).providerProfileId,
+          model,
+          reasoningEffort: effort,
+        }
+      : null;
+    const effortInvalid =
+      effort !== null &&
+      !chosen?.supportedReasoningEfforts.some(
+        (entry) => entry.reasoningEffort === effort,
+      );
+    const imageError = imageCapabilityMessage(
+      providerProfiles,
+      settings,
+      models,
+    );
+    return (
+      <ThreadView
+        key={id}
+        composerId={`side-chat-draft-${id}`}
+        thread={null}
+        approvals={[]}
+        composer={draft.composer}
+        models={models}
+        providerProfiles={providerProfiles}
+        selectedModel={model}
+        selectedReasoningEffort={effort}
+        modelDisabled={draft.sending || !!draft.threadId}
+        modelError={
+          draft.creationUnconfirmed
+            ? i18n.t("panels:sideChatCreationUnconfirmed")
+            : effortInvalid
+              ? i18n.t("panels:childSelectionUnavailable")
+              : null
+        }
+        imageCapabilityError={imageError}
+        composerSendMode={composerSendMode}
+        onComposerSendModeChange={changeComposerSendMode}
+        onModelChange={(model) =>
+          sideChatDrafts.configure(id, { model, effort: undefined })
+        }
+        onReasoningChange={(effort) => sideChatDrafts.configure(id, { effort })}
+        onDraftChange={(text) =>
+          sideChatDrafts.updateComposer(id, (state) =>
+            editComposer(state, text),
+          )
+        }
+        onImportImages={async (files) => {
+          const images = await window.zenx.imageAttachments.import(
+            await Promise.all(
+              files.map(async (file) => ({
+                name: file.name,
+                mediaType: file.type,
+                bytes: new Uint8Array(await file.arrayBuffer()),
+              })),
+            ),
+          );
+          sideChatDrafts.updateComposer(id, (state) =>
+            addComposerImages(state, images),
+          );
+        }}
+        onPickImages={async () => {
+          const images = await window.zenx.imageAttachments.pick();
+          sideChatDrafts.updateComposer(id, (state) =>
+            addComposerImages(state, images),
+          );
+        }}
+        onRemoveImage={(image) =>
+          sideChatDrafts.updateComposer(id, (state) =>
+            removeComposerImage(state, image),
+          )
+        }
+        onReadAttachment={async (attachment) =>
+          await window.zenx.imageAttachments.read(attachment)
+        }
+        onInterrupt={async () => {}}
+        onRespondToApproval={respondToApproval}
+        onSubmit={async (intent, turn, observation) => {
+          if (
+            intent !== "start" ||
+            turn !== null ||
+            !model ||
+            !canSendWithModel(models, model)
+          )
+            return;
+          if (
+            isCompactCommand(draft.composer.draft.text) ||
+            effortInvalid ||
+            (draft.composer.draft.images.length > 0 && imageError)
+          )
+            return;
+          await sideChatDrafts.submit(
+            id,
+            async (current) => {
+              const result = await window.zenx.protocol.request(
+                "zen/thread/create-child-configured",
+                {
+                  parentThreadId: current.parentThreadId,
+                  mode: "side-chat",
+                  snapshot: current.boundary,
+                  ...(current.model ? { model: current.model } : {}),
+                  ...(current.effort ? { effort: current.effort } : {}),
+                },
+              );
+              if (!result.thread.id)
+                throw new Error(i18n.t("panels:newConversationUnidentified"));
+              return result.thread.id;
+            },
+            deliverComposerSubmission,
+            observation,
+          );
+          const current = sideChatDrafts.get(id);
+          if (current?.threadId && current.composer.submission === null) {
+            const child = current.threadId;
+            const owner = current.roomId
+              ? `room:${current.roomId}`
+              : current.parentThreadId;
+            const nativeOwner = current.roomId
+              ? { kind: "room" as const, id: current.roomId }
+              : current.parentThreadId;
+            updateComposer(child, () => current.composer);
+            const draftTab = `custom:side-chat-draft-${id}`;
+            const order = (
+              sideChatTabOrdersRef.current[owner] ??
+              (current.roomId
+                ? roomWorkspaceStates[current.roomId]?.tabs
+                : workspaceTabOrder[owner]) ??
+              []
+            ).map((tab) => (tab === draftTab ? `thread:${child}` : tab));
+            if (!order.includes(`thread:${child}`))
+              order.push(`thread:${child}`);
+            setSideChatTabOrders((orders) => ({ ...orders, [owner]: order }));
+            await sidebarState.controller.edit(nativeOwner, (state) => {
+              const tabs = [
+                ...state.tabs,
+                { kind: "thread" as const, threadId: child },
+              ];
+              const byId = new Map(tabs.map((tab) => [sidebarTabId(tab), tab]));
+              const ids = [...new Set([...order, ...byId.keys()])].filter(
+                (tab) => byId.has(tab),
+              );
+              return { tabs: ids.map((tab) => byId.get(tab)!) };
+            });
+            if (
+              sideChatSelectionsRef.current[owner] ===
+              `custom:side-chat-draft-${id}`
+            ) {
+              setSideChatSelections((selection) => ({
+                ...selection,
+                [owner]: "",
+              }));
+              if (current.roomId) {
+                await sidebarState.controller.select(
+                  nativeOwner,
+                  `thread:${child}`,
+                );
+              } else
+                setPanelTabs((tabs) => ({
+                  ...tabs,
+                  [owner]: `thread:${child}`,
+                }));
+            }
+            sideChatDrafts.close(id);
+            void loadThreadSummaries();
+          }
+        }}
+      />
+    );
+  };
+
   const renderSideConversation = (id: string) => (
     <ThreadConversationViewport
       queueEditStore={queueEditStore}
@@ -3120,6 +3375,7 @@ function AppContent() {
 
   const shell = (
     <AppConversationProviders
+      openSideChatDraft={openSideChatDraft}
       fork={forkMessage}
       source={openMessageSource}
       models={models}
@@ -3687,18 +3943,62 @@ function AppContent() {
                 key={selectedRoom.id}
                 room={selectedRoom}
                 presentationState={roomSidebarState}
+                ephemeralTabs={sideChatDrafts
+                  .entries()
+                  .filter((draft) => draft.roomId === selectedRoom.id)
+                  .map((draft) => ({
+                    id: `side-chat-draft-${draft.id}`,
+                    title: i18n.t("panels:sideChat"),
+                    icon: "users" as const,
+                    render: () =>
+                      sideChatSelections[`room:${selectedRoom.id}`] ===
+                      `custom:side-chat-draft-${draft.id}`
+                        ? renderSideChatDraft(draft.id)
+                        : null,
+                  }))}
+                localSelectedTab={sideChatSelections[`room:${selectedRoom.id}`]}
+                localTabOrder={sideChatTabOrders[`room:${selectedRoom.id}`]}
+                onLocalSelectTab={(tab) =>
+                  setSideChatSelections((current) => ({
+                    ...current,
+                    [`room:${selectedRoom.id}`]: tab.startsWith(
+                      "custom:side-chat-draft-",
+                    )
+                      ? tab
+                      : "",
+                  }))
+                }
+                onLocalTabsChange={(tabs) =>
+                  setSideChatTabOrders((current) => ({
+                    ...current,
+                    [`room:${selectedRoom.id}`]: tabs,
+                  }))
+                }
+
                 onFullscreenChange={(fullscreen) => {
                   void sidebarState.controller.edit(
                     { kind: "room", id: selectedRoom.id },
                     () => ({ fullscreen }),
                   );
                 }}
-                onRemoveTab={(id) =>
-                  sidebarState.controller.remove(
-                    { kind: "room", id: selectedRoom.id },
-                    id,
-                  )
-                }
+                onRemoveTab={(id) => {
+                  if (id.startsWith("custom:side-chat-draft-")) {
+                    sideChatDrafts.close(
+                      id.slice("custom:side-chat-draft-".length),
+                    );
+                    setSideChatSelections((current) => ({
+                      ...current,
+                      [`room:${selectedRoom.id}`]:
+                        current[`room:${selectedRoom.id}`] === id
+                          ? ""
+                          : (current[`room:${selectedRoom.id}`] ?? ""),
+                    }));
+                  } else
+                    sidebarState.controller.remove(
+                      { kind: "room", id: selectedRoom.id },
+                      id,
+                    );
+                }}
                 onReplaceTab={(oldId, tab) =>
                   replaceSidebarTab(
                     { kind: "room", id: selectedRoom.id },
@@ -3760,6 +4060,23 @@ function AppContent() {
                       : undefined,
                   threads: [...activeSummaries, ...archivedSummaries],
                 }}
+                customTabs={sideChatDrafts
+                  .entries()
+                  .filter(
+                    (draft) =>
+                      !draft.roomId && draft.parentThreadId === threadDetail.id,
+                  )
+                  .map((draft) => ({
+                    id: `side-chat-draft-${draft.id}`,
+                    title: i18n.t("panels:sideChat"),
+                    icon: "users" as const,
+                    render: () =>
+                      browserPanels[threadDetail.id] &&
+                      sideChatSelections[threadDetail.id] ===
+                        `custom:side-chat-draft-${draft.id}`
+                        ? renderSideChatDraft(draft.id)
+                        : null,
+                  }))}
                 conversations={(conversationPanels[threadDetail.id] ?? []).map(
                   (threadId) => {
                     const summary = [
@@ -3796,9 +4113,17 @@ function AppContent() {
                     fullscreen,
                   }));
                 }}
-                onRemoveTab={(id) =>
-                  sidebarState.controller.remove(threadDetail.id, id)
-                }
+                onRemoveTab={(id) => {
+                  if (id.startsWith("custom:side-chat-draft-")) {
+                    sideChatDrafts.close(
+                      id.slice("custom:side-chat-draft-".length),
+                    );
+                    setSideChatSelections((current) => ({
+                      ...current,
+                      [threadDetail.id]: "",
+                    }));
+                  } else sidebarState.controller.remove(threadDetail.id, id);
+                }}
                 onReplaceTab={(oldId, tab) =>
                   replaceSidebarTab(
                     { kind: "thread", id: threadDetail.id },
@@ -3820,20 +4145,39 @@ function AppContent() {
                   }))
                 }
                 snapshot={pluginSnapshot}
-                openedTabs={workspaceTabOrder[threadDetail.id]}
-                onTabsChange={(tabs) =>
-                  setWorkspaceTabOrder((current) => ({
+                openedTabs={
+                  sideChatTabOrders[threadDetail.id] ??
+                  workspaceTabOrder[threadDetail.id]
+                }
+                onTabsChange={(tabs) => {
+                  setSideChatTabOrders((current) => ({
                     ...current,
                     [threadDetail.id]: tabs,
-                  }))
-                }
-                selectedTab={panelTabs[threadDetail.id]}
-                onSelectTab={(tab) =>
-                  setPanelTabs((current) => ({
+                  }));
+                  setWorkspaceTabOrder((current) => ({
                     ...current,
-                    [threadDetail.id]: tab,
-                  }))
+                    [threadDetail.id]: tabs.filter(
+                      (id) => !id.startsWith("custom:side-chat-draft-"),
+                    ),
+                  }));
+                }}
+                selectedTab={
+                  sideChatSelections[threadDetail.id] ||
+                  panelTabs[threadDetail.id]
                 }
+                onSelectTab={(tab) => {
+                  setSideChatSelections((current) => ({
+                    ...current,
+                    [threadDetail.id]: tab.startsWith("custom:side-chat-draft-")
+                      ? tab
+                      : "",
+                  }));
+                  if (!tab.startsWith("custom:side-chat-draft-"))
+                    setPanelTabs((current) => ({
+                      ...current,
+                      [threadDetail.id]: tab,
+                    }));
+                }}
               />
             ) : null}
           </main>

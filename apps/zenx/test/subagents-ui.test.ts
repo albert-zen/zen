@@ -17,6 +17,7 @@ import {
 import {
   ChildThreadSidebarContext,
   SubagentCreationModelsContext,
+  SideChatDraftContext,
   PluginThreadHeaders,
   ThreadBreadcrumbAncestors,
   registerSubagentsUi,
@@ -128,41 +129,55 @@ async function fixture(
     await act(async () => {
       root.render(
         React.createElement(
-          ChildThreadSidebarContext.Provider,
-          { value: sidebar ?? null },
+          SideChatDraftContext.Provider,
+          {
+            value: async (input) => {
+              const call = {
+                pluginId: "zenx-app",
+                commandId: "open-draft",
+                input,
+              };
+              calls.push(call);
+              await execute(call);
+            },
+          },
           React.createElement(
-            SubagentCreationModelsContext.Provider,
-            { value: { ...modelCatalog } },
-            surface === "header"
-              ? React.createElement(PluginThreadHeaders, {
-                  snapshot,
-                  threadId: parent,
-                  threads,
-                  navigate,
-                  registry,
-                })
-              : surface === "breadcrumb"
-                ? React.createElement(ThreadBreadcrumbAncestors, {
+            ChildThreadSidebarContext.Provider,
+            { value: sidebar ?? null },
+            React.createElement(
+              SubagentCreationModelsContext.Provider,
+              { value: { ...modelCatalog } },
+              surface === "header"
+                ? React.createElement(PluginThreadHeaders, {
+                    snapshot,
                     threadId: parent,
                     threads,
                     navigate,
-                  })
-                : React.createElement(GenericPluginUiHost, {
                     registry,
-                    snapshot,
-                    pluginId: "zenx-subagents",
-                    surfaceId: "subagents-panel",
-                    context: {
+                  })
+                : surface === "breadcrumb"
+                  ? React.createElement(ThreadBreadcrumbAncestors, {
                       threadId: parent,
-                      quickCreate: surface === "quick-create",
                       threads,
-                      ...(active === undefined ? {} : { active }),
-                    },
-                    theme: "light",
-                    navigate,
-                    executeCommand,
-                    readHandle,
-                  }),
+                      navigate,
+                    })
+                  : React.createElement(GenericPluginUiHost, {
+                      registry,
+                      snapshot,
+                      pluginId: "zenx-subagents",
+                      surfaceId: "subagents-panel",
+                      context: {
+                        threadId: parent,
+                        quickCreate: surface === "quick-create",
+                        threads,
+                        ...(active === undefined ? {} : { active }),
+                      },
+                      theme: "light",
+                      navigate,
+                      executeCommand,
+                      readHandle,
+                    }),
+            ),
           ),
         ),
       );
@@ -197,21 +212,21 @@ async function fixture(
   };
 }
 
-test("Side chat creation always forks full context without starting a task", async () => {
+test("Side chat opening asks App for a local draft without creating or navigating a native child", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
-    call.commandId === "create" ? creation.promise : { threads: [] },
+    call.commandId === "open-draft" ? creation.promise : { threads: [] },
   );
   try {
     await f.render("selected-parent", "panel");
     await f.click(f.button("New side chat"));
     assert.deepEqual(
-      f.calls.filter((call) => call.commandId === "create"),
+      f.calls.filter((call) => call.commandId === "open-draft"),
       [
         {
-          pluginId: "zenx-subagents",
-          commandId: "create",
-          input: { parentThreadId: "selected-parent", mode: "side-chat" },
+          pluginId: "zenx-app",
+          commandId: "open-draft",
+          input: { parentThreadId: "selected-parent" },
         },
       ],
     );
@@ -221,16 +236,16 @@ test("Side chat creation always forks full context without starting a task", asy
     );
     assert.deepEqual(f.routes, []);
     await act(async () => creation.resolve({ threadId: "side-chat" }));
-    assert.deepEqual(f.routes, ["/threads/side-chat?view=panel"]);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }
 });
 
-test("two creation clicks before a render dispatch only one command", async () => {
+test("two opening clicks before a render dispatch only one App draft request", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
-    call.commandId === "create" ? creation.promise : { threads: [] },
+    call.commandId === "open-draft" ? creation.promise : { threads: [] },
   );
   try {
     await f.render("parent", "panel");
@@ -240,12 +255,12 @@ test("two creation clicks before a render dispatch only one command", async () =
       fresh.click();
     });
     assert.equal(
-      f.calls.filter((call) => call.commandId === "create").length,
+      f.calls.filter((call) => call.commandId === "open-draft").length,
       1,
     );
     assert.equal(f.button("New side chat").disabled, true);
     await act(async () => creation.resolve({ thread: { id: "created" } }));
-    assert.deepEqual(f.routes, ["/threads/created?view=panel"]);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }
@@ -289,7 +304,7 @@ test("a late list reply cannot repopulate the panel after its parent changes", a
 test("a late create reply from the old panel parent does not navigate or refresh the new parent", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
-    call.commandId === "create" ? creation.promise : { threads: [] },
+    call.commandId === "open-draft" ? creation.promise : { threads: [] },
   );
   try {
     await f.render("parent-a");
@@ -301,8 +316,8 @@ test("a late create reply from the old panel parent does not navigate or refresh
     assert.equal(f.calls.length, callsBeforeReply);
     assert.equal(f.button("New side chat").disabled, false);
     assert.deepEqual(
-      f.calls.filter((call) => call.commandId === "create")[0]?.input,
-      { parentThreadId: "parent-a", mode: "side-chat" },
+      f.calls.filter((call) => call.commandId === "open-draft")[0]?.input,
+      { parentThreadId: "parent-a" },
     );
   } finally {
     await f.close();
@@ -312,7 +327,7 @@ test("a late create reply from the old panel parent does not navigate or refresh
 test("disabling the plugin withdraws the panel and ignores its pending creation", async () => {
   const creation = deferred<unknown>();
   const f = await fixture(async (call) =>
-    call.commandId === "create" ? creation.promise : { threads: [] },
+    call.commandId === "open-draft" ? creation.promise : { threads: [] },
   );
   try {
     await f.render("parent");
@@ -463,7 +478,7 @@ test("a pending Side chat creation cannot navigate after its panel hides, even i
   for (const reopen of [false, true]) {
     const creation = deferred<unknown>();
     const f = await fixture(async (call) =>
-      call.commandId === "create" ? creation.promise : { threads: [] },
+      call.commandId === "open-draft" ? creation.promise : { threads: [] },
     );
     try {
       await f.render("parent", "panel", [], undefined, true);
@@ -482,7 +497,7 @@ test("a pending Side chat creation cannot navigate after its panel hides, even i
   }
 });
 
-test("chooser quick-create reuses side-chat creation without loading the tree", async () => {
+test("chooser quick-create opens an App draft without loading the tree", async () => {
   const f = await fixture(async () => ({ threadId: "quick-child" }));
   try {
     await f.render("parent", "quick-create");
@@ -494,12 +509,12 @@ test("chooser quick-create reuses side-chat creation without loading the tree", 
     await f.click(f.button("New side chat"));
     assert.deepEqual(f.calls, [
       {
-        pluginId: "zenx-subagents",
-        commandId: "create",
-        input: { parentThreadId: "parent", mode: "side-chat" },
+        pluginId: "zenx-app",
+        commandId: "open-draft",
+        input: { parentThreadId: "parent" },
       },
     ]);
-    assert.deepEqual(f.routes, ["/threads/quick-child?view=panel"]);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }
@@ -556,7 +571,7 @@ async function chooseCreationOption(
 
 test("side chat model and effort are exact creation arguments; no task starts", async () => {
   const f = await fixture(async (call) =>
-    call.commandId === "create"
+    call.commandId === "open-draft"
       ? { threadId: "configured-child" }
       : { threads: [] },
   );
@@ -572,12 +587,11 @@ test("side chat model and effort are exact creation arguments; no task starts", 
     await f.click(f.button("New side chat"));
     assert.deepEqual(
       f.calls
-        .filter((call) => call.commandId === "create")
+        .filter((call) => call.commandId === "open-draft")
         .map((call) => call.input),
       [
         {
           parentThreadId: "parent",
-          mode: "side-chat",
           model: second.id,
           effort: "xhigh",
         },
@@ -587,7 +601,7 @@ test("side chat model and effort are exact creation arguments; no task starts", 
       f.calls.some((call) => call.commandId === "send"),
       false,
     );
-    assert.deepEqual(f.routes, ["/threads/configured-child?view=panel"]);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }
@@ -595,7 +609,7 @@ test("side chat model and effort are exact creation arguments; no task starts", 
 
 test("changing model clears effort and changing parent resets creation choices", async () => {
   const f = await fixture(async (call) =>
-    call.commandId === "create" ? { threadId: "child" } : { threads: [] },
+    call.commandId === "open-draft" ? { threadId: "child" } : { threads: [] },
   );
   const first = creationModel("a", "reasoning", ["high"]);
   const second = creationModel("b", "text-only", []);
@@ -611,8 +625,8 @@ test("changing model clears effort and changing parent resets creation choices",
     await f.click(f.button("Side chat model settings"));
     await f.click(f.button("New side chat"));
     assert.deepEqual(
-      f.calls.find((call) => call.commandId === "create")?.input,
-      { parentThreadId: "parent", mode: "side-chat", model: second.id },
+      f.calls.find((call) => call.commandId === "open-draft")?.input,
+      { parentThreadId: "parent", model: second.id },
     );
     await f.render("other", "panel");
     await f.click(f.button("Side chat model settings"));
@@ -640,7 +654,7 @@ test("removed models and unsupported efforts block creation until the user choos
       /selected model or effort is unavailable/,
     );
     assert.equal(
-      f.calls.some((call) => call.commandId === "create"),
+      f.calls.some((call) => call.commandId === "open-draft"),
       false,
     );
     await chooseCreationOption(f, "Child model", "");
@@ -653,7 +667,7 @@ test("removed models and unsupported efforts block creation until the user choos
 test("effort-only choices retain the inherited model and survive a failed creation", async () => {
   let attempts = 0;
   const f = await fixture(async (call) => {
-    if (call.commandId !== "create") return { threads: [] };
+    if (call.commandId !== "open-draft") return { threads: [] };
     if (++attempts === 1) throw new Error("Host unavailable");
     return { threadId: "retried-child" };
   });
@@ -675,14 +689,14 @@ test("effort-only choices retain the inherited model and survive a failed creati
     await f.click(f.button("New side chat"));
     assert.deepEqual(
       f.calls
-        .filter((call) => call.commandId === "create")
+        .filter((call) => call.commandId === "open-draft")
         .map((call) => call.input),
       [
-        { parentThreadId: "parent", mode: "side-chat", effort: "high" },
-        { parentThreadId: "parent", mode: "side-chat", effort: "high" },
+        { parentThreadId: "parent", effort: "high" },
+        { parentThreadId: "parent", effort: "high" },
       ],
     );
-    assert.deepEqual(f.routes, ["/threads/retried-child?view=panel"]);
+    assert.deepEqual(f.routes, []);
   } finally {
     await f.close();
   }
@@ -888,7 +902,7 @@ test("child visibility retry preserves same-panel model and effort creation choi
   };
   const f = await fixture(
     async (call) =>
-      call.commandId === "create"
+      call.commandId === "open-draft"
         ? { threadId: "configured-child" }
         : { threads: [] },
     sidebar,
@@ -948,12 +962,11 @@ test("child visibility retry preserves same-panel model and effort creation choi
     await f.click(f.button("New side chat"));
     assert.deepEqual(
       f.calls
-        .filter((call) => call.commandId === "create")
+        .filter((call) => call.commandId === "open-draft")
         .map((call) => call.input),
       [
         {
           parentThreadId: "parent",
-          mode: "side-chat",
           model: model.id,
           effort: "high",
         },
@@ -963,7 +976,7 @@ test("child visibility retry preserves same-panel model and effort creation choi
       f.calls.some((call) => /send|pin/i.test(call.commandId)),
       false,
     );
-    assert.deepEqual(f.routes, ["/threads/configured-child?view=panel"]);
+    assert.deepEqual(f.routes, []);
     assert.deepEqual(sidebar.visibleSubagentThreadIds, ["child-a"]);
     assert.equal(attempts, 2);
   } finally {

@@ -134,6 +134,69 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+test("Side chat preserves the exact open-time history and semantic context prefixes", async () => {
+  const f = fixture();
+  const parent = await f.server.startThread();
+  await (
+    await f.server.startTurn(parent.id, "before opening")
+  ).done;
+  const opened = await f.server.readThread(parent.id);
+  const snapshot = {
+    itemId: opened.items.at(-1)!.id,
+    contextItemId: opened.itemList!.at(-1)?.id ?? null,
+  };
+  await (
+    await f.server.startTurn(parent.id, "after opening")
+  ).done;
+  const advanced = await f.server.readThread(parent.id);
+  const child = await f.server.createChildThread({
+    parentThreadId: parent.id,
+    mode: "side-chat",
+    snapshot,
+  });
+  assert.equal(child.parentThreadId, parent.id);
+  assert.match(JSON.stringify(child.items), /before opening/);
+  assert.doesNotMatch(JSON.stringify(child.items), /after opening/);
+  assert.match(
+    JSON.stringify(compileItemList(child.itemList!).messages),
+    /before opening/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(compileItemList(child.itemList!).messages),
+    /after opening/,
+  );
+  assert.equal(
+    f.requests.length,
+    2,
+    "opening the side chat starts no model request",
+  );
+  assert.deepEqual(
+    (await f.server.readThread(parent.id)).items,
+    advanced.items,
+  );
+});
+
+test("Side chat rejects missing snapshot boundaries instead of copying newer history", async () => {
+  const f = fixture();
+  const parent = await f.server.startThread();
+  await assert.rejects(
+    f.server.createChildThread({
+      parentThreadId: parent.id,
+      mode: "side-chat",
+      snapshot: { itemId: "missing", contextItemId: null },
+    }),
+    /snapshot.*unavailable/i,
+  );
+  await assert.rejects(
+    f.server.createChildThread({
+      parentThreadId: parent.id,
+      mode: "side-chat",
+      snapshot: { itemId: parent.items.at(-1)!.id, contextItemId: "missing" },
+    }),
+    /snapshot.*unavailable/i,
+  );
+});
+
 test("Side chat snapshots the active full tail, cancels inherited work, and waits for its first explicit ask", async () => {
   const entered = deferred<void>();
   const release = deferred<void>();

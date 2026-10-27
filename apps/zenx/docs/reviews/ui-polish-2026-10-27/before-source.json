@@ -1,0 +1,26 @@
+{
+  "commit": "b85af87a3cdea701feaaed5bd0ec9148e22dbde0",
+  "dirtyFiles": [],
+  "scope": "Production App welcome/Project selector/Fleet machine selector and AuxiliaryPanel. All app bridge facts and tab contents are synthetic. CSP blocks all network connections. No user profile, real Host, filesystem, model or native desktop action.",
+  "artifact": {
+    "html": "ui-polish-visual.html",
+    "htmlSha256": "4e5ea2e2ff72db6897c64a4ac411579a3be07c899715646589b33085c5c955a7"
+  },
+  "sources": {
+    "scripts/build-ui-polish-visual.mjs": "16813c985597bde2f589dbaa5e45c597df9597121b0f98e3d2db194d21c86f27",
+    "scripts/capture-ui-polish-visual.mjs": "edd15a5be46abbb1b59ac3e673fdb2f2428dca897d9871e5fc325145ad900196",
+    "scripts/preview-browser.mjs": "fa825e48b1196dff7da7617004452e3a9bab46b8492614e4d17bed84d54f24be",
+    "scripts/preview-browser-lifecycle.mjs": "71ee505a535bbd4701e48668a66e26821f335a4dc0dc44bbf7af80274dde84fa",
+    "src/renderer/src/App.tsx": "fc796a5e3900d08c58a63850114e559f028d775d0c21a45042ccb33c986c1c6f",
+    "src/renderer/src/auxiliary-panel.tsx": "9ccb4efba2eacc0c4c7eb3c189daafc045681943be7aa5fba7659f7b4a959e2a",
+    "src/renderer/src/FleetComposerSurface.tsx": "d080242d0330ba21d07df1d21b7cbc9809fff5031f323d9b9d5da8f83e291381",
+    "src/renderer/src/ThreadView.tsx": "7cf0dc2747a5ead47ea5f51af376a820001a0dcde2ea85bbd668efb0d3f00aa7",
+    "src/renderer/src/Sidebar.tsx": "4a6eef9672ff7c1b7b0ffdbdb0a387ef267a1db7ee4d619777ffe518df33ce4f",
+    "src/renderer/src/fleet-ui.css": "8938aeee96151bf5851a64d51faf79d0eee2ca56958fa864703c2fa414322069",
+    "src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
+    "src/renderer/src/styles.css": "b28d6ad7b3d7addf4c9ad52e5496f39fdec02d5fc4442f32b2c4c81640395272",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "test/fixtures/ui-polish-visual.tsx": "4379bb1c0361e307c714769a3a4420370c5d640f259cf076ac4701c0082e5c9c",
+    "test/fixtures/ui-polish-visual.html": "7a7c4c2f5b20fa8164ac4eb1196d5aa4e513b1735750ea04ff56b124d8a6f882"
+  }
+}

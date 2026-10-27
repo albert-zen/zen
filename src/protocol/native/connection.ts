@@ -662,7 +662,11 @@ export class NativeConnection {
             "parentThreadId and fresh/fork/side-chat mode are required",
           );
         for (const key of Object.keys(params)) {
-          if (!["parentThreadId", "mode", "model", "effort"].includes(key))
+          if (
+            !["parentThreadId", "mode", "model", "effort", "snapshot"].includes(
+              key,
+            )
+          )
             throw new AppServerError(
               "invalid_request",
               `Unexpected argument: ${key}`,
@@ -709,6 +713,12 @@ export class NativeConnection {
         const thread = await this.#appServer.createChildThread({
           parentThreadId: params.parentThreadId,
           mode: params.mode,
+          ...(params.snapshot === undefined
+            ? {}
+            : {
+                snapshot:
+                  params.snapshot as import("../../app-server.js").CreateChildThreadInput["snapshot"] & {},
+              }),
           ...(selection === undefined
             ? params.effort === undefined
               ? {}

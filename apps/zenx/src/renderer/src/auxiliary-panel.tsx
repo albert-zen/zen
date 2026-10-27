@@ -33,6 +33,7 @@ import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
+import { ActionMenu } from "./ui/controls.js";
 
 function panelIcon(pluginId: string): IconName {
   if (pluginId === "zenx-subagents") return "users";
@@ -175,7 +176,9 @@ export function AuxiliaryPanel({
   const [choosing, setChoosing] = useState(false);
   const selectedDescriptor =
     presentationState?.tabs.find((tab) => sidebarTabId(tab) === selectedTab) ??
-    presentationState?.tabs[0];
+    (customTabs.some((tab) => `custom:${tab.id}` === selectedTab)
+      ? undefined
+      : presentationState?.tabs[0]);
   const selectedResource = !choosing
     ? selectedDescriptor?.resourceThreadId
     : undefined;
@@ -217,6 +220,13 @@ export function AuxiliaryPanel({
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
+  const dragSource = useRef<string | null>(null);
+  const [tabDrag, setTabDrag] = useState<{
+    source: string;
+    target?: string;
+    placement?: "before" | "after";
+  } | null>(null);
+  const reorderedFocus = useRef<string | null>(null);
   const fileBody = useRef<HTMLDivElement>(null);
   const [fileNavigationWidth, setFileNavigationWidth] = useState(192);
   const [fileNavigationHeight, setFileNavigationHeight] = useState(180);
@@ -430,8 +440,24 @@ export function AuxiliaryPanel({
       ...(descriptor.kind === "file" ? { path: descriptor.path } : {}),
     });
   }
-  const ids = presentationState
-    ? presentationState.tabs.map(sidebarTabId)
+  const persistedIds = presentationState?.tabs.map(sidebarTabId);
+  // Unsaved side chats belong to this renderer. Their owner filters these IDs
+  // out of durable mutations and supplies the combined order via openedTabs.
+  const ephemeralIds = customTabs
+    .map((tab) => `custom:${tab.id}`)
+    .filter((id) => !persistedIds?.includes(id));
+  const presentationIds = persistedIds
+    ? [...persistedIds, ...ephemeralIds]
+    : undefined;
+  const ids = presentationIds
+    ? ephemeralIds.length && openedTabs
+      ? [
+          ...new Set([
+            ...openedTabs.filter((id) => presentationIds.includes(id)),
+            ...presentationIds,
+          ]),
+        ]
+      : presentationIds
     : [
         ...new Set([
           ...order,
@@ -475,6 +501,8 @@ export function AuxiliaryPanel({
     snapshot,
   ]);
   const tabs = ids.map((id) => available.get(id)!);
+  const canReorder =
+    tabs.length > 1 && (!presentationState || Boolean(onTabsChange));
   const active =
     selectedTab && ids.includes(selectedTab) ? selectedTab : ids[0];
   const idsRef = useRef(ids);
@@ -487,6 +515,58 @@ export function AuxiliaryPanel({
   activeRef.current = active;
   orderRef.current = order;
   threadIdRef.current = threadId;
+  const clearTabDrag = () => {
+    dragSource.current = null;
+    setTabDrag(null);
+  };
+  const reorderTab = (
+    source: string,
+    target: string,
+    after: boolean,
+    focus = false,
+  ) => {
+    const current = idsRef.current;
+    if (
+      !canReorder ||
+      source === target ||
+      !current.includes(source) ||
+      !current.includes(target)
+    )
+      return;
+    const next = current.filter((id) => id !== source);
+    next.splice(next.indexOf(target) + (after ? 1 : 0), 0, source);
+    if (next.every((id, index) => id === current[index])) return;
+    if (focus) reorderedFocus.current = source;
+    setOrder(next);
+  };
+  const moveTab = (id: string, direction: -1 | 1) => {
+    const current = idsRef.current;
+    const index = current.indexOf(id);
+    const target = current[index + direction];
+    if (index >= 0 && target) reorderTab(id, target, direction === 1, true);
+  };
+  useLayoutEffect(() => {
+    const id = reorderedFocus.current;
+    if (!id) return;
+    reorderedFocus.current = null;
+    document.getElementById(`aux-tab-${id}`)?.focus({ preventScroll: true });
+  }, [signature]);
+  const workspaceIdentity = roomContext
+    ? `room:${roomContext.roomId}`
+    : `thread:${threadId}`;
+  useEffect(() => {
+    clearTabDrag();
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clearTabDrag();
+    };
+    window.addEventListener("keydown", cancel);
+    window.addEventListener("blur", clearTabDrag);
+    return () => {
+      dragSource.current = null;
+      window.removeEventListener("keydown", cancel);
+      window.removeEventListener("blur", clearTabDrag);
+    };
+  }, [workspaceIdentity, open, signature]);
   const resourceCurrent = (epoch: number, owner: string) =>
     mounted.current &&
     threadIdRef.current === owner &&
@@ -592,6 +672,7 @@ export function AuxiliaryPanel({
     suppressFollowing();
     setPresentation(undefined);
     selectionEpoch.current += 1;
+    reorderedFocus.current = null;
     pendingTabFocus.current = focusTab ? id : null;
     setChoosing(false);
     setPickingFile(false);
@@ -602,6 +683,7 @@ export function AuxiliaryPanel({
     // Host SDK panel requests can change selection without calling select().
     // Fence pending actions as soon as that external selection is committed.
     selectionEpoch.current += 1;
+    reorderedFocus.current = null;
     if (pendingTabFocus.current !== selectedTab) pendingTabFocus.current = null;
     setChoosing(false);
     setPickingFile(false);
@@ -1176,6 +1258,70 @@ export function AuxiliaryPanel({
                   (tab.externalBrowser?.activityCount ?? 0) > 0,
                 )}
                 key={tab.id}
+                draggable={canReorder}
+                data-dragging={tabDrag?.source === tab.id || undefined}
+                data-drop-placement={
+                  tabDrag?.target === tab.id ? tabDrag.placement : undefined
+                }
+                onDragStart={(event) => {
+                  if (
+                    !canReorder ||
+                    (event.target as HTMLElement).closest(
+                      ".workspace-tab-close",
+                    )
+                  ) {
+                    event.preventDefault();
+                    return;
+                  }
+                  dragSource.current = tab.id;
+                  setTabDrag({ source: tab.id });
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData(
+                    "application/x-zenx-workspace-tab",
+                    tab.id,
+                  );
+                }}
+                onDragOver={(event) => {
+                  const source = dragSource.current;
+                  if (!source || !canReorder) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  const placement =
+                    event.clientX < bounds.left + bounds.width / 2
+                      ? "before"
+                      : "after";
+                  setTabDrag({ source, target: tab.id, placement });
+                  const rail = tabRail.current;
+                  if (rail) {
+                    const edge = rail.getBoundingClientRect();
+                    if (event.clientX < edge.left + 28) rail.scrollLeft -= 20;
+                    else if (event.clientX > edge.right - 28)
+                      rail.scrollLeft += 20;
+                  }
+                }}
+                onDragLeave={(event) => {
+                  if (
+                    event.relatedTarget instanceof Node &&
+                    event.currentTarget.contains(event.relatedTarget)
+                  )
+                    return;
+                  const source = dragSource.current;
+                  setTabDrag(source ? { source } : null);
+                }}
+                onDrop={(event) => {
+                  const source = dragSource.current;
+                  if (!source) return;
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  reorderTab(
+                    source,
+                    tab.id,
+                    event.clientX >= bounds.left + bounds.width / 2,
+                  );
+                  clearTabDrag();
+                }}
+                onDragEnd={clearTabDrag}
               >
                 <button
                   type="button"
@@ -1184,9 +1330,23 @@ export function AuxiliaryPanel({
                   aria-selected={!showChooser && active === tab.id}
                   aria-controls={`aux-content-${tab.id}`}
                   tabIndex={active === tab.id ? 0 : -1}
+                  aria-keyshortcuts={
+                    canReorder ? "Alt+ArrowLeft Alt+ArrowRight" : undefined
+                  }
                   title={tab.path ?? tab.browser?.url ?? tab.title}
                   onClick={() => select(tab.id)}
                   onKeyDown={(event) => {
+                    if (
+                      event.altKey &&
+                      !event.ctrlKey &&
+                      !event.metaKey &&
+                      ["ArrowLeft", "ArrowRight"].includes(event.key)
+                    ) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      moveTab(tab.id, event.key === "ArrowLeft" ? -1 : 1);
+                      return;
+                    }
                     const next =
                       event.key === "Home"
                         ? 0
@@ -1247,6 +1407,35 @@ export function AuxiliaryPanel({
               </span>
             ))}
           </div>
+          {canReorder && active && !showChooser ? (
+            <span className="workspace-tab-reorder-menu">
+              <ActionMenu
+                compact
+                label={i18n.t("panels:reorderWorkspaceTab", {
+                  defaultValue: "Reorder {{title}}",
+                  title: available.get(active)?.title,
+                })}
+                items={[
+                  {
+                    label: i18n.t("panels:moveWorkspaceTabLeft", {
+                      defaultValue: "Move left",
+                    }),
+                    description: "Alt+←",
+                    disabled: ids.indexOf(active) === 0,
+                    onSelect: () => moveTab(active, -1),
+                  },
+                  {
+                    label: i18n.t("panels:moveWorkspaceTabRight", {
+                      defaultValue: "Move right",
+                    }),
+                    description: "Alt+→",
+                    disabled: ids.indexOf(active) === ids.length - 1,
+                    onSelect: () => moveTab(active, 1),
+                  },
+                ]}
+              />
+            </span>
+          ) : null}
           <button
             type="button"
             className="icon-button workspace-add-tab"

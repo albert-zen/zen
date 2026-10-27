@@ -70,6 +70,7 @@ export function Select({
   disabled,
   className = "",
   popoverClassName = "",
+  showIndicator = true,
   ...props
 }: Omit<
   ComponentProps<typeof SelectPrimitive.Trigger>,
@@ -80,6 +81,7 @@ export function Select({
   children: ReactNode;
   /** Optional class for the portaled dropdown, e.g. a wider machine picker. */
   popoverClassName?: string;
+  showIndicator?: boolean;
 }) {
   useTranslation("panels");
   const items = choices(children);
@@ -104,9 +106,11 @@ export function Select({
         <SelectPrimitive.Value>
           {selected?.label ?? i18n.t("panels:unavailableSelection")}
         </SelectPrimitive.Value>
-        <SelectPrimitive.Icon>
-          <Icon name="chevron-down" size={14} />
-        </SelectPrimitive.Icon>
+        {showIndicator ? (
+          <SelectPrimitive.Icon>
+            <Icon name="chevron-down" size={14} />
+          </SelectPrimitive.Icon>
+        ) : null}
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content

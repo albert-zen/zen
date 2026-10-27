@@ -36,6 +36,16 @@ export const SubagentCreationModelsContext = createContext<{
   error: string | null;
 }>({ models: [], error: null });
 
+/** App owns unsent side chats, outside the native Thread catalog. */
+export const SideChatDraftContext = createContext<
+  | null
+  | ((input: {
+      parentThreadId: string;
+      model?: string;
+      effort?: string;
+    }) => Promise<void>)
+>(null);
+
 /** Trusted shell preference only; plugin commands and canonical Threads stay unchanged. */
 export const ChildThreadSidebarContext = createContext<{
   visibleSubagentThreadIds: readonly string[];
@@ -154,7 +164,6 @@ function useRelatedThreads(sdk: PluginUiSurfaceProps["sdk"]) {
 function CreateSideChat({
   sdk,
   parent,
-  onCreated,
   compact = false,
 }: {
   sdk: PluginUiSurfaceProps["sdk"];
@@ -164,6 +173,7 @@ function CreateSideChat({
 }) {
   useTranslation("panels");
   const catalog = useContext(SubagentCreationModelsContext);
+  const openDraft = useContext(SideChatDraftContext);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -220,20 +230,13 @@ function CreateSideChat({
     setBusy(true);
     setError(null);
     try {
-      const result = (await sdk.commands.execute("create", {
+      if (!openDraft)
+        throw new Error(i18n.t("panels:newConversationUnidentified"));
+      await openDraft({
         parentThreadId: source,
-        mode: "side-chat",
         ...(model ? { model } : {}),
         ...(effort ? { effort } : {}),
-      })) as { thread?: { id?: string }; threadId?: string };
-      const id = result.thread?.id ?? result.threadId;
-      if (!id) throw new Error(i18n.t("panels:newConversationUnidentified"));
-      if (mounted.current && epoch.current === requestEpoch) {
-        onCreated();
-        sdk.navigation.navigate(
-          `/threads/${encodeURIComponent(id)}?view=panel`,
-        );
-      }
+      });
     } catch (cause) {
       if (mounted.current && epoch.current === requestEpoch)
         setError(message(cause));
