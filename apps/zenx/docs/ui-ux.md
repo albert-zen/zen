@@ -450,6 +450,7 @@ ThreadView
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - macOS 同行标题栏的 traffic lights 与左侧栏开关拥有独立、共享的 leading 安全区；右栏展开、左侧栏收起或布局动画不能让工作区 Tab、滚动轨道和拖动命中区侵入。安全区约束整个 Tab 容器，不依赖首个 Tab 的名称或顺序；窄屏仍沿用独立标题行。
 - 宽窗口可以调整右栏宽度或展开；窄窗口打开右栏时使用工作区全宽，关闭返回聊天。Tab 支持左右方向键、Home/End；Escape 还原展开或关闭右栏。
+- Computer 后台应用键盘活动明确显示“向指定应用的当前焦点输入；应用内焦点可能变化”，不称为指定窗口/控件输入，不在旧窗口画指针或恢复截图新鲜度。它使用独立本机应用键盘权限，旧前台接管和窗口点击语义不变。
 - 文件选择器从当前 Thread 的 cwd 浏览现有 UTF-8 文本，上限 1 MiB；目录最多显示 2,000 项并提示截断，不显示符号链接，拒绝解析时位于 cwd 外的路径。路径检查界定普通浏览范围，不构成防御本机进程并发替换文件树的 OS 沙箱。每个文件直接占一个顶层 Tab，Markdown 使用连续编辑与光标附近语法展开，其他文本直接编辑；自动保存，无常规 Edit / Preview / Save 按钮，Ctrl/Cmd+S 可立即提交待保存内容。保留 BOM 与未修改区域的混合换行。保存前校验读取版本，冲突保留草稿并可查看磁盘版本；不提供无提示强制覆盖。保存使用临时文件替换，并串行化 Host 内同一路径的保存，外部编辑采用乐观检查而非跨进程文件锁。草稿跨面板和 Thread 切换保留在窗口内；关闭文件先完成保存，失败保留文件和输入；丢弃冲突草稿重新读磁盘需要明确操作，窗口关闭仍有未保存内容时提示。文件不自动监视，也不缓存为会话历史。
 - 文件选择器提供按需展开的文件树，以及覆盖当前 Thread 精确 cwd 的文件名/相对路径搜索；搜索不会退化成当前已展开目录的过滤。文件名是主标签，搜索结果的父路径单独显示，完整路径保留在 tooltip 和文件头。方向键导航树、左右展开/折叠，Enter 打开，Escape 清除搜索；输入法组合期间不提交。返回、切换 Thread、更新查询和刷新后，旧读取不能回填。显式“打开输入的路径”保留已知相对路径入口，仍经同一 Host 校验。
 - 目录沿用每次 2,000 项限制，树最多显示 2,000 行；搜索沿用 80 结果、10,000 扫描项、32 层与 500 ms 检查预算，并明确提示部分结果；它不保证文件系统调用的硬超时。搜索跳过依赖目录、Git 元数据和符号链接，不建立索引或读取文件内容。清除搜索恢复已展开目录；刷新重新读取。
@@ -829,3 +830,5 @@ Sidebar 的已提交 patch/state 日志是恢复真相源；当前 map / JSON �
 不能 ACK 或通知成功；下一次读取先核对日志，不凭旧缓存重试。旧 JSON 仅一次显式
 legacy import，导入时间不是历史点击时间。UI/tool 来源由可信入口固定，不等同于
 真人操作；这些产品事实不进入模型 ItemList。缓存写失败不撤销已经持久的事实。
+
+App-current-focus keyboard permission explains that the selected app’s own windows may reorder behind the current foreground app while foreign windows, global foreground and hardware pointer stay stable; it grants no exact-window guarantee and does not relax the separate exact-window click contract.

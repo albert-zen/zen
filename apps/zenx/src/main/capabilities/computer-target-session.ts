@@ -6,6 +6,7 @@ export interface BoundComputerTarget {
   /** Native runtime capability, absent on older/missing-SPI helpers. */
   windowLocalInputAvailable?: true;
   exactWindowCaptureAvailable?: true;
+  appKeyboardInputAvailable?: true;
   target: {
     pid: number;
     applicationName: string;
@@ -50,6 +51,22 @@ export type BoundComputerInput =
   | { operation: "type"; text: string }
   | { operation: "shortcut"; key: string; modifiers: string[] }
   | { operation: "scroll"; deltaY: number };
+
+export const COMPUTER_BASIC_KEYS = [
+  "enter",
+  "escape",
+  "tab",
+  "backspace",
+  "space",
+  "arrowUp",
+  "arrowDown",
+  "arrowLeft",
+  "arrowRight",
+] as const;
+export function validateComputerAppText(text: string): void {
+  if (!text || Array.from(text).length > 1024 || /[\uD800-\uDFFF]/u.test(text))
+    throw new Error("text must contain 1 to 1024 well-formed Unicode scalars");
+}
 
 /** Ephemeral per-provider, per-thread native target selection. Never persisted or inferred from the foreground app. */
 export class ComputerTargetSession {
@@ -265,6 +282,92 @@ export class ComputerTargetSession {
       if (this.#selected.get(owner) === binding) this.#selected.delete(owner);
       throw error;
     }
+  }
+
+  async backgroundType(
+    owner: string,
+    bindingId: string,
+    text: string,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<unknown> {
+    validateComputerAppText(text);
+    return this.#appKeyboard(
+      owner,
+      bindingId,
+      { operation: "backgroundType", text },
+      signal,
+      onStopping,
+    );
+  }
+
+  async backgroundKeyPress(
+    owner: string,
+    bindingId: string,
+    key: string,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<unknown> {
+    if (!(COMPUTER_BASIC_KEYS as readonly string[]).includes(key))
+      throw new Error("Unsupported background app key");
+    return this.#appKeyboard(
+      owner,
+      bindingId,
+      { operation: "backgroundKeyPress", key },
+      signal,
+      onStopping,
+    );
+  }
+
+  async #appKeyboard(
+    owner: string,
+    bindingId: string,
+    action: Record<string, unknown>,
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<unknown> {
+    signal.throwIfAborted();
+    const binding = this.#selected.get(owner);
+    if (this.#closed || !binding || binding.bindingId !== bindingId)
+      throw new Error(
+        "Selected application binding changed or expired; select again; no input dispatched",
+      );
+    if (binding.appKeyboardInputAvailable !== true)
+      throw new Error(
+        "Selected helper has no app keyboard capability; no input dispatched",
+      );
+    this.invalidateCaptures();
+    try {
+      const receipt = await this.transport.request(
+        { ...action, owner, bindingId },
+        signal,
+        onStopping,
+      );
+      if (
+        !isPostedComputerInputReceipt(receipt) ||
+        (receipt as { release?: unknown }).release !== "posted" ||
+        (receipt as { targetScope?: unknown }).targetScope !==
+          "application_current_focus"
+      )
+        throw new Error(
+          "Invalid app keyboard receipt; input outcome unknown; do not retry automatically",
+        );
+      return receipt;
+    } catch (error) {
+      if (this.#selected.get(owner) === binding) this.#selected.delete(owner);
+      throw error;
+    }
+  }
+
+  /** Identity label only; this intentionally discards the original window. */
+  selectedApplication(
+    owner: string,
+    bindingId: string,
+  ): ComputerTarget | undefined {
+    const target = this.selectedTarget(owner, bindingId);
+    if (!target) return;
+    const { windowTitle: _window, ...application } = target;
+    return application;
   }
 
   invalidateSelections(): void {

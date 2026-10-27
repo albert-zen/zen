@@ -240,10 +240,15 @@ export function PluginAccessReview({
               computer?.environment?.lockedUse === "provider-dependent"
                 ? permissions.some(
                     (permission) =>
-                      permission.id === "computer.window.background_click",
+                      permission.id === "computer.app.background_keyboard",
                   )
-                  ? "pluginAccessReview.sessionNativeWindowDetail"
-                  : "pluginAccessReview.sessionNativeDetail"
+                  ? "pluginAccessReview.sessionNativeAppDetail"
+                  : permissions.some(
+                        (permission) =>
+                          permission.id === "computer.window.background_click",
+                      )
+                    ? "pluginAccessReview.sessionNativeWindowDetail"
+                    : "pluginAccessReview.sessionNativeDetail"
                 : "pluginAccessReview.sessionDetail",
             )}
             action={null}

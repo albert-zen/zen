@@ -24,7 +24,8 @@ body {
   overflow: hidden;
   background: var(--color-surface-main);
 }
-body[data-scenario^="environment-"] .synthetic-panel {
+body[data-scenario^="environment-"] .synthetic-panel,
+body[data-scenario="computer-app-permission"] .synthetic-panel {
   height: auto;
   padding: 20px;
 }

@@ -628,6 +628,8 @@ export const en = {
     "Locked use is unsupported. Display off is separate from system sleep; display power is not reported here.",
   "pluginAccessReview.sessionNativeDetail":
     "Native macOS accessibility can be checked while locked; app support varies. Foreground control and window images require unlock. Display power is not reported here.",
+  "pluginAccessReview.sessionNativeAppDetail":
+    "Native macOS can attempt separately authorized input to the selected application’s current focus while locked. App focus may change; this is not an exact-window guarantee. Window capture/click retain their own permission and target checks. No wake or unlock; native failures remain failures.",
   "pluginAccessReview.sessionNativeWindowDetail":
     "On macOS 14+, the native provider can read a selected window and attempt a separately authorized background click while locked. Each operation checks the target again; application support varies. Foreground control requires unlock. Display power is not reported here.",
   "pluginAccessReview.idlePrevention": "Idle prevention",
@@ -1938,6 +1940,8 @@ export const zhCN: Record<keyof typeof en, string> = {
     "不支持在锁屏状态下使用。显示器熄灭与系统休眠是不同状态；这里不报告显示器供电状态。",
   "pluginAccessReview.sessionNativeDetail":
     "锁屏时可实际检查原生辅助功能，能否操作取决于目标应用；前台控制和窗口图像需要解锁。这里不报告显示器供电状态。",
+  "pluginAccessReview.sessionNativeAppDetail":
+    "原生 macOS 可在单独授权后，尝试向所选应用的当前焦点输入，包括锁屏时；应用内焦点可能变化，不保证是原窗口。窗口截图和点击仍有各自权限与目标校验。不唤醒或解锁，原生失败仍会明确报告。",
   "pluginAccessReview.sessionNativeWindowDetail":
     "在 macOS 14 及以上版本，原生服务商可在锁屏时读取指定窗口，并在单独授权后尝试后台点击。每次操作都会重新核对目标，能否操作取决于应用。前台控制需要解锁。这里不报告显示器供电状态。",
   "pluginAccessReview.idlePrevention": "闲置期间保持运行",
