@@ -1,0 +1,959 @@
+{
+  "commit": "3fa8dd902da3f8391a2cf1cf0bc18a8087e585c7",
+  "scope": "Synthetic local UI fixture using production App/Project selector/Fleet machine selector/AuxiliaryPanel. Network is blocked by fixture CSP; no real Host, profile, user data, model, filesystem or native desktop action.",
+  "welcome": [
+    {
+      "name": "welcome-light-1280",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "documentWidth": 1280,
+        "documentHeight": 900
+      },
+      "machineMenu": {
+        "options": [
+          "This machine",
+          "Design and prototyping MacBook Pro for the visual QA lab",
+          "Research workstation · Linux"
+        ],
+        "highlighted": "This machine",
+        "viewportWidth": 1280,
+        "overflow": false
+      },
+      "projectOpen": {
+        "options": ["Zen", "Design system", "Field notes"],
+        "rect": {
+          "left": 370,
+          "right": 656,
+          "top": 640,
+          "bottom": 847
+        },
+        "overflow": false
+      },
+      "focusedProject": "Design system",
+      "selectedProject": "Design system",
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 2,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      }
+    },
+    {
+      "name": "welcome-light-390",
+      "viewport": {
+        "width": 390,
+        "height": 900,
+        "documentWidth": 390,
+        "documentHeight": 900
+      },
+      "machineMenu": {
+        "options": [
+          "This machine",
+          "Design and prototyping MacBook Pro for the visual QA lab",
+          "Research workstation · Linux"
+        ],
+        "highlighted": "This machine",
+        "viewportWidth": 390,
+        "overflow": false
+      },
+      "projectOpen": {
+        "options": ["Zen", "Design system", "Field notes"],
+        "rect": {
+          "left": 30,
+          "right": 316,
+          "top": 650,
+          "bottom": 857
+        },
+        "overflow": false
+      },
+      "focusedProject": "Design system",
+      "selectedProject": "Design system",
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 2,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      }
+    },
+    {
+      "name": "welcome-dark-1280",
+      "viewport": {
+        "width": 1280,
+        "height": 900,
+        "documentWidth": 1280,
+        "documentHeight": 900
+      },
+      "machineMenu": {
+        "options": [
+          "本机",
+          "Design and prototyping MacBook Pro for the visual QA lab",
+          "Research workstation · Linux"
+        ],
+        "highlighted": "本机",
+        "viewportWidth": 1280,
+        "overflow": false
+      },
+      "projectOpen": {
+        "options": ["Zen", "Design system", "Field notes"],
+        "rect": {
+          "left": 320,
+          "right": 606,
+          "top": 640,
+          "bottom": 847
+        },
+        "overflow": false
+      },
+      "focusedProject": "Design system",
+      "selectedProject": "Design system",
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 2,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      }
+    },
+    {
+      "name": "welcome-dark-390",
+      "viewport": {
+        "width": 390,
+        "height": 900,
+        "documentWidth": 390,
+        "documentHeight": 900
+      },
+      "machineMenu": {
+        "options": [
+          "本机",
+          "Design and prototyping MacBook Pro for the visual QA lab",
+          "Research workstation · Linux"
+        ],
+        "highlighted": "本机",
+        "viewportWidth": 390,
+        "overflow": false
+      },
+      "projectOpen": {
+        "options": ["Zen", "Design system", "Field notes"],
+        "rect": {
+          "left": 10,
+          "right": 296,
+          "top": 650,
+          "bottom": 857
+        },
+        "overflow": false
+      },
+      "focusedProject": "Design system",
+      "selectedProject": "Design system",
+      "telemetry": {
+        "protocolCalls": ["zen/initialize", "zen/initialize"],
+        "workspaceUsedCalls": 0,
+        "machineStatusCalls": 2,
+        "machineCatalogCalls": 0,
+        "machineThreadCreateCalls": 0,
+        "sideChatCreateCommandCalls": 0
+      }
+    }
+  ],
+  "auxiliary": [
+    {
+      "name": "auxiliary-light-1280",
+      "initial": {
+        "order": [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": []
+      },
+      "dimensions": {
+        "panel": {
+          "width": 520,
+          "right": 1280
+        },
+        "rail": {
+          "width": 369,
+          "scrollWidth": 593
+        },
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "tabs": [
+          {
+            "id": "aux-tab-custom:files",
+            "title": "PLAN.md",
+            "icon": "file",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 771,
+              "y": 6.5,
+              "width": 110.71875,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:browser",
+            "title": "Browser",
+            "icon": "browser",
+            "selected": "true",
+            "draggable": true,
+            "rect": {
+              "x": 885.71875,
+              "y": 6.5,
+              "width": 104.609375,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:computer",
+            "title": "Computer",
+            "icon": "computer",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 994.328125,
+              "y": 6.5,
+              "width": 114.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:subagents",
+            "title": "Subagents",
+            "icon": "users",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 1112.453125,
+              "y": 6.5,
+              "width": 118.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:triggers",
+            "title": "Triggers",
+            "icon": "trigger",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 1234.578125,
+              "y": 6.5,
+              "width": 104.96875,
+              "height": 30
+            }
+          }
+        ]
+      },
+      "afterCancel": {
+        "order": [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": []
+      },
+      "afterDrop": {
+        "order": [
+          "custom:browser",
+          "custom:computer",
+          "custom:files",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": [
+          [
+            "custom:browser",
+            "custom:computer",
+            "custom:files",
+            "custom:subagents",
+            "custom:triggers"
+          ]
+        ]
+      },
+      "cancelledMarker": "after",
+      "cancelEvents": [
+        {
+          "type": "dragstart",
+          "target": "aux-tab-custom:files",
+          "x": 826,
+          "defaultPrevented": false,
+          "dropEffect": "none"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 869,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 891,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 913,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 935,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 957,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 978,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1000,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1022,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1044,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1066,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragend",
+          "target": "aux-tab-custom:files",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "none"
+        }
+      ],
+      "committedEvents": [
+        {
+          "type": "dragstart",
+          "target": "aux-tab-custom:files",
+          "x": 826,
+          "defaultPrevented": false,
+          "dropEffect": "none"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 869,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 891,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 913,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 935,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 957,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 978,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1000,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1022,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1044,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1066,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragend",
+          "target": "aux-tab-custom:files",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "none"
+        },
+        {
+          "type": "dragstart",
+          "target": "aux-tab-custom:files",
+          "x": 826,
+          "defaultPrevented": false,
+          "dropEffect": "none"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:files",
+          "x": 848,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:files",
+          "x": 869,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 891,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 913,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 935,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:browser",
+          "x": 957,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:browser",
+          "x": 978,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1000,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1022,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1044,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1066,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragenter",
+          "target": "aux-tab-custom:computer",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragover",
+          "target": "aux-tab-custom:computer",
+          "x": 1087,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "drop",
+          "target": "aux-tab-custom:computer",
+          "x": 1087,
+          "defaultPrevented": true,
+          "dropEffect": "move"
+        },
+        {
+          "type": "dragend",
+          "target": "aux-tab-custom:files",
+          "x": 1087,
+          "defaultPrevented": false,
+          "dropEffect": "move"
+        }
+      ],
+      "dropTarget": {
+        "point": {
+          "x": 1087.910625,
+          "y": 21.5
+        },
+        "hit": "<svg aria-hidden=\"true\" data-icon=\"x\" fill=\"none\" height=\"16\" viewBox=\"0 0 16 16\" width=\"16\"><g stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.6\"><path d=\"m3 3 10 10M13 3 3 13\"></pat",
+        "tabId": "aux-tab-custom:computer",
+        "tabRect": {
+          "left": 994.328125,
+          "right": 1108.453125,
+          "top": 6.5,
+          "bottom": 36.5
+        },
+        "railScrollLeft": 0
+      }
+    },
+    {
+      "name": "auxiliary-light-390",
+      "initial": {
+        "order": [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": []
+      },
+      "dimensions": {
+        "panel": {
+          "width": 390,
+          "right": 390
+        },
+        "rail": {
+          "width": 240,
+          "scrollWidth": 582
+        },
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "tabs": [
+          {
+            "id": "aux-tab-custom:files",
+            "title": "PLAN.md",
+            "icon": "file",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 10,
+              "y": 50.5,
+              "width": 110.71875,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:browser",
+            "title": "Browser",
+            "icon": "browser",
+            "selected": "true",
+            "draggable": true,
+            "rect": {
+              "x": 124.71875,
+              "y": 50.5,
+              "width": 104.609375,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:computer",
+            "title": "Computer",
+            "icon": "computer",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 233.328125,
+              "y": 50.5,
+              "width": 114.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:subagents",
+            "title": "Subagents",
+            "icon": "users",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 351.453125,
+              "y": 50.5,
+              "width": 118.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:triggers",
+            "title": "Triggers",
+            "icon": "trigger",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 473.578125,
+              "y": 50.5,
+              "width": 104.96875,
+              "height": 30
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auxiliary-dark-1280",
+      "initial": {
+        "order": [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": []
+      },
+      "dimensions": {
+        "panel": {
+          "width": 520,
+          "right": 1280
+        },
+        "rail": {
+          "width": 369,
+          "scrollWidth": 593
+        },
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "tabs": [
+          {
+            "id": "aux-tab-custom:files",
+            "title": "PLAN.md",
+            "icon": "file",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 771,
+              "y": 6.5,
+              "width": 110.71875,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:browser",
+            "title": "Browser",
+            "icon": "browser",
+            "selected": "true",
+            "draggable": true,
+            "rect": {
+              "x": 885.71875,
+              "y": 6.5,
+              "width": 104.609375,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:computer",
+            "title": "Computer",
+            "icon": "computer",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 994.328125,
+              "y": 6.5,
+              "width": 114.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:subagents",
+            "title": "Subagents",
+            "icon": "users",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 1112.453125,
+              "y": 6.5,
+              "width": 118.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:triggers",
+            "title": "Triggers",
+            "icon": "trigger",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 1234.578125,
+              "y": 6.5,
+              "width": 104.96875,
+              "height": 30
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "auxiliary-dark-390",
+      "initial": {
+        "order": [
+          "custom:files",
+          "custom:browser",
+          "custom:computer",
+          "custom:subagents",
+          "custom:triggers"
+        ],
+        "selected": "custom:browser",
+        "writes": []
+      },
+      "dimensions": {
+        "panel": {
+          "width": 390,
+          "right": 390
+        },
+        "rail": {
+          "width": 240,
+          "scrollWidth": 582
+        },
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "tabs": [
+          {
+            "id": "aux-tab-custom:files",
+            "title": "PLAN.md",
+            "icon": "file",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 10,
+              "y": 50.5,
+              "width": 110.71875,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:browser",
+            "title": "Browser",
+            "icon": "browser",
+            "selected": "true",
+            "draggable": true,
+            "rect": {
+              "x": 124.71875,
+              "y": 50.5,
+              "width": 104.609375,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:computer",
+            "title": "Computer",
+            "icon": "computer",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 233.328125,
+              "y": 50.5,
+              "width": 114.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:subagents",
+            "title": "Subagents",
+            "icon": "users",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 351.453125,
+              "y": 50.5,
+              "width": 118.125,
+              "height": 30
+            }
+          },
+          {
+            "id": "aux-tab-custom:triggers",
+            "title": "Triggers",
+            "icon": "trigger",
+            "selected": "false",
+            "draggable": true,
+            "rect": {
+              "x": 473.578125,
+              "y": 50.5,
+              "width": 104.96875,
+              "height": 30
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "status": "passed",
+  "sidechat": {
+    "name": "sidechat-light-1280",
+    "sideDraft": {
+      "tabs": ["Subagents", "Side chat"],
+      "composer": "Ask ZenX anything…",
+      "nativeCreateCalls": 0,
+      "pluginCreateCalls": 0
+    },
+    "sideLayout": {
+      "workspacePanelWidth": "520px",
+      "titlebar": {
+        "left": 0,
+        "right": 760,
+        "top": 0,
+        "bottom": 44
+      },
+      "panel": {
+        "left": 760,
+        "right": 1280,
+        "top": 0,
+        "bottom": 900
+      },
+      "tab": {
+        "left": 893.125,
+        "right": 979.796875,
+        "top": 6.5,
+        "bottom": 36.5
+      },
+      "tabId": "aux-tab-custom:side-chat-draft-53affb96-d5c1-4a6d-a56f-889a41d127ed",
+      "tabIcon": "users",
+      "icon": {
+        "left": 902.125,
+        "right": 916.125,
+        "top": 14.5,
+        "bottom": 28.5
+      },
+      "iconHitTabId": "aux-tab-custom:side-chat-draft-53affb96-d5c1-4a6d-a56f-889a41d127ed"
+    },
+    "sideDraftAfterClose": {
+      "nativeCreateCalls": 0,
+      "pluginCreateCalls": 0
+    }
+  }
+}
