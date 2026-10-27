@@ -51,7 +51,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
-import { boundedBrowserQuery, searchCapturedTargets } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
+import { boundedBrowserQuery, focusCapturedTargets, searchCapturedTargets } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -251,7 +251,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Browser actions observe by default and use exact backend-scoped refs. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
+    "Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -778,6 +778,10 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           ? inspected
           : { ...inspected, grouping: action.grouping },
         options,
+        undefined,
+        options.baseObservationId === undefined && options.full !== true
+          ? typeof invocation.arguments.targetId === "string" ? invocation.arguments.targetId : ""
+          : undefined,
       );
     } catch (error) {
       // The mutation already completed. Never turn a failed follow-up read into
@@ -801,6 +805,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     result: BrowserInspection,
     options: ObservationReadOptions,
     query?: string,
+    focusTargetId?: string,
   ): Record<string, unknown> {
     const {
       targets,
@@ -820,7 +825,19 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         },
       };
     const found = query === undefined ? undefined : searchCapturedTargets(capture.entries.map((entry) => entry.value), query, MAX_OBSERVATION_CAPTURE_ITEMS);
-    const presentedCapture = found === undefined ? capture : {
+    const focused = focusTargetId === undefined ? undefined : focusCapturedTargets(capture.entries.map((entry) => entry.value), capture.text, focusTargetId);
+    const presentedCapture = found === undefined ? focused === undefined ? capture : {
+      ...capture,
+      scopeKey: `${capture.scopeKey}:focused:${focusTargetId}`,
+      entries: capture.entries.filter((entry) => focused.targets.some((target) => target.targetId === entry.value.targetId)),
+      text: focused.text,
+      coverage: {
+        ...capture.coverage,
+        scope: `focused subset of ${capture.coverage.scope}`,
+        sourceComplete: false as const,
+        reasons: [...capture.coverage.reasons, "focused_subset_of_capture"],
+      },
+    } : {
       ...capture,
       scopeKey: `${capture.scopeKey}:query:${query}`,
       entries: capture.entries.filter((entry) => found.matches.some((match) => match.targetId === entry.value.targetId)),
@@ -834,7 +851,8 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     return this.#presentation.publish(
       this.#observationKey(result.sessionId, result.tabId),
       result.observationId,
-      found === undefined ? header : { ...header, search: { query, matchedCapturedTargets: found.totalMatches, sourceScope: capture.coverage.scope } },
+      found !== undefined ? { ...header, search: { query, matchedCapturedTargets: found.totalMatches, sourceScope: capture.coverage.scope } } :
+      focused !== undefined ? { ...header, view: { kind: "focused-capture", sourceScope: capture.coverage.scope, textOffset: focused.textOffset }, nextAction: "Call browser_inspect on this tab with full:true for the broader bounded capture." } : header,
       presentedCapture,
       options,
     );

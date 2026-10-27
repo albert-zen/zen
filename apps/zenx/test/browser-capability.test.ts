@@ -684,7 +684,7 @@ function invocation(arguments_: Record<string, unknown>) {
   return {
     callId: "call-1",
     name: "test",
-    arguments: arguments_,
+    arguments: { observe: false, ...arguments_ },
     cwd: "/workspace",
     signal: new AbortController().signal,
   };

@@ -134,7 +134,7 @@ function invocation(
     callId: "call",
     cwd: "/tmp",
     threadId,
-    arguments: { sessionId: "public-session", tabId: "tab", ...args },
+    arguments: { sessionId: "public-session", tabId: "tab", observe: false, ...args },
     signal: new AbortController().signal,
   };
 }
