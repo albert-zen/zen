@@ -285,6 +285,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Known Provider 新增入口只提供当前已有生命周期的 OpenAI subscription 与 local demo；
   custom OpenAI-compatible 入口编辑 display name、Provider name、base URL、API key replacement
   和 model IDs。稳定 profile ID 既不展示也不可编辑；已保存 API key 永不回显，空白表示保留。
+- Provider 保存被拒绝时，错误显示在当前表单保存按钮旁并保留输入；仍属于本次提交的焦点才移至错误并最小滚动，切页或新的焦点意图不得被迟到回复打断。凭证错误只显示已证实的固定阶段与本地恢复建议，不回显密钥或原生错误，不提供明文存储降级。
 - Account 额度卡按当前 ZenX 登录账户的真实订阅接口窗口显示剩余/已用及本地重置时间，按返回时长命名；缺失窗口与空分组不渲染，窗口内未知值不补0。进入账户页或登录成功后查询，可显式刷新；失败清空旧值，退出或切换账户使迟到响应失效，不混入 API 余额。
 - Settings 的二态开关复用 plugin-switch，Agentic compaction、RTK、前台控制与外观开关保持同一命中区、焦点与禁用样式。共享 Select/Combobox 保留键盘和选择语义，使用统一主题浮层、箭头与留白，字段说明在对应控件下方。
 - Z05 UI 至多配置一个 OpenAI subscription profile；Account 的登录、登出与手动 code

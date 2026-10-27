@@ -71,6 +71,7 @@ test("a rejected Provider mutation returns the same safe outcome and attempt as 
       attemptId,
       operation: "edit",
       outcome: reply.outcome,
+      code: reply.code,
     });
     assert.equal(JSON.stringify(reply).includes(failure.message), false);
     assert.equal(raw.includes(failure.message), false);
@@ -171,6 +172,13 @@ test("invalid reason and out-of-range row cannot be written", async () => {
         operation: "add",
         reason: "model_id_missing",
         modelIndex: 1024,
+      },
+      {
+        event: "provider-save-outcome",
+        attemptId,
+        operation: "edit",
+        outcome: "failed",
+        code: "private-native-key-error",
       },
       {
         event: "provider-save-outcome",

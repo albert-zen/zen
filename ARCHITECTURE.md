@@ -388,6 +388,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   renderer settings、进程环境与 App Server 协议配置字段都不主动序列化解密值。Provider、
   模型或工具返回的内容属于 trace，即使字节与 credential 相同也不扫描或改写，并可按正常
   Runtime 规则进入 canonical ItemList。
+- **CredentialStorageError** — 既有凭证边界仅报告固定的 OS 加密不可用、加解密、读取或持久化失败码，经 ConfigurationPreCommitError 进入原有 Settings IPC 与有界诊断日志；不携带原生错误、路径或密钥，不改变提交判定或增加存储权威。
 - **ZenX 本机诊断日志** — 主进程将设置页校验拒绝与 Provider 保存结果规范化为固定事件、
   原因码、行序号、尝试 ID 和结果，再写入 userData 下权限收窄、定额轮转的 JSONL 支持数据；
   Renderer 原文、Provider/模型身份、URL、凭证和错误文本都不进入该日志，写入失败不改变保存结果。
