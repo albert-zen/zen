@@ -1,6 +1,6 @@
 body {
   margin: 0;
-  background: #17191d;
+  background: var(--color-surface-main);
 }
 .synthetic-stage {
   width: min(920px, calc(100vw - 48px));
