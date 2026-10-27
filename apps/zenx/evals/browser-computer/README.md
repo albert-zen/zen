@@ -69,3 +69,16 @@ Record manual interventions and infrastructure setup separately from task time. 
 Run `node --test apps/zenx/test/browser-computer-eval.test.mjs` to check fixture outcomes. Product regression coverage lives in `apps/zenx/test/` and exercises actual capability APIs and provider behavior. The fixture is also reusable by real Electron, Playwright, CDP and other harness drivers; readiness is the printed URL, and completion is an observed UI outcome. Desktop tools that return only app names without selectable window identities cannot pass C1.
 
 Current scope: page scrolling, ordinary labeled text fields, fresh observations, tab ownership, disabled controls, window discovery, Unicode input and missing-window recovery. B6 additionally probes native select, checkbox and contenteditable handling, and treats an honestly reported capability gap as unsupported rather than passed. See the [native ZenX model evaluation report](../../docs/browser-computer-model-evaluation.md) for the current real-model evidence and qualifications. Nested scroll containers, cross-origin frames, shadow DOM, file dialogs, drag-and-drop and multi-monitor/DPI behavior require additional tasks and are not implied by a pass here.
+
+## Deterministic macOS provider evaluation
+
+Run the source checkout under a real macOS Electron runtime, without a model or API calls:
+
+```sh
+npx esbuild apps/zenx/scripts/macos-provider-eval.ts --bundle --platform=node --format=esm --external:electron --external:../evals/browser-computer/fixture.mjs --outfile=apps/zenx/out/macos-provider-eval.mjs
+ZENX_MACOS_EVAL_DIR=/absolute/private/fresh-evidence-directory npx electron apps/zenx/out/macos-provider-eval.mjs
+```
+
+The output directory must be new. The runner creates its own disposable Electron profile and loopback fixture, invokes Browser/Computer capability APIs, and saves structured per-call latency, response JSON bytes, outcome checks, and synthetic screenshots. Browser tests cover Unicode forms, scroll, stale observations, retained tabs and cross-session rejection, disabled controls, select/checkbox/contenteditable, pre-dispatch cancellation, and missing tabs. Native macOS AX checks inspect an owned window and set Unicode field values before pressing its form button. Task success requires a visible final confirmation; a successful native AX action return alone does not pass the task.
+
+No global keyboard, mouse, activation, display-off, lock or sleep operation is dispatched. Frontmost application and pointer position are compared before/after, which does not prove isolation during simultaneous physical user input. The Computer environment monitor and full running ZenX host permissions/Trace path are not instantiated by this provider-level runner. TCC denials are reported as blocked. An optional `ZENX_MACOS_FIXTURE_HOLD_MS` retains the owned fixture for a bounded separate probe before cleanup; its exact PID/title are written to `fixture.json`. All results are private evidence pending review.
