@@ -28,46 +28,23 @@ import {
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
 import { browserConnectionScopeKey } from "./browser-connections.js";
+import { browserOperations, browserOperation as operation, browserNamespace as namespace, browserModelDescriptions } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
 export type BrowserModelConnections = ReadonlyMap<
   string,
   { connectionId: string; label: string; state: string; generation: string }
 >;
-const operations = [
-  "list_tabs",
-  "open",
-  "navigate",
-  "inspect",
-  "click",
-  "type",
-  "select",
-  "scroll",
-  "pointer_click",
-  "key_press",
-  "close",
-  "close_session",
-];
 const names = new Set([
   "browser_connections",
   ...["browser_", "browser_workspace_", "browser_connected_"].flatMap((p) =>
-    operations.map((o) => p + o),
+    browserOperations.map((o) => p + o),
   ),
 ]);
 export const isBrowserModelTool = (name: string) => names.has(name);
-function operation(name: string): string {
-  return name.replace(/^browser_(?:workspace_|connected_)?/u, "");
-}
-function namespace(name: string): string {
-  return name.startsWith("browser_workspace_")
-    ? "workspace"
-    : name.startsWith("browser_connected_")
-      ? "connected"
-      : "legacy";
-}
 const sessionTools = new Set(["list_tabs", "open", "close_session"]);
 const targetTools = new Set(["click", "type", "select"]);
 const observationTools = new Set(["scroll", "pointer_click", "key_press"]);
 export const browserModelDocument =
-  "Browser returns exact scoped connection/session/tab/observation/target refs. Start with connections for external browsers, then list_tabs with a semantic session (default main). Inspect a tab for bounded full observations; follow cursor alone for immutable continuation. Targets retain their exact tab and observation. Native owner, permission, connection generation, freshness and human-control guards remain authoritative. An unavailable tab is never redirected. actionCompleted with observationError means inspect again, never repeat the action. Unknown effects are never automatically replayed. New Browser sidebar tabs use exact returned tab refs, not native IDs.";
+  "Browser refs bind an exact backend, tab, observation and owner. Inspect gives a bounded capture; query searches its captured targets only, and cursor continues that immutable capture. Actions observe by default; pass since with a retained observation ref for a diff, or full:true to resync. Human takeover requires fresh inspection after return. After actionCompleted plus observationError inspect again; never replay unknown effects.";
 export function browserModelDefinition<T extends ModelTool>(source: T): T {
   const tool = structuredClone(source),
     op = operation(tool.name),
@@ -92,9 +69,12 @@ export function browserModelDefinition<T extends ModelTool>(source: T): T {
           ? "observation"
           : "tab";
       fields[field] = MODEL_REF;
-      if (op === "inspect") fields.cursor = MODEL_REF;
+      if (op === "inspect") {
+        fields.cursor = MODEL_REF;
+        fields.query = { type: "string", minLength: 1, maxLength: 120 };
+      }
       else required.push(field);
-      if (op === "navigate" || op === "close") fields.observation = MODEL_REF;
+      if (op === "navigate" || op === "close" || targetTools.has(op)) fields.observation = MODEL_REF;
     }
     const native = record(tool.inputSchema.properties) ?? {};
     for (const key of [
@@ -108,8 +88,11 @@ export function browserModelDefinition<T extends ModelTool>(source: T): T {
       "y",
       "key",
       "observe",
+      "full",
     ])
       if (native[key] !== undefined) fields[key] = native[key];
+    if (op === "inspect" || ["open", "navigate", "click", "type", "select", "scroll", "pointer_click", "key_press"].includes(op))
+      fields.since = { ...MODEL_REF, description: "Exact retained observation ref to compare with the new capture." };
     for (const key of Array.isArray(tool.inputSchema.required)
       ? tool.inputSchema.required
       : [])
@@ -136,7 +119,7 @@ export function browserModelDefinition<T extends ModelTool>(source: T): T {
       ? { oneOf: [{ required: ["tab"] }, { required: ["cursor"] }] }
       : {}),
   };
-  tool.description = `${op}: ${browserModelDocument}`;
+  tool.description = `${op}: ${browserModelDescriptions[op] ?? tool.description}`;
   return tool;
 }
 function routeFrom(value: Record<string, unknown>): BrowserModelRoute {
@@ -193,6 +176,9 @@ export function decodeBrowserArguments(
       "y",
       "key",
       "observe",
+      "since",
+      "full",
+      "query",
     ];
   only(input, op === "connections" ? [] : allowed);
   if (op === "connections") return args;
@@ -203,7 +189,7 @@ export function decodeBrowserArguments(
     only(input, [
       "session",
       "connection",
-      ...(op === "open" ? ["url", "observe"] : []),
+      ...(op === "open" ? ["url", "observe", "since", "full"] : []),
     ]);
     if (typeof input.session === "string" && refs.lookup(input.session))
       route = routeFrom(resolve(input.session, "session"));
@@ -239,7 +225,8 @@ export function decodeBrowserArguments(
       if (
         other !== field &&
         input[other] !== undefined &&
-        !(["navigate", "close"].includes(op) && other === "observation")
+        !(["navigate", "close"].includes(op) && other === "observation") &&
+        !(targetTools.has(op) && other === "observation")
       )
         throw Error(
           "The exact Browser ref already binds its target; omit other routing fields",
@@ -250,7 +237,7 @@ export function decodeBrowserArguments(
       args.observationId = bound.observationId;
     if (field === "target") args.targetId = bound.targetId;
     if (field === "cursor") args.cursor = bound.cursor;
-    if (["navigate", "close"].includes(op) && input.observation !== undefined) {
+    if ((["navigate", "close"].includes(op) || targetTools.has(op)) && input.observation !== undefined) {
       const observed = resolve(input.observation, "observation");
       if (JSON.stringify(routeFrom(observed)) !== JSON.stringify(route))
         throw Error("Observation belongs to another exact tab");
@@ -300,9 +287,22 @@ export function decodeBrowserArguments(
     "y",
     "key",
     "observe",
+    "query",
   ])
     if (input[key] !== undefined) args[key] = structuredClone(input[key]);
-  if ((op === "inspect" && args.cursor === undefined) || args.observe === true)
+  if (input.since !== undefined) {
+    if (args.cursor !== undefined || input.full === true)
+      throw Error("since cannot be combined with cursor or full:true");
+    const base = resolve(input.since, "observation");
+    const baseRoute = routeFrom(base);
+    if (route && JSON.stringify(baseRoute) !== JSON.stringify(route))
+      throw Error("Baseline belongs to another exact tab");
+    if (!route && op === "open")
+      throw Error("Open cannot compare an observation from an unknown new tab");
+    args.baseObservationId = base.observationId;
+  }
+  if (input.full !== undefined) args.full = input.full;
+  else if (op === "inspect" && args.cursor === undefined && input.since === undefined)
     args.full = true;
   return args;
 }
@@ -381,7 +381,9 @@ function projectBrowserResult(
         "mutationsRequireObservation",
         "automaticPresentation",
         "visibleText",
+        "visibleTextChange",
         "coverage",
+        "search",
         "inputViewport",
         "focusedInputAvailable",
         "inputPolicy",
@@ -413,6 +415,7 @@ function projectBrowserResult(
         "capturedAt",
         "continuation",
         "resetReason",
+        "unchanged",
       ]);
     if (typeof v.observationId === "string") {
       if (!route?.tabId) throw new ProjectionUnavailable();
@@ -420,6 +423,10 @@ function projectBrowserResult(
         route,
         observationId: v.observationId,
       });
+      const page = record(out.page);
+      const nativePage = record(v.observation);
+      if (page && typeof nativePage?.baseObservationId === "string")
+        page.base = bind("observation", { route, observationId: nativePage.baseObservationId });
       if (record(v.screenshot)) {
         const screenshot = object(v.screenshot);
         out.screenshot = {
@@ -459,6 +466,24 @@ function projectBrowserResult(
             ]),
           };
         });
+      if (record(v.targetChanges)) {
+        const changes = object(v.targetChanges);
+        const projectTarget = (item: unknown, observationId: string) => {
+          const target = object(item);
+          return {
+            ref: bind("target", { route, observationId, targetId: target.targetId }),
+            ...pick(target, ["role", "name", "actions", "value", "checked", "selected", "options", "optionsTruncated"]),
+          };
+        };
+        const baseId = nativePage?.baseObservationId;
+        if (typeof baseId !== "string") throw new ProjectionUnavailable();
+        out.targetChanges = {
+          added: Array.isArray(changes.added) ? changes.added.map((item) => projectTarget(item, v.observationId as string)) : [],
+          updated: Array.isArray(changes.updated) ? changes.updated.map((item) => projectTarget(item, v.observationId as string)) : [],
+          removedFromView: Array.isArray(changes.removedFromView) ? changes.removedFromView.map((id) => bind("target", { route, observationId: baseId, targetId: id })) : [],
+          ...(Array.isArray(changes.order) ? { order: changes.order.map((id) => bind("target", { route, observationId: v.observationId as string, targetId: id })) } : {}),
+        };
+      }
     }
     if (typeof v.nextCursor === "string") {
       if (!route?.tabId) throw new ProjectionUnavailable();

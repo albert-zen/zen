@@ -51,6 +51,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
+import { boundedBrowserQuery, searchCapturedTargets } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
 
 import type { BrowserWindow, Session } from "electron";
 
@@ -250,7 +251,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action. Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_navigate/browser_close, must carry the latest observationId from a new browser_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically.",
+    "Browser actions observe by default and use exact backend-scoped refs. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -367,7 +368,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       name: "browser_inspect",
       description:
         "Inspect one tab, or use nextCursor to read more of its exact captured snapshot. Coverage distinguishes unread captured data from native omissions. Omit baseObservationId or set full:true for a self-contained first page; a retained matching base allows a smaller diff. Target IDs are stable only for surviving observed DOM nodes; actions require the fresh observationId.",
-      inputSchema: browserTargetSchema({ ...observationReadProperties }),
+      inputSchema: browserTargetSchema({ ...observationReadProperties, query: { type: "string", minLength: 1, maxLength: 120, description: "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture." } }),
       permissions: ["browser.tabs.read"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "cdp", "dom.inspect"],
@@ -541,7 +542,7 @@ function observationOption() {
   return {
     type: "boolean",
     description:
-      "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false.",
+      "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action.",
   };
 }
 
@@ -678,7 +679,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     toolName: string,
     invocation: ToolInvocation,
   ): Promise<unknown> {
-    const observe = optionalBoolean(invocation.arguments, "observe") ?? false;
+    const observe = optionalBoolean(invocation.arguments, "observe") ?? BROWSER_OBSERVABLE_ACTIONS.has(toolName);
     const options = observationReadOptions(invocation.arguments);
     if (options.cursor !== undefined && toolName !== "browser_inspect")
       throw new Error("cursor is only supported by browser_inspect");
@@ -703,6 +704,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       return this.#presentInspection(
         await this.#backend.inspect(sessionId, tabId, invocation.signal),
         options,
+        boundedBrowserQuery(invocation.arguments.query),
       );
     }
     const sessionId = requiredTargetId(invocation.arguments, "sessionId");
@@ -798,6 +800,7 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   #presentInspection(
     result: BrowserInspection,
     options: ObservationReadOptions,
+    query?: string,
   ): Record<string, unknown> {
     const {
       targets,
@@ -816,11 +819,23 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           reasons: ["backend_capture_coverage_unknown"],
         },
       };
+    const found = query === undefined ? undefined : searchCapturedTargets(capture.entries.map((entry) => entry.value), query, MAX_OBSERVATION_CAPTURE_ITEMS);
+    const presentedCapture = found === undefined ? capture : {
+      ...capture,
+      scopeKey: `${capture.scopeKey}:query:${query}`,
+      entries: capture.entries.filter((entry) => found.matches.some((match) => match.targetId === entry.value.targetId)),
+      text: undefined,
+      coverage: {
+        ...capture.coverage,
+        scope: `query within ${capture.coverage.scope}`,
+        reasons: [...capture.coverage.reasons, "query_filters_captured_targets_only"],
+      },
+    };
     return this.#presentation.publish(
       this.#observationKey(result.sessionId, result.tabId),
       result.observationId,
-      header,
-      capture,
+      found === undefined ? header : { ...header, search: { query, matchedCapturedTargets: found.totalMatches, sourceScope: capture.coverage.scope } },
+      presentedCapture,
       options,
     );
   }

@@ -51,8 +51,8 @@ test("Browser full projection keeps literal text, exact private targets, native 
       target: first.targets[0].ref,
       text: LITERAL,
     });
-    assert.equal(f.calls.at(-1)!.args[3], "RAW-native-node-0");
-    assert.equal(f.calls.at(-1)!.args[4], LITERAL);
+    assert.equal(f.calls.find((c) => c.name === "type")!.args[3], "RAW-native-node-0");
+    assert.equal(f.calls.find((c) => c.name === "type")!.args[4], LITERAL);
     await assert.rejects(
       f.bridge.call("browser_workspace_click", {
         target: first.targets[0].ref,
@@ -69,6 +69,56 @@ test("Browser full projection keeps literal text, exact private targets, native 
     const route = readBrowserModelRoute(f.bridge.native[1])!;
     assert.notEqual(route.tabId, route.targetId);
     f.service.assertModelTarget(route, "RAW-owner");
+  } finally {
+    await f.bridge.close();
+  }
+});
+test("Browser action observes by default and accepts an exact short baseline", async () => {
+  const f = await workspaceFixture();
+  try {
+    const list = await f.bridge.call("browser_workspace_list_tabs", {});
+    const first = await f.bridge.call("browser_workspace_inspect", { tab: list.tabs[0].tab });
+    const next = await f.bridge.call("browser_workspace_click", {
+      target: first.targets[0].ref,
+      since: first.observation,
+    });
+    assert.equal(next.observation === undefined, false);
+    assert.equal(next.page.format, "diff");
+    assert.equal(next.page.base, first.observation);
+    assert.ok(next.targetChanges);
+    assert.equal(typeof next.page.unchanged, "boolean");
+    assert.equal(f.calls.filter((c) => c.name === "inspect").length, 2);
+  } finally {
+    await f.bridge.close();
+  }
+});
+test("Browser query searches captured target metadata, keeps actionable refs and continuation", async () => {
+  const f = await workspaceFixture();
+  try {
+    const list = await f.bridge.call("browser_workspace_list_tabs", {});
+    const first = await f.bridge.call("browser_workspace_inspect", { tab: list.tabs[0].tab, query: "Save" });
+    assert.equal(first.search.matchedCapturedTargets, 89);
+    assert.equal(first.targets.length, 80);
+    assert.match(first.coverage.scope, /query within/);
+    ref(first.nextCursor);
+    const tail = await f.bridge.call("browser_workspace_inspect", { cursor: first.nextCursor });
+    assert.equal(tail.targets.length, 9);
+    const action = await f.bridge.call("browser_workspace_click", { target: tail.targets[0].ref, observation: first.observation, observe: false });
+    assert.equal(action.observation, undefined);
+  } finally {
+    await f.bridge.close();
+  }
+});
+test("Browser reuses a retained target only with an exact newer observation and native revalidation", async () => {
+  const f = await workspaceFixture();
+  try {
+    const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
+    const old = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
+    const fresh = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
+    await f.bridge.call("browser_workspace_click", { target: old.targets[0].ref, observation: fresh.observation, observe: false });
+    assert.equal(f.calls.filter((c) => c.name === "click").length, 1);
+    await assert.rejects(f.bridge.call("browser_workspace_click", { target: old.targets[0].ref, observation: old.observation }), /stale|unavailable|consumed/);
+    assert.equal(f.calls.filter((c) => c.name === "click").length, 1);
   } finally {
     await f.bridge.close();
   }

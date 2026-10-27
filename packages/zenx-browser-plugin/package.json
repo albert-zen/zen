@@ -4,7 +4,7 @@
   "description": "First-party ZenX Browser plugin",
   "type": "module",
   "files": [
-    "dist/runtime.js",
+    "dist/",
     "zenx.plugin.json",
     "README.md"
   ],
