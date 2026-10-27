@@ -58,7 +58,7 @@
   "tools": [
     {
       "name": "computer_environment",
-      "description": "Read current desktop session and power availability without waking, unlocking, or acting on another app.",
+      "description": "Read the current desktop session and power availability. Lock and suspension are reported explicitly; this read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -209,7 +209,10 @@
             },
             "additionalProperties": false,
             "required": ["observationId", "targetId"]
-          }
+          },
+          "observe": { "type": "boolean" },
+          "baseObservationId": { "type": "string" },
+          "full": { "type": "boolean" }
         },
         "required": ["target", "control"],
         "additionalProperties": false
@@ -269,7 +272,10 @@
           },
           "value": {
             "type": "string"
-          }
+          },
+          "observe": { "type": "boolean" },
+          "baseObservationId": { "type": "string" },
+          "full": { "type": "boolean" }
         },
         "required": ["target", "control", "value"],
         "additionalProperties": false
