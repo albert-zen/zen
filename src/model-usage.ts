@@ -297,6 +297,9 @@ function isPositiveCount(value: unknown): value is number {
 
 function estimateModelMessage(message: ModelMessage): number {
   switch (message.role) {
+    case "system":
+    case "developer":
+      return estimateText(message.text);
     case "assistant":
       return estimateText((message.text ?? "") + toolCallsText(message));
     case "reasoning":

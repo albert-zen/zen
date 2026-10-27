@@ -144,7 +144,12 @@ export class ModelReferenceScope {
     value: JsonValue,
     epoch?: string,
   ): string {
-    const key = identity({ namespace, kind, value, epoch });
+    const key = identity({
+      namespace,
+      kind,
+      value,
+      ...(epoch === undefined ? {} : { epoch }),
+    });
     const previous = this.state.identities.get(key);
     if (previous) {
       const binding = this.state.bindings.get(previous)!;
