@@ -3,7 +3,7 @@ export const COMPUTER_OCR_BUDGET_MS = 10_000;
 export const COMPUTER_OCR_MAX_BOXES = 96;
 export const COMPUTER_OCR_MAX_TEXT_BYTES = 16_384;
 export const COMPUTER_OCR_MAX_IMAGE_PIXELS = 4_000_000;
-export const COMPUTER_OCR_DEFAULT_LANGUAGES = ["en-US", "zh-Hans"];
+export const COMPUTER_OCR_DEFAULT_LANGUAGES = ["zh-Hans", "en-US"];
 
 export interface ComputerOcrText {
   text: string;
@@ -34,7 +34,23 @@ export function computerOcrLanguages(value: unknown): string[] {
     new Set(value).size !== value.length
   )
     throw new Error("OCR languages must contain 1–4 distinct language tags");
-  return value as string[];
+  // Vision revision 2 chooses its script recognizer from the first language.
+  // Chinese is supported only as the leading group, optionally with English.
+  const chinese = (language: string) =>
+    language === "zh-Hans" || language === "zh-Hant";
+  if (value.some(chinese)) {
+    if (value.some((language) => !chinese(language) && language !== "en-US"))
+      throw new Error(
+        "Vision revision 2 cannot combine Chinese with languages other than en-US; request those languages separately",
+      );
+    // These are requested language tags, not a priority contract. Preserve every
+    // tag while selecting the only model that can recognize the whole set.
+    return [
+      ...value.filter(chinese),
+      ...value.filter((language) => !chinese(language)),
+    ];
+  }
+  return [...value] as string[];
 }
 
 /** Check the helper's output against the original image, not current window size. */
@@ -147,6 +163,16 @@ let supported = try VNRecognizeTextRequest.supportedRecognitionLanguages(for: .a
 let unavailable = languages.filter { !supported.contains($0) }
 guard unavailable.isEmpty else {
   fail("Native OCR language unavailable: " + unavailable.joined(separator: ", ") + "; supported: " + supported.joined(separator: ", "))
+}
+let chinese = ["zh-Hans", "zh-Hant"]
+if languages.contains(where: { chinese.contains($0) }) {
+  var sawEnglish = false
+  for language in languages {
+    if language == "en-US" { sawEnglish = true }
+    else if !chinese.contains(language) || sawEnglish {
+      fail("Vision revision 2 requires Chinese languages first, paired only with en-US")
+    }
+  }
 }
 recognize.recognitionLanguages = languages
 try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognize])

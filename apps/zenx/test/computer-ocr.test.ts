@@ -6,7 +6,7 @@ import {
 } from "../src/main/capabilities/computer-ocr.js";
 
 const image = { width: 800, height: 400 };
-const languages = ["en-US", "zh-Hans"];
+const languages = ["zh-Hans", "en-US"];
 const result = () => ({
   ...image,
   engine: "apple-vision",
@@ -145,4 +145,24 @@ test("native-only OCR schema is read-only and unavailable providers never inspec
   );
   assert.equal(dispatches, 0);
   await capability.close();
+});
+
+test("Vision Chinese/English tags normalize without dropping languages; impossible combinations fail", () => {
+  assert.deepEqual(computerOcrLanguages(["en-US", "zh-Hans"]), [
+    "zh-Hans",
+    "en-US",
+  ]);
+  assert.deepEqual(computerOcrLanguages(["zh-Hant", "en-US", "zh-Hans"]), [
+    "zh-Hant",
+    "zh-Hans",
+    "en-US",
+  ]);
+  assert.deepEqual(computerOcrLanguages(["en-US", "fr-FR"]), [
+    "en-US",
+    "fr-FR",
+  ]);
+  assert.throws(
+    () => computerOcrLanguages(["zh-Hans", "fr-FR"]),
+    /cannot combine Chinese/,
+  );
 });

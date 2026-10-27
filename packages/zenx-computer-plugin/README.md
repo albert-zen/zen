@@ -120,7 +120,7 @@ screenshot epoch does not certify semantic actions or other apps/providers.
 
 For self-drawn apps with empty or partial AX inspection, explicitly call
 `computer_screenshot({target})`, then
-`computer_ocr({target, captureId, languages: ["en-US", "zh-Hans"]})` with that
+`computer_ocr({target, captureId, languages: ["zh-Hans", "en-US"]})` with that
 same screenshot. There is no automatic fallback after an AX failure. Update
 Computer in Plugin settings to receive the native 1.2.0 schema.
 
@@ -154,10 +154,17 @@ Retina displays, so its image fits the OCR pixel limit without a second resize.
 Image-pixel boxes are not macOS logical points or global desktop coordinates.
 An empty `texts` array means no text recognized, not a complete semantic tree.
 
-Vision revision 2 preserves the macOS 12 minimum. Defaults are English and
-Simplified Chinese (`en-US`, `zh-Hans`); callers may request 1–4 language tags.
+Vision revision 2 preserves the macOS 12 minimum. Defaults are Simplified Chinese then
+English (`zh-Hans`, `en-US`); callers may request 1–4 language tags. Chinese/English
+sets are normalized to Chinese-first without dropping any requested language;
+the returned `languages` reports the effective order. Chinese can pair only with
+English in revision 2; incompatible combinations fail with a correction hint
+rather than silently using the Latin-only recognizer.
 Native supported-language discovery rejects unavailable languages explicitly,
 rather than silently recognizing English alone. Accuracy depends on the source
 pixels and installed OS. Windows and Peekaboo do **not** advertise this tool;
 local OCR is explicitly unavailable there. Synthetic native CI checks Vision
 English/CJK recognition and geometry; it does not certify DingTalk or WeCom.
+
+The Chinese-first requirement follows [Apple’s Vision language guidance](https://developer.apple.com/documentation/vision/recognizing-text-in-images)
+and [WWDC21’s explanation of script-model selection](https://developer.apple.com/videos/play/wwdc2021/10041/).

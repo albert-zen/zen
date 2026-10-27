@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   COMPUTER_OCR_BUDGET_MS,
+  computerOcrLanguages,
   MAC_OCR_SOURCE,
   parseComputerOcrRecognition,
 } from "../src/main/capabilities/computer-ocr.js";
@@ -39,7 +40,7 @@ test(
   async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-native-ocr-"));
     const image = { width: 1600, height: 1000 };
-    const languages = ["en-US", "zh-Hans"];
+    const languages = computerOcrLanguages(undefined);
     try {
       const source = path.join(directory, "ocr.swift");
       const executable = path.join(directory, "ocr");
@@ -77,6 +78,25 @@ test(
         JSON.stringify(request),
       );
       const recognized = parseComputerOcrRecognition(output, image, languages);
+      // Preserve actual native output even when a later recognition/geometry
+      // assertion fails. This is exclusively the generated fixture, not a screen.
+      if (process.env.ZENX_COMPUTER_OCR_EVIDENCE)
+        await writeFile(
+          process.env.ZENX_COMPUTER_OCR_EVIDENCE,
+          JSON.stringify(
+            {
+              scope: "synthetic bitmap only; no real application acceptance",
+              stage: "recognition-returned; assertions not yet complete",
+              recognized,
+            },
+            null,
+            2,
+          ),
+        );
+      console.log(
+        "Native Vision synthetic recognition:",
+        JSON.stringify(recognized),
+      );
       const english = recognized.texts.find((text) =>
         text.text.includes("HELLO OCR"),
       );
@@ -112,6 +132,19 @@ test(
         ),
         /language unavailable/,
       );
+      for (const incompatible of [
+        ["en-US", "zh-Hans"],
+        ["zh-Hans", "fr-FR"],
+      ])
+        await assert.rejects(
+          runProcess(
+            executable,
+            [],
+            COMPUTER_OCR_BUDGET_MS,
+            JSON.stringify({ ...request, languages: incompatible }),
+          ),
+          /Chinese languages first, paired only with en-US/,
+        );
       await assert.rejects(
         runProcess(
           executable,
@@ -169,6 +202,7 @@ test(
                 "2x-geometry",
                 "empty",
                 "unsupported-language",
+                "unsupported-language-combination",
                 "dimension-mismatch",
                 "capture-digest-mismatch",
                 "cancelled-read",

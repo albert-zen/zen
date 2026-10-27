@@ -487,7 +487,7 @@
     },
     {
       "name": "computer_ocr",
-      "description": "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; requires an image at most 4 MP. Default languages en-US and zh-Hans; unsupported languages fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
+      "description": "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; requires an image at most 4 MP. Default languages zh-Hans then en-US; Chinese/English requests are normalized Chinese-first; returned languages report the effective order. Unsupported languages/combinations fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
       "inputSchema": {
         "type": "object",
         "properties": {
