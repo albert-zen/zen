@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 // Shared evaluation bounds, with no Electron or user-desktop operations.
 export const MAX_MACOS_EVAL_MS = 300_000;
 export function evaluationDuration(name, value, fallback, allowZero = false) {
@@ -40,4 +43,32 @@ export async function pause(milliseconds, signal) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function claimLauncherProfile(evidence) {
+  const scratch = process.env.ZENX_EVAL_SCRATCH;
+  const nonce = process.env.ZENX_EVAL_NONCE;
+  if (
+    !scratch ||
+    !nonce ||
+    path.dirname(scratch) !== os.tmpdir().replace(/\/$/u, "") ||
+    !/^zenx-macos-owned-[A-Za-z0-9]+$/u.test(path.basename(scratch))
+  )
+    throw Error(
+      "Run this entry with node apps/zenx/scripts/macos-eval-launch.mjs",
+    );
+  const owner = JSON.parse(
+    readFileSync(path.join(scratch, ".owner.json"), "utf8"),
+  );
+  const outputOwner = JSON.parse(
+    readFileSync(path.join(evidence, ".launcher.json"), "utf8"),
+  );
+  if (
+    owner.nonce !== nonce ||
+    owner.parentPid !== process.ppid ||
+    outputOwner.nonce !== nonce ||
+    outputOwner.scratch !== scratch
+  )
+    throw Error("Evaluation launcher identity mismatch");
+  return scratch;
 }

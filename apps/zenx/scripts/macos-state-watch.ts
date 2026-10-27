@@ -1,8 +1,7 @@
 // Real state observation only: never changes display/lock/focus or enables global input.
 import { app, BrowserWindow, powerMonitor, powerSaveBlocker } from "electron";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { readFile, writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   spawn,
   execFile,
@@ -11,11 +10,11 @@ import {
 } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import os from "node:os";
 import {
   bounded as bound,
   pause,
   evaluationDuration,
+  claimLauncherProfile,
 } from "./macos-eval-lifecycle.mjs";
 import { AutomationEnvironment } from "../src/main/automation-environment.js";
 import {
@@ -45,12 +44,13 @@ export async function runMacosStateWatch() {
   const abort = new AbortController();
   const timer = setTimeout(
     () => abort.abort(new Error("State watch deadline reached")),
-    Math.min(duration, 280000),
+    Math.min(duration, 268000),
   );
   let scratch: string | undefined,
     fixture: ChildProcess | undefined,
     window: BrowserWindow | undefined;
   let environment: AutomationEnvironment | undefined;
+  let computer: ComputerZenXCapabilityPackage | undefined;
   let cdp:
     Awaited<ReturnType<typeof connectUserBrowserCdp>>["backend"] | undefined;
   const server = createServer();
@@ -87,8 +87,7 @@ export async function runMacosStateWatch() {
       encoding: "utf8",
       timeout: 2000,
     }).trim();
-    mkdirSync(output!, { recursive: false, mode: 0o700 });
-    scratch = mkdtempSync(path.join(os.tmpdir(), "zenx-macos-state-"));
+    scratch = claimLauncherProfile(output!);
     cleanup.scratch = scratch;
     app.setPath("userData", path.join(scratch, "profile"));
     app.setActivationPolicy("accessory");
@@ -109,6 +108,7 @@ export async function runMacosStateWatch() {
       );
       const sourcePath = path.join(scratch, sourceFile!);
       await writeFile(sourcePath, content);
+      record({ setupPhase: "compile-fixture", sourceFile });
       await command("/usr/bin/swiftc", [sourcePath, "-o", binary!]);
     }
     const driver = new MacAccessibilityDriver(
@@ -124,12 +124,13 @@ export async function runMacosStateWatch() {
       throw Error(
         "This checkout lacks the native-session AutomationEnvironment API required by state watch",
       );
+    record({ setupPhase: "native-session-probe" });
     await bounded(environment.refresh(), abort.signal);
     for (const event of ["lock-screen", "unlock-screen", "suspend", "resume"])
       powerMonitor.on(event, () =>
         record({ powerMonitorEvent: event, snapshot: environment!.snapshot() }),
       );
-    const computer = new ComputerZenXCapabilityPackage(
+    computer = new ComputerZenXCapabilityPackage(
       new ElectronMacComputerBackend(path.join(scratch, "computer")),
       undefined,
       false,
@@ -142,7 +143,7 @@ export async function runMacosStateWatch() {
       const snapshot = environment!.snapshot();
       try {
         const result: any = await bounded(
-          computer.invoke(name, {
+          computer!.invoke(name, {
             name,
             callId: `watch-${records.length}`,
             threadId: "owned-macos-watch",
@@ -246,7 +247,7 @@ export async function runMacosStateWatch() {
       domTarget: { pid: process.pid, windowTitle: window.getTitle() },
       deadline:
         Date.now() +
-        Math.max(0, Math.min(duration, 280000) - (performance.now() - started)),
+        Math.max(0, Math.min(duration, 268000) - (performance.now() - started)),
       snapshot: environment.snapshot(),
       display: await display(),
     };
@@ -386,6 +387,7 @@ export async function runMacosStateWatch() {
       deadlineReached: abort.signal.aborted,
     });
   } finally {
+    cleanup.pendingAtAbort = pending.size;
     clearTimeout(timer);
     abort.abort(new Error("State watch cleanup"));
     const clean = async (name: string, operation: () => unknown) => {
@@ -401,6 +403,7 @@ export async function runMacosStateWatch() {
     };
     // Independent cleanup steps: a failing close must not skip another owned resource.
     await clean("environmentClosed", () => environment?.close());
+    await clean("computerClosed", () => computer?.close());
     await clean("browserClosed", () => cdp?.close());
     await clean("windowClosed", () => window?.destroy());
     await clean("childExited", async () => {
@@ -422,15 +425,7 @@ export async function runMacosStateWatch() {
     );
     await clean("operationsSettled", () => Promise.allSettled([...pending]));
     cleanup.pendingOperations = pending.size;
-    if (scratch)
-      await clean("profileRemoved", () =>
-        rm(scratch!, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 100,
-        }),
-      );
+    cleanup.profileCleanupOwner = "launcher";
     await clean("recordsWritten", flush);
     await clean("cleanupWritten", () =>
       writeFile(

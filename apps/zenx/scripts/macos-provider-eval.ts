@@ -1,11 +1,15 @@
 // Deterministic real-macOS provider evaluation. No model/API calls or global input.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
 import { runMacosStateWatch } from "./macos-state-watch.js";
-import { writeFile, copyFile, rm } from "node:fs/promises";
+import { writeFile, copyFile } from "node:fs/promises";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { bounded, pause, evaluationDuration } from "./macos-eval-lifecycle.mjs";
+import {
+  bounded,
+  pause,
+  evaluationDuration,
+  claimLauncherProfile,
+} from "./macos-eval-lifecycle.mjs";
 import path from "node:path";
 import os from "node:os";
 import { app, BrowserWindow, screen } from "electron";
@@ -53,11 +57,12 @@ async function main() {
   const controller = new AbortController();
   const deadlineTimer = setTimeout(
     () => controller.abort(new Error("Evaluation deadline reached")),
-    Math.min(durationMs, 280000),
+    Math.min(durationMs, 268000),
   );
   let scratch: string | undefined;
   let server: ReturnType<typeof createEvaluationServer> | undefined;
   let capability: BrowserZenXCapabilityPackage | undefined;
+  let computer: ComputerZenXCapabilityPackage | undefined;
   let fixture: BrowserWindow | undefined;
   const records: any[] = [];
   const cases: any[] = [];
@@ -76,8 +81,7 @@ async function main() {
       )
     ).stdout.trim();
   try {
-    mkdirSync(evidence!, { recursive: false, mode: 0o700 });
-    scratch = mkdtempSync(path.join(os.tmpdir(), "zenx-macos-eval-"));
+    scratch = claimLauncherProfile(evidence!);
     cleanup.scratch = scratch;
     app.setPath("userData", path.join(scratch, "profile"));
     app.setActivationPolicy("accessory");
@@ -91,7 +95,7 @@ async function main() {
     });
     browser.bindThreadSession("macos-eval", "macos-eval-thread");
     capability = new BrowserZenXCapabilityPackage(browser);
-    const computer = new ComputerZenXCapabilityPackage(
+    computer = new ComputerZenXCapabilityPackage(
       new ElectronMacComputerBackend(path.join(evidence!, "computer")),
     );
     async function invoke(
@@ -102,7 +106,7 @@ async function main() {
       const start = performance.now();
       try {
         const operation = (
-          name.startsWith("computer_") ? computer : capability!
+          name.startsWith("computer_") ? computer! : capability!
         ).invoke(name, {
           name,
           callId: `mac-eval-${records.length}`,
@@ -466,6 +470,7 @@ async function main() {
         cleanup.errors.push({ name, error: describe(error) });
       }
     };
+    await clean("computerClosed", () => computer?.close());
     await clean("windowClosed", () => fixture?.destroy());
     await clean("browserClosed", () => capability?.close());
     await clean(
@@ -479,15 +484,7 @@ async function main() {
     );
     await clean("operationsSettled", () => Promise.allSettled([...pending]));
     cleanup.pendingOperations = pending.size;
-    if (scratch)
-      await clean("profileRemoved", () =>
-        rm(scratch!, {
-          recursive: true,
-          force: true,
-          maxRetries: 10,
-          retryDelay: 100,
-        }),
-      );
+    cleanup.profileCleanupOwner = "launcher";
     await clean("resultsWritten", () =>
       writeFile(
         path.join(evidence!, "results.json"),
