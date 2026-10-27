@@ -619,6 +619,19 @@ export const en = {
   "pluginAccessReview.openScreenRecordingSettings":
     "Open Screen Recording settings",
   "pluginAccessReview.foregroundControl": "Foreground control",
+  "pluginAccessReview.computerSession": "Computer session",
+  "pluginAccessReview.session.active": "Session active",
+  "pluginAccessReview.session.locked": "Session locked",
+  "pluginAccessReview.session.suspended": "System suspended",
+  "pluginAccessReview.session.unknown": "Session state unknown",
+  "pluginAccessReview.sessionDetail":
+    "Locked use is unsupported. Display off is separate from system sleep; display power is not reported here.",
+  "pluginAccessReview.idlePrevention": "Idle prevention",
+  "pluginAccessReview.keepAwake.active-operation": "Active for this operation",
+  "pluginAccessReview.keepAwake.inactive": "Inactive",
+  "pluginAccessReview.keepAwake.unavailable": "Unavailable",
+  "pluginAccessReview.idlePreventionDetail":
+    "During an active Computer operation, ZenX prevents idle system sleep. It does not keep the display on or prevent manual sleep.",
   "pluginAccessReview.openGeneralSettings": "Open General settings",
   "pluginAccessReview.completeMacosSetup": "Complete macOS setup",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
@@ -1076,6 +1089,16 @@ export const en = {
     "This provider was not saved. Review its connection and model fields, then try again.",
   "settingsView.thisProviderWasNotSavedCheckApplicationStatusThen":
     "This provider was not saved. Check application status, then try again.",
+  "settingsView.providerCredentialStorageUnavailable":
+    "This provider was not saved because OS-protected credential storage is unavailable. Unlock or enable your operating system's keychain or credential service, then try again. Your edits are still here; ZenX will not store keys as plaintext.",
+  "settingsView.providerCredentialEncryptionFailed":
+    "This provider was not saved because its API key could not be encrypted. Check that your operating system's keychain or credential service is available, then try again. Your edits are still here.",
+  "settingsView.providerCredentialDecryptionFailed":
+    "This provider was not saved because an existing API key could not be decrypted. Check access to your operating system's keychain or credential service, then try again. Your edits are still here.",
+  "settingsView.providerCredentialReadFailed":
+    "This provider was not saved because the credential store could not be read. Check access to ZenX's application data and review the local diagnostics, then try again. Your edits are still here.",
+  "settingsView.providerCredentialWriteFailed":
+    "This provider was not saved because the encrypted credential store could not be written. Check free disk space and write access to ZenX's application data, then try again. Your edits are still here.",
   "settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck":
     "Could not confirm whether this provider was saved. Check application status before trying again.",
   "settingsView.enterADisplayName": "Enter a display name",
@@ -1902,6 +1925,19 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.screenRecording": "屏幕录制",
   "pluginAccessReview.openScreenRecordingSettings": "打开屏幕录制设置",
   "pluginAccessReview.foregroundControl": "前台控制",
+  "pluginAccessReview.computerSession": "电脑会话",
+  "pluginAccessReview.session.active": "会话可用",
+  "pluginAccessReview.session.locked": "会话已锁定",
+  "pluginAccessReview.session.suspended": "系统已休眠",
+  "pluginAccessReview.session.unknown": "会话状态未知",
+  "pluginAccessReview.sessionDetail":
+    "不支持在锁屏状态下使用。显示器熄灭与系统休眠是不同状态；这里不报告显示器供电状态。",
+  "pluginAccessReview.idlePrevention": "闲置期间保持运行",
+  "pluginAccessReview.keepAwake.active-operation": "本次操作期间生效",
+  "pluginAccessReview.keepAwake.inactive": "未启用",
+  "pluginAccessReview.keepAwake.unavailable": "不可用",
+  "pluginAccessReview.idlePreventionDetail":
+    "仅在 Computer 操作进行期间，ZenX 才防止系统因闲置而休眠；不会保持显示器点亮，也不会阻止手动休眠。",
   "pluginAccessReview.openGeneralSettings": "打开“通用”设置",
   "pluginAccessReview.completeMacosSetup": "完成 macOS 设置",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
@@ -2325,6 +2361,16 @@ export const zhCN: Record<keyof typeof en, string> = {
     "此服务商未保存。查看其连接和模型字段，然后重试。",
   "settingsView.thisProviderWasNotSavedCheckApplicationStatusThen":
     "此服务商未保存。请检查应用状态，然后重试。",
+  "settingsView.providerCredentialStorageUnavailable":
+    "此服务商未保存，因为操作系统保护的凭证存储不可用。请解锁或启用系统钥匙串或凭证服务后重试。您的编辑仍在此处；ZenX 不会以明文存储密钥。",
+  "settingsView.providerCredentialEncryptionFailed":
+    "此服务商未保存，因为无法加密 API 密钥。请检查系统钥匙串或凭证服务是否可用后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialDecryptionFailed":
+    "此服务商未保存，因为无法解密已有 API 密钥。请检查系统钥匙串或凭证服务的访问权限后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialReadFailed":
+    "此服务商未保存，因为无法读取凭证存储。请检查 ZenX 应用数据的访问权限并查看本机诊断后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialWriteFailed":
+    "此服务商未保存，因为无法写入加密的凭证存储。请检查磁盘可用空间和 ZenX 应用数据的写入权限后重试。您的编辑仍在此处。",
   "settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck":
     "无法确认此服务商是否已保存。请检查应用状态，然后重试。",
   "settingsView.enterADisplayName": "输入显示名称",

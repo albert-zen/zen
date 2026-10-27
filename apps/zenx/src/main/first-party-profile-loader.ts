@@ -11,12 +11,12 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   browser: {
     pluginId: "browser",
     packageName: "@zenx/browser-plugin",
-    tarball: "zenx-browser-plugin-electron-1.0.6.tgz",
+    tarball: "zenx-browser-plugin-electron-1.1.0.tgz",
   },
   computer: {
     pluginId: "computer",
     packageName: "@zenx/computer-plugin",
-    tarball: "zenx-computer-plugin-macos-1.2.0.tgz",
+    tarball: "zenx-computer-plugin-macos-1.3.0.tgz",
   },
   subagents: {
     pluginId: "zenx-subagents",
@@ -113,25 +113,25 @@ export function firstPartyProviderTarball(
 ): string {
   if (pluginId === "browser") {
     if (providerId === "multi-browser")
-      return "zenx-browser-plugin-multi-1.0.8.tgz";
+      return "zenx-browser-plugin-multi-1.1.0.tgz";
     if (providerId === "concurrent-browser")
-      return "zenx-browser-plugin-concurrent-1.0.7.tgz";
+      return "zenx-browser-plugin-concurrent-1.1.0.tgz";
     if (providerId === "electron-dedicated-browser")
-      return "zenx-browser-plugin-electron-1.0.6.tgz";
+      return "zenx-browser-plugin-electron-1.1.0.tgz";
     if (providerId === "playwright-cli")
-      return "zenx-browser-plugin-playwright-1.0.5.tgz";
+      return "zenx-browser-plugin-playwright-1.1.0.tgz";
     if (providerId === "user-browser-cdp")
-      return "zenx-browser-plugin-user-session-1.0.6.tgz";
+      return "zenx-browser-plugin-user-session-1.1.0.tgz";
   }
   if (pluginId === "computer") {
     if (providerId === "macos-desktop")
-      return "zenx-computer-plugin-macos-1.2.0.tgz";
+      return "zenx-computer-plugin-macos-1.3.0.tgz";
     if (providerId === "zenx-winapp-uia")
-      return "zenx-computer-plugin-win32-strict-1.2.0.tgz";
+      return "zenx-computer-plugin-win32-strict-1.3.0.tgz";
     if (providerId === "microsoft-winapp-cli")
-      return "zenx-computer-plugin-win32-1.1.5.tgz";
+      return "zenx-computer-plugin-win32-1.3.0.tgz";
     if (providerId === "peekaboo-cli")
-      return "zenx-computer-plugin-peekaboo-1.0.2.tgz";
+      return "zenx-computer-plugin-peekaboo-1.3.0.tgz";
   }
   throw new Error(`No provider variant for ${pluginId}/${providerId}`);
 }

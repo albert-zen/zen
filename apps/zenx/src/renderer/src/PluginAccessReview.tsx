@@ -227,6 +227,26 @@ export function PluginAccessReview({
               )
             }
           />
+          <AccessStatus
+            title={t("pluginAccessReview.computerSession")}
+            value={
+              computer === null && loading
+                ? t("pluginAccessReview.checking")
+                : t(
+                    `pluginAccessReview.session.${computer?.environment?.sessionState ?? "unknown"}`,
+                  )
+            }
+            detail={t("pluginAccessReview.sessionDetail")}
+            action={null}
+          />
+          <AccessStatus
+            title={t("pluginAccessReview.idlePrevention")}
+            value={t(
+              `pluginAccessReview.keepAwake.${computer?.environment?.keepAwake ?? "unavailable"}`,
+            )}
+            detail={t("pluginAccessReview.idlePreventionDetail")}
+            action={null}
+          />
           {computer?.platform === "darwin" &&
           (needsAccessibilitySetup(computer) || needsScreenSetup(computer)) ? (
             <div className="plugin-access-steps">

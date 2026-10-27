@@ -1,5 +1,6 @@
 import type { BrowserModelRoute } from "./capabilities/model-browser-metadata.js";
 import type { ForegroundActivityRunner } from "./foreground-activity.js";
+import type { ComputerEnvironmentPort } from "./automation-environment.js";
 import {
   unavailableBrowserConnections,
   type BrowserConnectionSource,
@@ -118,6 +119,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #computerBackend?: ZenXComputerBackend;
   readonly #computerManifest?: ZenXPluginManifestV2;
   readonly #foregroundActivity?: ForegroundActivityRunner;
+  readonly #computerEnvironment?: ComputerEnvironmentPort;
   #foregroundRequiredAllowed: boolean;
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
@@ -186,6 +188,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     computerManifest?: ZenXPluginManifestV2;
     allowForegroundRequired?: boolean;
     foregroundActivity?: ForegroundActivityRunner;
+    computerEnvironment?: ComputerEnvironmentPort;
     bundledProvidersOnly?: boolean;
     resourcesDirectory?: string;
     bundledManifestSha256?: string;
@@ -208,6 +211,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     appServerPort?: AppServerRequestPort & PluginHostAppServerPort;
   }) {
     this.#foregroundActivity = options.foregroundActivity;
+    this.#computerEnvironment = options.computerEnvironment;
     this.#toolTargetTransport = options.toolTargetTransport;
     this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
     this.#pluginToolEnvironment = new ToolEnvironment();
@@ -623,6 +627,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
               selection.manifest,
               this.#foregroundRequiredAllowed,
               this.#foregroundActivity,
+              this.#computerEnvironment,
             ),
       diagnostics,
     };

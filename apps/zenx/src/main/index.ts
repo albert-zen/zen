@@ -13,6 +13,7 @@ import { ThreadSidebarStore } from "./thread-sidebar-store.js";
 import { FileTraceStore } from "../../../../src/trace.js";
 import { installModelRequestDebugIpc } from "./model-request-debug-electron.js";
 import { ForegroundActivity } from "./foreground-activity.js";
+import { AutomationEnvironment } from "./automation-environment.js";
 import { ElectronForegroundActivityPresenter } from "./foreground-activity-electron.js";
 import {
   foregroundAgentName,
@@ -41,6 +42,8 @@ import {
   ipcMain,
   globalShortcut,
   Menu,
+  powerMonitor,
+  powerSaveBlocker,
   safeStorage,
   screen,
   session,
@@ -70,14 +73,13 @@ import type {
   ZenXSidebarOrder,
 } from "./host-profile.js";
 import {
-  ConfigurationPreCommitError,
+  providerKnownRejectionCode,
   ZenXSettingsService,
 } from "./settings-service.js";
 import {
   isRendererSettingsDiagnostic,
   SettingsDiagnosticLog,
   runDiagnosedProviderMutation,
-  type ProviderKnownRejectionCode,
 } from "./settings-diagnostic-log.js";
 import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
@@ -240,6 +242,7 @@ let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
 let foregroundActivity: ForegroundActivity | undefined;
+let automationEnvironment: AutomationEnvironment | undefined;
 let imZenXSetupService: ImZenXSetupService | undefined;
 let chromeExtensionBridge: ChromeExtensionBridge | undefined;
 let pluginDevControl: ZenXPluginDevControlServer | undefined;
@@ -501,7 +504,7 @@ async function bootstrapZenX(): Promise<void> {
     zenDataDirectory,
     vault: new ZenXCredentialVault(
       join(userDataDirectory, "credentials.vault"),
-      safeStorage,
+      secureLocalEncryption(safeStorage),
     ),
   });
   const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
@@ -716,8 +719,14 @@ async function bootstrapZenX(): Promise<void> {
       report: (error) =>
         console.error("Foreground computer activity failed", error),
     });
+    automationEnvironment = new AutomationEnvironment({
+      platform: process.platform,
+      monitor: powerMonitor,
+      blocker: powerSaveBlocker,
+    });
     capabilityService = new ZenXCapabilityService({
       foregroundActivity,
+      computerEnvironment: automationEnvironment,
       toolTargetTransport: (invocation) =>
         fleetToolTransport.invoke(invocation),
       userDataDirectory,
@@ -1319,6 +1328,8 @@ async function stopZenXHost(): Promise<void> {
   }
   foregroundActivity?.close();
   foregroundActivity = undefined;
+  automationEnvironment?.close();
+  automationEnvironment = undefined;
   try {
     await chromeExtensionBridge?.close();
     chromeExtensionBridge = undefined;
@@ -1940,6 +1951,8 @@ function installSettingsIpc(
       screenRecording,
       foregroundControlEnabled: settings.computerForegroundControlEnabled(),
     });
+    if (automationEnvironment)
+      snapshot.environment = automationEnvironment.snapshot();
     const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
     if (verificationStatus !== status) computerVerification = undefined;
     const result =
@@ -2649,16 +2662,6 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
-}
-
-function providerKnownRejectionCode(
-  error: unknown,
-): ProviderKnownRejectionCode | undefined {
-  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
-  const reason = "reason" in error ? error.reason : undefined;
-  if (reason === "conflict") return "revision-conflict";
-  if (reason === "validation") return "validation-rejected";
-  return "save-rejected";
 }
 
 function requireConfigurationRevision(value: unknown): void {

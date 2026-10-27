@@ -3212,6 +3212,260 @@ test("one Base URL field exposes one matching summary and inline error", async (
   }
 });
 
+for (const [code, guidance] of [
+  [
+    "credential-storage-unavailable",
+    /OS-protected credential storage is unavailable.*keychain.*will not store keys as plaintext/u,
+  ],
+  ["credential-encryption-failed", /API key could not be encrypted.*keychain/u],
+  [
+    "credential-decryption-failed",
+    /existing API key could not be decrypted.*keychain/u,
+  ],
+  [
+    "credential-read-failed",
+    /credential store could not be read.*application data.*diagnostics/u,
+  ],
+  [
+    "credential-write-failed",
+    /encrypted credential store could not be written.*disk space.*write access/u,
+  ],
+] as const) {
+  test(`Provider ${code} stays next to Save, keeps the draft and focuses each rejected attempt`, async () => {
+    const requests: ZenXProviderEditOptions[] = [];
+    const harness = await mountSettings("models", {
+      initialSettings: multiProviderSettings,
+      editProvider: async (_id, _provider, options, attemptId) => {
+        requests.push(options!);
+        return { ok: false, outcome: "failed", code, attemptId: attemptId! };
+      },
+    });
+    const scrolled: Element[] = [];
+    harness.dom.window.HTMLElement.prototype.scrollIntoView = function (
+      options,
+    ) {
+      if (this.matches(".provider-save-error")) {
+        assert.deepEqual(options, { block: "nearest" });
+        scrolled.push(this);
+      }
+    };
+    try {
+      await click(await waitFor(() => labeledButton("Edit Alpha")));
+      await changeControl(
+        requiredInput("Display name"),
+        "Unsaved provider draft",
+      );
+      await changeControl(requiredInput("API key"), "synthetic-private-key");
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const save = exactButtonRequired("Save provider");
+        save.focus();
+        await click(save);
+        const alert = document.querySelector<HTMLDivElement>(
+          ".provider-editor .provider-save-error[role=alert]",
+        );
+        assert.ok(alert !== null, "Provider save error is rendered");
+        assert.match(alert.textContent ?? "", guidance);
+        assert.match(alert.textContent ?? "", /Your edits are still here/u);
+        assert.equal(alert.tabIndex, -1);
+        assert.ok(
+          document.activeElement === alert,
+          "Rejected save focuses its inline error",
+        );
+        assert.equal(scrolled.length, attempt);
+        assert.ok(
+          alert.nextElementSibling?.matches(".provider-editor-actions"),
+        );
+        assert.equal(
+          document.querySelectorAll(".settings-error[role=alert]").length,
+          1,
+        );
+        assert.equal(
+          requiredInput("Display name").value,
+          "Unsaved provider draft",
+        );
+        assert.equal(requiredInput("API key").value, "synthetic-private-key");
+        assert.equal(requiredInput("API key").type, "password");
+        assert.doesNotMatch(
+          document.body.textContent ?? "",
+          /synthetic-private-key/u,
+        );
+        assert.equal(requests.length, attempt);
+        assert.equal(
+          requests[attempt - 1]?.baseRevision,
+          multiProviderSettings.profile.revision ?? 0,
+        );
+        assert.equal(requests[attempt - 1]?.apiKey, "synthetic-private-key");
+      }
+      await click(exactButtonRequired("Cancel"));
+      assert.ok(
+        document.querySelector(".provider-save-error") === null,
+        "Dismissed editor retires its save error",
+      );
+      await click(labeledButtonRequired("Edit Alpha"));
+      assert.equal(requiredInput("API key").value, "");
+      assert.ok(
+        document.querySelector(".provider-save-error") === null,
+        "Dismissed editor retires its save error",
+      );
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
+test("Add custom provider keeps all inputs and a nearby credential-storage error", async () => {
+  let calls = 0;
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    addProvider: async (_provider, _apiKey, _revision, _logo, attemptId) => {
+      calls += 1;
+      return {
+        ok: false,
+        outcome: "failed",
+        code: "credential-storage-unavailable",
+        attemptId: attemptId!,
+      };
+    },
+  });
+  try {
+    await click(await waitFor(() => exactButton("Add custom provider")));
+    await changeControl(
+      requiredInput("Display name"),
+      "Local synthetic provider",
+    );
+    await changeControl(requiredInput("Base URL"), "http://localhost:4317/v1");
+    await changeControl(requiredInput("API key"), "synthetic-provider-key");
+    await changeControl(requiredInput("Model 1"), "zenx-mock");
+    await changeControl(
+      requiredInput("Model 1 context window (Required)"),
+      "128000",
+    );
+    const save = exactButtonRequired("Add provider");
+    save.focus();
+    await click(save);
+    const alert = document.querySelector(
+      ".provider-editor .provider-save-error",
+    );
+    assert.ok(alert !== null, "Provider save error is rendered");
+    assert.ok(
+      document.activeElement === alert,
+      "Rejected save focuses its inline error",
+    );
+    assert.equal(calls, 1);
+    assert.equal(
+      requiredInput("Display name").value,
+      "Local synthetic provider",
+    );
+    assert.equal(requiredInput("Base URL").value, "http://localhost:4317/v1");
+    assert.equal(requiredInput("API key").value, "synthetic-provider-key");
+    assert.equal(requiredInput("Model 1").value, "zenx-mock");
+    assert.equal(
+      requiredInput("Model 1 context window (Required)").value,
+      "128000",
+    );
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /synthetic-provider-key/u,
+    );
+  } finally {
+    await unmount(harness);
+  }
+});
+
+for (const navigation of [
+  "none",
+  "outside",
+  "tab",
+  "window",
+  "activity",
+  "page",
+] as const) {
+  test(`late Provider rejection respects ${navigation} navigation without losing its inline error`, async () => {
+    let finish!: (value: ProviderReply) => void;
+    const harness = await mountSettings("models", {
+      initialSettings: multiProviderSettings,
+      editProvider: async () =>
+        await new Promise<ProviderReply>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    let scrolled = 0;
+    harness.dom.window.HTMLElement.prototype.scrollIntoView = function () {
+      if (this.matches(".provider-save-error")) scrolled += 1;
+    };
+    try {
+      await click(await waitFor(() => labeledButton("Edit Alpha")));
+      await changeControl(requiredInput("API key"), "synthetic-pending-key");
+      const save = exactButtonRequired("Save provider");
+      save.focus();
+      await click(save);
+      // Emulate Chromium's automatic blur when its focused Save is disabled.
+      const fieldset = document.querySelector<HTMLFieldSetElement>(
+        ".provider-editor fieldset",
+      )!;
+      fieldset.disabled = false;
+      save.disabled = false;
+      save.blur();
+      fieldset.disabled = true;
+      save.disabled = true;
+      if (navigation === "outside") exactButtonRequired("General").focus();
+      if (navigation === "tab")
+        document.body.dispatchEvent(
+          new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+        );
+      if (navigation === "window")
+        window.dispatchEvent(new window.Event("blur"));
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      if (navigation === "page") {
+        await click(exactButtonRequired("General"));
+        requiredInput("Maximum tool rounds").focus();
+      }
+      const destination = document.activeElement;
+      await act(async () =>
+        finish({
+          ok: false,
+          outcome: "failed",
+          code: "credential-storage-unavailable",
+          attemptId: globalThis.crypto.randomUUID(),
+        }),
+      );
+      if (navigation !== "none")
+        assert.ok(
+          document.activeElement === destination,
+          "Late error preserves newer focus",
+        );
+      if (navigation === "activity")
+        await click(exactButtonRequired("Toggle settings visibility"));
+      if (navigation === "page") {
+        const tab = exactButtonRequired("Models & provider");
+        tab.focus();
+        await click(tab);
+        assert.ok(
+          document.activeElement === tab,
+          "Returning to Models preserves navigation focus",
+        );
+      }
+      const alert = document.querySelector(
+        ".provider-editor .provider-save-error",
+      );
+      assert.ok(alert !== null, "Provider save error is rendered");
+      assert.ok(
+        (document.activeElement === alert) === (navigation === "none"),
+        "Error focuses only while the submission still owns focus",
+      );
+      assert.equal(scrolled, navigation === "none" ? 1 : 0);
+      assert.equal(requiredInput("API key").value, "synthetic-pending-key");
+      assert.doesNotMatch(
+        document.body.textContent ?? "",
+        /synthetic-pending-key/u,
+      );
+    } finally {
+      await unmount(harness);
+    }
+  });
+}
+
 test("Host-rejected stale API key edit keeps the draft despite another window's revision", async () => {
   const initial = structuredClone(multiProviderSettings);
   initial.profile.revision = 2;

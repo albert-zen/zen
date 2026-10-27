@@ -684,7 +684,7 @@ test(
 );
 
 function tool(name: string, description: string) {
-  return { name, description, inputSchema: { type: "object" } };
+  return { name, description, inputSchema: { type: "object", properties: {} } };
 }
 
 function plugin(id: string, pluginTool: ReturnType<typeof tool>) {

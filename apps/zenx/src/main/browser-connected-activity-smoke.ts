@@ -65,7 +65,9 @@ export async function smokeConnectedActivity(
   try {
     // Open through this Host mapping, never borrow a target owned by another
     // provider session. The caller supplies only its existing CI fixture URL.
-    await invoke("open", { url: fixtureUrl });
+    // This probe measures each inspection attempt separately, including its
+    // pre-dispatch retry boundary. Do not consume one in open's follow-up read.
+    await invoke("open", { url: fixtureUrl, observe: false });
     const opened = events.flatMap(({ event }) =>
       event.type === "activity" && event.callId === "ci-open" ? [event] : [],
     );

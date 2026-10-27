@@ -24,6 +24,8 @@ import {
   SystemExternalProviderProcessRunner,
 } from "./external-provider.js";
 import { PeekabooComputerBackend } from "./peekaboo-computer-provider.js";
+import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
+import { BROWSER_PLUGIN_VERSION } from "../../../../../packages/zenx-browser-plugin/src/version.js";
 import { PlaywrightCliBrowserBackend } from "./playwright-browser-provider.js";
 import {
   bindBundledProviderLaunch,
@@ -833,10 +835,10 @@ export async function probePeekabooCli(
   };
 }
 
-function playwrightBrowserManifest(): ZenXPluginManifestV2 {
+export function playwrightBrowserManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(browserCapabilityManifest),
-    version: "1.0.5",
+    version: BROWSER_PLUGIN_VERSION,
     description:
       "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
     permissions: browserCapabilityManifest.permissions.map((permission) =>
@@ -885,7 +887,7 @@ function playwrightBrowserManifest(): ZenXPluginManifestV2 {
 export function peekabooComputerManifest(): ZenXPluginManifestV2 {
   return {
     ...structuredClone(computerCapabilityManifest),
-    version: "1.0.2",
+    version: COMPUTER_PLUGIN_VERSION,
     mainDocument: `${computerCapabilityManifest.mainDocument} This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target. Its targeted press/value mutations are not certified focus-isolated: they require explicit foreground control and cannot be used as a background fallback. Backend completion does not verify application effect.`,
     description:
       "Peekaboo 3.x targeted macOS automation. Mutations are not certified focus-isolated and require explicit foreground control with a visible activity indicator.",

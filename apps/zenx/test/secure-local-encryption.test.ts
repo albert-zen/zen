@@ -28,11 +28,11 @@ test("Linux requires an OS-protected backend and blocks direct encryption/decryp
     assert.equal(wrapper.isEncryptionAvailable(), false);
     assert.throws(
       () => wrapper.encryptString("synthetic-secret"),
-      /no plaintext fallback/,
+      /[Nn]o plaintext fallback/,
     );
     assert.throws(
       () => wrapper.decryptString(Buffer.from("synthetic-secret")),
-      /no plaintext fallback/,
+      /[Nn]o plaintext fallback/,
     );
   }
   assert.equal(calls, 0);
@@ -69,3 +69,31 @@ test("Linux requires an OS-protected backend and blocks direct encryption/decryp
     false,
   );
 });
+
+for (const platform of ["win32", "darwin"] as const) {
+  test(`${platform} retains its native encrypted round-trip without a Linux backend dependency`, () => {
+    const calls: string[] = [];
+    const wrapper = secureLocalEncryption(
+      {
+        isEncryptionAvailable: () => true,
+        getSelectedStorageBackend: () => {
+          throw new Error("Linux-only API must not be queried");
+        },
+        encryptString(value) {
+          calls.push("encrypt");
+          return Buffer.from(`native:${value}`);
+        },
+        decryptString(value) {
+          calls.push("decrypt");
+          return value.toString().replace(/^native:/u, "");
+        },
+      },
+      platform,
+    );
+    assert.equal(
+      wrapper.decryptString(wrapper.encryptString("synthetic-key")),
+      "synthetic-key",
+    );
+    assert.deepEqual(calls, ["encrypt", "decrypt"]);
+  });
+}

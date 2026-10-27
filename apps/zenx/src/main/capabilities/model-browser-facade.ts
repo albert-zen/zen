@@ -28,116 +28,30 @@ import {
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
 import { browserConnectionScopeKey } from "./browser-connections.js";
+import {
+  browserOperations,
+  browserOperation as operation,
+  browserNamespace as namespace,
+  buildBrowserModelDefinition,
+  sessionTools,
+  targetTools,
+  observationTools,
+} from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
+import { projectTargetChanges } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
+export { browserModelDocument } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
 export type BrowserModelConnections = ReadonlyMap<
   string,
   { connectionId: string; label: string; state: string; generation: string }
 >;
-const operations = [
-  "list_tabs",
-  "open",
-  "navigate",
-  "inspect",
-  "click",
-  "type",
-  "select",
-  "scroll",
-  "pointer_click",
-  "key_press",
-  "close",
-  "close_session",
-];
 const names = new Set([
   "browser_connections",
   ...["browser_", "browser_workspace_", "browser_connected_"].flatMap((p) =>
-    operations.map((o) => p + o),
+    browserOperations.map((o) => p + o),
   ),
 ]);
 export const isBrowserModelTool = (name: string) => names.has(name);
-function operation(name: string): string {
-  return name.replace(/^browser_(?:workspace_|connected_)?/u, "");
-}
-function namespace(name: string): string {
-  return name.startsWith("browser_workspace_")
-    ? "workspace"
-    : name.startsWith("browser_connected_")
-      ? "connected"
-      : "legacy";
-}
-const sessionTools = new Set(["list_tabs", "open", "close_session"]);
-const targetTools = new Set(["click", "type", "select"]);
-const observationTools = new Set(["scroll", "pointer_click", "key_press"]);
-export const browserModelDocument =
-  "Browser returns exact scoped connection/session/tab/observation/target refs. Start with connections for external browsers, then list_tabs with a semantic session (default main). Inspect a tab for bounded full observations; follow cursor alone for immutable continuation. Targets retain their exact tab and observation. Native owner, permission, connection generation, freshness and human-control guards remain authoritative. An unavailable tab is never redirected. actionCompleted with observationError means inspect again, never repeat the action. Unknown effects are never automatically replayed. New Browser sidebar tabs use exact returned tab refs, not native IDs.";
 export function browserModelDefinition<T extends ModelTool>(source: T): T {
-  const tool = structuredClone(source),
-    op = operation(tool.name),
-    fields: Record<string, unknown> = {},
-    required: string[] = [];
-  if (op !== "connections") {
-    if (sessionTools.has(op)) {
-      fields.session =
-        op === "close_session"
-          ? MODEL_REF
-          : {
-              type: "string",
-              description:
-                "Semantic session name or exact session ref; defaults to main.",
-            };
-      if (op === "close_session") required.push("session");
-      if (namespace(tool.name) === "connected") fields.connection = MODEL_REF;
-    } else {
-      const field = targetTools.has(op)
-        ? "target"
-        : observationTools.has(op)
-          ? "observation"
-          : "tab";
-      fields[field] = MODEL_REF;
-      if (op === "inspect") fields.cursor = MODEL_REF;
-      else required.push(field);
-      if (op === "navigate" || op === "close") fields.observation = MODEL_REF;
-    }
-    const native = record(tool.inputSchema.properties) ?? {};
-    for (const key of [
-      "url",
-      "text",
-      "submit",
-      "option",
-      "direction",
-      "pixels",
-      "x",
-      "y",
-      "key",
-      "observe",
-    ])
-      if (native[key] !== undefined) fields[key] = native[key];
-    for (const key of Array.isArray(tool.inputSchema.required)
-      ? tool.inputSchema.required
-      : [])
-      if (
-        [
-          "url",
-          "text",
-          "option",
-          "direction",
-          "pixels",
-          "x",
-          "y",
-          "key",
-        ].includes(String(key))
-      )
-        required.push(String(key));
-  }
-  tool.inputSchema = {
-    type: "object",
-    properties: fields,
-    required,
-    additionalProperties: false,
-    ...(op === "inspect"
-      ? { oneOf: [{ required: ["tab"] }, { required: ["cursor"] }] }
-      : {}),
-  };
-  tool.description = `${op}: ${browserModelDocument}`;
-  return tool;
+  return buildBrowserModelDefinition(source, MODEL_REF);
 }
 function routeFrom(value: Record<string, unknown>): BrowserModelRoute {
   if (!isBrowserModelRoute(value.route))
@@ -193,6 +107,9 @@ export function decodeBrowserArguments(
       "y",
       "key",
       "observe",
+      "since",
+      "full",
+      "query",
     ];
   only(input, op === "connections" ? [] : allowed);
   if (op === "connections") return args;
@@ -203,7 +120,7 @@ export function decodeBrowserArguments(
     only(input, [
       "session",
       "connection",
-      ...(op === "open" ? ["url", "observe"] : []),
+      ...(op === "open" ? ["url", "observe", "since", "full"] : []),
     ]);
     if (typeof input.session === "string" && refs.lookup(input.session))
       route = routeFrom(resolve(input.session, "session"));
@@ -239,7 +156,8 @@ export function decodeBrowserArguments(
       if (
         other !== field &&
         input[other] !== undefined &&
-        !(["navigate", "close"].includes(op) && other === "observation")
+        !(["navigate", "close"].includes(op) && other === "observation") &&
+        !(targetTools.has(op) && other === "observation")
       )
         throw Error(
           "The exact Browser ref already binds its target; omit other routing fields",
@@ -250,7 +168,10 @@ export function decodeBrowserArguments(
       args.observationId = bound.observationId;
     if (field === "target") args.targetId = bound.targetId;
     if (field === "cursor") args.cursor = bound.cursor;
-    if (["navigate", "close"].includes(op) && input.observation !== undefined) {
+    if (
+      (["navigate", "close"].includes(op) || targetTools.has(op)) &&
+      input.observation !== undefined
+    ) {
       const observed = resolve(input.observation, "observation");
       if (JSON.stringify(routeFrom(observed)) !== JSON.stringify(route))
         throw Error("Observation belongs to another exact tab");
@@ -300,9 +221,26 @@ export function decodeBrowserArguments(
     "y",
     "key",
     "observe",
+    "query",
   ])
     if (input[key] !== undefined) args[key] = structuredClone(input[key]);
-  if ((op === "inspect" && args.cursor === undefined) || args.observe === true)
+  if (input.since !== undefined) {
+    if (args.cursor !== undefined || input.full === true)
+      throw Error("since cannot be combined with cursor or full:true");
+    const base = resolve(input.since, "observation");
+    const baseRoute = routeFrom(base);
+    if (route && JSON.stringify(baseRoute) !== JSON.stringify(route))
+      throw Error("Baseline belongs to another exact tab");
+    if (!route && op === "open")
+      throw Error("Open cannot compare an observation from an unknown new tab");
+    args.baseObservationId = base.observationId;
+  }
+  if (input.full !== undefined) args.full = input.full;
+  else if (
+    op === "inspect" &&
+    args.cursor === undefined &&
+    input.since === undefined
+  )
     args.full = true;
   return args;
 }
@@ -333,6 +271,14 @@ function projectBrowserResult(
   refs: ModelReferenceScope,
   epoch: string,
   connections?: BrowserModelConnections,
+  history: readonly {
+    namespace: string;
+    kind: string;
+    value: unknown;
+    ref: string;
+    ownerThreadId: string;
+    epoch?: string;
+  }[] = [],
 ): unknown {
   const op = operation(name),
     bind = (kind: string, value: unknown) =>
@@ -381,7 +327,10 @@ function projectBrowserResult(
         "mutationsRequireObservation",
         "automaticPresentation",
         "visibleText",
+        "visibleTextChange",
         "coverage",
+        "search",
+        "view",
         "inputViewport",
         "focusedInputAvailable",
         "inputPolicy",
@@ -413,6 +362,7 @@ function projectBrowserResult(
         "capturedAt",
         "continuation",
         "resetReason",
+        "unchanged",
       ]);
     if (typeof v.observationId === "string") {
       if (!route?.tabId) throw new ProjectionUnavailable();
@@ -420,6 +370,13 @@ function projectBrowserResult(
         route,
         observationId: v.observationId,
       });
+      const page = record(out.page);
+      const nativePage = record(v.observation);
+      if (page && typeof nativePage?.baseObservationId === "string")
+        page.base = bind("observation", {
+          route,
+          observationId: nativePage.baseObservationId,
+        });
       if (record(v.screenshot)) {
         const screenshot = object(v.screenshot);
         out.screenshot = {
@@ -459,6 +416,66 @@ function projectBrowserResult(
             ]),
           };
         });
+      if (record(v.targetChanges)) {
+        const changes = object(v.targetChanges);
+        const bindTarget = (targetId: string, observationId: string) =>
+          bind("target", { route, observationId, targetId });
+        const projectTarget = (
+          target: Record<string, unknown>,
+          observationId: string,
+        ) => {
+          return {
+            ref: bindTarget(target.targetId as string, observationId),
+            ...pick(target, [
+              "role",
+              "name",
+              "actions",
+              "value",
+              "checked",
+              "selected",
+              "options",
+              "optionsTruncated",
+            ]),
+          };
+        };
+        const baseId = nativePage?.baseObservationId;
+        if (typeof baseId !== "string") throw new ProjectionUnavailable();
+        const oldIds: string[] = [];
+        for (const binding of history) {
+          if (
+            binding.namespace !== "browser" ||
+            binding.kind !== "target" ||
+            binding.ownerThreadId !== refs.ownerThreadId ||
+            binding.epoch !== epoch
+          )
+            continue;
+          const old = record(binding.value);
+          if (
+            old?.observationId !== baseId ||
+            typeof old.targetId !== "string" ||
+            !record(old.route) ||
+            JSON.stringify(old.route) !== JSON.stringify(route)
+          )
+            continue;
+          // Candidate provenance is still checked by the typed ref resolver.
+          refs.resolve(binding.ref, "browser", "target", epoch);
+          if (!oldIds.includes(old.targetId)) oldIds.push(old.targetId);
+        }
+        const itemCoverage = record(record(v.coverage)?.items);
+        const returned =
+          typeof itemCoverage?.returned === "number"
+            ? itemCoverage.returned
+            : oldIds.length;
+        out.targetChanges = projectTargetChanges(
+          changes,
+          oldIds,
+          returned,
+          baseId,
+          v.observationId,
+          bindTarget,
+          projectTarget,
+        );
+      }
     }
     if (typeof v.nextCursor === "string") {
       if (!route?.tabId) throw new ProjectionUnavailable();
@@ -581,6 +598,7 @@ export async function invokeBrowserModelToolFacade(options: {
           refs,
           epoch,
           connections,
+          invocation.modelReferences,
         ),
       ),
     );

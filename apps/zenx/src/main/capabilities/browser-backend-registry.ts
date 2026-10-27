@@ -6,6 +6,7 @@ import {
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
 import { withBrowserOperationOrder } from "./browser-operation-order.js";
+import { BROWSER_PLUGIN_VERSION } from "../../../../../packages/zenx-browser-plugin/src/version.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import {
   BrowserZenXCapabilityPackage,
@@ -49,7 +50,7 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
     qualifySchemaDescriptions(tool.inputSchema, connectedPrefix);
   return {
     ...workspace,
-    version: "1.0.7",
+    version: BROWSER_PLUGIN_VERSION,
     description:
       "The shared ZenX browser and an explicitly connected external browser, available together with independent targets and tool approvals.",
     provider: {
@@ -100,7 +101,7 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
 /** One catalog, not a copy of each tool per connected profile. */
 export function multiBrowserManifest(): ZenXPluginManifestV2 {
   const manifest = concurrentBrowserManifest();
-  manifest.version = "1.0.8";
+  manifest.version = BROWSER_PLUGIN_VERSION;
   manifest.provider.id = "multi-browser";
   manifest.description =
     "Workspace, Chrome and Edge browser instances with separate targets and approvals.";

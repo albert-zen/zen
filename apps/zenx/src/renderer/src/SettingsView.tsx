@@ -1228,9 +1228,34 @@ function ModelsPanel({
   const addProviderButton = useRef<HTMLButtonElement>(null);
   const addCustomProviderButton = useRef<HTMLButtonElement>(null);
   const restoreEditorFocus = useRef(false);
-  const pendingEditorFocus = useRef<{ owned: boolean; cleanup(): void } | null>(
-    null,
-  );
+  const [providerSaveError, setProviderSaveError] = useState<{
+    message: string;
+  } | null>(null);
+  const pendingEditorFocus = useRef<{
+    owned: boolean;
+    editor: Element | undefined;
+    cleanup(): void;
+  } | null>(null);
+  useLayoutEffect(() => {
+    if (providerSaveError === null) return;
+    const focus = pendingEditorFocus.current;
+    if (!focus) return;
+    const activeEditor =
+      providerSection.current?.querySelector(".provider-editor");
+    if (
+      focus.owned &&
+      focus.editor?.isConnected &&
+      focus.editor === activeEditor
+    ) {
+      const alert = activeEditor.querySelector<HTMLDivElement>(
+        ".provider-save-error",
+      );
+      alert?.focus({ preventScroll: true });
+      alert?.scrollIntoView({ block: "nearest" });
+    }
+    focus.cleanup();
+    if (pendingEditorFocus.current === focus) pendingEditorFocus.current = null;
+  }, [providerSaveError]);
   useLayoutEffect(
     () => () => {
       // Activity hiding/unmounting is navigation even without a focus event.
@@ -1254,6 +1279,7 @@ function ModelsPanel({
     if (busy !== null) return;
     restoreEditorFocus.current = true;
     setEditor(null);
+    setProviderSaveError(null);
   };
 
   const acceptSettings = (value: PublicHostSettings, message: string) => {
@@ -1332,6 +1358,7 @@ function ModelsPanel({
   ): Promise<"success" | "committed-error" | "failed"> => {
     setBusy(operation);
     setError(null);
+    setProviderSaveError(null);
     setStatus(null);
     try {
       const reply = await mutation();
@@ -1371,6 +1398,21 @@ function ModelsPanel({
         "save-rejected": i18n.t(
           "settings:settingsView.thisProviderWasNotSavedCheckApplicationStatusThen",
         ),
+        "credential-storage-unavailable": i18n.t(
+          "settings:settingsView.providerCredentialStorageUnavailable",
+        ),
+        "credential-encryption-failed": i18n.t(
+          "settings:settingsView.providerCredentialEncryptionFailed",
+        ),
+        "credential-decryption-failed": i18n.t(
+          "settings:settingsView.providerCredentialDecryptionFailed",
+        ),
+        "credential-read-failed": i18n.t(
+          "settings:settingsView.providerCredentialReadFailed",
+        ),
+        "credential-write-failed": i18n.t(
+          "settings:settingsView.providerCredentialWriteFailed",
+        ),
         "save-finalization-failed": i18n.t(
           "settings:settingsView.providerSettingsWereSavedButFinalizationFailedCheckApplication",
         ),
@@ -1378,14 +1420,14 @@ function ModelsPanel({
           "settings:settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck",
         ),
       } as const;
-      setError(messageByCode[reply.code]);
+      setProviderSaveError({ message: messageByCode[reply.code] });
       return "failed";
     } catch {
-      setError(
-        i18n.t(
+      setProviderSaveError({
+        message: i18n.t(
           "settings:settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck",
         ),
-      );
+      });
       return "failed";
     } finally {
       setBusy(null);
@@ -1430,6 +1472,7 @@ function ModelsPanel({
       baseRevision: settings.profile.revision ?? 0,
     });
     setError(null);
+    setProviderSaveError(null);
     setStatus(null);
   };
 
@@ -1454,6 +1497,7 @@ function ModelsPanel({
       },
     });
     setError(null);
+    setProviderSaveError(null);
     setStatus(null);
   };
 
@@ -1631,6 +1675,7 @@ function ModelsPanel({
               editor.provider.providerProfileId,
             )}
             mode={editor.mode}
+            saveError={providerSaveError?.message ?? null}
             provider={editor.provider}
             logoDataUrl={
               settings.providerLogoDataUrls?.[editor.provider.providerProfileId]
@@ -1650,6 +1695,7 @@ function ModelsPanel({
                 providerSection.current?.querySelector(".provider-editor");
               const focus = {
                 cleanup: () => {},
+                editor: activeEditor ?? undefined,
                 owned: Boolean(activeEditor?.contains(document.activeElement)),
               };
               pendingEditorFocus.current = focus;
@@ -1678,7 +1724,7 @@ function ModelsPanel({
                 }
                 window.removeEventListener("blur", abandonFocus);
               };
-              let success: "success" | "committed-error" | "failed";
+              let success: "success" | "committed-error" | "failed" | undefined;
               try {
                 success = await runProviderMutation(
                   editor.mode === "add" ? "provider-add" : "provider-edit",
@@ -1707,9 +1753,13 @@ function ModelsPanel({
                         ),
                 );
               } finally {
-                focus.cleanup();
-                if (pendingEditorFocus.current === focus)
-                  pendingEditorFocus.current = null;
+                // Failed saves keep their ownership guard until the inline alert
+                // is committed, including Activity hiding and newer navigation.
+                if (success !== "failed") {
+                  focus.cleanup();
+                  if (pendingEditorFocus.current === focus)
+                    pendingEditorFocus.current = null;
+                }
               }
               if (success !== "failed") {
                 restoreEditorFocus.current = focus.owned;
@@ -1903,6 +1953,7 @@ function ProviderEditor({
   defaultModel,
   hasApiKey,
   mode,
+  saveError,
   onCancel,
   onSubmit,
   provider: initialProvider,
@@ -1914,6 +1965,7 @@ function ProviderEditor({
   defaultModel: ZenXModelReference;
   hasApiKey: boolean;
   mode: "add" | "edit";
+  saveError: string | null;
   onCancel(): void;
   onSubmit(
     provider: ZenXProviderProfile,
@@ -2852,6 +2904,16 @@ function ProviderEditor({
             <div className="settings-error provider-editor-error" role="alert">
               <Icon name="warning" />
               {logoSelectionError ?? validationError}
+            </div>
+          )}
+          {saveError === null ? null : (
+            <div
+              className="settings-error provider-editor-error provider-save-error"
+              role="alert"
+              tabIndex={-1}
+            >
+              <Icon name="warning" />
+              {saveError}
             </div>
           )}
           <div className="provider-editor-actions">

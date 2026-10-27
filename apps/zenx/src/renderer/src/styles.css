@@ -7967,6 +7967,19 @@ button:disabled {
 .computer-live-toolbar [data-status="live"] {
   color: var(--text-accent);
 }
+.computer-live-toolbar .computer-activity {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.computer-thread-panel[data-agent-active="true"] .computer-live-toolbar {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+@media (forced-colors: active) {
+  .computer-thread-panel[data-agent-active="true"] .computer-live-toolbar {
+    border-bottom: 2px solid Highlight;
+    box-shadow: none;
+  }
+}
 .computer-live-stage {
   flex: 1;
   min-height: 0;
@@ -11447,6 +11460,25 @@ button:disabled {
 }
 
 /* Activity belongs to chrome, never an overlay on the native page. */
+.workspace-browser-activity {
+  display: block;
+  min-height: 22px;
+  padding: 2px 14px 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-browser-activity[data-state="active"] {
+  color: var(--text-accent);
+}
+@media (forced-colors: active) {
+  .workspace-browser-activity[data-state="active"] {
+    color: Highlight;
+  }
+}
 .browser-thread-panel[data-agent-active="true"] .browser-panel-target,
 .workspace-browser-panel[data-agent-active="true"] .workspace-browser-address {
   box-shadow: inset 0 -2px 0 var(--accent);

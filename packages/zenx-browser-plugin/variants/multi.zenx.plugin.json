@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "browser",
   "name": "Browser",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "description": "Workspace, Chrome and Edge browser instances with separate targets and approvals.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_workspace_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action. Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_workspace_navigate/browser_workspace_close, must carry the latest observationId from a new browser_workspace_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically. Browser backends coexist: browser_workspace_* uses the shared Workspace browser; browser_connected_* uses only the explicitly enabled external connection. Start with each backend's list_tabs using a sessionId. Results identify backendId. Pass returned tabId, observationId, targetId and cursor unchanged to tools in the same namespace; cross-backend references reject. An unavailable external connection never redirects to the Workspace browser. Closing a connected tab/session only detaches ZenX and leaves the user's page open. Approvals for one tool namespace do not approve the other. Start with browser_connections to discover non-sensitive connection IDs and labels. Every browser_connected_* call requires an explicit connectionId. Choose that instance before listing tabs; separate instances need separate approvals, including instances of the same browser. References are bound to the exact connection generation, so reconnect requires fresh list/inspect and never retries an old action. No unavailable target falls back to another browser.",
+  "mainDocument": "Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace. Browser backends coexist: browser_workspace_* uses the shared Workspace browser; browser_connected_* uses only the explicitly enabled external connection. Start with each backend's list_tabs using a sessionId. Results identify backendId. Pass returned tabId, observationId, targetId and cursor unchanged to tools in the same namespace; cross-backend references reject. An unavailable external connection never redirects to the Workspace browser. Closing a connected tab/session only detaches ZenX and leaves the user's page open. Approvals for one tool namespace do not approve the other. Start with browser_connections to discover non-sensitive connection IDs and labels. Every browser_connected_* call requires an explicit connectionId. Choose that instance before listing tabs; separate instances need separate approvals, including instances of the same browser. References are bound to the exact connection generation, so reconnect requires fresh list/inspect and never retries an old action. No unavailable target falls back to another browser.",
   "provider": {
     "id": "multi-browser",
     "platforms": ["darwin", "win32", "linux"],
@@ -138,7 +138,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -178,7 +178,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -220,6 +220,12 @@
           "full": {
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
           }
         },
         "required": ["sessionId", "tabId"],
@@ -250,7 +256,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -286,7 +292,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -330,7 +336,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -382,7 +388,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -427,7 +433,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -475,7 +481,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_workspace_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -594,7 +600,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -646,7 +652,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -701,6 +707,12 @@
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
           },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role, name, and value within this backend's captured targets. Coverage names the capture scope; a miss is not a whole-page claim. Follow nextCursor for more matches from the same capture."
+          },
           "connectionId": {
             "type": "string",
             "description": "Exact opaque connectionId from browser_connections. Required even when only one browser is connected."
@@ -739,7 +751,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -793,7 +805,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -856,7 +868,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -926,7 +938,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -990,7 +1002,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",
@@ -1051,7 +1063,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_connected_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."
           },
           "baseObservationId": {
             "type": "string",

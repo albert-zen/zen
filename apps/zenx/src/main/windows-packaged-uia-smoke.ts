@@ -356,7 +356,7 @@ export async function verifyWindowsPackagedUiaSmoke(options: {
       anonymousVirtualControls.length > 0,
       "native inspection must retain actual anonymous virtual structure rows",
     );
-    const button = findControl(second, "ZenX packaged invoke", "press");
+    const button = findControl(second, "Apply draft", "press");
     await invoke("computer_press", {
       target: selectedTarget,
       control: button.selector,

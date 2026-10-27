@@ -2,6 +2,10 @@
 
 ## ItemList / Trace / current product state contract
 
+- **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
+- **Automation environment** — A Host-local OS observation port separates session locking, system suspend/resume and unknown display power; it retires native observations and aborts admitted calls on session changes, while an operation-lifetime application-suspension blocker never unlocks a device, prevents explicit sleep or creates durable task state.
+- **Local observation text changes** — A first-page diff may carry one Unicode-safe UTF-16 splice against its explicit retained baseline; scope changes, unavailable context and requested full views remain self-contained, and captured tails never become an implicit baseline.
+
 - **Typed model references** — Short model refs are disposable projections of exact Host bindings carried in existing trusted Context/tool-result provenance and raw Trace; resolution never grants authority or changes native freshness/CAS, and per-producer publication budgets cannot truncate already-issued provenance.
 - **Builtin model handles** — Compaction's `cN` references bind exact selected semantic sources and local task `tN` references bind exact accepted tool-call/task receipts; their separate numeric families are reconstructed from existing immutable provenance, never grant permission or replace native IDs, and resolve only under the current Thread and existing selection/task ownership checks without an alias store or replay.
 - **Shell session observation handles** — Model-facing `shell_sessions` preserves the exact native observation in Trace and projects current-owner session IDs through the same `tN` family; human terminals receive a distinct read-observation binding from the accepted reader call, never an invented model-created task, and existing human-input, termination, expiration and restart restrictions remain authoritative.
@@ -389,6 +393,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   renderer settings、进程环境与 App Server 协议配置字段都不主动序列化解密值。Provider、
   模型或工具返回的内容属于 trace，即使字节与 credential 相同也不扫描或改写，并可按正常
   Runtime 规则进入 canonical ItemList。
+- **CredentialStorageError** — 既有凭证边界仅报告固定的 OS 加密不可用、加解密、读取或持久化失败码，经 ConfigurationPreCommitError 进入原有 Settings IPC 与有界诊断日志；不携带原生错误、路径或密钥，不改变提交判定或增加存储权威。
 - **ZenX 本机诊断日志** — 主进程将设置页校验拒绝与 Provider 保存结果规范化为固定事件、
   原因码、行序号、尝试 ID 和结果，再写入 userData 下权限收窄、定额轮转的 JSONL 支持数据；
   Renderer 原文、Provider/模型身份、URL、凭证和错误文本都不进入该日志，写入失败不改变保存结果。

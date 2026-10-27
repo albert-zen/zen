@@ -28,6 +28,10 @@ public static class ZenXPackagedFixture {
   }
   public static void Json(string name, object value) { Write(name, new JavaScriptSerializer().Serialize(value)); }
   public static bool Exists(string name) { return File.Exists(FilePath(name)); }
+  public static string Preview(string prefix, string value) {
+    string visible = String.IsNullOrEmpty(value) ? "(empty)" : value;
+    return prefix + (visible.Length > 160 ? visible.Substring(0, 160) + "… (truncated)" : visible);
+  }
   public static void Run(string mode, string directory, string title, int targetPid, string targetHwnd) {
     DirectoryPath = directory;
     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
@@ -37,6 +41,7 @@ public static class ZenXPackagedFixture {
     else throw new InvalidOperationException("Unknown fixture role");
   }
   public sealed class BlockingEditor : TextBox {
+    public Action<string> ValueChanged;
     protected override void WndProc(ref Message message) {
       // A real ValuePattern.SetValue must enter the native edit operation. This
       // blocking target belongs only to the fixture; production has no test hook.
@@ -47,6 +52,9 @@ public static class ZenXPackagedFixture {
         if (!Exists("release-value")) Write("value-block-timeout", "timeout");
       }
       base.WndProc(ref message);
+      // UIA ValuePattern may use WM_SETTEXT without EN_CHANGE. Publish a
+      // visible app-owned status before the native SetValue readback returns.
+      if (message.Msg == 0x000C && ValueChanged != null) ValueChanged(Text);
     }
   }
   static BlockingEditor Editor(Form form) {
@@ -105,13 +113,34 @@ public static class ZenXPackagedFixture {
   static void Target(string title) {
     var diagnostic = new TargetDiagnostic();
     var form = new ObservedForm(diagnostic);
-    form.Text = title; form.SetBounds(40, 40, 620, 320); form.StartPosition = FormStartPosition.Manual;
+    form.Text = title; form.SetBounds(40, 40, 620, 360); form.StartPosition = FormStartPosition.Manual;
     BlockingEditor editor = Editor(form);
+    var draftStatus = new TextBox();
+    draftStatus.Name = "ZenXDraftStatus"; draftStatus.ReadOnly = true; draftStatus.TabStop = false;
+    draftStatus.SetBounds(24, 204, 550, 24);
+    draftStatus.Text = "Draft: (empty)"; draftStatus.AccessibleName = draftStatus.Text;
+    form.Controls.Add(draftStatus);
+    var appliedStatus = new TextBox();
+    appliedStatus.Name = "ZenXAppliedStatus"; appliedStatus.ReadOnly = true; appliedStatus.TabStop = false;
+    appliedStatus.SetBounds(24, 236, 550, 24);
+    appliedStatus.Text = "Applied: (none)"; appliedStatus.AccessibleName = appliedStatus.Text;
+    form.Controls.Add(appliedStatus);
+    Action<string> updateDraft = delegate(string value) {
+      draftStatus.Text = Preview("Draft: ", value);
+      draftStatus.AccessibleName = draftStatus.Text;
+    };
+    editor.ValueChanged = updateDraft;
     var button = new Button();
-    button.Name = "ZenXPackagedInvoke"; button.Text = "ZenX packaged invoke";
+    button.Name = "ZenXPackagedInvoke"; button.Text = "Apply draft";
     button.SetBounds(24, 164, 190, 32);
     int invokeCount = 0;
-    button.Click += delegate { Write("invoke-count", (++invokeCount).ToString()); };
+    button.Click += delegate {
+      string applied = editor.Text;
+      appliedStatus.Text = Preview("Applied " + (++invokeCount).ToString() + ": ", applied);
+      appliedStatus.AccessibleName = appliedStatus.Text;
+      Write("applied-value", applied);
+      Write("invoke-count", invokeCount.ToString());
+    };
     form.Controls.Add(button);
     // ToolStrip items are real, HWND-less UIA controls. The strict transport
     // must refuse to mutate one even when its provider offers InvokePattern.
@@ -135,12 +164,14 @@ public static class ZenXPackagedFixture {
       diagnostic.Tick();
       if (!string.Equals(observedEditorValue, currentEditorValue, StringComparison.Ordinal)) {
         Write("editor-value", currentEditorValue);
+        updateDraft(currentEditorValue);
         observedEditorValue = currentEditorValue;
       }
       if (Exists("replace-editor") && !replaced) {
         replaced = true; string old = editor.Handle.ToInt64().ToString();
         // Keep the old HWND alive until the replacement obtains a different one.
-        var replacement = Editor(form); string current = replacement.Handle.ToInt64().ToString();
+        var replacement = Editor(form); replacement.ValueChanged = updateDraft;
+        string current = replacement.Handle.ToInt64().ToString();
         form.Controls.Remove(editor); editor.Dispose(); editor = replacement;
         Json("editor-replaced.json", new { oldHwnd = old, hwnd = current });
       }
