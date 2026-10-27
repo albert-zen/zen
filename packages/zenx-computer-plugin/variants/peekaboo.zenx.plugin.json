@@ -8,6 +8,7 @@
     "interactionModes": ["background_safe", "foreground_required"],
     "capabilities": [
       "peekaboo.snapshot",
+      "desktop.environment.read",
       "accessibility.inspect",
       "foreground.targeted_action",
       "window.capture",
@@ -42,8 +43,22 @@
   ],
   "tools": [
     {
+      "name": "computer_environment",
+      "description": "Read current desktop session and power availability without waking, unlocking, or acting on another app.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.accessibility.inspect"],
+      "interactionMode": "background_safe",
+      "capabilities": ["desktop.environment.read", "no_global_input"],
+      "maxOutputBytes": 4096
+    },
+    {
       "name": "computer_inspect",
-      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required.",
+      "description": "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. Model callers use since with an exact observation ref to request a diff; omit it or set full:true to resync. target.windowTitle is required.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -88,6 +103,16 @@
           "full": {
             "type": "boolean",
             "description": "Force a new self-contained full bounded view. This does not mean the entire page/window was captured; follow nextCursor and inspect coverage."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
           }
         },
         "required": ["target"],
@@ -373,5 +398,5 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target. Its targeted press/value mutations are not certified focus-isolated: they require explicit foreground control and cannot be used as a background fallback. Backend completion does not verify application effect."
+  "mainDocument": "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Prefer a returned exact window ref with computer_inspect; providers without discovery accept an explicit native window target. Inspect coverage and follow nextCursor alone to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions use exact control refs and native revalidation. Pass since with a retained observation ref for a diff; omit since or set full:true after context compaction/lost context. For retained controls, pass the control ref with an explicit latest observation ref; native action checks still decide freshness. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls. This Peekaboo variant does not expose computer_list_windows; use an explicitly supplied target. Its targeted press/value mutations are not certified focus-isolated: they require explicit foreground control and cannot be used as a background fallback. Backend completion does not verify application effect."
 }
