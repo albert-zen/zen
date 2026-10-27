@@ -1441,7 +1441,11 @@ capture bind the same retained AX window, while foreground input revalidates
 that binding after existing approval/arbitration. This host device-control state
 is not conversation truth, is never journaled or restored, and cannot authorize
 input without the existing foreground consent. Helper termination invalidates
-all bindings; uncertain input is never automatically replayed.
+all bindings; uncertain input is never automatically replayed. Its existing
+process owner retains stopping activity through failed termination requests until
+actual child/pipe close; only the native posted/unverified receipt records posted
+input, and closed sessions or invalidated in-flight captures cannot publish fresh
+bindings or screenshot authority.
 
 The existing foreground presenter supplies only live, painted, mouse-ignoring
 edge-indicator native window IDs through a trusted main-only read projection;

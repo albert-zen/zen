@@ -92,3 +92,40 @@ bootstrap and Host lifecycle classes with synthetic children, including real
 probe/cleanup deadlines, failed kill, delayed lease acquisition, both providers,
 startup without fallback, blocked Quit, late close, repeated Quit and no replay.
 No native applications or user desktop are involved.
+
+## Native target lifecycle repair (2026-10-27)
+
+This stage builds on the explicit native OCR checkpoint, preserving its existing
+owner/target/capture/expiry checks and all-capture invalidation on attempted input.
+
+- Native target transport now uses one termination path for abort, timeout,
+  malformed/oversized output, pipe/process errors and explicit close. A failed
+  kill, thrown kill, or error emitted while killing does not settle the call;
+  stopping activity remains through `exit` and late output until actual `close`.
+  Termination is requested once, not retried. No helper restart or input replay
+  is introduced. This uses the existing process lifetime, not a new ledger.
+- Mutation replies must contain `dispatch: posted` and
+  `applicationEffect: unverified`. A `{result:{}}` envelope is not a success:
+  native transport terminates and waits for close, then reports unknown input
+  outcome. Session-level validation also refuses malformed injected receipts.
+  It never claims the action did not happen. Read-only select/verify cancellation
+  remains a read-only unknown result, not a claim that desktop input was sent.
+- Closing a target session fences late selection before publication. Capture
+  checks cancellation, target identity and a local capture generation before
+  queuing verification and after verification. Input or explicit invalidation
+  fences already-acquiring images as well as already-stored images. Old failed
+  calls do not clear a newer explicit selection.
+
+Fresh synthetic regressions reproduce ten session/receipt failures on the
+unchanged OCR checkpoint before the fix. The expanded transport matrix covers
+32 combinations (eight failure sources and four kill outcomes), exercising the
+production `ForegroundActivity` owner. Existing real child-process fixtures test
+malformed replies and process closure; new capture tests cover close, target
+replacement, cancellation, input and explicit invalidation. The macOS CI lane
+runs the same lifecycle and capture suites alongside the native bound-input and
+real synthetic-pixel Vision checks.
+
+No UI layout, foreground consent, native activation, screen-power policy,
+clipboard channel, screenshot TTL or provider routing changes are included.
+These tests do not establish DingTalk/WeCom behavior, physical Stop clicks,
+sleeping-display/locked-session input or arbitrary third-party acceptance.
