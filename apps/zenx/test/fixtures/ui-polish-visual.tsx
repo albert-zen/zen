@@ -42,6 +42,8 @@ const uiPolishTelemetry = {
   workspaceUsedCalls: 0,
   machineStatusCalls: 0,
   machineCatalogCalls: 0,
+  machineThreadCreateCalls: 0,
+  sideChatCreateCommandCalls: 0,
 };
 const options = {
   request: async (method: string, request?: unknown) => {
@@ -76,6 +78,18 @@ const options = {
           tokenUsage: { inputTokens: 12000, outputTokens: 180 },
         });
       return recovery;
+    }
+    if (method === "zen/thread/read") {
+      const threadId =
+        (request as { threadId?: string } | undefined)?.threadId ?? "thread-1";
+      return {
+        thread: resumed(
+          threadWithMessage(
+            "Synthetic parent read for local side chat draft.",
+            threadId,
+          ),
+        ).thread,
+      };
     }
     if (method === "thread/compact") {
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -344,7 +358,7 @@ Object.assign(zenx, {
             },
             {
               id: "synthetic-design",
-              label: "Design and prototyping MacBook Pro",
+              label: "Design and prototyping MacBook Pro for the visual QA lab",
               description: "Synthetic QA target; no connection is attempted.",
               access: "read" as const,
               transport: "https" as const,
@@ -356,10 +370,49 @@ Object.assign(zenx, {
         host: { enabled: false, hostId: "synthetic-host", clients: [] },
       };
     },
-    catalog: async () => {
+    catalog: async (id: string) => {
       uiPolishTelemetry.machineCatalogCalls += 1;
-      throw new Error("This fixture never connects to a machine.");
+      return {
+        machine: {
+          id,
+          key: `synthetic-key-${id}`,
+          hostId: "synthetic-host",
+          label: "Design and prototyping MacBook Pro for the visual QA lab",
+          description: "Synthetic QA target; no connection is attempted.",
+          access: "read" as const,
+          shellEnabled: false,
+        },
+        workspaces: [
+          { id: "synthetic-workspace", label: "Synthetic workspace" },
+        ],
+        models: [
+          {
+            id: "fake::fake",
+            label: "Local demo",
+            isDefault: true,
+            efforts: ["medium"],
+            defaultEffort: "medium",
+          },
+        ],
+        preferredWorkspace: "synthetic-workspace",
+      };
     },
+    listThreads: async () => ({ threads: [], truncated: false }),
+    createThread: async (input: {
+      deviceId: string;
+      deviceKey: string;
+      workspace: string;
+    }) => {
+      uiPolishTelemetry.machineThreadCreateCalls += 1;
+      return {
+        ...input,
+        hostId: "synthetic-host",
+        threadId: "synthetic-never-created",
+      };
+    },
+    readThread: async () => ({}),
+    threadStatus: async () => ({ status: "idle" }),
+    sendThread: async () => ({}),
   },
   browserObservation: { subscribe: () => () => undefined },
   workspaceFiles: {
@@ -414,7 +467,10 @@ if (params.has("launchers") || params.has("conversationTabs")) {
           return {
             threads: params.has("conversationTabs") ? sideConversations : [],
           };
-        if (command === "create") return { threadId: "synthetic-side-chat" };
+        if (command === "create") {
+          uiPolishTelemetry.sideChatCreateCommandCalls += 1;
+          return { threadId: "synthetic-side-chat" };
+        }
       }
       if (pluginId === "zenx-triggers") {
         if (command === "threads")
@@ -472,6 +528,7 @@ function AuxiliaryFixture() {
   return (
     <div
       className={`app-shell ${collapsed ? "sidebar-collapsed" : "sidebar-open"}`}
+      style={{ "--workspace-panel-width": `${width}px` } as React.CSSProperties}
     >
       <WindowTitleBar
         mode="projects"
