@@ -1,3 +1,7 @@
+import {
+  nativeComputerRequestDiagnostics,
+  type NativeRequestDiagnostics,
+} from "./computer-native-trace.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   isPostedComputerInputReceipt,
@@ -11,6 +15,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
   #terminating = false;
   #queue: Promise<unknown> = Promise.resolve();
   #pending?: {
+    diagnostic?: NativeRequestDiagnostics;
     resolve(value: unknown): void;
     reject(error: unknown): void;
     onStopping?: () => void;
@@ -35,8 +40,10 @@ export class NativeComputerTargetTransport implements TargetTransport {
     signal: AbortSignal,
     onStopping?: () => void,
   ): Promise<unknown> {
+    const diagnostic = nativeComputerRequestDiagnostics(request.operation);
+    diagnostic?.event("queued");
     const operation = this.#queue.then(() =>
-      this.#request(request, signal, onStopping),
+      this.#request(request, signal, onStopping, diagnostic),
     );
     this.#queue = operation.catch(() => {});
     return operation;
@@ -46,6 +53,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
     request: Record<string, unknown>,
     signal: AbortSignal,
     onStopping?: () => void,
+    diagnostic?: NativeRequestDiagnostics,
   ): Promise<unknown> {
     signal.throwIfAborted();
     if (request.operation === "backgroundClick" && this.#backgroundUnsafe)
@@ -67,14 +75,17 @@ export class NativeComputerTargetTransport implements TargetTransport {
         throw new Error(
           "Native target session ended; select the window again; no input dispatched",
         );
+      diagnostic?.event("helper-prepare");
       const executable = await this.executable();
       signal.throwIfAborted();
       if (this.#closed) throw new Error("Computer target session is closed");
       this.#start(executable);
+      diagnostic?.event("helper-started");
     }
     const child = this.#child!;
     const output = new Promise<unknown>((resolve, reject) => {
       this.#pending = {
+        diagnostic,
         resolve,
         reject,
         onStopping,
@@ -98,7 +109,11 @@ export class NativeComputerTargetTransport implements TargetTransport {
       if (signal.aborted) abort();
       else {
         try {
-          child.stdin.write(JSON.stringify(request) + "\n");
+          diagnostic?.event("dispatch");
+          const payload = diagnostic?.correlationId
+            ? { ...request, diagnosticRequestId: diagnostic.correlationId }
+            : request;
+          child.stdin.write(JSON.stringify(payload) + "\n");
         } catch {
           stop("Computer target dispatch failed");
         }
@@ -122,6 +137,9 @@ export class NativeComputerTargetTransport implements TargetTransport {
     this.#child = child;
     this.#exit = new Promise<void>((resolve) => {
       child.once("close", () => {
+        this.#pending?.diagnostic?.event("child-close", {
+          terminating: this.#terminating,
+        });
         clearTimeout(this.#grace);
         this.#grace = undefined;
         if (this.#pending?.background && !this.#pending.backgroundSettled)
@@ -144,6 +162,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
     child.stdin.on("error", fail);
     child.stderr.on("data", (chunk) => {
       this.#stderr = (this.#stderr + String(chunk)).slice(-2048);
+      this.#pending?.diagnostic?.stderr(chunk);
     });
     child.stdout.on("data", (chunk) => {
       // A late receipt cannot settle cancellation before the owned child closes.
@@ -156,21 +175,27 @@ export class NativeComputerTargetTransport implements TargetTransport {
         const line = this.#buffer.slice(0, newline);
         this.#buffer = this.#buffer.slice(newline + 1);
         const pending = this.#pending;
-        if (!pending)
-          return fail(new Error("Unexpected native target response"));
         try {
           const response = JSON.parse(line) as {
             error?: string;
             result?: unknown;
             phase?: string;
             release?: string;
+            diagnostic?: unknown;
           };
+          if (response?.phase === "diagnostic") {
+            pending?.diagnostic?.marker(response.diagnostic);
+            continue;
+          }
+          if (!pending)
+            return fail(new Error("Unexpected native target response"));
           if (
             pending.background &&
             response?.phase === "backgroundPairStarted" &&
             !pending.pairStarted &&
             !pending.backgroundSettled
           ) {
+            pending.diagnostic?.event("background-pair-started");
             pending.pairStarted = true;
             continue;
           }
@@ -181,9 +206,14 @@ export class NativeComputerTargetTransport implements TargetTransport {
             ((response.release === "posted" && pending.pairStarted) ||
               (response.release === "not_needed" && !pending.pairStarted))
           ) {
+            pending.diagnostic?.event("background-settled", {
+              release: response.release,
+            });
             pending.backgroundSettled = true;
             continue;
           }
+          if (response?.phase !== undefined)
+            throw new Error("Invalid native target phase");
           if (
             !response ||
             typeof response !== "object" ||
@@ -210,6 +240,11 @@ export class NativeComputerTargetTransport implements TargetTransport {
           )
             throw new Error("Invalid native input receipt");
           // Cancellation retains the actual process owner until release/restore and close.
+          pending.diagnostic?.terminal();
+          pending.diagnostic?.event("terminal", {
+            status: response.error ? "error" : "result",
+            terminating: this.#terminating,
+          });
           if (this.#terminating) continue;
           this.#pending = undefined;
           if (response.error) pending.reject(new Error(response.error));
@@ -236,6 +271,16 @@ export class NativeComputerTargetTransport implements TargetTransport {
     if (child !== this.#child || this.#terminating) return;
     this.#failure = this.#operationFailure(error.message);
     this.#terminating = true;
+    this.#pending?.diagnostic?.event("cancel-requested", {
+      reason:
+        error.message === "Computer target operation timed out"
+          ? "timeout"
+          : error.message === "Computer target operation cancelled"
+            ? "abort"
+            : error.message === "Computer target session closed"
+              ? "close"
+              : "transport_failure",
+    });
     try {
       this.#pending?.onStopping?.();
     } catch {

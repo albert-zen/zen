@@ -1,3 +1,4 @@
+import { withNativeComputerTrace } from "./computer-native-trace.js";
 import type { NativeImage } from "electron";
 import {
   COMPUTER_OCR_BUDGET_MS,
@@ -727,6 +728,15 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    return withNativeComputerTrace(invocation.traceOutput, () =>
+      this.#invokeTraced(toolName, invocation),
+    );
+  }
+
+  async #invokeTraced(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     const foregroundAtStart =
       toolName.startsWith("computer_foreground_") ||
       this.manifest.tools.some(

@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+Native Computer diagnostics capture a bounded, allowlisted per-request observation context before transport enqueue and write into the invoking harness ToolTraceCapture; this context has no authority, result or replay semantics.
+
 - **Projectless workspaces** — The local Host exclusively allocates a persistent dated directory and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
