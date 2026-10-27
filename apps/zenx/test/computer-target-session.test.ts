@@ -18,7 +18,7 @@ function fixture() {
           windowId: 17,
           bounds: { x: -100, y: 20, width: 400, height: 200 },
         };
-      return {};
+      return { dispatch: "posted", applicationEffect: "unverified" };
     },
     async close() {},
   };
@@ -343,4 +343,259 @@ test("native text and shortcuts share owner/consent fences and never echo typed 
     /enable Foreground/,
   );
   await capability.close();
+});
+
+const ocrTarget = { pid: 7, windowTitle: "Window" };
+const ocrImage = () => ({
+  width: 800,
+  height: 400,
+  artifactPath: "/synthetic/never-read.png",
+  capturedAt: new Date(Date.now() - 1000).toISOString(),
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+});
+
+test("OCR reads exactly the original capture with native checks and 2x image coordinates", async () => {
+  const { session, calls } = fixture();
+  const pixels = ocrImage();
+  const capture = await session.capture(
+    "a",
+    ocrTarget,
+    signal,
+    async () => pixels,
+  );
+  const before = calls.length;
+  const read = await session.readCapture(
+    "a",
+    ocrTarget,
+    capture.captureId,
+    signal,
+    async (image, binding) => {
+      assert.equal(image.capturedAt, pixels.capturedAt);
+      assert.equal(image.width / binding.bounds.width, 2);
+      return { text: "工作消息", x: 200, y: 100 };
+    },
+  );
+  assert.equal(read.text, "工作消息");
+  assert.deepEqual(
+    calls.slice(before).map((call) => call.operation),
+    ["verify", "verify"],
+  );
+  await session.input(
+    "a",
+    {
+      operation: "click",
+      captureId: capture.captureId,
+      x: read.x,
+      y: read.y,
+      button: "left",
+    },
+    signal,
+  );
+  assert.equal(calls.at(-1)?.x, 0); // -100 + 200 / 2
+  assert.equal(calls.at(-1)?.y, 70); // 20 + 100 / 2
+  await assert.rejects(
+    session.readCapture(
+      "a",
+      ocrTarget,
+      capture.captureId,
+      signal,
+      async () => "stale",
+    ),
+    /current, unexpired screenshot/,
+  );
+});
+
+test("OCR rejects foreign owner/target/capture and expired pixels without native work", async () => {
+  const { session, calls } = fixture();
+  const capture = await session.capture("a", ocrTarget, signal, async () =>
+    ocrImage(),
+  );
+  const before = calls.length;
+  let reads = 0;
+  const read = async () => {
+    reads++;
+  };
+  for (const [owner, target, id] of [
+    ["b", ocrTarget, capture.captureId],
+    ["a", { ...ocrTarget, windowTitle: "Other" }, capture.captureId],
+    ["a", ocrTarget, "other-capture"],
+  ] as const)
+    await assert.rejects(
+      session.readCapture(owner, target, id, signal, read),
+      /current, unexpired screenshot/,
+    );
+  assert.equal(calls.length, before);
+  assert.equal(reads, 0);
+  for (const expiresAt of [new Date(0).toISOString(), "invalid"]) {
+    const expired = await session.capture("a", ocrTarget, signal, async () => ({
+      ...ocrImage(),
+      expiresAt,
+    }));
+    await assert.rejects(
+      session.readCapture("a", ocrTarget, expired.captureId, signal, read),
+      /current, unexpired screenshot/,
+    );
+  }
+  assert.equal(reads, 0);
+});
+
+test("OCR discards late results after cancellation, replacement, mutation or geometry failure without retry", async () => {
+  for (const change of ["cancel", "replace", "mutate", "geometry"] as const) {
+    const { session, transport, calls } = fixture();
+    const controller = new AbortController();
+    const capture = await session.capture("a", ocrTarget, signal, async () =>
+      ocrImage(),
+    );
+    let reads = 0;
+    const original = transport.request;
+    await assert.rejects(
+      session.readCapture(
+        "a",
+        ocrTarget,
+        capture.captureId,
+        controller.signal,
+        async () => {
+          reads++;
+          if (change === "cancel") controller.abort();
+          if (change === "replace")
+            await session.capture("a", ocrTarget, signal, async () =>
+              ocrImage(),
+            );
+          if (change === "mutate") session.invalidateCaptures();
+          if (change === "geometry")
+            transport.request = async (request, ...rest) => {
+              if (request.operation === "verify")
+                throw Error("Window geometry changed");
+              return original(request, ...rest);
+            };
+          return "late OCR text";
+        },
+      ),
+      /abort|current, unexpired screenshot|geometry changed/iu,
+    );
+    assert.equal(reads, 1);
+    assert.ok(
+      calls.every((call) =>
+        ["select", "verify"].includes(String(call.operation)),
+      ),
+    );
+  }
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((ok) => {
+    resolve = ok;
+  });
+  return { promise, resolve };
+}
+
+for (const receipt of [
+  undefined,
+  null,
+  {},
+  { dispatch: "completed" },
+  { dispatch: "posted", applicationEffect: "verified" },
+]) {
+  test(`invalid input receipt ${JSON.stringify(receipt)} stays unknown and cannot be replayed`, async () => {
+    const { session, transport } = fixture();
+    await session.select("a", { pid: 7 }, signal);
+    let calls = 0;
+    transport.request = async () => {
+      calls++;
+      return receipt;
+    };
+    await assert.rejects(
+      session.input("a", { operation: "key", key: "enter" }, signal),
+      /outcome unknown; do not retry automatically/,
+    );
+    await assert.rejects(
+      session.input("a", { operation: "key", key: "enter" }, signal),
+      /Select a Computer target/,
+    );
+    assert.equal(calls, 1);
+  });
+}
+
+test("late selection after close cannot restore an input binding or start another request", async () => {
+  const { session, transport } = fixture();
+  const original = transport.request;
+  const reply = deferred<unknown>();
+  let calls = 0;
+  transport.request = async () => {
+    calls++;
+    return reply.promise;
+  };
+  const select = session.select("a", { pid: 7 }, signal);
+  const rejected = assert.rejects(select, /session is closed/);
+  await session.close();
+  reply.resolve(await original({ operation: "select" }, signal));
+  await rejected;
+  assert.throws(
+    () => session.selectedBindingId("a"),
+    /Select a Computer target/,
+  );
+  await assert.rejects(
+    session.select("a", { pid: 7 }, signal),
+    /session is closed/,
+  );
+  assert.equal(calls, 1);
+});
+
+for (const change of [
+  "close",
+  "select",
+  "abort",
+  "input",
+  "invalidate",
+] as const) {
+  test(`capture ${change} race publishes no stale coordinates or later verification`, async () => {
+    const { session, calls } = fixture();
+    const image = deferred<{ width: number; height: number }>();
+    const entered = deferred<void>();
+    const controller = new AbortController();
+    const capture = session.capture(
+      "a",
+      { pid: 7 },
+      controller.signal,
+      async () => {
+        entered.resolve();
+        return image.promise;
+      },
+    );
+    const rejected = assert.rejects(capture, /target changed|abort/iu);
+    await entered.promise;
+    let newBinding: string | undefined;
+    if (change === "close") await session.close();
+    if (change === "select")
+      newBinding = (await session.select("a", { pid: 8 }, signal)).bindingId;
+    if (change === "abort") controller.abort();
+    if (change === "input")
+      await session.input("a", { operation: "key", key: "enter" }, signal);
+    if (change === "invalidate") session.invalidateCaptures();
+    const before = calls.length;
+    image.resolve({ width: 800, height: 400 });
+    await rejected;
+    assert.equal(
+      calls.length,
+      before,
+      "retired capture must not queue native reads",
+    );
+    if (newBinding) assert.equal(session.selectedBindingId("a"), newBinding);
+  });
+}
+
+test("late failed input does not clear a newer explicit selection", async () => {
+  const { session, transport } = fixture();
+  await session.select("a", { pid: 7 }, signal);
+  const reply = deferred<unknown>();
+  const original = transport.request;
+  transport.request = async (...args) =>
+    args[0].operation === "key" ? reply.promise : original(...args);
+  const input = session.input("a", { operation: "key", key: "enter" }, signal);
+  const rejected = assert.rejects(input, /outcome unknown/);
+  const next = await session.select("a", { pid: 8 }, signal);
+  reply.resolve({});
+  await rejected;
+  assert.equal(session.selectedBindingId("a"), next.bindingId);
 });

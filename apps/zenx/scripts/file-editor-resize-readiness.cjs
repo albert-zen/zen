@@ -17,7 +17,9 @@ exports.fileEditorResizeState = function fileEditorResizeState(document) {
   const current = Number(separator.getAttribute("aria-valuenow"));
   return {
     ready:
-      Math.abs(panelWidth - 600) < 1 &&
+      // Normal-motion transitions can match ResizeObserver in an intermediate
+      // frame. Require the final pane width, not merely its last animated pixel.
+      Math.abs(panelWidth - 600) < 0.01 &&
       bounds.width > 0 &&
       bounds.height > 0 &&
       orientation === (stacked ? "horizontal" : "vertical") &&

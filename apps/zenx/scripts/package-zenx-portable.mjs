@@ -1,3 +1,4 @@
+import { stageStorageWriter } from "./stage-storage-writer.mjs";
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import {
@@ -437,6 +438,7 @@ export function extractMacNativeHelperSources(source) {
     "MAC_BOUND_TARGET_SOURCE",
     "MAC_ACCESSIBILITY_SOURCE",
     "MAC_FOREGROUND_INPUT_SOURCE",
+    "MAC_OCR_SOURCE",
   ]);
   const sources = {};
   for (const statement of sourceFile.statements) {
@@ -469,7 +471,15 @@ export async function compileMacNativeHelpers(options) {
       path.join(zenx, "src", "main", "capabilities", "computer-provider.ts"),
       "utf8",
     ));
-  const sources = extractMacNativeHelperSources(providerSource);
+  const ocrSource =
+    options.ocrSource ??
+    (await readFile(
+      path.join(zenx, "src", "main", "capabilities", "computer-ocr.ts"),
+      "utf8",
+    ));
+  const sources = extractMacNativeHelperSources(
+    providerSource + "\n" + ocrSource,
+  );
   const compile =
     options.compile ??
     ((sourcePath, executablePath) =>
@@ -491,6 +501,7 @@ export async function compileMacNativeHelpers(options) {
       ["zenx-bound-target", sources.MAC_BOUND_TARGET_SOURCE],
       ["zenx-accessibility", sources.MAC_ACCESSIBILITY_SOURCE],
       ["zenx-foreground-input", sources.MAC_FOREGROUND_INPUT_SOURCE],
+      ["zenx-ocr", sources.MAC_OCR_SOURCE],
     ]) {
       const sourcePath = path.join(sourceDirectory, `${name}.swift`);
       const executablePath = path.join(options.destinationDirectory, name);
@@ -790,6 +801,7 @@ export async function publishPackagedArtifact(
 }
 
 export async function stagePackage(options) {
+  await stageStorageWriter(options.rootDirectory, options.appDirectory);
   const stagedMain =
     options.target === "app"
       ? path.join(options.appDirectory, "out", "main")
@@ -1011,6 +1023,7 @@ export function packageManifest(target, zenxPackage) {
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],
+          "fs-native-extensions": "1.4.5",
         },
       }
     : {
@@ -1019,6 +1032,7 @@ export function packageManifest(target, zenxPackage) {
         private: true,
         type: "module",
         main: "main/packaged-provider-smoke.js",
+        dependencies: { "fs-native-extensions": "1.4.5" },
       };
 }
 

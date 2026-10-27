@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { traceClock } from "../../trace.js";
+import { parseClientSendObservation } from "../../client-observation.js";
 import {
   readOriginalThreadHistory,
   type OriginalHistoryOptions,
@@ -96,9 +99,130 @@ export class NativeConnection {
 
   async receive(message: JsonRpcMessage): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    const params = isRecord(message.params) ? message.params : {};
+    const observed =
+      this.#appServer !== undefined &&
+      (this.#initialized || this.#isInitialized()) &&
+      [
+        "zen/turn/send",
+        NATIVE_TURN_SEND_UNARCHIVED_METHOD,
+        NATIVE_TURN_RETRY_METHOD,
+        NATIVE_QUEUE_CANCEL_METHOD,
+        NATIVE_QUEUE_EDIT_METHOD,
+        NATIVE_QUEUE_STEER_METHOD,
+      ].includes(message.method) &&
+      typeof params.threadId === "string" &&
+      /^[A-Za-z0-9_-]{1,200}$/u.test(params.threadId);
+    if (!observed) return await this.#receive(message, this.#send);
+    // Captured before awaiting observation or input preparation. Neither this
+    // receipt nor the client clock proves input admission or a human actor.
+    const hostReceived = traceClock();
+    const requestId = randomUUID();
+    const clientObservation = parseClientSendObservation(
+      params.clientObservation,
+    );
+    const facts = {
+      requestId,
+      operation: message.method,
+      source: "native-client",
+      clientId:
+        typeof params.clientUserMessageId === "string"
+          ? params.clientUserMessageId
+          : typeof params.clientId === "string"
+            ? params.clientId
+            : null,
+      requestedMode: typeof params.mode === "string" ? params.mode : "auto",
+      expectedTurnId:
+        typeof params.expectedTurnId === "string"
+          ? params.expectedTurnId
+          : null,
+      clientObservationStatus:
+        params.clientObservation === undefined
+          ? "unobserved"
+          : clientObservation === undefined
+            ? "invalid"
+            : "client-reported",
+      ...(clientObservation === undefined ? {} : { clientObservation }),
+    };
+    const threadId = params.threadId as string;
+    await this.#appServer!.observeTrace({
+      threadId,
+      type: "client_request_received",
+      data: { ...facts, hostReceived },
+    });
+    let reply: JsonRpcMessage | undefined;
+    try {
+      await this.#receive(message, (value) => {
+        if ("id" in value && value.id === message.id) reply = value;
+        this.#send(value);
+      });
+    } finally {
+      const result =
+        reply && "result" in reply && isRecord(reply.result)
+          ? reply.result
+          : undefined;
+      const error = reply && "error" in reply ? reply.error : undefined;
+      const unknown =
+        reply === undefined || (error !== undefined && error.code === -32603);
+      await this.#appServer!.observeTrace({
+        threadId,
+        ...(typeof result?.turnId === "string"
+          ? { turnId: result.turnId }
+          : {}),
+        type: "client_request_finished",
+        data: {
+          requestId,
+          operation: message.method,
+          clientId: facts.clientId,
+          outcome: unknown ? "unknown" : error ? "rejected" : "accepted",
+          // Admission/edit/cancel receipts only. No model or tool completion claim.
+          ...(result === undefined ? {} : { result }),
+          ...(error === undefined ? {} : { error }),
+        },
+      });
+    }
+  }
+
+  async #receive(message: JsonRpcMessage, send: SendJson): Promise<void> {
+    if (this.#closed || !isRequest(message)) return;
+    if (message.method === "zen/trace/client-activation") {
+      const params = isRecord(message.params) ? message.params : {};
+      const observation = parseClientSendObservation(params.observation);
+      if (
+        !this.#appServer ||
+        (!this.#initialized && !this.#isInitialized()) ||
+        !observation ||
+        (params.threadId !== undefined &&
+          (typeof params.threadId !== "string" ||
+            !/^[A-Za-z0-9_-]{1,200}$/u.test(params.threadId)))
+      ) {
+        send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message: "Valid initialized client observation required",
+          },
+        });
+        return;
+      }
+      const receipt = await this.#appServer.observeTrace({
+        threadId:
+          typeof params.threadId === "string"
+            ? params.threadId
+            : "ui-activations",
+        type: "client_send_activated",
+        data: { source: "client-reported-ui", clientObservation: observation },
+      });
+      send({
+        id: message.id,
+        result: { observed: receipt?.durability === "durable" },
+      });
+      return;
+    }
+
     if (message.method === NATIVE_TURN_WAKE_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -171,9 +295,9 @@ export class NativeConnection {
               : { requestApproval: this.#requestApproval }),
           },
         );
-        this.#send({ id: message.id, result });
+        send({ id: message.id, result });
       } catch (error) {
-        this.#send({
+        send({
           id: message.id,
           error: {
             code: -32602,
@@ -188,7 +312,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_THREAD_MESSAGE_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -249,9 +373,9 @@ export class NativeConnection {
             ? {}
             : { requestApproval: this.#requestApproval },
         );
-        this.#send({ id: message.id, result });
+        send({ id: message.id, result });
       } catch (error) {
-        this.#send({
+        send({
           id: message.id,
           error: {
             code: -32602,
@@ -269,7 +393,7 @@ export class NativeConnection {
       message.method === "zen/thread/import"
     ) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -342,10 +466,10 @@ export class NativeConnection {
                 }),
           });
         }
-        if (!this.#closed) this.#send({ id: message.id, result });
+        if (!this.#closed) send({ id: message.id, result });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: -32602,
@@ -367,7 +491,7 @@ export class NativeConnection {
       message.method === NATIVE_THREAD_RESTORE_METHOD
     ) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -426,10 +550,10 @@ export class NativeConnection {
                   ),
                 };
         }
-        if (!this.#closed) this.#send({ id: message.id, result });
+        if (!this.#closed) send({ id: message.id, result });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: error instanceof AppServerError ? -32602 : -32603,
@@ -444,7 +568,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_THREAD_FORK_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -495,10 +619,10 @@ export class NativeConnection {
           through,
           workspace: { type: "same-directory" },
         });
-        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
+        if (!this.#closed) send({ id: message.id, result: { thread } });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: error instanceof AppServerError ? -32602 : -32603,
@@ -516,7 +640,7 @@ export class NativeConnection {
       message.method === NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD
     ) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -591,10 +715,10 @@ export class NativeConnection {
               : { reasoningEffort: params.effort as string }
             : { selection }),
         });
-        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
+        if (!this.#closed) send({ id: message.id, result: { thread } });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: error instanceof AppServerError ? -32602 : -32603,
@@ -609,7 +733,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_QUEUE_STEER_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -646,10 +770,10 @@ export class NativeConnection {
             ? {}
             : { requestApproval: this.#requestApproval },
         );
-        if (!this.#closed) this.#send({ id: message.id, result });
+        if (!this.#closed) send({ id: message.id, result });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error:
               error instanceof AppServerError
@@ -669,7 +793,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_QUEUE_EDIT_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -703,10 +827,10 @@ export class NativeConnection {
           request,
           request.input,
         );
-        if (!this.#closed) this.#send({ id: message.id, result });
+        if (!this.#closed) send({ id: message.id, result });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error:
               error instanceof AppServerError
@@ -726,7 +850,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_QUEUE_CANCEL_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -763,7 +887,7 @@ export class NativeConnection {
           items,
         );
         this.#subscriptions.add(params.threadId);
-        this.#send({ id: message.id, result: { results } });
+        send({ id: message.id, result: { results } });
       } catch (error) {
         const reason =
           error instanceof AppServerError
@@ -777,13 +901,13 @@ export class NativeConnection {
                 message:
                   "Queue cancellation outcome is unconfirmed. Read the Thread before retrying.",
               };
-        this.#send({ id: message.id, error: reason });
+        send({ id: message.id, error: reason });
       }
       return;
     }
     if (message.method === NATIVE_TURN_RETRY_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -808,6 +932,7 @@ export class NativeConnection {
                 "expectedTurnId",
                 "clientUserMessageId",
                 "language",
+                "clientObservation",
               ].includes(key),
           )
         )
@@ -828,10 +953,10 @@ export class NativeConnection {
         );
         this.#subscriptions.add(params.threadId);
         void turn.done.catch(() => undefined);
-        this.#send({ id: message.id, result: { turnId: turn.id } });
+        send({ id: message.id, result: { turnId: turn.id } });
       } catch (error) {
         const unknown = error instanceof ThreadJournalAppendOutcomeUnknownError;
-        this.#send({
+        send({
           id: message.id,
           error: {
             code: unknown ? -32603 : -32602,
@@ -855,7 +980,7 @@ export class NativeConnection {
       message.method === NATIVE_TURN_SEND_UNARCHIVED_METHOD
     ) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -955,9 +1080,9 @@ export class NativeConnection {
             void replacement.turn.done.catch(() => undefined);
           } else throw new Error("Invalid send mode");
         }
-        this.#send({ id: message.id, result });
+        send({ id: message.id, result });
       } catch (error) {
-        this.#send({
+        send({
           id: message.id,
           error: {
             code:
@@ -982,7 +1107,7 @@ export class NativeConnection {
     }
     if (message.method === NATIVE_THREAD_ORIGINAL_READ_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
-        this.#send({
+        send({
           id: message.id,
           error: { code: -32600, message: "Not initialized" },
         });
@@ -1001,10 +1126,10 @@ export class NativeConnection {
           thread,
           options as unknown as OriginalHistoryOptions,
         );
-        if (!this.#closed) this.#send({ id: message.id, result });
+        if (!this.#closed) send({ id: message.id, result });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: -32602,
@@ -1017,7 +1142,7 @@ export class NativeConnection {
     if (message.method === NATIVE_INITIALIZE_METHOD) {
       this.#initialized = true;
       this.#nativeSession = true;
-      this.#send({
+      send({
         id: message.id,
         result: {
           processEpoch: this.#projection.processEpoch,
@@ -1036,7 +1161,7 @@ export class NativeConnection {
       message.method !== NATIVE_THREAD_RESUME_METHOD &&
       message.method !== NATIVE_THREAD_READ_METHOD
     ) {
-      this.#send({
+      send({
         id: message.id,
         error: { code: -32601, message: `Method not found: ${message.method}` },
       });
@@ -1046,7 +1171,7 @@ export class NativeConnection {
       !isRecord(message.params) ||
       typeof message.params.threadId !== "string"
     ) {
-      this.#send({
+      send({
         id: message.id,
         error: { code: -32602, message: "threadId is required" },
       });
@@ -1056,10 +1181,10 @@ export class NativeConnection {
     if (message.method === NATIVE_THREAD_READ_METHOD) {
       try {
         const thread = await this.#projection.read(threadId);
-        if (!this.#closed) this.#send({ id: message.id, result: { thread } });
+        if (!this.#closed) send({ id: message.id, result: { thread } });
       } catch (error) {
         if (!this.#closed)
-          this.#send({
+          send({
             id: message.id,
             error: {
               code: -32603,
@@ -1071,7 +1196,7 @@ export class NativeConnection {
     }
     this.#nativeSession = true;
     if (this.#barriers.has(threadId)) {
-      this.#send({
+      send({
         id: message.id,
         error: {
           code: -32600,
@@ -1104,11 +1229,11 @@ export class NativeConnection {
           "thread_deleted",
           "Thread was deleted during resume; refresh before opening it",
         );
-      this.#send({ id: message.id, result: snapshot });
+      send({ id: message.id, result: snapshot });
       resumedWatermark = snapshot.watermark;
     } catch (error) {
       if (!this.#closed) {
-        this.#send({
+        send({
           id: message.id,
           error: {
             code: -32603,

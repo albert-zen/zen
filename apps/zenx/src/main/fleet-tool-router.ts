@@ -70,8 +70,7 @@ interface CatalogDisclosure {
 }
 interface Proxy {
   definition: ModelTool;
-  device: string;
-  context: TargetContext;
+  ref: string;
   toolName: string;
 }
 
@@ -110,77 +109,84 @@ export class FleetToolTargetRouter implements ToolTargetRouter {
         schema.type !== "object" ||
         !record(properties) ||
         "device" in properties ||
-        "target_context" in properties
+        "target_context" in properties ||
+        "remoteTool" in properties
       )
         return structuredClone(definition);
       return {
         ...structuredClone(definition),
-        description: `${definition.description} Omit device for local execution. For an explicitly chosen remote machine, first discover its exact Fleet tool catalog and supply device plus target_context; no local fallback. Use the target-scoped proxy when its schema differs.`,
+        description: `${definition.description} Omit remoteTool for local execution. For an explicitly selected remote tool, use its exact short catalog ref as remoteTool; no local fallback. Use the target-scoped proxy when its schema differs.`,
         inputSchema: {
           ...structuredClone(schema),
           properties: {
             ...structuredClone(properties),
-            device: {
+            remoteTool: {
               type: "string",
-              description:
-                "Configured Fleet machine ID; omit or local for this Host",
+              pattern: "^r[1-9][0-9]*$",
+              description: "Exact remote tool ref from Fleet catalog",
             },
-            target_context: targetContextSchema,
           },
         },
       };
     });
-    const latest = new Map<string, CatalogDisclosure>();
+    const latest = new Map<
+      string,
+      {
+        disclosure: CatalogDisclosure;
+        bindings: import("../../../../src/model-references.js").ModelReferenceBinding[];
+      }
+    >();
     for (const { call, result: item } of disclosureCallResults(items)) {
       if (
         call.name !== "zenx_fleet_tools" ||
         item.exitCode !== 0 ||
-        item.threadId !== sourceThreadId
+        item.threadId !== sourceThreadId ||
+        item.contentType !== FLEET_CATALOG_CONTENT_TYPE
       )
         continue;
       try {
-        const value: unknown =
-          item.contentType === FLEET_CATALOG_CONTENT_TYPE
-            ? item.structuredContent
-            : JSON.parse(item.output);
+        const value: unknown = item.structuredContent;
         if (!record(value) || value.source !== "zenx.fleet.tools") continue;
         const disclosure = parseDisclosure(value);
         if (disclosure.sourceThreadId !== item.threadId) continue;
         latest.set(
           `${disclosure.device}:${disclosure.workspaceId}:${disclosure.targetThreadId}`,
-          disclosure,
+          { disclosure, bindings: [...(item.referenceBindings ?? [])] },
         );
       } catch {
         /* Failed or invalid disclosure is not a capability. */
       }
     }
-    for (const disclosure of latest.values()) {
+    for (const { disclosure, bindings } of latest.values()) {
       for (const entry of disclosure.catalog.tools) {
         if (!entry.eligible || proxies.size >= 128) continue;
-        const name = `fleet_tool_${createHash("sha256")
-          .update(
-            JSON.stringify([
-              disclosure.deviceKey,
-              disclosure.catalog.hostId,
-              disclosure.catalog.processEpoch,
-              disclosure.workspaceId,
-              disclosure.targetThreadId,
-              entry.definition.name,
-              entry.generation,
-            ]),
-          )
-          .digest("hex")
-          .slice(0, 24)}`;
-        const context = {
-          workspace: disclosure.workspaceId,
+        const exact = {
+          device: disclosure.device,
           deviceKey: disclosure.deviceKey,
+          workspace: disclosure.workspaceId,
           targetThreadId: disclosure.targetThreadId,
           processEpoch: disclosure.catalog.processEpoch,
           toolGeneration: entry.generation,
+          name: entry.definition.name,
         };
+        const binding = bindings.find((binding) => {
+          const value = binding.value;
+          return (
+            binding.ownerThreadId === sourceThreadId &&
+            binding.namespace === "fleet" &&
+            binding.kind === "tool" &&
+            /^r[1-9][0-9]*$/u.test(binding.ref) &&
+            record(value) &&
+            Object.entries(exact).every(
+              ([key, expected]) => value[key] === expected,
+            )
+          );
+        });
+        if (!binding) continue;
+        const name = `fleet_${entry.definition.name.replace(/[^a-zA-Z0-9_]/gu, "_").slice(0, 40)}_${binding.ref}`;
         const definition = {
           name,
-          description: `[${disclosure.device}, ${entry.definition.name}] ${entry.definition.description} Exact target schema; execution stays on that Host. Remote paths are not local files.`,
+          description: `[Remote ${entry.definition.name}] ${entry.definition.description} Exact target schema; execution stays on that Host. Remote paths are not local files.`,
           inputSchema: {
             type: "object",
             properties: {
@@ -192,8 +198,7 @@ export class FleetToolTargetRouter implements ToolTargetRouter {
         };
         proxies.set(name, {
           definition,
-          device: disclosure.device,
-          context,
+          ref: binding.ref,
           toolName: entry.definition.name,
         });
         projected.push(definition);
@@ -218,45 +223,56 @@ export class FleetToolTargetRouter implements ToolTargetRouter {
         ...invocation,
         name: "zenx_fleet_execute",
         arguments: {
-          device: proxy.device,
-          ...proxy.context,
+          tool: proxy.ref,
           name: proxy.toolName,
           arguments: invocation.arguments.arguments,
         },
       };
     } else if (
       invocation.name === "wait" &&
-      isFleetToolHandle(invocation.arguments.task_id)
+      (isFleetToolHandle(invocation.arguments.task_id) ||
+        invocation.modelReferences?.some(
+          (binding) =>
+            binding.ownerThreadId === invocation.threadId &&
+            binding.ref === invocation.arguments.task_id &&
+            binding.namespace === "fleet" &&
+            binding.kind === "task",
+        ))
     ) {
       // Wait stays the existing Core tool. Only the target owns its execution task.
     } else if (FLEET_TOOL_FACADES.has(invocation.name)) {
       if (!local) throw new Error("Fleet tool plugin is unavailable");
     } else {
-      const device = invocation.arguments.device;
-      if (device === undefined || device === "local") return undefined;
-      if (!local?.eligible) return undefined;
-      const props = local.definition.inputSchema.properties;
-      if (record(props) && ("device" in props || "target_context" in props))
+      const remoteTool = invocation.arguments.remoteTool;
+      if (remoteTool === undefined) {
+        if (
+          invocation.arguments.device !== undefined &&
+          invocation.arguments.device !== "local" &&
+          local?.eligible
+        )
+          throw new Error(
+            "Use a discovered remoteTool ref, not native routing fields",
+          );
         return undefined;
+      }
+      const props = local?.definition.inputSchema.properties;
       if (
-        typeof device !== "string" ||
-        !record(invocation.arguments.target_context)
+        record(props) &&
+        ("device" in props ||
+          "target_context" in props ||
+          "remoteTool" in props)
       )
+        return undefined;
+      if (!local?.eligible)
         throw new Error(
-          "Remote tool execution requires device and exact target_context from Fleet discovery",
+          "This tool is not eligible for Fleet routing; no local fallback was attempted",
         );
-      const context = parseContext(invocation.arguments.target_context);
-      const {
-        device: _device,
-        target_context: _context,
-        ...arguments_
-      } = invocation.arguments;
+      const { remoteTool: _remoteTool, ...arguments_ } = invocation.arguments;
       forwarded = {
         ...invocation,
         name: "zenx_fleet_execute",
         arguments: {
-          device,
-          ...context,
+          tool: remoteTool,
           name: invocation.name,
           arguments: arguments_,
         },
@@ -272,7 +288,7 @@ export class FleetToolTargetRouter implements ToolTargetRouter {
       executionMode: "parallel_safe",
       ...(invocation.name === "wait" ? { waitPolicyExempt: true } : {}),
       ...(forwarded.name === "zenx_fleet_execute" || invocation.name === "wait"
-        ? { resultEnvelope: "tool-task" as const }
+        ? { resultEnvelope: "tool-task-or-result" as const }
         : {}),
       execute: () => this.send(forwarded),
     };
@@ -307,8 +323,20 @@ export class FleetToolTransportAdapter {
       )
         return await this.#observe(invocation, sourceThreadId);
       if (invocation.name === "zenx_fleet_tools") {
-        only(invocation.arguments, ["device", "workspace", "targetThreadId"]);
+        only(invocation.arguments, [
+          "device",
+          "deviceKey",
+          "workspace",
+          "targetThreadId",
+        ]);
         const device = await this.#device(invocation.arguments.device);
+        if (
+          invocation.arguments.deviceKey !== undefined &&
+          invocation.arguments.deviceKey !== fleetDeviceKey(device)
+        )
+          throw new Error(
+            "Fleet target configuration changed since discovery; no request sent",
+          );
         const workspaceId = string(invocation.arguments.workspace, "workspace");
         const targetThreadId = string(
           invocation.arguments.targetThreadId,
@@ -479,10 +507,7 @@ export class FleetToolTransportAdapter {
             : {}),
           ...(replayYieldTimeMs === undefined ? {} : { replayYieldTimeMs }),
         });
-        throw new Error(
-          `Fleet tool ${admitted ? "observation after admission" : "admission"} is unconfirmed: ${describe(error)}. Observe this same operation with zenx_fleet_tool_status or wait; do not rerun the mutation. task_id: ${taskId}`,
-          { cause: error },
-        );
+        return recovery(taskId, admitted ? "accepted" : "unknown", error);
       }
     } finally {
       this.#inFlight--;
@@ -516,28 +541,31 @@ export class FleetToolTransportAdapter {
       targetThreadId: handle.targetThreadId,
       admissionId: handle.admissionId,
     };
-    if (isStatus) {
-      const result = await this.fleet.native.status(
-        device,
-        { ...binding, ...(handle.taskId ? { taskId: handle.taskId } : {}) },
-        invocation.signal,
-      );
-      return {
-        output: JSON.stringify({
-          ...result,
-          task_id: encodeHandle({ ...handle, taskId: result.taskId }),
-        }),
-        exitCode: 0,
-      };
-    }
     let taskId = handle.taskId;
-    if (!taskId) {
-      const status = await this.fleet.native.status(
-        device,
-        binding,
-        invocation.signal,
+    try {
+      if (isStatus || !taskId) {
+        const result = await this.fleet.native.status(
+          device,
+          { ...binding, ...(taskId ? { taskId } : {}) },
+          invocation.signal,
+        );
+        if (isStatus)
+          return {
+            output: JSON.stringify({
+              ...result,
+              task_id: encodeHandle({ ...handle, taskId: result.taskId }),
+            }),
+            exitCode: 0,
+            contentType: "zen/fleet-tool-status",
+          };
+        taskId = result.taskId;
+      }
+    } catch (error) {
+      return recovery(
+        encodeHandle(handle),
+        handle.taskId ? "accepted" : "unknown",
+        error,
       );
-      taskId = status.taskId;
     }
     const terminate = invocation.arguments.terminate ?? false;
     if (typeof terminate !== "boolean")
@@ -568,10 +596,7 @@ export class FleetToolTransportAdapter {
         ...handle,
         replayYieldTimeMs: yieldTimeMs,
       });
-      throw new Error(
-        `Fleet task observation is unavailable: ${describe(error)}. Reobserve the same task; do not rerun its mutation. task_id: ${taskId}`,
-        { cause: error },
-      );
+      return recovery(taskId, "accepted", error);
     }
   }
 
@@ -582,7 +607,7 @@ export class FleetToolTransportAdapter {
     const device = (await readFleetConfig(this.fleet.file)).devices.find(
       (entry) => entry.id === value,
     );
-    if (!device) throw new Error(`Unknown Fleet device: ${value}`);
+    if (!device) throw new Error("Unknown or unavailable Fleet device");
     if (device.transport !== "https")
       throw new Error(
         "This SSH bridge does not expose generic target-owned tools; no SSH fallback is supported",
@@ -773,21 +798,24 @@ function integer(value: unknown, fallback: number, max: number): number {
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-const targetContextSchema = {
-  type: "object",
-  properties: {
-    workspace: { type: "string" },
-    deviceKey: { type: "string" },
-    targetThreadId: { type: "string" },
-    processEpoch: { type: "string" },
-    toolGeneration: { type: "string" },
-  },
-  required: [
-    "workspace",
-    "deviceKey",
-    "targetThreadId",
-    "processEpoch",
-    "toolGeneration",
-  ],
-  additionalProperties: false,
-};
+function recovery(
+  task_id: string,
+  admission: "accepted" | "unknown",
+  error: unknown,
+): ToolExecutionResult {
+  const value = {
+    status: "unknown",
+    admission,
+    observation: "unavailable",
+    task_id,
+    error: describe(error),
+    safeNextStep:
+      "Observe this same task with status or wait. Do not rerun the mutation.",
+  };
+  return {
+    output: JSON.stringify(value),
+    exitCode: 1,
+    contentType: "zen/fleet-tool-recovery",
+    structuredContent: value,
+  };
+}

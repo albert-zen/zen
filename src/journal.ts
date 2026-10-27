@@ -1,3 +1,4 @@
+import type { ContextItem } from "./item-list.js";
 import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -10,7 +11,15 @@ const THREAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export interface ThreadJournal {
   append(item: CanonicalItem): Promise<void>;
   /** Atomically publishes a complete new Thread when supported by the store. */
-  create?(items: readonly CanonicalItem[]): Promise<void>;
+  create?(
+    items: readonly CanonicalItem[],
+    exactItemList?: readonly ContextItem[],
+  ): Promise<void>;
+  readItemList?(threadId: string): Promise<ContextItem[]>;
+  appendContext?(item: ContextItem): Promise<void>;
+  /** Read-only history remains available; unsafe control recovery blocks new dispatch. */
+  assertRecoverySafe?(threadId: string): Promise<void>;
+  close?(): Promise<void>;
   listThreadIds(): Promise<string[]>;
   read(threadId: string): Promise<CanonicalItem[]>;
 }

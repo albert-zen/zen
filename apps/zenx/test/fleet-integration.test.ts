@@ -128,14 +128,15 @@ test(
           /archived|inactive/i,
           name,
         );
-      await remote.manager.request("thread/unarchive", {
+      // Delete through the authoritative log, not by removing a legacy cache file.
+      const archived = await remote.manager.request("zen/thread/read", {
         threadId: selected.id,
       });
+      await remote.manager.request("zen/thread/delete", {
+        threadId: selected.id,
+        expectedLastItemId: archived.thread.items.at(-1)!.id,
+      });
       await remote.manager.stop();
-      // Remove only this throwaway fixture journal, then load a fresh Host catalog.
-      await rm(
-        path.join(dir, "remote", "data", "threads", `${selected.id}.jsonl`),
-      );
       await remote.manager.start();
       for (const threadId of [selected.id, collision.id.slice(0, 12)])
         for (const [name, args] of operations) {

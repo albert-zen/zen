@@ -136,7 +136,7 @@ test("Windows runner rejects a root whose parent relationship does not match its
 });
 
 for (const nested of [false, true]) {
-  test(`Windows runner rejects an old orphan during initial ${nested ? "nested" : "root"} capture`, async (t) => {
+  test(`Windows runner ${nested ? "rejects a post-root orphan during nested" : "excludes an unrelated pre-root orphan during initial"} capture`, async (t) => {
     const f = fixture(t);
     const parent = {
       ...f.root,
@@ -150,58 +150,97 @@ for (const nested of [false, true]) {
       parentPid: nested ? parent.pid : f.root.pid,
       startTime: nested ? "250" : "50",
     };
-    const actual = await f.run(async () => ({
-      entries: [f.root, ...(nested ? [parent] : []), orphan],
-    }));
-    assert.equal(actual.status, "cancelled");
-    assert.match(
-      actual.error ?? "",
-      /predates parent.*containment was not proven/u,
-    );
-    assert.deepEqual(f.kills, []);
-  });
-}
-
-for (const tickDifference of [-10n, 0n, 10n]) {
-  test(`Windows runner preserves creation-tick order at a ${String(tickDifference)} tick difference beyond Number precision`, async (t) => {
-    const f = fixture(t);
-    f.root.startTime = "639286200000000000";
-    const descendant = {
-      ...f.root,
-      pid: 303,
-      parentPid: f.root.pid,
-      startTime: String(BigInt(f.root.startTime) + tickDifference),
-    };
-    // CIM has microsecond (10-tick) precision. At contemporary .NET dates,
-    // Number conversion would erase this difference; decimal strings do not.
-    assert.equal(Number(descendant.startTime), Number(f.root.startTime));
     let captures = 0;
     const actual = await f.run(async () => {
       captures += 1;
       return {
+        // The owned ChildProcess is closed by cancellation. The unrelated
+        // pre-root process remains visible; it must not be killed or adopted.
         entries:
-          captures === 1
-            ? [descendant, f.root]
-            : captures === 2
-              ? [descendant]
-              : [],
+          nested || captures === 1
+            ? [f.root, ...(nested ? [parent] : []), orphan]
+            : [orphan],
       };
     });
     assert.equal(actual.status, "cancelled");
-    if (tickDifference < 0n) {
-      // A real child born after a backward wall-clock adjustment and an old
-      // orphan with this recycled PPID have identical snapshot evidence.
-      // Neither can be silently discarded or adopted as a verified child.
+    if (nested) {
       assert.match(
         actual.error ?? "",
-        /PID 303 predates parent PID 101 \(creation ticks 639286199999999990 < 639286200000000000\); containment was not proven/u,
+        /predates parent.*containment was not proven/u,
       );
-      assert.deepEqual(f.kills, []);
     } else {
       assert.equal(actual.error, "fixture cancellation");
-      assert.deepEqual(f.kills, [descendant]);
+      assert(
+        captures >= 3,
+        "The excluded orphan remains present across quiescence observations",
+      );
+      assert.notEqual(
+        f.child.exitCode,
+        null,
+        "The owned root must have exited",
+      );
     }
+    assert.deepEqual(f.kills, []);
   });
+}
+
+for (const nested of [false, true]) {
+  for (const tickDifference of [-10n, 0n, 10n]) {
+    test(`Windows runner preserves ${nested ? "post-root parent" : "root"} creation-tick order at a ${String(tickDifference)} tick difference beyond Number precision`, async (t) => {
+      const f = fixture(t);
+      const parentTime = 639286200000000000n;
+      f.root.startTime = String(nested ? parentTime - 1_000n : parentTime);
+      const parent = nested
+        ? {
+            ...f.root,
+            pid: 202,
+            parentPid: f.root.pid,
+            startTime: String(parentTime),
+          }
+        : f.root;
+      const descendant = {
+        ...f.root,
+        pid: 303,
+        parentPid: parent.pid,
+        startTime: String(parentTime + tickDifference),
+      };
+      // CIM has microsecond (10-tick) precision. Number conversion erases
+      // the parent/candidate difference; both exclusion and rejection use BigInt.
+      assert.equal(Number(descendant.startTime), Number(parent.startTime));
+      let captures = 0;
+      const actual = await f.run(async () => {
+        captures += 1;
+        return {
+          entries:
+            captures === 1
+              ? [descendant, ...(nested ? [parent] : []), f.root]
+              : captures === 2 || (!nested && tickDifference < 0n)
+                ? [descendant]
+                : [],
+        };
+      });
+      assert.equal(actual.status, "cancelled");
+      if (tickDifference < 0n && nested) {
+        // This candidate is newer than our root but predates the observed
+        // parent. An unobserved descendant generation remains ambiguous.
+        assert.match(
+          actual.error ?? "",
+          /PID 303 predates parent PID 202 \(creation ticks 639286199999999990 < 639286200000000000\); containment was not proven/u,
+        );
+        assert.deepEqual(f.kills, []);
+      } else {
+        assert.equal(actual.error, "fixture cancellation");
+        assert.deepEqual(f.kills, tickDifference < 0n ? [] : [descendant]);
+        if (tickDifference < 0n) {
+          assert(
+            captures >= 3,
+            "A provably pre-root process need not disappear for owned-tree quiescence",
+          );
+          assert.notEqual(f.child.exitCode, null);
+        }
+      }
+    });
+  }
 }
 
 test("Windows runner rejects newly observed descendants after the root exits", async (t) => {

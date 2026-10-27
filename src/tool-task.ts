@@ -4,6 +4,15 @@ import type {
   ShellTerminalControl,
 } from "./shell-session.js";
 import { randomUUID } from "node:crypto";
+import {
+  allocateBuiltinTaskBinding,
+  resolveBuiltinTaskReference,
+} from "./builtin-model-handles.js";
+import {
+  attachModelReferenceBindings,
+  trustedModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 import { validateUserInput, type UserInput } from "./item.js";
 import {
   type ToolOutputSpool,
@@ -11,6 +20,7 @@ import {
 } from "./tool-output-spool.js";
 import {
   attachToolOutputCapture,
+  carryToolResultReferences,
   capturedToolOutput,
   toolOutputSuffix,
   ToolOutputWindow,
@@ -66,10 +76,17 @@ type Status =
 /** Host-local executions, output windows, cancellation evidence and retained resources. */
 export class ToolTaskManager {
   readonly #tasks = new Map<string, Task>();
+  // A final receipt leaves #tasks before its caller commits provenance. Never
+  // reuse an issued number during that gap; this is not a task/alias store.
+  readonly #modelTaskNext = new Map<string, number>();
   // Completed observations only; these records cannot execute, wait or cancel.
   readonly #shellHistory = new Map<
     string,
-    { view: ShellSessionRead; expires: number }
+    {
+      view: ShellSessionRead;
+      expires: number;
+      reference?: ModelReferenceBinding;
+    }
   >();
 
   #pruneShellHistory() {
@@ -85,6 +102,9 @@ export class ToolTaskManager {
     this.#shellHistory.set(task.id, {
       view,
       expires: Date.now() + this.#options.retentionMs,
+      ...(task.modelReferenceBinding === undefined
+        ? {}
+        : { reference: task.modelReferenceBinding }),
     });
     while (this.#shellHistory.size > this.#options.maxTasks)
       this.#shellHistory.delete(this.#shellHistory.keys().next().value!);
@@ -114,6 +134,65 @@ export class ToolTaskManager {
     if (!retained || retained.session.threadId !== threadId)
       throw new Error("Shell session not found for this thread");
     return sliceShellView(retained, cursor);
+  }
+  /** An accepted reader may name an existing session, never create or adopt a task. */
+  modelShellSessionReference(
+    invocation: ToolInvocation,
+    taskId: string,
+  ): ModelReferenceBinding | undefined {
+    if (
+      invocation.threadId === undefined ||
+      invocation.canonicalToolCallId === undefined ||
+      invocation.modelReferences === undefined
+    )
+      return undefined;
+    this.#pruneShellHistory();
+    const task = this.#tasks.get(taskId);
+    const retained = this.#shellHistory.get(taskId);
+    if (
+      !(task?.isShell && task.threadId === invocation.threadId) &&
+      retained?.view.session.threadId !== invocation.threadId
+    )
+      throw new Error("Shell session not found for this thread");
+    const reference =
+      task?.modelReferenceBinding ??
+      retained?.reference ??
+      this.#allocateModelTaskReference(invocation, taskId, "shell-session")!;
+    if (task) task.observeModelReference(reference);
+    else retained!.reference = reference;
+    return reference;
+  }
+
+  #allocateModelTaskReference(
+    invocation: ToolInvocation,
+    taskId: string,
+    kind: "task" | "shell-session" = "task",
+  ): ModelReferenceBinding | undefined {
+    if (
+      invocation.threadId === undefined ||
+      invocation.canonicalToolCallId === undefined ||
+      invocation.modelReferences === undefined
+    )
+      return undefined;
+    const reference = allocateBuiltinTaskBinding({
+      ownerThreadId: invocation.threadId,
+      sourceToolCallId: invocation.canonicalToolCallId,
+      taskId,
+      kind,
+      history: invocation.modelReferences,
+      minimumNext: this.#modelTaskNext.get(invocation.threadId) ?? 1,
+      occupied: [...this.#tasks.values()].flatMap((task) =>
+        task.threadId === invocation.threadId &&
+        task.modelReferenceBinding !== undefined
+          ? [task.modelReferenceBinding]
+          : [],
+      ),
+    });
+    this.#modelTaskNext.set(
+      reference.ownerThreadId,
+      Number(reference.ref.slice(1)) + 1,
+    );
+    return reference;
   }
   #shellTask(threadId: string, taskId: string): Task {
     const task = this.#tasks.get(taskId);
@@ -290,21 +369,30 @@ export class ToolTaskManager {
     );
     // Observe the task's own signal so parent abort, terminate and deadline
     // cancellation all bound the guest wait without changing normal awaits.
+    const taskId = randomUUID();
+    const reference = this.#allocateModelTaskReference(invocation, taskId);
     let task!: Task;
-    task = new Task(runtime, invocation, execute, {
-      ...this.#options,
-      timeoutMs,
-      onRelease: () => {
-        this.#releaseClaims(task);
-        this.#removeQueued(task);
-        options.release?.();
-        this.#dispatchQueued();
+    task = new Task(
+      runtime,
+      invocation,
+      execute,
+      {
+        ...this.#options,
+        timeoutMs,
+        onRelease: () => {
+          this.#releaseClaims(task);
+          this.#removeQueued(task);
+          options.release?.();
+          this.#dispatchQueued();
+        },
+        onExpire: () => {
+          this.#archiveShell(task);
+          this.#tasks.delete(task.id);
+        },
       },
-      onExpire: () => {
-        this.#archiveShell(task);
-        this.#tasks.delete(task.id);
-      },
-    });
+      taskId,
+      reference,
+    );
     this.#tasks.set(task.id, task);
     this.#invocations.add(invocation);
     const releaseObservation = task.acquireObservation();
@@ -361,7 +449,14 @@ export class ToolTaskManager {
     const id = invocation.arguments.task_id;
     if (typeof id !== "string" || id.length === 0)
       throw new Error("wait.task_id must be a non-empty string");
-    const task = this.#tasks.get(id);
+    const nativeId = /^t[1-9][0-9]*$/u.test(id)
+      ? resolveBuiltinTaskReference(
+          invocation.threadId ?? "",
+          id,
+          invocation.modelReferences ?? [],
+        )
+      : id;
+    const task = this.#tasks.get(nativeId);
     if (
       task === undefined ||
       invocation.threadId === undefined ||
@@ -514,6 +609,21 @@ export class ToolTaskManager {
 }
 
 class Task {
+  #modelReferenceBinding: ModelReferenceBinding | undefined;
+  get modelReferenceBinding() {
+    return this.#modelReferenceBinding;
+  }
+  observeModelReference(binding: ModelReferenceBinding): void {
+    if (
+      resolveBuiltinTaskReference(this.threadId ?? "", binding.ref, [
+        binding,
+      ]) !== this.id ||
+      (this.#modelReferenceBinding !== undefined &&
+        JSON.stringify(this.#modelReferenceBinding) !== JSON.stringify(binding))
+    )
+      throw new Error("Conflicting immutable shell session reference");
+    this.#modelReferenceBinding = binding;
+  }
   readonly #createdAt = new Date().toISOString();
   #shellOutput = "";
   #shellOffset = 0;
@@ -582,7 +692,6 @@ class Task {
   readonly completion: Promise<void>;
   #complete!: () => void;
   #yieldRequested = false;
-  readonly id = randomUUID();
   readonly threadId: string | undefined;
   readonly #runtime: ToolRuntime;
   readonly #invocation: ToolInvocation;
@@ -623,12 +732,15 @@ class Task {
         onRelease(): void;
         onExpire(): void;
       },
+    readonly id: string,
+    modelReferenceBinding?: ModelReferenceBinding,
   ) {
     this.#runtime = runtime;
     this.#invocation = invocation;
     this.#execute = execute;
     this.#options = options;
     this.threadId = invocation.threadId;
+    this.#modelReferenceBinding = modelReferenceBinding;
     this.#window = this.#newWindow();
     this.completion = new Promise((resolve) => {
       this.#complete = resolve;
@@ -781,6 +893,12 @@ class Task {
             },
             onOutput: (text) => {
               if (this.#closed) return;
+              if (!this.isShell && this.#invocation.traceOutput)
+                void this.#invocation.traceOutput.write(
+                  "task-output",
+                  text,
+                  "task-decoded-text",
+                );
               this.#window.write(text);
               this.#notify();
             },
@@ -895,10 +1013,10 @@ class Task {
       const result =
         originalResult === undefined
           ? undefined
-          : {
+          : carryToolResultReferences(originalResult, {
               ...originalResult,
               ...(modelContent.length === 0 ? {} : { modelContent }),
-            };
+            });
       const window = this.#window;
       this.#window = this.#newWindow();
       if (quiet && result !== undefined && !window.hasOutput) {
@@ -925,7 +1043,10 @@ class Task {
       if (quiet && result !== undefined && !window.hasOutput) return result;
       if (quiet && result !== undefined) {
         return attachToolOutputCapture(
-          { ...result, output: capture.output },
+          carryToolResultReferences(result, {
+            ...result,
+            output: capture.output,
+          }),
           capture.metadata,
           toolOutputSuffix(result) ?? "",
         );
@@ -992,8 +1113,8 @@ class Task {
         ? ""
         : `\nforeground: ${shellLifecycle.foreground}\nstdio: ${shellLifecycle.stdio}${shellLifecycle.foreground === "exited" ? `\nforeground_exit_code: ${shellLifecycle.foreground_exit_code}\nforeground_signal: ${shellLifecycle.foreground_signal}` : ""}${foregroundExited ? "\nThe foreground exited; output pipes remain open. Continue wait to collect output, or terminate to cancel the owned process group (including intentional background processes on POSIX). Pipe-holder identities are unavailable." : ""}`;
     const timeoutMs = this.humanTerminal ? null : this.#options.timeoutMs;
-    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${timeoutMs ?? "none"}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
-    return attachToolOutputCapture(
+    const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.modelReferenceBinding?.ref ?? this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${timeoutMs ?? "none"}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
+    const receipt = attachToolOutputCapture(
       {
         output: capture.output,
         exitCode,
@@ -1027,6 +1148,24 @@ class Task {
         (result === undefined ? "" : (toolOutputSuffix(result) ?? "")) +
         control,
     );
+    const projected =
+      result === undefined
+        ? receipt
+        : carryToolResultReferences(result, receipt);
+    if (this.modelReferenceBinding === undefined) return projected;
+    const references = [...(trustedModelReferenceBindings(projected) ?? [])];
+    const previous = references.find(
+      (entry) =>
+        entry.ownerThreadId === this.modelReferenceBinding!.ownerThreadId &&
+        entry.ref === this.modelReferenceBinding!.ref,
+    );
+    if (
+      previous &&
+      JSON.stringify(previous) !== JSON.stringify(this.modelReferenceBinding)
+    )
+      throw new Error("Conflicting immutable builtin task reference");
+    if (!previous) references.push(this.modelReferenceBinding);
+    return attachModelReferenceBindings(projected, references);
   }
 
   #release() {

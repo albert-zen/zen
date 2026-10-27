@@ -4,6 +4,7 @@ import type { IconName } from "./icons.js";
 import type { ThreadItem } from "../../protocol-client/index.js";
 
 export type CommandPhase =
+  | "unknown"
   | "imported"
   | "requested"
   | "admitting"
@@ -55,6 +56,8 @@ export function commandTask(
 }
 export function isTerminalCommandPhase(phase: CommandPhase): boolean {
   return [
+    // Closed presentation, not proof that an unknown operation terminated.
+    "unknown",
     "imported",
     "completed",
     "failed",
@@ -71,7 +74,11 @@ export function commandPhase(item: CommandItem): CommandPhase {
     return item.status === "inProgress" ? "waiting" : item.status;
   const receipt = commandTask(item);
   if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
-  if (item.status === "failed" || item.status === "declined")
+  if (
+    item.status === "unknown" ||
+    item.status === "failed" ||
+    item.status === "declined"
+  )
     return item.status;
   return (
     receipt?.phase ?? (item.status === "inProgress" ? "requested" : "completed")
@@ -79,6 +86,7 @@ export function commandPhase(item: CommandItem): CommandPhase {
 }
 export function commandPhaseLabel(phase: CommandPhase): string {
   const keys = {
+    unknown: "toolOutcomeUnknown",
     imported: "importedHistory",
     requested: "requested",
     admitting: "admitting",

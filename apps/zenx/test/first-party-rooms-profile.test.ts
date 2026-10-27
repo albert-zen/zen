@@ -16,6 +16,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
+import { DomainThreadJournal } from "../../../src/domain-journal.js";
+import { FileTraceStore } from "../../../src/trace.js";
+import { JsonlThreadMetadataStore } from "../../../src/thread-metadata.js";
 import { ZENX_ROOMS_TARBALL } from "../scripts/pack-first-party-plugins.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
@@ -217,14 +220,60 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       JSON.parse(results.at(-3)!.output).plugins[0].id,
       "zenx-rooms",
     );
+    const document = JSON.parse(results.at(-2)!.output).plugin.mainDocument;
+    assert.match(document, /exact scoped Room, Thread and message refs/u);
     assert.match(
-      JSON.parse(results.at(-2)!.output).plugin.mainDocument,
-      /Rooms/u,
+      document,
+      /Refs never grant membership, permission, delivery or completed work/u,
     );
+    const listResult = results.at(-1)!;
+    const projected = JSON.parse(listResult.output) as {
+      rooms: Array<{ ref: string; name: string; id?: string }>;
+    };
     assert.deepEqual(
-      (
-        JSON.parse(results.at(-1)!.output) as { rooms: Array<{ id: string }> }
-      ).rooms.map((room) => room.id),
+      projected.rooms.map((room) => room.name),
+      ["legacy"],
+    );
+    assert.equal(projected.rooms[0]!.id, undefined);
+    assert.ok(
+      listResult.referenceBindings?.some(
+        (binding) =>
+          binding.ownerThreadId === thread.id &&
+          binding.ref === projected.rooms[0]!.ref &&
+          binding.namespace === "rooms" &&
+          binding.kind === "room" &&
+          JSON.stringify(binding.value) ===
+            JSON.stringify({ id: "legacy-room" }),
+      ),
+      "model ref must retain the exact persisted native Room binding",
+    );
+    // Native identity assertions belong to the retained original return, not the
+    // compact model projection. Read the actual child Host's durable artifact.
+    const trace = new FileTraceStore(path.join(directory, "zen-data", "trace"));
+    const rawRecord = (await trace.read(thread.id)).records.find((record) => {
+      const data = record.data as
+        { callId?: string; captureLayer?: string } | undefined;
+      return (
+        record.type === "tool_result_observed" &&
+        data?.callId === listResult.callId &&
+        data.captureLayer === "capability-result-before-model-projection"
+      );
+    });
+    const artifact = rawRecord?.artifacts.find(
+      (entry) => entry.name === "result_json",
+    );
+    assert.ok(
+      artifact,
+      "original native Room list must remain durable before projection",
+    );
+    const native = JSON.parse(
+      Buffer.from(await trace.readArtifact(artifact.ref)).toString("utf8"),
+    ) as { output: string; exitCode: number };
+    assert.equal(native.exitCode, 0);
+    assert.deepEqual(
+      (JSON.parse(native.output) as { rooms: Array<{ id: string }> }).rooms.map(
+        (room) => room.id,
+      ),
       ["legacy-room"],
     );
 
@@ -716,10 +765,28 @@ async function runTurn(
 }
 
 async function journalItems(filename: string): Promise<CanonicalItem[]> {
-  return (await readFile(filename, "utf8"))
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as CanonicalItem);
+  // The supplied legacy-shaped path identifies the data root and Thread only.
+  // Read actual persisted source facts through the production read-only accessor,
+  // not semantic ItemList/fence JSON and not the live Host's in-memory projection.
+  const directory = path.dirname(filename);
+  const root = path.dirname(directory);
+  const threadId = path.basename(filename, ".jsonl");
+  const trace = new FileTraceStore(path.join(root, "trace"));
+  assert.equal((await trace.read(threadId)).completeness, "complete");
+  const journal = new DomainThreadJournal({
+    directory,
+    trace,
+    metadata: new JsonlThreadMetadataStore(
+      path.join(root, "thread-metadata.jsonl"),
+    ),
+    access: "read-only",
+  });
+  try {
+    await journal.assertRecoverySafe(threadId);
+    return await journal.read(threadId);
+  } finally {
+    await journal.close();
+  }
 }
 
 function deferred<T>() {

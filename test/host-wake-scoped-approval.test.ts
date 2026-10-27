@@ -158,7 +158,12 @@ test(
       const context = samples[1]!.messages;
       const steerIndex = context.findIndex(
         (message) =>
-          "text" in message && message.text?.includes("Next inspect browser B"),
+          message.role === "user" &&
+          "content" in message &&
+          message.content.some(
+            (part) =>
+              part.type === "text" && part.text === "Next inspect browser B",
+          ),
       );
       assert.ok(
         steerIndex > context.findIndex((message) => message.role === "tool"),

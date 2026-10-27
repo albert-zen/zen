@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createManualTurnRetryRequester } from "../src/renderer/src/manual-turn-retry.js";
+import {
+  createManualTurnRetryRequester,
+  type ManualTurnRetryParams,
+} from "../src/renderer/src/manual-turn-retry.js";
 import { recoveryScenario } from "./fixtures/loop-recovery-scenario.js";
 import {
   editComposer,
@@ -17,7 +20,7 @@ function gate() {
 
 test("manual retry coalesces main/side duplicate clicks with one stable request identity", async () => {
   const response = gate();
-  const calls: unknown[] = [];
+  const calls: ManualTurnRetryParams[] = [];
   const retry = createManualTurnRetryRequester(
     async (params) => {
       calls.push(params);
@@ -30,7 +33,7 @@ test("manual retry coalesces main/side duplicate clicks with one stable request 
   const duplicate = retry(thread, thread.turns[0]!.id);
   assert.equal(first, duplicate);
   await Promise.resolve();
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map(withoutObservation), [
     {
       threadId: thread.id,
       expectedTurnId: thread.turns[0]!.id,
@@ -49,7 +52,7 @@ test("manual retry coalesces main/side duplicate clicks with one stable request 
 });
 
 test("ambiguous retry failure retains request identity and never reads or rewrites a draft", async () => {
-  const calls: unknown[] = [];
+  const calls: ManualTurnRetryParams[] = [];
   let ids = 0;
   const retry = createManualTurnRetryRequester(
     async (params) => {
@@ -65,7 +68,8 @@ test("ambiguous retry failure retains request identity and never reads or rewrit
   const before = structuredClone(draft);
   await assert.rejects(retry(thread, thread.turns[0]!.id), /disconnected/);
   await retry(thread, thread.turns[0]!.id);
-  assert.deepEqual(calls[0], calls[1]);
+  assert.deepEqual(withoutObservation(calls[0]), withoutObservation(calls[1]));
+  assert.notDeepEqual(calls[0]!.clientObservation, calls[1]!.clientObservation);
   assert.equal(ids, 1);
   assert.deepEqual(draft, before);
 });
@@ -103,7 +107,7 @@ test("manual retry refuses historical targets and leaves canonical data unchange
 });
 
 test("retry freezes localized continuation language across ambiguous acknowledgements", async () => {
-  const calls: Array<{ language: string; clientUserMessageId: string }> = [];
+  const calls: ManualTurnRetryParams[] = [];
   let language: "zh-CN" | "en" = "zh-CN";
   const retry = createManualTurnRetryRequester(
     async (params) => {
@@ -121,10 +125,19 @@ test("retry freezes localized continuation language across ambiguous acknowledge
     calls.map(({ language }) => language),
     ["zh-CN", "zh-CN"],
   );
-  assert.deepEqual(calls[0], calls[1]);
+  assert.deepEqual(withoutObservation(calls[0]), withoutObservation(calls[1]));
+  assert.notDeepEqual(calls[0]!.clientObservation, calls[1]!.clientObservation);
   assert.equal(
     "input" in calls[0]!,
     false,
     "unsent composer input is never a retry parameter",
   );
 });
+
+function withoutObservation(value: unknown) {
+  const { clientObservation: _observation, ...semantic } = value as Record<
+    string,
+    unknown
+  >;
+  return semantic;
+}

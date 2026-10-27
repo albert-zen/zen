@@ -15,8 +15,19 @@ const {
   fileEditorResizeState,
   fileEditorResizeEvents,
 } = require("./file-editor-resize-readiness.cjs");
+const {
+  prepareFileEditorMotion,
+} = require("./file-editor-motion-preference.cjs");
+const { observeColdCapture } = require("./file-editor-cold-capture.cjs");
 const resizeState = `(${fileEditorResizeState.toString()})(document)`;
 const scope = fileEditorDiagnosticScope(process.argv.slice(3));
+// Optional owned-renderer media emulation only; default/system behavior is unchanged.
+const motionPreference = process.env.ZENX_FILE_MOTION;
+assert.ok(
+  motionPreference === undefined ||
+    ["reduce", "no-preference"].includes(motionPreference),
+  "Known optional motion preference",
+);
 
 assert.equal(
   process.platform,
@@ -32,6 +43,7 @@ assert.ok(process.versions.electron, "Requires the installed Electron runtime");
 const directory = path.resolve(process.argv[2] || "");
 assert.ok(process.argv[2], "Pass the built synthetic preview directory");
 let window;
+let fixtureDocumentLoaded = false;
 let profile;
 let finishing = false;
 let previousDocumentNonce;
@@ -39,6 +51,7 @@ let policyProbeActive = false;
 let originProbeUrl;
 const evidence = {
   diagnosticScope: scope,
+  motionPreference: motionPreference ?? "system",
   navigationAssertionsIncluded: scope !== "scroll-security",
   scope:
     "Actual file sidebar components in macOS Electron, synthetic memory-only CJK files; owned-window Electron sendInputEvent and capturePage. No Host, user profile, private file, desktop capture, AX, or physical trackpad acceptance.",
@@ -257,6 +270,17 @@ async function resizeEditor(width, caseReceipt, editor) {
     );
   }
 }
+async function verifyMotionPreference() {
+  const actual = await evaluate(
+    "matchMedia('(prefers-reduced-motion: reduce)').matches",
+  );
+  assert.equal(
+    actual,
+    motionPreference === "reduce",
+    "Owned renderer uses the requested motion preference",
+  );
+  return { requested: motionPreference, reducedMotion: actual };
+}
 async function runColdEndCase(markdown) {
   const receipt = {
     editor: markdown ? "markdown" : "source",
@@ -264,9 +288,11 @@ async function runColdEndCase(markdown) {
     status: "running",
   };
   (evidence.coldEndCases ||= []).push(receipt);
+  fixtureDocumentLoaded = false;
   await window.loadFile(
     path.join(directory, "file-sidebar-production-csp.html"),
   );
+  fixtureDocumentLoaded = true;
   window.show();
   window.focus();
   window.webContents.focus();
@@ -274,6 +300,7 @@ async function runColdEndCase(markdown) {
     "document.body?.dataset.previewReady==='true' && document.querySelector('.cm-scroller')",
     "cold component ready",
   );
+  if (motionPreference) receipt.motion = await verifyMotionPreference();
   await until(
     `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
     "cold titlebar settled",
@@ -301,6 +328,23 @@ async function runColdEndCase(markdown) {
       "window.__nativeEditorCoordinates()",
     );
   await screenshot(`macos-cold-${receipt.editor}-end`);
+  // Retain the original PNG/verdict. This follow-up only distinguishes a stale
+  // captured surface from a DOM viewport that actually rolls back after capture.
+  const captureState = `(() => {
+    const result=(${measure}),root=document.querySelector(${JSON.stringify(selector)});
+    const scroller=root.querySelector('.cm-scroller').getBoundingClientRect();
+    const visible=Array.from(root.querySelectorAll('.cm-line')).map(line=>{const r=line.getBoundingClientRect();return {text:line.textContent,top:r.top,bottom:r.bottom};}).filter(line=>line.bottom>scroller.top&&line.top<scroller.bottom);
+    const selection=getSelection();
+    return {...result,url:location.href,documentState:document.readyState,at:performance.now(),domSelection:selection?{anchorOffset:selection.anchorOffset,focusOffset:selection.focusOffset,isCollapsed:selection.isCollapsed,anchorParent:selection.anchorNode?.parentElement?.className,focusParent:selection.focusNode?.parentElement?.className}:null,lastVisibleLine:visible.at(-1)||null,markerVisible:visible.some(line=>line.text.includes(${JSON.stringify(marker)}))};
+  })()`;
+  receipt.captureObservation = await observeColdCapture(
+    () => evaluate(captureState),
+    () =>
+      window.webContents.executeJavaScript(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      ),
+    () => screenshot(`macos-cold-${receipt.editor}-end-after-two-frames`),
+  );
 }
 async function runCase(width, precise, productionCsp = false) {
   const receipt = {
@@ -311,6 +355,7 @@ async function runCase(width, precise, productionCsp = false) {
     status: "running",
   };
   evidence.cases.push(receipt);
+  fixtureDocumentLoaded = false;
   await window.loadFile(
     path.join(
       directory,
@@ -320,6 +365,7 @@ async function runCase(width, precise, productionCsp = false) {
       ? {}
       : { query: { lang: "zh-CN", theme: "light", diagnostic: "true" } },
   );
+  fixtureDocumentLoaded = true;
   window.show();
   window.focus();
   window.webContents.focus();
@@ -327,6 +373,7 @@ async function runCase(width, precise, productionCsp = false) {
     "document.body?.dataset.previewReady==='true' && document.querySelector('.cm-scroller')",
     "component ready",
   );
+  if (motionPreference) receipt.motion = await verifyMotionPreference();
   await until(
     `(() => {const p=document.querySelector('.auxiliary-panel').getBoundingClientRect(),b=document.querySelector('.window-titlebar').getBoundingClientRect();return Math.abs(b.right-p.x)<1;})()`,
     "integrated titlebar settled",
@@ -593,8 +640,13 @@ async function finish(error) {
   if (error) {
     evidence.failure = String(error.stack || error);
     try {
-      evidence.failureState = await evaluate(measure);
-      await screenshot("macos-file-failure");
+      if (fixtureDocumentLoaded) {
+        evidence.failureState = await evaluate(measure);
+        await screenshot("macos-file-failure");
+      } else {
+        evidence.captureSkipped =
+          "No synthetic fixture document loaded; failure metadata does not depend on renderer evaluation";
+      }
     } catch (captureError) {
       evidence.captureError = String(captureError);
     }
@@ -649,6 +701,20 @@ const watchdog = setTimeout(
       nodeIntegration: false,
     },
   });
+  if (motionPreference) {
+    await prepareFileEditorMotion(
+      window.webContents,
+      motionPreference,
+      async (receipt) => {
+        evidence.motionSetup = receipt;
+        console.log("FILE_MOTION_SETUP " + JSON.stringify(receipt));
+        await fs.writeFile(
+          path.join(directory, "electron-motion-setup.json"),
+          JSON.stringify(receipt, null, 2) + "\n",
+        );
+      },
+    );
+  }
   window.webContents.session.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
   );

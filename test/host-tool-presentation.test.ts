@@ -342,3 +342,81 @@ test("RTK configuration changes wait for the next Host launch and reverting clea
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("packaged interruption waits for actual Worker admission and preserves exact root cancellation receipt", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-worker-readiness-"),
+  );
+  let markReady!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: path.join(directory, "data"),
+    model: "fake",
+    models: ["fake"],
+    approvalPolicy: "never",
+    provider: { type: "fake" },
+    toolPresentation: "both",
+    codeRuntimeOptions: { wallTimeMs: 5000 },
+    toolEnvironment: new ToolEnvironment({
+      bundles: [
+        {
+          identity: { kind: "external", id: "readiness" },
+          tools: [
+            {
+              name: "worker_ready",
+              specification: {
+                name: "worker_ready",
+                description: "Synthetic actual worker admission gate",
+                inputSchema: { type: "object", additionalProperties: false },
+              },
+              execute: async () => {
+                markReady();
+                return { output: "ready", exitCode: 0 };
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  try {
+    const thread = await host.startThread();
+    const running = await host.startTurn(
+      thread.id,
+      '!tool run_code {"code":"await tools.worker_ready({}); for (;;) {}"}',
+    );
+    await Promise.race([
+      ready,
+      running.done.then(() => {
+        throw Error("Worker terminated before readiness");
+      }),
+    ]);
+    await host.interruptTurn(thread.id, running.id);
+    await running.done;
+    const snapshot = await host.readThread(thread.id);
+    const root = snapshot.items.find(
+      (item) => item.type === "tool_call" && item.name === "run_code",
+    );
+    assert(root?.type === "tool_call");
+    assert(
+      snapshot.items.some(
+        (item) =>
+          item.type === "tool_call" &&
+          item.name === "worker_ready" &&
+          item.parentCallId === root.callId,
+      ),
+    );
+    const receipt = snapshot.items.find(
+      (item) => item.type === "tool_result" && item.callId === root.callId,
+    );
+    assert(receipt?.type === "tool_result");
+    assert.equal(receipt.exitCode, 130);
+    assert.equal(snapshot.turns.at(-1)?.status, "interrupted");
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

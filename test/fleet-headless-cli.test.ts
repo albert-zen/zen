@@ -20,6 +20,10 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { WebSocket } from "ws";
+import { decodeCanonicalItem } from "../src/item.js";
+import { FileItemListStore } from "../src/item-list-store.js";
+import { FileTraceStore } from "../src/trace.js";
+import type { RemoteRecoveryPage } from "../src/protocol/native/remote-wire.js";
 
 const cli = path.resolve("dist/apps/cli/src/cli.js");
 
@@ -228,7 +232,9 @@ test("headless shutdown interrupts an active provider stream instead of waiting 
     accepted = resolve;
   });
   let providerDisconnected = false;
+  let providerCalls = 0;
   const model = createServer((incoming, response) => {
+    providerCalls++;
     incoming.resume();
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(
@@ -245,20 +251,20 @@ test("headless shutdown interrupts an active provider stream instead of waiting 
   assert(address && typeof address !== "string");
   let host: Running | undefined;
   let socket: WebSocket | undefined;
+  const provider = [
+    "--provider",
+    "openai-compatible",
+    "--model",
+    "streaming-fixture",
+    "--context-window",
+    "16384",
+    "--base-url",
+    `http://127.0.0.1:${address.port}/v1`,
+    "--api-key-env",
+    "FLEET_HEADLESS_TEST_KEY",
+  ];
   try {
-    host = await launch(f, [
-      "--pair",
-      "--provider",
-      "openai-compatible",
-      "--model",
-      "streaming-fixture",
-      "--context-window",
-      "16384",
-      "--base-url",
-      `http://127.0.0.1:${address.port}/v1`,
-      "--api-key-env",
-      "FLEET_HEADLESS_TEST_KEY",
-    ]);
+    host = await launch(f, ["--pair", ...provider]);
     const paired = await pair(host.url, f.cert, {
       hostId: f.hostId,
       deviceId: "controller",
@@ -285,11 +291,76 @@ test("headless shutdown interrupts an active provider stream instead of waiting 
     await started;
     await host.stop();
     await eventually(async () => providerDisconnected);
-    const journal = await readFile(
-      path.join(f.dir, "host-data", "threads", `${threadId}.jsonl`),
-      "utf8",
+    const trace = new FileTraceStore(path.join(f.dir, "host-data", "trace"));
+    const observed = await trace.read(threadId);
+    assert.equal(observed.completeness, "complete");
+    const facts = observed.records
+      .filter((record) => record.type === "runtime_item")
+      .map((record) =>
+        decodeCanonicalItem((record.data as { item: unknown }).item),
+      );
+    const startedTurn = facts.find((item) => item.type === "turn_started");
+    assert(startedTurn?.type === "turn_started");
+    const aborted = facts.filter((item) => item.type === "turn_aborted");
+    assert.equal(
+      aborted.length,
+      1,
+      "shutdown must durably record exactly one abort",
     );
-    assert(journal.includes('"type":"turn_aborted"'));
+    assert.equal(aborted[0]?.turnId, startedTurn.turnId);
+    assert.equal(
+      facts.some(
+        (item) => item.type === "turn_completed" && item.status === "completed",
+      ),
+      false,
+    );
+    const itemListStore = new FileItemListStore(
+      path.join(f.dir, "host-data", "threads", "items"),
+    );
+    const semanticBefore = await itemListStore.read(threadId);
+    assert(semanticBefore.some((item) => item.source.kind === "user_message"));
+    assert.equal(providerCalls, 1);
+
+    socket.terminate();
+    socket = undefined;
+    host = await launch(f, provider);
+    socket = await connect(
+      host.url,
+      f.cert,
+      "controller",
+      paired.body.token as string,
+    );
+    await rpc(socket, "zen/remote/hello", { hostId: f.hostId, version: 1 });
+    const reply = await rpc(socket, "zen/remote/resume", {
+      workspaceId: "workspace",
+      threadId,
+    });
+    assert.equal(reply.error, undefined);
+    const resumed = reply.result as RemoteRecoveryPage;
+    assert.equal(resumed.threadId, threadId);
+    assert.equal(resumed.nextCursor, null);
+    assert.deepEqual(
+      resumed.entries.flatMap((entry) =>
+        entry.kind === "item" && entry.turn ? [entry.turn] : [],
+      ),
+      [{ id: startedTurn.turnId, status: "interrupted" }],
+    );
+    assert.deepEqual(await itemListStore.read(threadId), semanticBefore);
+    await host.stop();
+    assert.equal(
+      providerCalls,
+      1,
+      "restart, cold recovery, and joined shutdown must not replay the interrupted model sample",
+    );
+    assert.deepEqual(
+      (await trace.read(threadId)).records
+        .filter((record) => record.type === "runtime_item")
+        .map((record) =>
+          decodeCanonicalItem((record.data as { item: unknown }).item),
+        ),
+      facts,
+      "cold recovery must not append a replacement terminal fact",
+    );
   } finally {
     socket?.terminate();
     await host?.stop();

@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile, unlink, rmdir } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  writeFile,
+  unlink,
+  rmdir,
+  rm,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ZenAppServer } from "../../../src/app-server.ts";
 import { AgentRuntime } from "../../../src/runtime.ts";
-import { InMemoryThreadJournal } from "../../../src/journal.ts";
+import { DomainThreadJournal } from "../../../src/domain-journal.ts";
+import { FileTraceStore } from "../../../src/trace.ts";
+import { compileItemList, decodeContextItem } from "../../../src/item-list.ts";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.ts";
 import { InMemoryAttachmentStore } from "../../../src/attachment.ts";
 import { StaticModelCatalog } from "../../../src/model-catalog.ts";
@@ -48,14 +58,24 @@ const captureReports = [];
 let capturedUserMessage;
 try {
   for (const format of ["chat-completions", "responses"]) {
-    const journal = new InMemoryThreadJournal();
+    const domainDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-reference-v3-domains-"),
+    );
     const metadata = new InMemoryThreadMetadataStore();
+    const trace = new FileTraceStore(path.join(domainDirectory, "trace"));
+    const journal = new DomainThreadJournal({
+      directory: path.join(domainDirectory, "threads"),
+      trace,
+      metadata,
+    });
     const attachments = new InMemoryAttachmentStore();
     let hostSequence = 0;
+    let nextThreadId;
     let runtimeSequence = 0;
     let phase = "seed";
     let capturedRaw;
     let outgoingForCapture;
+    let targetForCapture;
     let requestCount = 0;
     let matchingUserMessageCaptures = 0;
     const dispatchPhases = [];
@@ -75,20 +95,61 @@ try {
             ? userMessage.content
             : [{ type: "text", text: userMessage.content }]
         ).filter((part) => ["text", "input_text"].includes(part.type));
-        const exactUserText = textParts
-          .map((part) => part.text)
-          .find((value) => value === outgoingForCapture);
-        if (exactUserText !== undefined) {
-          matchingUserMessageCaptures += 1;
-          if (capturedRaw === undefined) capturedRaw = body;
-          if (capturedUserMessage === undefined)
-            capturedUserMessage = exactUserText;
-          else
-            assert.ok(
-              exactUserText === capturedUserMessage,
-              "provider formats agree on the exact user string",
-            );
-        }
+        const exactUserText = textParts.map((part) => part.text).join("\n");
+        const persisted = (
+          await readFile(
+            path.join(
+              domainDirectory,
+              "threads",
+              "items",
+              `${targetForCapture}.jsonl`,
+            ),
+            "utf8",
+          )
+        )
+          .trim()
+          .split("\n")
+          .map((line) => decodeContextItem(JSON.parse(line)));
+        const semantic = persisted.find(
+          (item) => item.source.metadata?.clientId === clientId,
+        );
+        assert.ok(semantic?.kind === "message" && semantic.role === "user");
+        assert.equal(
+          exactUserText,
+          semantic.content.text,
+          "actual transport text equals already-persisted semantic input",
+        );
+        const compiled = compileItemList(persisted).messages.findLast(
+          (message) => message.role === "user",
+        );
+        assert.deepEqual(
+          compiled?.content,
+          semantic.content.parts,
+          "sole compiler uses exact persisted parts",
+        );
+        const facts = (await trace.read(targetForCapture)).records;
+        assert.ok(
+          facts.some(
+            (record) =>
+              record.type === "runtime_item" &&
+              record.data.item.type === "user_message" &&
+              record.data.item.clientId === clientId &&
+              record.data.item.content?.[0]?.text === outgoingForCapture,
+          ),
+          "durable original source log is unchanged before dispatch",
+        );
+        assert.ok(!exactUserText.includes("zenx-reference-message:v3"));
+        assert.ok(!exactUserText.includes(clientId));
+        matchingUserMessageCaptures += 1;
+        if (capturedRaw === undefined) capturedRaw = body;
+        if (capturedUserMessage === undefined)
+          capturedUserMessage = exactUserText;
+        else
+          assert.equal(
+            exactUserText,
+            capturedUserMessage,
+            "provider formats agree on the exact semantic input",
+          );
       }
 
       const answer =
@@ -191,7 +252,14 @@ try {
         sandbox: "read-only",
         approvalPolicy: "always",
       },
-      idFactory: () => `synthetic-v3-host-${++hostSequence}`,
+      idFactory: () => {
+        if (nextThreadId) {
+          const id = nextThreadId;
+          nextThreadId = undefined;
+          return id;
+        }
+        return `synthetic-v3-host-generated-${++hostSequence}`;
+      },
       now: () => timestamp,
     });
     const seedMessages = [
@@ -200,7 +268,11 @@ try {
     ];
     let seedIndex = 0;
     try {
+      // Pin the existing fixture's source identities, independently of new
+      // compiler-owned instruction IDs allocated between native operations.
+      nextThreadId = "synthetic-v3-host-1";
       const target = await server.startThread();
+      nextThreadId = "synthetic-v3-host-3";
       const threadA = await server.startThread();
       await metadata.setName(threadA.id, "项目状态讨论");
       phase = "seed";
@@ -213,6 +285,7 @@ try {
         (item) => item.type === "agent_message",
       );
       assert.ok(messageA && messageA.type === "agent_message");
+      nextThreadId = "synthetic-v3-host-7";
       const subagentB = await server.createChildThread({
         parentThreadId: target.id,
         mode: "fresh",
@@ -297,6 +370,7 @@ try {
         ),
       );
       outgoingForCapture = outgoing;
+      targetForCapture = target.id;
       phase = "capture";
       const nativeInput = await prepareNativeInput(
         [{ type: "text", text: outgoing }],
@@ -331,26 +405,25 @@ try {
           ? actualUserMessage.content
           : [{ type: "text", text: actualUserMessage.content }]
       ).filter((part) => ["text", "input_text"].includes(part.type));
-      const actualUserText = textParts
-        .map((part) => part.text)
-        .find((value) => value === outgoing);
-      assert.ok(
-        actualUserText === outgoing,
-        `${format} user text matches the outgoing v3 string`,
+      const actualUserText = textParts.map((part) => part.text).join("\n");
+      const semantic = (await journal.readItemList(target.id)).find(
+        (item) => item.source.metadata?.clientId === clientId,
       );
-      if (capturedUserMessage === undefined)
-        capturedUserMessage = actualUserText;
-      else
-        assert.ok(
-          actualUserText === capturedUserMessage,
-          "provider formats agree on the exact v3 string",
-        );
+      assert.equal(actualUserText, semantic.content.text);
+      assert.equal(
+        actualUserText,
+        capturedUserMessage,
+        "provider formats agree on the exact persisted semantic input",
+      );
       captureReports.push({
         format,
         requestCount,
         matchingUserMessageCaptures,
         networkRequests: 0,
         canonicalJournalMatch: true,
+        originalFactLogMatch: true,
+        persistedSemanticInputMatch: true,
+        compilerInputMatch: true,
         providerUserMessageMatch: true,
         threadAId: threadA.id,
         subagentBId: subagentB.id,
@@ -365,7 +438,7 @@ try {
           text: draftText,
           references: orderedReferences,
           clientId,
-          payload: actualUserText,
+          payload: outgoing,
           threadAId: threadA.id,
           subagentBId: subagentB.id,
           sourceMessageAId: messageA.id,
@@ -383,6 +456,8 @@ try {
       }
     } finally {
       await server.closeRuntimeConfiguration();
+      await journal.close();
+      await rm(domainDirectory, { recursive: true, force: true });
     }
   }
 } finally {
@@ -401,15 +476,17 @@ await writeFile(
     {
       timestamp,
       assertions: "passed",
+      contextFormat: "persisted-semantic-itemlist",
+      syntheticOnly: true,
       reports: captureReports,
       capturesOnlyUserMessage: true,
       fullProviderRequestsWritten: false,
       systemAndToolPromptsWritten: false,
       networkRequests: 0,
       notes: [
-        "The captured string came from each production provider adapter request at an injected fake transport boundary.",
-        "Only the exact user text part, synthetic reference metadata, and these verification facts are persisted.",
-        "Source threads, source messages, and the synthetic file are created only in memory or a temporary directory and are not included as bodies in the captured user string unless an exact excerpt is explicitly referenced.",
+        "The captured string came from the sole ItemList compiler and each production provider adapter request at an injected fake transport boundary.",
+        "Only the exact semantic user text, unchanged original v3 fixture, and these verification facts are exported; the temporary durable source log and ItemList are removed after checking.",
+        "All data is synthetic. Original v3 input is checked byte-for-byte in its durable fact log before dispatch, independently of compact persisted user-role semantic parts and the actual provider bytes.",
         "Thread and file references are pointers, not evidence that the source body was read or included.",
       ],
     },

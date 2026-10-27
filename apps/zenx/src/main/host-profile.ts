@@ -34,6 +34,8 @@ export type ZenXProviderConnection =
       name: string;
       displayName: string;
       baseUrl: string;
+      /** Missing retains Chat; Responses is an explicit user choice. */
+      protocol?: "chat-completions" | "responses";
     };
 
 export type ZenXProviderProfile = ZenXProviderConnection & {
@@ -720,6 +722,7 @@ function hostProviderFromProfile(
   return {
     type: "openai-compatible" as const,
     baseUrl: profile.baseUrl,
+    ...(profile.protocol === undefined ? {} : { protocol: profile.protocol }),
     apiKey,
     name: profile.name,
   };
@@ -780,6 +783,12 @@ function validateProviderConnection(
   if (value.type !== "openai-compatible") {
     throw new Error("ZenX provider type is invalid");
   }
+  if (
+    value.protocol !== undefined &&
+    value.protocol !== "chat-completions" &&
+    value.protocol !== "responses"
+  )
+    throw new Error("ZenX provider protocol is invalid");
   const baseUrl = nonEmpty(value.baseUrl, "base URL");
   let parsed: URL;
   try {
@@ -811,6 +820,7 @@ function validateProviderConnection(
     name: providerProfileIdentifier(value.name),
     displayName,
     baseUrl: parsed.toString().replace(/\/$/u, ""),
+    ...(value.protocol === undefined ? {} : { protocol: value.protocol }),
   };
 }
 

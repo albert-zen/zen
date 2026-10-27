@@ -90,7 +90,7 @@ jobs:
           retention-days: 14
       - name: Verify workspace tab overflow on production components
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-tab-overflow"
           node apps/zenx/scripts/capture-workspace-tab-overflow.mjs "${{ runner.temp }}/zenx-tab-overflow"
@@ -319,8 +319,22 @@ jobs:
           path: ${{ runner.temp }}/computer-event-construction.json
           if-no-files-found: warn
           retention-days: 14
-      - name: Verify native static-text labeling with synthetic attributes
-        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts
+      - name: Verify bound Computer process ownership and capture retirement
+        run: node --import tsx --test apps/zenx/test/computer-target-transport.test.ts apps/zenx/test/computer-target-session.test.ts
+      - name: Verify native inspection budgets and static-text labels with synthetic attributes
+        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts apps/zenx/test/computer-native-inspect.test.ts
+      - name: Verify real local Vision OCR with synthetic English and CJK pixels
+        env:
+          ZENX_COMPUTER_OCR_EVIDENCE: ${{ runner.temp }}/computer-native-ocr.json
+        run: node --import tsx --test apps/zenx/test/computer-ocr.test.ts apps/zenx/test/computer-target-session.test.ts apps/zenx/test/computer-native-ocr.test.ts
+      - name: Retain synthetic native Vision OCR evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-native-ocr-${{ github.sha }}
+          path: ${{ runner.temp }}/computer-native-ocr.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Exercise macOS login-shell PATH and first tool execution
         run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
       - name: Verify native launch observer and hung-main cleanup contracts
@@ -674,6 +688,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify native Electron Trace frame ownership
+        timeout-minutes: 2
+        run: node apps/zenx/scripts/smoke-durable-trace-electron.mjs "${{ runner.temp }}/zenx-trace-electron"
+      - name: Retain synthetic native Trace frame evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-trace-frame-gate-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-trace-electron
+          if-no-files-found: warn
+          retention-days: 14
       - name: Install the official Playwright CLI and Chromium
         run: |
           npm install --global @playwright/cli@0.1.18

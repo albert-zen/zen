@@ -11,6 +11,7 @@ export interface ContextEstimateRequest {
   adapter: ModelAdapter;
   selection: CanonicalProviderSelection;
   inputModalities?: readonly string[] | null;
+  instructionsMaterialized?: boolean;
 }
 interface Receipt {
   adapter: number;
@@ -46,7 +47,9 @@ export class ContextCalibration {
     const raw = estimateModelInput(
       request.messages,
       request.tools,
-      request.adapter.contextInstructions,
+      request.instructionsMaterialized
+        ? undefined
+        : request.adapter.contextInstructions,
     );
     let adapterId = this.#adapterIds.get(request.adapter);
     if (adapterId === undefined) {

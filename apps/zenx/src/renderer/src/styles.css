@@ -1,3 +1,4 @@
+@import "./TraceInspector.css";
 @import "./inline-composer.css";
 @import "./reference-token.css";
 @import "./message-quote.css";
@@ -5828,7 +5829,7 @@ button:disabled {
     scroll-behavior: auto !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
   }
 }
 /* Ordinary renderer failures stay visible without replacing the conversation. */
@@ -8904,7 +8905,7 @@ button:disabled {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }

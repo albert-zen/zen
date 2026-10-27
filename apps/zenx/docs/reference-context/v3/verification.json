@@ -1,6 +1,8 @@
 {
   "timestamp": "2026-10-21T03:00:00.000Z",
   "assertions": "passed",
+  "contextFormat": "persisted-semantic-itemlist",
+  "syntheticOnly": true,
   "reports": [
     {
       "format": "chat-completions",
@@ -8,6 +10,9 @@
       "matchingUserMessageCaptures": 1,
       "networkRequests": 0,
       "canonicalJournalMatch": true,
+      "originalFactLogMatch": true,
+      "persistedSemanticInputMatch": true,
+      "compilerInputMatch": true,
       "providerUserMessageMatch": true,
       "threadAId": "synthetic-v3-host-3",
       "subagentBId": "synthetic-v3-host-7",
@@ -20,6 +25,9 @@
       "matchingUserMessageCaptures": 1,
       "networkRequests": 0,
       "canonicalJournalMatch": true,
+      "originalFactLogMatch": true,
+      "persistedSemanticInputMatch": true,
+      "compilerInputMatch": true,
       "providerUserMessageMatch": true,
       "threadAId": "synthetic-v3-host-3",
       "subagentBId": "synthetic-v3-host-7",
@@ -32,9 +40,9 @@
   "systemAndToolPromptsWritten": false,
   "networkRequests": 0,
   "notes": [
-    "The captured string came from each production provider adapter request at an injected fake transport boundary.",
-    "Only the exact user text part, synthetic reference metadata, and these verification facts are persisted.",
-    "Source threads, source messages, and the synthetic file are created only in memory or a temporary directory and are not included as bodies in the captured user string unless an exact excerpt is explicitly referenced.",
+    "The captured string came from the sole ItemList compiler and each production provider adapter request at an injected fake transport boundary.",
+    "Only the exact semantic user text, unchanged original v3 fixture, and these verification facts are exported; the temporary durable source log and ItemList are removed after checking.",
+    "All data is synthetic. Original v3 input is checked byte-for-byte in its durable fact log before dispatch, independently of compact persisted user-role semantic parts and the actual provider bytes.",
     "Thread and file references are pointers, not evidence that the source body was read or included."
   ]
 }

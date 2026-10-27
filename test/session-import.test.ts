@@ -150,8 +150,10 @@ test("import persists atomically, remains idle, and new input continues with loc
     requests[0]?.some(
       (entry) =>
         entry.role === "user" &&
-        "text" in entry &&
-        entry.text === "remember apples",
+        "content" in entry &&
+        entry.content.some(
+          (part) => part.type === "text" && part.text === "remember apples",
+        ),
     ),
   );
   assert(
@@ -236,7 +238,7 @@ import { MAX_THREAD_IMPORT_BYTES } from "../src/thread-import.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 import type { JsonRpcMessage } from "../src/protocol/codex/wire.js";
-import { compileModelMessages } from "../src/model.js";
+import { compileItemList, type ContextItem } from "../src/item-list.js";
 
 const toolCall = (id = "call-1") => ({
   type: "function_call",
@@ -269,8 +271,16 @@ test("tool pairs preserve arguments and output without inventing an exit status 
   assert.equal(result.output, "historical output, not a command");
   assert.equal(result.exitCode, null);
   assert.equal(result.executionStatus, undefined);
-  const messages = compileModelMessages(thread.items);
-  assert.equal(messages.find((entry) => entry.role === "tool")?.exitCode, null);
+  const messages = compileItemList(thread.itemList!).messages;
+  assert.deepEqual(
+    messages.find((entry) => entry.role === "tool"),
+    {
+      role: "tool",
+      callId: call.callId,
+      text: "Outcome: unknown\nhistorical output, not a command",
+      exitCode: null,
+    },
+  );
   assert.equal(thread.turns[0]?.status, "interrupted");
 });
 for (const [label, selected, expected] of [
@@ -366,7 +376,7 @@ test("source instructions, credentials/configuration and opaque reasoning never 
   const history = parseCodexRollout(selected);
   assert.equal(history.source.exclusions.length, 4);
   const { thread } = await server().importThread(history, { cwd: os.tmpdir() });
-  const context = JSON.stringify(compileModelMessages(thread.items));
+  const context = JSON.stringify(compileItemList(thread.itemList!).messages);
   for (const secret of [
     "source system secret",
     "source developer secret",
@@ -731,16 +741,23 @@ test("imported timestamps distinguish original records from synthetic checkpoint
     const imported = await app.importThread(parseCodexRollout(records), {
       cwd: os.tmpdir(),
     });
-    const timestamps = (
-      items: readonly import("../src/item.js").CanonicalItem[],
-    ) =>
-      compileModelMessages(items).flatMap((entry) =>
-        entry.role === "user" && entry.userTimestamp !== undefined
-          ? [entry.userTimestamp]
-          : [],
-      );
+    const timestamps = (items: readonly ContextItem[]) =>
+      items.flatMap((item) => {
+        if (item.kind !== "message" || item.source.kind !== "user_message")
+          return [];
+        assert.equal(item.role, "user");
+        const prefix = item.content.parts[0];
+        assert(prefix?.type === "text");
+        if (prefix.text === "[Message receipt time unavailable]") return [null];
+        const match = /^\[Message received at (.+)\]$/u.exec(prefix.text);
+        assert(
+          match,
+          "receipt time is explicit persisted text, not adapter metadata",
+        );
+        return [match[1]!];
+      });
     const expected = checkpoint ? [null, null] : [stamp];
-    assert.deepEqual(timestamps(imported.thread.items), expected);
+    assert.deepEqual(timestamps(imported.thread.itemList!), expected);
     if (checkpoint)
       assert.equal(
         imported.thread.items.find((entry) => entry.type === "user_message")
@@ -750,7 +767,7 @@ test("imported timestamps distinguish original records from synthetic checkpoint
       );
     const restored = server(journal);
     assert.deepEqual(
-      timestamps((await restored.readThread(imported.thread.id)).items),
+      timestamps((await restored.readThread(imported.thread.id)).itemList!),
       expected,
     );
     if (checkpoint) {
@@ -761,7 +778,7 @@ test("imported timestamps distinguish original records from synthetic checkpoint
         through: { type: "latest-complete" },
         workspace: { type: "same-directory" },
       });
-      assert.deepEqual(timestamps(partial.items), [null]);
+      assert.deepEqual(timestamps(partial.itemList!), [null]);
       await (
         await restored.startTurn(partial.id, "local after partial fork")
       ).done;
@@ -769,7 +786,7 @@ test("imported timestamps distinguish original records from synthetic checkpoint
       const partialLocalTime = partialSnapshot.items.findLast(
         (entry) => entry.type === "user_message",
       )!.createdAt;
-      assert.deepEqual(timestamps(partialSnapshot.items), [
+      assert.deepEqual(timestamps(partialSnapshot.itemList!), [
         null,
         partialLocalTime,
       ]);
@@ -778,9 +795,12 @@ test("imported timestamps distinguish original records from synthetic checkpoint
         through: { type: "latest-complete" },
         workspace: { type: "same-directory" },
       });
-      assert.deepEqual(timestamps(repeated.items), [null, partialLocalTime]);
+      assert.deepEqual(timestamps(repeated.itemList!), [
+        null,
+        partialLocalTime,
+      ]);
       assert.deepEqual(
-        timestamps((await server(journal).readThread(repeated.id)).items),
+        timestamps((await server(journal).readThread(repeated.id)).itemList!),
         [null, partialLocalTime],
       );
     }
@@ -791,12 +811,12 @@ test("imported timestamps distinguish original records from synthetic checkpoint
     const localTime = snapshot.items.findLast(
       (entry) => entry.type === "user_message",
     )!.createdAt;
-    assert.deepEqual(timestamps(snapshot.items), [...expected, localTime]);
+    assert.deepEqual(timestamps(snapshot.itemList!), [...expected, localTime]);
     const fork = await restored.forkThread({
       sourceThreadId: imported.thread.id,
       through: { type: "latest-complete" },
       workspace: { type: "same-directory" },
     });
-    assert.deepEqual(timestamps(fork.items), [...expected, localTime]);
+    assert.deepEqual(timestamps(fork.itemList!), [...expected, localTime]);
   }
 });

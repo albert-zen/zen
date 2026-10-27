@@ -1,3 +1,4 @@
+import type { BrowserModelRoute } from "./capabilities/model-browser-metadata.js";
 import type { ForegroundActivityRunner } from "./foreground-activity.js";
 import {
   unavailableBrowserConnections,
@@ -633,6 +634,21 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     if (capabilityPackage === undefined)
       throw new Error("Browser provider is unavailable");
     return capabilityPackage;
+  }
+
+  assertBrowserModelTarget(route: BrowserModelRoute, threadId: string): void {
+    const selected = this.#browserProfilePackage;
+    if (
+      !this.pluginSnapshot().plugins.some(
+        (p) => p.id === "browser" && p.enabled && p.available,
+      ) ||
+      !(
+        selected instanceof BrowserZenXCapabilityPackage ||
+        selected instanceof BrowserBackendRegistry
+      )
+    )
+      throw Error("Browser provider is unavailable; refresh");
+    selected.assertModelTarget(route, threadId);
   }
 
   async readBrowserTargetUrl(

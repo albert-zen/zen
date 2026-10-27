@@ -1,3 +1,8 @@
+import {
+  contextItemsFromLegacy,
+  decodeContextItem,
+  type ContextItem,
+} from "./item-list.js";
 import type {
   ApprovalPolicy,
   CanonicalProviderSelection,
@@ -36,13 +41,46 @@ export interface EffectiveThreadConfiguration extends CanonicalProviderSelection
 export class Thread {
   readonly id: string;
   readonly #items: CanonicalItem[];
+  readonly #itemList: ContextItem[];
 
-  constructor(id: string, items: readonly CanonicalItem[] = []) {
+  constructor(
+    id: string,
+    items: readonly CanonicalItem[] = [],
+    itemList?: readonly ContextItem[],
+  ) {
     this.id = id;
     this.#items = [];
-    for (const item of items) {
-      this.append(item);
+    this.#itemList = [];
+    if (itemList === undefined) {
+      for (const item of items) this.append(item);
+    } else {
+      // Domain reads validate individual persisted records. Observed Trace gaps
+      // are not repaired with invented turn_started/control events.
+      this.#items.push(
+        ...items.map((item) => deepFreeze(structuredClone(item))),
+      );
+      this.#itemList.push(
+        ...itemList.map((item) => deepFreeze(decodeContextItem(item))),
+      );
+      if (
+        this.#items.some((item) => item.threadId !== id) ||
+        this.#itemList.some((item) => item.threadId !== id)
+      )
+        throw new Error("Mixed Thread identities");
     }
+  }
+
+  get itemList(): readonly ContextItem[] {
+    return Object.freeze([...this.#itemList]);
+  }
+  appendContext(item: ContextItem): void {
+    const valid = decodeContextItem(item);
+    if (
+      valid.threadId !== this.id ||
+      this.#itemList.some((existing) => existing.id === valid.id)
+    )
+      throw new Error("Invalid semantic append identity");
+    this.#itemList.push(deepFreeze(valid));
   }
 
   get items(): readonly CanonicalItem[] {
@@ -139,7 +177,9 @@ export class Thread {
         );
         const source = this.#items[index];
         const content =
-          source?.type === "user_message" && occurrence.field === "content"
+          (source?.type === "user_message" ||
+            source?.type === "thread_message") &&
+          occurrence.field === "content"
             ? source.content
             : source?.type === "tool_result" &&
                 occurrence.field === "modelContent"
@@ -268,9 +308,18 @@ export class Thread {
     }
   }
 
-  append(item: CanonicalItem): void {
+  append(item: CanonicalItem, committedContext?: readonly ContextItem[]): void {
     this.validateAppend(item);
+    const context =
+      committedContext ??
+      contextItemsFromLegacy(
+        item,
+        this.#items,
+        this.#items.length,
+        this.#itemList,
+      );
     this.#items.push(deepFreeze(structuredClone(item)));
+    for (const semantic of context) this.appendContext(semantic);
   }
 
   deriveTurns(options: { activeTurnId?: string } = {}): DerivedTurn[] {

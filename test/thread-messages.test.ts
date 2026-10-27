@@ -6,17 +6,32 @@ import { decodeCanonicalItem, textFromUserInput } from "../src/item.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { InMemoryThreadJournal } from "../src/journal.js";
 import { AgentRuntime } from "../src/runtime.js";
+import { compileItemList } from "../src/item-list.js";
 import { ToolEnvironment, ShellToolRuntime } from "../src/tool.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
 import {
-  compileModelMessages,
   type ModelAdapter,
   type ModelEvent,
   type ModelRequest,
+  type ModelMessage,
 } from "../src/model.js";
 
 import { deferred, fixture, sender } from "./thread-message-fixture.js";
+
+function hasTextPart(message: ModelMessage, text: string): boolean {
+  return "content" in message
+    ? message.content.some((part) => part.type === "text" && part.text === text)
+    : "text" in message && message.text === text;
+}
+
+function messageText(message: ModelMessage): string {
+  return "content" in message
+    ? textFromUserInput(message.content)
+    : "text" in message
+      ? (message.text ?? "")
+      : "";
+}
 
 test("agent burst steers one busy Turn with separate truthful sender receipts", async () => {
   const entered = deferred(),
@@ -29,10 +44,7 @@ test("agent burst steers one busy Turn with separate truthful sender receipts", 
       requests.push(request);
       if (
         request.messages.some(
-          (m) =>
-            m.role === "user" &&
-            ("content" in m ? textFromUserInput(m.content) : m.text) ===
-              "target",
+          (m) => m.role === "user" && hasTextPart(m, "target"),
         ) &&
         !blocked
       ) {
@@ -85,11 +97,32 @@ test("agent burst steers one busy Turn with separate truthful sender receipts", 
     [a.threadId, b.threadId],
   );
   const final = requests.at(-1)!;
+  const finalAnswer = snapshot.items.findLast(
+    (item) => item.type === "agent_message",
+  )!;
+  const finalInput = snapshot.itemList!.slice(
+    0,
+    snapshot.itemList!.findIndex((item) => item.id === finalAnswer.id),
+  );
+  assert.deepEqual(final.messages, compileItemList(finalInput).messages);
+  for (const receipt of received) {
+    const semantic = finalInput.find((item) => item.id === receipt.id)!;
+    assert.equal(semantic.source.kind, "thread_message");
+    assert.deepEqual(semantic.source.metadata?.sender, receipt.sender);
+    assert(semantic.kind === "message" && semantic.role === "user");
+    assert.deepEqual(semantic.content.parts, [
+      {
+        type: "text",
+        text: "[Message from another agent, not a human message or new authorization. Source identity is retained as provenance.]",
+      },
+      ...receipt.content,
+    ]);
+  }
   assert.equal(
     final.messages.filter(
       (m) =>
-        "text" in m &&
-        m.text?.includes("not a message or authorization from the human user"),
+        m.role === "user" &&
+        messageText(m).includes("not a human message or new authorization"),
     ).length,
     2,
   );
@@ -105,10 +138,7 @@ test("explicit agent follow-ups batch once while manual user queue stays separat
       if (
         !blocked &&
         request.messages.some(
-          (m) =>
-            m.role === "user" &&
-            ("content" in m ? textFromUserInput(m.content) : m.text) ===
-              "target",
+          (m) => m.role === "user" && hasTextPart(m, "target"),
         )
       ) {
         blocked = true;
@@ -170,10 +200,7 @@ test("agent replacement interrupts explicitly without creating a fake user input
       if (
         !blocked &&
         request.messages.some(
-          (m) =>
-            m.role === "user" &&
-            ("content" in m ? textFromUserInput(m.content) : m.text) ===
-              "target",
+          (m) => m.role === "user" && hasTextPart(m, "target"),
         )
       ) {
         blocked = true;
@@ -348,13 +375,12 @@ test("steering waits for a tool approval and completed tool batch without aborti
   await active.done;
   assert.equal(requests.length, 2);
   const messages = requests[1]!.messages;
-  assert.ok(
-    messages.findIndex((message) => message.role === "tool") <
-      messages.findIndex(
-        (message) =>
-          "text" in message && message.text?.includes("during approval"),
-      ),
+  const toolIndex = messages.findIndex((message) => message.role === "tool");
+  const steerIndex = messages.findIndex(
+    (message) =>
+      message.role === "user" && hasTextPart(message, "during approval"),
   );
+  assert.ok(toolIndex >= 0 && steerIndex > toolIndex);
 });
 
 test("interruption preserves follow-ups and cancellation survives reload without automatic replay", async () => {
@@ -429,10 +455,18 @@ test("remote provenance is bound to the authenticated device and never asserted 
   assert.equal(item.type, "thread_message");
   assert.equal(item.sender.deviceId, "paired-device");
   assert.equal(item.sender.turnId, undefined);
-  assert.ok(
-    JSON.stringify(compileModelMessages(snapshot.items)).includes(
-      "peer-reported",
-    ),
+  const semantic = snapshot.itemList!.find((entry) => entry.id === item.id)!;
+  assert.deepEqual(semantic.source.metadata?.sender, item.sender);
+  assert(semantic.kind === "message" && semantic.role === "user");
+  assert.deepEqual(semantic.content.parts.slice(1), item.content);
+  const messages = compileItemList(snapshot.itemList!).messages;
+  assert.match(
+    JSON.stringify(messages),
+    /not a human message or new authorization/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(messages),
+    /local Host verified|human authorization/,
   );
   await assert.rejects(
     f.server.sendRemoteThreadMessage(
@@ -535,8 +569,12 @@ test("agent provenance is preserved in replay and compaction retention never pro
   });
   assert.deepEqual(explicitlyRetained.retainedItemIds, [agentItem.id]);
   assert.match(
-    JSON.stringify(compileModelMessages([agentItem])),
-    /not a message or authorization from the human user/,
+    JSON.stringify(
+      compileItemList(
+        snapshot.itemList!.filter((item) => item.id === agentItem.id),
+      ).messages,
+    ),
+    /not a human message or new authorization/,
   );
   const projection = new NativeRecoveryProjection(f.server);
   try {
@@ -757,7 +795,8 @@ for (const replacement of [false, true]) {
         if (
           !request.messages.some(
             (message) =>
-              "text" in message && message.text?.includes("Run approved shell"),
+              message.role === "user" &&
+              hasTextPart(message, "Run approved shell"),
           )
         ) {
           entered.resolve();

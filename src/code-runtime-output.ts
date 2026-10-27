@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
+import { resolveBuiltinTaskReference } from "./builtin-model-handles.js";
+import { trustedModelReferenceBindings } from "./model-references.js";
+import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 import {
   capturedToolOutput,
   toolOutputSuffix,
@@ -18,7 +21,7 @@ export interface ProgramOutputInfo {
 
 /** Project host capture into program data; model receipts remain a separate projection. */
 export async function programToolResult(result: ToolExecutionResult): Promise<
-  Omit<ToolExecutionResult, "output"> & {
+  Omit<ToolExecutionResult, "output" | "referenceBindings"> & {
     output: string | null;
     outputInfo: ProgramOutputInfo;
     diagnostic?: string;
@@ -84,8 +87,36 @@ export async function programToolResult(result: ToolExecutionResult): Promise<
   }
   info.complete = output !== null;
   const diagnostic = toolOutputSuffix(result);
+  const { referenceBindings: _hostOnlyReferences, ...programResult } = result;
+  const task = result.structuredContent;
+  if (
+    result.contentType === TOOL_TASK_CONTENT_TYPE &&
+    task &&
+    typeof task === "object" &&
+    !Array.isArray(task) &&
+    "task_id" in task &&
+    typeof task.task_id === "string"
+  ) {
+    const matching = (trustedModelReferenceBindings(result) ?? []).filter(
+      (binding) =>
+        binding.ref.startsWith("t") &&
+        resolveBuiltinTaskReference(binding.ownerThreadId, binding.ref, [
+          binding,
+        ]) === task.task_id,
+    );
+    if (matching.length > 1)
+      throw new Error("Conflicting builtin task result references");
+    if (matching[0])
+      programResult.structuredContent = { ...task, task_id: matching[0].ref };
+  }
+  // Reserved first-party discovery authority is a Host-only annotation, not program data.
+  // Never recursively rewrite user output or arbitrary structured JSON fields.
+  if (result.contentType === "zen/fleet-tool-catalog-disclosure") {
+    delete programResult.contentType;
+    delete programResult.structuredContent;
+  }
   return {
-    ...result,
+    ...programResult,
     output,
     outputInfo: info,
     ...(diagnostic === undefined || diagnostic.length === 0

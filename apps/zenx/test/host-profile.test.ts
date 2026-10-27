@@ -1057,3 +1057,45 @@ test("external application preferences omit the empty default and preserve confi
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("API-key protocol is explicit, validated and preserved through saved profile and Host configuration", () => {
+  for (const protocol of [
+    undefined,
+    "chat-completions",
+    "responses",
+  ] as const) {
+    const source = {
+      ...profile,
+      providerProfiles: [
+        {
+          ...profile.providerProfiles[0]!,
+          ...(protocol === undefined ? {} : { protocol }),
+        },
+      ],
+    };
+    const normalized = validateHostProfile(source);
+    const provider = normalized.providerProfiles[0]!;
+    assert.equal(provider.type, "openai-compatible");
+    if (provider.type !== "openai-compatible") return;
+    assert.equal(provider.protocol, protocol);
+    const config = hostConfigFromProfile(normalized, {
+      dataDirectory: "/synthetic",
+      fallbackWorkspace: "/synthetic",
+      subscriptionProfilePath: "/synthetic/auth.json",
+      apiKeys: { local: "synthetic-key" },
+    });
+    assert.equal(config.providers![0]!.provider.type, "openai-compatible");
+    const wired = config.providers![0]!.provider;
+    if (wired.type === "openai-compatible")
+      assert.equal(wired.protocol, protocol);
+  }
+  for (const protocol of ["auto", "subscription", null, {}, true])
+    assert.throws(
+      () =>
+        validateHostProfile({
+          ...profile,
+          providerProfiles: [{ ...profile.providerProfiles[0]!, protocol }],
+        }),
+      /protocol/,
+    );
+});

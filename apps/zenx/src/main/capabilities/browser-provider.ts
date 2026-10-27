@@ -1,3 +1,8 @@
+import {
+  attachBrowserModelTargets,
+  readBrowserModelRoute,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
 import { withBrowserOperationOrder } from "./browser-operation-order.js";
 import {
   assertBrowserInputSnapshot,
@@ -592,6 +597,15 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     toolName: string,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    const expected = readBrowserModelRoute(invocation);
+    if (expected) {
+      if (
+        expected.sessionId !== invocation.arguments.sessionId ||
+        expected.tabId !== invocation.arguments.tabId
+      )
+        throw Error("Browser reference does not match the exact native target");
+      this.assertModelTarget(expected, invocation.threadId);
+    }
     if (invocation.threadId === undefined)
       return await this.#invokeAndObserve(toolName, invocation);
     const publicSessionId = requiredTargetId(invocation.arguments, "sessionId");
@@ -630,7 +644,23 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       typeof value === "object" && value !== null && "sessionId" in value
         ? { ...value, sessionId: publicSessionId }
         : value;
-    return Array.isArray(result) ? result.map(project) : project(result);
+    const projected = Array.isArray(result)
+      ? result.map(project)
+      : project(result);
+    const metadata = this.#threadObservation.modelTargets(
+      invocation.threadId,
+      publicSessionId,
+    );
+    return projected && typeof projected === "object" && metadata
+      ? attachBrowserModelTargets(projected, metadata)
+      : projected;
+  }
+
+  assertModelTarget(
+    route: BrowserModelRoute,
+    threadId: string | undefined,
+  ): void {
+    this.#threadObservation.assertModelTarget(route, threadId);
   }
 
   observeThread(

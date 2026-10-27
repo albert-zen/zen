@@ -325,7 +325,7 @@ test("protocol session approvals cannot authorize later restricted escalations",
   }
 });
 
-test("permission changes wait for yielded tool bodies after their turn completes", async () => {
+test("permission changes revoke future dispatch without undoing an already yielded body", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-permission-busy-"));
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -357,14 +357,11 @@ test("permission changes wait for yielded tool bodies after their turn completes
     await (
       await server.startTurn(thread.id, "!tool slow {}")
     ).done;
-    await assert.rejects(
-      server.setThreadPermissions(thread.id, "read-only"),
-      /running turn and tools/,
-    );
     assert.equal(
-      (await server.readThread(thread.id)).sandbox,
-      "danger-full-access",
+      (await server.setThreadPermissions(thread.id, "read-only")).sandbox,
+      "read-only",
     );
+    assert.equal((await server.readThread(thread.id)).sandbox, "read-only");
     release();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(

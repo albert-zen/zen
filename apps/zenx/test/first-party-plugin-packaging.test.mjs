@@ -43,7 +43,7 @@ const expected = [
   ["@zenx/browser-plugin", "zenx-browser-plugin-concurrent-1.0.7.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-playwright-1.0.5.tgz"],
   ["@zenx/browser-plugin", "zenx-browser-plugin-user-session-1.0.6.tgz"],
-  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.1.0.tgz"],
+  ["@zenx/computer-plugin", "zenx-computer-plugin-macos-1.2.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.0.2.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.1.5.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-strict-1.2.0.tgz"],
@@ -78,8 +78,8 @@ const providerVariants = new Map([
     ["browser", "1.0.6", "user-browser-cdp", 12],
   ],
   [
-    "zenx-computer-plugin-macos-1.1.0.tgz",
-    ["computer", "1.1.0", "macos-desktop", 11],
+    "zenx-computer-plugin-macos-1.2.0.tgz",
+    ["computer", "1.2.0", "macos-desktop", 12],
   ],
   [
     "zenx-computer-plugin-peekaboo-1.0.2.tgz",
@@ -362,7 +362,7 @@ test("Host provider selection maps every real manifest variant deterministically
       "zenx-browser-plugin-multi-1.0.8.tgz",
       "zenx-browser-plugin-playwright-1.0.5.tgz",
       "zenx-browser-plugin-user-session-1.0.6.tgz",
-      "zenx-computer-plugin-macos-1.1.0.tgz",
+      "zenx-computer-plugin-macos-1.2.0.tgz",
       "zenx-computer-plugin-peekaboo-1.0.2.tgz",
       "zenx-computer-plugin-win32-1.1.5.tgz",
     ],

@@ -1,5 +1,10 @@
 import {
+  readBrowserSidebarTargets,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
+import {
   resolveSidebarScope,
+  SidebarScopeChoiceRequired,
   bindSidebarResources,
   type SidebarRoom,
 } from "../sidebar-tool-scope.js";
@@ -610,6 +615,10 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly #fleet: FleetRouter | undefined;
   readonly #workflows: WorkflowConfigurationPort | undefined;
   readonly #sidebar: ThreadSidebarPort | undefined;
+  readonly #browserTargetAdmission?: (
+    route: BrowserModelRoute,
+    threadId: string,
+  ) => void;
   readonly #sidebarRooms: () => readonly SidebarRoom[];
   readonly #sendPreference: () => Promise<"queue" | "soft" | "hard">;
   readonly #sending = new Map<
@@ -621,6 +630,10 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     appServer: AppServerRequestPort;
     workflows?: WorkflowConfigurationPort;
     sidebar?: ThreadSidebarPort;
+    browserTargetAdmission?: (
+      route: BrowserModelRoute,
+      threadId: string,
+    ) => void;
     sidebarRooms?: () => readonly SidebarRoom[];
     fleet?: FleetRouter;
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
@@ -629,6 +642,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     this.#fleet = options.fleet;
     this.#workflows = options.workflows;
     this.#sidebar = options.sidebar;
+    this.#browserTargetAdmission = options.browserTargetAdmission;
     this.#sidebarRooms = options.sidebarRooms ?? (() => []);
     this.#sendPreference = options.sendPreference ?? (async () => "soft");
   }
@@ -652,13 +666,33 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         includeTurns: false,
       });
       invocation.signal.throwIfAborted();
-      const scope = resolveSidebarScope(
-        threadId,
-        invocation.arguments.scope,
-        this.#sidebarRooms(),
-      );
+      let scope: ReturnType<typeof resolveSidebarScope>;
+      try {
+        scope = resolveSidebarScope(
+          threadId,
+          invocation.arguments.scope,
+          this.#sidebarRooms(),
+        );
+      } catch (error) {
+        if (
+          error instanceof SidebarScopeChoiceRequired &&
+          name === "zenx_self_control_sidebar_read"
+        )
+          return {
+            status: "ambiguous",
+            error: error.message,
+            visibility: "not-observed",
+            authorizedScopes: error.choices,
+          };
+        throw error;
+      }
       const admit = () => {
         invocation.signal.throwIfAborted();
+        for (const route of readBrowserSidebarTargets(invocation) ?? []) {
+          if (!this.#browserTargetAdmission)
+            throw Error("Browser target admission is unavailable; refresh");
+          this.#browserTargetAdmission(route, threadId);
+        }
         resolveSidebarScope(
           threadId,
           scope.effectiveScope,
@@ -699,7 +733,11 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         }
       }
       resolveSidebarScope(threadId, scope.effectiveScope, this.#sidebarRooms());
-      const result = await this.#sidebar.update(request, admit);
+      const result = await this.#sidebar.update(request, admit, {
+        kind: "tool",
+        threadId,
+        callId: invocation.callId,
+      });
       return {
         source: "zenx.sidebar-state",
         visibility: "not-observed",
@@ -731,9 +769,19 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       if (device !== "local") {
         if (!this.#fleet)
           throw new Error("Fleet is not configured on this Host");
-        return await this.#fleet.invoke(device, invocation);
+        return await this.#fleet.invoke(
+          device,
+          invocation,
+          invocation.arguments.deviceKey === undefined
+            ? undefined
+            : requiredString(invocation.arguments.deviceKey, "device key"),
+        );
       }
-      const { device: _device, ...args } = invocation.arguments;
+      const {
+        device: _device,
+        deviceKey: _deviceKey,
+        ...args
+      } = invocation.arguments;
       invocation = { ...invocation, arguments: args };
     }
     if (name === "zenx_threads_send") {

@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import { syncBuiltinESMExports } from "node:module";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
+import { InMemoryTraceStore } from "../src/trace.js";
+import { observeModelWithTrace, closeModelTrace } from "../src/trace-model.js";
 import { ModelRequestDebugStore } from "../apps/cli/src/model-request-debug.js";
 import type { ModelAdapter, ModelRequest } from "../src/model.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
 import { fetchModelResponse } from "../src/model/request-retry.js";
 
-function token(account: string) {
-  return `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: account } })).toString("base64url")}.signature`;
+function token(account: string, version = "one") {
+  return `header.${Buffer.from(JSON.stringify({ version, "https://api.openai.com/auth": { chatgpt_account_id: account } })).toString("base64url")}.signature`;
 }
 function request(attempt = 1): ModelRequest {
   return {
@@ -42,15 +44,15 @@ test("capture preserves subscription 8+2+2 dispatch budget and identities across
     t.mock.timers.reset();
     syncBuiltinESMExports();
   });
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  const oldToken = token("old-account");
-  const newToken = token("new-account");
+  const trace = new InMemoryTraceStore();
+  const store = new ModelRequestDebugStore(trace);
+  const oldToken = token("same-account", "old");
+  const newToken = token("same-account", "new");
   const statuses = [503, 503, 503, 401, 503, 503, 503, 200, 401, 200, 401, 200];
   const authorizations: string[] = [];
   const bodies: string[] = [];
   let renewals = 0;
-  const adapter = store.observe(
+  const adapter = observeModelWithTrace(
     new OpenAiSubscriptionModel({
       acquireAccessLease: async () => ({ accessToken: oldToken }),
       renewAccessLease: async (rejected) => {
@@ -62,27 +64,41 @@ test("capture preserves subscription 8+2+2 dispatch budget and identities across
         assert(bodies.length < statuses.length, "dispatch budget exceeded");
         bodies.push(String(init?.body));
         authorizations.push(new Headers(init?.headers).get("authorization")!);
-        const captures = store.control({
-          action: "list",
-          threadId: "thread-seam",
-        }).records!;
+        const captures = (
+          await store.control({
+            action: "list",
+            threadId: "thread-seam",
+          })
+        ).records!;
         assert.equal(
           captures.length,
           bodies.length,
           "capture must precede each HTTP dispatch",
         );
         const latest = captures[0]!;
-        const payload = store.control({ action: "read", id: latest.id }).page!
-          .text;
+        const payload = (
+          await store.control({
+            action: "read",
+            threadId: latest.threadId,
+            id: latest.id,
+          })
+        ).page!.text;
         assert(
-          !payload.includes(oldToken),
-          "rejected credentials remain redacted after rotation",
+          payload.includes(oldToken),
+          "user body is preserved exactly, not broadly credential-redacted",
         );
         assert(!JSON.stringify(latest).includes(oldToken));
         assert(!JSON.stringify(latest).includes(newToken));
-        assert.equal(latest.redacted, true);
+        const wire = (await trace.read("thread-seam")).records.find(
+          (r) => r.id === latest.id,
+        )!;
+        assert.deepEqual(
+          (wire.data as { omittedHeaders: string[] }).omittedHeaders,
+          ["authorization"],
+        );
+        assert(!JSON.stringify(wire.data).includes(oldToken));
         assert.equal(
-          latest.originalBytes,
+          latest.requestBytes,
           Buffer.byteLength(String(init?.body)),
         );
         const status = statuses[bodies.length - 1]!;
@@ -91,6 +107,7 @@ test("capture preserves subscription 8+2+2 dispatch budget and identities across
           : new Response(null, { status });
       },
     }),
+    trace,
   );
   let finished = false;
   const samples = (async () => {
@@ -114,9 +131,10 @@ test("capture preserves subscription 8+2+2 dispatch budget and identities across
     await setImmediate();
   }
   await samples;
-  const records = store
-    .control({ action: "list", threadId: "thread-seam" })
-    .records!.reverse();
+  await closeModelTrace(trace);
+  const records = (
+    await store.control({ action: "list", threadId: "thread-seam" })
+  ).records!.reverse();
   assert.equal(records.length, 12);
   assert.equal(new Set(records.map((entry) => entry.id)).size, 12);
   assert.deepEqual(
@@ -157,8 +175,8 @@ test("capture does not re-enable admission retries for sampling replays", async 
   for (const provider of ["chat", "subscription"] as const) {
     for (const failure of ["http", "transport"] as const) {
       await t.test(`${provider} ${failure}`, async () => {
-        const store = new ModelRequestDebugStore();
-        store.control({ action: "setEnabled", enabled: true });
+        const trace = new InMemoryTraceStore();
+        const store = new ModelRequestDebugStore(trace);
         let calls = 0;
         const fetch: typeof globalThis.fetch = async () => {
           calls++;
@@ -178,12 +196,17 @@ test("capture does not re-enable admission retries for sampling replays", async 
                 }),
                 fetch,
               });
-        await assert.rejects(consume(store.observe(model), request(2)));
+        await assert.rejects(
+          consume(observeModelWithTrace(model, trace), request(2)),
+        );
         assert.equal(calls, 1);
-        const records = store.control({
-          action: "list",
-          threadId: "thread-seam",
-        }).records!;
+        await closeModelTrace(trace);
+        const records = (
+          await store.control({
+            action: "list",
+            threadId: "thread-seam",
+          })
+        ).records!;
         assert.equal(records.length, 1);
         assert.equal(records[0]!.sampleAttempt, 2);
         assert.equal(records[0]!.transportAttempt, 1);

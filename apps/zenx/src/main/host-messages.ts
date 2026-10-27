@@ -1,3 +1,10 @@
+import {
+  isBrowserModelRoute,
+  isBrowserModelTargets,
+  isBrowserSidebarTargets,
+  type BrowserModelRoute,
+  type BrowserModelTargets,
+} from "./capabilities/model-browser-metadata.js";
 import { validateModelRequestDebugCommand } from "../../../../apps/cli/src/model-request-debug.js";
 import type {
   ModelRequestDebugCommand,
@@ -139,6 +146,7 @@ export type HostCommand =
   | CapabilityResultCommand;
 
 export interface CapabilityResultCommand {
+  browserModelTargets?: BrowserModelTargets;
   type: "capability/result";
   invocationId: string;
   generationToken: string;
@@ -269,6 +277,8 @@ export type HostEvent =
     }
   | {
       type: "capability/invoke";
+      browserModelRoute?: BrowserModelRoute;
+      browserSidebarTargets?: BrowserModelRoute[];
       /** Host-minted execution-target transport; never tool-argument provenance. */
       targetRoute?: true;
       invocationId: string;
@@ -349,6 +359,7 @@ export function isHostCommand(value: unknown): value is HostCommand {
       typeof fleet.roomId === "string" && typeof fleet.threadId === "string"
     );
   const command = value as {
+    browserModelTargets?: unknown;
     type?: unknown;
     requestId?: unknown;
     options?: unknown;
@@ -386,6 +397,8 @@ export function isHostCommand(value: unknown): value is HostCommand {
     (type === "maintenance/end" &&
       typeof command.maintenanceToken === "string") ||
     (type === "capability/result" &&
+      (command.browserModelTargets === undefined ||
+        isBrowserModelTargets(command.browserModelTargets)) &&
       typeof command.invocationId === "string" &&
       typeof command.generationToken === "string") ||
     (type === "capabilities/replace" &&
@@ -472,6 +485,8 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     );
   }
   const event = value as {
+    browserModelRoute?: unknown;
+    browserSidebarTargets?: unknown;
     type?: unknown;
     url?: unknown;
     message?: unknown;
@@ -572,6 +587,11 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
       event.type === "capability/cancel") &&
       typeof event.invocationId === "string" &&
       typeof event.generationToken === "string" &&
+      (event.type !== "capability/invoke" ||
+        ((event.browserModelRoute === undefined ||
+          isBrowserModelRoute(event.browserModelRoute)) &&
+          (event.browserSidebarTargets === undefined ||
+            isBrowserSidebarTargets(event.browserSidebarTargets)))) &&
       (event.type !== "capability/invoke" ||
         event.targetRoute === undefined ||
         event.targetRoute === true))

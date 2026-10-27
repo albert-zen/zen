@@ -1,3 +1,4 @@
+import { modelMediaOrigin } from "./model-media-origin.js";
 import type {
   CanonicalItem,
   RecoveryMediaOccurrence,
@@ -96,7 +97,7 @@ export function safeProviderErrorIdentity(value: unknown): string | undefined {
 export function safeProviderErrorParameter(value: unknown): string | undefined {
   return typeof value === "string" &&
     value.length <= 160 &&
-    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
+    /^(?:messages|input)(?:\[\d{1,4}\]|\.(?:content|output|image_url|file_url|url|file|image|audio|data|type|input_audio|input_image|file_data|file_id))*$/u.test(
       value,
     )
     ? value
@@ -304,7 +305,10 @@ function occurrenceKey(entry: RecoveryMediaOccurrence): string {
 function itemContent(
   item: CanonicalItem,
 ): { field: RecoveryMediaOccurrence["field"]; content: UserInput } | undefined {
-  if (item.type === "user_message" && item.content !== undefined)
+  if (
+    (item.type === "user_message" || item.type === "thread_message") &&
+    item.content !== undefined
+  )
     return { field: "content", content: item.content };
   if (item.type === "tool_result" && item.modelContent !== undefined)
     return { field: "modelContent", content: item.modelContent };
@@ -349,7 +353,7 @@ export function sampledMediaOccurrences(
       seen.add(key);
       if (rejectedParts !== undefined && !rejectedParts.includes(part))
         continue;
-      const origin = origins.get(part);
+      const origin = modelMediaOrigin(part) ?? origins.get(part);
       if (origin !== undefined) found.set(JSON.stringify(origin), origin);
     }
   }

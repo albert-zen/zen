@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fixture } from "../../../test/thread-message-fixture.js";
-import { compileModelMessages, type ModelEvent } from "../../../src/model.js";
+import type { ModelEvent } from "../../../src/model.js";
+import { compileItemList } from "../../../src/item-list.js";
 import { RemoteHostAccess } from "../../../src/protocol/native/remote-host.js";
 import { serveRemoteHost } from "../../../src/protocol/native/remote-transport.js";
 import {
@@ -317,11 +318,12 @@ test("two real HTTPS Hosts preserve remote source identity and model exact read/
     /invalid_request/,
   );
   const model = JSON.stringify(
-    compileModelMessages((await b.server.readThread(target.id)).items),
+    compileItemList((await b.server.readThread(target.id)).itemList!).messages,
   );
-  assert.match(model, /not a message or authorization from the human/);
-  assert.ok(model.includes(received.id));
-  assert.ok(model.includes(a.workspace));
+  assert.match(model, /not a human message or new authorization/);
+  assert.ok(!model.includes(received.id));
+  assert.ok(!model.includes(a.workspace));
+  assert.ok(model.includes("source context"));
   const tools = new ZenXFleetCapabilityPackage({
     fleet: b.fleet,
     threads: {} as never,

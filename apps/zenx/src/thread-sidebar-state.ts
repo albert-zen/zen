@@ -34,6 +34,9 @@ export interface ThreadSidebarUpdate {
   patch: ThreadSidebarPatch;
 }
 export type SidebarAdmission = () => void;
+/** Internal Host provenance; IPC does not accept this from renderer payloads. */
+export type SidebarChangeSource =
+  { kind: "ui" | "host" } | { kind: "tool"; threadId: string; callId: string };
 export interface ThreadSidebarPort {
   read(
     owner: SidebarOwner | string,
@@ -42,6 +45,7 @@ export interface ThreadSidebarPort {
   update(
     request: ThreadSidebarUpdate,
     admit?: SidebarAdmission,
+    source?: SidebarChangeSource,
   ): Promise<{ applied: boolean; state: ThreadSidebarState }>;
 }
 export interface ThreadSidebarApi extends ThreadSidebarPort {

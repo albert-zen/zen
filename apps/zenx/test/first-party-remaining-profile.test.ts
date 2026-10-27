@@ -63,7 +63,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const currentTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.1.0.tgz",
+      "zenx-computer-plugin-macos-1.2.0.tgz",
     );
     const oldTarball = path.join(
       resources,
@@ -117,7 +117,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const updated = service
       .pluginSnapshot()
       .plugins.find((plugin) => plugin.id === "computer");
-    assert.equal(updated?.version, "1.1.0");
+    assert.equal(updated?.version, "1.2.0");
     assert.equal(
       path.basename(updated?.profileSource?.packageSpec ?? ""),
       path.basename(currentTarball),
@@ -1141,7 +1141,7 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 "plugins",
                 platform === "win32"
                   ? "zenx-computer-plugin-win32-1.1.5.tgz"
-                  : "zenx-computer-plugin-macos-1.1.0.tgz",
+                  : "zenx-computer-plugin-macos-1.2.0.tgz",
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
             ),

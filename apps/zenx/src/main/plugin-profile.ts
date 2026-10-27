@@ -1,3 +1,4 @@
+import { copyBrowserModelContext } from "./capabilities/model-browser-metadata.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -642,24 +643,27 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
-    return await this.#runtime.invoke(toolName, {
-      callId: invocation.callId,
-      ...(invocation.trustedPluginUi === true
-        ? { trustedPluginUi: true as const }
-        : {}),
-      ...(invocation.canonicalToolCallId === undefined
-        ? {}
-        : { canonicalToolCallId: invocation.canonicalToolCallId }),
-      arguments: invocation.arguments,
-      ...(invocation.approvalScope === undefined
-        ? {}
-        : { approvalScope: invocation.approvalScope }),
-      cwd: invocation.cwd,
-      ...(invocation.threadId === undefined
-        ? {}
-        : { threadId: invocation.threadId }),
-      signal: invocation.signal,
-    });
+    return await this.#runtime.invoke(
+      toolName,
+      copyBrowserModelContext(invocation, {
+        callId: invocation.callId,
+        ...(invocation.trustedPluginUi === true
+          ? { trustedPluginUi: true as const }
+          : {}),
+        ...(invocation.canonicalToolCallId === undefined
+          ? {}
+          : { canonicalToolCallId: invocation.canonicalToolCallId }),
+        arguments: invocation.arguments,
+        ...(invocation.approvalScope === undefined
+          ? {}
+          : { approvalScope: invocation.approvalScope }),
+        cwd: invocation.cwd,
+        ...(invocation.threadId === undefined
+          ? {}
+          : { threadId: invocation.threadId }),
+        signal: invocation.signal,
+      }),
+    );
   }
 
   async close(): Promise<void> {

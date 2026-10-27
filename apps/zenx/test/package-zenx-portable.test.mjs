@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import {
   access,
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -54,6 +55,8 @@ import {
 import { prepareShellPty } from "../scripts/prepare-shell-pty.mjs";
 import { verifyShellPtyPatch } from "../scripts/shell-pty-patch.mjs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { stageStorageWriter } from "../scripts/stage-storage-writer.mjs";
 
 const placeholder = "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__";
 const run = promisify(execFile);
@@ -387,7 +390,13 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
     "utf8",
   );
-  const sources = extractMacNativeHelperSources(providerSource);
+  const ocrSource = await readFile(
+    new URL("../src/main/capabilities/computer-ocr.ts", import.meta.url),
+    "utf8",
+  );
+  const sources = extractMacNativeHelperSources(
+    providerSource + "\n" + ocrSource,
+  );
   assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /AXIsProcessTrusted/u);
   assert.match(
     sources.MAC_ACCESSIBILITY_SOURCE,
@@ -497,6 +506,7 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     await compileMacNativeHelpers({
       destinationDirectory,
       providerSource,
+      ocrSource,
       compile: async (sourcePath, executablePath) => {
         if (process.platform === "darwin") {
           await run("/usr/bin/swiftc", ["-typecheck", sourcePath]);
@@ -510,11 +520,17 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     });
     assert.deepEqual(
       compiled.map(({ name }) => name),
-      ["zenx-bound-target", "zenx-accessibility", "zenx-foreground-input"],
+      [
+        "zenx-bound-target",
+        "zenx-accessibility",
+        "zenx-foreground-input",
+        "zenx-ocr",
+      ],
     );
     assert.equal(compiled[0].source, sources.MAC_BOUND_TARGET_SOURCE);
     assert.equal(compiled[1].source, sources.MAC_ACCESSIBILITY_SOURCE);
     assert.equal(compiled[2].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal(compiled[3].source, sources.MAC_OCR_SOURCE);
     assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
     for (const { name } of compiled) {
       const mode = (await stat(path.join(destinationDirectory, name))).mode;
@@ -877,6 +893,7 @@ test("foreground smoke stages only its dedicated preload, without the app IPC br
     const output = path.join(directory, "build");
     const destination = path.join(directory, "smoke");
     await writeBuildFixture(output, "native-foreground");
+    await writeStorageWriterFixture(directory);
     await stagePackage({
       target: "smoke",
       outDirectory: output,
@@ -948,6 +965,7 @@ test("stages the real app without modifying reusable build output", async () => 
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
+          "fs-native-extensions": "1.4.5",
         },
       }),
       {
@@ -960,6 +978,7 @@ test("stages the real app without modifying reusable build output", async () => 
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
+          "fs-native-extensions": "1.4.5",
         },
       },
     );
@@ -994,9 +1013,14 @@ test("stages only the provider smoke through the same digest path", async () => 
     await assert.rejects(access(path.join(appDirectory, "out")), {
       code: "ENOENT",
     });
-    await assert.rejects(access(path.join(appDirectory, "node_modules")), {
-      code: "ENOENT",
-    });
+    await access(
+      path.join(appDirectory, "node_modules", "fs-native-extensions"),
+    );
+    for (const omitted of ["ws", "node-pty"])
+      await assert.rejects(
+        access(path.join(appDirectory, "node_modules", omitted)),
+        { code: "ENOENT" },
+      );
     assert.equal(
       packageManifest("smoke", {
         version: "0.1.0",
@@ -1618,7 +1642,17 @@ test("Shell packaging retains platform native resources including Windows ConPTY
   }
 });
 
+async function writeStorageWriterFixture(rootDirectory) {
+  const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
+  await stageStorageWriter(realRoot, rootDirectory);
+  await cp(
+    path.join(realRoot, "package-lock.json"),
+    path.join(rootDirectory, "package-lock.json"),
+  );
+}
+
 async function writePtyFixture(rootDirectory) {
+  await writeStorageWriterFixture(rootDirectory);
   for (const name of ["xterm", "addon-fit"]) {
     const directory = path.join(rootDirectory, "node_modules", "@xterm", name);
     await mkdir(directory, { recursive: true });

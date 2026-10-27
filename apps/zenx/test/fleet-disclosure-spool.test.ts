@@ -1,3 +1,12 @@
+import { DomainThreadJournal } from "../../../src/domain-journal.js";
+import { FileTraceStore } from "../../../src/trace.js";
+import { compileItemList } from "../../../src/item-list.js";
+import { ModelReferenceRegistry } from "../../../src/model-references.js";
+import {
+  invokeModelToolFacade,
+  modelPluginDocument,
+} from "../src/main/capabilities/model-tool-facade.js";
+import { fleetDeviceKey } from "../src/main/fleet.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -59,7 +68,7 @@ const device: NativeFleetDevice = {
 function server(
   runtime: AgentRuntime,
   model: ModelAdapter,
-  journal = new InMemoryThreadJournal(),
+  journal: import("../../../src/journal.js").ThreadJournal = new InMemoryThreadJournal(),
 ): ZenAppServer {
   return new ZenAppServer({
     runtime,
@@ -93,13 +102,20 @@ async function fullOutput(output: string): Promise<string> {
   return await readFile(file, "utf8");
 }
 
-test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooling and repeated provider IDs", async (t) => {
+test("actual compact Fleet discovery and native gateway catalog survive durable semantics and repeated provider IDs", async (t) => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "fleet-disclosure-spool-"),
   );
   const file = path.join(directory, "fleet.json");
   await writeFile(file, JSON.stringify({ version: 1, devices: [device] }));
   const spool = new ToolOutputSpool();
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  const journal = new DomainThreadJournal({
+    directory: path.join(directory, "threads"),
+    trace,
+    metadata: new InMemoryThreadMetadataStore(),
+  });
+  let rawCatalog: ToolExecutionResult | undefined;
   const targetTools = new ToolEnvironment({
     runtimes: [
       new ShellToolRuntime(),
@@ -173,16 +189,64 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
     toolOutputSpool: spool,
     send(event) {
       if (event.type !== "capability/invoke") return;
-      void adapter
-        .invoke({ ...event.invocation, signal: new AbortController().signal })
-        .then((result) =>
+      const call = {
+        ...event.invocation,
+        signal: new AbortController().signal,
+      };
+      void (async () => {
+        if (call.name === "zenx_fleet_devices")
+          return {
+            output: JSON.stringify({
+              devices: [
+                {
+                  id: device.id,
+                  key: fleetDeviceKey(device),
+                  label: device.label,
+                },
+              ],
+            }),
+            exitCode: 0,
+          };
+        if (call.name === "zenx_fleet_workspaces")
+          return {
+            output: JSON.stringify({
+              device: device.id,
+              result: {
+                source: "zenx.remote-host",
+                projects: [{ id: "workspace", name: "Workspace" }],
+              },
+            }),
+            exitCode: 0,
+          };
+        if (call.name === "zenx_fleet_threads_list")
+          return {
+            output: JSON.stringify({
+              device: device.id,
+              result: {
+                source: "zenx.remote-host",
+                threads: [{ id: target.id, name: "Worker" }],
+              },
+            }),
+            exitCode: 0,
+          };
+        rawCatalog = await adapter.invoke(call);
+        return rawCatalog;
+      })().then(
+        (result) =>
           composition.capabilityBundle.handleResult({
             type: "capability/result",
             invocationId: event.invocationId,
             generationToken: event.generationToken,
             ...result,
           }),
-        );
+        (error) =>
+          composition.capabilityBundle.handleResult({
+            type: "capability/result",
+            invocationId: event.invocationId,
+            generationToken: event.generationToken,
+            error: error.message,
+          }),
+      );
     },
   });
   t.after(async () => {
@@ -190,6 +254,7 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
     await gateway.close();
     await targetTools.close();
     await spool.close();
+    await journal.close();
     await rm(directory, { recursive: true, force: true });
   });
   const samples: ModelRequest[] = [];
@@ -207,15 +272,32 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
       else if (samples.length === 2)
         yield {
           type: "tool_call",
+          callId: "device",
+          name: "zenx_fleet_devices",
+          arguments: {},
+        };
+      else if (samples.length === 3)
+        yield {
+          type: "tool_call",
+          callId: "workspace",
+          name: "zenx_fleet_workspaces",
+          arguments: { device: "r1" },
+        };
+      else if (samples.length === 4)
+        yield {
+          type: "tool_call",
+          callId: "thread",
+          name: "zenx_fleet_threads_list",
+          arguments: { device: "r1", workspace: "r2" },
+        };
+      else if (samples.length === 5)
+        yield {
+          type: "tool_call",
           callId: "reused-provider-id",
           name: "zenx_fleet_tools",
-          arguments: {
-            device: device.id,
-            workspace: "workspace",
-            targetThreadId: target.id,
-          },
+          arguments: { device: "r1", workspace: "r2", thread: "r3" },
         };
-      else if ([3, 5].includes(samples.length))
+      else if ([6, 8].includes(samples.length))
         yield {
           type: "tool_call",
           callId: "reused-provider-id",
@@ -230,8 +312,10 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
       toolEnvironment: composition.toolEnvironment,
       toolDefinitionProjection: composition.toolDefinitionProjection,
       toolOutputSpool: spool,
+      trace,
     }),
     model,
+    journal,
   );
   const source = await app.startThread();
   await (
@@ -246,11 +330,19 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
   assert(results.every((item) => item.exitCode === 0));
   assert.deepEqual(
     calls.map((item) => item.callId),
-    ["read", "reused-provider-id", "reused-provider-id", "reused-provider-id"],
+    [
+      "read",
+      "device",
+      "workspace",
+      "thread",
+      "reused-provider-id",
+      "reused-provider-id",
+      "reused-provider-id",
+    ],
   );
-  assert.equal(new Set(calls.map((item) => item.id)).size, 4);
-  assert.notEqual(calls[1]?.modelResponseId, calls[2]?.modelResponseId);
-  assert.notEqual(calls[2]?.turnId, calls[3]?.turnId);
+  assert.equal(new Set(calls.map((item) => item.id)).size, 7);
+  assert.notEqual(calls[4]?.modelResponseId, calls[5]?.modelResponseId);
+  assert.notEqual(calls[5]?.turnId, calls[6]?.turnId);
   const read = results[0]!;
   assert.equal(read.contentType, PLUGIN_DISCLOSURE_CONTENT_TYPE);
   assert.deepEqual(read.structuredContent, {
@@ -258,32 +350,51 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
     operation: "read",
     pluginId: fleetManifest.id,
   });
-  const readText = await fullOutput(read.output);
-  assert(Buffer.byteLength(readText) > DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES);
+  const readText = read.output.startsWith("[tool output receipt]")
+    ? await fullOutput(read.output)
+    : read.output;
   assert.equal(
     JSON.parse(readText).plugin.mainDocument,
-    fleetManifest.mainDocument,
-  );
-  assert(
-    samples[1]!.messages.some(
-      (message) => message.role === "tool" && message.text === read.output,
-    ),
+    modelPluginDocument(fleetManifest.id, fleetManifest.mainDocument!),
   );
   assert(samples[1]!.tools.some((tool) => tool.name === "zenx_fleet_tools"));
-  const catalog = results[1]!;
+  const catalog = results[4]!;
   assert.equal(catalog.contentType, FLEET_CATALOG_CONTENT_TYPE);
-  const catalogText = await fullOutput(catalog.output);
-  assert(Buffer.byteLength(catalogText) > DEFAULT_TOOL_OUTPUT_PREVIEW_BYTES);
-  assert.deepEqual(catalog.structuredContent, JSON.parse(catalogText));
-  const proxies = samples[2]!.tools.filter((tool) =>
-    tool.name.startsWith("fleet_tool_"),
+  const catalogText = catalog.output.startsWith("[tool output receipt]")
+    ? await fullOutput(catalog.output)
+    : catalog.output;
+  assert.ok(!catalogText.includes(target.id));
+  assert.ok(!catalogText.includes(fleetDeviceKey(device)));
+  assert.deepEqual(catalog.structuredContent, rawCatalog!.structuredContent);
+  const proxies = samples[5]!.tools.filter((tool) =>
+    tool.name.startsWith("fleet_"),
   );
   assert(proxies.length > 0);
-  for (const sample of samples.slice(2))
+  for (const sample of samples.slice(5))
     assert.deepEqual(
-      sample.tools.filter((tool) => tool.name.startsWith("fleet_tool_")),
+      sample.tools.filter((tool) => tool.name.startsWith("fleet_")),
       proxies,
     );
+  assert.doesNotMatch(
+    JSON.stringify(
+      compileItemList(await journal.readItemList(source.id)).messages,
+    ),
+    new RegExp(target.id),
+  );
+  const observed = await trace.read(source.id);
+  const artifacts = await Promise.all(
+    observed.records
+      .flatMap((record) => record.artifacts)
+      .map(async (artifact) =>
+        Buffer.from(await trace.readArtifact(artifact.ref)).toString("utf8"),
+      ),
+  );
+  assert.ok(
+    artifacts.some(
+      (text) =>
+        text.includes(fleetDeviceKey(device)) && text.includes(target.id),
+    ),
+  );
   // Data metadata is never another source of provider-visible instruction text.
   assert(
     samples.every((sample) =>
@@ -304,7 +415,7 @@ test("actual Fleet HOWTO and gateway catalog survive AgentRuntime default spooli
         samples[1]!.tools,
         composition.toolEnvironment.remoteDefinitions,
       )
-      .filter((tool) => tool.name.startsWith("fleet_tool_")),
+      .filter((tool) => tool.name.startsWith("fleet_")),
     proxies,
   );
 });
@@ -401,6 +512,27 @@ for (const kind of ["fleet", "plugin"] as const) {
         throw new Error("composite entry required");
       },
       async executeComposite(invocation, nested) {
+        if (kind === "fleet") {
+          const refs = references.scope(invocation.threadId!);
+          Object.assign(childArguments, {
+            device: refs.bind("fleet", "device", {
+              id: device.id,
+              key: fleetDeviceKey(device),
+            }),
+            workspace: refs.bind("fleet", "workspace", {
+              id: "workspace",
+              device: device.id,
+              deviceKey: fleetDeviceKey(device),
+            }),
+            thread: refs.bind("threads", "thread", {
+              id: target.id,
+              device: device.id,
+              deviceKey: fleetDeviceKey(device),
+              workspace: "workspace",
+            }),
+          });
+          delete (childArguments as Record<string, unknown>).targetThreadId;
+        }
         const result = nested.invoke(childName, childArguments);
         await started.promise;
         assert(invocation.taskContext?.requestYield);
@@ -410,8 +542,14 @@ for (const kind of ["fleet", "plugin"] as const) {
         return { output: "discovery completed", exitCode: 0 };
       },
     };
+    const references = new ModelReferenceRegistry();
     const router = new FleetToolTargetRouter((invocation) =>
-      adapter.invoke(invocation),
+      invokeModelToolFacade({
+        invocation,
+        references,
+        epoch: "fixture",
+        dispatch: (resolved) => adapter.invoke(resolved),
+      }),
     );
     const tools = new ToolEnvironment({
       runtimes: [
@@ -582,7 +720,7 @@ for (const kind of ["fleet", "plugin"] as const) {
     const disclosed = (sample: ModelRequest) =>
       sample.tools.filter((tool) =>
         kind === "fleet"
-          ? tool.name.startsWith("fleet_tool_")
+          ? tool.name.startsWith("fleet_")
           : tool.name === "fixture_echo",
       );
     assert.deepEqual(
@@ -600,7 +738,7 @@ for (const kind of ["fleet", "plugin"] as const) {
     assert.deepEqual(
       rebuilt.filter((tool) =>
         kind === "fleet"
-          ? tool.name.startsWith("fleet_tool_")
+          ? tool.name.startsWith("fleet_")
           : tool.name === "fixture_echo",
       ),
       disclosed(samples[2]!),
@@ -636,8 +774,40 @@ function pair(
       arguments: {},
       ...overrides,
     },
-    { ...base, type: "tool_result", id: "result", exitCode: 0, output },
+    {
+      ...base,
+      type: "tool_result",
+      id: "result",
+      exitCode: 0,
+      output,
+      ...(callName === "zenx_fleet_tools" && output.startsWith("{")
+        ? {
+            contentType: FLEET_CATALOG_CONTENT_TYPE,
+            structuredContent: JSON.parse(output),
+            referenceBindings: catalogBindings(JSON.parse(output)),
+          }
+        : {}),
+    },
   ];
+}
+
+function catalogBindings(disclosure: any) {
+  return disclosure.catalog.tools.map((entry: any, index: number) => ({
+    ref: `r${index + 1}`,
+    ownerThreadId: disclosure.sourceThreadId,
+    namespace: "fleet",
+    kind: "tool",
+    epoch: "fixture",
+    value: {
+      device: disclosure.device,
+      deviceKey: disclosure.deviceKey,
+      workspace: disclosure.workspaceId,
+      targetThreadId: disclosure.targetThreadId,
+      processEpoch: disclosure.catalog.processEpoch,
+      toolGeneration: entry.generation,
+      name: entry.definition.name,
+    },
+  }));
 }
 
 const legacyDisclosure = JSON.stringify({
@@ -922,6 +1092,7 @@ test("disclosure data stays bounded and exact eligibility remains authoritative"
       ...result,
       contentType: FLEET_CATALOG_CONTENT_TYPE,
       structuredContent: value,
+      referenceBindings: catalogBindings(value),
     },
   ];
   const excluded = structuredClone(valid);

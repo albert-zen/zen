@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { FileTraceStore } from "../../../src/trace.js";
 import { ThreadSidebarStore } from "../src/main/thread-sidebar-store.js";
 import {
   emptySidebarState,
@@ -37,14 +38,18 @@ test("typed owner isolation, CAS, restart durability and defensive copies", asyn
     await rm(dir, { recursive: true, force: true });
   }
 });
-test("failed write does not notify or advance state; queue recovers", async () => {
+test("failed durable fact does not notify or advance state; queue recovers", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "sidebar-"));
   let fail = true;
   let events = 0;
   try {
-    const store = new ThreadSidebarStore(dir, async (file, data) => {
-      if (fail) throw Error("disk full");
-      await writeFile(file, data);
+    const trace = new FileTraceStore(path.join(dir, "trace"));
+    const store = new ThreadSidebarStore(dir, undefined, {
+      read: trace.read.bind(trace),
+      record: async (event) => {
+        if (fail) throw Error("disk full");
+        return trace.record(event);
+      },
     });
     store.onChanged(() => events++);
     await assert.rejects(
@@ -53,7 +58,7 @@ test("failed write does not notify or advance state; queue recovers", async () =
         expectedRevision: 0,
         patch: { open: true },
       }),
-      /disk full/,
+      /durability is unconfirmed/,
     );
     assert.equal(events, 0);
     assert.equal((await store.read("a")).revision, 0);

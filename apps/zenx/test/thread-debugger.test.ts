@@ -5,6 +5,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
+import { contextItemsFromLegacy } from "../../../src/item-list-legacy.js";
 import { ThreadDebugger } from "../src/renderer/src/ThreadDebugger.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
@@ -21,8 +22,11 @@ const base = runtimeThread(
   "interrupted",
   "thread",
 );
-const items = nativeRecoveryForThread(base).thread.items;
-const thread = { ...base, canonicalItems: items };
+const sourceItems = nativeRecoveryForThread(base).thread.items;
+const items = sourceItems.flatMap((item, n) =>
+  contextItemsFromLegacy(item, sourceItems.slice(0, n), n),
+);
+const thread = { ...base, canonicalItems: sourceItems, itemList: items };
 async function dom(
   run: (root: ReturnType<typeof createRoot>) => Promise<void>,
 ) {
@@ -42,7 +46,7 @@ async function dom(
     d.window.close();
   }
 }
-test("Items preserves canonical order and renders hidden metadata alongside shared Markdown without capture", async () =>
+test("Items preserves semantic order, role and provenance with shared Markdown without capture", async () =>
   dom(async (root) => {
     await act(async () =>
       root.render(
@@ -61,7 +65,7 @@ test("Items preserves canonical order and renders hidden metadata alongside shar
     );
     assert.equal(
       document.querySelector('[data-item-id="answer"] strong')?.textContent,
-      "agent_message",
+      "message",
     );
     assert.ok(
       document
@@ -118,14 +122,14 @@ test("normal views have no debug navigation row; controlled debug exits inline",
     assert.equal(document.querySelector(".thread-debugger"), null);
     assert.ok(document.querySelector(".thread-view"));
   }));
-test("tool results use inert shared fallback; opaque reasoning and hostile strings stay literal", async () =>
+test("tool results use inert text presentation; opaque reasoning and hostile strings stay literal", async () =>
   dom(async (root) => {
     const common = {
       threadId: thread.id,
       turnId: "turn",
       createdAt: "2026-10-14T00:00:00Z",
     };
-    const extra: typeof items = [
+    const extra: typeof sourceItems = [
       {
         ...common,
         id: "call",
@@ -157,12 +161,14 @@ test("tool results use inert shared fallback; opaque reasoning and hostile strin
       root.render(
         createElement(ThreadDebugger, {
           thread,
-          items: extra,
+          items: extra.flatMap((item, n) =>
+            contextItemsFromLegacy(item, extra.slice(0, n), n),
+          ),
         }),
       ),
     );
     assert.equal(document.querySelectorAll("script").length, 0);
-    assert.equal(document.querySelector(".tool-result-fallback"), null);
+    assert.equal(document.querySelector(".thread-debug-tool-output"), null);
     assert.equal(document.querySelector(".thread-debug-tool pre"), null);
     const disclosures = [
       ...document.querySelectorAll<HTMLDetailsElement>(
@@ -183,7 +189,7 @@ test("tool results use inert shared fallback; opaque reasoning and hostile strin
     );
     assert.ok(
       document
-        .querySelector(".tool-result-fallback")
+        .querySelector(".thread-debug-tool-output")
         ?.textContent?.includes("<script>"),
     );
     assert.ok(document.body.textContent?.includes("Public summary"));
@@ -224,9 +230,17 @@ test("debugger remounts for a different Thread without retaining Item JSON", asy
       d.open = true;
       d.dispatchEvent(new window.Event("toggle"));
     });
-    await render({ ...thread, id: "another", canonicalItems: [] }, false);
+    await render(
+      { ...thread, id: "another", canonicalItems: [], itemList: [] },
+      false,
+    );
     assert.equal(document.querySelector(".thread-debugger"), null);
-    await render({ ...thread, id: "another", canonicalItems: [] });
+    await render({
+      ...thread,
+      id: "another",
+      canonicalItems: [],
+      itemList: [],
+    });
     assert.equal(document.querySelectorAll("[data-item-id]").length, 0);
   }));
 
@@ -240,3 +254,51 @@ test("normal conversation fills its flex surface when history and Composer are a
     /\.thread-conversation-surface > \.thread-view\s*\{[^}]*flex:\s*1;/,
   );
 });
+
+test("timestamp presentation requires trusted source provenance and retains exact original", async () =>
+  dom(async (root) => {
+    const text = "[Message received at 2026-10-27T00:00:00Z]";
+    const message = {
+      id: "time",
+      threadId: thread.id,
+      createdAt: "2026-10-27T00:00:00Z",
+      kind: "message" as const,
+      role: "user" as const,
+      source: {
+        kind: "user_message" as const,
+        sequence: 1,
+        metadata: { bodyStart: 1 },
+      },
+      content: {
+        text: `${text}\nactual user text`,
+        parts: [
+          { type: "text" as const, text },
+          { type: "text" as const, text: "actual user text" },
+        ],
+      },
+    };
+    await act(async () =>
+      root.render(
+        createElement(ThreadDebugger, {
+          thread,
+          items: [
+            message,
+            {
+              ...message,
+              id: "lookalike",
+              source: { kind: "host_message", sequence: 2 },
+            },
+          ],
+        }),
+      ),
+    );
+    assert.equal(document.querySelectorAll(".thread-debug-time").length, 1);
+    assert.equal(
+      document.querySelector(".thread-debug-time pre")!.textContent,
+      text,
+    );
+    assert.match(
+      document.querySelector('[data-item-id="lookalike"]')!.textContent!,
+      /\[Message received at/u,
+    );
+  }));

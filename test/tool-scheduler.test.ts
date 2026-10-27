@@ -610,7 +610,11 @@ test("both presentation freezes direct and nested capabilities through scheduler
   const model: ModelAdapter = {
     provider: "frozen-scheduler-model",
     async *stream(request): AsyncIterable<ModelEvent> {
-      requests.push(structuredClone(request));
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      });
       sample += 1;
       if (sample === 1) {
         environment.registerBundle(hidden);

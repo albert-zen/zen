@@ -1,3 +1,5 @@
+import type { OpaqueReasoningReplayProvenance } from "./item.js";
+import type { ModelTransportObservation } from "./model/transport-types.js";
 import { projectRecoveryMedia, recoveryContext } from "./loop-recovery.js";
 import type { ImportedToolCallOrigin } from "./thread-import.js";
 import type { WorkspaceInstructionFile } from "./item.js";
@@ -35,12 +37,17 @@ export function copyModelMessageContextCategory(
   const category = contextCategories.get(source);
   if (category !== undefined) contextCategories.set(target, category);
 }
-function classifyContext<T extends ModelMessage>(
+export function classifyContext<T extends ModelMessage>(
   message: T,
   category: "instructions" | "pluginContext",
 ): T {
   contextCategories.set(message, category);
   return message;
+}
+
+export interface InstructionModelMessage {
+  role: "system" | "developer";
+  text: string;
 }
 
 export interface TextModelMessage {
@@ -101,9 +108,11 @@ export interface ReasoningModelMessage {
   summary?: string;
   contentVisibility: "public" | "opaque";
   providerItemId?: string;
+  opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
 }
 
 export type ModelMessage =
+  | InstructionModelMessage
   | TextModelMessage
   | TypedUserModelMessage
   | ToolCallModelMessage
@@ -115,14 +124,17 @@ export type ReasoningEffort = string;
 /** Passive identity for a single Runtime sample, never replay state. */
 export interface ModelRequestDebugContext {
   threadId: string;
-  purpose: "turn" | "compaction";
+  purpose: "turn" | "compaction" | "title" | "image-probe";
   turnId: string | null;
   sampleId: string;
   contextBoundaryItemId: string;
+  /** Frozen actual sample settings, not current UI configuration. */
+  configuration?: Record<string, unknown>;
+  selectedItemIds?: readonly string[];
   sampleAttempt: number;
 }
 
-/** Only the serialized body, never URL, transport headers or credentials. */
+/** Legacy body callback. Always-on wire observation uses onTransport. */
 export interface ModelRequestObservation {
   format: "chat-completions" | "responses" | "model-input";
   body: string;
@@ -135,6 +147,7 @@ export interface ModelRequestObservation {
 
 export interface ModelRequest {
   model: string;
+  maxOutputTokens?: number;
   /** null leaves Provider-specific reasoning controls out of the request. */
   reasoningEffort: ReasoningEffort | null;
   messages: ModelMessage[];
@@ -148,8 +161,13 @@ export interface ModelRequest {
   /** A sample replay must not restart HTTP admission retries. */
   isSamplingRetry?: true;
   debugContext?: ModelRequestDebugContext;
-  /** Opt-in Host observation; adapters must ignore observer failures. */
-  onRequest?: (observation: ModelRequestObservation) => void;
+  /** Compatibility observer; never a substitute for durable transport capture. */
+  onRequest?: (observation: ModelRequestObservation) => void | Promise<void>;
+  onTransport?: (
+    observation: ModelTransportObservation,
+  ) => void | Promise<void>;
+  /** Current revocation guard only; never re-resolve frozen sample parameters. */
+  assertDispatchAllowed?: () => void;
 }
 
 export interface ModelTool {
@@ -180,6 +198,7 @@ export type ModelEvent =
       summary?: string;
       contentVisibility: "public" | "opaque";
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
     }
   | {
       type: "tool_call";
@@ -375,7 +394,7 @@ function compileConversationMessages(
 }
 
 /** Resolve admission facts before compaction filters out their queue anchors. */
-function recordedUserTimestamps(
+export function recordedUserTimestamps(
   items: readonly CanonicalItem[],
 ): Map<string, string | null> {
   const admissions = new Map<string, string | null>();
@@ -927,7 +946,9 @@ export class FakeModel implements ModelAdapter {
   readonly provider = "fake";
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
-    const latest = request.messages.at(-1);
+    const latest = request.messages.findLast(
+      (message) => message.role !== "system" && message.role !== "developer",
+    );
     if (latest?.role === "tool") {
       yield* streamWords(`Command result:\n${latest.text}`, request.signal);
       return;
@@ -939,12 +960,20 @@ export class FakeModel implements ModelAdapter {
         (message): message is TextModelMessage | TypedUserModelMessage =>
           message.role === "user",
       );
-    const text =
+    let text =
       latestUser !== undefined &&
       "content" in latestUser &&
       latestUser.content !== undefined
         ? textFromUserInput(latestUser.content)
         : ((latestUser as TextModelMessage | undefined)?.text ?? "");
+    // This deterministic fake interprets a command part, not Host receipt metadata.
+    // Real adapters never remove or synthesize semantic text.
+    if (latestUser !== undefined && "content" in latestUser) {
+      const command = latestUser.content.find(
+        (part) => part.type === "text" && /^!(?:shell|tool) /u.test(part.text),
+      );
+      if (command?.type === "text") text = command.text;
+    }
     if (text.startsWith("!shell ")) {
       yield {
         type: "tool_call",
@@ -1016,7 +1045,7 @@ async function* streamWords(
   }
 }
 
-function filePermissionContext(
+export function filePermissionContext(
   sandbox: import("./item.js").SandboxMode,
 ): string {
   if (sandbox === "danger-full-access")

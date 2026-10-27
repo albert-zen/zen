@@ -25,6 +25,8 @@ export type Thread = Omit<
   parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
+  /** Persisted semantic model context; absent on older Hosts, never reconstructed wire. */
+  itemList?: readonly import("../../../../src/item-list.js").ContextItem[];
   turns: Turn[];
   queuedMessages?: Array<
     NonNullable<CodexThread["queuedMessages"]>[number] & {
@@ -42,7 +44,8 @@ export type Turn = Omit<CodexTurn, "items"> & {
   liveRecovery?: import("../../../../src/runtime.js").LiveTurnRecovery | null;
 };
 export type ThreadItem =
-  | CodexThreadItem
+  | Exclude<CodexThreadItem, { type: "commandExecution" }>
+  | CommandItem
   | {
       type: "hostMessage";
       id: string;
@@ -61,7 +64,10 @@ export type ThreadItem =
       content: Array<{ type: "text"; text: string; text_elements: [] }>;
       deliveryAfter?: string;
     };
-export type CommandItem = CodexCommandItem;
+export type CommandItem = Omit<CodexCommandItem, "status"> & {
+  /** Native-only honest recovery; CAS has no equivalent status. */
+  status: CodexCommandItem["status"] | "unknown";
+};
 
 export interface ClientInfo {
   name: string;
@@ -177,6 +183,10 @@ export interface ClientRequestParams {
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryParams;
+  "zen/trace/client-activation": {
+    threadId?: string;
+    observation: import("../../../../src/client-observation.js").ClientSendObservation;
+  };
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendParams;
   "zen/thread/queue/cancel": {
@@ -281,6 +291,7 @@ export interface ClientRequestResults {
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryResult;
+  "zen/trace/client-activation": { observed: boolean };
   "zen/turn/send": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/turn/send-unarchived": import("../../../../src/protocol/native/wire.js").NativeTurnSendResult;
   "zen/thread/queue/cancel": {

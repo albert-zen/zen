@@ -11,6 +11,14 @@ export interface SidebarRoom {
   assistant?: { threadId: string };
   members: readonly { threadId: string }[];
 }
+export class SidebarScopeChoiceRequired extends Error {
+  constructor(readonly choices: readonly (SidebarOwner & { name?: string })[]) {
+    super(
+      "Multiple dedicated Room bindings; choose an explicit authorized scope",
+    );
+    this.name = "SidebarScopeChoiceRequired";
+  }
+}
 export function resolveSidebarScope(
   threadId: string,
   requested: unknown,
@@ -22,9 +30,13 @@ export function resolveSidebarScope(
   const dedicated = memberRooms.filter(
     (room) => room.assistant?.threadId === threadId,
   );
-  const choices: SidebarOwner[] = [
-    { kind: "thread", id: threadId },
-    ...memberRooms.map((room) => ({ kind: "room" as const, id: room.id })),
+  const choices: (SidebarOwner & { name?: string })[] = [
+    { kind: "thread", id: threadId, name: "Private Thread" },
+    ...memberRooms.map((room) => ({
+      kind: "room" as const,
+      id: room.id,
+      name: room.name,
+    })),
   ];
   let effectiveScope: SidebarOwner;
   let defaultReason: string;
@@ -45,9 +57,7 @@ export function resolveSidebarScope(
     effectiveScope = { kind: "room", id: dedicated[0]!.id };
     defaultReason = "unique-dedicated-assistant-binding";
   } else if (dedicated.length > 1) {
-    throw new Error(
-      `Multiple dedicated Room bindings; specify scope explicitly: ${JSON.stringify(choices)}`,
-    );
+    throw new SidebarScopeChoiceRequired(choices);
   } else {
     effectiveScope = { kind: "thread", id: threadId };
     defaultReason = "private-thread-no-unique-dedicated-room-binding";

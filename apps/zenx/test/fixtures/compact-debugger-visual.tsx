@@ -10,11 +10,12 @@ import "../../src/renderer/src/room-conversations.css";
 import "../../src/renderer/src/companion-workspace.css";
 import React from "react";
 import { i18n } from "../../src/renderer/src/i18n.js";
-import type {
-  ModelRequestDebugCommand,
-  ModelRequestDebugResult,
-  ModelRequestDebugSummary,
-} from "../../../cli/src/model-request-debug-types.js";
+import {
+  syntheticTraceReader,
+  syntheticRequestBody,
+  syntheticSemanticItems,
+} from "./durable-trace-fixture-data.js";
+import type { ModelRequestDebugCommand } from "../../../cli/src/model-request-debug-types.js";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
 import type { Thread } from "../../src/protocol-client/index.js";
@@ -75,6 +76,7 @@ const options = {
           algorithmVersion: "zen.context-compaction.v2",
           tokenUsage: { inputTokens: 12000, outputTokens: 180 },
         });
+      recovery.thread.itemList = syntheticSemanticItems(recovery.thread.items);
       return recovery;
     }
     if (method === "thread/compact") {
@@ -399,161 +401,20 @@ Object.assign(zenx, {
     },
   },
 });
-// Every request, identity and payload below is synthetic. No Host or provider is contacted.
-let enabled = params.get("capture") !== "off";
-let generation = 1;
-const body = JSON.stringify(
-  {
-    model: "synthetic-model",
-    instructions:
-      "You are reviewing a local-only synthetic workspace. Preserve exact canonical history and report evidence clearly.",
-    messages: [
-      {
-        role: "system",
-        content:
-          "Long strings wrap naturally in Tree. Raw remains exactly the retained text. “多语言数据与完整的上下文。” ".repeat(
-            8,
-          ),
-      },
-      {
-        role: "user",
-        content:
-          "Inspect the workspace and describe the next steps. No real data is used in this fixture.",
-      },
-      {
-        role: "assistant",
-        content:
-          "I will check the context, compare the views and report any anomalies.",
-      },
-    ],
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "synthetic_workspace_inspect",
-          description: "Read synthetic fixture metadata",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-          },
-        },
-      },
-    ],
-    temperature: 0.2,
-  },
-  null,
-  2,
-);
-const rows: ModelRequestDebugSummary[] = Array.from(
-  { length: 18 },
-  (_, index) => ({
-    id: `synthetic-request-${index}`,
-    capturedAt: new Date(1791983100000 - index * 5000).toISOString(),
-    threadId: "thread-1",
-    purpose: index === 3 ? "compaction" : "turn",
-    turnId: index === 3 ? null : "synthetic-turn-1",
-    sampleId: `synthetic-sample-${index}`,
-    contextBoundaryItemId: "synthetic-context-boundary",
-    sampleAttempt: index === 4 ? 2 : 1,
-    transportAttempt: index === 5 ? 3 : 1,
-    provider: "Synthetic provider",
-    model: params.has("long")
-      ? "超长模型名称-LongMultilingualModelNameWithoutBreaks-2026-10-14"
-      : "synthetic-model",
-    format: index === 2 ? "model-input" : "chat-completions",
-    redacted: index === 1 || index === 2,
-    truncated: index === 2,
-    originalBytes: body.length + (index === 2 ? 9000 : 0),
-    retainedBytes: body.length,
-    sourceAttachmentCount: index === 1 ? 1 : 0,
-    sourceAttachments:
-      index === 1
-        ? [
-            {
-              sha256: "a".repeat(64),
-              mediaType: "image/png",
-              byteLength: 128,
-              width: 16,
-              height: 16,
-            },
-          ]
-        : [],
-  }),
-);
-let records = enabled ? rows : [];
+// Read-only durable contract with synthetic data; no real Host or provider is contacted.
 const commands: ModelRequestDebugCommand[] = [];
 Object.assign(zenx, {
   modelRequestDebug: {
-    request: async (
-      command: ModelRequestDebugCommand,
-    ): Promise<ModelRequestDebugResult> => {
-      commands.push(command);
-      if (command.action === "setEnabled") {
-        enabled = command.enabled;
-        generation++;
-        records = enabled ? rows : [];
-      }
-      if (command.action === "clear") {
-        generation++;
-        records = [];
-      }
-      const result: ModelRequestDebugResult = {
-        sessionId: "synthetic-session",
-        generation,
-        enabled,
-        retainedCount: records.length,
-        retainedBytes: body.length * records.length,
-        evictedCount: 3,
-        limits: {
-          maxRecords: 200,
-          maxBytes: 33554432,
-          maxRecordBytes: 1048576,
-          pageCharacters: 50000,
-        },
-      };
-      if (command.action === "list")
-        result.records = records.filter(
-          (record) =>
-            (!command.threadId || record.threadId === command.threadId) &&
-            (!command.query ||
-              JSON.stringify(record).includes(command.query) ||
-              body.includes(command.query)),
-        );
-      if (command.action === "read") {
-        const record = records.find((entry) => entry.id === command.id);
-        if (!record) throw new Error("Synthetic capture missing");
-        const view = command.view ?? "payload";
-        const data = JSON.parse(body);
-        const text = record.truncated
-          ? body.slice(0, 700)
-          : view === "payload"
-            ? body
-            : JSON.stringify(
-                view === "messages"
-                  ? data.messages
-                  : view === "tools"
-                    ? data.tools
-                    : {
-                        instructions: data.instructions,
-                        temperature: data.temperature,
-                      },
-                null,
-                2,
-              );
-        result.page = {
-          record,
-          view,
-          text,
-          offset: 0,
-          nextOffset: null,
-          totalCharacters: text.length,
-        };
-      }
-      return result;
-    },
+    request: syntheticTraceReader({
+      threadId: "thread-1",
+      empty: params.get("capture") === "off",
+      onCommand: (command) => commands.push(command),
+    }),
   },
 });
-Object.assign(window, { compactDebugFixture: { commands, body } });
+Object.assign(window, {
+  compactDebugFixture: { commands, body: syntheticRequestBody },
+});
 Object.defineProperty(window, "zenx", { value: zenx });
 localStorage.setItem("zenx-sidebar-mode", "inbox");
 await i18n.changeLanguage(params.get("lang") ?? "en");
@@ -661,7 +522,9 @@ function threadWithMessage(text: string): Thread {
 }
 
 function resumed(value: Thread) {
-  return nativeRecoveryForThread(value);
+  const recovery = nativeRecoveryForThread(value);
+  recovery.thread.itemList = syntheticSemanticItems(recovery.thread.items);
+  return recovery;
 }
 
 function model() {

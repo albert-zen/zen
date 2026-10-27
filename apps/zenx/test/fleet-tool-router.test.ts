@@ -1,3 +1,5 @@
+import { ModelReferenceRegistry } from "../../../src/model-references.js";
+import { invokeModelToolFacade } from "../src/main/capabilities/model-tool-facade.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -244,15 +246,11 @@ test("lost execute response returns exact observation address and never auto-rep
       };
     },
   });
-  let task = "";
-  await assert.rejects(
-    adapter.invoke(invocation("zenx_fleet_execute", executeArguments)),
-    (error: Error) => {
-      assert.match(error.message, /unconfirmed/);
-      task = error.message.split("task_id: ")[1]!;
-      return true;
-    },
+  const recovery = await adapter.invoke(
+    invocation("zenx_fleet_execute", executeArguments),
   );
+  assert.equal(JSON.parse(recovery.output).admission, "unknown");
+  const task = JSON.parse(recovery.output).task_id;
   await adapter.invoke(invocation("zenx_fleet_tool_status", { task_id: task }));
   await adapter.invoke(invocation("wait", { task_id: task }));
   assert.equal(executes, 1);
@@ -282,7 +280,30 @@ test("lazy target proxy uses exact remote-only schema and excludes ineligible en
       targetThreadId: "target-thread",
     }),
   );
-  const router = new FleetToolTargetRouter((value) => adapter.invoke(value));
+  const references = new ModelReferenceRegistry(),
+    refs = references.scope("source");
+  refs.bind(
+    "fleet",
+    "tool",
+    {
+      device: "remote",
+      deviceKey: fleetDeviceKey(device),
+      workspace: "workspace",
+      targetThreadId: "target-thread",
+      processEpoch: catalog.processEpoch,
+      toolGeneration: "target-generation",
+      name: "ordinary",
+    },
+    "fixture",
+  );
+  const router = new FleetToolTargetRouter((value) =>
+    invokeModelToolFacade({
+      invocation: value,
+      references,
+      epoch: "fixture",
+      dispatch: (resolved) => adapter.invoke(resolved),
+    }),
+  );
   const fleetTool = {
     name: "zenx_fleet_tools",
     description: "catalog",
@@ -307,6 +328,7 @@ test("lazy target proxy uses exact remote-only schema and excludes ineligible en
       turnId: "turn",
       callId: "catalog-call",
       ...catalogResult,
+      referenceBindings: refs.newBindings,
     },
   ];
   assert.equal(router.definitions([], [fleetTool], []).length, 1);
@@ -337,7 +359,8 @@ test("lazy target proxy uses exact remote-only schema and excludes ineligible en
   );
   const receipt = await caller.execute(prepared);
   assert.equal(caller.taskManager.activeTaskCount, 0);
-  assert.match(receipt.output, /target-host/);
+  assert.match(receipt.output, /target output/);
+  assert.doesNotMatch(receipt.output, /target-host/);
   assert.equal(
     JSON.parse(catalogResult.output).deviceKey,
     fleetDeviceKey(device),
@@ -375,9 +398,10 @@ test("Host child IPC marks target transport and creates no local facade executio
     await composition.close();
     await spool.close();
   });
-  const prepared = composition.toolEnvironment.prepare(
-    invocation("zenx_fleet_execute", executeArguments),
-  );
+  const prepared = composition.toolEnvironment.prepare({
+    ...invocation("zenx_fleet_execute", executeArguments),
+    trustedPluginUi: true,
+  });
   const value = await composition.toolEnvironment.execute(prepared);
   assert.equal(composition.toolEnvironment.taskManager.activeTaskCount, 0);
   assert.equal(
@@ -451,19 +475,13 @@ test("unknown execute recovery preserves the original output ceiling", async (t)
       );
     },
   });
-  let task = "";
-  await assert.rejects(
-    adapter.invoke(
-      invocation("zenx_fleet_execute", {
-        ...executeArguments,
-        max_output_bytes: 65536,
-      }),
-    ),
-    (error: Error) => {
-      task = error.message.split("task_id: ")[1]!;
-      return true;
-    },
+  const recovery = await adapter.invoke(
+    invocation("zenx_fleet_execute", {
+      ...executeArguments,
+      max_output_bytes: 65536,
+    }),
   );
+  const task = JSON.parse(recovery.output).task_id;
   const recovered = await adapter.invoke(invocation("wait", { task_id: task }));
   assert.equal(outputCeiling, 65536);
   assert.match(recovered.output, /x{20000}/);
@@ -486,20 +504,15 @@ test("program polling recovery reuses exact ACK observation bounds without execu
       return result(request.admissionId, "replayed", "terminal", "completed");
     },
   });
-  let task = "";
-  await assert.rejects(
-    adapter.invoke({
-      ...invocation("zenx_fleet_execute", {
-        ...executeArguments,
-        max_output_bytes: 65536,
-      }),
-      task: { waitForCompletion: true },
+  const recovery = await adapter.invoke({
+    ...invocation("zenx_fleet_execute", {
+      ...executeArguments,
+      max_output_bytes: 65536,
     }),
-    (error: Error) => {
-      task = error.message.split("task_id: ")[1]!;
-      return true;
-    },
-  );
+    task: { waitForCompletion: true },
+  });
+  assert.equal(JSON.parse(recovery.output).admission, "accepted");
+  const task = JSON.parse(recovery.output).task_id;
   const recovered = await adapter.invoke(
     invocation("wait", { task_id: task, yield_time_ms: 1 }),
   );

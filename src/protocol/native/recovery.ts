@@ -241,6 +241,7 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "thread_settings_updated":
     case "turn_started":
     case "item_completed":
+    case "context_item_completed":
     case "turn_completed":
       return true;
     case "turn_recovery":
@@ -267,6 +268,10 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "context_item_completed":
+      return (
+        snapshot.itemList?.some((item) => item.id === event.item.id) === true
+      );
     case "model_catalog_updated":
       return true;
     case "queue_failed":

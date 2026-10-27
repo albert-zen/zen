@@ -168,54 +168,77 @@ await withPreviewBrowser(
               }
             }
             if (!baseline && (width > 720 || sidebar === "closed")) {
-              await evaluate(
-                "window.__titlebarPreview.setSelected('custom:synthetic-0')",
-              );
-              await stable();
-              await click('[id="aux-tab-custom:synthetic-1"]');
-              assert.ok(
-                (await evaluate(measure)).tabs[1].active,
-                "pointer selects a partially visible trailing tab",
-              );
-              for (const [k, c, v, index] of [
-                ["End", "End", 35, 11],
-                ["Home", "Home", 36, 0],
-                ["ArrowRight", "ArrowRight", 39, 1],
-                ["ArrowLeft", "ArrowLeft", 37, 0],
-              ]) {
-                await key(k, c, v);
-                const m = await evaluate(measure);
-                valid(m);
-                assert.ok(m.tabs[index].active);
-                assert.equal(m.focused, `aux-tab-custom:synthetic-${index}`);
-              }
-              const r = (await evaluate(measure)).rail;
-              await send("Input.dispatchMouseEvent", {
-                type: "mouseWheel",
-                x: r.left + r.width / 2,
-                y: r.top + r.height / 2,
-                deltaX: 87,
-                deltaY: 0,
-              });
-              await delay(250);
-              await stable();
-              const manual = await evaluate(measure);
-              assert.ok(
-                manual.scrollLeft > 0,
-                "native horizontal wheel remains available",
-              );
-              assert.ok(
-                manual.tabs[0].active,
-                "manual scrolling does not select another tab",
-              );
-              item.manualScroll = manual.scrollLeft;
-              await evaluate(
-                "window.__titlebarPreview.setSelected('custom:synthetic-11')",
-              );
-              await stable();
-              valid(await evaluate(measure));
-              evidence.phase = `${name}: resize wider`;
-              await evaluate(`(() => {
+              item.interactionModes = [];
+              for (const expanded of [false, true]) {
+                if ((await evaluate(measure)).expanded !== String(expanded))
+                  await click(
+                    ".auxiliary-heading > .icon-button[aria-pressed]",
+                  );
+                const interaction = { expanded };
+                item.interactionModes.push(interaction);
+                await evaluate(
+                  "window.__titlebarPreview.setSelected('custom:synthetic-0')",
+                );
+                await stable();
+                await click('[id="aux-tab-custom:synthetic-1"]');
+                assert.ok(
+                  (await evaluate(measure)).tabs[1].active,
+                  "pointer selects a partially visible trailing tab",
+                );
+                for (const [k, c, v, index] of [
+                  ["End", "End", 35, 11],
+                  ["Home", "Home", 36, 0],
+                  ["ArrowRight", "ArrowRight", 39, 1],
+                  ["ArrowLeft", "ArrowLeft", 37, 0],
+                ]) {
+                  await key(k, c, v);
+                  const m = await evaluate(measure);
+                  valid(m);
+                  assert.ok(m.tabs[index].active);
+                  assert.equal(m.focused, `aux-tab-custom:synthetic-${index}`);
+                }
+                const r = (await evaluate(measure)).rail;
+                await send("Input.dispatchMouseEvent", {
+                  type: "mouseWheel",
+                  x: r.left + r.width / 2,
+                  y: r.top + r.height / 2,
+                  deltaX: 87,
+                  deltaY: 0,
+                });
+                await delay(250);
+                await stable();
+                const manual = await evaluate(measure);
+                assert.ok(
+                  manual.scrollLeft > 0,
+                  "native horizontal wheel remains available",
+                );
+                assert.ok(
+                  manual.tabs[0].active,
+                  "manual scrolling does not select another tab",
+                );
+                interaction.manualScroll = manual.scrollLeft;
+                await evaluate(
+                  "window.__titlebarPreview.setSelected('custom:synthetic-11')",
+                );
+                await stable();
+                valid(await evaluate(measure));
+                // Acceptance must also pass without the independent diagnostic
+                // observer/RAF sampler below, whose extra reads can affect timing.
+                evidence.phase = `${name}: resize without diagnostic sampling`;
+                for (const resizedWidth of [width + 80, width]) {
+                  await send("Emulation.setDeviceMetricsOverride", {
+                    width: resizedWidth,
+                    height: 820,
+                    deviceScaleFactor: 1,
+                    mobile: false,
+                  });
+                  await stable();
+                  valid(await evaluate(measure));
+                }
+                interaction.uninstrumentedResize =
+                  "wider and back passed without diagnostic sampling";
+                evidence.phase = `${name}: resize wider`;
+                await evaluate(`(() => {
                 window.__tabOverflowResize=[]; let recording=true,raf=0,dropped=0;
                 const record=phase=>{if(window.__tabOverflowResize.length<256)window.__tabOverflowResize.push({phase,...${measure}});else dropped++;};
                 const observer=new ResizeObserver(()=>record('observer'));
@@ -224,160 +247,169 @@ await withPreviewBrowser(
                 raf=requestAnimationFrame(tick);
                 window.__stopTabOverflowResize=()=>{recording=false;cancelAnimationFrame(raf);observer.disconnect();return {samples:window.__tabOverflowResize,dropped,scope:'Read-only independent ResizeObserver/RAF geometry sampling; extra reads may affect layout timing. Diagnostic results are not fix acceptance.'}};
               })()`);
-              await send("Emulation.setDeviceMetricsOverride", {
-                width: width + 80,
-                height: 820,
-                deviceScaleFactor: 1,
-                mobile: false,
-              });
-              await stable();
-              valid(await evaluate(measure));
-              evidence.phase = `${name}: resize back`;
-              await send("Emulation.setDeviceMetricsOverride", {
-                width,
-                height: 820,
-                deviceScaleFactor: 1,
-                mobile: false,
-              });
-              await stable();
-              valid(await evaluate(measure));
-              item.resizeSamples = await evaluate(
-                "window.__stopTabOverflowResize()",
-              );
-              evidence.phase = `${name}: owner reorder`;
-              await evaluate(
-                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+(11-i)))",
-              );
-              await stable();
-              valid(await evaluate(measure));
-              assert.ok(
-                (await evaluate(measure)).tabs[0].active,
-                "owner reorder preserves selection",
-              );
-              await evaluate(
-                "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-4')",
-              );
-              await stable();
-              for (let cycle = 0; cycle < 2; cycle++) {
-                await click(
-                  '.workspace-content-tab[data-active="true"] .workspace-tab-close',
+                await send("Emulation.setDeviceMetricsOverride", {
+                  width: width + 80,
+                  height: 820,
+                  deviceScaleFactor: 1,
+                  mobile: false,
+                });
+                await stable();
+                valid(await evaluate(measure));
+                evidence.phase = `${name}: resize back`;
+                await send("Emulation.setDeviceMetricsOverride", {
+                  width,
+                  height: 820,
+                  deviceScaleFactor: 1,
+                  mobile: false,
+                });
+                await stable();
+                valid(await evaluate(measure));
+                interaction.resizeSamples = await evaluate(
+                  "window.__stopTabOverflowResize()",
                 );
-                assert.equal((await evaluate(measure)).tabs.length, 11);
-                await click(".workspace-add-tab");
-                if (cycle === 0) {
-                  const probe = (which = "first") =>
-                    evaluate(`(() => {
+                evidence.phase = `${name}: owner reorder`;
+                await evaluate(
+                  "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+(11-i)))",
+                );
+                await stable();
+                valid(await evaluate(measure));
+                assert.ok(
+                  (await evaluate(measure)).tabs[0].active,
+                  "owner reorder preserves selection",
+                );
+                await evaluate(
+                  "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-4')",
+                );
+                await stable();
+                for (let cycle = 0; cycle < 2; cycle++) {
+                  await click(
+                    '.workspace-content-tab[data-active="true"] .workspace-tab-close',
+                  );
+                  assert.equal((await evaluate(measure)).tabs.length, 11);
+                  await click(".workspace-add-tab");
+                  if (cycle === 0) {
+                    const probe = (which = "first") =>
+                      evaluate(`(() => {
                     const first=document.querySelector(${JSON.stringify(which === "last" ? ".workspace-tab-types > button:last-of-type" : ".workspace-tab-types > button")}),r=first.getBoundingClientRect();
                     const x=r.left+r.width/2,y=r.top+r.height/2;
                     return {top:r.top,bottom:r.bottom,focused:document.activeElement===first,reachable:y>=0&&y<innerHeight&&first.contains(document.elementFromPoint(x,y)),scrolls:[...document.querySelectorAll('.auxiliary-panel *')].filter(e=>e.scrollHeight>e.clientHeight+1).map(e=>({className:e.className,top:e.scrollTop,height:e.clientHeight,scrollHeight:e.scrollHeight}))};
                   })()`);
-                  const before = await probe();
-                  const body = await evaluate(
-                    `(() => {const r=document.querySelector('.auxiliary-body').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+Math.min(200,r.height/2)}})()`,
-                  );
-                  await send("Input.dispatchMouseEvent", {
-                    type: "mouseWheel",
-                    ...body,
-                    deltaX: 0,
-                    deltaY: -2000,
-                  });
-                  await delay(250);
-                  const afterWheel = await probe();
-                  // Start at the already-focused plus control and use real Tab
-                  // navigation, not programmatic focus/scroll, to reach choice one.
-                  let afterKeyboard = afterWheel;
-                  for (let n = 0; n < 12 && !afterKeyboard.focused; n++) {
-                    await key("Tab", "Tab", 9);
-                    afterKeyboard = await probe();
-                  }
-                  item.firstChoiceProbe = { before, afterWheel, afterKeyboard };
-                  assert.equal(
-                    afterWheel.reachable,
-                    true,
-                    "first chooser choice is reachable by native scrolling",
-                  );
-                  assert.equal(
-                    afterKeyboard.focused,
-                    true,
-                    "native Tab reaches the first choice",
-                  );
-                  assert.equal(
-                    afterKeyboard.reachable,
-                    true,
-                    "first chooser keyboard focus is visible",
-                  );
-                  if (platform === "darwin" && width === 760)
-                    await screenshot(`${name}-chooser-first-after.png`);
-                  {
-                    await click(".workspace-tab-types > button");
-                    assert.ok(
-                      (await evaluate(measure)).tabs.some(
-                        (tab) => tab.active && tab.id.endsWith("synthetic-0"),
-                      ),
+                    const before = await probe();
+                    const body = await evaluate(
+                      `(() => {const r=document.querySelector('.auxiliary-body').getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+Math.min(200,r.height/2)}})()`,
                     );
-                    await click(".workspace-add-tab");
+                    await send("Input.dispatchMouseEvent", {
+                      type: "mouseWheel",
+                      ...body,
+                      deltaX: 0,
+                      deltaY: -2000,
+                    });
+                    await delay(250);
+                    const afterWheel = await probe();
+                    // Start at the already-focused plus control and use real Tab
+                    // navigation, not programmatic focus/scroll, to reach choice one.
+                    let afterKeyboard = afterWheel;
+                    for (let n = 0; n < 12 && !afterKeyboard.focused; n++) {
+                      await key("Tab", "Tab", 9);
+                      afterKeyboard = await probe();
+                    }
+                    interaction.firstChoiceProbe = {
+                      before,
+                      afterWheel,
+                      afterKeyboard,
+                    };
+                    assert.equal(
+                      afterWheel.reachable,
+                      true,
+                      "first chooser choice is reachable by native scrolling",
+                    );
+                    assert.equal(
+                      afterKeyboard.focused,
+                      true,
+                      "native Tab reaches the first choice",
+                    );
+                    assert.equal(
+                      afterKeyboard.reachable,
+                      true,
+                      "first chooser keyboard focus is visible",
+                    );
+                    if (platform === "darwin" && width === 760)
+                      await screenshot(
+                        `${name}-${expanded ? "expanded" : "normal"}-chooser-first-after.png`,
+                      );
+                    {
+                      await click(".workspace-tab-types > button");
+                      assert.ok(
+                        (await evaluate(measure)).tabs.some(
+                          (tab) => tab.active && tab.id.endsWith("synthetic-0"),
+                        ),
+                      );
+                      await click(".workspace-add-tab");
+                    }
+                    await send("Input.dispatchMouseEvent", {
+                      type: "mouseWheel",
+                      ...body,
+                      deltaX: 0,
+                      deltaY: 2000,
+                    });
+                    await delay(250);
+                    const lastAfterWheel = await probe("last");
+                    let lastAfterKeyboard = lastAfterWheel;
+                    for (let n = 0; n < 32 && !lastAfterKeyboard.focused; n++) {
+                      await key("Tab", "Tab", 9);
+                      lastAfterKeyboard = await probe("last");
+                    }
+                    interaction.lastChoiceProbe = {
+                      afterWheel: lastAfterWheel,
+                      afterKeyboard: lastAfterKeyboard,
+                    };
+                    assert.equal(
+                      lastAfterWheel.reachable,
+                      true,
+                      "last chooser choice is reachable by native scrolling",
+                    );
+                    assert.equal(
+                      lastAfterKeyboard.focused,
+                      true,
+                      "native Tab reaches the last choice",
+                    );
+                    assert.equal(
+                      lastAfterKeyboard.reachable,
+                      true,
+                      "last chooser keyboard focus is visible",
+                    );
+                    if (platform === "darwin" && width === 760)
+                      await screenshot(
+                        `${name}-${expanded ? "expanded" : "normal"}-chooser-last-after.png`,
+                      );
+                    await send("Input.dispatchMouseEvent", {
+                      type: "mouseWheel",
+                      ...body,
+                      deltaX: 0,
+                      deltaY: -2000,
+                    });
+                    await delay(250);
                   }
-                  await send("Input.dispatchMouseEvent", {
-                    type: "mouseWheel",
-                    ...body,
-                    deltaX: 0,
-                    deltaY: 2000,
-                  });
-                  await delay(250);
-                  const lastAfterWheel = await probe("last");
-                  let lastAfterKeyboard = lastAfterWheel;
-                  for (let n = 0; n < 32 && !lastAfterKeyboard.focused; n++) {
-                    await key("Tab", "Tab", 9);
-                    lastAfterKeyboard = await probe("last");
-                  }
-                  item.lastChoiceProbe = {
-                    afterWheel: lastAfterWheel,
-                    afterKeyboard: lastAfterKeyboard,
-                  };
-                  assert.equal(
-                    lastAfterWheel.reachable,
-                    true,
-                    "last chooser choice is reachable by native scrolling",
-                  );
-                  assert.equal(
-                    lastAfterKeyboard.focused,
-                    true,
-                    "native Tab reaches the last choice",
-                  );
-                  assert.equal(
-                    lastAfterKeyboard.reachable,
-                    true,
-                    "last chooser keyboard focus is visible",
-                  );
-                  if (platform === "darwin" && width === 760)
-                    await screenshot(`${name}-chooser-last-after.png`);
-                  await send("Input.dispatchMouseEvent", {
-                    type: "mouseWheel",
-                    ...body,
-                    deltaX: 0,
-                    deltaY: -2000,
-                  });
-                  await delay(250);
+                  // Reopen the closed middle type after independently checking
+                  // both menu ends through real scrolling and keyboard navigation.
+                  await click(".workspace-tab-types > button:nth-of-type(5)");
+                  const m = await evaluate(measure);
+                  valid(m);
+                  assert.equal(m.tabs.length, 12);
+                  assert.equal(m.focused, "aux-tab-custom:synthetic-4");
                 }
-                // Reopen the closed middle type after independently checking
-                // both menu ends through real scrolling and keyboard navigation.
-                await click(".workspace-tab-types > button:nth-of-type(5)");
-                const m = await evaluate(measure);
-                valid(m);
-                assert.equal(m.tabs.length, 12);
-                assert.equal(m.focused, "aux-tab-custom:synthetic-4");
+                await click(".workspace-add-tab");
+                await key("Escape", "Escape", 27);
+                assert.equal(
+                  await evaluate(
+                    "document.querySelector('.auxiliary-panel').dataset.open",
+                  ),
+                  "true",
+                );
+                valid(await evaluate(measure));
+                interaction.interactions =
+                  "pointer, keyboard, manual horizontal wheel, resize, owner reorder, close/reopen twice, chooser Escape";
               }
-              await click(".workspace-add-tab");
-              await key("Escape", "Escape", 27);
-              assert.equal(
-                await evaluate(
-                  "document.querySelector('.auxiliary-panel').dataset.open",
-                ),
-                "true",
-              );
-              valid(await evaluate(measure));
-              item.interactions =
-                "pointer, keyboard, manual horizontal wheel, resize, owner reorder, close/reopen twice, chooser Escape";
             }
             item.status = baseline ? "observed" : "passed";
           }

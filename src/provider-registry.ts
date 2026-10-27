@@ -35,6 +35,8 @@ export interface ResolvedProviderSelection {
 
 export interface ProviderSelectionLease extends ResolvedProviderSelection {
   readonly revision: number;
+  /** Live membership only; ordinary edits do not change a frozen lease. */
+  assertDispatchAllowed(): void;
   release(): void;
 }
 
@@ -217,6 +219,8 @@ export class ProviderRegistry {
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
+  readonly #memberships = new Map<string, { revoked: boolean }>();
+
   constructor(
     profiles: readonly ProviderProfile[],
     options: ProviderRegistryOptions = {},
@@ -228,6 +232,8 @@ export class ProviderRegistry {
     this.#states.get(initial)!.status = "current";
     this.#prepared.delete(initial);
     this.#current = initial;
+    for (const profile of profiles)
+      this.#memberships.set(profile.providerProfileId, { revoked: false });
   }
 
   currentSnapshot(): ProviderRegistrySnapshot {
@@ -286,6 +292,17 @@ export class ProviderRegistry {
     state.status = "current";
     this.#prepared.delete(snapshot);
     this.#current = snapshot;
+    const present = new Set(
+      snapshot.listModels().map((entry) => entry.providerProfileId),
+    );
+    for (const [id, member] of this.#memberships)
+      if (!present.has(id)) {
+        member.revoked = true;
+        this.#memberships.delete(id);
+      }
+    for (const id of present)
+      if (!this.#memberships.has(id))
+        this.#memberships.set(id, { revoked: false });
     previousState.status = "retired";
     this.#releaseSnapshotResources(previousState);
   }
@@ -302,6 +319,7 @@ export class ProviderRegistry {
 
   close(): Promise<void> {
     this.#closed = true;
+    for (const member of this.#memberships.values()) member.revoked = true;
     this.#closePromise ??= (async () => {
       const states: SnapshotState[] = [];
       const currentState = this.#requireState(this.#current);
@@ -358,9 +376,26 @@ export class ProviderRegistry {
     state.activeLeases += 1;
     resource.references += 1;
     let released = false;
+    const membership = this.#memberships.get(
+      resolved.selection.providerProfileId,
+    );
     return Object.freeze({
       revision: snapshot.revision,
       ...resolved,
+      assertDispatchAllowed: () => {
+        if (
+          this.#closed ||
+          released ||
+          membership === undefined ||
+          membership.revoked
+        )
+          throw Object.assign(
+            new Error(
+              "Provider membership was revoked; frozen request cannot dispatch",
+            ),
+            { modelRecoveryBlocked: true, retryable: false },
+          );
+      },
       release: () => {
         if (released) return;
         released = true;

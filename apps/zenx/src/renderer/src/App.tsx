@@ -1,3 +1,4 @@
+import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
 import { useThreadSidebar } from "./use-thread-sidebar.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
@@ -1966,6 +1967,9 @@ function AppContent() {
           ? {}
           : { mode: submission.intent }),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientObservation === undefined
+          ? {}
+          : { clientObservation: submission.clientObservation }),
         ...(submission.intent !== "replace" ||
         submission.expectedTurnId === null
           ? {}
@@ -1994,6 +1998,9 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientObservation === undefined
+          ? {}
+          : { clientObservation: submission.clientObservation }),
       });
     } else if (submission.intent === "batch-next") {
       if (archivingThreadIdsRef.current.has(threadId))
@@ -2011,14 +2018,29 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientObservation === undefined
+          ? {}
+          : { clientObservation: submission.clientObservation }),
       });
     } else if (submission.intent === "queue") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
-      await window.zenx.protocol.request("turn/queue", {
+      await window.zenx.protocol.request("zen/turn/send", {
         threadId,
-        input,
+        mode: "queue",
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientObservation === undefined
+          ? {}
+          : { clientObservation: submission.clientObservation }),
       });
     } else {
       if (submission.expectedTurnId === null)
@@ -2027,11 +2049,23 @@ function AppContent() {
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
-      await window.zenx.protocol.request("turn/replace", {
+      await window.zenx.protocol.request("zen/turn/send", {
         threadId,
+        mode: "replace",
         expectedTurnId: submission.expectedTurnId,
-        input,
+        input: input.map((part) =>
+          part.type === "attachment"
+            ? { type: "image" as const, attachment: part.attachment }
+            : part.type === "text"
+              ? part
+              : (() => {
+                  throw new Error(i18n.t("shell:unsupportedBatchInputPart"));
+                })(),
+        ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientObservation === undefined
+          ? {}
+          : { clientObservation: submission.clientObservation }),
       });
     }
   };
@@ -2039,6 +2073,7 @@ function AppContent() {
   const submitNewThreadDraft = async (
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ) => {
     if (intent !== "start" || expectedTurnId !== null) return;
     const current = newThreadDraftRef.current;
@@ -2102,6 +2137,7 @@ function AppContent() {
       intent,
       expectedTurnId,
       () => crypto.randomUUID(),
+      clientObservation,
     );
     if (startedComposer === current.composer) return;
     const startedDraft = { ...current, composer: startedComposer };
@@ -2248,6 +2284,7 @@ function AppContent() {
   const submitComposer = async (
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ) => {
     if (
       threadDetail === null ||
@@ -2323,6 +2360,7 @@ function AppContent() {
       intent,
       expectedTurnId,
       () => crypto.randomUUID(),
+      clientObservation,
     );
     if (started === current) return;
     composerStatesRef.current = {
@@ -4153,10 +4191,12 @@ function AgentSurface({
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ): Promise<void>;
   onSubmitNewThread(
     intent: ComposerIntent,
     expectedTurnId: string | null,
+    clientObservation?: ClientSendObservation,
   ): Promise<void>;
   selectedSettings: SelectedThreadSettings | null;
   selectedSummary: NativeThreadSummary | null;
