@@ -21,6 +21,7 @@ import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const projectlessScene = params.get("scene") === "projectless";
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
 // Slow the same production transition for inspectable intermediate-frame QA.
@@ -169,6 +170,9 @@ const zenx = {
         ? []
         : [
             summary(),
+            ...(projectlessScene
+              ? [summary("projectless-existing", "Trip planning")]
+              : []),
             ...(params.has("conversationTabs") ? sideConversations : []),
           ],
   },
@@ -224,7 +228,10 @@ const zenx = {
         },
       ],
       unavailableThreadIds: [],
-      lastUsedWorkspace: "/work/zen",
+      ...(projectlessScene
+        ? { projectlessThreadIds: ["projectless-existing"] }
+        : {}),
+      lastUsedWorkspace: projectlessScene ? null : "/work/zen",
     }),
   },
   settings: {
@@ -595,7 +602,10 @@ function summary(
     currentMetadata: {
       model: "fake",
       provider: "fake",
-      cwd: "/work/zen",
+      cwd:
+        threadId === "projectless-existing"
+          ? "/synthetic/Documents/ZenX/2026-10-27/trip-planning"
+          : "/work/zen",
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },

@@ -529,3 +529,28 @@ test("per-Thread Sidebar visibility is independent for siblings, nested children
   assert.equal(nested.parentThreadId, "child");
   assert.equal(threads.length, 5);
 });
+
+test("projectless Threads share one visible group while their real cwd stays in native metadata", () => {
+  const a = summary("a", "idle", 10),
+    b = summary("b", "active", 20);
+  const groups = deriveProjectGroups([a, b], {
+    projects: [],
+    projectlessThreadIds: ["a", "b"],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: null,
+  });
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.label, "No project");
+  assert.equal(groups[0]!.workspace, null);
+  assert.equal(groups[0]!.configured, false);
+  assert.deepEqual(
+    groups[0]!.threads.map((t) => t.threadId),
+    ["b", "a"],
+  );
+  assert.deepEqual(
+    groups[0]!.threads.map((t) =>
+      t.status === "systemError" ? null : t.currentMetadata.cwd,
+    ),
+    [b.currentMetadata.cwd, a.currentMetadata.cwd],
+  );
+});

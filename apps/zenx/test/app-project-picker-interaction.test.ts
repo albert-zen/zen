@@ -1339,7 +1339,7 @@ test("selecting an existing Thread discards stale recovery", async () => {
   }
 });
 
-test("New thread without a last-used Project opens an unselected draft menu", async () => {
+test("New thread without a last-used Project visibly chooses No project and can open the menu", async () => {
   let starts = 0;
   const harness = await mountApp(
     {
@@ -1370,6 +1370,7 @@ test("New thread without a last-used Project opens an unselected draft menu", as
       document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
     );
     await waitFor(() => document.getElementById("thread-composer"));
+    await act(async () => projectSwitcher()?.click());
     const menu = await waitFor(() =>
       document.querySelector<HTMLElement>(
         '[role="menu"][aria-label="Choose a Project"]',
@@ -1388,7 +1389,7 @@ test("New thread without a last-used Project opens an unselected draft menu", as
     assert.match(menu.textContent ?? "", /zen/u);
     assert.match(
       document.body.textContent ?? "",
-      /What should we build in Choose a Project/u,
+      /What should we build in No project/u,
     );
     assert.ok(
       document.querySelector('[role="dialog"][aria-label="Switch Project"]'),
@@ -1966,8 +1967,11 @@ test("zero-Project New thread adds a Project but still does not create a Thread"
     const newThread = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(".new-thread-action"),
     );
-    assert.match(newThread.textContent ?? "", /Add project first/u);
+    assert.match(newThread.textContent ?? "", /No project/u);
     await act(async () => newThread.click());
+    await waitFor(() => document.getElementById("thread-composer"));
+    await act(async () => projectSwitcher()?.click());
+    await act(async () => exactButton("Add project")?.click());
     await waitFor(() => document.querySelector('[role="dialog"]'));
     assert.match(
       document.querySelector('[role="dialog"]')?.textContent ?? "",
@@ -2096,6 +2100,9 @@ test("zero-Project picker cancel fences delayed and duplicate folder selection",
     await act(async () =>
       document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
     );
+    await waitFor(() => document.getElementById("thread-composer"));
+    await act(async () => projectSwitcher()?.click());
+    await act(async () => exactButton("Add project")?.click());
     await waitFor(() => document.querySelector(".directory-picker-dialog"));
     const addFolder = await waitFor(() => exactButton("Add folder"));
     await invokeButtonClick(addFolder, 2);
@@ -4399,6 +4406,69 @@ test("welcome drafts retain unsent input per Project, restore across navigation,
   }
 });
 
+test("No project creates its independent directory only on a valid first Send and starts the ordinary Turn", async () => {
+  const allocations: Array<{ name?: string; selection?: unknown }> = [];
+  const projectMutations: string[] = [];
+  const sent: unknown[] = [];
+  const result = started(
+    liveThread(),
+    "/synthetic/Documents/ZenX/2026-10-27/new-chat",
+  );
+  const harness = await mountApp(
+    { projects: [], unavailableThreadIds: [], lastUsedWorkspace: null },
+    {
+      addWorkspace: async (cwd) => {
+        projectMutations.push(cwd);
+      },
+      markWorkspaceUsed: async (cwd) => {
+        projectMutations.push(cwd);
+        return publicSettings([]);
+      },
+      startProjectlessThread: async (name, selection) => {
+        allocations.push({ name, selection });
+        return result;
+      },
+      request: async (method, params) => {
+        if (method === "zen/turn/send") {
+          sent.push(params);
+          return { turn: { id: "new-turn", status: "inProgress", items: [] } };
+        }
+        return undefined;
+      },
+    },
+  );
+  try {
+    await waitFor(() => document.getElementById("thread-composer"));
+    assert.match(projectSwitcher()?.textContent ?? "", /No project/u);
+    assert.equal(allocations.length, 0);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".new-thread-action")?.click(),
+    );
+    assert.equal(allocations.length, 0);
+    const input =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(input, "写一个中文报告");
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    const send = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Send"]'),
+    );
+    await act(async () => send.click());
+    await waitFor(() => sent.length === 1);
+    assert.equal(allocations.length, 1);
+    assert.equal(allocations[0]!.name, "写一个中文报告");
+    assert.deepEqual(projectMutations, []);
+    assert.equal(document.querySelector(".new-thread-draft-surface"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
@@ -4424,6 +4494,10 @@ async function mountApp(
       workspace: string,
     ): Promise<ReturnType<typeof publicSettings>>;
     projectsGet?(): Promise<ZenXProjectProjectionSnapshot>;
+    startProjectlessThread?(
+      directoryName?: string,
+      selection?: { model?: string; effort?: string },
+    ): Promise<unknown>;
     startProjectThread?(
       workspace: string,
       selection?: { model?: string; effort?: string },
@@ -4567,6 +4641,26 @@ async function mountApp(
           : await options.modelUsage(),
     },
     projects: {
+      startProjectlessThread: async (
+        directoryName?: string,
+        selection?: { model?: string; effort?: string },
+      ) => {
+        if (!options.startProjectlessThread)
+          throw new Error("Unexpected projectless Thread start");
+        const result = await options.startProjectlessThread(
+          directoryName,
+          selection,
+        );
+        if (
+          typeof result === "object" &&
+          result !== null &&
+          "thread" in result
+        ) {
+          const thread = result.thread as Thread;
+          createdThreads.set(thread.id, thread);
+        }
+        return result;
+      },
       get: async () =>
         options.projectsGet === undefined
           ? projects

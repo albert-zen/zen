@@ -275,10 +275,16 @@ const manifest: ZenXPluginManifestV2 = {
     {
       name: "zenx_threads_create",
       description:
-        "Create an idle Thread through App Server thread/start with an explicit cwd and optional runtime settings.",
+        "Create an idle Thread in a configured Project/cwd, or choose projectless:true to allocate a persistent independent folder on this Host. Does not send a message; use threads_send to start work.",
       inputSchema: {
         type: "object",
         properties: {
+          projectless: { type: "boolean", enum: [true] },
+          directoryName: {
+            type: "string",
+            description:
+              "Optional folder name hint for projectless:true; never a path. The Host allocates a unique persistent directory.",
+          },
           cwd: { type: "string" },
           project: {
             type: "string",
@@ -290,7 +296,11 @@ const manifest: ZenXPluginManifestV2 = {
           approvalPolicy: { type: "string", enum: ["on-request", "never"] },
           sandbox: { type: "string", enum: ["danger-full-access"] },
         },
-        anyOf: [{ required: ["cwd"] }, { required: ["project"] }],
+        oneOf: [
+          { required: ["cwd"] },
+          { required: ["project"] },
+          { required: ["projectless"] },
+        ],
         additionalProperties: false,
       },
       permissions: [
@@ -613,6 +623,9 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest = manifest;
   readonly #appServer: AppServerRequestPort;
   readonly #fleet: FleetRouter | undefined;
+  readonly #createProjectlessWorkspace?: (
+    directoryName?: string,
+  ) => Promise<string>;
   readonly #workflows: WorkflowConfigurationPort | undefined;
   readonly #sidebar: ThreadSidebarPort | undefined;
   readonly #browserTargetAdmission?: (
@@ -628,6 +641,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
 
   constructor(options: {
     appServer: AppServerRequestPort;
+    createProjectlessWorkspace?: (directoryName?: string) => Promise<string>;
     workflows?: WorkflowConfigurationPort;
     sidebar?: ThreadSidebarPort;
     browserTargetAdmission?: (
@@ -639,6 +653,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     sendPreference?: () => Promise<"queue" | "soft" | "hard">;
   }) {
     this.#appServer = options.appServer;
+    this.#createProjectlessWorkspace = options.createProjectlessWorkspace;
     this.#fleet = options.fleet;
     this.#workflows = options.workflows;
     this.#sidebar = options.sidebar;
@@ -911,7 +926,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       case "zenx_threads_list":
         return await this.#listThreads(args);
       case "zenx_threads_create":
-        return await this.#createThread(args);
+        return await this.#createThread(args, invocation.signal);
       case "zenx_threads_read":
         return await this.#readThread(args, requireActive);
       case "zenx_self_control_threads_wait": {
@@ -1147,45 +1162,33 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     };
   }
 
-  async #createThread(args: Record<string, unknown>): Promise<unknown> {
+  async #createThread(
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
     assertOnly(args, [
       "cwd",
       "project",
+      "projectless",
+      "directoryName",
       "model",
       "effort",
       "approvalPolicy",
       "sandbox",
     ]);
-    if (args.cwd !== undefined && args.project !== undefined)
-      throw new Error("Specify project or cwd, not both");
-    let requestedCwd: string;
-    if (args.project !== undefined) {
-      const project = requiredString(args.project, "project");
-      const snapshot = await this.#appServer.projectProjection.project([]);
-      const pathMatch =
-        await this.#appServer.projectProjection.configuredWorkspace(project);
-      const matches =
-        pathMatch === null
-          ? snapshot.projects.filter(
-              (entry) =>
-                (entry.name ?? path.basename(entry.workspace)) === project,
-            )
-          : snapshot.projects.filter((entry) => entry.workspace === pathMatch);
-      if (matches.length !== 1)
-        return {
-          source: SOURCE,
-          status: matches.length === 0 ? "not_found" : "ambiguous",
-          candidates: matches.map((entry) => ({
-            name: entry.name ?? path.basename(entry.workspace),
-            cwd: entry.workspace,
-          })),
-        };
-      requestedCwd = matches[0]!.workspace;
-    } else requestedCwd = path.resolve(requiredString(args.cwd, "cwd"));
-    const cwd =
-      await this.#appServer.projectProjection.configuredWorkspace(requestedCwd);
-    if (cwd === null)
-      throw new Error("Configure the workspace as a ZenX Project first");
+    if (
+      [args.cwd, args.project, args.projectless].filter(
+        (value) => value !== undefined,
+      ).length !== 1
+    )
+      throw new Error(
+        "Specify exactly one of project, cwd or projectless:true",
+      );
+    if (args.projectless !== undefined && args.projectless !== true)
+      throw new Error("projectless must be true");
+    if (args.directoryName !== undefined && args.projectless !== true)
+      throw new Error("directoryName requires projectless:true");
+    const directoryName = optionalString(args.directoryName, "directoryName");
     const model = optionalString(args.model, "model");
     const effort = optionalString(args.effort, "effort");
     const approvalPolicy = optionalEnum(args.approvalPolicy, "approvalPolicy", [
@@ -1195,6 +1198,49 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
     const sandbox = optionalEnum(args.sandbox, "sandbox", [
       "danger-full-access",
     ] as const);
+    let cwd: string;
+    if (args.projectless === true) {
+      if (!this.#createProjectlessWorkspace)
+        throw new Error(
+          "Projectless workspace allocation is unavailable on this Host",
+        );
+      cwd = await this.#createProjectlessWorkspace(directoryName);
+    } else {
+      let requestedCwd: string;
+      if (args.project !== undefined) {
+        const project = requiredString(args.project, "project");
+        const snapshot = await this.#appServer.projectProjection.project([]);
+        const pathMatch =
+          await this.#appServer.projectProjection.configuredWorkspace(project);
+        const matches =
+          pathMatch === null
+            ? snapshot.projects.filter(
+                (entry) =>
+                  (entry.name ?? path.basename(entry.workspace)) === project,
+              )
+            : snapshot.projects.filter(
+                (entry) => entry.workspace === pathMatch,
+              );
+        if (matches.length !== 1)
+          return {
+            source: SOURCE,
+            status: matches.length === 0 ? "not_found" : "ambiguous",
+            candidates: matches.map((entry) => ({
+              name: entry.name ?? path.basename(entry.workspace),
+              cwd: entry.workspace,
+            })),
+          };
+        requestedCwd = matches[0]!.workspace;
+      } else requestedCwd = path.resolve(requiredString(args.cwd, "cwd"));
+      const configured =
+        await this.#appServer.projectProjection.configuredWorkspace(
+          requestedCwd,
+        );
+      if (configured === null)
+        throw new Error("Configure the workspace as a ZenX Project first");
+      cwd = configured;
+    }
+    signal.throwIfAborted();
     const result = await this.#appServer.request("thread/start", {
       cwd,
       ...(model === undefined ? {} : { model }),
@@ -1704,7 +1750,6 @@ async function waitForAbort<T>(
   operation: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  signal.throwIfAborted();
   return await new Promise<T>((resolve, reject) => {
     const aborted = (): void => {
       cleanup();
@@ -1714,7 +1759,8 @@ async function waitForAbort<T>(
       );
     };
     const cleanup = (): void => signal.removeEventListener("abort", aborted);
-    signal.addEventListener("abort", aborted, { once: true });
+    // Observe the already-started operation even if allocation aborted before
+    // this wrapper was entered; late rejection must never escape as unhandled.
     void operation.then(
       (value) => {
         cleanup();
@@ -1725,6 +1771,8 @@ async function waitForAbort<T>(
         reject(error);
       },
     );
+    if (signal.aborted) aborted();
+    else signal.addEventListener("abort", aborted, { once: true });
   });
 }
 

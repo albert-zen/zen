@@ -154,10 +154,18 @@
     },
     {
       "name": "zenx_threads_create",
-      "description": "Create an idle Thread through App Server thread/start with an explicit cwd and optional runtime settings.",
+      "description": "Create an idle Thread in a configured Project/cwd, or choose projectless:true to allocate a persistent independent folder on this Host. Does not send a message; use threads_send to start work.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "projectless": {
+            "type": "boolean",
+            "enum": [true]
+          },
+          "directoryName": {
+            "type": "string",
+            "description": "Optional folder name hint for projectless:true; never a path. The Host allocates a unique persistent directory."
+          },
           "cwd": {
             "type": "string"
           },
@@ -184,15 +192,18 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "anyOf": [
+        "additionalProperties": false,
+        "oneOf": [
           {
             "required": ["cwd"]
           },
           {
             "required": ["project"]
+          },
+          {
+            "required": ["projectless"]
           }
-        ],
-        "additionalProperties": false
+        ]
       },
       "permissions": [
         "zenx-self-control.workspace-read",

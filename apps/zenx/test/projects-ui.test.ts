@@ -45,7 +45,7 @@ test("no-project sidebar keeps explicit Add project and New thread guidance", as
     }),
   );
   assert.match(html, />New thread</u);
-  assert.match(html, /Add project first/u);
+  assert.match(html, /No project/u);
   assert.match(html, /aria-label="Add project"/u);
   assert.match(html, /title="Add project"/u);
   assert.doesNotMatch(html, />Add project<\/button>/u);
