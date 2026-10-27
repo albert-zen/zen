@@ -76,9 +76,24 @@ export function ComputerThreadPanel({
 
   const selected = targets.find((target) => target.id === targetId);
   const followed = targetId === undefined ? targets.at(-1) : selected;
+  const activity = followed?.activity;
+  const activityMessage = activity
+    ? activity.kind === "waiting-human"
+      ? i18n.t("panels:computerWaitingForHuman")
+      : activity.kind === "foreground"
+        ? i18n.t("panels:computerForegroundActivity")
+        : activity.kind === "background-window"
+          ? i18n.t("panels:computerBackgroundActivity", {
+              window: followed?.target.windowTitle,
+            })
+          : i18n.t("panels:computerActivityUnknown")
+    : targets.length > 0
+      ? i18n.t("panels:computerNoCurrentActivity")
+      : undefined;
   return (
     <section
       className="computer-thread-panel"
+      data-agent-active={Boolean(activity && activity.kind !== "waiting-human")}
       aria-label={i18n.t("panels:computerWorkspace")}
     >
       <div className="computer-live-toolbar">
@@ -110,6 +125,16 @@ export function ComputerThreadPanel({
         <span role="status" data-status={status.status}>
           {computerStatusMessage(status.message)}
         </span>
+        {activityMessage ? (
+          <span
+            className="computer-activity"
+            role="status"
+            aria-live="polite"
+            data-kind={activity?.kind ?? "idle"}
+          >
+            {activityMessage}
+          </span>
+        ) : null}
       </div>
       {frame ? (
         <figure className="computer-live-stage">

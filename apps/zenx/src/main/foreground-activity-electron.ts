@@ -356,6 +356,9 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
       const html = foregroundActivityHtml({
         kind,
         agentNames: snapshot.activities.map((activity) => activity.agentName),
+        actions: snapshot.activities.map(
+          (activity) => activity.action ?? "input",
+        ),
         stopping: snapshot.activities.every((activity) => activity.stopping),
         language: this.#options.language(),
         escapeAvailable: this.#escapeOwned,
@@ -437,6 +440,9 @@ export class ElectronForegroundActivityPresenter implements ForegroundActivityPr
             ...foregroundActivityText({
               agentNames: snapshot.activities.map(
                 (activity) => activity.agentName,
+              ),
+              actions: snapshot.activities.map(
+                (activity) => activity.action ?? "input",
               ),
               stopping: snapshot.activities.every(
                 (activity) => activity.stopping,

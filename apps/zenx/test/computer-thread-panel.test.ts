@@ -69,6 +69,7 @@ test("Computer panel follows the Agent until the user pins and pauses frames whi
           invocationId: "private-call-id",
           mode: "live",
           target: { pid: 101, windowTitle: "First window" },
+          activity: { kind: "background-window", count: 1 },
         },
         {
           id: "window-b",
@@ -91,6 +92,29 @@ test("Computer panel follows the Agent until the user pins and pauses frames whi
   assert.match(select.title, /latest-private-call-id/u);
 
   await chooseValue(select, "window-a");
+  await act(async () =>
+    listener?.({
+      type: "targets",
+      targets: [
+        {
+          id: "window-a",
+          invocationId: "private-call-id",
+          mode: "live",
+          target: { pid: 101, windowTitle: "First window" },
+          activity: { kind: "background-window", count: 1 },
+        },
+      ],
+      selectedId: "window-a",
+    }),
+  );
+  await act(async () =>
+    listener?.({ type: "status", status: "failed", message: "Capture failed" }),
+  );
+  assert.match(
+    dom.window.document.querySelector(".computer-activity")?.textContent ?? "",
+    /Agent is working in First window/u,
+  );
+
   assert.deepEqual(requests.at(-1), {
     threadId: "thread-a",
     targetId: "window-a",

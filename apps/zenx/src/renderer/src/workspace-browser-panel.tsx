@@ -193,6 +193,18 @@ function BrowserPanel({
     }
   };
   const agentAllowed = active.control === "agent";
+  const actionCount = active.agentActionsInFlight;
+  const inspectionCount = active.agentInspectionsInFlight ?? 0;
+  const activity =
+    actionCount > 0
+      ? agentAllowed
+        ? i18n.t("panels:browserAgentActing")
+        : i18n.t("panels:browserActionFinishing")
+      : inspectionCount > 0
+        ? i18n.t("panels:browserAgentInspecting")
+        : agentAllowed
+          ? i18n.t("panels:browserAgentAllowedIdle")
+          : i18n.t("panels:browserHumanControl");
   const permissionDetail = [
     i18n.t("panels:browserAgentPermission"),
     i18n.t(
@@ -251,12 +263,6 @@ function BrowserPanel({
         </p>
       ) : null}
       <>
-        <span className="sr-only" role="status">
-          {active.agentActionsInFlight > 0 ||
-          (active.agentInspectionsInFlight ?? 0) > 0
-            ? i18n.t("panels:browserAgentWorking")
-            : ""}
-        </span>
         <form
           className="workspace-browser-address"
           onSubmit={(event) => {
@@ -336,6 +342,20 @@ function BrowserPanel({
             {permissionDetail}
           </span>
         </form>
+        <span
+          className="workspace-browser-activity"
+          role="status"
+          aria-live="polite"
+          data-state={
+            actionCount > 0 || inspectionCount > 0
+              ? "active"
+              : agentAllowed
+                ? "allowed"
+                : "human"
+          }
+        >
+          {activity}
+        </span>
         {active.error ? (
           <p role="alert" className="browser-ui-error">
             {active.error}

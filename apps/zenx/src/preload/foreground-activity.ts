@@ -13,6 +13,7 @@ ipcRenderer.on(
       version: number;
       agentLabel: string;
       activityLabel: string;
+      actionDetail: string;
       stopLabel: string;
       stopDescription: string;
       title: string;
@@ -23,12 +24,14 @@ ipcRenderer.on(
     version = state.version;
     const names = document.getElementById("agent-names");
     const activity = document.getElementById("activity-label");
+    const actionDetail = document.getElementById("action-detail");
     const stop = document.getElementById("stop") as HTMLButtonElement | null;
     const status = document.getElementById("status");
     const escapeHint = document.getElementById("escape-hint");
     if (escapeHint) escapeHint.textContent = state.escapeHint;
     if (names) names.textContent = state.agentLabel;
     if (activity) activity.textContent = state.activityLabel;
+    if (actionDetail) actionDetail.textContent = state.actionDetail;
     if (stop) {
       stop.textContent = state.stopLabel;
       stop.disabled = state.stopping;

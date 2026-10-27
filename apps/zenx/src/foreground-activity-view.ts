@@ -1,6 +1,7 @@
 export interface ForegroundActivityViewOptions {
   kind: "edges" | "status";
   agentNames: readonly string[];
+  actions?: readonly string[];
   stopping: boolean;
   language: "en" | "zh-CN";
   escapeAvailable?: boolean;
@@ -50,6 +51,7 @@ const style = `
   }
   .activity-icon { flex: 0 0 18px; width: 18px; height: 18px; color: #b3c2ff; }
   .message-stack { min-width: 0; display: grid; gap: 1px; }
+  .action-detail { color: #dce4ff; font-size: 11px; line-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .escape-hint { color: #b8bdca; font-size: 10px; line-height: 13px; white-space: nowrap; }
   .message { display: flex; align-items: baseline; gap: 4px; min-width: 0; font-size: 13px; line-height: 18px; }
   .agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
@@ -99,7 +101,7 @@ const style = `
     .edge-frame { border: 2px solid Highlight; box-shadow: none; }
     .edge-frame::after { display: none; }
     #status { background: Canvas; color: CanvasText; border: 1px solid CanvasText; box-shadow: none; }
-    .activity-icon, #status[data-stopping="true"] .activity-icon, .activity-label, .escape-hint { color: CanvasText; }
+    .activity-icon, #status[data-stopping="true"] .activity-icon, .activity-label, .action-detail, .escape-hint { color: CanvasText; }
     #stop, #stop:hover:not(:disabled), #stop:active:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
     #stop:disabled { background: ButtonFace; color: GrayText; border-color: GrayText; }
     #stop:focus-visible { outline-color: Highlight; }
@@ -137,7 +139,7 @@ function safeName(value: string | undefined): string {
 export function foregroundActivityText(
   options: Pick<
     ForegroundActivityViewOptions,
-    "agentNames" | "stopping" | "language" | "escapeAvailable"
+    "agentNames" | "actions" | "stopping" | "language" | "escapeAvailable"
   >,
 ): {
   agentLabel: string;
@@ -146,6 +148,7 @@ export function foregroundActivityText(
   stopDescription: string;
   title: string;
   escapeHint: string;
+  actionDetail: string;
 } {
   const chinese = options.language === "zh-CN";
   const uniqueNames = [...new Set(options.agentNames.map(safeName))];
@@ -181,12 +184,36 @@ export function foregroundActivityText(
   const stopDescription = chinese
     ? "停止显示中的电脑操作"
     : "Stop the displayed computer operations";
+  const actions = [
+    ...new Set(
+      (options.actions ?? []).filter((action) =>
+        ["click", "key", "type", "shortcut", "scroll"].includes(action),
+      ),
+    ),
+  ];
+  const actionNames: Record<string, readonly [string, string]> = {
+    click: ["Clicking", "点击"],
+    key: ["Pressing a key", "按键"],
+    type: ["Typing", "输入文字"],
+    shortcut: ["Using a shortcut", "使用快捷键"],
+    scroll: ["Scrolling", "滚动"],
+  };
+  const actionDetail = options.stopping
+    ? chinese
+      ? "等待前台输入结束"
+      : "Waiting for foreground input to settle"
+    : actions.length === 1
+      ? `${actionNames[actions[0]!]![chinese ? 1 : 0]} · ${chinese ? "当前前台应用" : "current foreground app"}`
+      : chinese
+        ? "正在操作当前前台应用"
+        : "Using the current foreground app";
   return {
     agentLabel: visibleNames,
     activityLabel: activity,
     stopLabel,
     stopDescription: options.stopping ? stopLabel : stopDescription,
     title,
+    actionDetail,
     escapeHint: options.stopping
       ? chinese
         ? "正在等待操作结束"
@@ -212,6 +239,7 @@ export function foregroundActivityHtml(
     stopLabel,
     stopDescription,
     title,
+    actionDetail,
     escapeHint,
   } = foregroundActivityText(options);
   const content =
@@ -219,7 +247,7 @@ export function foregroundActivityHtml(
       ? `<div id="edges" class="edge-frame" data-stopping="${options.stopping}" aria-hidden="true"></div>`
       : `<div id="status" data-stopping="${options.stopping}" role="status" aria-live="polite" aria-atomic="true" title="${escapeHtml(title)}">
   <svg class="activity-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="15" height="10.5" rx="2"/><path d="M7 17h6m-3-3v3m-4-9h3m-3 3h6"/></svg>
-  <span class="message-stack"><span class="message"><bdi id="agent-names" class="agent-name" dir="auto">${escapeHtml(agentLabel)}</bdi><span id="activity-label" class="activity-label">${escapeHtml(activityLabel)}</span></span><span id="escape-hint" class="escape-hint">${escapeHtml(escapeHint)}</span></span>
+  <span class="message-stack"><span class="message"><bdi id="agent-names" class="agent-name" dir="auto">${escapeHtml(agentLabel)}</bdi><span id="activity-label" class="activity-label">${escapeHtml(activityLabel)}</span></span><span id="action-detail" class="action-detail">${escapeHtml(actionDetail)}</span><span id="escape-hint" class="escape-hint">${escapeHtml(escapeHint)}</span></span>
   <button id="stop" type="button" aria-label="${escapeHtml(stopDescription)}"${options.stopping ? ' disabled aria-disabled="true"' : ""}>${escapeHtml(stopLabel)}</button>
 </div>`;
 
