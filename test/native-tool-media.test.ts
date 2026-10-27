@@ -87,6 +87,7 @@ for (const terminal of [false, true, "reasoning"] as const) {
       ];
       const original = structuredClone(messages);
       let body: any;
+      let observed: unknown;
       const adapter = new OpenAiCompatibleModel({
         baseUrl: "https://synthetic.invalid/v1",
         apiKey: "synthetic",
@@ -101,6 +102,9 @@ for (const terminal of [false, true, "reasoning"] as const) {
         },
       });
       const request: ModelRequest = {
+        onTransport: async (event) => {
+          if (event.type === "request") observed = event.toolMediaTransport;
+        },
         model: "synthetic",
         reasoningEffort: "medium",
         messages,
@@ -110,6 +114,14 @@ for (const terminal of [false, true, "reasoning"] as const) {
       for await (const _event of adapter.stream(request)) {
         /* strict fake provider */
       }
+      assert.deepEqual(observed, {
+        nativeToolContent: positions.length + 2,
+        compatibilitySupplement: 0,
+        unknownTarget: 0,
+        undeclaredMedia: 0,
+        nativeSupportUnverified: 0,
+        conflictingEvidence: 0,
+      });
       assert.deepEqual(
         messages,
         original,
@@ -378,3 +390,30 @@ for (const target of ["native", "fallback", "human"] as const) {
     assert.equal(attempts, 1);
   });
 }
+
+test("conflicting evidence overrides otherwise matching native declarations without guessing other targets", () => {
+  const conflict = { ...support };
+  assert.deepEqual(
+    selectChatToolMediaTransport(
+      [support],
+      support.endpoint,
+      support.model,
+      [image],
+      [conflict],
+    ),
+    {
+      encoding: "user-after-tool-batch",
+      reason: "conflicting-evidence",
+    },
+  );
+  assert.equal(
+    selectChatToolMediaTransport(
+      [support],
+      support.endpoint,
+      support.model,
+      [image],
+      [{ ...conflict, endpoint: conflict.endpoint + "/different" }],
+    ).encoding,
+    "native-tool-content",
+  );
+});

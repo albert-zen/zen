@@ -1,6 +1,7 @@
 import {
   selectChatToolMediaTransport,
   type ChatToolMediaCapability,
+  type ChatToolMediaEvidenceConflict,
 } from "./tool-media-transport.js";
 import {
   safeProviderErrorIdentity,
@@ -29,6 +30,7 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
+import type { ToolMediaTransportSummary } from "./transport-types.js";
 import type { AttachmentStore } from "../attachment.js";
 
 export interface ModelStreamDiagnostic {
@@ -52,6 +54,7 @@ export interface OpenAiCompatibleModelOptions {
 
   /** Explicit exact-target transport support; absent means compatibility encoding. */
   toolMediaCapabilities?: readonly ChatToolMediaCapability[];
+  toolMediaEvidenceConflicts?: readonly ChatToolMediaEvidenceConflict[];
   baseUrl: string;
   apiKey: string;
   provider?: string;
@@ -122,6 +125,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
 
   readonly #onStreamFailure: OpenAiCompatibleModelOptions["onStreamFailure"];
   readonly #toolMediaCapabilities: readonly ChatToolMediaCapability[];
+  readonly #toolMediaEvidenceConflicts: readonly ChatToolMediaEvidenceConflict[];
   readonly #apiKey: string;
   readonly #defaultParams: Readonly<Record<string, unknown>>;
   readonly #endpoint: string;
@@ -133,6 +137,9 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     this.#toolMediaCapabilities = (options.toolMediaCapabilities ?? []).map(
       (entry) => ({ ...entry, media: [...entry.media] }),
     );
+    this.#toolMediaEvidenceConflicts = (
+      options.toolMediaEvidenceConflicts ?? []
+    ).map((entry) => ({ ...entry }));
     this.#apiKey = requiredSecret(options.apiKey);
     this.provider = requiredLabel(
       options.provider ?? "openai-compatible",
@@ -157,6 +164,14 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     });
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
+    const toolMediaTransport: ToolMediaTransportSummary = {
+      nativeToolContent: 0,
+      compatibilitySupplement: 0,
+      unknownTarget: 0,
+      undeclaredMedia: 0,
+      nativeSupportUnverified: 0,
+      conflictingEvidence: 0,
+    };
     // Chat tool replies are a contiguous batch. Supplemental user-role media
     // follows the entire batch, never another tool's still-pending reply.
     const pendingToolMedia: Array<{
@@ -188,15 +203,27 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       }
       if (message.role !== "tool") flushToolMedia();
       let encoded = await toChatMessage(message, this.#attachments);
-      const nativeToolMedia =
-        message.role === "tool" &&
-        message.modelContent !== undefined &&
-        selectChatToolMediaTransport(
-          this.#toolMediaCapabilities,
-          this.#endpoint,
-          model,
-          message.modelContent,
-        ).encoding === "native-tool-content";
+      const decision =
+        message.role === "tool" && message.modelContent !== undefined
+          ? selectChatToolMediaTransport(
+              this.#toolMediaCapabilities,
+              this.#endpoint,
+              model,
+              message.modelContent,
+              this.#toolMediaEvidenceConflicts,
+            )
+          : undefined;
+      const nativeToolMedia = decision?.encoding === "native-tool-content";
+      if (decision !== undefined) {
+        if (nativeToolMedia) toolMediaTransport.nativeToolContent++;
+        else toolMediaTransport.compatibilitySupplement++;
+        if (decision.reason === "conflicting-evidence")
+          toolMediaTransport.conflictingEvidence++;
+        if (decision.reason === "unknown-target")
+          toolMediaTransport.unknownTarget++;
+        if (decision.reason === "undeclared-media")
+          toolMediaTransport.undeclaredMedia++;
+      }
       let nativeContent: import("../item.js").UserInput | undefined;
       if (
         nativeToolMedia &&
@@ -306,6 +333,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
             format: this.requestPayloadFormat,
             provider: this.provider,
             transportAttempt: ++transportAttempt,
+            toolMediaTransport,
             init: {
               method: "POST",
               signal: request.signal,

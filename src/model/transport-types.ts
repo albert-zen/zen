@@ -1,4 +1,13 @@
 import type { TraceClock } from "../trace-clock.js";
+/** Bounded adapter decisions, never wire content or model semantics. Counts are tool results, not media parts. */
+export interface ToolMediaTransportSummary {
+  nativeToolContent: number;
+  compatibilitySupplement: number;
+  unknownTarget: number;
+  undeclaredMedia: number;
+  nativeSupportUnverified: number;
+  conflictingEvidence: number;
+}
 /** Portable observation contracts. No Node or transport implementation imports. */
 export type ModelDispatchRevocationReason =
   "provider_revoked" | "account_changed" | "auth_session_changed";
@@ -25,6 +34,7 @@ export type ModelTransportObservation = Attempt &
         format: "chat-completions" | "responses" | "model-input";
         provider: string;
         model: string;
+        toolMediaTransport?: ToolMediaTransportSummary;
       }
     | {
         type: "capture_gap";

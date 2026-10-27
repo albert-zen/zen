@@ -39,6 +39,10 @@ import {
 } from "../../../src/model-catalog.js";
 import { FakeModel, type ModelAdapter } from "../../../src/model.js";
 import { OpenAiResponsesModel } from "../../../src/model/openai-responses.js";
+import {
+  BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+  BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
+} from "../../../src/model/tool-media-profiles.js";
 import { OpenAiCompatibleModel } from "../../../src/model/openai-compatible.js";
 import { OpenAiSubscriptionModel } from "../../../src/model/openai-subscription.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
@@ -1130,6 +1134,13 @@ function createModel(
       ? OpenAiResponsesModel
       : OpenAiCompatibleModel;
   return new Adapter({
+    ...(provider.protocol === "responses"
+      ? {}
+      : {
+          toolMediaCapabilities: BUILTIN_CHAT_TOOL_MEDIA_CAPABILITIES,
+          toolMediaEvidenceConflicts:
+            BUILTIN_CHAT_TOOL_MEDIA_EVIDENCE_CONFLICTS,
+        }),
     ...(onStreamFailure === undefined ? {} : { onStreamFailure }),
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,

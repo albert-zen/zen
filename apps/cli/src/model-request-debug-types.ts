@@ -37,6 +37,7 @@ export interface ModelRequestDebugSummary {
   format: string;
   sampleAttempt: number | null;
   transportAttempt: number | null;
+  toolMediaTransport?: import("../../../src/model/transport-types.js").ToolMediaTransportSummary;
   sampleOutcome:
     "completed" | "failed" | "cancelled" | "consumer_cancelled" | "unknown";
   dispatch: "observed" | "blocked" | "unknown" | "not-applicable";

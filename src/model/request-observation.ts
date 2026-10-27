@@ -1,4 +1,5 @@
 import { traceClock } from "../trace.js";
+import { sanitizeToolMediaTransportSummary } from "./tool-media-transport.js";
 import { inspect } from "node:util";
 import type { ModelRequest, ModelRequestObservation } from "../model.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   ModelTransportHooks,
   ModelTransportObservation,
   ModelTransportObserver,
+  ToolMediaTransportSummary,
 } from "./transport-types.js";
 export type { ModelTransportObservation } from "./transport-types.js";
 
@@ -90,9 +92,13 @@ export async function fetchObservedModelResponse(options: {
   format: ModelRequestObservation["format"];
   provider: string;
   transportAttempt: number;
+  toolMediaTransport?: ToolMediaTransportSummary;
 }): Promise<Response> {
   const { request, transportAttempt, url, provider, format, fetch } = options;
   const model = request.model;
+  const toolMediaTransport = sanitizeToolMediaTransportSummary(
+    options.toolMediaTransport,
+  );
   // Freeze the submitted shape before observers can run. The original body
   // value is passed unchanged; unsupported BodyInit values are never encoded.
   const init: RequestInit = { ...options.init };
@@ -192,6 +198,7 @@ export async function fetchObservedModelResponse(options: {
     format: format,
     provider: provider,
     model,
+    ...(toolMediaTransport === undefined ? {} : { toolMediaTransport }),
   });
   if (!bodyKnown)
     await emit({

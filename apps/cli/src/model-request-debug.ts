@@ -1,3 +1,4 @@
+import { sanitizeToolMediaTransportSummary } from "../../../src/model/tool-media-transport.js";
 import {
   buildTraceTimeline,
   observedTraceClock,
@@ -166,6 +167,9 @@ function summarize(r: TraceRecord, index: Index): ModelRequestDebugSummary {
       ? Number(BigInt(ns)) / 1e6
       : null;
   const request = a?.request ?? (r.type === "model_request" ? r : undefined);
+  const toolMediaTransport = sanitizeToolMediaTransportSummary(
+    data(request).toolMediaTransport,
+  );
   const responseCapture = !a
     ? "not-applicable"
     : a.error
@@ -196,6 +200,7 @@ function summarize(r: TraceRecord, index: Index): ModelRequestDebugSummary {
     ),
     sampleAttempt: number(frozen.sampleAttempt),
     transportAttempt: attempt,
+    ...(toolMediaTransport === undefined ? {} : { toolMediaTransport }),
     sampleOutcome,
     dispatch: !a
       ? "not-applicable"

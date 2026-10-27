@@ -32,7 +32,10 @@ import type {
   ModelRequest,
   ModelTool,
 } from "../model.js";
-import type { ModelTransportHooks } from "./transport-types.js";
+import type {
+  ToolMediaTransportSummary,
+  ModelTransportHooks,
+} from "./transport-types.js";
 import type { AttachmentStore } from "../attachment.js";
 
 const defaultEndpoint = "https://chatgpt.com/backend-api/codex/responses";
@@ -119,6 +122,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     const sessionHint = promptCacheHint(request.sessionId);
     const input: Array<Record<string, unknown>> = [];
     const mediaPaths = new Map<string, object>();
+    let supplementalToolResults = 0;
     for (const [index, message] of request.messages.entries()) {
       if (message.role === "system") continue;
       const encoded = await toResponsesInput(
@@ -135,13 +139,15 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
           contextUserContent(message),
           ["image"],
         );
-      if (message.role === "tool" && message.modelContent !== undefined)
+      if (message.role === "tool" && message.modelContent !== undefined) {
+        supplementalToolResults++;
         recordMediaPaths(
           mediaPaths,
           `input[${input.length + encoded.length - 1}]`,
           message.modelContent,
           ["image"],
         );
+      }
       input.push(...encoded);
     }
     const body = JSON.stringify({
@@ -169,6 +175,14 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       ...(sessionHint === undefined ? {} : { prompt_cache_key: sessionHint }),
     });
 
+    const toolMediaTransport: ToolMediaTransportSummary = {
+      nativeToolContent: 0,
+      compatibilitySupplement: supplementalToolResults,
+      unknownTarget: 0,
+      undeclaredMedia: 0,
+      nativeSupportUnverified: supplementalToolResults,
+      conflictingEvidence: 0,
+    };
     let transportAttempt = 0;
     const initialLease = await this.#acquireAccessLease(request.signal);
     const initialAccountId = extractChatGptAccountId(
@@ -219,6 +233,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
       request.isSamplingRetry !== true,
       requestForLease(lease, accessToken),
       () => ++transportAttempt,
+      toolMediaTransport,
     );
 
     if (response.status === 401 && this.#renewAccessLease !== undefined) {
@@ -235,6 +250,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
         request.isSamplingRetry !== true,
         requestForLease(lease, accessToken),
         () => ++transportAttempt,
+        toolMediaTransport,
       );
     }
 
@@ -279,6 +295,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
     allowRetries: boolean,
     request: ModelRequest,
     nextAttempt: () => number,
+    toolMediaTransport: ToolMediaTransportSummary,
   ): Promise<Response> {
     signal.throwIfAborted();
     const headers = new Headers({
@@ -304,6 +321,7 @@ export class OpenAiSubscriptionModel implements ModelAdapter {
             format: this.requestPayloadFormat,
             provider: this.provider,
             transportAttempt: nextAttempt(),
+            toolMediaTransport,
             init: { method: "POST", body, headers, signal },
           }),
         signal,
