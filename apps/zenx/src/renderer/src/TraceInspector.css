@@ -1,0 +1,203 @@
+/* Read-only Trace UI. All selectors are isolated from chat/sidebar/editor layout. */
+.trace-inspector {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  color: var(--color-text-primary);
+  background: var(--color-surface-main);
+  font-size: 12px;
+}
+.trace-inspector button,
+.trace-inspector input,
+.trace-inspector select {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--border-control);
+  background: var(--color-surface-main);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+.trace-inspector button:not(:disabled),
+.trace-inspector summary {
+  cursor: pointer;
+}
+.trace-inspector button:disabled {
+  opacity: 0.5;
+}
+.trace-inspector :is(button, input, select, summary):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.trace-inspector [hidden] {
+  display: none;
+}
+.trace-inspector-controls,
+.trace-inspector-toolbar,
+.trace-inspector-views,
+.trace-inspector-presentation,
+.trace-inspector-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+}
+.trace-inspector-controls strong {
+  margin-right: auto;
+}
+.trace-inspector-toolbar input {
+  flex: 1;
+  min-width: 140px;
+}
+.trace-inspector-toolbar label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.trace-inspector-disclosure {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-control);
+  overflow-wrap: anywhere;
+}
+.trace-inspector-disclosure p {
+  margin: 8px 0;
+}
+.trace-inspector-disclosure pre {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.trace-inspector-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+  border-top: 1px solid var(--border-control);
+}
+.trace-inspector[data-narrow="true"] .trace-inspector-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trace-inspector-list {
+  overflow: auto;
+  border-right: 1px solid var(--border-control);
+  min-width: 0;
+  padding: 8px;
+}
+.trace-inspector-record {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  gap: 6px;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.trace-inspector-record > span:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.trace-inspector-record time {
+  font-size: 10px;
+}
+.trace-inspector .trace-inspector-record[aria-pressed="true"],
+.trace-inspector .trace-inspector-record:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-active);
+}
+.trace-inspector-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+}
+.trace-inspector-status > span {
+  border: 1px solid var(--border-control);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.trace-inspector-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  gap: 8px;
+}
+.trace-inspector-detail h3 {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+.trace-inspector-note {
+  font-size: 11px;
+  margin: 0;
+}
+.trace-inspector-error,
+.trace-inspector-warning {
+  margin: 4px 10px;
+  padding: 8px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.trace-inspector-detail-scroll {
+  flex: 1 0 160px;
+  min-width: 0;
+  overflow: auto;
+}
+.trace-inspector-payload {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.55 var(--font-mono, monospace);
+}
+.trace-inspector-views button[aria-pressed="true"],
+.trace-inspector-presentation button[aria-pressed="true"] {
+  background: var(--color-surface-active);
+}
+.trace-inspector-pagination {
+  justify-content: space-between;
+}
+.trace-inspector-tree {
+  font: 12px/1.55 var(--font-mono, monospace);
+  padding: 8px;
+  overflow-wrap: anywhere;
+}
+.trace-inspector-tree-children {
+  border-left: 1px solid var(--border-control);
+  margin-left: 6px;
+  padding-left: 12px;
+}
+.trace-inspector-tree-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  text-align: left;
+  width: 100%;
+}
+.trace-inspector-tree-toggle svg {
+  width: 12px;
+  height: 12px;
+}
+.trace-inspector-tree-leaf {
+  display: flex;
+  gap: 12px;
+  white-space: pre-wrap;
+}
+.trace-inspector-tree-key {
+  font-weight: 600;
+}
+.trace-inspector-tree-value {
+  min-width: 0;
+}
+@media (pointer: coarse) {
+  .trace-inspector :is(button, select, input, summary) {
+    min-height: 44px;
+  }
+}

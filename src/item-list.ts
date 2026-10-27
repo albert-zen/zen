@@ -1,10 +1,12 @@
 import {
   validateUserInput,
+  validateOpaqueReplayProvenance,
+  type OpaqueReasoningReplayProvenance,
   textFromUserInput,
   type JsonValue,
   type UserInput,
 } from "./item.js";
-import type { ModelMessage, ModelTool } from "./model.js";
+import { classifyContext, type ModelMessage, type ModelTool } from "./model.js";
 
 /** The writable conversation format. Runtime events are deliberately not a variant. */
 export type ContextSourceKind =
@@ -72,6 +74,7 @@ export type ContextItem = ContextBase &
           summary?: string;
           visibility: "public" | "opaque";
           providerItemId?: string;
+          opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
         };
       }
     | {
@@ -138,6 +141,7 @@ const metadataKeys = new Set([
   "category",
   "generatedReference",
   "reasoningSummaryOnly",
+  "mediaOccurrence",
 ]);
 
 /** Strict at the writer boundary: unknown runtime variants/fields cannot leak into ItemList. */
@@ -224,7 +228,13 @@ export function decodeContextItem(value: unknown): ContextItem {
     case "reasoning":
       keys(
         content,
-        ["text", "summary", "visibility", "providerItemId"],
+        [
+          "text",
+          "summary",
+          "visibility",
+          "providerItemId",
+          "opaqueReplayProvenance",
+        ],
         "reasoning.content",
       );
       if (item.role !== "assistant" || source.kind !== "reasoning")
@@ -232,6 +242,11 @@ export function decodeContextItem(value: unknown): ContextItem {
       string(content.text, "reasoning.text");
       if (content.summary !== undefined)
         string(content.summary, "reasoning.summary");
+      if (content.opaqueReplayProvenance !== undefined) {
+        if (content.visibility !== "opaque")
+          throw new Error("Replay provenance requires opaque content");
+        validateOpaqueReplayProvenance(content.opaqueReplayProvenance);
+      }
       if (content.providerItemId !== undefined)
         string(content.providerItemId, "reasoning.providerItemId", false);
       if (!["public", "opaque"].includes(String(content.visibility)))
@@ -297,6 +312,7 @@ export function compileItemList(
   options: {
     sampleId?: string;
     selection?: { providerProfileId: string; modelId: string };
+    inputModalities?: readonly string[] | null;
   } = {},
 ): CompiledItemList {
   const validated = items.map(decodeContextItem);
@@ -347,6 +363,13 @@ export function compileItemList(
       latestSources.get(item.source.kind) === item,
   );
   const selectedItemIds: string[] = [];
+  const supportedMedia = new Set(
+    options.inputModalities ?? ["text", "image", "audio"],
+  );
+  const projectParts = (content: UserInput) =>
+    content.filter(
+      (part) => part.type === "text" || supportedMedia.has(part.type),
+    );
   const messages: ModelMessage[] = [];
   let tools: ModelTool[] = [];
   for (const item of selected) {
@@ -355,7 +378,7 @@ export function compileItemList(
         if (item.role === "user")
           messages.push({
             role: "user",
-            content: structuredClone(item.content.parts),
+            content: structuredClone(projectParts(item.content.parts)),
           });
         else if (item.role === "assistant")
           messages.push({ role: "assistant", text: item.content.text });
@@ -379,7 +402,9 @@ export function compileItemList(
           exitCode: item.content.exitCode,
           ...(item.content.parts === undefined
             ? {}
-            : { modelContent: structuredClone(item.content.parts) }),
+            : {
+                modelContent: structuredClone(projectParts(item.content.parts)),
+              }),
         });
         break;
       case "reasoning": {
@@ -404,6 +429,9 @@ export function compileItemList(
           ...(item.content.summary === undefined
             ? {}
             : { summary: item.content.summary }),
+          ...(item.content.opaqueReplayProvenance === undefined
+            ? {}
+            : { opaqueReplayProvenance: item.content.opaqueReplayProvenance }),
           ...(item.content.providerItemId === undefined
             ? {}
             : { providerItemId: item.content.providerItemId }),
@@ -416,6 +444,23 @@ export function compileItemList(
       case "tools":
         tools = structuredClone(item.content.tools);
         break;
+    }
+    if (item.kind === "message") {
+      const message = messages.at(-1)!;
+      if (
+        item.role === "system" ||
+        item.role === "developer" ||
+        item.source.kind === "workspace_instructions" ||
+        item.source.kind === "permission_instruction"
+      )
+        classifyContext(message, "instructions");
+      else if (item.source.kind === "host_message")
+        classifyContext(
+          message,
+          item.source.metadata?.source === "bootstrap"
+            ? "instructions"
+            : "pluginContext",
+        );
     }
     selectedItemIds.push(item.id);
   }

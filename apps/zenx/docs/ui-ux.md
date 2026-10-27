@@ -28,7 +28,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - 目标 ZenX Host 同时拥有并列的 ZAS/AppServer 与 Plugin Host 服务。Plugin Host 负责插件生命周期、UI/tool 注册与 Runtime 路由，但不拥有 Agent、Thread、Turn 或 transcript；人类直接操作插件 UI 不创建 Turn，只有显式 **Run Agent** 才调用 AppServer。
 - ZenX Host 通过稳定的私有 descriptor 暴露唯一 ZAS 的带认证 loopback endpoint。关闭最后一个窗口只关闭 UI，不停止 ZenX Host、active Turn 或外部连接；activation 重建窗口，显式 Quit 在 macOS、Windows、Linux 都撤销发现入口并停止 Host / ZAS。本阶段仍不做 OS daemon。
 - Renderer、native IPC 与外层产品功能不复制 ZAS 的 Agent、Thread、Turn、transcript 或 scheduler authority。Codex App Server（CAS）compatibility mapping / claim 只覆盖 ZAS 中固定 0.146.0 可表达且已验收的子集；当前共用 endpoint/shape 不使 CAS 成为 ZenX 产品读取路径或产品模型权威。
-- Thread 会话内容与执行结果来自 append-only canonical ItemList。流式 delta 只用于实时显示，不能被 UI 当作第二份 durable history。
+- 持久日志是事实与恢复真相源，当前权限、队列等只是日志投影/缓存；关键 queue/config/control 变更未持久成功不得 ACK。ItemList 仅承载模型语义上下文；Trace 记录真实输入、输出、工具及运行观察，流式显示不能成为第二份可编辑历史。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前前台 Thread 选择、disclosure、草稿和打开的菜单属于 renderer-local UI 状态。Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个 main-process revision/CAS presentation store 持久化；它不是会话历史。后台更新只改变所属工作区，不抢占当前前台、焦点或读取文件/打开网页。Room 使用相同工作区界面，资源标签保留原 member Thread 归属，成员移除后不可借用其他成员执行。PAW 默认 Room 来自 trusted runtime 专属绑定，不与私有 Thread 侧栏双向同步。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
@@ -784,3 +784,15 @@ trusted style nonce for CodeMirror runtime styles. Packaged acceptance uses the
 actual renderer CSP, not a permissive preview policy; missing/incorrect nonce
 styles remain blocked. Fixing layout or focus must never broadly permit inline
 styles or scripts, and editor scrolling stays inside its bounded pane.
+
+### 持久 Trace 与模型上下文调试
+
+- 调试器是常开本机持久 Trace 的只读消费端，不拥有 capture、开关、清空或重放能力。关闭面板与重启不能删除记录；没有捕获的 actual transport 必须不可用，不能由 ItemList 反推伪造。
+- 普通会话渲染语义内容与日志派生的产品状态，ItemList 只呈现精确 role/content/provenance，不混入 runtime/control 日志。来源不是角色：Host 包裹的用户选择仍是 user 数据，不升级为 developer 指令；时间/引用可友好呈现但保留精确模型文本。
+- Model sample outcome、HTTP dispatch evidence、raw response EOF 是三个独立观察。模型已完成而 HTTP tail 未完，显示回复已完成且捕获未知；HTTP EOF 也不能遮蔽模型解析失败/取消。无终态的冷历史显示 unknown，不能假装仍在运行。
+- request_body 是准备字节；只有 model_request_dispatched 证明开始调用 fetch（不是提供方已接收）。blocked 显示未派发；不能把早先重试的 EOF/耗时用在当前尝试。整体 sample 耗时与逐 attempt 耗时分开，跨单调时钟域不能相减。
+- 所选详情显示同次读取的状态及字节；索引轮询不能悄悄用新状态覆盖旧详情。Thread 切换、作用域、查询、关闭、重复打开和重叠异步请求都有 freshness fence。窄面板 list/detail 分层，Back 返回同一行键盘焦点。
+- 当前 UI settings 与 frozen sample configuration 显式分开；改变当前模型/权限不会改变已捕获请求。内部 ID/headers/metadata 按需披露，不倒灌普通消息或模型上下文。
+- 本机原始内容仅省略认证 headers 的 API Key，不 broadly redact body；导出清理另行处理。元数据索引不声称已验证所有 artifacts，逐次读取校验原始 hash/length；部分/损坏/缺失显示未知与原因，同时保留已知事实。
+- Trace IPC 仅允许 owned ZenX window 的 main frame、精确 renderer URL，拒绝 webview/subframe/foreign window/origin。All local 范围明示含辅助 title/probe，不能为了日志制造假用户消息或隐藏 chat Thread。
+- UI 验收必须使用生产组件、合成数据、精确 source/bundle SHA 的真实截图与原始 lifecycle receipt。JSDOM、HTML bundle 和未运行 CI 不等于视觉通过；未完成截图不能合并。

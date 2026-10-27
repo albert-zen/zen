@@ -1,3 +1,15 @@
+import type { AttachmentStore } from "./attachment.js";
+import type { RuntimeTrace } from "./trace.js";
+import {
+  createToolTraceCapture,
+  TraceReadToolRuntime,
+  type ToolTraceCapture,
+} from "./trace-tool.js";
+import {
+  attachModelReferenceBindings,
+  trustedModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 import {
   ShellSessionsRuntime,
   type ShellPtyProvider,
@@ -70,6 +82,10 @@ export type ShellLifecycleFacts = {
 );
 
 export interface ToolInvocation {
+  /** Trusted host provenance; never accepted from tool argument JSON. */
+  modelReferences?: readonly ModelReferenceBinding[];
+  modelTraceInspectionTool?: "trace_read";
+  traceOutput?: ToolTraceCapture;
   /** Host-minted human terminal request. Never accepted from tool arguments. */
   userTerminal?: { cols: number; rows: number };
   callId: string;
@@ -108,6 +124,7 @@ export interface ToolInvocation {
 }
 
 export interface ToolExecutionResult {
+  referenceBindings?: readonly ModelReferenceBinding[];
   output: string;
   exitCode: number;
   contentType?: string;
@@ -409,6 +426,16 @@ export class ToolEnvironment {
     Map<string, Promise<void>>
   >();
   #targetRouter: ToolTargetRouter | undefined;
+  #trace: RuntimeTrace | undefined;
+  #attachments: AttachmentStore | undefined;
+  bindTrace(trace: RuntimeTrace, attachments?: AttachmentStore): void {
+    if (this.#trace !== undefined && this.#trace !== trace)
+      throw new Error(
+        "ToolEnvironment already belongs to a different Trace owner",
+      );
+    this.#trace = trace;
+    this.#attachments = attachments ?? this.#attachments;
+  }
 
   constructor(
     options: {
@@ -422,6 +449,8 @@ export class ToolEnvironment {
       approvedTools?: Set<string>;
       deniedTools?: Set<string>;
       targetRouter?: ToolTargetRouter;
+      trace?: RuntimeTrace;
+      attachments?: AttachmentStore;
     } = {},
   ) {
     if (
@@ -441,6 +470,8 @@ export class ToolEnvironment {
           })
         : new InMemoryToolPolicyStore());
     this.#targetRouter = options.targetRouter;
+    this.#trace = options.trace;
+    this.#attachments = options.attachments;
     this.taskManager = new ToolTaskManager({
       ...options.taskOptions,
       ...(options.toolOutputSpool === undefined
@@ -665,8 +696,31 @@ export class ToolEnvironment {
         "Tool approval scope must come from the trusted runtime resolver",
       );
     const registration = this.#tools.get(invocation.name);
+    const traceOutput =
+      invocation.traceOutput ??
+      (this.#trace && invocation.threadId
+        ? createToolTraceCapture(
+            this.#trace,
+            {
+              threadId: invocation.threadId,
+              callId: invocation.callId,
+              toolName: invocation.name,
+              ...(invocation.canonicalToolCallId === undefined
+                ? {}
+                : { toolCallItemId: invocation.canonicalToolCallId }),
+              origin: "tool-environment",
+            },
+            this.#attachments ? { attachments: this.#attachments } : {},
+          )
+        : undefined);
+    const { modelTraceInspectionTool: _claimedReader, ...trustedInvocation } =
+      invocation;
     const frozenInvocation: ToolInvocation = Object.freeze({
-      ...invocation,
+      ...trustedInvocation,
+      ...(this.#tools.get("trace_read")?.runtime instanceof TraceReadToolRuntime
+        ? { modelTraceInspectionTool: "trace_read" as const }
+        : {}),
+      ...(traceOutput === undefined ? {} : { traceOutput }),
       arguments: Object.freeze(structuredClone(invocation.arguments)),
     });
     const local =
@@ -1019,8 +1073,21 @@ export class ToolEnvironment {
           )} input required by ${prepared.invocation.name}`,
         );
       }
+      // Do not introduce an await(undefined) into the historical no-Trace launch path.
+      if (prepared.invocation.traceOutput)
+        await prepared.invocation.traceOutput.recordInvocation({
+          name: prepared.invocation.name,
+          arguments: prepared.invocation.arguments,
+          cwd: prepared.invocation.cwd,
+          sandbox: prepared.invocation.sandbox,
+        });
       if (registration.route !== undefined) {
         const result = await registration.route.execute();
+        if (prepared.invocation.traceOutput)
+          await prepared.invocation.traceOutput.recordResult(
+            result,
+            "target-result-before-normalization",
+          );
         if (result.modelContent !== undefined)
           throw new ToolResultNormalizationError(
             "Remote execution supports text/JSON results only",
@@ -1051,6 +1118,14 @@ export class ToolEnvironment {
             ? await runtime.executeComposite(invocation, nested)
             : await runtime.execute(invocation);
         await nested?.drain?.();
+        if (
+          invocation.traceOutput &&
+          !invocation.traceOutput.hasObservedResult()
+        )
+          await invocation.traceOutput.recordResult(
+            result,
+            "tool-result-before-normalization",
+          );
         try {
           return normalizeToolExecutionResult(result, prepared.owner);
         } catch (error) {
@@ -1248,11 +1323,17 @@ export function normalizeToolExecutionResult(
   result: ToolExecutionResult,
   owner: ToolBundleIdentity,
 ): ToolExecutionResult {
-  return normalizeToolResultWithBudget(
+  const bindings = trustedModelReferenceBindings(result);
+  if (result.referenceBindings !== undefined && bindings === undefined)
+    throw new Error("Untrusted model reference bindings");
+  const normalized = normalizeToolResultWithBudget(
     result,
     owner,
     MAX_STRUCTURED_TOOL_RESULT_BYTES,
   );
+  return bindings === undefined
+    ? normalized
+    : attachModelReferenceBindings(normalized, bindings);
 }
 
 function normalizeTargetToolTaskResult(
@@ -1555,6 +1636,9 @@ export class ShellToolRuntime implements ToolRuntime {
       ...invocation.userTerminal!,
     });
     const write = (text: string) => {
+      // The PTY only exposes decoded text; its producer cannot be paused. The sink bounds pending bytes and records any gap.
+      if (invocation.traceOutput)
+        void invocation.traceOutput.write("pty", text, "pty-decoded-text");
       invocation.taskContext!.onShellOutput?.(text);
       invocation.taskContext!.onOutput(text);
     };
@@ -1572,7 +1656,11 @@ export class ShellToolRuntime implements ToolRuntime {
         invocation.signal.removeEventListener("abort", abort);
         data.dispose();
         exit.dispose();
-        resolve({ output: "", exitCode });
+        if (invocation.traceOutput)
+          void invocation.traceOutput
+            .end("pty", true)
+            .then(() => resolve({ output: "", exitCode }));
+        else resolve({ output: "", exitCode });
       });
       const abort = () => {
         if (ended) return;
@@ -1690,8 +1778,33 @@ export class ShellToolRuntime implements ToolRuntime {
     });
     const stdout = new StringDecoder("utf8"),
       stderr = new StringDecoder("utf8");
-    child.stdout.on("data", (chunk: Buffer) => write(stdout.write(chunk)));
-    child.stderr.on("data", (chunk: Buffer) => write(stderr.write(chunk)));
+    const rawPending: Promise<void>[] = [];
+    const observePipe = (
+      pipe: typeof child.stdout,
+      decoder: StringDecoder,
+      source: string,
+    ) => {
+      pipe.on("data", (chunk: Buffer) => {
+        if (!invocation.traceOutput) {
+          write(decoder.write(chunk));
+          return;
+        }
+        pipe.pause();
+        const pending = invocation.traceOutput
+          .write(source, chunk, "child-process-pipe")
+          .then(() => {
+            write(decoder.write(chunk));
+            pipe.resume();
+          });
+        rawPending.push(pending);
+        void pending.finally(() => {
+          const index = rawPending.indexOf(pending);
+          if (index >= 0) rawPending.splice(index, 1);
+        });
+      });
+    };
+    observePipe(child.stdout, stdout, "stdout");
+    observePipe(child.stderr, stderr, "stderr");
     let killTimer: NodeJS.Timeout | undefined;
     let aborted = false;
     const kill = (signal: NodeJS.Signals) => {
@@ -1715,9 +1828,23 @@ export class ShellToolRuntime implements ToolRuntime {
         finished = true;
         if (killTimer !== undefined) clearTimeout(killTimer);
         invocation.signal.removeEventListener("abort", abort);
-        write(stdout.end());
-        write(stderr.end());
-        resolve(code);
+        void Promise.all(rawPending).then(async () => {
+          write(stdout.end());
+          write(stderr.end());
+          if (invocation.traceOutput) {
+            await invocation.traceOutput.end(
+              "stdout",
+              stdoutEof,
+              stdoutEof ? undefined : "pipe_closed_without_eof",
+            );
+            await invocation.traceOutput.end(
+              "stderr",
+              stderrEof,
+              stderrEof ? undefined : "pipe_closed_without_eof",
+            );
+          }
+          resolve(code);
+        });
       };
       const abort = () => {
         if (aborted || finished) return;
@@ -1966,12 +2093,22 @@ export class ToolOutputWindow {
   }
 }
 
+export function carryToolResultReferences(
+  source: ToolExecutionResult,
+  target: ToolExecutionResult,
+): ToolExecutionResult {
+  const bindings = trustedModelReferenceBindings(source);
+  return bindings === undefined
+    ? target
+    : attachModelReferenceBindings(target, bindings);
+}
+
 export function attachToolOutputCapture(
   result: ToolExecutionResult,
   metadata?: ToolOutputCaptureMetadata,
   suffix = "",
 ): ToolExecutionResult {
-  return {
+  return carryToolResultReferences(result, {
     ...result,
     output: result.output + suffix,
     [TOOL_OUTPUT_CAPTURE]:
@@ -1979,7 +2116,7 @@ export function attachToolOutputCapture(
       capturedToolOutput(result) ??
       inlineToolOutputCapture(result.output, result.sourceTruncated ?? false),
     ...(suffix.length === 0 ? {} : { [TOOL_OUTPUT_SUFFIX]: suffix }),
-  };
+  });
 }
 
 function inlineToolOutputCapture(

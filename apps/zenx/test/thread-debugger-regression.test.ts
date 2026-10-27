@@ -12,7 +12,8 @@ import {
   runtimeMessage,
 } from "./fixtures/agent-runtime-data.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
-import type { CanonicalItem } from "../../../src/item.js";
+import type { ContextItem } from "../../../src/item-list.js";
+import { contextItemsFromLegacy } from "../../../src/item-list-legacy.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 const noop = async () => undefined;
@@ -41,10 +42,14 @@ function fixture(text = "hello") {
     "interrupted",
     "thread",
   );
+  const sources = nativeRecoveryForThread(base).thread.items;
   return {
     ...base,
     cwd: "/project/actual-thread",
-    canonicalItems: nativeRecoveryForThread(base).thread.items,
+    canonicalItems: sources,
+    itemList: sources.flatMap((item, n) =>
+      contextItemsFromLegacy(item, sources.slice(0, n), n),
+    ),
   };
 }
 const props = (thread: ReturnType<typeof fixture>) => ({
@@ -126,21 +131,21 @@ test("closed metadata row does not materialize its entire large payload", async 
   dom(async (root) => {
     const thread = fixture();
     const value = "x".repeat(2 * 1024 * 1024);
-    const item: CanonicalItem = {
+    const item: ContextItem = {
       id: "large-state",
       threadId: thread.id,
       turnId: "turn",
       createdAt: "2026-10-14T00:00:00Z",
-      type: "code_state",
-      callId: "call",
-      key: "large",
-      value,
+      kind: "tool_call",
+      role: "assistant",
+      source: { kind: "tool_call", sequence: 0 },
+      content: { callId: "call", name: "large", arguments: { value } },
     };
     await act(async () =>
       root.render(createElement(ThreadDebugger, { thread, items: [item] })),
     );
     assert.equal(document.querySelectorAll("details[open]").length, 0);
-    const length = document.querySelector(".thread-debug-metadata")!
+    const length = document.querySelector(".thread-debug-tool-content summary")!
       .textContent!.length;
     console.log(
       JSON.stringify({
@@ -158,11 +163,17 @@ test("closed metadata row does not materialize its entire large payload", async 
 test("initial long-history view bounds mounted rows while preserving access to all Items", async () =>
   dom(async (root) => {
     const thread = fixture();
-    const items: CanonicalItem[] = Array.from({ length: 3000 }, (_, i) => ({
+    const items: ContextItem[] = Array.from({ length: 3000 }, (_, i) => ({
       id: `lifecycle-${i}`,
       threadId: thread.id,
       createdAt: "2026-10-14T00:00:00Z",
-      type: "thread_deleted",
+      kind: "message",
+      role: "user",
+      source: { kind: "user_message", sequence: i },
+      content: {
+        text: `semantic ${i}`,
+        parts: [{ type: "text", text: `semantic ${i}` }],
+      },
     }));
     const started = performance.now();
     await act(async () =>
@@ -183,11 +194,17 @@ test("initial long-history view bounds mounted rows while preserving access to a
 test("paging exposes every Item exactly once and large output remains explicitly expandable", async () =>
   dom(async (root) => {
     const thread = fixture();
-    const items: CanonicalItem[] = Array.from({ length: 123 }, (_, i) => ({
+    const items: ContextItem[] = Array.from({ length: 123 }, (_, i) => ({
       id: `row-${i}`,
       threadId: thread.id,
       createdAt: "2026-10-14T00:00:00Z",
-      type: "thread_deleted",
+      kind: "message",
+      role: "user",
+      source: { kind: "user_message", sequence: i },
+      content: {
+        text: `semantic ${i}`,
+        parts: [{ type: "text", text: `semantic ${i}` }],
+      },
     }));
     await act(async () =>
       root.render(createElement(ThreadDebugger, { thread, items })),
@@ -228,10 +245,14 @@ test("paging exposes every Item exactly once and large output remains explicitly
               threadId: thread.id,
               turnId: "turn",
               createdAt: "2026-10-14T00:00:00Z",
-              type: "tool_result",
-              callId: "unknown",
-              exitCode: 0,
-              output: "x".repeat(100000),
+              kind: "tool_result",
+              role: "tool",
+              source: { kind: "tool_result", sequence: 0 },
+              content: {
+                callId: "unknown",
+                exitCode: 0,
+                text: "x".repeat(100000),
+              },
             },
           ],
         }),

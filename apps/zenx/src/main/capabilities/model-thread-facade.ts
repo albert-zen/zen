@@ -327,15 +327,22 @@ export function projectThreadResult(
       output.parent = typeof value === "string" ? thread(value) : value;
     else if (key === "delivery" && record(value))
       output.delivery = projectThreadResult(object(value), args, refs);
-    else if (key === "runtime" && record(value))
-      output.runtime = pick(object(value), [
+    else if (key === "runtime" && record(value)) {
+      const runtime = pick(object(value), [
         "cwd",
         "model",
         "reasoningEffort",
         "approvalPolicy",
         "sandbox",
       ]);
-    else if (key === "items" && Array.isArray(value))
+      // Native thread/start returns a typed encoded provider/model key here.
+      if (
+        typeof runtime.model === "string" &&
+        runtime.model.startsWith("zen-model-v1:")
+      )
+        runtime.model = decodeModelKey(runtime.model).modelId;
+      output.runtime = runtime;
+    } else if (key === "items" && Array.isArray(value))
       output.items = value.map(item);
     else if (key === "turns" && Array.isArray(value))
       output.turns = value.map((value) => {

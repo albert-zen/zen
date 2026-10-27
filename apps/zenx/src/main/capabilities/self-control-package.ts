@@ -1,5 +1,6 @@
 import {
   resolveSidebarScope,
+  SidebarScopeChoiceRequired,
   bindSidebarResources,
   type SidebarRoom,
 } from "../sidebar-tool-scope.js";
@@ -652,11 +653,26 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         includeTurns: false,
       });
       invocation.signal.throwIfAborted();
-      const scope = resolveSidebarScope(
-        threadId,
-        invocation.arguments.scope,
-        this.#sidebarRooms(),
-      );
+      let scope: ReturnType<typeof resolveSidebarScope>;
+      try {
+        scope = resolveSidebarScope(
+          threadId,
+          invocation.arguments.scope,
+          this.#sidebarRooms(),
+        );
+      } catch (error) {
+        if (
+          error instanceof SidebarScopeChoiceRequired &&
+          name === "zenx_self_control_sidebar_read"
+        )
+          return {
+            status: "ambiguous",
+            error: error.message,
+            visibility: "not-observed",
+            authorizedScopes: error.choices,
+          };
+        throw error;
+      }
       const admit = () => {
         invocation.signal.throwIfAborted();
         resolveSidebarScope(

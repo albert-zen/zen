@@ -828,9 +828,7 @@ export class AppServerManager {
           event.error !== undefined ||
           event.result === undefined
         )
-          throw new Error(
-            "Local model debug request failed or capture expired",
-          );
+          throw new Error("Local durable Trace read failed");
         return event.result;
       },
     );

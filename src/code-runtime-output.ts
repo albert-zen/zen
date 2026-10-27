@@ -18,7 +18,7 @@ export interface ProgramOutputInfo {
 
 /** Project host capture into program data; model receipts remain a separate projection. */
 export async function programToolResult(result: ToolExecutionResult): Promise<
-  Omit<ToolExecutionResult, "output"> & {
+  Omit<ToolExecutionResult, "output" | "referenceBindings"> & {
     output: string | null;
     outputInfo: ProgramOutputInfo;
     diagnostic?: string;
@@ -84,8 +84,9 @@ export async function programToolResult(result: ToolExecutionResult): Promise<
   }
   info.complete = output !== null;
   const diagnostic = toolOutputSuffix(result);
+  const { referenceBindings: _hostOnlyReferences, ...programResult } = result;
   return {
-    ...result,
+    ...programResult,
     output,
     outputInfo: info,
     ...(diagnostic === undefined || diagnostic.length === 0

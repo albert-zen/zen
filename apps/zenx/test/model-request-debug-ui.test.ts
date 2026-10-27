@@ -11,7 +11,7 @@ import type {
   ModelRequestDebugCommand,
   ModelRequestDebugResult,
 } from "../../cli/src/model-request-debug-types.js";
-import { observeRequestBody } from "../../../src/model/request-observation.js";
+import { InMemoryTraceStore } from "../../../src/trace.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
@@ -61,43 +61,6 @@ async function click(text: string) {
   });
   await settle();
 }
-async function capture(
-  store: ModelRequestDebugStore,
-  threadId = "synthetic-thread",
-) {
-  const body = JSON.stringify({
-    model: "synthetic-model",
-    instructions: "synthetic system instructions",
-    messages: [{ role: "user", content: "synthetic prompt🙂".repeat(20) }],
-    tools: [{ type: "function", function: { name: "synthetic_tool" } }],
-  });
-  const adapter = store.observe({
-    provider: "synthetic",
-    requestPayloadFormat: "chat-completions",
-    async *stream(request) {
-      observeRequestBody(request, body, "chat-completions", "synthetic", 1);
-      yield { type: "text_delta" as const, delta: "ok" };
-    },
-  });
-  for await (const _event of adapter.stream({
-    model: "synthetic-model",
-    messages: [],
-    tools: [],
-    reasoningEffort: null,
-    signal: new AbortController().signal,
-    debugContext: {
-      threadId,
-      purpose: "turn",
-      turnId: "synthetic-turn",
-      sampleId: "synthetic-sample",
-      sampleAttempt: 1,
-      contextBoundaryItemId: "synthetic-boundary",
-    },
-  })) {
-    /* consume */
-  }
-  return body;
-}
 function connect(
   request: (
     input: ModelRequestDebugCommand,
@@ -105,230 +68,52 @@ function connect(
 ) {
   Object.assign(window, { zenx: { modelRequestDebug: { request } } });
 }
-
-test("viewer requires opt-in, exposes captured sections, paging and disabling removes payload", async () =>
-  withDom(async (root) => {
-    await i18n.changeLanguage("en");
-    const store = new ModelRequestDebugStore({ pageCharacters: 100 });
-    connect(async (input) => store.control(input));
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          threadId: "synthetic-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    assert.match(
-      document.body.textContent!,
-      /Earlier requests cannot be reconstructed/,
-    );
-    assert.equal(store.control({ action: "status" }).enabled, false);
-    await click("Enable capture");
-    await capture(store);
-    await click("Refresh");
-    await click("synthetic-model");
-    assert.match(
-      document.querySelector(".model-debug-payload, .model-debug-tree")!
-        .textContent!,
-      /synthetic-model/,
-    );
-    assert.match(
-      document.body.textContent!,
-      /does not prove that the provider received/,
-    );
-    await click("Next page");
-    assert.match(document.body.textContent!, /Characters 101/);
-    await click("Previous page");
-    await click("Instructions & settings");
-    assert.match(
-      document.querySelector(".model-debug-payload, .model-debug-tree")!
-        .textContent!,
-      /synthetic system instructions/,
-    );
-    await click("Tools");
-    assert.match(
-      document.querySelector(".model-debug-payload, .model-debug-tree")!
-        .textContent!,
-      /synthetic_tool/,
-    );
-    await click("Disable and clear");
-    assert.equal(document.querySelector(".model-debug-payload"), null);
-    assert.equal(store.control({ action: "status" }).retainedCount, 0);
-    assert.match(document.body.textContent!, /Capture off/);
-  }));
-
-test("a late payload after closing and switching thread cannot appear in the new viewer", async () =>
-  withDom(async (root) => {
-    const store = new ModelRequestDebugStore();
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
-    const pending = deferredResult();
-    let delayed: ModelRequestDebugResult | undefined;
-    connect(async (input) => {
-      if (input.action === "read") {
-        delayed = store.control(input);
-        return pending.promise;
-      }
-      return store.control(input);
-    });
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          key: "old",
-          threadId: "synthetic-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    await act(async () => button("synthetic-model").click());
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          key: "new",
-          threadId: "different-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    assert(delayed);
-    await act(async () => {
-      pending.resolve(delayed!);
-      await pending.promise;
-    });
-    assert.equal(document.querySelector(".model-debug-payload"), null);
-    assert(!document.body.textContent!.includes("synthetic prompt"));
-    assert.equal(
-      document.querySelector(".model-debug-scope")?.getAttribute("title"),
-      "different-thread",
-    );
-  }));
-
-test("unsupported adapters and oversized capture are explicitly labeled; structured tabs are disabled", async () =>
-  withDom(async (root) => {
-    const store = new ModelRequestDebugStore({
-      maxBytes: 150,
-      maxRecordBytes: 150,
-    });
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
-    connect(async (input) => store.control(input));
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          threadId: "synthetic-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    await click("synthetic-model");
-    assert.match(document.body.textContent!, /omitted content is unavailable/);
-    assert.equal(button("Messages / input").disabled, true);
-    assert.equal(button("Tools").disabled, true);
-    const record = store.control({
-      action: "list",
-      threadId: "synthetic-thread",
-    }).records![0]!;
-    const originalRequest = window.zenx.modelRequestDebug!.request;
-    connect(async (input) => {
-      const result = await originalRequest(input);
-      if (result.page) result.page.record.format = "model-input";
-      if (result.records)
-        result.records = result.records.map((row) => ({
-          ...row,
-          format: "model-input",
-        }));
-      return result;
-    });
-    await click("Refresh");
-    await click("synthetic-model");
-    assert.match(document.body.textContent!, /not a captured provider request/);
-    assert.equal(record.format, "chat-completions");
-  }));
-
-test("clearing while enabled invalidates the old selected capture and preserves capture mode", async () =>
-  withDom(async (root) => {
-    const store = new ModelRequestDebugStore();
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
-    connect(async (input) => store.control(input));
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          threadId: "synthetic-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    await click("synthetic-model");
-    await click("Clear captures");
-    assert.equal(document.querySelector(".model-debug-payload"), null);
-    assert.equal(store.control({ action: "status" }).enabled, true);
-    assert.equal(store.control({ action: "status" }).retainedCount, 0);
-  }));
-
-function deferredResult() {
-  let resolve!: (value: ModelRequestDebugResult) => void;
-  const promise = new Promise<ModelRequestDebugResult>((done) => {
-    resolve = done;
+async function fixture(threadId = "synthetic-thread") {
+  const trace = new InMemoryTraceStore();
+  await trace.record({
+    threadId,
+    sampleId: "sample",
+    type: "model_sample_started",
+    data: {
+      model: "frozen-model",
+      purpose: "turn",
+      configuration: { permission: "ask" },
+    },
   });
-  return { promise, resolve };
+  const body = JSON.stringify({
+    model: "frozen-model",
+    instructions: "trusted-system",
+    messages: [
+      { role: "user", content: "<img src=x onerror=alert(1)>原文🙂".repeat(6) },
+    ],
+    tools: [{ name: "test_tool" }],
+  });
+  const request = await trace.record({
+    threadId,
+    sampleId: "sample",
+    type: "model_request",
+    data: { transportAttempt: 1, model: "frozen-model", format: "responses" },
+    artifacts: [{ name: "request_body", bytes: body }],
+  });
+  await trace.record({
+    threadId,
+    sampleId: "sample",
+    type: "model_request_dispatched",
+    data: { transportAttempt: 1 },
+  });
+  await trace.record({
+    threadId,
+    sampleId: "sample",
+    type: "model_sample_finished",
+    data: { outcome: "completed", elapsedNs: "125000000" },
+  });
+  const store = new ModelRequestDebugStore(trace, { pageCharacters: 100 });
+  return { trace, store, request, body };
 }
-
-test("complete payload tree folds without losing raw retained text", async () =>
+test("durable reader has no opt-in/clear, preserves escaped exact pages, separate outcomes and frozen/current settings", async () =>
   withDom(async (root) => {
     await i18n.changeLanguage("en");
-    const store = new ModelRequestDebugStore();
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
-    connect(async (input) => store.control(input));
-    await act(async () =>
-      root.render(
-        createElement(ModelRequestDebugPanel, {
-          threadId: "synthetic-thread",
-          onClose() {},
-        }),
-      ),
-    );
-    await settle();
-    await click("synthetic-model");
-    assert(document.querySelector(".model-debug-tree"));
-    const toggle = document.querySelector<HTMLButtonElement>(
-      ".model-debug-tree-toggle",
-    )!;
-    assert.equal(toggle.getAttribute("aria-expanded"), "true");
-    await act(async () => toggle.click());
-    assert.equal(toggle.getAttribute("aria-expanded"), "false");
-    assert.equal(document.querySelector(".model-debug-tree-children"), null);
-    await click("Raw JSON");
-    const id = store.control({ action: "list", threadId: "synthetic-thread" })
-      .records![0]!.id;
-    const retained = store.control({ action: "read", id, view: "payload" })
-      .page!.text;
-    assert.equal(
-      document.querySelector(".model-debug-payload")!.textContent,
-      retained,
-    );
-    await click("Tree");
-    assert(document.querySelector(".model-debug-tree"));
-    await click("Disable and clear");
-    assert.equal(
-      document.querySelector(".model-debug-tree, .model-debug-payload"),
-      null,
-    );
-  }));
-
-test("compact inspector preserves list state and focus when returning from a narrow detail", async () =>
-  withDom(async (root) => {
-    await i18n.changeLanguage("en");
-    const store = new ModelRequestDebugStore();
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
+    const { store, body } = await fixture();
     const commands: ModelRequestDebugCommand[] = [];
     connect(async (input) => {
       commands.push(input);
@@ -338,200 +123,235 @@ test("compact inspector preserves list state and focus when returning from a nar
       root.render(
         createElement(ModelRequestDebugPanel, {
           threadId: "synthetic-thread",
+          currentSettings: { model: "current-model" },
         }),
       ),
     );
     await settle();
+    assert.match(document.body.textContent!, /Always on · read only/u);
+    assert.equal(document.querySelector('[role="switch"]'), null);
+    assert(!document.body.textContent!.includes("Clear"));
+    await click("frozen-model");
     assert.equal(
-      document.querySelector("h2"),
-      null,
-      "embedded inspector has no repeated title",
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      body.slice(0, 100),
     );
-    const list = document.querySelector<HTMLElement>(".model-debug-list")!;
-    list.scrollTop = 120;
-    const selected = button("synthetic-model");
-    await click("synthetic-model");
+    assert.equal(document.querySelector(".trace-inspector-payload img"), null);
+    assert.match(document.body.textContent!, /Sample outcome: completed/u);
+    assert.match(document.body.textContent!, /Raw response capture: unknown/u);
+    await click("Next page");
     assert.equal(
-      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
-      "true",
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      body.slice(100, 200),
     );
+    await click("Previous page");
     assert.equal(
-      document.activeElement,
-      document.querySelector(".model-debug-detail-heading"),
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      body.slice(0, 100),
     );
-    await click("Back to requests");
-    assert.equal(
-      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
-      "false",
+    await click("Frozen settings");
+    assert.match(
+      document.querySelector(".trace-inspector-payload")!.textContent!,
+      /frozenSample/u,
     );
-    assert.equal(list.scrollTop, 120);
-    assert.equal(document.activeElement, selected);
-    assert.equal(selected.getAttribute("aria-current"), "true");
-    assert.equal(
-      commands.some((command) => command.action === "setEnabled"),
-      false,
+    assert.match(document.body.textContent!, /current-model/u);
+    await click("Messages & instructions");
+    assert.match(
+      document.querySelector(".trace-inspector-payload")!.textContent!,
+      /trusted-system/u,
     );
+    assert(commands.every((x) => ["list", "read"].includes(x.action)));
   }));
-
-test("inspector responds to its own container and keeps search, selection and scroll on Back", async () =>
+test("close/reopen rereads existing evidence and narrow Back returns keyboard focus", async () =>
   withDom(async (root) => {
     await i18n.changeLanguage("en");
-    let resize: ResizeObserverCallback | undefined;
-    const originalObserver = globalThis.ResizeObserver;
-    Object.assign(globalThis, {
-      ResizeObserver: class {
-        constructor(callback: ResizeObserverCallback) {
-          resize = callback;
-        }
-        observe() {}
-        disconnect() {}
-      },
-    });
-    try {
-      const store = new ModelRequestDebugStore();
-      store.control({ action: "setEnabled", enabled: true });
-      await capture(store);
-      connect(async (input) => store.control(input));
-      await act(async () =>
-        root.render(
-          createElement(ModelRequestDebugPanel, {
-            threadId: "synthetic-thread",
-          }),
-        ),
-      );
-      await settle();
-      const input = document.querySelector<HTMLInputElement>(
-        ".model-debug-search input",
-      )!;
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          "value",
-        )!.set!.call(input, "synthetic");
-        input.dispatchEvent(new window.Event("input", { bubbles: true }));
-        input.dispatchEvent(new window.Event("change", { bubbles: true }));
-      });
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 220));
-      });
-      await act(async () =>
-        resize!(
-          [{ contentRect: { width: 1000 } } as ResizeObserverEntry],
-          {} as ResizeObserver,
-        ),
-      );
-      const sidebar = document.querySelector<HTMLElement>(
-        ".model-debug-sidebar",
-      )!;
-      const detail = document.querySelector<HTMLElement>(
-        ".model-debug-detail",
-      )!;
-      assert.equal(sidebar.hidden, false);
-      await click("synthetic-model");
-      assert.equal(sidebar.hidden, false, "wide container shows both panes");
-      await act(async () =>
-        resize!(
-          [{ contentRect: { width: 600 } } as ResizeObserverEntry],
-          {} as ResizeObserver,
-        ),
-      );
-      assert.equal(
-        sidebar.hidden,
-        true,
-        "narrow container hides the list without unmounting it",
-      );
-      assert.equal(detail.hidden, false);
-      const list = document.querySelector<HTMLElement>(".model-debug-list")!;
-      list.scrollTop = 70;
-      await click("Back to requests");
-      assert.equal(sidebar.hidden, false);
-      assert.equal(detail.hidden, true);
-      assert.equal(document.querySelector(".model-debug-search input"), input);
-      assert.equal(input.value, "synthetic");
-      assert.equal(list.scrollTop, 70);
-      assert.equal(document.activeElement, button("synthetic-model"));
-    } finally {
-      Object.assign(globalThis, { ResizeObserver: originalObserver });
-    }
+    const { store } = await fixture();
+    connect((input) => store.control(input));
+    const render = () =>
+      createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" });
+    await act(async () => root.render(render()));
+    await settle();
+    const source = button("frozen-model");
+    source.focus();
+    await click("frozen-model");
+    assert.equal(document.activeElement?.tagName, "H3");
+    await click("Back to records");
+    assert.equal(document.activeElement, source);
+    await act(async () => root.render(null));
+    await act(async () => root.render(render()));
+    await settle();
+    assert.match(document.body.textContent!, /frozen-model/u);
   }));
-
-test("Back during a pending section read stays in the list and does not change capture", async () =>
+test("thread switch ignores an old read, new requests remain selectable, stale overlap cannot replace new detail", async () =>
   withDom(async (root) => {
-    const store = new ModelRequestDebugStore();
-    store.control({ action: "setEnabled", enabled: true });
-    await capture(store);
-    const pending = deferredResult();
-    let delayed: ModelRequestDebugResult | undefined;
-    connect(async (input) => {
-      if (input.action === "read" && input.view === "tools") {
-        delayed = store.control(input);
-        return pending.promise;
-      }
+    await i18n.changeLanguage("en");
+    const a = await fixture("thread-a"),
+      b = await fixture("thread-b");
+    let release: ((r: ModelRequestDebugResult) => void) | undefined;
+    const oldPage = await a.store.control({
+      action: "read",
+      threadId: "thread-a",
+      id: a.request.recordId!,
+    });
+    connect((input) =>
+      input.action === "read" && input.threadId === "thread-a"
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : b.store.control(input),
+    );
+    // Use the real per-thread records, with a pending old response on the first thread.
+    connect((input) =>
+      input.action === "read" && input.threadId === "thread-a"
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : (input.action !== "status" && input.threadId === "thread-a"
+            ? a.store
+            : b.store
+          ).control(input),
+    );
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "thread-a" }),
+      ),
+    );
+    await settle();
+    await click("frozen-model");
+    assert(release);
+    await act(async () =>
+      root.render(
+        createElement(ModelRequestDebugPanel, { threadId: "thread-b" }),
+      ),
+    );
+    await settle();
+    await click("frozen-model");
+    await act(async () => release!(oldPage));
+    assert.match(
+      document.querySelector(".trace-inspector-detail")!.textContent!,
+      /thread-b/u,
+    );
+    assert(
+      !document
+        .querySelector(".trace-inspector-detail")!
+        .textContent!.includes("thread-a"),
+    );
+    await b.trace.record({
+      threadId: "thread-b",
+      sampleId: "sample-new",
+      type: "model_request",
+      data: { model: "new-request", transportAttempt: 1 },
+      artifacts: [{ name: "request_body", bytes: '{"model":"new-request"}' }],
+    });
+    await click("Refresh index");
+    await click("new-request");
+    assert.match(
+      document.querySelector(".trace-inspector-payload")!.textContent!,
+      /new-request/u,
+    );
+  }));
+test("empty, read error, retry, cancelled sample and prepared blocked records remain honest", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const { store, trace } = await fixture();
+    let fail = true;
+    connect((input) => {
+      if (input.action === "read" && fail)
+        return Promise.reject(new Error("artifact is unavailable"));
       return store.control(input);
     });
     await act(async () =>
       root.render(
-        createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
+        createElement(ModelRequestDebugPanel, { threadId: "absent" }),
       ),
     );
     await settle();
-    await click("synthetic-model");
-    await click("Tools");
-    await click("Back to requests");
-    await act(async () => pending.resolve(delayed!));
-    assert.equal(
-      document.querySelector(".model-debug-body")?.getAttribute("data-detail"),
-      "false",
-    );
-    assert.equal(store.control({ action: "status" }).enabled, true);
-  }));
-
-test("critical consent stays visible before enabling and simultaneous integrity flags remain discoverable", async () =>
-  withDom(async (root) => {
-    await i18n.changeLanguage("en");
-    const store = new ModelRequestDebugStore();
-    connect(async (input) => {
-      const result = store.control(input);
-      if (result.page)
-        Object.assign(result.page.record, {
-          truncated: true,
-          redacted: true,
-          format: "model-input",
-        });
-      return result;
-    });
+    assert.match(document.body.textContent!, /No recorded evidence/u);
     await act(async () =>
       root.render(
         createElement(ModelRequestDebugPanel, { threadId: "synthetic-thread" }),
       ),
     );
     await settle();
-    const consent = document.querySelector(".model-debug-consent")!;
+    await click("frozen-model");
     assert.match(
-      consent.textContent!,
-      /Device-wide.*private content.*Memory only.*Closing keeps capture on; disabling clears it/,
+      document.querySelector('[role="alert"]')!.textContent!,
+      /artifact is unavailable/u,
     );
+    await click("Back to records");
+    fail = false;
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "sample",
+      type: "model_sample_finished",
+      data: { outcome: "cancelled" },
+    });
+    await trace.record({
+      threadId: "synthetic-thread",
+      sampleId: "sample",
+      type: "model_dispatch_blocked",
+      data: { transportAttempt: 1, preparedRequestCaptured: true },
+    });
+    await click("Refresh index");
+    await click("frozen-model");
+    assert.match(document.body.textContent!, /Sample outcome: cancelled/u);
+    assert.match(
+      document.body.textContent!,
+      /These bytes were not sent by this attempt/u,
+    );
+  }));
+test("all-local title scope and original tool artifacts are explicit", async () =>
+  withDom(async (root) => {
+    await i18n.changeLanguage("en");
+    const { store, trace } = await fixture();
+    await trace.record({
+      threadId: "aux-title",
+      sampleId: "title-sample",
+      type: "model_sample_started",
+      data: { purpose: "title", model: "title-model" },
+    });
+    await trace.record({
+      threadId: "aux-title",
+      sampleId: "title-sample",
+      type: "model_input",
+      artifacts: [{ name: "model_input", bytes: "title-input" }],
+    });
+    await trace.record({
+      threadId: "synthetic-thread",
+      type: "tool_output",
+      artifacts: [{ name: "tool_output", bytes: "exact-tool-output" }],
+    });
+    connect((input) => store.control(input));
+    await act(async () =>
+      root.render(createElement(ModelRequestDebugPanel, {})),
+    );
+    await settle();
+    assert.match(
+      document.body.textContent!,
+      /All local · includes title\/probe/u,
+    );
+    await click("title-model");
+    assert.match(
+      document.querySelector(".trace-inspector-payload")!.textContent!,
+      /Unavailabl/u,
+    );
+    await click("Original artifact");
     assert.equal(
-      button("Enable capture").getAttribute("aria-describedby"),
-      consent.id,
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      "title-input",
     );
-    await click("Enable capture");
-    await capture(store);
-    await click("Refresh");
-    await click("synthetic-model");
-    const summary = document.querySelector(
-      ".model-debug-record-info > summary",
-    )!;
-    assert.match(summary.textContent!, /Model input only/);
-    assert.match(summary.textContent!, /Truncated/);
-    assert.match(summary.textContent!, /Redacted/);
-    assert.equal(button("Messages / input").disabled, true);
-    const metadata = document.querySelector<HTMLDetailsElement>(
-      ".model-debug-record-info",
-    )!;
-    assert.equal(metadata.open, false);
-    metadata.open = true;
-    assert.match(metadata.textContent!, /not a captured provider request/);
-    assert.match(metadata.textContent!, /omitted content is unavailable/);
-    assert.match(metadata.textContent!, /not byte-identical/);
+    await act(async () => {
+      const select = document.querySelector(
+        'select[aria-label="Evidence"]',
+      ) as HTMLSelectElement;
+      select.value = "events";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    await settle();
+    await click("tool_output");
+    await click("Original artifact");
+    assert.equal(
+      document.querySelector(".trace-inspector-payload")!.textContent,
+      "exact-tool-output",
+    );
   }));

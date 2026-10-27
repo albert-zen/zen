@@ -1,3 +1,10 @@
+import { FileTraceStore, type RuntimeTrace } from "../../../src/trace.js";
+import {
+  observeModelWithTrace,
+  closeModelTrace,
+} from "../../../src/trace-model.js";
+import { TraceReadToolRuntime } from "../../../src/trace-tool.js";
+import { DomainThreadJournal } from "../../../src/domain-journal.js";
 import { ModelRequestDebugStore } from "./model-request-debug.js";
 import { SkillsService } from "./skills.js";
 import { RtkShellOutputFilter } from "../../../src/shell-output-filter.js";
@@ -177,21 +184,32 @@ export function createHostedAppServer(
   const attachments =
     options.attachments ??
     new FileAttachmentStore(path.join(options.dataDirectory, "attachments"));
+  const trace = new FileTraceStore(path.join(options.dataDirectory, "trace"));
+  const threadMetadata =
+    options.threadMetadata ??
+    new JsonlThreadMetadataStore(
+      path.join(options.dataDirectory, "thread-metadata.jsonl"),
+    );
   const journal =
     options.journal ??
-    new JsonlThreadJournal(path.join(options.dataDirectory, "threads"));
+    new DomainThreadJournal({
+      directory: path.join(options.dataDirectory, "threads"),
+      trace,
+      metadata: threadMetadata,
+      attachments,
+    });
   const normalizedProfiles = normalizePreparedProviderProfiles(
     options,
     attachments,
   );
-  const modelRequestDebug = new ModelRequestDebugStore();
+  const modelRequestDebug = new ModelRequestDebugStore(trace);
   const providerPreparation = createProviderProfiles(
     normalizedProfiles,
     attachments,
     createModelDiagnosticWriter(
       path.join(options.dataDirectory, "diagnostics"),
     ),
-    modelRequestDebug,
+    trace,
   );
   const preparedProfiles = providerPreparation.profiles;
   const defaultSelection = normalizeDefaultSelection(options, preparedProfiles);
@@ -261,6 +279,8 @@ export function createHostedAppServer(
     journal,
     attachments,
     runtime: new AgentRuntime({
+      trace,
+      traceInspection: true,
       resolveCodeMedia: createMediaOutputConverter(attachments),
       toolEnvironment,
       toolPresentation: codeRuntime.presentation,
@@ -282,11 +302,7 @@ export function createHostedAppServer(
           `[provider retirement] ${error instanceof Error ? error.message : String(error)}`,
         ),
     }),
-    threadMetadata:
-      options.threadMetadata ??
-      new JsonlThreadMetadataStore(
-        path.join(options.dataDirectory, "thread-metadata.jsonl"),
-      ),
+    threadMetadata,
     threadSummaryProjection:
       options.threadSummaryProjection ??
       new JsonThreadSummaryProjection(
@@ -314,12 +330,11 @@ export function createHostedAppServer(
     initialRevision: options.configurationRevision ?? 0,
     initialResources: providerPreparation.resources,
     attachments,
-    modelRequestDebug,
+    trace,
   });
   let closeTransportPromise: Promise<void> | undefined;
   const closeProviderTransport = async () => {
     closeTransportPromise ??= (async () => {
-      modelRequestDebug.control({ action: "setEnabled", enabled: false });
       const toolResults = await Promise.allSettled([toolEnvironment.close()]);
       const results = [
         ...toolResults,
@@ -328,6 +343,9 @@ export function createHostedAppServer(
           toolOutputSpool.close(),
         ])),
       ];
+      results.push(...(await Promise.allSettled([closeModelTrace(trace)])));
+      results.push(...(await Promise.allSettled([trace.flush()])));
+      results.push(...(await Promise.allSettled([journal.close?.()])));
       const failures = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
@@ -337,6 +355,11 @@ export function createHostedAppServer(
     })();
     await closeTransportPromise;
   };
+  toolEnvironment.bindTrace(trace, attachments);
+  toolEnvironment.registerRuntime(new TraceReadToolRuntime(trace), {
+    kind: "builtin",
+    id: "trace-reader",
+  });
   return Object.assign(appServer, {
     modelRequestDebug,
     processEpoch: configuration.processEpoch,
@@ -439,7 +462,7 @@ function createProviderProfiles(
   profiles: readonly NormalizedProviderProfile[],
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
-  modelRequestDebug: ModelRequestDebugStore,
+  trace: RuntimeTrace,
   reusable: ReadonlyMap<string, ProviderResource> = new Map(),
 ): {
   profiles: PreparedProviderProfile[];
@@ -461,7 +484,7 @@ function createProviderProfiles(
               profile,
               attachments,
               onStreamFailure,
-              modelRequestDebug,
+              trace,
             );
       if (resource !== existing) created.push(resource);
       resources.set(profile.providerProfileId, resource);
@@ -487,7 +510,7 @@ function createProviderResource(
   profile: NormalizedProviderProfile,
   attachments: AttachmentStore,
   onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>,
-  modelRequestDebug: ModelRequestDebugStore,
+  trace: RuntimeTrace,
 ): ProviderResource {
   const fetch = createProviderFetch(profile.transport);
   let closePromise: Promise<void> | undefined;
@@ -502,7 +525,7 @@ function createProviderResource(
       providerProfileId: profile.providerProfileId,
       provider: profile.provider,
       transport: profile.transport,
-      adapter: modelRequestDebug.observe(adapter),
+      adapter: observeModelWithTrace(adapter, trace),
       close: async () => {
         closePromise ??= Promise.resolve(fetch.close?.()).then(() => undefined);
         await closePromise;
@@ -530,7 +553,7 @@ class HostRuntimeConfiguration {
   readonly #appServer: ZenAppServer;
   readonly #processOptions: ZenHostOptions;
   readonly #attachments: AttachmentStore;
-  readonly #modelRequestDebug: ModelRequestDebugStore;
+  readonly #trace: RuntimeTrace;
   readonly #onStreamFailure: ReturnType<typeof createModelDiagnosticWriter>;
   readonly #published = new Map<
     string,
@@ -552,7 +575,7 @@ class HostRuntimeConfiguration {
     initialRevision: number;
     initialResources: Map<string, ProviderResource>;
     attachments: AttachmentStore;
-    modelRequestDebug: ModelRequestDebugStore;
+    trace: RuntimeTrace;
   }) {
     this.#appServer = options.appServer;
     this.processEpoch = options.processEpoch;
@@ -560,7 +583,7 @@ class HostRuntimeConfiguration {
     this.#currentOptions = options.initialOptions;
     this.#currentResources = options.initialResources;
     this.#attachments = options.attachments;
-    this.#modelRequestDebug = options.modelRequestDebug;
+    this.#trace = options.trace;
     this.#onStreamFailure = createModelDiagnosticWriter(
       path.join(options.initialOptions.dataDirectory, "diagnostics"),
     );
@@ -598,7 +621,7 @@ class HostRuntimeConfiguration {
       normalized,
       this.#attachments,
       this.#onStreamFailure,
-      this.#modelRequestDebug,
+      this.#trace,
       this.#currentResources,
     );
     try {

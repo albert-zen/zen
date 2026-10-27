@@ -43,7 +43,10 @@ export const en = {
   debugView: "Debug",
   debugItems: "Items",
   debugRequests: "Actual requests",
-  debugItemsNote: "Canonical Items · append order · {{count}} records",
+  debugSemanticUnavailable:
+    "Semantic ItemList unavailable from this Host; source history is not reconstructed as exact model input.",
+  debugItemsNote:
+    "Semantic ItemList · exact roles and contents · {{count}} records",
   debugEmpty: "No canonical Items yet.",
   debugJson: "Exact Item JSON",
   debugOpaque: "Opaque provider reasoning · content available in Item JSON",
@@ -987,7 +990,9 @@ export const zhCN = {
   debugView: "调试",
   debugItems: "Items",
   debugRequests: "实际请求",
-  debugItemsNote: "Canonical Items · 追加顺序 · {{count}} 条",
+  debugSemanticUnavailable:
+    "此 Host 未提供语义 ItemList；不会将原始历史重建后冒充精确模型输入。",
+  debugItemsNote: "语义 ItemList · 精确角色与内容 · {{count}} 条",
   debugEmpty: "暂无 canonical Items。",
   debugJson: "完整 Item JSON",
   debugOpaque: "提供方不透明推理数据 · 可在 Item JSON 中查看",

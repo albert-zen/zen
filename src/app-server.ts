@@ -1,4 +1,5 @@
-import type { ContextItem } from "./item-list.js";
+import { compileItemList, type ContextItem } from "./item-list.js";
+import { prepareSampleContext } from "./context-preparation.js";
 import { projectModelMessages } from "./model-content.js";
 import {
   matchesSkillInputSnapshot,
@@ -316,6 +317,7 @@ export interface ModelCatalogUpdatedEvent {
 }
 
 export type AppServerEvent =
+  | { type: "context_item_completed"; threadId: string; item: ContextItem }
   | Exclude<RuntimeEvent, { type: "item_completed" }>
   | {
       type: "item_completed";
@@ -3508,7 +3510,7 @@ export class ZenAppServer {
                     }
                   });
                 },
-                dispatchTool: async (_call, launch) => {
+                dispatchTool: async (_call, launch, baseline) => {
                   const admitted = await this.#withThreadMutation(
                     threadId,
                     async () => {
@@ -3517,12 +3519,15 @@ export class ZenAppServer {
                       this.#assertCurrentThreadAuthority(thread);
                       const current = thread.effectiveConfiguration();
                       if (
-                        current.sandbox !== configuration.sandbox ||
-                        current.approvalPolicy !== configuration.approvalPolicy
+                        current.sandbox !== baseline.sandbox ||
+                        current.approvalPolicy !== baseline.approvalPolicy
                       )
-                        throw new AppServerError(
-                          "operation_forbidden",
-                          "Thread permissions changed before tool dispatch; request new admission",
+                        throw Object.assign(
+                          new AppServerError(
+                            "operation_forbidden",
+                            "Thread permissions changed before tool dispatch; request new admission",
+                          ),
+                          { modelRecoveryBlocked: true },
                         );
                       controller.signal.throwIfAborted();
                       // No await between the final authority check and actual launch.
@@ -3626,31 +3631,78 @@ export class ZenAppServer {
                         "Model sample has no canonical context boundary",
                       );
                     }
-                    const messages = compileModelMessages(
-                      items,
-                      resolved.selection,
-                    );
                     const notice =
                       active.contextCompactionNotice !== undefined &&
                       active.contextCompactionNoticeIssued !== true
                         ? active.contextCompactionNotice
                         : undefined;
-                    if (notice !== undefined) {
-                      active.contextCompactionNoticeIssued = true;
+                    const configuration = thread.effectiveConfiguration();
+                    const sample =
+                      this.#providerRegistry.acquire(configuration);
+                    try {
+                      const presentation =
+                        this.#runtime.projectToolPresentation(
+                          items,
+                          admitted.configuration.contextCompaction
+                            .agenticEnabled &&
+                            sample.model.contextWindow !== null,
+                        );
+                      for (const context of prepareSampleContext({
+                        threadId,
+                        turnId,
+                        sampleId: modelResponseId,
+                        items,
+                        itemList: thread.itemList,
+                        sandbox: configuration.sandbox,
+                        ...(sample.adapter.contextInstructions === undefined
+                          ? {}
+                          : {
+                              instructions: sample.adapter.contextInstructions,
+                            }),
+                        tools: presentation.modelTools,
+                        inputModalities: sample.model.inputModalities,
+                        ...(notice === undefined ? {} : { notice }),
+                        id: this.#id,
+                        now: this.#now,
+                      }))
+                        await this.#commitContext(thread, context);
+                      const compiled = compileItemList(thread.itemList, {
+                        sampleId: modelResponseId,
+                        selection: sample.selection,
+                        inputModalities: sample.model.inputModalities,
+                      });
+                      if (notice !== undefined)
+                        active.contextCompactionNoticeIssued = true;
+                      return {
+                        compiled: true as const,
+                        messages: compiled.messages,
+                        presentation: {
+                          ...presentation,
+                          modelTools: compiled.tools,
+                        },
+                        selectedItemIds: compiled.selectedItemIds,
+                        modelAdapter: sample.adapter,
+                        configuration: {
+                          cwd: configuration.cwd,
+                          providerProfileId: sample.selection.providerProfileId,
+                          model: sample.selection.modelId,
+                          reasoningEffort: sample.selection.reasoningEffort,
+                          sandbox: configuration.sandbox,
+                          approvalPolicy: configuration.approvalPolicy,
+                          inputModalities: sample.model.inputModalities,
+                          contextWindow: sample.model.contextWindow,
+                        },
+                        contextBoundaryItemId,
+                        assertDispatchAllowed: () => {
+                          this.#assertCurrentThreadAuthority(thread);
+                          sample.assertDispatchAllowed();
+                        },
+                        release: () => sample.release(),
+                      };
+                    } catch (error) {
+                      sample.release();
+                      throw error;
                     }
-                    return {
-                      messages:
-                        notice === undefined
-                          ? messages
-                          : [
-                              ...messages,
-                              {
-                                role: "user" as const,
-                                text: notice,
-                              },
-                            ],
-                      contextBoundaryItemId,
-                    };
                   }),
                 commitFinal: async (message, modelResponseId) =>
                   await this.#commitFinalResponse(
@@ -4870,6 +4922,19 @@ export class ZenAppServer {
     }
   }
 
+  async #commitContext(thread: Thread, item: ContextItem): Promise<void> {
+    this.#assertCurrentThreadAuthority(thread);
+    try {
+      await this.#journal.appendContext?.(item);
+    } catch (error) {
+      if (this.#threads.get(thread.id) === thread)
+        this.#threads.delete(thread.id);
+      throw new ThreadJournalAppendOutcomeUnknownError(error);
+    }
+    thread.appendContext(item);
+    this.#emit({ type: "context_item_completed", threadId: thread.id, item });
+  }
+
   #assertCurrentThreadAuthority(thread: Thread): void {
     if (this.#threads.get(thread.id) !== thread)
       throw new ThreadJournalAppendOutcomeUnknownError(
@@ -4898,7 +4963,15 @@ export class ZenAppServer {
       this.#threadSummaries = undefined;
       throw new ThreadJournalAppendOutcomeUnknownError(error);
     }
+    const before = new Set(thread.itemList.map((context) => context.id));
     thread.append(item);
+    for (const context of thread.itemList)
+      if (!before.has(context.id))
+        this.#emit({
+          type: "context_item_completed",
+          threadId: thread.id,
+          item: context,
+        });
     await this.#refreshThreadSummary(thread);
   }
 

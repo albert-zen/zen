@@ -813,3 +813,414 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
   );
   assert.ok(result.output.length < 1024);
 });
+
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ThreadSidebarStore } from "../src/main/thread-sidebar-store.js";
+import { sidebarTabId } from "../src/thread-sidebar-state.js";
+import {
+  ZenXTriggersCapabilityPackage,
+  type ZenXAutomationControlPort,
+} from "../src/main/capabilities/automation-control-package.js";
+import { ZenXSubagentsCapabilityPackage } from "../src/main/capabilities/subagents-package.js";
+test("sidebar facade exact snapshot preserves other member descriptors and live membership fences", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "compact-sidebar-"));
+  try {
+    const store = new ThreadSidebarStore(directory),
+      owner = { kind: "room" as const, id: "room-" + UUID },
+      original = {
+        kind: "file" as const,
+        path: `${UUID}.md`,
+        resourceThreadId: OTHER,
+      };
+    await store.update({
+      owner,
+      expectedRevision: 0,
+      patch: { tabs: [original], selectedTab: sidebarTabId(original) },
+    });
+    let membership = [
+      {
+        id: owner.id,
+        name: "Team",
+        assistant: { threadId: "caller" },
+        members: [{ threadId: "caller" }, { threadId: OTHER }],
+      },
+    ];
+    const service = new ZenXSelfControlCapabilityPackage({
+      sidebar: store,
+      sidebarRooms: () => membership,
+      appServer: {
+        request: async () => ({ thread: { id: "caller" } }),
+      } as never,
+    });
+    const app = bridge(service.manifest.tools, service);
+    const old = await app.call("zenx_self_control_sidebar_read", {});
+    assert.equal(old.state.revision, undefined);
+    assert.equal(old.state.tabs[0].path, `${UUID}.md`);
+    assert.equal(old.state.tabs[0].resourceThreadId, undefined);
+    const current = await store.read(owner);
+    await store.update({
+      owner,
+      expectedRevision: current.revision,
+      patch: { open: !current.open },
+    });
+    const fresh = await app.call("zenx_self_control_sidebar_read", {});
+    assert.notEqual(old.snapshot, fresh.snapshot);
+    const stale = await app.call("zenx_self_control_sidebar_update", {
+      snapshot: old.snapshot,
+      patch: { open: true },
+    });
+    assert.equal(stale.applied, false);
+    assert.equal(
+      app.native.at(-1)!.arguments.expectedRevision,
+      current.revision,
+    );
+    const updated = await app.call("zenx_self_control_sidebar_update", {
+      snapshot: fresh.snapshot,
+      patch: {
+        tabs: [{ ref: fresh.state.tabs[0].ref }],
+        selectedTab: fresh.state.tabs[0].ref,
+      },
+    });
+    assert.equal(updated.applied, true);
+    assert.deepEqual((await store.read(owner)).tabs, [original]);
+    membership = [];
+    await assert.rejects(
+      app.call("zenx_self_control_sidebar_read", { scope: fresh.scope.ref }),
+      /currently belong/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("ambiguous sidebar choices carry semantic names and refs without routing JSON", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "compact-sidebar-"));
+  try {
+    const service = new ZenXSelfControlCapabilityPackage({
+      sidebar: new ThreadSidebarStore(directory),
+      sidebarRooms: () =>
+        ["one", "two"].map((id) => ({
+          id: id + UUID,
+          name: "Same label",
+          assistant: { threadId: "caller" },
+          members: [{ threadId: "caller" }],
+        })),
+      appServer: {
+        request: async () => ({ thread: { id: "caller" } }),
+      } as never,
+    });
+    const app = bridge(service.manifest.tools, service),
+      choices = await app.call("zenx_self_control_sidebar_read", {});
+    assert.equal(choices.status, "ambiguous");
+    assert.doesNotMatch(JSON.stringify(choices), new RegExp(UUID));
+    assert.notEqual(
+      choices.authorizedScopes[1].ref,
+      choices.authorizedScopes[2].ref,
+    );
+    await app.call("zenx_self_control_sidebar_read", {
+      scope: choices.authorizedScopes[1].ref,
+    });
+    assert.equal((app.native.at(-1)!.arguments.scope as any).id, "one" + UUID);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+test("Trigger facade preserves exact native resume/preview fences and unknown delivery without program rewrite", async () => {
+  let revision = 3,
+    previewRevision = 7,
+    resumed = 0,
+    created = 0;
+  const triggerId = "trigger-" + UUID,
+    historyId = "history-" + UUID;
+  const definition = () => ({
+    id: triggerId,
+    definitionRevision: revision,
+    threadId: THREAD,
+    kind: "thread",
+    label: "Watch",
+    prompt: literal,
+    createdAt: 1,
+    active: false,
+    watch: {
+      threadId: OTHER,
+      event: "turn_completed",
+      sourceDevice: "device-" + UUID,
+      sourceWorkspace: "Synthetic workspace",
+    },
+    program: { action: { command: literal, args: [UUID] } },
+  });
+  const preview = () => ({
+    workspace: "/synthetic",
+    resolvedWorkspace: "/synthetic",
+    model: "opaque-" + UUID,
+    modelId: "semantic-model",
+    providerProfileId: UUID,
+    reasoningEffort: null,
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    processEpoch: "epoch-" + UUID,
+    revision: previewRevision,
+  });
+  const calls: any[] = [];
+  const port = {
+    snapshot: () => ({
+      triggers: [definition()],
+      rooms: [],
+      history: [
+        {
+          id: historyId,
+          triggerId,
+          threadId: THREAD,
+          kind: "thread",
+          reason: "Observed",
+          prompt: literal,
+          clientUserMessageId: UUID,
+          startedAt: 1,
+          completedAt: null,
+          status: "running",
+          delivery: "unknown",
+          turnId: null,
+          error: "Uncertain: " + literal,
+          sourceThreadId: OTHER,
+          sourceDevice: "device-" + UUID,
+          sourceTurnId: null,
+          sourceRoomId: null,
+          sourceRoomMessageId: null,
+          replyRoomId: null,
+          replyAuthor: null,
+          programInvocationId: UUID,
+          programOutcome: null,
+          programOutcomes: [],
+        },
+      ],
+    }),
+    resume: async (id: string, expected: number) => {
+      assert.equal(id, triggerId);
+      if (expected !== revision) throw Error("Definition revision conflict");
+      resumed++;
+    },
+    previewTarget: async () => preview(),
+    createTarget: async (workspace: string, expected: any) => {
+      assert.equal(workspace, "/synthetic");
+      if (JSON.stringify(expected) !== JSON.stringify(preview()))
+        throw Error("Target preview changed");
+      created++;
+      return { threadId: OTHER, effective: preview() };
+    },
+    update: async (input: any) => {
+      calls.push(input);
+      return definition();
+    },
+    result: async (id: string) => {
+      assert.equal(id, historyId);
+      return {
+        sourceDevice: "device-" + UUID,
+        threadId: OTHER,
+        turnId: "turn-" + UUID,
+        status: "failed",
+        preview: literal,
+      };
+    },
+  } as unknown as ZenXAutomationControlPort;
+  const service = new ZenXTriggersCapabilityPackage(port),
+    app = bridge(service.manifest.tools, service);
+  const first = await app.call("zenx_triggers_list", {}),
+    trigger = first.triggers[0];
+  assert.equal(trigger.definitionRevision, undefined);
+  assert.equal(trigger.program.action.command, literal);
+  assert.equal(first.history[0].delivery, "unknown");
+  assert.equal(first.history[0].clientUserMessageId, undefined);
+  revision++;
+  await assert.rejects(
+    app.call("zenx_triggers_resume", { snapshot: trigger.snapshot }),
+    /conflict/,
+  );
+  assert.equal(resumed, 0);
+  const fresh = await app.call("zenx_triggers_list", {});
+  await app.call("zenx_triggers_resume", {
+    snapshot: fresh.triggers[0].snapshot,
+  });
+  assert.equal(resumed, 1);
+  await app.call("zenx_triggers_update", {
+    trigger: trigger.ref,
+    thread: trigger.thread,
+    kind: "thread",
+    label: "Watch",
+    prompt: literal,
+    watchedThread: trigger.watch.thread,
+    sourceWorkspace: "Synthetic workspace",
+    program: { action: { command: literal } },
+  });
+  assert.equal(calls[0].watchedThreadId, OTHER);
+  assert.equal(calls[0].sourceDevice, "device-" + UUID);
+  const target = await app.call("zenx_triggers_preview_target", {
+    workspace: "/synthetic",
+  });
+  assert.equal(target.revision, undefined);
+  assert.equal(target.processEpoch, undefined);
+  previewRevision++;
+  await assert.rejects(
+    app.call("zenx_triggers_create_target", { snapshot: target.snapshot }),
+    /changed/,
+  );
+  assert.equal(created, 0);
+  const newTarget = await app.call("zenx_triggers_preview_target", {
+    workspace: "/synthetic",
+  });
+  await app.call("zenx_triggers_create_target", {
+    snapshot: newTarget.snapshot,
+  });
+  assert.equal(created, 1);
+  const source = await app.call("zenx_triggers_result", {
+    history: first.history[0].ref,
+  });
+  assert.equal(source.status, "failed");
+  assert.equal(source.preview, literal);
+});
+
+test("real Subagent facade preserves exact native parent/child routes and partial follow-up outcome", async () => {
+  const child = {
+    id: OTHER,
+    parentThreadId: THREAD,
+    name: "Same label",
+    cwd: "/synthetic",
+    providerProfileId: UUID,
+    modelId: "semantic-model",
+    reasoningEffort: null,
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    archived: false,
+    items: [],
+    turns: [],
+  };
+  const calls: any[] = [];
+  const port = {
+    projectProjection: { canonicalKeys: async (keys: string[]) => keys },
+    request: async (method: string, args: any) => {
+      calls.push({ method, args });
+      if (method === "zen/thread/create-child") {
+        assert.equal(args.parentThreadId, THREAD);
+        return { thread: child };
+      }
+      if (method === "thread/name/set")
+        throw Error("Unknown title outcome " + literal);
+      if (method === "zen/thread/read" || method === "thread/read")
+        return { thread: child };
+      if (method === "thread/list")
+        return {
+          data: args.archived ? [] : [{ ...child, status: { type: "idle" } }],
+          nextCursor: null,
+        };
+      throw Error("Unexpected " + method);
+    },
+  } as unknown as AppServerRequestPort;
+  const threads = new ZenXSelfControlCapabilityPackage({ appServer: port }),
+    service = new ZenXSubagentsCapabilityPackage({
+      appServer: port,
+      threads,
+      listSummaries: async () =>
+        [
+          {
+            threadId: OTHER,
+            parentThreadId: THREAD,
+            name: "Same label",
+            status: "idle",
+            currentMetadata: {
+              cwd: "/synthetic",
+              providerProfileId: UUID,
+              modelId: "semantic-model",
+            },
+          },
+        ] as never,
+    });
+  const registry = new ModelReferenceRegistry(),
+    seed = registry.scope("caller"),
+    parent = seed.bind("threads", "thread", { id: THREAD, device: "local" });
+  const app = bridge(service.manifest.tools, service, seed.newBindings);
+  const created = await app.call("zenx_subagents_create", {
+    parent,
+    mode: "fresh",
+    title: "Synthetic",
+  });
+  assert.equal(created.status, "created");
+  assert.equal(created.followUpError, "Unknown title outcome " + literal);
+  assert.equal(created.thread.providerProfileId, undefined);
+  assert.equal(created.parent, parent);
+  const listed = await app.call("zenx_subagents_list", { parent });
+  assert.equal(listed.threads[0].ref, created.ref);
+  await app.call("zenx_subagents_read", { ref: created.ref });
+  assert.equal(app.native.at(-1)!.arguments.threadId, OTHER);
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.method === "zen/thread/read" && call.args.threadId === OTHER,
+    ),
+  );
+});
+
+test("degraded Trace capture never invents an inspection ref or loses known backend outcome", async () => {
+  const result = await invokeModelToolFacade({
+    invocation: {
+      name: "zenx_threads_create",
+      callId: "degraded",
+      threadId: "caller",
+      cwd: "/synthetic",
+      arguments: { cwd: "/synthetic" },
+      signal: signal(),
+      modelTraceInspectionTool: "trace_read",
+      traceOutput: {
+        recordResult: async () => ({
+          durability: "degraded",
+          error: "Synthetic storage unavailable",
+        }),
+      },
+    },
+    epoch: "epoch",
+    references: new ModelReferenceRegistry(),
+    dispatch: async () => ({
+      output: JSON.stringify({
+        threadId: "generated-".repeat(150_000),
+        status: "created",
+        followUpError: literal,
+      }),
+      exitCode: 0,
+    }),
+  });
+  const projected = JSON.parse(result.output);
+  assert.equal(projected.projection, "projection_unavailable");
+  assert.equal(projected.outcome.status, "created");
+  assert.equal(projected.outcome.followUpError, literal);
+  assert.equal(projected.trace, undefined);
+  assert.equal(trustedModelReferenceBindings(result), undefined);
+});
+
+test("native Thread creation runtime settings project their generated model key semantically", async () => {
+  const { encodeModelKey } = await import("../../../src/protocol/model-key.js");
+  const raw = {
+    threadId: THREAD,
+    runtime: {
+      model: encodeModelKey({
+        providerProfileId: UUID,
+        modelId: "semantic-model",
+      }),
+      modelProvider: UUID,
+      cwd: `/tmp/${UUID}`,
+      reasoningEffort: "high",
+    },
+  };
+  const app = bridge(selfControl().service.manifest.tools, {
+    invoke: async () => raw,
+  });
+  const created = await app.call("zenx_threads_create", { cwd: "/synthetic" });
+  assert.equal(created.runtime.model, "semantic-model");
+  assert.equal(created.runtime.modelProvider, undefined);
+  assert.equal(created.runtime.cwd, `/tmp/${UUID}`);
+  assert.ok(
+    (
+      app.trace.find(
+        (entry) => entry.layer === "capability-result-before-model-projection",
+      )!.value as ToolExecutionResult
+    ).output.includes(raw.runtime.model),
+  );
+});

@@ -7,7 +7,6 @@ import {
   asJson,
   pick,
   renameField,
-  renameRequired,
 } from "./model-facade-fields.js";
 const names = new Set([
   "zenx_rooms_list",

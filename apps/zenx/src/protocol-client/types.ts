@@ -25,6 +25,8 @@ export type Thread = Omit<
   parentThreadId: string | null;
   /** Native product projection input; absent on CAS-only compatibility data. */
   canonicalItems?: readonly CanonicalItem[];
+  /** Persisted semantic model context; absent on older Hosts, never reconstructed wire. */
+  itemList?: readonly import("../../../../src/item-list.js").ContextItem[];
   turns: Turn[];
   queuedMessages?: Array<
     NonNullable<CodexThread["queuedMessages"]>[number] & {

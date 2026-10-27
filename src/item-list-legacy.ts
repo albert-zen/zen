@@ -177,6 +177,9 @@ export function contextItemsFromLegacy(
             text: item.reasoningContent ?? "",
             visibility: item.contentVisibility ?? "public",
             ...(item.summary === undefined ? {} : { summary: item.summary }),
+            ...(item.opaqueReplayProvenance === undefined
+              ? {}
+              : { opaqueReplayProvenance: item.opaqueReplayProvenance }),
             ...(item.providerItemId === undefined
               ? {}
               : { providerItemId: item.providerItemId }),
@@ -342,6 +345,9 @@ export function legacyItemFromContext(
         ...(item.content.summary === undefined
           ? []
           : [{ summary: item.content.summary }]),
+        ...(item.content.opaqueReplayProvenance === undefined
+          ? []
+          : [{ opaqueReplayProvenance: item.content.opaqueReplayProvenance }]),
         ...(item.content.providerItemId === undefined
           ? []
           : [{ providerItemId: item.content.providerItemId }]),

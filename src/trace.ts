@@ -93,6 +93,12 @@ export interface TraceReader {
     options?: { verifyArtifacts?: boolean },
   ): Promise<TraceReadResult>;
   readArtifact(ref: TraceArtifactRef): Promise<Uint8Array>;
+  /** Validates the entire content hash but retains only the requested page in memory. */
+  readArtifactRange?(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array>;
 }
 export interface TraceStatus {
   durability: "healthy" | "degraded";
@@ -229,6 +235,65 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     await this.#assertDirectories("artifacts");
     assertBytes(bytes, ref);
     return bytes;
+  }
+  async readArtifactRange(
+    ref: TraceArtifactRef,
+    offset: number,
+    limit: number,
+  ): Promise<Uint8Array> {
+    assertArtifactRef(ref);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 1024 * 1024
+    )
+      throw new Error("Invalid Trace artifact range");
+    await this.#assertDirectories("artifacts");
+    const filename = this.#artifactPath(ref.sha256),
+      before = await lstat(filename);
+    assertOwnedRegularFile(before);
+    const file = await open(
+      filename,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const opened = await file.stat();
+      assertOwnedRegularFile(opened);
+      assertSameFile(before, opened);
+      const hash = createHash("sha256"),
+        buffer = Buffer.alloc(64 * 1024),
+        page = Buffer.alloc(
+          Math.min(limit, Math.max(0, ref.byteLength - offset)),
+        );
+      let position = 0;
+      for (;;) {
+        const { bytesRead } = await file.read(
+          buffer,
+          0,
+          buffer.length,
+          position,
+        );
+        if (!bytesRead) break;
+        const chunk = buffer.subarray(0, bytesRead);
+        hash.update(chunk);
+        const from = Math.max(offset, position),
+          to = Math.min(offset + page.length, position + bytesRead);
+        if (to > from)
+          chunk.copy(page, from - offset, from - position, to - position);
+        position += bytesRead;
+      }
+      const after = await lstat(filename);
+      assertOwnedRegularFile(after);
+      assertSameFile(opened, after);
+      await this.#assertDirectories("artifacts");
+      if (position !== ref.byteLength || hash.digest("hex") !== ref.sha256)
+        throw new Error("Trace artifact integrity mismatch");
+      return page;
+    } finally {
+      await file.close();
+    }
   }
   /** Copies independent bytes; imported evidence never authorizes local execution. */
   async importRecords(

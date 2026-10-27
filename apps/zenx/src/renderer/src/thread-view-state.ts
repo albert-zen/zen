@@ -97,6 +97,14 @@ export function applyNativeThreadEvent(
   if (event.type === "model_catalog_updated") return thread;
   if (event.type === "queue_failed" || event.type === "queue_admission_started")
     return thread;
+  if (event.type === "context_item_completed") {
+    if (
+      event.threadId !== thread.id ||
+      thread.itemList?.some((item) => item.id === event.item.id)
+    )
+      return thread;
+    return { ...thread, itemList: [...(thread.itemList ?? []), event.item] };
+  }
   if (event.type === "thread_started") {
     return event.threadId === thread.id
       ? projectNativeThread(event.thread)
@@ -616,6 +624,9 @@ function projectNativeThread(
     gitInfo: null,
     name: snapshot.name ?? null,
     canonicalItems: structuredClone(snapshot.items),
+    ...(snapshot.itemList === undefined
+      ? {}
+      : { itemList: structuredClone(snapshot.itemList) }),
     queuedMessages: projectedQueue(snapshot.items),
     turns: snapshot.turns.map((turn) => {
       const started = turn.items.find((item) => item.type === "turn_started");

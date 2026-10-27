@@ -80,13 +80,13 @@ async function handleCommand(command: HostCommand): Promise<void> {
       send({
         type: "model-debug/result",
         requestId: command.requestId,
-        result: appServer.modelRequestDebug.control(command.input),
+        result: await appServer.modelRequestDebug.control(command.input),
       });
     } catch {
       send({
         type: "model-debug/result",
         requestId: command.requestId,
-        error: "Model debug request failed or capture expired",
+        error: "Durable Trace read failed",
       });
     }
     return;

@@ -11,6 +11,7 @@ import {
 } from "./tool-output-spool.js";
 import {
   attachToolOutputCapture,
+  carryToolResultReferences,
   capturedToolOutput,
   toolOutputSuffix,
   ToolOutputWindow,
@@ -781,6 +782,12 @@ class Task {
             },
             onOutput: (text) => {
               if (this.#closed) return;
+              if (!this.isShell && this.#invocation.traceOutput)
+                void this.#invocation.traceOutput.write(
+                  "task-output",
+                  text,
+                  "task-decoded-text",
+                );
               this.#window.write(text);
               this.#notify();
             },
@@ -895,10 +902,10 @@ class Task {
       const result =
         originalResult === undefined
           ? undefined
-          : {
+          : carryToolResultReferences(originalResult, {
               ...originalResult,
               ...(modelContent.length === 0 ? {} : { modelContent }),
-            };
+            });
       const window = this.#window;
       this.#window = this.#newWindow();
       if (quiet && result !== undefined && !window.hasOutput) {
@@ -925,7 +932,10 @@ class Task {
       if (quiet && result !== undefined && !window.hasOutput) return result;
       if (quiet && result !== undefined) {
         return attachToolOutputCapture(
-          { ...result, output: capture.output },
+          carryToolResultReferences(result, {
+            ...result,
+            output: capture.output,
+          }),
           capture.metadata,
           toolOutputSuffix(result) ?? "",
         );
@@ -993,7 +1003,7 @@ class Task {
         : `\nforeground: ${shellLifecycle.foreground}\nstdio: ${shellLifecycle.stdio}${shellLifecycle.foreground === "exited" ? `\nforeground_exit_code: ${shellLifecycle.foreground_exit_code}\nforeground_signal: ${shellLifecycle.foreground_signal}` : ""}${foregroundExited ? "\nThe foreground exited; output pipes remain open. Continue wait to collect output, or terminate to cancel the owned process group (including intentional background processes on POSIX). Pipe-holder identities are unavailable." : ""}`;
     const timeoutMs = this.humanTerminal ? null : this.#options.timeoutMs;
     const control = `\n[tool task ${status}${foregroundExited ? " (foreground_exited)" : ""}]\ntask_id: ${this.id}\ntool_name: ${this.#runtime.name}\ntimeout_ms: ${timeoutMs ?? "none"}\ncancellation: ${cancellation}\nresource_scope: ${resourceScope}\nlifetime: host_instance${terminal ? `\nexit_code: ${exitCode}` : ""}${status === "cancellation_unconfirmed" ? "\nCancellation is unconfirmed; the underlying operation may still be running." : ""}${shellFacts}`;
-    return attachToolOutputCapture(
+    const receipt = attachToolOutputCapture(
       {
         output: capture.output,
         exitCode,
@@ -1027,6 +1037,9 @@ class Task {
         (result === undefined ? "" : (toolOutputSuffix(result) ?? "")) +
         control,
     );
+    return result === undefined
+      ? receipt
+      : carryToolResultReferences(result, receipt);
   }
 
   #release() {

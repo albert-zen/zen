@@ -85,3 +85,28 @@ test("replacement inode fails closed; closed object cannot mutate", async () => 
   owner.close();
   assert.throws(() => owner.assertHeld(), /closed/);
 });
+
+test("failed real apply_patch preflight cannot release private writer lock", async () => {
+  const { ApplyPatchToolRuntime } = await import("../src/apply-patch.js");
+  const dir = await directory();
+  const owner = new StorageWriterOwnership(dir);
+  try {
+    const before = await readFile(path.join(dir, ".writer.lock"));
+    const result = await new ApplyPatchToolRuntime().execute({
+      callId: "synthetic",
+      name: "apply_patch",
+      cwd: dir,
+      signal: new AbortController().signal,
+      arguments: {
+        patch:
+          "*** Begin Patch\n*** Update File: .writer.lock\n@@\n-missing expected line\n+no mutation\n*** End Patch",
+      },
+    });
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(await readFile(path.join(dir, ".writer.lock")), before);
+    assert.equal(await run(dir), 23);
+    owner.assertHeld();
+  } finally {
+    owner.close();
+  }
+});

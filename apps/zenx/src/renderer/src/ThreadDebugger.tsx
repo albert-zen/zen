@@ -1,44 +1,35 @@
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  contentFromUserMessage,
-  textFromUserInput,
-  textFromUserMessage,
-  type CanonicalItem,
-  type ToolCallItem,
-} from "../../../../../src/item.js";
+import type { ContextItem } from "../../../../../src/item-list.js";
+import type { UserInput } from "../../../../../src/item.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import type { Thread } from "../../protocol-client/index.js";
 import { Markdown, MessageLinkContext } from "./Markdown.js";
-import { HostMessageContent } from "./HostMessageContent.js";
 import {
   AttachmentImage,
   ImagePreview,
   ThreadImagesContext,
 } from "./ImagePresentation.js";
-import { ToolResultFallback } from "./ToolResultRenderer.js";
-import { projectNativeCommandCompleted } from "./thread-view-state.js";
 import { ModelRequestDebugPanel } from "./ModelRequestDebugDialog.js";
-
 type Props = {
   thread: Thread;
-  items: readonly CanonicalItem[];
+  items?: readonly ContextItem[];
   localModelDebug?: boolean;
+  currentSettings?: unknown;
   onExit?(): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
 };
-
-/** Disposable view over canonical order. Never writes Items or reconstructs transport bodies. */
+/** Semantic context only. Legacy source/queue/control facts are not additional prompt Items. */
 export function ThreadDebugger(props: Props) {
   const { t } = useTranslation("shell");
+  const items = props.items ?? [];
   const [tab, setTab] = useState<"items" | "requests">("items");
   const [page, setPage] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
-  const pageCount = Math.max(1, Math.ceil(props.items.length / 50));
-  const currentPage = Math.min(page, pageCount - 1);
-  const start = currentPage * 50;
-  const visibleItems = props.items.slice(start, start + 50);
+  const pageCount = Math.max(1, Math.ceil(items.length / 50));
+  const currentPage = Math.min(page, pageCount - 1),
+    start = currentPage * 50;
   const go = (next: number) => {
     setPage(next);
     if (scroller.current) scroller.current.scrollTop = 0;
@@ -48,15 +39,6 @@ export function ThreadDebugger(props: Props) {
     name: string;
     trigger: HTMLButtonElement;
   } | null>(null);
-  const calls = useMemo(
-    () =>
-      new Map(
-        props.items
-          .filter((item): item is ToolCallItem => item.type === "tool_call")
-          .map((item) => [JSON.stringify([item.turnId, item.callId]), item]),
-      ),
-    [props.items],
-  );
   return (
     <MessageLinkContext.Provider value={props.onOpenMessageLink ?? null}>
       <ThreadImagesContext.Provider
@@ -75,9 +57,9 @@ export function ThreadDebugger(props: Props) {
               aria-pressed={tab === "items"}
               onClick={() => setTab("items")}
             >
-              {t("debugItems")} <span>{props.items.length}</span>
+              {t("debugItems")} <span>{items.length}</span>
             </button>
-            {props.localModelDebug ? (
+            {props.localModelDebug && (
               <button
                 type="button"
                 aria-pressed={tab === "requests"}
@@ -85,8 +67,8 @@ export function ThreadDebugger(props: Props) {
               >
                 {t("debugRequests")}
               </button>
-            ) : null}
-            {props.onExit ? (
+            )}
+            {props.onExit && (
               <button
                 type="button"
                 className="thread-debug-exit"
@@ -94,11 +76,14 @@ export function ThreadDebugger(props: Props) {
               >
                 {t("debugExit")}
               </button>
-            ) : null}
+            )}
           </nav>
           {tab === "requests" && props.localModelDebug ? (
             <div className="thread-debug-requests">
-              <ModelRequestDebugPanel threadId={props.thread.id} />
+              <ModelRequestDebugPanel
+                threadId={props.thread.id}
+                currentSettings={props.currentSettings}
+              />
             </div>
           ) : (
             <>
@@ -108,20 +93,18 @@ export function ThreadDebugger(props: Props) {
               >
                 <span>
                   {t("debugItemRange", {
-                    start: props.items.length ? start + 1 : 0,
-                    end: Math.min(start + 50, props.items.length),
-                    count: props.items.length,
+                    start: items.length ? start + 1 : 0,
+                    end: Math.min(start + 50, items.length),
+                    count: items.length,
                   })}
                 </span>
                 <button
-                  type="button"
                   disabled={currentPage === 0}
                   onClick={() => go(currentPage - 1)}
                 >
                   {t("debugPreviousItems")}
                 </button>
                 <button
-                  type="button"
                   disabled={currentPage === pageCount - 1}
                   onClick={() => go(currentPage + 1)}
                 >
@@ -130,52 +113,63 @@ export function ThreadDebugger(props: Props) {
               </nav>
               <div className="thread-debug-items" tabIndex={0} ref={scroller}>
                 <p className="thread-debug-note">
-                  {t("debugItemsNote", { count: props.items.length })}
+                  {t("debugItemsNote", { count: items.length })}
                 </p>
-                {props.items.length === 0 ? <p>{t("debugEmpty")}</p> : null}
-                {visibleItems.map((item, index) => (
+                {props.items === undefined ? (
+                  <p>{t("debugSemanticUnavailable")}</p>
+                ) : (
+                  !items.length && <p>{t("debugEmpty")}</p>
+                )}
+                {items.slice(start, start + 50).map((item, index) => (
                   <article
-                    className={`thread-debug-item thread-debug-item-${item.type}`}
                     key={item.id}
+                    className={`thread-debug-item thread-debug-item-${item.kind}`}
                     data-item-id={item.id}
                   >
                     <header>
                       <span className="thread-debug-index">
                         {start + index + 1}
                       </span>
-                      <strong>{item.type}</strong>
+                      <strong>{item.kind}</strong>
+                      <span>{item.role}</span>
+                      <span>{item.source.kind}</span>
                     </header>
-                    {item.type === "tool_call" ||
-                    item.type === "tool_result" ? (
+                    {item.kind === "tool_call" ||
+                    item.kind === "tool_result" ||
+                    item.kind === "tools" ? (
                       <ToolDisclosure
                         label={
-                          item.type === "tool_call"
-                            ? item.name
-                            : (calls.get(
-                                JSON.stringify([item.turnId, item.callId]),
-                              )?.name ?? item.callId)
+                          item.kind === "tool_call"
+                            ? item.content.name
+                            : item.kind === "tools"
+                              ? `tools (${item.content.tools.length})`
+                              : "tool result"
                         }
                       >
-                        <ItemContent item={item} calls={calls} {...props} />
-                        <ItemImages
-                          item={item}
-                          onReadAttachment={props.onReadAttachment}
-                          onOpen={(attachment, name, trigger) =>
-                            setPreview({ attachment, name, trigger })
-                          }
-                        />
+                        <SemanticContent item={item} />
                       </ToolDisclosure>
                     ) : (
-                      <>
-                        <ItemContent item={item} calls={calls} {...props} />
-                        <ItemImages
-                          item={item}
-                          onReadAttachment={props.onReadAttachment}
-                          onOpen={(attachment, name, trigger) =>
-                            setPreview({ attachment, name, trigger })
-                          }
-                        />
-                      </>
+                      <SemanticContent item={item} />
+                    )}
+                    {props.onReadAttachment && (
+                      <div className="message-images">
+                        {parts(item)
+                          .flatMap((p) =>
+                            p.type === "image" ? [p.attachment] : [],
+                          )
+                          .map((attachment, n) => (
+                            <AttachmentImage
+                              key={`${attachment.sha256}-${n}`}
+                              attachment={attachment}
+                              name={`${item.kind} ${n + 1}`}
+                              onReadAttachment={props.onReadAttachment!}
+                              onOpen={(attachment, name, trigger) =>
+                                setPreview({ attachment, name, trigger })
+                              }
+                              lazy
+                            />
+                          ))}
+                      </div>
                     )}
                     <ItemJson item={item} label={t("debugJson")} />
                   </article>
@@ -183,19 +177,23 @@ export function ThreadDebugger(props: Props) {
               </div>
             </>
           )}
-          {preview && props.onReadAttachment ? (
+          {preview && props.onReadAttachment && (
             <ImagePreview
               {...preview}
               onReadAttachment={props.onReadAttachment}
               onClose={() => setPreview(null)}
             />
-          ) : null}
+          )}
         </section>
       </ThreadImagesContext.Provider>
     </MessageLinkContext.Provider>
   );
 }
-
+function parts(item: ContextItem): UserInput {
+  return item.kind === "message" || item.kind === "tool_result"
+    ? (item.content.parts ?? [])
+    : [];
+}
 function ToolDisclosure({
   label,
   children,
@@ -207,227 +205,118 @@ function ToolDisclosure({
   return (
     <details
       className="thread-debug-tool-content"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary>{label}</summary>
       {open ? children : null}
     </details>
   );
 }
-
-function ItemImages({
-  item,
-  onReadAttachment,
-  onOpen,
-}: {
-  item: CanonicalItem;
-  onReadAttachment?: Props["onReadAttachment"];
-  onOpen(
-    attachment: AttachmentRef,
-    name: string,
-    trigger: HTMLButtonElement,
-  ): void;
-}) {
-  return onReadAttachment ? (
-    <div className="message-images">
-      {itemImages(item).map((attachment, n) => (
-        <AttachmentImage
-          key={`${attachment.sha256}-${n}`}
-          attachment={attachment}
-          name={`${item.type} ${n + 1}`}
-          onReadAttachment={onReadAttachment}
-          onOpen={onOpen}
-          lazy
-        />
-      ))}
-    </div>
-  ) : null;
-}
-
-function ItemContent({
-  item,
-  calls,
-  ...props
-}: Props & { item: CanonicalItem; calls: Map<string, ToolCallItem> }) {
-  const { t } = useTranslation("shell");
-  switch (item.type) {
-    case "user_message":
-      return <TextContent text={textFromUserMessage(item)} />;
-    case "agent_message":
-      return <TextContent text={item.text} />;
-    case "user_message_queued":
-    case "host_message_queued":
-    case "thread_message_queued":
-      return <TextContent text={textFromUserInput(item.input)} />;
-    case "thread_message":
-      return <TextContent text={textFromUserInput(item.content)} />;
-    case "host_message":
-      return <TextContent text={item.text} host={item} />;
-    case "reasoning":
-      return (
-        <TextContent
-          text={
-            item.contentVisibility === "opaque"
-              ? item.summary || t("debugOpaque")
-              : (item.reasoningContent ?? item.summary ?? "")
-          }
-        />
-      );
-    case "tool_call":
-      return (
-        <div className="thread-debug-tool">
-          <strong>{item.name}</strong>
-          <pre>{compactFields(item.arguments)}</pre>
-        </div>
-      );
-    case "tool_result": {
-      const call = calls.get(JSON.stringify([item.turnId, item.callId]));
-      return (
-        <ToolContent item={item} call={call} cwd={props.thread.cwd ?? ""} />
-      );
-    }
-    default:
-      return <p className="thread-debug-metadata">{compactFields(item)}</p>;
-  }
-}
-
-function ItemJson({ item, label }: { item: CanonicalItem; label: string }) {
+function ItemJson({ item, label }: { item: ContextItem; label: string }) {
   const [open, setOpen] = useState(false);
   return (
     <details
       className="thread-debug-json"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary>{label}</summary>
-      {open ? <pre>{JSON.stringify(item, null, 2)}</pre> : null}
+      {open && <pre>{JSON.stringify(item, null, 2)}</pre>}
     </details>
   );
 }
-
-function itemImages(item: CanonicalItem): readonly AttachmentRef[] {
-  const content =
-    item.type === "user_message"
-      ? contentFromUserMessage(item)
-      : item.type === "tool_result"
-        ? (item.modelContent ?? [])
-        : item.type === "thread_message"
-          ? item.content
-          : item.type === "user_message_queued" ||
-              item.type === "host_message_queued" ||
-              item.type === "thread_message_queued"
-            ? item.input
-            : [];
-  return content.flatMap((part) =>
-    part.type === "image" ? [part.attachment] : [],
+function SemanticContent({ item }: { item: ContextItem }) {
+  const { t } = useTranslation("shell");
+  switch (item.kind) {
+    case "message":
+      return <MessageContent item={item} />;
+    case "reasoning":
+      return (
+        <TextContent
+          text={
+            item.content.visibility === "opaque"
+              ? item.content.summary || t("debugOpaque")
+              : item.content.text
+          }
+        />
+      );
+    case "selection":
+      return <TextContent text={item.content.text} />;
+    case "tool_call":
+      return (
+        <div className="thread-debug-tool">
+          <strong>{item.content.name}</strong>
+          <TextContent
+            text={JSON.stringify(item.content.arguments, null, 2)}
+            raw
+          />
+        </div>
+      );
+    case "tool_result":
+      return (
+        <div className="thread-debug-tool-output">
+          <TextContent text={item.content.text} raw />
+        </div>
+      );
+    case "tools":
+      return (
+        <TextContent text={JSON.stringify(item.content.tools, null, 2)} raw />
+      );
+  }
+}
+/** Only trusted source provenance, never a user-authored lookalike prefix, enables time presentation. */
+function MessageContent({
+  item,
+}: {
+  item: Extract<ContextItem, { kind: "message" }>;
+}) {
+  const first = item.content.parts[0];
+  const match =
+    item.source.kind === "user_message" &&
+    item.source.metadata?.bodyStart === 1 &&
+    first?.type === "text"
+      ? /^\[Message received at (.+)\]$/u.exec(first.text)
+      : null;
+  if (match && Number.isFinite(Date.parse(match[1]!))) {
+    const rest = item.content.parts
+      .slice(1)
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+    return (
+      <>
+        <details className="thread-debug-time">
+          <summary>
+            <time dateTime={match[1]}>
+              {new Date(match[1]!).toLocaleString()}
+            </time>
+          </summary>
+          <pre>{first!.type === "text" ? first.text : ""}</pre>
+        </details>
+        <TextContent text={rest} />
+      </>
+    );
+  }
+  return <TextContent text={item.content.text} />;
+}
+function TextContent({ text, raw = false }: { text: string; raw?: boolean }) {
+  const { t } = useTranslation("shell");
+  const [expanded, setExpanded] = useState(false),
+    shown = expanded ? text : text.slice(0, 8192);
+  return (
+    <>
+      {raw ? <pre>{shown}</pre> : <Markdown text={shown} />}
+      {shown.length < text.length && (
+        <button
+          type="button"
+          className="thread-debug-more"
+          onClick={() => setExpanded(true)}
+        >
+          {t("debugShowFullContent")}
+        </button>
+      )}
+    </>
   );
 }
-
 async function unavailableImage(): Promise<Uint8Array> {
   throw new Error("Image reader unavailable");
-}
-
-// Do not stringify hidden object payloads merely to paint a summary.
-function compactFields(value: object): string {
-  const fields: string[] = [];
-  for (const key in value) {
-    if (
-      !Object.hasOwn(value, key) ||
-      ["id", "type", "threadId", "turnId", "createdAt"].includes(key)
-    )
-      continue;
-    const field = (value as Record<string, unknown>)[key];
-    const summary =
-      typeof field === "string"
-        ? field.slice(0, 160) + (field.length > 160 ? "…" : "")
-        : field === null
-          ? "null"
-          : Array.isArray(field)
-            ? `[${field.length} entries]`
-            : typeof field === "object"
-              ? "{…}"
-              : String(field);
-    fields.push(`${key.slice(0, 80)}: ${summary}`);
-    if (fields.length === 6) break;
-  }
-  return fields.join(" · ");
-}
-
-const PREVIEW_CHARACTERS = 8192;
-function TextContent({
-  text,
-  host,
-}: {
-  text: string;
-  host?: Extract<CanonicalItem, { type: "host_message" }>;
-}) {
-  const { t } = useTranslation("shell");
-  const [expanded, setExpanded] = useState(false);
-  const shown = expanded ? text : text.slice(0, PREVIEW_CHARACTERS);
-  return (
-    <>
-      {host ? (
-        <HostMessageContent
-          {...host}
-          text={shown}
-          truncated={shown.length < text.length}
-          copyAction={false}
-        />
-      ) : (
-        <Markdown text={shown} />
-      )}
-      {shown.length < text.length ? (
-        <button
-          className="thread-debug-more"
-          type="button"
-          onClick={() => setExpanded(true)}
-        >
-          {t("debugShowFullContent")}
-        </button>
-      ) : null}
-    </>
-  );
-}
-function ToolContent({
-  item,
-  call,
-  cwd,
-}: {
-  item: Extract<CanonicalItem, { type: "tool_result" }>;
-  call: ToolCallItem | undefined;
-  cwd: string;
-}) {
-  const { t } = useTranslation("shell");
-  const [expanded, setExpanded] = useState(false);
-  const output = expanded
-    ? item.output
-    : item.output.slice(0, PREVIEW_CHARACTERS);
-  // This is a bounded presentation projection, never a replacement canonical Item.
-  const display = { ...item, output, structuredContent: undefined };
-  return (
-    <>
-      {call ? (
-        <ToolResultFallback
-          item={projectNativeCommandCompleted(
-            { ...call, arguments: {} },
-            display,
-            cwd,
-          )}
-        />
-      ) : (
-        <pre>{output}</pre>
-      )}
-      {item.structuredContent !== undefined ? (
-        <p className="thread-debug-metadata">{t("debugStructuredInJson")}</p>
-      ) : null}
-      {output.length < item.output.length ? (
-        <button
-          className="thread-debug-more"
-          type="button"
-          onClick={() => setExpanded(true)}
-        >
-          {t("debugShowFullContent")}
-        </button>
-      ) : null}
-    </>
-  );
 }

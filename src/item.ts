@@ -408,6 +408,28 @@ export interface ModelUsageItem extends ItemBase {
   reasoningOutputTokens?: number;
 }
 
+export interface OpaqueReasoningReplayProvenance {
+  version: 1;
+  adapter: "public-responses";
+  endpointSha256: string;
+}
+export function validateOpaqueReplayProvenance(
+  value: unknown,
+): OpaqueReasoningReplayProvenance {
+  const object = requireRecord(value, "opaqueReplayProvenance");
+  if (
+    Object.keys(object).some(
+      (key) => !["version", "adapter", "endpointSha256"].includes(key),
+    ) ||
+    object.version !== 1 ||
+    object.adapter !== "public-responses" ||
+    typeof object.endpointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(object.endpointSha256)
+  )
+    throw new Error("Invalid opaque reasoning replay provenance");
+  return structuredClone(object) as unknown as OpaqueReasoningReplayProvenance;
+}
+
 export type ReasoningItem =
   | (ItemBase & {
       type: "reasoning";
@@ -419,6 +441,7 @@ export type ReasoningItem =
       contentVisibility: "public" | "opaque";
       /** Stable provider identity retained only when its adapter requires replay. */
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
     })
   /** Existing summary-only journals remain readable without a rewrite. */
   | (ItemBase & {
@@ -428,6 +451,7 @@ export type ReasoningItem =
       reasoningContent?: never;
       contentVisibility?: never;
       providerItemId?: never;
+      opaqueReplayProvenance?: never;
       incomplete?: never;
     });
 
@@ -1143,6 +1167,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       requireTurnId(item, type);
       if (item.incomplete !== undefined && item.incomplete !== true) {
         throw new Error("reasoning.incomplete must be true when present");
+      }
+      if (item.opaqueReplayProvenance !== undefined) {
+        if (item.contentVisibility !== "opaque")
+          throw new Error("Opaque replay provenance requires opaque content");
+        validateOpaqueReplayProvenance(item.opaqueReplayProvenance);
       }
       if (hasOwn(item, "reasoningContent")) {
         requireString(item.reasoningContent, `${type}.reasoningContent`);

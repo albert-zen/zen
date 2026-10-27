@@ -1,3 +1,4 @@
+import { stageStorageWriter } from "./stage-storage-writer.mjs";
 import { applyShellPtyPatch } from "./shell-pty-patch.mjs";
 import { prepareRtkResource } from "./prepare-rtk.mjs";
 import {
@@ -790,6 +791,7 @@ export async function publishPackagedArtifact(
 }
 
 export async function stagePackage(options) {
+  await stageStorageWriter(options.rootDirectory, options.appDirectory);
   const stagedMain =
     options.target === "app"
       ? path.join(options.appDirectory, "out", "main")
@@ -1011,6 +1013,7 @@ export function packageManifest(target, zenxPackage) {
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],
+          "fs-native-extensions": "1.4.5",
         },
       }
     : {
@@ -1019,6 +1022,7 @@ export function packageManifest(target, zenxPackage) {
         private: true,
         type: "module",
         main: "main/packaged-provider-smoke.js",
+        dependencies: { "fs-native-extensions": "1.4.5" },
       };
 }
 

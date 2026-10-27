@@ -1,4 +1,16 @@
 import {
+  isTriggerModelTool,
+  triggerModelDefinition,
+  decodeTriggerArguments,
+  projectTriggerResult,
+} from "./model-trigger-facade.js";
+import {
+  isSidebarModelTool,
+  sidebarModelDefinition,
+  decodeSidebarArguments,
+  projectSidebarResult,
+} from "./model-sidebar-facade.js";
+import {
   isRoomModelTool,
   roomModelDefinition,
   decodeRoomArguments,
@@ -33,12 +45,16 @@ import {
 
 export function hasModelToolFacade(name: string): boolean {
   return (
+    isTriggerModelTool(name) ||
+    isSidebarModelTool(name) ||
     isComputerModelTool(name) ||
     isThreadModelTool(name) ||
     isRoomModelTool(name)
   );
 }
 export function modelToolDefinition<T extends ModelTool>(tool: T): T {
+  if (isTriggerModelTool(tool.name)) return triggerModelDefinition(tool);
+  if (isSidebarModelTool(tool.name)) return sidebarModelDefinition(tool);
   return isComputerModelTool(tool.name)
     ? computerModelDefinition(tool)
     : isThreadModelTool(tool.name)
@@ -68,10 +84,14 @@ export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
 export function modelPluginDocument(id: string, original: string): string {
   if (id === "computer")
     return "Inspect an exact semantic window target for scoped control refs. Follow cursor alone for immutable continuation. Foreground tools may take focus. Native owner, permission, freshness, binding and capture checks remain authoritative. A ref never grants authority, selects the newest capture, or makes dispatch proof of effect. Refresh stale observations; never automatically repeat an uncertain action.";
-  if (["zenx-self-control", "zenx-subagents"].includes(id))
+  if (id === "zenx-subagents")
+    return "Create/list native child Threads with exact parent refs. fresh/fork may receive an explicit task; side-chat snapshots parent context and waits for user input, so task is not allowed. Read/send use exact ref or semantic name. Creation remains true even if title/message follow-up fails; inspect status and preserve unknown outcomes rather than replaying mutations.";
+  if (id === "zenx-self-control")
     return "Manage Threads by semantic name or exact scoped ref. Read history preserves literal user/tool text, failures and unknown outcomes; selected sources are read-only. Workflow updates use immutable snapshots and native CAS. Discover models by semantic name and exact selection refs. Created/accepted is not completed work; never retry uncertain mutations automatically.";
   if (id === "zenx-rooms")
     return "Use exact scoped Room, Thread and message refs. Workspace edits use immutable snapshots and original CAS. Literal names, messages and planning notes are unchanged. Refs never grant membership, permission, delivery or completed work.";
+  if (id === "zenx-triggers")
+    return "Discover Trigger definitions/history with exact short refs. Notification and watched source Threads retain their exact native routes. Resume and target creation use immutable snapshots; native permissions and definition/configuration fences still run. Programs/prompts/signal names are literal. Preserve unknown delivery and failed outcomes; never infer work completion from dispatch or retry uncertain mutations automatically.";
   return original;
 }
 export interface ModelFacadeTraceCapture {
@@ -90,6 +110,10 @@ function decode(
   refs: ModelReferenceScope,
   epoch: string,
 ): Record<string, unknown> {
+  if (isTriggerModelTool(name))
+    return decodeTriggerArguments(name, args, refs, epoch);
+  if (isSidebarModelTool(name))
+    return decodeSidebarArguments(name, args, refs, epoch);
   if (isRoomModelTool(name))
     return decodeRoomArguments(name, args, refs, epoch);
   return isThreadModelTool(name)
@@ -103,6 +127,10 @@ function project(
   refs: ModelReferenceScope,
   epoch: string,
 ): Record<string, unknown> {
+  if (isTriggerModelTool(name))
+    return projectTriggerResult(name, result, args, refs, epoch);
+  if (isSidebarModelTool(name))
+    return projectSidebarResult(result, refs, epoch);
   if (isRoomModelTool(name))
     return projectRoomResult(name, result, args, refs, epoch);
   return isThreadModelTool(name)
@@ -186,15 +214,21 @@ export async function invokeModelToolFacade(options: {
     invocation.modelTraceInspectionTool === "trace_read" &&
     capture?.durability === "durable" &&
     record(capture.locator)
-  )
-    inspection = {
-      ref: refs.bind(
-        "trace",
-        "tool-result",
-        asJson({ locator: capture.locator, tool: "trace_read" }),
-      ),
-      tool: "trace_read",
-    };
+  ) {
+    try {
+      inspection = {
+        ref: refs.bind(
+          "trace",
+          "tool-result",
+          asJson({ locator: capture.locator, tool: "trace_read" }),
+        ),
+        tool: "trace_read",
+      };
+    } catch (error) {
+      // Even an oversized evidence locator cannot erase a known backend result.
+      if (!(error instanceof ModelReferenceBudgetError)) throw error;
+    }
+  }
   const retained = refs.newBindings;
   const attach = (result: ToolExecutionResult, bindings = refs.newBindings) =>
     bindings.length
@@ -224,7 +258,7 @@ export async function invokeModelToolFacade(options: {
         ...(inspection ? { trace: inspection } : {}),
         safeNextStep: inspection
           ? "Inspect the retained result through the exact Trace ref, or read current state with a smaller scope. Do not retry a mutation merely because compact projection is unavailable."
-          : "Read current state with a smaller scope. No model Trace reader is available for this receipt; do not retry a mutation merely because compact projection is unavailable.",
+          : "Read current state with a smaller scope. This receipt has no usable durable Trace inspection reference; do not retry a mutation merely because compact projection is unavailable.",
       }),
     };
     delete fallback.contentType;

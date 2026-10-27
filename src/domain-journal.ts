@@ -3,7 +3,6 @@ import { link, lstat, mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
 import {
-  contextAnnotationFromLegacy,
   contextItemsFromLegacy,
   decodeContextItem,
   legacyItemFromContext,
@@ -23,26 +22,9 @@ import type {
   TraceEvent,
 } from "./trace.js";
 import { isMissing, replaceFile, syncDirectory } from "./storage-files.js";
+import { Thread } from "./thread.js";
 import { StorageWriterOwnership } from "./storage-writer-ownership.js";
 
-/** Critical product/control facts share Trace; ACK only follows its durable receipt. */
-export function requiresDurableControlFact(item: CanonicalItem): boolean {
-  return new Set([
-    "thread_metadata",
-    "thread_configuration_changed",
-    "user_message_queued",
-    "thread_message_queued",
-    "host_message_queued",
-    "user_message_queue_edited",
-    "user_message_queue_cancelled",
-    "thread_message_cancelled",
-    "host_message_cancelled",
-    "turn_replacement_requested",
-    "thread_deleted",
-    "thread_restored",
-    "code_state",
-  ]).has(item.type);
-}
 interface Fence {
   format: "zen-itemlist-trace-v1";
   threadId: string;
@@ -62,6 +44,9 @@ export interface DomainThreadJournalOptions {
   attachments?: Pick<AttachmentStore, "read">;
   access?: "read-only" | "read-write";
   onTraceDegraded?: (threadId: string, receipt: TraceReceipt) => void;
+  onItemListAppendPhase?: (
+    phase: import("./storage-files.js").PublicationPhase,
+  ) => void | Promise<void>;
   onMigrationPhase?: (
     phase: "archived" | "traced" | "fenced" | "published",
   ) => void | Promise<void>;
@@ -82,7 +67,12 @@ export class DomainThreadJournal implements ThreadJournal {
     this.#options = options;
     this.#directory = path.resolve(options.directory);
     this.trace = options.trace;
-    this.#items = new FileItemListStore(path.join(this.#directory, "items"));
+    this.#items = new FileItemListStore(
+      path.join(this.#directory, "items"),
+      options.onItemListAppendPhase === undefined
+        ? {}
+        : { onAppendPhase: options.onItemListAppendPhase },
+    );
     this.#owner =
       options.access === "read-only"
         ? undefined
@@ -134,38 +124,28 @@ export class DomainThreadJournal implements ThreadJournal {
   async #route(
     item: CanonicalItem,
     sequence: number,
-    contexts: readonly ContextItem[],
+    _contexts: readonly ContextItem[],
     strictImport = false,
   ): Promise<void> {
-    const fields = contextAnnotationFromLegacy(item);
-    if (Object.keys(fields).length)
-      await this.#record(
-        {
-          threadId: item.threadId,
-          type: "item_annotation",
-          data: { itemId: item.id, sequence, fields },
+    // Accepted original facts are immutable log input to the compiler, not an
+    // independently editable copy of model context. Partial observations remain evidence-only.
+    const observationOnly =
+      item.type === "model_usage" ||
+      ((item.type === "agent_message" || item.type === "reasoning") &&
+        item.incomplete === true);
+    await this.#record(
+      {
+        threadId: item.threadId,
+        ...(item.turnId === undefined ? {} : { turnId: item.turnId }),
+        type: "runtime_item",
+        data: {
+          item,
+          sequence,
+          ...(strictImport ? { captureLayer: "legacy-journal" } : {}),
         },
-        strictImport,
-      );
-    const represented = contexts.some(
-      (context) =>
-        context.id === item.id &&
-        legacyItemFromContext(context, fields) !== undefined,
+      },
+      strictImport || !observationOnly,
     );
-    if (!represented)
-      await this.#record(
-        {
-          threadId: item.threadId,
-          ...(item.turnId === undefined ? {} : { turnId: item.turnId }),
-          type: "runtime_item",
-          data: {
-            item,
-            sequence,
-            ...(strictImport ? { captureLayer: "legacy-journal" } : {}),
-          },
-        },
-        strictImport || requiresDurableControlFact(item),
-      );
   }
   async create(
     items: readonly CanonicalItem[],
@@ -176,6 +156,14 @@ export class DomainThreadJournal implements ThreadJournal {
     return this.#operation(first.threadId, async () => {
       if (await this.#items.exists(first.threadId))
         throw new Error("Thread already exists");
+      try {
+        await lstat(this.#path(first.threadId));
+        throw new Error(
+          "Thread source/fence already exists; reconcile instead of overwriting",
+        );
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
       const contexts: ContextItem[] = [];
       const previous: CanonicalItem[] = [];
       for (const raw of items) {
@@ -195,6 +183,16 @@ export class DomainThreadJournal implements ThreadJournal {
         throw new Error("Mixed frozen ItemList");
       for (const [sequence, item] of previous.entries())
         await this.#route(item, sequence, semantic);
+      if (exactItemList !== undefined)
+        for (const item of semantic)
+          await this.#record(
+            {
+              threadId: first.threadId,
+              type: "context_source",
+              data: { item, origin: "frozen-import" },
+            },
+            true,
+          );
       await this.#writeFence(first.threadId);
       await this.#items.create(first.threadId, semantic);
       this.#live.set(first.threadId, structuredClone(previous));
@@ -218,6 +216,7 @@ export class DomainThreadJournal implements ThreadJournal {
         this.#live.set(item.threadId, [item]);
         return;
       }
+      await this.#reconcileCompilation(item.threadId);
       const previous = await this.#read(item.threadId);
       if (previous.some((i) => i.id === item.id))
         throw new Error(
@@ -237,21 +236,23 @@ export class DomainThreadJournal implements ThreadJournal {
               Number((r.data as { sequence?: number })?.sequence ?? -1),
             ),
         ) + 1;
-      const semantic = contextItemsFromLegacy(
-        item,
-        previous,
-        sequence,
-        contexts,
-      );
       try {
-        await this.#route(item, sequence, semantic);
+        await this.#route(item, sequence, []);
+        const semantic = contextItemsFromLegacy(
+          item,
+          previous,
+          sequence,
+          contexts,
+        );
         if (semantic.length) await this.#items.append(item.threadId, semantic);
       } catch (error) {
-        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
-          this.#uncertain.add(item.threadId);
-          this.#live.delete(item.threadId);
-        }
-        throw error;
+        this.#live.delete(item.threadId);
+        if (
+          this.#uncertain.has(item.threadId) ||
+          error instanceof ThreadJournalAppendOutcomeUnknownError
+        )
+          throw error;
+        throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
       }
       this.#live.set(item.threadId, [...previous, item]);
     });
@@ -260,12 +261,105 @@ export class DomainThreadJournal implements ThreadJournal {
     const item = decodeContextItem(raw);
     return this.#operation(item.threadId, async () => {
       await this.#migrate(item.threadId);
+      if (
+        (await this.#items.read(item.threadId)).some(
+          (existing) => existing.id === item.id,
+        )
+      )
+        throw new Error("Duplicate immutable context source identity");
+      await this.#record(
+        {
+          threadId: item.threadId,
+          type: "context_source",
+          data: { item, origin: "generated-input" },
+        },
+        true,
+      );
       await this.#items.append(item.threadId, [item]);
     });
+  }
+  /** Rebuild missing compiled artifacts only. Never invokes tools, models or effects. */
+  async reconcileCompilation(threadId: string): Promise<void> {
+    return this.#operation(threadId, () =>
+      this.#reconcileCompilation(threadId),
+    );
+  }
+  async #reconcileCompilation(threadId: string): Promise<void> {
+    const observed = await this.trace.read(threadId, {
+      verifyArtifacts: false,
+    });
+    if (
+      observed.issues.some((issue) =>
+        ["read_failure", "partial_frame", "invalid_frame"].includes(issue.kind),
+      )
+    )
+      throw new Error("Cannot compile through damaged source log");
+    const contexts = await this.#items.read(threadId);
+    const present = new Set(contexts.map((item) => item.id));
+    const previous: CanonicalItem[] = [];
+    const seenFacts = new Map<string, string>();
+    const missing: ContextItem[] = [];
+    const frozen = new Map<string, ContextItem>();
+    for (const record of observed.records)
+      if (record.type === "context_source") {
+        const item = decodeContextItem((record.data as { item: unknown }).item);
+        if (item.threadId !== threadId)
+          throw new Error("Mixed context source Thread");
+        const prior = frozen.get(item.id);
+        if (
+          prior !== undefined &&
+          JSON.stringify(prior) !== JSON.stringify(item)
+        )
+          throw new Error("Conflicting immutable context source");
+        frozen.set(item.id, item);
+      }
+    for (const record of observed.records) {
+      if (record.type === "context_source") {
+        const item = frozen.get(
+          (record.data as { item: ContextItem }).item.id,
+        )!;
+        if (!present.has(item.id)) {
+          missing.push(item);
+          present.add(item.id);
+        }
+        continue;
+      }
+      if (record.type !== "runtime_item") continue;
+      const data = record.data as { item: unknown; sequence: number };
+      const item = decodeCanonicalItem(data.item);
+      if (item.threadId !== threadId || !Number.isSafeInteger(data.sequence))
+        throw new Error("Invalid accepted source fact");
+      const known = seenFacts.get(item.id);
+      if (known !== undefined) {
+        if (known !== JSON.stringify(item))
+          throw new Error("Conflicting accepted fact identity");
+        continue;
+      }
+      seenFacts.set(item.id, JSON.stringify(item));
+      // Frozen fork sources are authoritative compiler inputs for their exact IDs.
+      const encoded = frozen.has(item.id)
+        ? []
+        : contextItemsFromLegacy(item, previous, data.sequence, [
+            ...contexts,
+            ...missing,
+          ]);
+      for (const context of encoded)
+        if (!present.has(context.id)) {
+          missing.push(context);
+          present.add(context.id);
+        }
+      previous.push(item);
+    }
+    if (!(await this.#items.exists(threadId))) {
+      if (!previous.some((item) => item.type === "thread_metadata")) return;
+      await this.#writeFence(threadId);
+      await this.#items.create(threadId, missing);
+    } else if (missing.length) await this.#items.append(threadId, missing);
   }
   async readItemList(threadId: string): Promise<ContextItem[]> {
     if (!(await this.#items.exists(threadId)) && this.#owner !== undefined)
       await this.migrate(threadId);
+    if (this.#owner !== undefined) await this.reconcileCompilation(threadId);
     return this.#items.read(threadId);
   }
   async read(threadId: string): Promise<CanonicalItem[]> {
@@ -312,8 +406,9 @@ export class DomainThreadJournal implements ThreadJournal {
         combined.set(item.id, { sequence: data.sequence, item });
       }
     for (const context of contexts) {
+      if (combined.has(context.id)) continue;
       const item = legacyItemFromContext(context, annotations.get(context.id));
-      if (item !== undefined)
+      if (item !== undefined && !combined.has(item.id))
         combined.set(item.id, { sequence: context.source.sequence, item });
     }
     return [...combined.values()]
@@ -321,6 +416,8 @@ export class DomainThreadJournal implements ThreadJournal {
       .map((entry) => entry.item);
   }
   async assertRecoverySafe(threadId: string): Promise<void> {
+    if (this.#owner !== undefined && !this.#uncertain.has(threadId))
+      await this.reconcileCompilation(threadId);
     if (this.#uncertain.has(threadId))
       throw new ThreadJournalAppendOutcomeUnknownError(
         "Control fact outcome unknown",
@@ -414,6 +511,9 @@ export class DomainThreadJournal implements ThreadJournal {
     const source = await this.#legacy(threadId);
     if (!source)
       return { threadId, status: "absent", sourceItems: 0, semanticItems: 0 };
+    if (source.items[0]?.type !== "thread_metadata")
+      throw new Error("Legacy source must begin with original thread metadata");
+    new Thread(threadId, source.items); // Validate the actual old history before any cutover mutation.
     const semantic: ContextItem[] = [];
     for (const [sequence, item] of source.items.entries()) {
       semantic.push(

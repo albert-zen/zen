@@ -1,3 +1,4 @@
+import type { OpaqueReasoningReplayProvenance } from "./item.js";
 import type { ModelTransportObservation } from "./model/transport-types.js";
 import { projectRecoveryMedia, recoveryContext } from "./loop-recovery.js";
 import type { ImportedToolCallOrigin } from "./thread-import.js";
@@ -107,6 +108,7 @@ export interface ReasoningModelMessage {
   summary?: string;
   contentVisibility: "public" | "opaque";
   providerItemId?: string;
+  opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
 }
 
 export type ModelMessage =
@@ -196,6 +198,7 @@ export type ModelEvent =
       summary?: string;
       contentVisibility: "public" | "opaque";
       providerItemId?: string;
+      opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
     }
   | {
       type: "tool_call";
@@ -943,7 +946,9 @@ export class FakeModel implements ModelAdapter {
   readonly provider = "fake";
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
-    const latest = request.messages.at(-1);
+    const latest = request.messages.findLast(
+      (message) => message.role !== "system" && message.role !== "developer",
+    );
     if (latest?.role === "tool") {
       yield* streamWords(`Command result:\n${latest.text}`, request.signal);
       return;
@@ -955,12 +960,20 @@ export class FakeModel implements ModelAdapter {
         (message): message is TextModelMessage | TypedUserModelMessage =>
           message.role === "user",
       );
-    const text =
+    let text =
       latestUser !== undefined &&
       "content" in latestUser &&
       latestUser.content !== undefined
         ? textFromUserInput(latestUser.content)
         : ((latestUser as TextModelMessage | undefined)?.text ?? "");
+    // This deterministic fake interprets a command part, not Host receipt metadata.
+    // Real adapters never remove or synthesize semantic text.
+    if (latestUser !== undefined && "content" in latestUser) {
+      const command = latestUser.content.find(
+        (part) => part.type === "text" && /^!(?:shell|tool) /u.test(part.text),
+      );
+      if (command?.type === "text") text = command.text;
+    }
     if (text.startsWith("!shell ")) {
       yield {
         type: "tool_call",
@@ -1032,7 +1045,7 @@ async function* streamWords(
   }
 }
 
-function filePermissionContext(
+export function filePermissionContext(
   sandbox: import("./item.js").SandboxMode,
 ): string {
   if (sandbox === "danger-full-access")

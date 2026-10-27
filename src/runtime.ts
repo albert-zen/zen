@@ -1,3 +1,10 @@
+import { createToolTraceCapture, type ToolTraceCapture } from "./trace-tool.js";
+import type { RuntimeTrace } from "./trace.js";
+import {
+  trustedModelReferenceBindings,
+  validateModelReferenceBindings,
+  type ModelReferenceBinding,
+} from "./model-references.js";
 import {
   ContextCalibration,
   type ContextEstimateRequest,
@@ -111,6 +118,13 @@ export interface RuntimeConfiguration {
 }
 
 export interface PreparedModelSample {
+  compiled?: true;
+  presentation?: ToolPresentationSnapshot;
+  configuration?: RuntimeConfiguration;
+  modelAdapter?: ModelAdapter;
+  selectedItemIds?: readonly string[];
+  assertDispatchAllowed?: () => void;
+  release?: () => void;
   messages: ModelMessage[];
   /** Last canonical Item included in the atomically captured projection. */
   contextBoundaryItemId: string;
@@ -210,6 +224,7 @@ export interface RunTurnOptions {
   dispatchTool?: (
     call: ToolCallItem,
     launch: () => Promise<ToolExecutionResult>,
+    baseline: RuntimeConfiguration,
   ) => Promise<ToolExecutionResult>;
 }
 
@@ -218,6 +233,8 @@ export type ToolDefinitionProjection = (
 ) => readonly ModelTool[];
 
 interface ModelSampleResult {
+  configuration: RuntimeConfiguration;
+  modelAdapter: ModelAdapter;
   itemId: string;
   text: string;
   presentation: ToolPresentationSnapshot;
@@ -282,7 +299,13 @@ export class AgentRuntime {
       ) => Promise<UserInput>)
     | undefined;
 
+  readonly #trace: RuntimeTrace | undefined;
+  readonly #traceInspection: boolean;
+  readonly #toolTraces = new Map<string, ToolTraceCapture>();
+
   constructor(options: {
+    trace?: RuntimeTrace;
+    traceInspection?: boolean;
     toolEnvironment: ToolEnvironment;
     idFactory?: () => string;
     now?: () => string;
@@ -304,6 +327,8 @@ export class AgentRuntime {
     ) => Promise<UserInput>;
   }) {
     this.#tools = options.toolEnvironment;
+    this.#trace = options.trace;
+    this.#traceInspection = options.traceInspection === true;
     this.#resolveCodeMedia = options.resolveCodeMedia;
     this.#id = options.idFactory ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
@@ -519,7 +544,11 @@ export class AgentRuntime {
           toolCallItems,
           result.presentation,
           result.contextBoundaryItemId,
-          options,
+          {
+            ...options,
+            configuration: result.configuration,
+            modelAdapter: result.modelAdapter,
+          },
           scheduler,
         );
         try {
@@ -867,303 +896,333 @@ export class AgentRuntime {
     };
 
     const preparedSample = await options.prepareModelSample(itemId);
-    if (
-      Array.isArray(preparedSample) &&
-      options.configuration.agenticContextCompaction !== undefined
-    ) {
-      throw new Error(
-        "Agentic context compaction requires an atomic model sample boundary",
-      );
-    }
-    const messages = Array.isArray(preparedSample)
-      ? preparedSample
-      : preparedSample.messages;
-    const contextBoundaryItemId = Array.isArray(preparedSample)
-      ? options.thread.items.at(-1)?.id
-      : preparedSample.contextBoundaryItemId;
-    if (contextBoundaryItemId === undefined) {
-      throw new Error("Model sample requires a canonical context boundary");
-    }
-    const presentation = this.projectToolPresentation(
-      options.thread.items,
-      options.configuration.agenticContextCompaction !== undefined,
-    );
-    const projectedMessages = projectModelMessages(
-      messages,
-      options.configuration.inputModalities,
-      (source, projected) => mediaOrigins.set(projected, source),
-    );
-    const contextRequest = this.#contextCalibration.prepare({
-      threadId: options.thread.id,
-      items: options.thread.items,
-      messages: projectedMessages,
-      tools: presentation.modelTools,
-      adapter: options.modelAdapter,
-      selection: {
-        providerProfileId: options.configuration.providerProfileId,
-        modelId: options.configuration.model,
-        reasoningEffort: options.configuration.reasoningEffort,
-      },
-      inputModalities: options.configuration.inputModalities ?? null,
-    });
-    const estimate = contextRequest.estimate;
-    const contextWindow = options.configuration.contextWindow;
-    if (contextWindow != null && estimate.total >= contextWindow) {
-      throw new ModelContextBudgetError(
-        `Model input exceeds the configured context window (${estimate.total} estimated tokens, including ${estimate.toolDefinitions} tool-definition tokens, window ${contextWindow}). Reduce tool exposure or compact history.`,
-      );
-    }
-
+    const prepared = Array.isArray(preparedSample) ? undefined : preparedSample;
+    const sampleConfiguration =
+      prepared?.configuration ?? options.configuration;
+    const sampleAdapter = prepared?.modelAdapter ?? options.modelAdapter;
     try {
-      for await (const event of options.modelAdapter.stream({
-        model: options.configuration.model,
-        reasoningEffort: options.configuration.reasoningEffort,
+      if (
+        Array.isArray(preparedSample) &&
+        sampleConfiguration.agenticContextCompaction !== undefined
+      ) {
+        throw new Error(
+          "Agentic context compaction requires an atomic model sample boundary",
+        );
+      }
+      const messages = Array.isArray(preparedSample)
+        ? preparedSample
+        : preparedSample.messages;
+      const contextBoundaryItemId = Array.isArray(preparedSample)
+        ? options.thread.items.at(-1)?.id
+        : preparedSample.contextBoundaryItemId;
+      if (contextBoundaryItemId === undefined) {
+        throw new Error("Model sample requires a canonical context boundary");
+      }
+      const presentation =
+        prepared?.presentation ??
+        this.projectToolPresentation(
+          options.thread.items,
+          sampleConfiguration.agenticContextCompaction !== undefined,
+        );
+      const projectedMessages = prepared?.compiled
+        ? messages
+        : projectModelMessages(
+            messages,
+            sampleConfiguration.inputModalities,
+            (source, projected) => mediaOrigins.set(projected, source),
+          );
+      const contextRequest = this.#contextCalibration.prepare({
+        threadId: options.thread.id,
+        items: options.thread.items,
         messages: projectedMessages,
-        tools: presentation.modelTools.map((definition) =>
-          structuredClone(definition),
-        ),
-        signal: options.signal,
-        sessionId: options.thread.id,
-        ...(sampleAttempt > 1 ? { isSamplingRetry: true } : {}),
-        debugContext: {
-          threadId: options.thread.id,
-          purpose: "turn",
-          turnId,
-          sampleId: itemId,
-          contextBoundaryItemId,
-          sampleAttempt,
+        tools: presentation.modelTools,
+        adapter: sampleAdapter,
+        instructionsMaterialized: prepared?.compiled === true,
+        selection: {
+          providerProfileId: sampleConfiguration.providerProfileId,
+          modelId: sampleConfiguration.model,
+          reasoningEffort: sampleConfiguration.reasoningEffort,
         },
-      })) {
-        observedModelOutput = true;
-        if (event.type === "text_delta") {
-          if (!started) {
-            started = true;
+        inputModalities: sampleConfiguration.inputModalities ?? null,
+      });
+      const estimate = contextRequest.estimate;
+      const contextWindow = sampleConfiguration.contextWindow;
+      if (contextWindow != null && estimate.total >= contextWindow) {
+        throw new ModelContextBudgetError(
+          `Model input exceeds the configured context window (${estimate.total} estimated tokens, including ${estimate.toolDefinitions} tool-definition tokens, window ${contextWindow}). Reduce tool exposure or compact history.`,
+        );
+      }
+
+      try {
+        for await (const event of sampleAdapter.stream({
+          model: sampleConfiguration.model,
+          reasoningEffort: sampleConfiguration.reasoningEffort,
+          messages: projectedMessages,
+          tools: presentation.modelTools.map((definition) =>
+            structuredClone(definition),
+          ),
+          signal: options.signal,
+          sessionId: options.thread.id,
+          ...(prepared?.assertDispatchAllowed === undefined
+            ? {}
+            : { assertDispatchAllowed: prepared.assertDispatchAllowed }),
+          ...(sampleAttempt > 1 ? { isSamplingRetry: true } : {}),
+          debugContext: {
+            threadId: options.thread.id,
+            purpose: "turn",
+            turnId,
+            sampleId: itemId,
+            contextBoundaryItemId,
+            sampleAttempt,
+            configuration: { ...sampleConfiguration },
+            ...(prepared?.selectedItemIds === undefined
+              ? {}
+              : { selectedItemIds: prepared.selectedItemIds }),
+          },
+        })) {
+          observedModelOutput = true;
+          if (event.type === "text_delta") {
+            if (!started) {
+              started = true;
+              options.emit({
+                type: "item_started",
+                threadId: options.thread.id,
+                turnId,
+                itemId,
+                itemType: "agent_message",
+              });
+            }
+            text += event.delta;
             options.emit({
-              type: "item_started",
+              type: "item_delta",
               threadId: options.thread.id,
               turnId,
               itemId,
-              itemType: "agent_message",
+              delta: event.delta,
             });
-          }
-          text += event.delta;
-          options.emit({
-            type: "item_delta",
-            threadId: options.thread.id,
-            turnId,
-            itemId,
-            delta: event.delta,
-          });
-        } else if (event.type === "reasoning_started") {
-          ensureReasoningItem(event.reasoningId);
-        } else if (
-          event.type === "reasoning_summary_delta" ||
-          event.type === "reasoning_content_delta"
-        ) {
-          if (event.delta.length === 0) continue;
-          ensureReasoningItem(event.reasoningId);
-          const partial = reasoningDeltas.get(event.reasoningId)!;
-          if (event.type === "reasoning_content_delta")
-            partial.content += event.delta;
-          else partial.summary += event.delta;
-          options.emit({
-            type: event.type,
-            threadId: options.thread.id,
-            turnId,
-            itemId: ensureReasoningItem(event.reasoningId),
-            delta: event.delta,
-          });
-        } else if (event.type === "reasoning") {
-          const reasoningItemId =
-            event.reasoningId === undefined
-              ? this.#id()
-              : ensureReasoningItem(event.reasoningId);
-          if (event.reasoningId === undefined) {
+          } else if (event.type === "reasoning_started") {
+            ensureReasoningItem(event.reasoningId);
+          } else if (
+            event.type === "reasoning_summary_delta" ||
+            event.type === "reasoning_content_delta"
+          ) {
+            if (event.delta.length === 0) continue;
+            ensureReasoningItem(event.reasoningId);
+            const partial = reasoningDeltas.get(event.reasoningId)!;
+            if (event.type === "reasoning_content_delta")
+              partial.content += event.delta;
+            else partial.summary += event.delta;
             options.emit({
-              type: "item_started",
+              type: event.type,
               threadId: options.thread.id,
               turnId,
-              itemId: reasoningItemId,
-              itemType: "reasoning",
+              itemId: ensureReasoningItem(event.reasoningId),
+              delta: event.delta,
+            });
+          } else if (event.type === "reasoning") {
+            const reasoningItemId =
+              event.reasoningId === undefined
+                ? this.#id()
+                : ensureReasoningItem(event.reasoningId);
+            if (event.reasoningId === undefined) {
+              options.emit({
+                type: "item_started",
+                threadId: options.thread.id,
+                turnId,
+                itemId: reasoningItemId,
+                itemType: "reasoning",
+              });
+            }
+            const reasoning: ReasoningItem = {
+              id: reasoningItemId,
+              threadId: options.thread.id,
+              turnId,
+              createdAt: this.#now(),
+              type: "reasoning",
+              reasoningContent: event.reasoningContent,
+              contentVisibility: event.contentVisibility,
+              ...(event.summary === undefined
+                ? {}
+                : { summary: event.summary }),
+              ...(event.opaqueReplayProvenance === undefined
+                ? {}
+                : { opaqueReplayProvenance: event.opaqueReplayProvenance }),
+              ...(event.providerItemId === undefined
+                ? {}
+                : { providerItemId: event.providerItemId }),
+            };
+            // Later tool validation can still invalidate this entire sample.
+            completedReasoning.push(reasoning);
+            if (event.reasoningId !== undefined) {
+              reasoningItems.delete(event.reasoningId);
+              reasoningDeltas.delete(event.reasoningId);
+            }
+          } else if (event.type === "tool_call") {
+            toolCalls.push({
+              callId: event.callId,
+              name: event.name,
+              arguments: event.arguments,
+            });
+          } else {
+            latestUsage = {
+              inputTokens: event.inputTokens,
+              ...(event.cachedInputTokens === undefined
+                ? {}
+                : { cachedInputTokens: event.cachedInputTokens }),
+              outputTokens: event.outputTokens,
+              ...(event.reasoningOutputTokens === undefined
+                ? {}
+                : { reasoningOutputTokens: event.reasoningOutputTokens }),
+            };
+            options.emit({
+              type: "token_usage",
+              threadId: options.thread.id,
+              turnId,
+              inputTokens: event.inputTokens,
+              outputTokens: event.outputTokens,
+              ...(event.cachedInputTokens === undefined
+                ? {}
+                : { cachedInputTokens: event.cachedInputTokens }),
+              ...(event.reasoningOutputTokens === undefined
+                ? {}
+                : { reasoningOutputTokens: event.reasoningOutputTokens }),
             });
           }
-          const reasoning: ReasoningItem = {
-            id: reasoningItemId,
+        }
+        options.signal.throwIfAborted();
+        if (reasoningItems.size > 0) {
+          throw new Error("Model stream ended with incomplete reasoning");
+        }
+      } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError)
+          throw error;
+        const publicPartial = recoveryPublicPartial(error, text);
+        failure = {
+          error,
+          ...(isOutputLimit(error) ? { outputLimit: true as const } : {}),
+          ...(publicPartial ? { publicPartial } : {}),
+          sampleId: itemId,
+          contextBoundaryItemId,
+          ...(!observedModelOutput && mediaRequestRejected(error)
+            ? (() => {
+                const parts = (
+                  error as {
+                    recoveryRejectedMediaParts?: readonly object[];
+                  } | null
+                )?.recoveryRejectedMediaParts;
+                const originals = parts?.flatMap((part) =>
+                  mediaOrigins.has(part) ? [mediaOrigins.get(part)!] : [],
+                );
+                const exact = originals?.length
+                  ? sampledMediaOccurrences(
+                      options.thread.items,
+                      messages,
+                      sampleConfiguration.inputModalities,
+                      originals,
+                    )
+                  : [];
+                return exact.length > 0
+                  ? { withheldMedia: exact, mediaScope: "exact" as const }
+                  : {
+                      withheldMedia: sampledMediaOccurrences(
+                        options.thread.items,
+                        messages,
+                        sampleConfiguration.inputModalities,
+                      ),
+                      mediaScope: "diagnostic_turn" as const,
+                    };
+              })()
+            : {}),
+        };
+      }
+      // All canonical writes are outside the sample-error boundary: preparation
+      // and persistence failures cannot become a replayable model failure.
+      for (const reasoning of completedReasoning) {
+        const snapshot: ReasoningItem =
+          failure === undefined
+            ? reasoning
+            : { ...reasoning, incomplete: true };
+        await options.commit(snapshot);
+        options.emit({ type: "item_completed", item: snapshot });
+      }
+      if (failure !== undefined) {
+        for (const [reasoningId, partialId] of reasoningItems) {
+          const partial = reasoningDeltas.get(reasoningId)!;
+          if (!partial.content && !partial.summary) continue;
+          const snapshot: ReasoningItem = {
+            id: partialId,
             threadId: options.thread.id,
             turnId,
             createdAt: this.#now(),
             type: "reasoning",
-            reasoningContent: event.reasoningContent,
-            contentVisibility: event.contentVisibility,
-            ...(event.summary === undefined ? {} : { summary: event.summary }),
-            ...(event.providerItemId === undefined
-              ? {}
-              : { providerItemId: event.providerItemId }),
+            incomplete: true,
+            reasoningContent: partial.content,
+            contentVisibility: "public",
+            ...(partial.summary ? { summary: partial.summary } : {}),
           };
-          // Later tool validation can still invalidate this entire sample.
-          completedReasoning.push(reasoning);
-          if (event.reasoningId !== undefined) {
-            reasoningItems.delete(event.reasoningId);
-            reasoningDeltas.delete(event.reasoningId);
-          }
-        } else if (event.type === "tool_call") {
-          toolCalls.push({
-            callId: event.callId,
-            name: event.name,
-            arguments: event.arguments,
-          });
-        } else {
-          latestUsage = {
-            inputTokens: event.inputTokens,
-            ...(event.cachedInputTokens === undefined
-              ? {}
-              : { cachedInputTokens: event.cachedInputTokens }),
-            outputTokens: event.outputTokens,
-            ...(event.reasoningOutputTokens === undefined
-              ? {}
-              : { reasoningOutputTokens: event.reasoningOutputTokens }),
-          };
-          options.emit({
-            type: "token_usage",
+          await options.commit(snapshot);
+          options.emit({ type: "item_completed", item: snapshot });
+        }
+        if (text.length > 0) {
+          const snapshot: AgentMessageItem = {
+            id: itemId,
             threadId: options.thread.id,
             turnId,
-            inputTokens: event.inputTokens,
-            outputTokens: event.outputTokens,
-            ...(event.cachedInputTokens === undefined
-              ? {}
-              : { cachedInputTokens: event.cachedInputTokens }),
-            ...(event.reasoningOutputTokens === undefined
-              ? {}
-              : { reasoningOutputTokens: event.reasoningOutputTokens }),
-          });
+            createdAt: this.#now(),
+            type: "agent_message",
+            text,
+            // Superseded by a retry or by the surfaced failure; never replayed
+            // to the model.
+            incomplete: true,
+          };
+          await options.commit(snapshot);
+          options.emit({ type: "item_completed", item: snapshot });
         }
       }
-      options.signal.throwIfAborted();
-      if (reasoningItems.size > 0) {
-        throw new Error("Model stream ended with incomplete reasoning");
-      }
-    } catch (error) {
-      if (error instanceof ThreadJournalAppendOutcomeUnknownError) throw error;
-      const publicPartial = recoveryPublicPartial(error, text);
-      failure = {
-        error,
-        ...(isOutputLimit(error) ? { outputLimit: true as const } : {}),
-        ...(publicPartial ? { publicPartial } : {}),
-        sampleId: itemId,
-        contextBoundaryItemId,
-        ...(!observedModelOutput && mediaRequestRejected(error)
-          ? (() => {
-              const parts = (
-                error as {
-                  recoveryRejectedMediaParts?: readonly object[];
-                } | null
-              )?.recoveryRejectedMediaParts;
-              const originals = parts?.flatMap((part) =>
-                mediaOrigins.has(part) ? [mediaOrigins.get(part)!] : [],
-              );
-              const exact = originals?.length
-                ? sampledMediaOccurrences(
-                    options.thread.items,
-                    messages,
-                    options.configuration.inputModalities,
-                    originals,
-                  )
-                : [];
-              return exact.length > 0
-                ? { withheldMedia: exact, mediaScope: "exact" as const }
-                : {
-                    withheldMedia: sampledMediaOccurrences(
-                      options.thread.items,
-                      messages,
-                      options.configuration.inputModalities,
-                    ),
-                    mediaScope: "diagnostic_turn" as const,
-                  };
-            })()
-          : {}),
-      };
-    }
-    // All canonical writes are outside the sample-error boundary: preparation
-    // and persistence failures cannot become a replayable model failure.
-    for (const reasoning of completedReasoning) {
-      const snapshot: ReasoningItem =
-        failure === undefined ? reasoning : { ...reasoning, incomplete: true };
-      await options.commit(snapshot);
-      options.emit({ type: "item_completed", item: snapshot });
-    }
-    if (failure !== undefined) {
-      for (const [reasoningId, partialId] of reasoningItems) {
-        const partial = reasoningDeltas.get(reasoningId)!;
-        if (!partial.content && !partial.summary) continue;
-        const snapshot: ReasoningItem = {
-          id: partialId,
+      if (latestUsage !== undefined) {
+        if (failure === undefined)
+          this.#contextCalibration.record(
+            options.thread.id,
+            contextRequest.receipt,
+            latestUsage.inputTokens,
+          );
+        const usage: ModelUsageItem = {
+          id: this.#id(),
           threadId: options.thread.id,
           turnId,
           createdAt: this.#now(),
-          type: "reasoning",
-          incomplete: true,
-          reasoningContent: partial.content,
-          contentVisibility: "public",
-          ...(partial.summary ? { summary: partial.summary } : {}),
+          type: "model_usage",
+          modelResponseId: itemId,
+          ...latestUsage,
         };
-        await options.commit(snapshot);
-        options.emit({ type: "item_completed", item: snapshot });
+        await options.commit(usage);
+        options.emit({ type: "item_completed", item: usage });
       }
-      if (text.length > 0) {
-        const snapshot: AgentMessageItem = {
-          id: itemId,
+
+      if (failure !== undefined) return failure;
+
+      if (!started && toolCalls.length === 0) {
+        options.emit({
+          type: "item_started",
           threadId: options.thread.id,
           turnId,
-          createdAt: this.#now(),
-          type: "agent_message",
-          text,
-          // Superseded by a retry or by the surfaced failure; never replayed
-          // to the model.
-          incomplete: true,
-        };
-        await options.commit(snapshot);
-        options.emit({ type: "item_completed", item: snapshot });
+          itemId,
+          itemType: "agent_message",
+        });
       }
-    }
-    if (latestUsage !== undefined) {
-      if (failure === undefined)
-        this.#contextCalibration.record(
-          options.thread.id,
-          contextRequest.receipt,
-          latestUsage.inputTokens,
-        );
-      const usage: ModelUsageItem = {
-        id: this.#id(),
-        threadId: options.thread.id,
-        turnId,
-        createdAt: this.#now(),
-        type: "model_usage",
-        modelResponseId: itemId,
-        ...latestUsage,
-      };
-      await options.commit(usage);
-      options.emit({ type: "item_completed", item: usage });
-    }
-
-    if (failure !== undefined) return failure;
-
-    if (!started && toolCalls.length === 0) {
-      options.emit({
-        type: "item_started",
-        threadId: options.thread.id,
-        turnId,
+      return {
         itemId,
-        itemType: "agent_message",
-      });
+        configuration: sampleConfiguration,
+        modelAdapter: sampleAdapter,
+        text,
+        toolCalls,
+        presentation,
+        contextBoundaryItemId,
+        inputTokens: latestUsage?.inputTokens,
+      };
+    } finally {
+      prepared?.release?.();
     }
-    return {
-      itemId,
-      text,
-      toolCalls,
-      presentation,
-      contextBoundaryItemId,
-      inputTokens: latestUsage?.inputTokens,
-    };
   }
 
   async #runToolBatch(
@@ -1515,7 +1574,24 @@ export class AgentRuntime {
           `Unsupported tool: ${toolCall.name} (not available in this model sample)`,
         );
       }
+      const traceOutput =
+        this.#trace === undefined
+          ? undefined
+          : createToolTraceCapture(this.#trace, {
+              threadId: options.thread.id,
+              turnId,
+              callId: toolCall.callId,
+              toolCallItemId: toolCall.id,
+              toolName: toolCall.name,
+            });
+      if (traceOutput !== undefined)
+        this.#toolTraces.set(toolCall.id, traceOutput);
       prepared = this.#tools.prepare({
+        modelReferences: modelReferenceHistory(options.thread),
+        ...(traceOutput === undefined ? {} : { traceOutput }),
+        ...(this.#traceInspection
+          ? { modelTraceInspectionTool: "trace_read" as const }
+          : {}),
         callId: toolCall.callId,
         canonicalToolCallId: toolCall.id,
         name: toolCall.name,
@@ -1643,7 +1719,7 @@ export class AgentRuntime {
           const operation =
             options.dispatchTool === undefined
               ? launch()
-              : options.dispatchTool(toolCall, launch);
+              : options.dispatchTool(toolCall, launch, options.configuration);
           // The task manager bounds cancellation and owns the partial-output
           // receipt. Racing it here would discard its live wait handle.
           const result = await operation;
@@ -1674,10 +1750,16 @@ export class AgentRuntime {
                 output: `${phase}: ${describeError(error)}`,
                 exitCode: interrupted ? 130 : 1,
               };
+          const blocked =
+            error instanceof Error &&
+            "modelRecoveryBlocked" in error &&
+            error.modelRecoveryBlocked === true;
           outcome = {
             result: failed,
-            ...(interrupted ? { controlError: error } : {}),
-            ...(interrupted ? { executionStatus: "declined" as const } : {}),
+            ...(interrupted || blocked ? { controlError: error } : {}),
+            ...(interrupted || blocked
+              ? { executionStatus: "declined" as const }
+              : {}),
           };
         }
 
@@ -1809,6 +1891,27 @@ export class AgentRuntime {
     options: RunTurnOptions,
   ): Promise<void> {
     const { result } = outcome;
+    const trace = this.#toolTraces.get(toolCall.id);
+    if (trace !== undefined && !trace.hasObservedResult())
+      await trace.recordResult(result, "runtime-result");
+    const references = mergeReferenceBindings([
+      ...(trustedModelReferenceBindings(result) ?? []),
+      ...(toolCall.parentCallId === undefined
+        ? nestedReferenceBindings(options.thread.items, toolCall)
+        : []),
+    ]);
+    const state = result.structuredContent;
+    const taskIsPending =
+      result.contentType === TOOL_TASK_CONTENT_TYPE &&
+      state !== null &&
+      typeof state === "object" &&
+      !Array.isArray(state) &&
+      "status" in state &&
+      ["running", "cancel_requested", "cancellation_unconfirmed"].includes(
+        String(state.status),
+      );
+    if (trace !== undefined && !trace.hasAcceptedResult() && !taskIsPending)
+      await trace.recordAcceptedResult(result);
     const originalCapture = capturedToolOutput(result);
     const capture =
       this.#toolOutputSpool !== undefined &&
@@ -1828,6 +1931,7 @@ export class AgentRuntime {
       turnId: toolCall.turnId,
       createdAt: this.#now(),
       type: "tool_result",
+      ...(references.length === 0 ? {} : { referenceBindings: references }),
       callId: toolCall.callId,
       output: `${
         capture === undefined ? result.output : renderToolOutput(capture)
@@ -1847,6 +1951,7 @@ export class AgentRuntime {
         : { modelContent: result.modelContent }),
     };
     await this.#completeItem(resultItem, options);
+    this.#toolTraces.delete(toolCall.id);
   }
 
   async #completeItem(
@@ -2178,4 +2283,55 @@ async function waitForAbort<T>(
       },
     );
   });
+}
+
+function mergeReferenceBindings(
+  bindings: readonly ModelReferenceBinding[],
+): ModelReferenceBinding[] {
+  const byIdentity = new Map<string, ModelReferenceBinding>();
+  for (const binding of bindings) {
+    const key = `${binding.ownerThreadId}\0${binding.ref}`;
+    const prior = byIdentity.get(key);
+    if (
+      prior !== undefined &&
+      JSON.stringify(prior) !== JSON.stringify(binding)
+    )
+      throw new Error("Conflicting immutable model reference provenance");
+    byIdentity.set(key, binding);
+  }
+  return validateModelReferenceBindings([...byIdentity.values()]);
+}
+function modelReferenceHistory(thread: Thread): ModelReferenceBinding[] {
+  return mergeReferenceBindings([
+    ...thread.itemList.flatMap((item) =>
+      item.source.metadata?.referenceBindings === undefined
+        ? []
+        : validateModelReferenceBindings(
+            item.source.metadata.referenceBindings,
+          ),
+    ),
+    ...thread.items.flatMap((item) =>
+      item.type === "tool_result" ? (item.referenceBindings ?? []) : [],
+    ),
+  ]);
+}
+function nestedReferenceBindings(
+  items: readonly CanonicalItem[],
+  root: ToolCallItem,
+): ModelReferenceBinding[] {
+  const start = items.findIndex((item) => item.id === root.id);
+  const descendants = new Set([root.callId]);
+  const bindings: ModelReferenceBinding[] = [];
+  for (const item of items.slice(start + 1)) {
+    if (item.turnId !== root.turnId) continue;
+    if (
+      item.type === "tool_call" &&
+      item.parentCallId !== undefined &&
+      descendants.has(item.parentCallId)
+    )
+      descendants.add(item.callId);
+    if (item.type === "tool_result" && descendants.has(item.callId))
+      bindings.push(...(item.referenceBindings ?? []));
+  }
+  return bindings;
 }

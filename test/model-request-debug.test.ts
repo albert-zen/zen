@@ -1,617 +1,315 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { ModelRequestDebugStore } from "../apps/cli/src/model-request-debug.js";
-import type { ModelAdapter, ModelRequest } from "../src/model.js";
-const request = (): ModelRequest => ({
-  model: "synthetic-model",
-  reasoningEffort: null,
-  messages: [{ role: "user", text: "synthetic prompt" }],
-  tools: [],
-  signal: new AbortController().signal,
-  sessionId: "thread-1",
-  debugContext: {
-    threadId: "thread-1",
-    purpose: "turn",
-    turnId: "turn-1",
-    sampleId: "sample-1",
-    contextBoundaryItemId: "item-1",
-    sampleAttempt: 1,
-  },
-});
-test("capture is opt-in, exact dispatch body is immutable, disabling clears and fences late callbacks", async () => {
-  const store = new ModelRequestDebugStore();
-  let late: ModelRequest["onRequest"];
-  const model: ModelAdapter = {
-    provider: "synthetic",
-    requestPayloadFormat: "chat-completions",
-    async *stream(req) {
-      late = req.onRequest;
-      req.onRequest?.({
-        format: "chat-completions",
-        body: '{"messages":[{"role":"user","content":"final"}]}',
-        originalBytes: 48,
-        redacted: false,
-        transportAttempt: 1,
-        provider: "synthetic",
-        model: req.model,
-      });
-      yield { type: "text_delta", delta: "ok" };
-    },
-  };
-  const observed = store.observe(model);
-  for await (const _event of observed.stream(request())) {
-    /* consume */
-  }
-  assert.equal(store.control({ action: "status" }).retainedCount, 0);
-  assert.equal(late, undefined);
-  store.control({ action: "setEnabled", enabled: true });
-  for await (const _event of observed.stream(request())) {
-    /* consume */
-  }
-  const records = store.control({
-    action: "list",
-    threadId: "thread-1",
-  }).records!;
-  assert.equal(records.length, 1);
-  assert.equal(records[0]!.sampleId, "sample-1");
-  assert.match(
-    store.control({ action: "read", id: records[0]!.id }).page!.text,
-    /final/,
-  );
-  const old = late as ModelRequest["onRequest"];
-  store.control({ action: "setEnabled", enabled: false });
-  store.control({ action: "setEnabled", enabled: true });
-  old?.({
-    format: "chat-completions",
-    body: "{}",
-    originalBytes: 2,
-    redacted: false,
-    transportAttempt: 2,
-    provider: "synthetic",
-    model: "synthetic",
-  });
-  assert.equal(store.control({ action: "status" }).retainedCount, 0);
-});
-
-import { observeRequestBody } from "../src/model/request-observation.js";
-import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
-import { OpenAiSubscriptionModel } from "../src/model/openai-subscription.js";
-import { InMemoryAttachmentStore } from "../src/attachment.js";
-import { png1x1 } from "./fixtures.js";
-import { createHostedAppServer } from "../apps/cli/src/host.js";
-import { InMemoryThreadJournal } from "../src/journal.js";
-import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
-
-async function consume(adapter: ModelAdapter, input = request()) {
-  for await (const _event of adapter.stream(input)) {
-    /* consume */
-  }
-}
-function payloadAdapter(body: string): ModelAdapter {
+import { FileTraceStore, type TraceEvent } from "../src/trace.js";
+import {
+  ModelRequestDebugStore,
+  validateModelRequestDebugCommand,
+} from "../apps/cli/src/model-request-debug.js";
+async function fixture(t: test.TestContext) {
+  const directory = await mkdtemp(path.join(tmpdir(), "trace-reader-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new FileTraceStore(directory);
+  const add = (event: Omit<TraceEvent, "threadId"> & { threadId?: string }) =>
+    store.record({ threadId: "thread-a", sampleId: "sample-a", ...event });
   return {
-    provider: "synthetic",
-    requestPayloadFormat: "chat-completions",
-    async *stream(req) {
-      observeRequestBody(req, body, "chat-completions", "synthetic", 1);
-      yield { type: "text_delta", delta: "ok" };
-    },
+    directory,
+    store,
+    add,
+    reader: new ModelRequestDebugStore(store, {
+      pageCharacters: 7,
+      pageRecords: 2,
+    }),
   };
 }
-function readAll(
-  store: ModelRequestDebugStore,
+async function whole(
+  reader: ModelRequestDebugStore,
+  threadId: string,
   id: string,
-  view: "payload" | "messages" | "tools" | "configuration" = "payload",
+  view: "payload" | "output" | "artifact" = "payload",
 ) {
   let text = "",
     offset = 0;
-  for (;;) {
-    const page = store.control({ action: "read", id, offset, view }).page!;
+  do {
+    const page = (
+      await reader.control({ action: "read", threadId, id, view, offset })
+    ).page!;
     text += page.text;
-    if (page.nextOffset === null) return text;
+    if (page.nextOffset === null) break;
     offset = page.nextOffset;
-  }
+  } while (true);
+  return text;
 }
-function doneChat() {
-  return new Response(
-    'data: {"choices":[{"index":0,"delta":{"content":"synthetic response"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
-    { headers: { "content-type": "text/event-stream" } },
-  );
-}
-function subscriptionToken(account: string) {
-  return `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: account } })).toString("base64url")}.synthetic-signature`;
-}
-
-test("whole-record eviction, complete pagination, search and explicit oversized truncation", async () => {
-  const store = new ModelRequestDebugStore({
-    maxRecords: 2,
-    maxBytes: 200,
-    maxRecordBytes: 160,
+test("reader survives restart, paginates exact original body including BOM and supplementary characters", async (t) => {
+  const { directory, store, add } = await fixture(t);
+  const body =
+    '\uFEFF{"messages":[{"role":"user","content":"秘密😀<script>keep()</script>"}],"token":"body-not-redacted"}';
+  await add({
+    type: "model_sample_started",
+    data: {
+      purpose: "turn",
+      model: "old-model",
+      configuration: { permissions: "ask" },
+    },
+  });
+  await add({
+    type: "model_request",
+    data: { transportAttempt: 1, format: "responses" },
+    artifacts: [{ name: "request_body", bytes: body }],
+  });
+  await add({
+    type: "model_request_dispatched",
+    data: { transportAttempt: 1 },
+  });
+  const record = (await store.read("thread-a")).records.find(
+    (x) => x.type === "model_request",
+  )!;
+  const reader = new ModelRequestDebugStore(new FileTraceStore(directory), {
     pageCharacters: 7,
   });
-  store.control({ action: "setEnabled", enabled: true });
-  const body = JSON.stringify({
-    messages: [{ role: "user", content: "中🙂".repeat(8) }],
-    tools: [],
+  assert.equal(await whole(reader, "thread-a", record.id), body);
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: record.id,
+      view: "configuration",
+    })
+  ).page!;
+  assert.equal(page.record.model, "old-model");
+  assert.equal(page.record.dispatch, "observed");
+  assert.equal(page.record.responseCapture, "unknown");
+  assert.equal(page.record.sampleOutcome, "unknown");
+});
+test("semantic completion and full sample duration do not imply raw HTTP EOF or attempt duration", async (t) => {
+  const { reader, add } = await fixture(t);
+  await add({
+    type: "model_request",
+    data: { transportAttempt: 1 },
+    artifacts: [{ name: "request_body", bytes: "{}" }],
   });
-  await consume(store.observe(payloadAdapter(body)));
-  const first = store.control({ action: "list", threadId: "thread-1" })
+  await add({
+    type: "model_request_dispatched",
+    data: { transportAttempt: 1 },
+  });
+  await add({
+    type: "model_sample_finished",
+    data: { outcome: "completed", elapsedNs: "123000000" },
+  });
+  let r = (await reader.control({ action: "list", threadId: "thread-a" }))
     .records![0]!;
-  assert.equal(first.truncated, false);
-  assert.equal(readAll(store, first.id), body);
-  assert.equal(
-    store.control({ action: "list", threadId: "thread-1", query: "中🙂" })
-      .records!.length,
-    1,
-  );
-  assert.equal(
-    store.control({ action: "list", threadId: "other" }).records!.length,
-    0,
-  );
-  assert.deepEqual(
-    JSON.parse(readAll(store, first.id, "messages")),
-    JSON.parse(body).messages,
-  );
-  assert.equal(readAll(store, first.id, "tools"), "[]");
-  await consume(store.observe(payloadAdapter('{"messages":["second"]}')));
-  await consume(store.observe(payloadAdapter('{"messages":["third"]}')));
-  assert.equal(store.control({ action: "status" }).evictedCount, 1);
-  assert.throws(() => readAll(store, first.id), /expired/);
-  await consume(
-    store.observe(
-      payloadAdapter(JSON.stringify({ messages: ["🙂".repeat(500)] })),
-    ),
-  );
-  const large = store.control({ action: "list", threadId: "thread-1" })
+  assert.equal(r.sampleOutcome, "completed");
+  assert.equal(r.responseCapture, "unknown");
+  assert.equal(r.sampleDurationMs, 123);
+  assert.equal(r.attemptDurationMs, null);
+  await add({
+    type: "model_response_end",
+    data: {
+      transportAttempt: 1,
+      completeness: "complete",
+      bytes: 0,
+      chunks: 0,
+    },
+  });
+  r = (await reader.control({ action: "list", threadId: "thread-a" }))
     .records![0]!;
-  assert.equal(large.truncated, true);
-  assert(large.originalBytes > large.retainedBytes);
-  assert(large.retainedBytes <= 160);
-  assert(!readAll(store, large.id).includes("�"));
-  assert.throws(() => readAll(store, large.id, "messages"), /truncated/);
-  assert(store.control({ action: "status" }).retainedBytes <= 200);
+  assert.equal(r.responseCapture, "complete");
+  assert.notEqual(r.attemptDurationMs, null);
 });
-
-test("redaction precedes a size boundary and removes known secrets from body, keys and metadata", async () => {
-  const store = new ModelRequestDebugStore({
-    maxBytes: 120,
-    maxRecordBytes: 120,
+test("completed HTTP body cannot mask model cancellation or parser failure", async (t) => {
+  const { reader, add } = await fixture(t);
+  await add({ type: "model_request", data: { transportAttempt: 1 } });
+  await add({
+    type: "model_response_end",
+    data: { transportAttempt: 1, completeness: "complete" },
   });
-  store.control({ action: "setEnabled", enabled: true });
-  const secret = 'synthetic-key-"secret"';
-  const body = JSON.stringify({
-    messages: [{ content: "prefix " + "x".repeat(55) + secret + " suffix" }],
-    [secret]: secret,
-    api_key: "different-synthetic-key",
-  });
-  const adapter: ModelAdapter = {
-    provider: secret,
-    requestPayloadFormat: "chat-completions",
-    async *stream(req) {
-      observeRequestBody(req, body, "chat-completions", secret, 1, [secret]);
-      yield { type: "text_delta", delta: "ok" };
-    },
-  };
-  await consume(store.observe(adapter), { ...request(), model: secret });
-  const entry = store.control({ action: "list", threadId: "thread-1" })
-    .records![0]!;
-  assert.equal(entry.redacted, true);
-  assert.equal(entry.truncated, true);
-  const dump = JSON.stringify(entry) + readAll(store, entry.id);
-  assert(!dump.includes("synthetic-key"));
-  assert(!dump.includes("different-synthetic-key"));
-  assert.equal(entry.originalBytes, Buffer.byteLength(body));
-});
-
-test("clear fences in-flight capture, disable avoids serialization, unsupported adapters are never exact", async () => {
-  const store = new ModelRequestDebugStore();
-  let observe: ModelRequest["onRequest"];
-  const adapter: ModelAdapter = {
-    provider: "synthetic",
-    async *stream(req) {
-      observe = req.onRequest;
-      yield { type: "text_delta", delta: "ok" };
-    },
-  };
-  store.control({ action: "setEnabled", enabled: true });
-  await consume(store.observe(adapter));
-  const entry = store.control({ action: "list", threadId: "thread-1" })
-    .records![0]!;
-  assert.equal(entry.format, "model-input");
-  assert.equal(entry.transportAttempt, 0);
-  store.control({ action: "clear" });
-  (observe as ModelRequest["onRequest"])?.({
-    format: "responses",
-    body: "{}",
-    originalBytes: 2,
-    redacted: false,
-    transportAttempt: 1,
-    provider: "synthetic",
-    model: "synthetic",
-  });
-  assert.equal(store.control({ action: "status" }).retainedCount, 0);
-  store.control({ action: "setEnabled", enabled: false });
-  const input = request();
-  Object.defineProperty(input, "messages", {
-    get() {
-      throw new Error("debug serialization must not happen");
-    },
-  });
-  await consume(store.observe(adapter), input);
-  assert.equal(observe, undefined);
-});
-
-test("Chat Completions captures the exact final body including image bytes and provider settings, every HTTP attempt", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  const attachments = new InMemoryAttachmentStore();
-  const attachment = await attachments.importBytes(png1x1());
-  const bodies: string[] = [];
-  let attempts = 0;
-  const adapter = new OpenAiCompatibleModel({
-    baseUrl: "https://provider.test/never-capture-url/v1",
-    apiKey: "synthetic-key",
-    defaultParams: { temperature: 0.35 },
-    attachments,
-    fetch: async (_url, init) => {
-      bodies.push(String(init?.body));
-      // Capture must already exist before fetch, not after a successful response.
-      assert.equal(
-        store.control({ action: "status" }).retainedCount,
-        bodies.length,
-      );
-      if (++attempts === 1)
-        return new Response("retry", {
-          status: 429,
-          headers: { "retry-after": "0" },
-        });
-      return doneChat();
-    },
-  });
-  await consume(store.observe(adapter), {
-    ...request(),
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "image", attachment },
-          { type: "text", text: "synthetic visual prompt" },
-        ],
-      },
-    ],
-    tools: [
-      {
-        name: "synthetic_tool",
-        description: "synthetic tool",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ],
-  });
-  const entries = store
-    .control({ action: "list", threadId: "thread-1" })
-    .records!.reverse();
-  assert.equal(entries.length, 2);
-  assert.deepEqual(
-    entries.map((x) => x.transportAttempt),
-    [1, 2],
-  );
-  for (const [index, entry] of entries.entries()) {
-    assert.equal(readAll(store, entry.id), bodies[index]);
-    assert.equal(entry.redacted, false);
-    const body = JSON.parse(bodies[index]!);
-    assert.equal(body.temperature, 0.35);
-    assert(
-      body.messages[0].content[0].image_url.url.startsWith(
-        "data:image/png;base64,",
-      ),
-    );
-    assert.equal(body.tools[0].function.name, "synthetic_tool");
-  }
-  assert(!JSON.stringify(entries).includes("synthetic-key"));
-  assert(!readAll(store, entries[0]!.id).includes("never-capture-url"));
-});
-
-test("Responses capture includes injected instructions and configuration and fences observer failures", async () => {
-  const observations: string[] = [];
-  const bodies: string[] = [];
-  const adapter = new OpenAiSubscriptionModel({
-    instructions: "synthetic system instructions",
-    acquireAccessLease: async () => ({
-      accessToken: subscriptionToken("synthetic-account"),
-    }),
-    fetch: async (_url, init) => {
-      bodies.push(String(init?.body));
-      return new Response(
-        'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n',
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    },
-  });
-  const input = {
-    ...request(),
-    reasoningEffort: "medium",
-    onRequest: (event: import("../src/model.js").ModelRequestObservation) => {
-      observations.push(event.body);
-      throw new Error("observer is broken");
-    },
-  };
-  await consume(adapter, input);
-  assert.deepEqual(observations, bodies);
-  assert.equal(
-    JSON.parse(bodies[0]!).instructions,
-    "synthetic system instructions",
-  );
-  assert.equal(JSON.parse(bodies[0]!).reasoning.effort, "medium");
-  assert.equal(JSON.parse(bodies[0]!).store, false);
-  assert(!bodies[0]!.includes("synthetic-account"));
-});
-
-test("Host wiring is opt-in and disabling does not touch canonical history", async () => {
-  const journal = new InMemoryThreadJournal();
-  const host = createHostedAppServer({
-    cwd: process.cwd(),
-    dataDirectory: "/tmp/synthetic-debug-host",
-    model: "fake",
-    provider: { type: "fake" },
-    toolPresentation: "direct",
-    approvalPolicy: "never",
-    journal,
-    threadMetadata: new InMemoryThreadMetadataStore(),
-  });
-  try {
-    const thread = await host.startThread();
-    await (
-      await host.startTurn(thread.id, "synthetic first")
-    ).done;
-    assert.equal(
-      host.modelRequestDebug.control({ action: "status" }).retainedCount,
-      0,
-    );
-    host.modelRequestDebug.control({ action: "setEnabled", enabled: true });
-    await (
-      await host.startTurn(thread.id, "synthetic second")
-    ).done;
-    const entries = host.modelRequestDebug.control({
-      action: "list",
-      threadId: thread.id,
-    }).records!;
-    assert.equal(entries.length, 1);
-    const before = await journal.read(thread.id);
-    assert(before.some((item) => item.id === entries[0]!.sampleId));
-    assert(
-      before.some((item) => item.id === entries[0]!.contextBoundaryItemId),
-    );
-    assert.equal(entries[0]!.purpose, "turn");
-    host.modelRequestDebug.control({ action: "setEnabled", enabled: false });
-    assert.deepEqual(await journal.read(thread.id), before);
-  } finally {
-    await host.closeHostResources();
+  for (const outcome of ["failed", "cancelled"] as const) {
+    await add({ type: "model_sample_finished", data: { outcome } });
+    const r = (await reader.control({ action: "list", threadId: "thread-a" }))
+      .records![0]!;
+    assert.equal(r.responseCapture, "complete");
+    assert.equal(r.sampleOutcome, outcome);
   }
 });
-
-import { ZenAppServer } from "../src/app-server.js";
-import { AgentRuntime } from "../src/runtime.js";
-import { ToolEnvironment } from "../src/tool.js";
-import { ProviderRegistry } from "../src/provider-registry.js";
-import { StaticModelCatalog } from "../src/model-catalog.js";
-function debugServer(
-  model: ModelAdapter,
-  store: ModelRequestDebugStore,
-  agenticEnabled = false,
-) {
-  return new ZenAppServer({
-    journal: new InMemoryThreadJournal(),
-    threadMetadata: new InMemoryThreadMetadataStore(),
-    runtime: new AgentRuntime({
-      toolEnvironment: new ToolEnvironment({ runtimes: [] }),
-      sampleRetry: { maxAttempts: 3, baseDelayMs: 0 },
-    }),
-    providerRegistry: new ProviderRegistry([
-      {
-        providerProfileId: model.provider,
-        adapter: store.observe(model),
-        modelCatalog: new StaticModelCatalog([
-          { id: "synthetic-model", isDefault: true, contextWindow: 32768 },
-        ]),
-      },
-    ]),
-    defaults: {
-      cwd: process.cwd(),
-      providerProfileId: model.provider,
-      modelId: "synthetic-model",
-      reasoningEffort: "medium",
-      sandbox: "danger-full-access",
-      approvalPolicy: "never",
-    },
-    contextCompaction: { agenticEnabled },
+test("prepared body is not dispatch proof; blocked retries do not inherit previous attempt EOF", async (t) => {
+  const { reader, add } = await fixture(t);
+  await add({ type: "model_request", data: { transportAttempt: 1 } });
+  await add({
+    type: "model_response_end",
+    data: { transportAttempt: 1, completeness: "complete" },
   });
-}
-
-test("Runtime sample retries have distinct sample identities and updated final request bodies", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  let calls = 0;
-  const model = new OpenAiCompatibleModel({
-    baseUrl: "https://provider.test/v1",
-    apiKey: "synthetic-key",
-    fetch: async () =>
-      ++calls === 1
-        ? new Response(
-            'data: {"choices":[{"index":0,"delta":{"content":"incomplete synthetic"},"finish_reason":null}]}\n\n',
-            { headers: { "content-type": "text/event-stream" } },
-          )
-        : doneChat(),
+  await add({
+    type: "model_request",
+    data: { transportAttempt: 2 },
+    artifacts: [{ name: "request_body", bytes: "{}" }],
   });
-  const server = debugServer(model, store);
-  const thread = await server.startThread();
-  await (
-    await server.startTurn(thread.id, "synthetic user")
-  ).done;
-  const entries = store
-    .control({ action: "list", threadId: thread.id })
-    .records!.reverse();
-  assert.equal(entries.length, 2);
-  assert.deepEqual(
-    entries.map((x) => x.sampleAttempt),
-    [1, 2],
-  );
-  assert.deepEqual(
-    entries.map((x) => x.transportAttempt),
-    [1, 1],
-  );
-  assert.notEqual(entries[0]!.sampleId, entries[1]!.sampleId);
-  assert.equal(entries[0]!.turnId, entries[1]!.turnId);
-  assert(!readAll(store, entries[1]!.id).includes("incomplete synthetic"));
-  const items = (await server.readThread(thread.id)).items;
-  for (const entry of entries)
-    assert(items.some((item) => item.id === entry.contextBoundaryItemId));
-});
-
-test("steer accepted during dispatch changes only the next captured sample", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  const entered = deferredVoid(),
-    resume = deferredVoid();
-  let calls = 0;
-  const model = new OpenAiCompatibleModel({
-    baseUrl: "https://provider.test/v1",
-    apiKey: "synthetic-key",
-    fetch: async () => {
-      if (++calls === 1) {
-        entered.resolve();
-        await resume.promise;
-      }
-      return doneChat();
+  let r = (await reader.control({ action: "list", threadId: "thread-a" }))
+    .records![0]!;
+  assert.equal(r.dispatch, "unknown");
+  assert.equal(r.responseCapture, "unknown");
+  await add({
+    type: "model_dispatch_blocked",
+    data: {
+      transportAttempt: 2,
+      reason: "provider_revoked",
+      preparedRequestCaptured: true,
     },
   });
-  const server = debugServer(model, store);
-  const thread = await server.startThread();
-  const turn = await server.startTurn(thread.id, "synthetic original");
-  await entered.promise;
-  await server.steerTurn(thread.id, turn.id, "synthetic correction");
-  resume.resolve();
-  await turn.done;
-  const entries = store
-    .control({ action: "list", threadId: thread.id })
-    .records!.reverse();
-  assert.equal(entries.length, 2);
-  assert(!readAll(store, entries[0]!.id).includes("synthetic correction"));
-  assert(readAll(store, entries[1]!.id).includes("synthetic correction"));
-  assert.notEqual(
-    entries[0]!.contextBoundaryItemId,
-    entries[1]!.contextBoundaryItemId,
+  r = (await reader.control({ action: "list", threadId: "thread-a" }))
+    .records![0]!;
+  assert.equal(r.dispatch, "blocked");
+  assert.equal(r.preparedRequestCaptured, true);
+  assert.equal(r.responseCapture, "unknown");
+  assert.equal(r.attemptTimingScope, "request-preparation-to-block");
+  await add({
+    type: "model_dispatch_blocked",
+    data: { transportAttempt: 3, preparedRequestCaptured: false },
+  });
+  r = (await reader.control({ action: "list", threadId: "thread-a" }))
+    .records![0]!;
+  assert.equal(r.type, "model_dispatch_blocked");
+  assert.equal(r.preparedRequestCaptured, false);
+  assert.equal(r.requestBytes, null);
+});
+test("output joins split Unicode bytes, binary artifacts are lossless Base64", async (t) => {
+  const { reader, add, store } = await fixture(t);
+  const request = await add({
+    type: "model_request",
+    data: { transportAttempt: 1 },
+  });
+  const bytes = Buffer.from("😀正文");
+  for (const [index, chunk] of [
+    bytes.subarray(0, 2),
+    bytes.subarray(2),
+  ].entries())
+    await add({
+      type: "model_response_chunk",
+      data: { transportAttempt: 1, index },
+      artifacts: [{ name: "response_body", bytes: chunk }],
+    });
+  assert.equal(
+    await whole(reader, "thread-a", request.recordId!, "output"),
+    "😀正文",
+  );
+  const binary = await add({
+    type: "tool_output",
+    artifacts: [{ name: "tool_output", bytes: new Uint8Array([255, 0, 254]) }],
+  });
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: binary.recordId!,
+      view: "artifact",
+    })
+  ).page!;
+  assert.equal(page.encoding, "base64");
+  assert.equal(page.text, "/wD+");
+  assert.equal((await store.read("thread-a")).records.length, 4);
+});
+test("legacy/adapter input is not reconstructed wire; no absent output is called empty", async (t) => {
+  const { reader, add } = await fixture(t);
+  const receipt = await add({
+    type: "model_input",
+    artifacts: [{ name: "model_input", bytes: '{"messages":[]}' }],
+  });
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: receipt.recordId!,
+    })
+  ).page!;
+  assert.equal(page.availability, "unavailable");
+  assert.equal(
+    await whole(reader, "thread-a", receipt.recordId!, "artifact"),
+    '{"messages":[]}',
   );
 });
-
-test("generated compaction requests are distinguished without changing their provider cache hints", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  const model = new OpenAiCompatibleModel({
-    baseUrl: "https://provider.test/v1",
-    apiKey: "synthetic-key",
-    fetch: async () => doneChat(),
+test("all-local includes auxiliary records but IDs cannot read other scope/artifact paths", async (t) => {
+  const { reader, add } = await fixture(t);
+  const aux = await add({
+    threadId: "aux-title",
+    type: "model_input",
+    artifacts: [{ name: "input", bytes: "private-local" }],
   });
-  const server = debugServer(model, store);
-  const thread = await server.startThread();
-  await (
-    await server.startTurn(thread.id, "synthetic before compaction")
-  ).done;
-  await server.compactThread(thread.id, {
-    includeOriginalReference: false,
-    retention: { mode: "selected-items", recentTurnCount: 0 },
-  });
-  await (
-    await server.startTurn(thread.id, "synthetic after compaction")
-  ).done;
-  const entries = store
-    .control({ action: "list", threadId: thread.id })
-    .records!.reverse();
-  assert.equal(entries.length, 3);
-  assert.equal(entries[1]!.purpose, "compaction");
-  assert.equal(entries[1]!.turnId, null);
-  assert.equal(entries[2]!.purpose, "turn");
-  assert(
-    !readAll(store, entries[2]!.id).includes("synthetic before compaction"),
+  assert.equal(
+    (await reader.control({ action: "list", threadId: "" })).records![0]!
+      .threadId,
+    "aux-title",
   );
-  assert(readAll(store, entries[2]!.id).includes("synthetic response"));
-  assert(readAll(store, entries[2]!.id).includes("synthetic after compaction"));
-});
-
-test("agentic compaction capture follows the actual new projection", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  let calls = 0;
-  const model = new OpenAiCompatibleModel({
-    baseUrl: "https://provider.test/v1",
-    apiKey: "synthetic-key",
-    fetch: async () =>
-      ++calls === 1
-        ? new Response(
-            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "synthetic-compact", function: { name: "compact_context", arguments: JSON.stringify({ text: "synthetic compacted context", includeOriginalReference: false }) } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`,
-            { headers: { "content-type": "text/event-stream" } },
-          )
-        : doneChat(),
-  });
-  const server = debugServer(model, store, true);
-  const thread = await server.startThread();
-  await (
-    await server.startTurn(thread.id, "synthetic original context")
-  ).done;
-  const entries = store
-    .control({ action: "list", threadId: thread.id })
-    .records!.reverse();
-  assert.equal(entries.length, 2);
-  assert(readAll(store, entries[0]!.id).includes("synthetic original context"));
-  assert(
-    !readAll(store, entries[1]!.id).includes("synthetic original context"),
+  await assert.rejects(
+    reader.control({ action: "read", threadId: "thread-a", id: aux.recordId! }),
+    /scope/u,
   );
-  assert(
-    readAll(store, entries[1]!.id).includes("synthetic compacted context"),
-  );
-  assert.notEqual(
-    entries[0]!.contextBoundaryItemId,
-    entries[1]!.contextBoundaryItemId,
-  );
-});
-
-function deferredVoid() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-test("callbacks from a finished or failed sample cannot append obsolete captures", async () => {
-  const store = new ModelRequestDebugStore();
-  store.control({ action: "setEnabled", enabled: true });
-  let callback: ModelRequest["onRequest"];
-  const adapter: ModelAdapter = {
-    provider: "synthetic",
-    requestPayloadFormat: "chat-completions",
-    async *stream(input) {
-      callback = input.onRequest;
-      yield { type: "text_delta", delta: "complete" };
+  for (const input of [
+    { action: "clear" },
+    { action: "setEnabled", enabled: true },
+    { action: "status", path: "/etc/passwd" },
+    { action: "read", threadId: "../aux-title", id: aux.recordId },
+    {
+      action: "read",
+      threadId: "aux-title",
+      id: aux.recordId,
+      view: ["payload"],
     },
-  };
-  await consume(store.observe(adapter));
-  (callback as ModelRequest["onRequest"])?.({
-    format: "chat-completions",
-    body: "{}",
-    originalBytes: 2,
-    redacted: false,
-    transportAttempt: 1,
-    provider: "synthetic",
-    model: "synthetic",
+    {
+      action: "read",
+      threadId: "aux-title",
+      id: aux.recordId,
+      artifactIndex: -1,
+    },
+  ])
+    assert.throws(() => validateModelRequestDebugCommand(input));
+});
+test("artifact corruption is exposed on read without broad local redaction", async (t) => {
+  const { reader, add, store, directory } = await fixture(t);
+  const receipt = await add({
+    type: "model_request",
+    artifacts: [{ name: "request_body", bytes: "secret-original" }],
   });
-  assert.equal(store.control({ action: "status" }).retainedCount, 0);
+  const ref = (await store.read("thread-a")).records[0]!.artifacts[0]!.ref;
+  await writeFile(path.join(directory, "artifacts", ref.sha256), "corrupt");
+  const index = await reader.control({ action: "list", threadId: "thread-a" });
+  assert.equal(index.artifactVerification, "on-read");
+  const read = await reader.control({
+    action: "read",
+    threadId: "thread-a",
+    id: receipt.recordId!,
+  });
+  assert.equal(read.completeness, "incomplete");
+  assert.equal(read.page!.availability, "unavailable");
+  assert.equal(read.issues[0]!.kind, "artifact_unavailable");
 });
 
-test("observation preserves adapter-owned context instructions for budgeting", () => {
-  const store = new ModelRequestDebugStore();
-  const model: ModelAdapter = {
-    provider: "synthetic",
-    contextInstructions: "static instruction",
-    async *stream() {},
-  };
-  assert.equal(store.observe(model).contextInstructions, "static instruction");
+test("explicit EOF with missing captured chunks is incomplete, not an empty response", async (t) => {
+  const { reader, add } = await fixture(t);
+  const request = await add({
+    type: "model_request",
+    data: { transportAttempt: 1 },
+  });
+  await add({
+    type: "model_response_end",
+    data: {
+      transportAttempt: 1,
+      completeness: "complete",
+      bytes: 12,
+      chunks: 1,
+    },
+  });
+  const record = (
+    await reader.control({ action: "list", threadId: "thread-a" })
+  ).records![0]!;
+  assert.equal(record.responseCapture, "incomplete");
+  const page = (
+    await reader.control({
+      action: "read",
+      threadId: "thread-a",
+      id: request.recordId!,
+      view: "output",
+    })
+  ).page!;
+  assert.equal(page.availability, "unavailable");
 });

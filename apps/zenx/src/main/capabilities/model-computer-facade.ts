@@ -2,7 +2,6 @@ import type { ModelTool } from "../../../../../src/model.js";
 import type { ModelReferenceScope } from "../../../../../src/model-references.js";
 import {
   MODEL_REF,
-  record,
   object,
   asJson,
   renameField,
@@ -44,6 +43,12 @@ export function computerModelDefinition<T extends ModelTool>(source: T): T {
     tool.name === "computer_inspect"
       ? "Inspect an exact semantic window target. Returns self-contained bounded controls with exact refs; follow cursor alone for immutable continuation without recapture. Coverage retains native omissions."
       : tool.description;
+  if (tool.name === "computer_press" || tool.name === "computer_set_value")
+    tool.description =
+      "Act on the exact scoped control ref from inspection. The ref binds the original request target and observed control pair; native action support and freshness are revalidated.";
+  if (tool.name === "computer_foreground_click" && fields.capture)
+    tool.description =
+      "FOREGROUND TAKEOVER: click image-pixel x/y on the exact screenshot capture ref. Existing native selected-window, focus and geometry checks run immediately before posting.";
   tool.description +=
     " Use exact control/binding/capture refs, never the newest observation implicitly. Existing native owner, target, freshness, geometry and permission guards still run. Dispatch is not proof of application effect; never replay an uncertain action automatically.";
   return tool;
