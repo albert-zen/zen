@@ -1076,6 +1076,16 @@ export const en = {
     "This provider was not saved. Review its connection and model fields, then try again.",
   "settingsView.thisProviderWasNotSavedCheckApplicationStatusThen":
     "This provider was not saved. Check application status, then try again.",
+  "settingsView.providerCredentialStorageUnavailable":
+    "This provider was not saved because OS-protected credential storage is unavailable. Unlock or enable your operating system's keychain or credential service, then try again. Your edits are still here; ZenX will not store keys as plaintext.",
+  "settingsView.providerCredentialEncryptionFailed":
+    "This provider was not saved because its API key could not be encrypted. Check that your operating system's keychain or credential service is available, then try again. Your edits are still here.",
+  "settingsView.providerCredentialDecryptionFailed":
+    "This provider was not saved because an existing API key could not be decrypted. Check access to your operating system's keychain or credential service, then try again. Your edits are still here.",
+  "settingsView.providerCredentialReadFailed":
+    "This provider was not saved because the credential store could not be read. Check access to ZenX's application data and review the local diagnostics, then try again. Your edits are still here.",
+  "settingsView.providerCredentialWriteFailed":
+    "This provider was not saved because the encrypted credential store could not be written. Check free disk space and write access to ZenX's application data, then try again. Your edits are still here.",
   "settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck":
     "Could not confirm whether this provider was saved. Check application status before trying again.",
   "settingsView.enterADisplayName": "Enter a display name",
@@ -2325,6 +2335,16 @@ export const zhCN: Record<keyof typeof en, string> = {
     "此服务商未保存。查看其连接和模型字段，然后重试。",
   "settingsView.thisProviderWasNotSavedCheckApplicationStatusThen":
     "此服务商未保存。请检查应用状态，然后重试。",
+  "settingsView.providerCredentialStorageUnavailable":
+    "此服务商未保存，因为操作系统保护的凭证存储不可用。请解锁或启用系统钥匙串或凭证服务后重试。您的编辑仍在此处；ZenX 不会以明文存储密钥。",
+  "settingsView.providerCredentialEncryptionFailed":
+    "此服务商未保存，因为无法加密 API 密钥。请检查系统钥匙串或凭证服务是否可用后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialDecryptionFailed":
+    "此服务商未保存，因为无法解密已有 API 密钥。请检查系统钥匙串或凭证服务的访问权限后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialReadFailed":
+    "此服务商未保存，因为无法读取凭证存储。请检查 ZenX 应用数据的访问权限并查看本机诊断后重试。您的编辑仍在此处。",
+  "settingsView.providerCredentialWriteFailed":
+    "此服务商未保存，因为无法写入加密的凭证存储。请检查磁盘可用空间和 ZenX 应用数据的写入权限后重试。您的编辑仍在此处。",
   "settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck":
     "无法确认此服务商是否已保存。请检查应用状态，然后重试。",
   "settingsView.enterADisplayName": "输入显示名称",

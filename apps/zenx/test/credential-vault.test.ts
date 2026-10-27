@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import {
-  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -13,9 +13,12 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  CredentialStorageError,
   ZenXCredentialVault,
   type LocalEncryption,
 } from "../src/main/credential-vault.js";
+
+import { secureLocalEncryption } from "../src/main/secure-local-encryption.js";
 
 const encryption: LocalEncryption = {
   isEncryptionAvailable: () => true,
@@ -102,8 +105,11 @@ test("refuses to persist a secret when system encryption is unavailable", async 
     });
     await assert.rejects(
       vault.writeApiKey("profile-a", "secret"),
-      /encryption is unavailable/u,
+      (error: unknown) =>
+        error instanceof CredentialStorageError &&
+        error.code === "credential-storage-unavailable",
     );
+    assert.deepEqual(await readdir(directory), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -136,7 +142,9 @@ test("rejects corrupt v1 and v2 vault data without echoing stored material", asy
   try {
     const vault = new ZenXCredentialVault(file, encryption);
     await writeFile(file, "{not-json", { mode: 0o600 });
-    await assert.rejects(vault.readApiKey("profile"), /vault is invalid/u);
+    await assert.rejects(vault.readApiKey("profile"), {
+      code: "credential-read-failed",
+    });
     await writeFile(
       file,
       JSON.stringify({
@@ -148,8 +156,8 @@ test("rejects corrupt v1 and v2 vault data without echoing stored material", asy
     await assert.rejects(
       vault.readApiKey("profile"),
       (error: unknown) =>
-        error instanceof Error &&
-        /vault is invalid/u.test(error.message) &&
+        error instanceof CredentialStorageError &&
+        error.code === "credential-read-failed" &&
         !error.message.includes("private-material"),
     );
   } finally {
@@ -163,13 +171,105 @@ test("cleans credential staging when atomic replacement fails", async () => {
   );
   const file = path.join(directory, "credentials.vault");
   try {
-    await mkdir(file);
-    const vault = new ZenXCredentialVault(file, encryption);
-    await assert.rejects(vault.writeApiKey("profile-a", "secret"));
+    // Obstruct the destination only after the read and encryption stages.
+    // This exercises the actual atomic rename failure, not a read failure.
+    const vault = new ZenXCredentialVault(file, {
+      ...encryption,
+      encryptString(value) {
+        mkdirSync(file);
+        return encryption.encryptString(value);
+      },
+    });
+    await assert.rejects(vault.writeApiKey("profile-a", "secret"), {
+      code: "credential-write-failed",
+    });
     assert.deepEqual(
       (await readdir(directory)).filter((entry) => entry.endsWith(".tmp")),
       [],
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const failure of ["availability", "encrypt", "decrypt"] as const) {
+  test(`native ${failure} failures report only a fixed credential boundary code`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-vault-native-"),
+    );
+    const file = path.join(directory, "private-vault-path");
+    const secret = "synthetic-key-native-error-must-not-escape";
+    try {
+      await new ZenXCredentialVault(file, encryption).writeApiKey(
+        "profile",
+        secret,
+      );
+      const before = await readFile(file, "utf8");
+      const fail = () => {
+        throw new Error(`${secret} ${file}`);
+      };
+      const vault = new ZenXCredentialVault(file, {
+        ...encryption,
+        ...(failure === "availability"
+          ? { isEncryptionAvailable: fail }
+          : failure === "encrypt"
+            ? { encryptString: fail }
+            : { decryptString: fail }),
+      });
+      await assert.rejects(
+        failure === "decrypt"
+          ? vault.readApiKey("profile")
+          : vault.writeApiKey("profile", secret),
+        (error: unknown) => {
+          assert.ok(error instanceof CredentialStorageError);
+          assert.equal(
+            error.code,
+            failure === "availability"
+              ? "credential-storage-unavailable"
+              : failure === "encrypt"
+                ? "credential-encryption-failed"
+                : "credential-decryption-failed",
+          );
+          assert.equal(JSON.stringify(error).includes(secret), false);
+          assert.equal(error.message.includes(secret), false);
+          assert.equal(error.message.includes(file), false);
+          assert.equal(error.cause, undefined);
+          return true;
+        },
+      );
+      assert.equal(await readFile(file, "utf8"), before);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("credential availability changes remain typed unavailable at the final encryption boundary", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-vault-race-"));
+  try {
+    let checks = 0;
+    let encrypted = false;
+    const vault = new ZenXCredentialVault(
+      path.join(directory, "vault"),
+      secureLocalEncryption(
+        {
+          ...encryption,
+          isEncryptionAvailable: () => ++checks === 1,
+          getSelectedStorageBackend: () => "gnome_libsecret",
+          encryptString(value) {
+            encrypted = true;
+            return encryption.encryptString(value);
+          },
+        },
+        "linux",
+      ),
+    );
+    await assert.rejects(vault.writeApiKey("profile", "synthetic-key"), {
+      code: "credential-storage-unavailable",
+    });
+    assert.equal(checks, 2);
+    assert.equal(encrypted, false);
+    assert.deepEqual(await readdir(directory), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

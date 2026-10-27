@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -26,8 +27,13 @@ import {
 import { ProviderLogoResources } from "../src/main/provider-logo-resource.js";
 import {
   ConfigurationPreCommitError,
+  providerKnownRejectionCode,
   ZenXSettingsService,
 } from "../src/main/settings-service.js";
+import {
+  runDiagnosedProviderMutation,
+  SettingsDiagnosticLog,
+} from "../src/main/settings-diagnostic-log.js";
 import type { OpenAiSubscriptionAuthProfile } from "../../cli/src/subscription-auth.js";
 
 const encryption: LocalEncryption = {
@@ -1468,7 +1474,9 @@ test("a vault migration failure publishes no settings and succeeds on explicit r
       vault: new ZenXCredentialVault(vaultPath, encryption),
       subscription: inactiveSubscription(),
     });
-    await assert.rejects(failed.initialize({}), /not a regular file/u);
+    await assert.rejects(failed.initialize({}), {
+      code: "credential-read-failed",
+    });
     await assert.rejects(failed.publicSettings(), /not initialized/u);
     assert.equal(JSON.parse(await readFile(profilePath, "utf8")).version, 3);
 
@@ -2838,3 +2846,107 @@ test("explicit Responses profile persists without probing and discovery targets 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const failure of [
+  "unavailable",
+  "encrypt",
+  "decrypt",
+  "read",
+  "write",
+] as const) {
+  test(`Provider ${failure} credential boundary survives Settings IPC diagnostics without secrets or profile commit`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-provider-credential-"),
+    );
+    const file = path.join(directory, "credentials.vault");
+    const secret = "synthetic-secret-never-serialize-native-error";
+    let fail = false;
+    const vault = new ZenXCredentialVault(file, {
+      isEncryptionAvailable: () => !(fail && failure === "unavailable"),
+      encryptString(value) {
+        if (fail && failure === "encrypt") throw new Error(`${secret} ${file}`);
+        if (fail && failure === "write") mkdirSync(file);
+        return encryption.encryptString(value);
+      },
+      decryptString(value) {
+        if (fail && failure === "decrypt") throw new Error(`${secret} ${file}`);
+        return encryption.decryptString(value);
+      },
+    });
+    const service = new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: path.join(directory, "zen"),
+      vault,
+      subscription: inactiveSubscription(),
+    });
+    try {
+      await service.initialize({ ZENX_PROVIDER: "fake" });
+      const provider =
+        compatibleProfile("credential-test").providerProfiles[0]!;
+      if (failure === "decrypt")
+        await service.addProviderProfile(provider, secret);
+      const before = (await service.publicSettings()).profile;
+      const profileFile = path.join(directory, "host-profile.json");
+      const profileBytes = await readFile(profileFile, "utf8");
+      if (failure === "read") await writeFile(file, secret, { mode: 0o600 });
+      fail = true;
+      const reply = await runDiagnosedProviderMutation({
+        log: new SettingsDiagnosticLog(directory),
+        operation: failure === "decrypt" ? "edit" : "add",
+        knownRejectionCode: providerKnownRejectionCode,
+        mutate: async ({ markCommitted }) => {
+          if (failure === "decrypt") {
+            await service.editProviderProfile(
+              provider.providerProfileId,
+              provider,
+              {
+                apiKey: "replacement",
+                baseRevision: before.revision,
+              },
+            );
+          } else
+            await service.addProviderProfile(provider, secret, before.revision);
+          markCommitted();
+          return await service.publicSettings();
+        },
+      });
+      const code =
+        failure === "unavailable"
+          ? "credential-storage-unavailable"
+          : failure === "encrypt"
+            ? "credential-encryption-failed"
+            : failure === "decrypt"
+              ? "credential-decryption-failed"
+              : failure === "read"
+                ? "credential-read-failed"
+                : "credential-write-failed";
+      assert.equal(reply.ok, false);
+      assert.equal(reply.outcome, "failed");
+      assert.equal(!reply.ok && reply.code, code);
+      assert.equal(await readFile(profileFile, "utf8"), profileBytes);
+      const raw = await readFile(
+        path.join(directory, "diagnostics", "settings.jsonl"),
+        "utf8",
+      );
+      assert.equal(JSON.parse(raw).code, code);
+      assert.equal(JSON.parse(raw).attemptId, reply.attemptId);
+      for (const privateValue of [secret, file, "credential-test"]) {
+        assert.equal(raw.includes(privateValue), false);
+        assert.equal(JSON.stringify(reply).includes(privateValue), false);
+      }
+      if (failure === "unavailable" || failure === "encrypt")
+        await assert.rejects(readFile(file), { code: "ENOENT" });
+      fail = false;
+      if (failure === "write" || failure === "read")
+        await rm(file, { recursive: true });
+      assert.deepEqual((await service.publicSettings()).profile, before);
+      if (failure === "decrypt")
+        assert.equal(
+          await vault.readApiKey(provider.providerProfileId),
+          secret,
+        );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
