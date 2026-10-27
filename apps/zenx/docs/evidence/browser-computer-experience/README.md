@@ -1,7 +1,12 @@
 # Browser and Computer activity presentation
 
-Captured against integration commit `15db1ed65da79831ac719275d9279ec303670bdc` using
-`test/fixtures/browser-computer-experience-visual.tsx`. The fixture mounts the
+The production code is based on integration commit
+`15db1ed65da79831ac719275d9279ec303670bdc` and rendered by the fixture
+`test/fixtures/browser-computer-experience-visual.tsx` at this README's Git
+revision. The five Browser/Computer/foreground images were captured at
+`68aab53edc7c71a997486825e73308bca713ab98`; the locked/unknown images
+were recaptured with the corrected idle-system-sleep text from this revision.
+No production component structure changed between those captures. The fixture mounts the
 production `WorkspaceBrowserPanel`, `ComputerThreadPanel`, `PluginAccessReview`
 and `foregroundActivityHtml` renderer with synthetic Host facts. PNGs are
 1000 × 850 Chrome headless captures from an isolated synthetic browser profile.
@@ -24,5 +29,5 @@ differences. They do not verify Host event delivery, paint-before-input admissio
 physical Stop/Esc, native focus, multi-display behavior, lock detection, sleep,
 or macOS helper/overlay behavior. Those require native acceptance evidence.
 
-The uncommitted capture build and isolated Chrome profiles are retained only in
-`D:/Work/agent-data/projects/zen/artifacts/browser-computer-upgrade-20261027/experience-capture/`.
+The capture build and isolated Chrome profiles are local temporary artifacts;
+they are not part of this public evidence package.

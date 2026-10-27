@@ -396,7 +396,11 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
   );
   assert.match(
     dom.window.document.body.textContent ?? "",
-    /only during an active Computer operation/u,
+    /During an active Computer operation, ZenX prevents idle system sleep/u,
+  );
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /does not keep the display on or prevent manual sleep/u,
   );
   sessionState = "active";
   await act(async () => {

@@ -631,7 +631,7 @@ export const en = {
   "pluginAccessReview.keepAwake.inactive": "Inactive",
   "pluginAccessReview.keepAwake.unavailable": "Unavailable",
   "pluginAccessReview.idlePreventionDetail":
-    "ZenX prevents app suspension only during an active Computer operation. It does not keep the display on or block system sleep.",
+    "During an active Computer operation, ZenX prevents idle system sleep. It does not keep the display on or prevent manual sleep.",
   "pluginAccessReview.openGeneralSettings": "Open General settings",
   "pluginAccessReview.completeMacosSetup": "Complete macOS setup",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
@@ -1927,7 +1927,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.keepAwake.inactive": "未启用",
   "pluginAccessReview.keepAwake.unavailable": "不可用",
   "pluginAccessReview.idlePreventionDetail":
-    "ZenX 仅在 Computer 操作进行时防止应用挂起；不会保持显示器亮起，也不会阻止系统休眠。",
+    "仅在 Computer 操作进行期间，ZenX 才防止系统因闲置而休眠；不会保持显示器点亮，也不会阻止手动休眠。",
   "pluginAccessReview.openGeneralSettings": "打开“通用”设置",
   "pluginAccessReview.completeMacosSetup": "完成 macOS 设置",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
