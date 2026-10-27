@@ -295,15 +295,18 @@ test("Windows containment does not silently ignore a new child of a replacement 
   assert.match(actual.error, /parent.*identity.*containment was not proven/u);
 });
 
-test("Windows containment rejects an old orphan despite a matching current parent", async () => {
-  const root = windowsIdentity(101, 1, "400");
-  const oldOrphan = windowsIdentity(303, root.pid, "250");
+test("Windows containment rejects a post-root orphan despite a matching current parent", async () => {
+  const root = windowsIdentity(101, 1, "100");
+  const parent = windowsIdentity(202, root.pid, "400");
+  // Unlike a process older than the root, this could belong to an unobserved
+  // descendant generation created after our root but before this parent.
+  const oldOrphan = windowsIdentity(303, parent.pid, "250");
   const dispatched: number[] = [];
   const actual = await verifyAndTerminateWindowsProcessTree(
     root.pid,
-    { root, descendants: [] },
+    { root, descendants: [parent] },
     {
-      captureProcessTable: async () => ({ entries: [root, oldOrphan] }),
+      captureProcessTable: async () => ({ entries: [root, parent, oldOrphan] }),
       terminateProcessIdentity: async (identity) => {
         dispatched.push(identity.pid);
         return { ok: true, error: "" };
@@ -315,6 +318,72 @@ test("Windows containment rejects an old orphan despite a matching current paren
   assert.match(actual.error, /predates.*parent.*containment was not proven/u);
   assert.deepEqual(dispatched, []);
 });
+
+test("Windows containment excludes a pre-root process with a stale descendant PPID", async () => {
+  // PID/ticks reproduce the unrelated old process observed in Windows CI.
+  // The owned root's earlier bound is synthetic; the child/orphan ticks are exact.
+  const root = windowsIdentity(1092, 1, "639286713195000000");
+  const descendant = windowsIdentity(740, root.pid, "639286713195907800");
+  const unrelated = windowsIdentity(748, descendant.pid, "639286711108980170");
+  let entries = [unrelated, descendant, root];
+  const dispatched: WindowsProcessIdentity[] = [];
+  const actual = await verifyAndTerminateWindowsProcessTree(
+    root.pid,
+    { root, descendants: [] },
+    {
+      captureProcessTable: async () => ({ entries: [...entries] }),
+      terminateProcessIdentity: async (identity) => {
+        dispatched.push(identity);
+        entries = entries.filter((entry) => entry.pid !== identity.pid);
+        return { ok: true, error: "" };
+      },
+    },
+    { quiescencePollMs: 0 },
+  );
+  assert.deepEqual(actual, { ok: true, error: "" });
+  assert.deepEqual(dispatched, [root, descendant]);
+  assert.deepEqual(
+    entries,
+    [unrelated],
+    "the stale-PPID process must not be killed or adopted",
+  );
+});
+
+for (const missing of ["root", "candidate"] as const) {
+  for (const clock of [null, "unknown"]) {
+    test(`Windows containment does not exclude stale PPIDs with ${missing} creation time ${String(clock)}`, async () => {
+      const root: WindowsProcessIdentity = {
+        ...windowsIdentity(101, 1, "400"),
+        ...(missing === "root" ? { startTime: clock } : {}),
+      };
+      const candidate: WindowsProcessIdentity = {
+        ...windowsIdentity(303, root.pid, "250"),
+        ...(missing === "candidate" ? { startTime: clock } : {}),
+      };
+      const dispatched: WindowsProcessIdentity[] = [];
+      const actual = await verifyAndTerminateWindowsProcessTree(
+        root.pid,
+        { root, descendants: [] },
+        {
+          captureProcessTable: async () => ({ entries: [root, candidate] }),
+          terminateProcessIdentity: async (identity) => {
+            dispatched.push(identity);
+            return { ok: true, error: "" };
+          },
+        },
+        { quiescencePollMs: 0 },
+      );
+      assert.equal(actual.ok, false);
+      assert.match(
+        actual.error,
+        missing === "root" && clock === null
+          ? /parent.*identity was absent or changed; containment was not proven/u
+          : /creation identity was unavailable; containment was not proven/u,
+      );
+      assert.deepEqual(dispatched, []);
+    });
+  }
+}
 
 test("Windows containment preserves captured descendants after their parent exits", async () => {
   const root = windowsIdentity(101, 1, "100");
