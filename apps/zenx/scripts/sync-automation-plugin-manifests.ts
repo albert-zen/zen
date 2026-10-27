@@ -78,7 +78,6 @@ for (const relative of [
   "apps/zenx/src/main/first-party-profile-loader.ts",
   "apps/zenx/scripts/pack-first-party-plugins.mjs",
   "apps/zenx/test/concurrent-browser-profile.test.ts",
-  "apps/zenx/test/first-party-remaining-profile.test.ts",
   "apps/zenx/test/first-party-plugin-packaging.test.mjs",
 ]) {
   const file = resolve(root, relative);

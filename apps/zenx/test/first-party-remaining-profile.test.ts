@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { windowsStrictUiaCapabilityManifest } from "../src/main/capabilities/windows-strict-uia-provider.js";
+import { boundComputerCapabilityManifest } from "../src/main/capabilities/computer-provider.js";
 import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXTriggersCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
@@ -63,12 +64,12 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const currentTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.3.0.tgz",
+      `zenx-computer-plugin-macos-${boundComputerCapabilityManifest.version}.tgz`,
     );
     const oldTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.3.0.tgz",
+      "zenx-computer-plugin-macos-1.0.0.tgz",
     );
     await run("tar", ["-xf", currentTarball, "-C", staging]);
     for (const filename of ["package.json", "zenx.plugin.json"]) {
@@ -117,7 +118,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const updated = service
       .pluginSnapshot()
       .plugins.find((plugin) => plugin.id === "computer");
-    assert.equal(updated?.version, "1.2.0");
+    assert.equal(updated?.version, boundComputerCapabilityManifest.version);
     assert.equal(
       path.basename(updated?.profileSource?.packageSpec ?? ""),
       path.basename(currentTarball),
@@ -160,16 +161,17 @@ test("strict Windows Computer profile upgrades retain disablement and do not app
       const current = path.join(
         resources,
         "plugins",
-        "zenx-computer-plugin-win32-strict-1.3.0.tgz",
+        `zenx-computer-plugin-win32-strict-${windowsStrictUiaCapabilityManifest.version}.tgz`,
       );
       const previous = path.join(
         resources,
         "plugins",
-        "zenx-computer-plugin-win32-1.3.0.tgz",
+        "zenx-computer-plugin-win32-1.1.5.tgz",
       );
       await run("tar", ["-xf", current, "-C", staging]);
       const manifest = {
         ...structuredClone(windowsComputerCapabilityManifest),
+        version: "1.1.5",
         runtime: { type: "bundled", entry: "./dist/runtime.js" },
       };
       await writeFile(
@@ -207,7 +209,10 @@ test("strict Windows Computer profile upgrades retain disablement and do not app
       const updated = service
         .pluginSnapshot()
         .plugins.find((plugin) => plugin.id === "computer");
-      assert.equal(updated?.version, "1.2.0");
+      assert.equal(
+        updated?.version,
+        windowsStrictUiaCapabilityManifest.version,
+      );
       assert.equal(updated?.enabled, !disabled);
       assert.equal(
         path.basename(updated?.profileSource?.packageSpec ?? ""),
@@ -424,7 +429,10 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       "profile-a",
     );
     const oldComputerCallback = computerLiveCallbacks.at(-1)!;
-    assert.equal(computerEvents.at(-1)?.status, "live");
+    assert.equal(
+      computerEvents.filter((event) => event.type === "status").at(-1)?.status,
+      "live",
+    );
     await service.setEnabled("computer", false);
     assert.equal(computerLiveStops, 1);
     assert.equal(computerEvents.at(-1)?.status, "unavailable");
@@ -1140,8 +1148,8 @@ test("profile-managed Computer remains absent on Linux and unavailable Windows p
                 resources,
                 "plugins",
                 platform === "win32"
-                  ? "zenx-computer-plugin-win32-1.3.0.tgz"
-                  : "zenx-computer-plugin-macos-1.3.0.tgz",
+                  ? `zenx-computer-plugin-win32-${windowsComputerCapabilityManifest.version}.tgz`
+                  : `zenx-computer-plugin-macos-${boundComputerCapabilityManifest.version}.tgz`,
               ),
               { pluginId: "computer", packageName: "@zenx/computer-plugin" },
             ),
