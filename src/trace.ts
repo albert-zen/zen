@@ -1,3 +1,4 @@
+import type { TraceClock } from "./trace-clock.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import {
@@ -16,11 +17,7 @@ const clockDomain = randomUUID();
 const clockStart = process.hrtime.bigint();
 const identifier = /^[A-Za-z0-9_-]+$/u;
 const hashPattern = /^[a-f0-9]{64}$/u;
-export interface TraceClock {
-  domain: string;
-  monotonicNs: string;
-  wallTime: string;
-}
+export type { TraceClock } from "./trace-clock.js";
 export interface TraceArtifactRef {
   sha256: string;
   byteLength: number;

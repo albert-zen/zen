@@ -167,7 +167,12 @@ export class ZenXHostToolBundle implements ToolBundle {
   async executeTarget(
     invocation: ToolInvocation,
   ): Promise<ToolExecutionResult> {
-    return await this.#execute(invocation.name, invocation, true);
+    return await invokeModelToolFacade({
+      invocation,
+      epoch: this.#modelReferenceEpoch,
+      references: (this.#state.references ??= new ModelReferenceRegistry()),
+      dispatch: (resolved) => this.#execute(resolved.name, resolved, true),
+    });
   }
 
   async #execute(

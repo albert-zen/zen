@@ -769,9 +769,19 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
       if (device !== "local") {
         if (!this.#fleet)
           throw new Error("Fleet is not configured on this Host");
-        return await this.#fleet.invoke(device, invocation);
+        return await this.#fleet.invoke(
+          device,
+          invocation,
+          invocation.arguments.deviceKey === undefined
+            ? undefined
+            : requiredString(invocation.arguments.deviceKey, "device key"),
+        );
       }
-      const { device: _device, ...args } = invocation.arguments;
+      const {
+        device: _device,
+        deviceKey: _deviceKey,
+        ...args
+      } = invocation.arguments;
       invocation = { ...invocation, arguments: args };
     }
     if (name === "zenx_threads_send") {

@@ -544,9 +544,27 @@ test("Runtime records unconfirmed cancellation for abort-ignoring children befor
       const taskId = (childResult.structuredContent as { task_id: string })
         .task_id;
       assert.equal(typeof taskId, "string");
-      assert(
-        JSON.stringify(compileModelMessages(snapshot.items)).includes(taskId),
+      const binding = childResult.referenceBindings?.find(
+        (entry) =>
+          entry.namespace === "builtin-task" &&
+          entry.kind === "task" &&
+          entry.ownerThreadId === thread.id &&
+          JSON.stringify(entry.value) ===
+            JSON.stringify({ taskId, sourceToolCallId: child.id }),
       );
+      assert.ok(
+        binding,
+        "observable child receipt retains its exact native task/source identity",
+      );
+      assert.match(binding.ref, /^t[1-9][0-9]*$/u);
+      const legacyModel = JSON.stringify(compileModelMessages(snapshot.items));
+      const semanticModel = JSON.stringify(
+        compileItemList(snapshot.itemList!).messages,
+      );
+      assert.ok(legacyModel.includes(binding.ref));
+      assert.ok(semanticModel.includes(binding.ref));
+      assert.ok(!legacyModel.includes(taskId));
+      assert.ok(!semanticModel.includes(taskId));
     } else {
       assert.equal(childResult.exitCode, 130);
     }

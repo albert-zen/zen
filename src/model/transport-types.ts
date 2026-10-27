@@ -1,4 +1,4 @@
-import type { TraceClock } from "../trace.js";
+import type { TraceClock } from "../trace-clock.js";
 /** Portable observation contracts. No Node or transport implementation imports. */
 export type ModelDispatchRevocationReason =
   "provider_revoked" | "account_changed" | "auth_session_changed";

@@ -266,6 +266,7 @@ test("TLS generic tools execute through target environment and preserve origin w
   const f = await fixture(t),
     before = await f.app.readThread(f.thread.id),
     request = await f.request();
+  request.yieldTimeMs = 10_000;
   const result = await f.client.execute(f.peer, request);
   assert.equal(result.output, "remote value");
   assert.equal(result.origin.hostId, "target");
@@ -484,6 +485,7 @@ test("explicit generic cancel targets the authenticated task without replaying i
 test("replacing a device grant cannot recover the previous grant's admission", async (t) => {
   const f = await fixture(t),
     request = await f.request("old-grant");
+  request.yieldTimeMs = 10_000;
   const result = await f.client.execute(f.peer, request);
   const original = f.vault.get(f.peer.id)!;
   const replacement = await f.access.pair({
@@ -504,6 +506,7 @@ test("replacing a device grant cannot recover the previous grant's admission", a
     /outcome unknown/,
   );
   const newRequest = await f.request("new-grant");
+  newRequest.yieldTimeMs = 10_000;
   assert.equal(
     (await f.client.execute(f.peer, newRequest)).output,
     "remote value",
@@ -657,8 +660,8 @@ function assertUnknown(error: unknown): asserts error is Error {
   assert.doesNotMatch(error.message, /withheld-sensitive-result/u);
 }
 
-function recoveryHandle(error: Error) {
-  const handle = error.message.match(/task_id: (fleet-tool:v1:[\w-]+)/u)?.[1];
+function recoveryHandle(result: { output: string }) {
+  const handle = JSON.parse(result.output).task_id as string;
   assert.ok(
     handle,
     "unknown admission must retain a qualified recovery handle",
@@ -719,15 +722,11 @@ for (const scopeLoss of [
     });
     const request = await f.request(scopeLoss.replaceAll(" ", "-"));
     const transport = await tlsAdapter(f);
-    let adapterError!: Error;
-    await assert.rejects(
-      transport.adapter.invoke(adapterExecute(f, request)),
-      (error: unknown) => {
-        assert.ok(error instanceof Error);
-        adapterError = error;
-        return true;
-      },
+    const adapterResult = await transport.adapter.invoke(
+      adapterExecute(f, request),
     );
+    assert.equal(adapterResult.exitCode, 1);
+    assert.equal(JSON.parse(adapterResult.output).admission, "unknown");
     assert.equal(
       await readFile(path.join(f.cwd, "effect.txt"), "utf8"),
       scopeLoss,
@@ -736,9 +735,12 @@ for (const scopeLoss of [
     if (scopeLoss === "archive")
       assert.equal((await f.app.readThread(f.thread.id)).archived, true);
     assertUnknown(transport.nativeError());
-    assert.equal(adapterError.cause, transport.nativeError());
-    assert.doesNotMatch(adapterError.message, /withheld-sensitive-result/u);
-    const { handle, binding } = recoveryHandle(adapterError);
+    assert.equal(
+      JSON.parse(adapterResult.output).error,
+      (transport.nativeError() as Error).message,
+    );
+    assert.doesNotMatch(adapterResult.output, /withheld-sensitive-result/u);
+    const { handle, binding } = recoveryHandle(adapterResult);
     const sent = transport.sent();
     assert.deepEqual(binding, {
       device: f.peer.id,
@@ -957,19 +959,12 @@ test("TLS adapter retains an admitted running task when waitForCompletion loses 
     }
   };
   const invocation = adapterExecute(f, request);
-  let adapterError!: Error;
-  await assert.rejects(
-    transport.adapter.invoke({
-      ...invocation,
-      task: { waitForCompletion: true },
-      arguments: { ...invocation.arguments, yield_time_ms: 1 },
-    }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      adapterError = error;
-      return true;
-    },
-  );
+  const adapterResult = await transport.adapter.invoke({
+    ...invocation,
+    task: { waitForCompletion: true },
+    arguments: { ...invocation.arguments, yield_time_ms: 1 },
+  });
+  assert.equal(adapterResult.exitCode, 1);
   assert.ok(waitError instanceof Error);
   assert.equal(
     (waitError as Error & { confirmedRejection?: boolean }).confirmedRejection,
@@ -977,15 +972,11 @@ test("TLS adapter retains an admitted running task when waitForCompletion loses 
     "the individual wait was definitely rejected before observation",
   );
   assert.match(waitError.message, /stale_thread/u);
-  assert.notEqual(
-    (adapterError as Error & { confirmedRejection?: boolean })
-      .confirmedRejection,
-    true,
-    "the already admitted execution is not a definitely rejected mutation",
-  );
-  assert.equal(adapterError.cause, waitError);
-  assert.match(adapterError.message, /do not rerun the mutation/u);
-  const { handle, binding } = recoveryHandle(adapterError);
+  const receipt = JSON.parse(adapterResult.output);
+  assert.equal(receipt.admission, "accepted");
+  assert.equal(receipt.error, waitError.message);
+  assert.match(receipt.safeNextStep, /Do not rerun/u);
+  const { handle, binding } = recoveryHandle(adapterResult);
   const sent = transport.sent();
   assert.deepEqual(binding, {
     device: f.peer.id,

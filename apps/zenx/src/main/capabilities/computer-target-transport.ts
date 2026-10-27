@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { TargetTransport } from "./computer-target-session.js";
+import {
+  isPostedComputerInputReceipt,
+  type TargetTransport,
+} from "./computer-target-session.js";
 
 /** Single native session, serialized JSONL; death invalidates all AX object references. */
 export class NativeComputerTargetTransport implements TargetTransport {
@@ -7,12 +10,20 @@ export class NativeComputerTargetTransport implements TargetTransport {
   #closed = false;
   #terminating = false;
   #queue: Promise<unknown> = Promise.resolve();
-  #pending?: { resolve(value: unknown): void; reject(error: unknown): void };
+  #pending?: {
+    resolve(value: unknown): void;
+    reject(error: unknown): void;
+    onStopping?: () => void;
+    expectsInputReceipt: boolean;
+  };
   #buffer = "";
   #stderr = "";
   #failure?: Error;
   #exit: Promise<void> = Promise.resolve();
-  constructor(readonly executable: () => Promise<string>) {}
+  constructor(
+    readonly executable: () => Promise<string>,
+    readonly spawnProcess: typeof spawn = spawn,
+  ) {}
 
   request(
     request: Record<string, unknown>,
@@ -54,20 +65,16 @@ export class NativeComputerTargetTransport implements TargetTransport {
     }
     const child = this.#child!;
     const output = new Promise<unknown>((resolve, reject) => {
-      this.#pending = { resolve, reject };
+      this.#pending = {
+        resolve,
+        reject,
+        onStopping,
+        expectsInputReceipt:
+          request.operation !== "select" && request.operation !== "verify",
+      };
     });
-    const stop = (message: string) => {
-      try {
-        onStopping?.();
-      } catch {
-        /* Presentation cannot prevent cancellation. */
-      }
-      this.#terminating = true;
-      this.#failure = new Error(
-        `${message}; native input outcome unknown; do not retry automatically`,
-      );
-      child.kill("SIGKILL");
-    };
+    const stop = (message: string) =>
+      this.#terminate(child, new Error(message));
     const abort = () => stop("Computer target operation cancelled");
     signal.addEventListener("abort", abort, { once: true });
     const timer = setTimeout(
@@ -95,7 +102,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
     this.#stderr = "";
     this.#failure = undefined;
     this.#terminating = false;
-    const child = spawn(executable, [], {
+    const child = this.spawnProcess(executable, [], {
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -105,8 +112,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
         this.#child = undefined;
         this.#pending?.reject(
           this.#failure ??
-            new Error(
-              `Native target session ended; input outcome unknown; do not retry automatically. ${this.#stderr}`,
+            this.#operationFailure(
+              `Native target session ended. ${this.#stderr}`,
             ),
         );
         this.#pending = undefined;
@@ -114,11 +121,9 @@ export class NativeComputerTargetTransport implements TargetTransport {
       });
     });
     const fail = (error: Error) => {
-      this.#failure = error;
-      this.#terminating = true;
-      child.kill("SIGKILL");
+      this.#terminate(child, error);
     };
-    child.once("error", fail);
+    child.on("error", fail);
     child.stdin.on("error", fail);
     child.stderr.on("data", (chunk) => {
       this.#stderr = (this.#stderr + String(chunk)).slice(-2048);
@@ -128,18 +133,14 @@ export class NativeComputerTargetTransport implements TargetTransport {
       if (this.#terminating) return;
       this.#buffer += String(chunk);
       if (this.#buffer.length > 65536)
-        return fail(
-          new Error("Native target response exceeded bound; outcome unknown"),
-        );
+        return fail(new Error("Native target response exceeded bound"));
       const newline = this.#buffer.indexOf("\n");
       if (newline < 0) return;
       const line = this.#buffer.slice(0, newline);
       this.#buffer = this.#buffer.slice(newline + 1);
       const pending = this.#pending;
       if (!pending || this.#buffer.length)
-        return fail(
-          new Error("Unexpected native target response; outcome unknown"),
-        );
+        return fail(new Error("Unexpected native target response"));
       try {
         const response = JSON.parse(line) as {
           error?: string;
@@ -156,22 +157,53 @@ export class NativeComputerTargetTransport implements TargetTransport {
             : !("result" in response))
         )
           throw new Error("Invalid native target response");
+        if (
+          !response.error &&
+          pending.expectsInputReceipt &&
+          !isPostedComputerInputReceipt(response.result)
+        )
+          throw new Error("Invalid native input receipt");
         this.#pending = undefined;
         if (response.error) pending.reject(new Error(response.error));
         else pending.resolve(response.result);
       } catch {
-        fail(
-          new Error(
-            "Invalid native target response; outcome unknown; do not retry automatically",
-          ),
-        );
+        fail(new Error("Invalid native target response"));
       }
     });
   }
 
+  #operationFailure(message: string): Error {
+    return new Error(
+      `${message}; ${
+        this.#pending?.expectsInputReceipt
+          ? "native input outcome unknown; do not retry automatically"
+          : "read-only target request outcome unknown; no input requested by this operation"
+      }`,
+    );
+  }
+
+  #terminate(child: ChildProcessWithoutNullStreams, error: Error): void {
+    if (child !== this.#child || this.#terminating) return;
+    this.#failure = this.#operationFailure(error.message);
+    this.#terminating = true;
+    try {
+      this.#pending?.onStopping?.();
+    } catch {
+      // Presentation cannot prevent termination or settle an owned process.
+    }
+    // A signal request is not a close receipt. Failed kill/throw/error retains
+    // the same pending owner; late replies cannot settle it or trigger replay.
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Preserve the original failure and wait for actual process/pipe close.
+    }
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
-    this.#child?.kill("SIGKILL");
+    if (this.#child)
+      this.#terminate(this.#child, new Error("Computer target session closed"));
     await this.#exit;
   }
 }

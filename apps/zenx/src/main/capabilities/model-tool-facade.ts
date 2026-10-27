@@ -1,4 +1,12 @@
 import {
+  isFleetModelTool,
+  isFleetModelInvocation,
+  fleetModelDefinition,
+  fleetDeviceModelDefinition,
+  fleetModelDocument,
+  invokeFleetModelToolFacade,
+} from "./model-fleet-facade.js";
+import {
   isBrowserModelTool,
   browserModelDefinition,
   browserModelDocument,
@@ -53,6 +61,7 @@ import {
 
 export function hasModelToolFacade(name: string): boolean {
   return (
+    isFleetModelTool(name) ||
     isBrowserModelTool(name) ||
     isTriggerModelTool(name) ||
     isSidebarModelTool(name) ||
@@ -62,6 +71,8 @@ export function hasModelToolFacade(name: string): boolean {
   );
 }
 export function modelToolDefinition<T extends ModelTool>(tool: T): T {
+  if (isFleetModelTool(tool.name)) return fleetModelDefinition(tool);
+  tool = fleetDeviceModelDefinition(tool);
   if (isBrowserModelTool(tool.name)) return browserModelDefinition(tool);
   if (isTriggerModelTool(tool.name)) return triggerModelDefinition(tool);
   if (isSidebarModelTool(tool.name)) return sidebarModelDefinition(tool);
@@ -92,6 +103,7 @@ const UI_ONLY_ROOMS = new Set([
 export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
   !UI_ONLY_ROOMS.has(tool.name);
 export function modelPluginDocument(id: string, original: string): string {
+  if (id === "zenx-fleet") return fleetModelDocument;
   if (id === "browser") return browserModelDocument;
   if (id === "computer")
     return "Inspect an exact semantic window target for scoped control refs. Follow cursor alone for immutable continuation. Foreground tools may take focus. Native owner, permission, freshness, binding and capture checks remain authoritative. A ref never grants authority, selects the newest capture, or makes dispatch proof of effect. Refresh stale observations; never automatically repeat an uncertain action.";
@@ -192,11 +204,14 @@ export async function invokeModelToolFacade(options: {
 > {
   const { invocation, epoch, references, dispatch } = options;
   if (
-    !hasModelToolFacade(invocation.name) ||
+    (!hasModelToolFacade(invocation.name) &&
+      !isFleetModelInvocation(invocation)) ||
     invocation.trustedPluginUi ||
     !invocation.threadId
   )
     return await dispatch(invocation);
+  if (isFleetModelInvocation(invocation))
+    return invokeFleetModelToolFacade(options);
   if (isBrowserModelTool(invocation.name))
     return invokeBrowserModelToolFacade({
       ...options,

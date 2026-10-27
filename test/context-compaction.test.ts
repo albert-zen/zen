@@ -28,7 +28,10 @@ import {
   type ThreadJournal,
 } from "../src/journal.js";
 import { StaticModelCatalog, type ModelCatalog } from "../src/model-catalog.js";
-import { estimateModelMessageInputTokens } from "../src/model-usage.js";
+import {
+  estimateModelInput,
+  estimateModelMessageInputTokens,
+} from "../src/model-usage.js";
 import {
   compileModelMessages,
   type ModelAdapter,
@@ -502,6 +505,19 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
       requests.push(cloneRequest(request));
       samples += 1;
       if (samples === 2) {
+        const stored = await server.readThread(request.debugContext!.threadId);
+        const declaration = assertCompactionReferenceDeclaration(
+          request,
+          stored.itemList,
+        );
+        const firstUserRef = declaration.bindings.find(
+          (binding) =>
+            JSON.stringify(binding.value) ===
+            JSON.stringify({ itemId: firstUserId }),
+        )?.ref;
+        assert(firstUserRef !== undefined);
+        assert.match(firstUserRef, /^c[1-9][0-9]*$/u);
+        assert.notEqual(firstUserRef, firstUserId);
         yield {
           type: "tool_call",
           callId: "structured-reset",
@@ -509,7 +525,10 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
           arguments: {
             text: "handwritten summary",
             retention: {
-              itemIds: [firstUserId, firstUserId],
+              itemIds: [firstUserRef, firstUserRef],
+              itemRanges: [
+                { fromItemId: firstUserRef, toItemId: firstUserRef },
+              ],
               preserveUserMessages: true,
               recentTurnCount: 1,
             },
@@ -572,10 +591,13 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
     semanticCompaction.content.text,
     "[Zen compacted context]\nhandwritten summary\n[Original conversation history; s1; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]",
   );
-  assert.deepEqual(requests[2]?.messages[0], {
+  assert(requests[2] !== undefined);
+  assert.deepEqual(requests[2].messages[0], {
     role: "user",
     text: semanticCompaction.content.text,
   });
+  assert.equal(samples, 3);
+  assert(snapshot.turns.every((turn) => turn.status === "completed"));
   assert.doesNotMatch(
     JSON.stringify(requests[2]?.messages),
     /zen-thread:\/\//u,
@@ -599,6 +621,184 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
   assert.equal(requests.some(isSummaryRequest), false);
 });
 
+test("agentic retention rejects native IDs, unknown handles and stale sample handles without reset", async (t) => {
+  for (const scenario of ["native", "unknown", "stale"] as const) {
+    for (const selector of ["itemIds", "itemRanges"] as const) {
+      await t.test(`${scenario} ${selector}`, async (t) => {
+        const requests: ModelRequest[] = [];
+        let firstRef = "";
+        let firstUserId = "";
+        let initialFacts: readonly CanonicalItem[] = [];
+        const directory = await mkdtemp(
+          path.join(os.tmpdir(), "zen-compaction-ref-rejection-"),
+        );
+        const newJournal = () =>
+          new DomainThreadJournal({
+            directory: path.join(directory, "threads"),
+            trace: new FileTraceStore(path.join(directory, "trace")),
+            metadata: new InMemoryThreadMetadataStore(),
+          });
+        let journal = newJournal();
+        t.after(async () => {
+          await journal.close();
+          await rm(directory, { recursive: true, force: true });
+        });
+        const model: ModelAdapter = {
+          provider: "recording",
+          async *stream(request): AsyncIterable<ModelEvent> {
+            requests.push(cloneRequest(request));
+            const stored = await server.readThread(
+              request.debugContext!.threadId,
+            );
+            assertSampleMatchesStoredContext(request, stored.itemList);
+            const sample = requests.length;
+            if (sample === 1) {
+              initialFacts = structuredClone(stored.items);
+              firstUserId = stored.items.find(
+                (item) => item.type === "user_message",
+              )!.id;
+              const declaration = assertCompactionReferenceDeclaration(
+                request,
+                stored.itemList,
+              );
+              assert.equal(declaration.bindings.length, 1);
+              firstRef = declaration.bindings[0]!.ref;
+              assert.deepEqual(declaration.bindings[0]!.value, {
+                itemId: firstUserId,
+              });
+              if (scenario === "stale") {
+                yield {
+                  type: "tool_call",
+                  callId: "valid-first-reset",
+                  name: "compact_context",
+                  arguments: {
+                    text: "only this continuation",
+                    includeOriginalReference: false,
+                  },
+                };
+                return;
+              }
+            }
+            if (sample === (scenario === "stale" ? 2 : 1)) {
+              const ref =
+                scenario === "native"
+                  ? firstUserId
+                  : scenario === "unknown"
+                    ? "c999999"
+                    : firstRef;
+              const currentBindings = (stored.itemList ?? []).flatMap((item) =>
+                item.source.metadata?.onlySampleId ===
+                  request.debugContext?.sampleId &&
+                item.source.metadata?.referenceBindings !== undefined
+                  ? validateModelReferenceBindings(
+                      item.source.metadata.referenceBindings,
+                    )
+                  : [],
+              );
+              assert.equal(
+                currentBindings.some((binding) => binding.ref === ref),
+                false,
+              );
+              yield {
+                type: "tool_call",
+                callId: "invalid-retention",
+                name: "compact_context",
+                arguments: {
+                  text: "must not replace selected context",
+                  includeOriginalReference: false,
+                  retention:
+                    selector === "itemIds"
+                      ? { itemIds: [ref] }
+                      : { itemRanges: [{ fromItemId: ref, toItemId: ref }] },
+                },
+              };
+              return;
+            }
+            yield {
+              type: "text_delta",
+              delta: "rejection observed without retry",
+            };
+          },
+        };
+        const server = createServer({
+          journal,
+          model,
+          contextCompaction: { agenticEnabled: true },
+        });
+        const thread = await server.startThread();
+        await (
+          await server.startTurn(thread.id, "original user input")
+        ).done;
+        const snapshot = await server.readThread(thread.id);
+        assert.equal(requests.length, scenario === "stale" ? 3 : 2);
+        assert.equal(requests.some(isSummaryRequest), false);
+        assert.equal(snapshot.turns[0]?.status, "completed");
+        assert.deepEqual(
+          snapshot.items.slice(0, initialFacts.length),
+          initialFacts,
+        );
+        const compactions = snapshot.items.filter(
+          (item) => item.type === "context_compaction",
+        );
+        assert.equal(compactions.length, scenario === "stale" ? 1 : 0);
+        if (scenario === "stale")
+          assert.equal(compactions[0]?.summary, "only this continuation");
+        const rejected = snapshot.items.find(
+          (item) =>
+            item.type === "tool_result" && item.callId === "invalid-retention",
+        );
+        assert(rejected?.type === "tool_result");
+        assert.notEqual(rejected.exitCode, 0);
+        assert.match(
+          rejected.output,
+          /invalid retention:.*reference unavailable/iu,
+        );
+        assert.equal(
+          snapshot.items.filter(
+            (item) =>
+              item.type === "tool_call" && item.callId === "invalid-retention",
+          ).length,
+          1,
+        );
+        const finalRequest = requests.at(-1)!;
+        assertSampleMatchesStoredContext(finalRequest, snapshot.itemList);
+        const currentMessages = finalRequest.messages.filter(
+          (message) => message.role === "user",
+        );
+        if (scenario === "stale") {
+          assert.deepEqual(currentMessages, [
+            {
+              role: "user",
+              text: "[Zen compacted context]\nonly this continuation",
+            },
+          ]);
+        } else {
+          assert.equal(currentMessages.length, 1);
+          assert("content" in currentMessages[0]!);
+          assert(
+            currentMessages[0].content.some(
+              (part) =>
+                part.type === "text" && part.text === "original user input",
+            ),
+          );
+        }
+        await journal.close();
+        journal = newJournal();
+        const restarted = createServer({
+          journal,
+          model,
+          contextCompaction: { agenticEnabled: true },
+        });
+        assert.deepEqual(
+          (await restarted.readThread(thread.id)).itemList,
+          snapshot.itemList,
+        );
+        assert.equal(requests.length, scenario === "stale" ? 3 : 2);
+      });
+    }
+  }
+});
+
 test("agentic compaction preserves user steering unseen by its model sample", async () => {
   const firstSampleStarted = deferred<void>();
   const releaseFirstSample = deferred<void>();
@@ -608,6 +808,8 @@ test("agentic compaction preserves user steering unseen by its model sample", as
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(cloneRequest(request));
+      const stored = await server.readThread(request.debugContext!.threadId);
+      assertCompactionReferenceDeclaration(request, stored.itemList);
       samples += 1;
       if (samples === 1) {
         firstSampleStarted.resolve();
@@ -630,17 +832,34 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   });
   const thread = await server.startThread();
   const handle = await server.startTurn(thread.id, "initial request");
-  await firstSampleStarted.promise;
+  await expectSummaryStarted(firstSampleStarted.promise, handle.done);
   await server.steerTurn(thread.id, handle.id, "new instruction", {
     clientId: "agentic-steer",
   });
   releaseFirstSample.resolve();
   await handle.done;
 
-  const userTimestamps = (await server.readThread(thread.id)).items
-    .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
-  assert.deepEqual(requests[1]?.messages, [
+  const snapshot = await server.readThread(thread.id);
+  const users = snapshot.items.filter((item) => item.type === "user_message");
+  const userTimestamps = users.map((item) => item.createdAt);
+  assert(requests[1] !== undefined);
+  const declaration = assertCompactionReferenceDeclaration(
+    requests[1],
+    snapshot.itemList,
+  );
+  assert.deepEqual(declaration.bindings, [
+    {
+      ref: "c2",
+      ownerThreadId: thread.id,
+      namespace: "builtin-compaction",
+      kind: "item",
+      value: { itemId: users[1]!.id },
+    },
+  ]);
+  assert.equal(samples, 2);
+  assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.deepEqual(requests[1].messages, [
+    declaration.message,
     { role: "user", text: "[Zen compacted context]\ncontinuation" },
     {
       role: "user",
@@ -1267,6 +1486,43 @@ test("agentic compaction stays off by default and mixed calls fail locally", asy
 });
 
 test("oversized agentic text fails without changing the effective projection", async () => {
+  const initialRequests: ModelRequest[] = [];
+  const runtime = () =>
+    new AgentRuntime({
+      toolEnvironment: new ToolEnvironment({
+        runtimes: [new ShellToolRuntime()],
+      }),
+    });
+  const probe = createServer({
+    journal: new InMemoryThreadJournal(),
+    runtime: runtime(),
+    model: {
+      provider: "recording",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        initialRequests.push(cloneRequest(request));
+        yield { type: "text_delta", delta: "probe complete" };
+      },
+    },
+    contextCompaction: { agenticEnabled: true },
+  });
+  const probeThread = await probe.startThread();
+  await (
+    await probe.startTurn(probeThread.id, "original survives")
+  ).done;
+  assert.equal(initialRequests.length, 1);
+  const initial = initialRequests[0]!;
+  const initialTokens = estimateModelInput(
+    initial.messages,
+    initial.tools,
+  ).total;
+  // Derive a window from the actual schema plus persisted declaration, below
+  // the 80% trigger initially but still too small for the proposed 2,000 bytes.
+  const contextWindow = Math.ceil(initialTokens / 0.8) + 1;
+  const oversizedTokens = estimateModelInput(
+    [{ role: "user", text: `[Zen compacted context]\n${"x".repeat(2_000)}` }],
+    initial.tools,
+  ).total;
+  assert(oversizedTokens > contextWindow);
   const requests: ModelRequest[] = [];
   let samples = 0;
   const model: ModelAdapter = {
@@ -1292,8 +1548,9 @@ test("oversized agentic text fails without changing the effective projection", a
   const server = createServer({
     journal: new InMemoryThreadJournal(),
     model,
+    runtime: runtime(),
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 100 },
+      { id: "recording-model", isDefault: true, contextWindow },
     ]),
     contextCompaction: {
       agenticEnabled: true,
@@ -1314,6 +1571,19 @@ test("oversized agentic text fails without changing the effective projection", a
   // The failed reset leaves its oversized tool arguments in history; do not
   // send a second over-window request merely to report the reset error.
   assert.equal(requests.length, 1);
+  const dispatched = requests[0]!;
+  assert(
+    estimateModelInput(dispatched.messages, dispatched.tools).total <
+      contextWindow * 0.8,
+  );
+  assertCompactionReferenceDeclaration(dispatched, snapshot.itemList);
+  const rejected = snapshot.items.find(
+    (item) =>
+      item.type === "tool_result" && item.callId === "oversized-compact",
+  );
+  assert(rejected?.type === "tool_result");
+  assert.notEqual(rejected.exitCode, 0);
+  assert.match(rejected.output, /exceed|budget|context/i);
   assert(
     snapshot.items.some(
       (item) =>
@@ -3794,6 +4064,51 @@ function malformedCompactionShape(): Record<string, unknown> {
     algorithmVersion: "zen.context-compaction.v1",
     tokenUsage: { inputTokens: 1, outputTokens: 1 },
   };
+}
+
+function assertCompactionReferenceDeclaration(
+  request: ModelRequest,
+  items: Awaited<ReturnType<ZenAppServer["readThread"]>>["itemList"],
+) {
+  assertSampleMatchesStoredContext(request, items);
+  assert(items !== undefined);
+  const declarations = items.filter(
+    (item) =>
+      item.source.kind === "context_notice" &&
+      item.source.metadata?.onlySampleId === request.debugContext?.sampleId &&
+      item.source.metadata?.referenceBindings !== undefined,
+  );
+  assert.equal(declarations.length, 1);
+  const declaration = declarations[0]!;
+  assert.equal(declaration.role, "developer");
+  assert(declaration.kind === "message");
+  const bindings = validateModelReferenceBindings(
+    declaration.source.metadata?.referenceBindings,
+  );
+  assert(bindings.length > 0);
+  for (const binding of bindings) {
+    assert.equal(binding.ownerThreadId, request.debugContext?.threadId);
+    assert.equal(binding.namespace, "builtin-compaction");
+    assert.equal(binding.kind, "item");
+    assert.match(binding.ref, /^c[1-9][0-9]*$/u);
+    assert(declaration.content.text.includes(binding.ref));
+    const source = items.find(
+      (item) =>
+        JSON.stringify(binding.value) === JSON.stringify({ itemId: item.id }),
+    );
+    assert(source !== undefined);
+    assert(request.debugContext?.selectedItemIds?.includes(source.id));
+  }
+  const message: ModelMessage = {
+    role: "developer",
+    text: declaration.content.text,
+  };
+  assert(
+    request.messages.some(
+      (entry) => JSON.stringify(entry) === JSON.stringify(message),
+    ),
+  );
+  return { message, bindings };
 }
 
 function assertSampleMatchesStoredContext(

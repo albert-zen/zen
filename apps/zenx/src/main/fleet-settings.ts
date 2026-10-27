@@ -753,10 +753,19 @@ export class FleetSettingsService {
       return await this.status();
     });
   }
-  async test(id: string, signal: AbortSignal = AbortSignal.timeout(10000)) {
+  async test(
+    id: string,
+    signal: AbortSignal = AbortSignal.timeout(10000),
+    expectedDeviceKey?: string,
+  ) {
     signal.throwIfAborted();
     const peer = (await this.config()).devices.find((d) => d.id === id);
     if (!peer) throw new Error("Device not found");
+    if (
+      expectedDeviceKey !== undefined &&
+      fleetDeviceKey(peer) !== expectedDeviceKey
+    )
+      throw new Error("Fleet machine changed before probe; no request sent");
     const identity = fleetObservationIdentity(peer);
     this.#checks.set(id, {
       identity,
@@ -769,6 +778,7 @@ export class FleetSettingsService {
           : await this.invoke(
               {
                 device: id,
+                expectedDeviceKey: fleetDeviceKey(peer),
                 name: "zenx_threads_list",
                 arguments: { limit: 1 },
               },

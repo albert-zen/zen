@@ -540,3 +540,46 @@ test("a maximum target payload survives caller canonical journal persistence and
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("explicit alternate-result route uses ordinary result budget without weakening strict task receipts", async () => {
+  let result: ToolExecutionResult = {
+    output: "Known outcome; projection unavailable",
+    exitCode: 0,
+    contentType: "application/json",
+    structuredContent: { projection: "unavailable", outcome: "completed" },
+  };
+  const environment = new ToolEnvironment({
+    targetRouter: {
+      prepare() {
+        return {
+          owner: { kind: "external", id: "projection-host" },
+          definition: runtime.specification,
+          executionMode: "parallel_safe",
+          resultEnvelope: "tool-task-or-result",
+          execute: async () => result,
+        };
+      },
+    },
+  });
+  try {
+    assert.deepEqual(
+      await environment.execute(environment.prepare(invocation())),
+      result,
+    );
+    result = {
+      ...result,
+      structuredContent: payload(MAX_STRUCTURED_TOOL_RESULT_BYTES + 1),
+    };
+    await assert.rejects(
+      environment.execute(environment.prepare(invocation())),
+      /1048576 byte limit/,
+    );
+    result = envelope();
+    assert.deepEqual(
+      await environment.execute(environment.prepare(invocation())),
+      result,
+    );
+  } finally {
+    await environment.close();
+  }
+});

@@ -374,7 +374,7 @@ export class FleetRouter {
     const device = (await this.config()).devices.find(
       (device) => device.id === deviceId,
     );
-    if (!device) throw new Error(`Unknown Fleet device: ${deviceId}`);
+    if (!device) throw new Error("Unknown or unavailable Fleet device");
     if (expectedDeviceKey && fleetDeviceKey(device) !== expectedDeviceKey)
       throw new Error(
         "Fleet machine changed before request admission; no operation was sent or locally substituted. Reopen the target catalog.",
@@ -399,7 +399,7 @@ export class FleetRouter {
     if (!fleetTools.has(invocation.name))
       throw new Error("This tool does not support Fleet");
     if (device.access !== "control" && !fleetReadTools.has(invocation.name))
-      throw new Error(`Fleet device ${deviceId} is read-only`);
+      throw new Error("Selected Fleet device is read-only");
     if (
       invocation.trustedPluginUi !== true &&
       invocation.name === "zenx_threads_send" &&
@@ -410,7 +410,11 @@ export class FleetRouter {
       throw new Error(
         "Source-attributed Agent Thread messages require an authenticated native Fleet Host. SSH bridge sends cannot verify remote sender provenance; no message was sent.",
       );
-    const { device: _device, ...args } = invocation.arguments;
+    const {
+      device: _device,
+      deviceKey: _deviceKey,
+      ...args
+    } = invocation.arguments;
     const request: FleetRequest = {
       // Old bridges strictly reject v2 before executing their unfenced sends.
       version:

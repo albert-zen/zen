@@ -17,7 +17,8 @@ Discovery supplies targets, not control selectors: inspect the selected window
 before acting.
 
 The bundled macOS discovery uses its existing Accessibility helper and requires
-Accessibility permission and the Swift compiler. The Peekaboo variant currently
+Accessibility permission. Packaged helpers are precompiled; explicit development
+setup requires the Swift compiler. The Peekaboo variant currently
 does not advertise window discovery; its existing targeted tools are unchanged.
 Windows discovery is verified through WinApp CLI 0.3.1; macOS requires an actual
 Mac for live verification.
@@ -114,3 +115,56 @@ The native smoke includes fixture-only direct CUIAutomation8 `SetValue` and
 continuous focus/pointer samples, provider identity and complete Unicode checks.
 No experimental client is exposed as a production background-safe path. A green
 screenshot epoch does not certify semantic actions or other apps/providers.
+
+## Local visual-text fallback (native macOS 1.2.0)
+
+For self-drawn apps with empty or partial AX inspection, explicitly call
+`computer_screenshot({target})`, then
+`computer_ocr({target, captureId, languages: ["zh-Hans", "en-US"]})` with that
+same screenshot. There is no automatic fallback after an AX failure. Update
+Computer in Plugin settings to receive the native 1.2.0 schema.
+
+OCR runs Apple Vision locally, with no paid API, upload, model download or cloud
+OCR. It returns recognized `texts` with confidence and approximate line `box`
+geometry in the **original screenshot pixels, origin at top left**. It preserves
+`bindingId`, `captureId`, `capturedAt` and the original five-minute expiry; it does
+not take a new screenshot or make old pixels fresh. These are visual observations,
+not authenticated labels, semantic controls, or evidence that a click will work.
+There are no OCR control selectors or `press` actions. Foreground coordinate input
+still requires explicit consent and all existing exact-window checks.
+
+The read has its own ten-second budget shared by before/after native binding
+checks and OCR, not an extension of the existing AX ten-second budget. Timeout or
+cancellation terminates the owned helper and waits for process closure; it never
+retries input, activates a window, wakes a display or unlocks a session. Packaged
+helpers are compiled before signing; only explicit development setup may compile
+once under the existing separate 60-second setup limit. If the existing scoped
+capture is unavailable (permissions, locked/off/unrendered desktop, missing
+window), OCR cannot bypass that failure.
+
+Only the current thread's current capture is accepted. Reselection, replacement
+capture, attempted input, provider retirement, expiry, changed window identity
+or geometry, and changed PNG bytes invalidate the read. A screenshot may still
+show older app content; the returned capture time is not a promise of live state.
+
+Limits: 4 million pixels, 16 MiB encoded PNG, 96 text boxes, 16 KiB recognized
+UTF-8 text; `truncated` reports omitted recognized results. The existing macOS
+screenshot path requests a 1600×1000-bounded Electron thumbnail, including on
+Retina displays, so its image fits the OCR pixel limit without a second resize.
+Image-pixel boxes are not macOS logical points or global desktop coordinates.
+An empty `texts` array means no text recognized, not a complete semantic tree.
+
+Vision revision 2 preserves the macOS 12 minimum. Defaults are Simplified Chinese then
+English (`zh-Hans`, `en-US`); callers may request 1–4 language tags. Chinese/English
+sets are normalized to Chinese-first without dropping any requested language;
+the returned `languages` reports the effective order. Chinese can pair only with
+English in revision 2; incompatible combinations fail with a correction hint
+rather than silently using the Latin-only recognizer.
+Native supported-language discovery rejects unavailable languages explicitly,
+rather than silently recognizing English alone. Accuracy depends on the source
+pixels and installed OS. Windows and Peekaboo do **not** advertise this tool;
+local OCR is explicitly unavailable there. Synthetic native CI checks Vision
+English/CJK recognition and geometry; it does not certify DingTalk or WeCom.
+
+The Chinese-first requirement follows [Apple’s Vision language guidance](https://developer.apple.com/documentation/vision/recognizing-text-in-images)
+and [WWDC21’s explanation of script-model selection](https://developer.apple.com/videos/play/wwdc2021/10041/).

@@ -108,7 +108,7 @@ export function decodeThreadArguments(
     const bound = object(
       refs.resolve(args.model, "models", "selection", epoch),
     );
-    if (bound.device !== device)
+    if (bound.device !== device || bound.deviceKey !== args.deviceKey)
       throw Error("Model ref belongs to a different device");
     args.model = bound.id;
   }
@@ -167,9 +167,21 @@ export function decodeThreadArguments(
       if (selected.kind === "history") args.throughItemId = bound.throughItemId;
     } else {
       const bound = object(refs.resolve(args.ref, "threads", "thread"));
-      if (bound.device !== device)
-        throw Error("Thread ref belongs to a different device");
+      if (
+        bound.device !== device ||
+        bound.deviceKey !== args.deviceKey ||
+        (args.workspace !== undefined &&
+          bound.workspace !== undefined &&
+          args.workspace !== bound.workspace)
+      )
+        throw Error("Thread ref belongs to a different device or workspace");
       args.threadId = bound.id;
+      if (
+        device !== "local" &&
+        args.workspace === undefined &&
+        bound.workspace !== undefined
+      )
+        args.workspace = bound.workspace;
     }
     delete args.ref;
   }
@@ -183,11 +195,21 @@ export function decodeThreadArguments(
     const bound = object(refs.resolve(args[field], "threads", kind));
     if (
       bound.device !== device ||
+      bound.deviceKey !== args.deviceKey ||
+      (args.workspace !== undefined &&
+        bound.workspace !== undefined &&
+        args.workspace !== bound.workspace) ||
       (args.threadId !== undefined &&
         bound.threadId !== undefined &&
         args.threadId !== bound.threadId)
     )
       throw Error("Reference belongs to a different Thread or device");
+    if (
+      device !== "local" &&
+      args.workspace === undefined &&
+      bound.workspace !== undefined
+    )
+      args.workspace = bound.workspace;
     if (bound.threadId !== undefined) {
       if (args.target !== undefined)
         throw Error("Use exact Thread ref with history refs");
@@ -210,13 +232,19 @@ export function projectThreadResult(
         : typeof args.threadId === "string"
           ? args.threadId
           : undefined;
-  const thread = (id: string) => refs.bind("threads", "thread", { id, device });
+  const route = {
+    device,
+    ...(args.deviceKey === undefined ? {} : { deviceKey: args.deviceKey }),
+    ...(args.workspace === undefined ? {} : { workspace: args.workspace }),
+  };
+  const thread = (id: string) =>
+    refs.bind("threads", "thread", asJson({ id, ...route }));
   const scoped = (kind: string, id: unknown, owner = threadId) =>
     typeof id === "string"
       ? refs.bind(
           "threads",
           kind,
-          asJson({ id, device, ...(owner ? { threadId: owner } : {}) }),
+          asJson({ id, ...route, ...(owner ? { threadId: owner } : {}) }),
         )
       : id;
   const summary = (value: unknown): unknown => {
@@ -282,13 +310,38 @@ export function projectThreadResult(
       item: _item,
       preview: _preview,
       read: _read,
-      sourceId: _source,
+      sourceId,
+      sender,
       ...rest
     } = entry;
     return {
       ref: scoped("item", itemId),
       ...(turnId ? { turn: scoped("turn", turnId) } : {}),
       ...rest,
+      ...(record(sender)
+        ? {
+            sender: pick(object(sender), [
+              "name",
+              "threadName",
+              "displayName",
+              "label",
+            ]),
+          }
+        : {}),
+      ...(entry.type === "host_message" &&
+      entry.source === "trigger" &&
+      typeof sourceId === "string" &&
+      typeof args.deviceKey === "string" &&
+      typeof args.workspace === "string" &&
+      typeof threadId === "string"
+        ? {
+            sourceRef: refs.bind(
+              "fleet",
+              "trigger-source",
+              asJson({ ...route, threadId, triggerId: sourceId }),
+            ),
+          }
+        : {}),
     };
   };
   const output: Record<string, unknown> = {};
@@ -312,6 +365,11 @@ export function projectThreadResult(
     else if (key === "turnId" || key === "activeTurnId")
       output[key === "turnId" ? "turn" : "activeTurn"] = scoped("turn", value);
     else if (key === "itemId") output.item = scoped("item", value);
+    else if (key === "lastTurn" && record(value))
+      output.lastTurn = {
+        ...pick(object(value), ["status", "createdAt", "error"]),
+        turn: scoped("turn", object(value).turnId),
+      };
     else if (key === "snapshotThroughItemId") {
       if (args.throughItemId !== undefined)
         output.through = scoped("item", value);
@@ -389,7 +447,18 @@ export function projectThreadToolResult(
           name: id.startsWith("zen-model-v1:")
             ? decodeModelKey(id).modelId
             : id,
-          ref: refs.bind("models", "selection", { id, device }, epoch),
+          ref: refs.bind(
+            "models",
+            "selection",
+            asJson({
+              id,
+              device,
+              ...(args.deviceKey === undefined
+                ? {}
+                : { deviceKey: args.deviceKey }),
+            }),
+            epoch,
+          ),
         };
       });
     return output;

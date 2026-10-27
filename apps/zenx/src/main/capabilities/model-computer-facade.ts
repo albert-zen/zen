@@ -13,6 +13,7 @@ const names = new Set([
   "computer_press",
   "computer_set_value",
   "computer_screenshot",
+  "computer_ocr",
   "computer_foreground_click",
   "computer_foreground_key_press",
   "computer_foreground_type",
@@ -31,6 +32,12 @@ export function computerModelDefinition<T extends ModelTool>(source: T): T {
     fields.control = structuredClone(MODEL_REF);
     schema.required =
       tool.name === "computer_press" ? ["control"] : ["control", "value"];
+  }
+  if (tool.name === "computer_ocr") {
+    delete fields.target;
+    schema.required = ["capture"];
+    tool.description =
+      "Read local visual text from the exact current screenshot capture ref. Returns original capture time and image-pixel text boxes, not AX controls or click-effect evidence. Native owner, binding, expiry, geometry and byte-identity checks still run; no recapture, foreground activation or automatic retry. Optional language tags are checked against native support.";
   }
   if (tool.name === "computer_inspect") {
     delete fields.baseObservationId;
@@ -85,6 +92,15 @@ export function decodeComputerArguments(
       args.cursor = bound.id;
     } else args.full = true;
   }
+  if (
+    name === "computer_ocr" &&
+    (args.capture === undefined ||
+      args.target !== undefined ||
+      args.binding !== undefined)
+  )
+    throw Error(
+      "OCR requires one exact screenshot capture ref; omit target and binding",
+    );
   if (args.binding !== undefined) {
     const bound = object(
       refs.resolve(args.binding, "computer", "binding", epoch),
@@ -99,7 +115,17 @@ export function decodeComputerArguments(
     if (args.bindingId !== undefined && args.bindingId !== bound.bindingId)
       throw Error("Capture belongs to a different selected binding");
     delete args.capture;
-    args.bindingId = bound.bindingId;
+    if (name === "computer_ocr") {
+      if (
+        !bound.target ||
+        typeof bound.target !== "object" ||
+        Array.isArray(bound.target)
+      )
+        throw Error(
+          "This capture ref has no original target; take a fresh screenshot for OCR",
+        );
+      args.target = bound.target;
+    } else args.bindingId = bound.bindingId;
     args.captureId = bound.captureId;
   }
   return args;
@@ -152,7 +178,11 @@ export function projectComputerResult(
       output.capture = refs.bind(
         "computer",
         "capture",
-        { bindingId: result.bindingId, captureId: result.captureId },
+        asJson({
+          target: args.target,
+          bindingId: result.bindingId,
+          captureId: result.captureId,
+        }),
         epoch,
       );
     }

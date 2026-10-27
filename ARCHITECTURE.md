@@ -63,8 +63,9 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **OS 凭证保护适配** — 复用既有 credential vault 的加解密接口，Linux 仅接受已知 OS secret-store backend，拒绝 Electron basic_text / unknown fallback；该判断不配置 keychain 或更改系统安全设置。
 - **Fleet 新线程目标** — 新稿显式选择 machine、目标工作空间和该目标的 Zen 模型；创建后机器/Host/工作空间/Thread 定位不可被本机同 ID 替代，界面只保留定位与易失显示投影，默认仍是本机。 远端消息可要求目标未归档，该条件在既有 Thread mutation lock 下核对，默认调用行为不变。
 - **Fleet Shell** — 既有独立 shell opt-in 保持窄授权；它不因新增通用工具能力而扩张。
+- **Fleet model boundary** — Typed receiving-Thread short refs carry exact captured device keys and remote catalog/task routes in existing trusted provenance; target-routed calls pass through the same projection boundary, while native authorization and epoch/generation checks remain authoritative. No alias store or effect replay is added.
 - **Fleet Tool Gateway** — 独立 Host/client/device 通用工具授权按精确 Host epoch、工具 generation 和已有 targetThreadId 的当前权限复用目标 ToolEnvironment；执行、资源、期限与任务均由目标拥有，远端 timing 预算只收紧同一目标任务管理器解析的领域参数、runtime policy 或 manager 默认值，不创建目标 Agent Turn 或第二份 journal。
-- **Tool Target Router** — Host 在同一 ToolEnvironment 为可表达的普通工具投影可选 device 和目标上下文，默认本机；已路由的调用与 qualified wait 只消耗有界传输预算，不另建本机执行任务，明确远端失败不回退本机或任意 SSH。
+- **Tool Target Router** — Host 在同一 ToolEnvironment 为可表达的普通工具投影可选 remoteTool 短引用，内部保留精确 device/target tuple，默认本机；已路由的调用与 qualified wait 只消耗有界传输预算，不另建本机执行任务，明确远端失败不回退本机或任意 SSH。
 - **Fleet Tool Receipt** — 目标对有界 admission ID 和增量 receipt/cursor ACK 保留易失去重与重放，终态 receipt 在 ACK 或过期前可观察；授权在 destructive wait 开始前失败时保留同一 ACK 的重试能力，开始后即使结果未知也不重复 drain。它不是持久执行账本，断连不自动重跑副作用，epoch 改变后明确报告未知或失效。
 - **Fleet Tool Eligibility** — 首个通用传输只接受显式 text-json 普通 runtime；组合/run_code、compaction、可信 UI 和尚无 origin-aware transfer 的媒体/page/artifact 工具不参与，远端文本/JSON 路径始终保留所属 Host。
 - **Target Tool Dispatch Fence** — 目标 Host 用已有 root-operation admission 和 Thread mutation lock 核对最新上下文、权限、归档与注册，在异步 Thread 读取前固定 canonical cwd，并在同一同步 launch fence 内重新核对当前 workspace 映射、真实目录与设备 scope 后注册已有目标工具任务；无法同步提供 workspace 权威的 provider 对新通用执行 fail closed，短 admission lease 随后释放，不等待工具 body、不创建 Turn 或 Item。
@@ -1463,7 +1464,11 @@ capture bind the same retained AX window, while foreground input revalidates
 that binding after existing approval/arbitration. This host device-control state
 is not conversation truth, is never journaled or restored, and cannot authorize
 input without the existing foreground consent. Helper termination invalidates
-all bindings; uncertain input is never automatically replayed.
+all bindings; uncertain input is never automatically replayed. Its existing
+process owner retains stopping activity through failed termination requests until
+actual child/pipe close; only the native posted/unverified receipt records posted
+input, and closed sessions or invalidated in-flight captures cannot publish fresh
+bindings or screenshot authority.
 
 The existing foreground presenter supplies only live, painted, mouse-ignoring
 edge-indicator native window IDs through a trusted main-only read projection;
@@ -1542,3 +1547,11 @@ ZenX main's existing file-loading session transforms only its exact trusted pack
 - **CI CJK font prerequisite** — Synthetic UI capture requires a normally installed font package resolved from the runner’s authenticated current Ubuntu indexes; only its exact OS/release/architecture/version/SHA-256 .deb is cached and reverified, with bounded downloads restricted to already configured official archives and no source/key or product-state changes.
 
 Browser 的模型短引用通过私有可信 sideband 保留现有 native session epoch 与 product target 精确对应；只读 lookup 与既有 ordered dispatch 验证它，不新增路由权威或持久 alias store。
+
+Trace clock wire declarations stay runtime-neutral; the Host clock reader and file store are not dependencies of native mobile wire types.
+- **Native Computer OCR** — An explicit read-only macOS OCR request applies local
+  Apple Vision to the current thread-owned, exact-window screenshot under its
+  existing binding and expiry, returning bounded text/geometry observations with
+  original capture identity and time; it creates no semantic controls, renewed
+  input authority, automatic AX fallback, foreground activation or durable state.
+  Its separate ten-second read budget never extends an AX inspection deadline.

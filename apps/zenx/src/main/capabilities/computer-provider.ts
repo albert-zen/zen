@@ -1,8 +1,16 @@
+import {
+  COMPUTER_OCR_BUDGET_MS,
+  COMPUTER_OCR_MAX_IMAGE_PIXELS,
+  MAC_OCR_SOURCE,
+  computerOcrLanguages,
+  parseComputerOcrRecognition,
+  type ComputerOcrRecognition,
+} from "./computer-ocr.js";
 import { ComputerTargetSession } from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
 import type { ForegroundActivityRunner } from "../foreground-activity.js";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   access,
   constants as fsConstants,
@@ -95,6 +103,7 @@ export interface ComputerInspection {
   }>;
   truncated: boolean;
   diagnostics?: ComputerInspectionDiagnostics;
+  visualTextFallback?: string;
 }
 
 export interface ComputerInspectionDiagnostics {
@@ -149,7 +158,25 @@ export type ComputerLiveObservationListener = (
   event: ComputerLiveObservationEvent,
 ) => void;
 
+export interface ComputerOcrInspection extends ComputerOcrRecognition {
+  target: ComputerInspection["target"];
+  bindingId: string;
+  captureId: string;
+  capturedAt: string;
+  expiresAt: string;
+  coordinateSpace: "screenshot_pixels_top_left";
+  observationOnly: true;
+}
+
 export interface ZenXComputerBackend {
+  ocr?(
+    target: ComputerTarget,
+    captureId: string,
+    languages: string[],
+    owner: string,
+    signal: AbortSignal,
+  ): Promise<ComputerOcrInspection>;
+
   readonly targetSession?: ComputerTargetSession;
   observeWindow?(
     target: ComputerTarget,
@@ -412,10 +439,17 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
 /** Native-only replacement; other providers retain their separate capability contract. */
 export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.0",
+  version: "1.2.0",
+  provider: {
+    ...computerCapabilityManifest.provider!,
+    capabilities: [
+      ...computerCapabilityManifest.provider!.capabilities,
+      "window.ocr",
+    ],
+  },
   mainDocument:
     computerCapabilityManifest.mainDocument +
-    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee.",
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop.",
   tools: [
     ...computerCapabilityManifest.tools.map((tool) =>
       tool.name === "computer_foreground_click"
@@ -499,6 +533,29 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
         "cancellable",
         "target_bound",
       ],
+    },
+    {
+      name: "computer_ocr",
+      description:
+        "Read local visual text from this thread's current exact-window screenshot, with original capture time and top-left image-pixel boxes. Explicit ten-second read, not an automatic AX fallback. Up to 96 text boxes/16 KiB text; requires an image at most 4 MP. Default languages zh-Hans then en-US; Chinese/English requests are normalized Chinese-first; returned languages report the effective order. Unsupported languages/combinations fail explicitly. Observations only, never AX controls or proof a click works. No recapture, foreground activation, wake, unlock or cloud OCR.",
+      inputSchema: objectSchema(
+        {
+          target: targetSchema(),
+          captureId: stringSchema(),
+          languages: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            uniqueItems: true,
+            items: { type: "string", maxLength: 32 },
+          },
+        },
+        ["target", "captureId"],
+      ),
+      permissions: ["computer.window.capture"],
+      interactionMode: "background_safe",
+      capabilities: ["window.ocr", "app_targeted", "no_global_input"],
+      maxOutputBytes: 64 * 1024,
     },
     {
       name: "computer_select_target",
@@ -666,6 +723,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             signal,
           );
           this.#presentation.invalidate(key);
+          this.#backend.targetSession?.invalidateCaptures();
           return {
             ...(await this.#backend.press(target, native, signal, onStopping)),
             control,
@@ -699,6 +757,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             signal,
           );
           this.#presentation.invalidate(key);
+          this.#backend.targetSession?.invalidateCaptures();
           return {
             ...(await this.#backend.setValue(
               target,
@@ -718,6 +777,20 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           : await execute(signal);
         break;
       }
+      case "computer_ocr":
+        requireScopedWindow(target, "computer_ocr");
+        if (!this.#backend.ocr)
+          throw new Error(
+            "Local OCR is unavailable for this Computer provider/platform",
+          );
+        result = await this.#backend.ocr(
+          target,
+          requiredString(invocation.arguments, "captureId"),
+          computerOcrLanguages(invocation.arguments.languages),
+          requiredComputerOwner(invocation),
+          invocation.signal,
+        );
+        break;
       case "computer_screenshot":
         if (target.windowTitle === undefined) {
           throw new Error("computer_screenshot requires target.windowTitle");
@@ -1283,6 +1356,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly #accessibility: Pick<MacAccessibilityDriver, "run">;
   readonly #foregroundInput: MacForegroundInputDriver;
   readonly #observations = new ComputerObservationLedger();
+  #ocrExecutable?: Promise<string>;
 
   constructor(
     artifactDirectory = path.join(
@@ -1423,6 +1497,12 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       observationId: observation.observationId,
       target: result.target,
       controls: controls.slice(0, boundedControls.length),
+      ...(readOnly || controls.length === 0
+        ? {
+            visualTextFallback:
+              "For self-drawn text, explicitly use computer_screenshot then computer_ocr on that capture. OCR reads visual text only, not actionable AX controls.",
+          }
+        : {}),
       [OBSERVATION_CAPTURE]: {
         assertCurrent: () =>
           this.#observations.assertCurrent(
@@ -1580,6 +1660,80 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     return await this.#saveScreenshot(resolvedTarget, image);
   }
 
+  async ocr(
+    target: ComputerTarget,
+    captureId: string,
+    languages: string[],
+    owner: string,
+    signal: AbortSignal,
+  ): Promise<ComputerOcrInspection> {
+    requireMacOs();
+    signal.throwIfAborted();
+    languages = computerOcrLanguages(languages);
+    // Packaged helpers are precompiled. Explicit development compilation retains
+    // the existing separate 60-second setup ceiling, never an OCR retry.
+    const executable = await (this.#ocrExecutable ??=
+      resolveMacNativeHelperExecutable("zenx-ocr", async () => {
+        await mkdir(this.#artifactDirectory, { recursive: true, mode: 0o700 });
+        const source = path.join(this.#artifactDirectory, "zenx-ocr.swift");
+        const executable = path.join(this.#artifactDirectory, "zenx-ocr");
+        await writeFile(source, MAC_OCR_SOURCE, { mode: 0o600 });
+        await runProcess(
+          "/usr/bin/swiftc",
+          ["-O", source, "-o", executable],
+          60_000,
+          undefined,
+          signal,
+        );
+        return executable;
+      }));
+    signal.throwIfAborted();
+    const deadline = AbortSignal.timeout(COMPUTER_OCR_BUDGET_MS);
+    const readSignal = AbortSignal.any([signal, deadline]);
+    return await this.targetSession.readCapture(
+      owner,
+      target,
+      captureId,
+      readSignal,
+      async (image, binding) => {
+        if (
+          !image.artifactPath ||
+          !image.imageSha256 ||
+          !image.capturedAt ||
+          !image.expiresAt ||
+          image.width * image.height > COMPUTER_OCR_MAX_IMAGE_PIXELS
+        )
+          throw new Error(
+            "OCR requires an available bound screenshot of at most 4 megapixels",
+          );
+        const output = await runProcess(
+          executable,
+          [],
+          COMPUTER_OCR_BUDGET_MS,
+          JSON.stringify({
+            imagePath: image.artifactPath,
+            imageSha256: image.imageSha256,
+            width: image.width,
+            height: image.height,
+            languages,
+          }),
+          readSignal,
+        );
+        readSignal.throwIfAborted();
+        return {
+          ...parseComputerOcrRecognition(output, image, languages),
+          target: binding.target,
+          bindingId: binding.bindingId,
+          captureId,
+          capturedAt: image.capturedAt,
+          expiresAt: image.expiresAt,
+          coordinateSpace: "screenshot_pixels_top_left",
+          observationOnly: true,
+        };
+      },
+    );
+  }
+
   async #saveScreenshot(
     resolvedTarget: ComputerInspection["target"],
     image: import("electron").NativeImage,
@@ -1589,6 +1743,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       this.#artifactDirectory,
       `${randomUUID()}.png`,
     );
+    const capturedAt = new Date().toISOString();
     const png = image.toPNG();
     await writeFile(artifactPath, png, { mode: 0o600 });
     const expiresAt = new Date(Date.now() + 5 * 60_000);
@@ -1605,7 +1760,9 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       width: size.width,
       height: size.height,
       bytes: png.length,
+      imageSha256: createHash("sha256").update(png).digest("hex"),
       expiresAt: expiresAt.toISOString(),
+      capturedAt,
     };
   }
 
@@ -1892,7 +2049,10 @@ export class MacAccessibilityDriver {
 
 export async function resolveMacNativeHelperExecutable(
   helperName:
-    "zenx-accessibility" | "zenx-foreground-input" | "zenx-bound-target",
+    | "zenx-accessibility"
+    | "zenx-foreground-input"
+    | "zenx-bound-target"
+    | "zenx-ocr",
   compileDevelopmentHelper: () => Promise<string>,
   runtime: {
     resourcesPath?: string;

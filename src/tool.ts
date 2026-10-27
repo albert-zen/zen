@@ -384,7 +384,7 @@ export interface ToolTargetRoute {
   /** Qualified task observation remains exempt from ordinary tool admission. */
   readonly waitPolicyExempt?: boolean;
   /** Host-only opt-in for a separately bounded, exact target-owned task receipt. */
-  readonly resultEnvelope?: "tool-task";
+  readonly resultEnvelope?: "tool-task" | "tool-task-or-result";
   execute(): Promise<ToolExecutionResult>;
 }
 
@@ -1112,8 +1112,9 @@ export class ToolEnvironment {
             "Remote execution supports text/JSON results only",
           );
         try {
-          return registration.route.resultEnvelope === "tool-task" &&
-            result.contentType === TOOL_TASK_CONTENT_TYPE
+          return registration.route.resultEnvelope === "tool-task" ||
+            (registration.route.resultEnvelope === "tool-task-or-result" &&
+              result.contentType === TOOL_TASK_CONTENT_TYPE)
             ? normalizeTargetToolTaskResult(result, prepared.owner)
             : normalizeToolExecutionResult(result, prepared.owner);
         } catch (error) {

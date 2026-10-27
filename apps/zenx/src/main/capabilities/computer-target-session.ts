@@ -12,6 +12,16 @@ export interface BoundComputerTarget {
   windowId: number;
   bounds: { x: number; y: number; width: number; height: number };
 }
+export interface ComputerCaptureImage {
+  width: number;
+  height: number;
+  artifactPath?: string;
+  bytes?: number;
+  imageSha256?: string;
+  capturedAt?: string;
+  expiresAt?: string;
+}
+
 export interface TargetTransport {
   request(
     request: Record<string, unknown>,
@@ -36,9 +46,18 @@ export type BoundComputerInput =
 /** Ephemeral per-provider, per-thread native target selection. Never persisted or inferred from the foreground app. */
 export class ComputerTargetSession {
   readonly #selected = new Map<string, BoundComputerTarget>();
+  #closed = false;
+  #captureGeneration = 0;
   readonly #captures = new Map<
     string,
-    { bindingId: string; captureId: string; width: number; height: number }
+    {
+      bindingId: string;
+      captureId: string;
+      width: number;
+      height: number;
+      image: ComputerCaptureImage;
+      targetKey: string;
+    }
   >();
   constructor(readonly transport: TargetTransport) {}
 
@@ -47,6 +66,8 @@ export class ComputerTargetSession {
     target: ComputerTarget,
     signal: AbortSignal,
   ): Promise<BoundComputerTarget> {
+    signal.throwIfAborted();
+    if (this.#closed) throw new Error("Computer target session is closed");
     this.#selected.delete(owner);
     this.#captures.delete(owner);
     const result = (await this.transport.request(
@@ -54,24 +75,37 @@ export class ComputerTargetSession {
       signal,
     )) as BoundComputerTarget;
     signal.throwIfAborted();
+    if (this.#closed) throw new Error("Computer target session is closed");
     this.#selected.set(owner, result);
     return result;
   }
 
-  async capture<T extends { width: number; height: number }>(
+  async capture<T extends ComputerCaptureImage>(
     owner: string,
     target: ComputerTarget,
     signal: AbortSignal,
     capture: (binding: BoundComputerTarget) => Promise<T>,
   ): Promise<T & { bindingId: string; captureId: string }> {
     const binding = await this.select(owner, target, signal);
+    const generation = this.#captureGeneration;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (
+        this.#closed ||
+        this.#selected.get(owner) !== binding ||
+        generation !== this.#captureGeneration
+      )
+        throw new Error(
+          "Computer target changed while capturing; capture again",
+        );
+    };
     const image = await capture(binding);
+    assertCurrent();
     await this.transport.request(
       { operation: "verify", owner, bindingId: binding.bindingId },
       signal,
     );
-    if (this.#selected.get(owner) !== binding)
-      throw new Error("Computer target changed while capturing; capture again");
+    assertCurrent();
     if (![image.width, image.height].every((v) => Number.isFinite(v) && v > 0))
       throw new Error("Invalid capture dimensions");
     // Electron must supply an uncropped full-window image; reject incoherent aspect ratios.
@@ -87,8 +121,62 @@ export class ComputerTargetSession {
       captureId,
       width: image.width,
       height: image.height,
+      image,
+      targetKey: captureTargetKey(target),
     });
     return { ...image, bindingId: binding.bindingId, captureId };
+  }
+
+  /** Read the existing exact capture; neither recaptures nor renews its age. */
+  async readCapture<T>(
+    owner: string,
+    target: ComputerTarget,
+    captureId: string,
+    signal: AbortSignal,
+    read: (
+      image: ComputerCaptureImage,
+      binding: BoundComputerTarget,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const capture = this.#captures.get(owner);
+    const binding = this.#selected.get(owner);
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (
+        !capture ||
+        !binding ||
+        this.#captures.get(owner) !== capture ||
+        this.#selected.get(owner) !== binding ||
+        capture.captureId !== captureId ||
+        capture.bindingId !== binding.bindingId ||
+        capture.targetKey !== captureTargetKey(target) ||
+        !capture.image.expiresAt ||
+        !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
+        Date.parse(capture.image.expiresAt) <= Date.now()
+      )
+        throw new Error(
+          "OCR requires this thread's current, unexpired screenshot of the same target; capture again",
+        );
+    };
+    assertCurrent();
+    await this.transport.request(
+      { operation: "verify", owner, bindingId: binding!.bindingId },
+      signal,
+    );
+    assertCurrent();
+    const result = await read(capture!.image, binding!);
+    assertCurrent();
+    await this.transport.request(
+      { operation: "verify", owner, bindingId: binding!.bindingId },
+      signal,
+    );
+    assertCurrent();
+    return result;
+  }
+
+  invalidateCaptures(): void {
+    this.#captureGeneration++;
+    this.#captures.clear();
   }
 
   selectedBindingId(owner: string): string {
@@ -149,8 +237,10 @@ export class ComputerTargetSession {
           (action.y * binding.bounds.height) / capture.height,
       };
     }
+    // Shared-desktop input invalidates existing and still-acquiring screenshots.
+    this.invalidateCaptures();
     try {
-      await this.transport.request(
+      const receipt = await this.transport.request(
         {
           ...operation,
           owner,
@@ -160,6 +250,10 @@ export class ComputerTargetSession {
         signal,
         onStopping,
       );
+      if (!isPostedComputerInputReceipt(receipt))
+        throw new Error(
+          "Native input receipt is invalid; input outcome unknown; do not retry automatically",
+        );
     } catch (error) {
       // Refusal, cancellation and uncertain native posting all require explicit reselection.
       if (this.#selected.get(owner) === binding) {
@@ -171,8 +265,30 @@ export class ComputerTargetSession {
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
     this.#selected.clear();
-    this.#captures.clear();
+    this.invalidateCaptures();
     await this.transport.close();
   }
+}
+
+function captureTargetKey(target: ComputerTarget): string {
+  return JSON.stringify([
+    target.pid ?? null,
+    target.applicationId ?? null,
+    target.bundleId ?? null,
+    target.windowTitle ?? null,
+  ]);
+}
+
+export function isPostedComputerInputReceipt(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "dispatch" in value &&
+    value.dispatch === "posted" &&
+    "applicationEffect" in value &&
+    value.applicationEffect === "unverified"
+  );
 }

@@ -33,7 +33,7 @@ export class ZenXFleetCapabilityPackage implements ZenXCapabilityPackage {
         : invocation.arguments;
     const allowed = Object.keys(record(tool.inputSchema.properties));
     for (const key of Object.keys(args))
-      if (!allowed.includes(key))
+      if (!allowed.includes(key) && key !== "deviceKey")
         throw new Error(`Unexpected Fleet argument: ${key}`);
     if (name === "zenx_fleet_trigger_read")
       return await this.options.fleet.router.invoke(
@@ -67,7 +67,14 @@ export class ZenXFleetCapabilityPackage implements ZenXCapabilityPackage {
       };
     if (name === "zenx_fleet_probe") {
       const id = string(args.device, "device");
-      if (id !== "local") await this.options.fleet.test(id, invocation.signal);
+      if (id !== "local")
+        await this.options.fleet.test(
+          id,
+          invocation.signal,
+          args.deviceKey === undefined
+            ? undefined
+            : string(args.deviceKey, "device key"),
+        );
       return {
         source: "zenx.fleet",
         device: (await this.options.fleet.devices()).find(
@@ -81,10 +88,16 @@ export class ZenXFleetCapabilityPackage implements ZenXCapabilityPackage {
         throw new Error(
           "Use the ordinary local shell tool for this Host; Fleet shell requires an explicit remote device",
         );
-      return await this.options.fleet.router.invoke(id, {
-        ...invocation,
-        arguments: args,
-      });
+      return await this.options.fleet.router.invoke(
+        id,
+        {
+          ...invocation,
+          arguments: args,
+        },
+        args.deviceKey === undefined
+          ? undefined
+          : string(args.deviceKey, "device key"),
+      );
     }
     const target = mapped[name as keyof typeof mapped];
     if (!target) throw new Error("Unsupported Fleet tool");
