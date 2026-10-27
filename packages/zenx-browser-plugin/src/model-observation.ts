@@ -66,32 +66,6 @@ export function focusCapturedTargets<T extends BrowserSearchTarget>(
   };
 }
 
-/** One splice of the bounded visible-text window; offsets are UTF-16 code units. */
-export function localTextChange(before: string, after: string) {
-  let start = 0;
-  while (
-    start < before.length &&
-    start < after.length &&
-    before[start] === after[start]
-  )
-    start++;
-  let oldEnd = before.length,
-    newEnd = after.length;
-  while (
-    oldEnd > start &&
-    newEnd > start &&
-    before[oldEnd - 1] === after[newEnd - 1]
-  ) {
-    oldEnd--;
-    newEnd--;
-  }
-  return {
-    start,
-    deleteCount: oldEnd - start,
-    insert: after.slice(start, newEnd),
-  };
-}
-
 /** Convert a captured first-page delta to exact replacement references. */
 export function projectTargetChanges(
   changes: Record<string, unknown>,

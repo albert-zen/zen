@@ -1,6 +1,6 @@
 /** Model-facing Browser vocabulary. This module has no Host, Core or native provider dependency. */
 export const browserModelDocument =
-  "Browser refs bind an exact backend, tab, observation and owner. Inspect gives a bounded capture; query searches captured targets only, and cursor continues that immutable capture. Actions observe by default with a small captured subset; pass since with a retained observation ref for an exact diff, or full:true for a broader self-contained capture. Diffs replace old action refs via targetChanges.replacements. Human takeover requires fresh inspection after return. After actionCompleted plus observationError inspect again; never replay unknown effects.";
+  "Browser refs bind an exact backend, tab, observation and owner. Inspect gives a bounded capture; query searches captured targets only, and cursor continues that immutable capture. Actions observe by default with a small captured subset; pass since with a retained observation ref for an exact diff, or full:true for a broader self-contained capture. Diffs replace old action refs via targetChanges.replacements. Discard prior continuation pages after every new observation or first-page diff and follow the new nextCursor. Human takeover requires fresh inspection after return. After actionCompleted plus observationError inspect again; never replay unknown effects.";
 export const browserOperations = [
   "list_tabs",
   "open",

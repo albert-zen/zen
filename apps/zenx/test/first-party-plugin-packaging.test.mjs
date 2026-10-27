@@ -10,6 +10,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import { browserModelDocument } from "../../../packages/zenx-browser-plugin/src/model-contract.ts";
 
 import {
   firstPartyPluginStagingPrefix,
@@ -92,6 +93,7 @@ const providerVariants = new Map([
 ]);
 
 test("all packaged Browser and Computer manifests match their runtime observation contracts", async (t) => {
+  assert.match(browserModelDocument, /Discard.*prior continuation pages/u);
   const options = {
     userDataDirectory: path.join(os.tmpdir(), "zenx-manifest-parity"),
     environment: { PATH: "" },
@@ -254,7 +256,33 @@ test("all prepared first-party plugins are self-contained ordinary npm tarballs"
             (file) => file.includes(".venv") || file.includes("__pycache__"),
           ),
         );
-      } else
+      } else if (packageName === "@zenx/browser-plugin")
+        assert.deepEqual(files, [
+          "README.md",
+          "dist/model-contract.d.ts",
+          "dist/model-contract.js",
+          "dist/model-observation.d.ts",
+          "dist/model-observation.js",
+          "dist/runtime.d.ts",
+          "dist/runtime.js",
+          "dist/version.d.ts",
+          "dist/version.js",
+          "package.json",
+          "zenx.plugin.json",
+        ]);
+      else if (packageName === "@zenx/computer-plugin")
+        assert.deepEqual(files, [
+          "README.md",
+          "dist/model-contract.d.ts",
+          "dist/model-contract.js",
+          "dist/runtime.d.ts",
+          "dist/runtime.js",
+          "dist/version.d.ts",
+          "dist/version.js",
+          "package.json",
+          "zenx.plugin.json",
+        ]);
+      else
         assert.deepEqual(files, [
           "README.md",
           "dist/runtime.js",
