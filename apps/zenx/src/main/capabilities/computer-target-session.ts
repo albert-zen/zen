@@ -12,6 +12,16 @@ export interface BoundComputerTarget {
   windowId: number;
   bounds: { x: number; y: number; width: number; height: number };
 }
+export interface ComputerCaptureImage {
+  width: number;
+  height: number;
+  artifactPath?: string;
+  bytes?: number;
+  imageSha256?: string;
+  capturedAt?: string;
+  expiresAt?: string;
+}
+
 export interface TargetTransport {
   request(
     request: Record<string, unknown>,
@@ -38,7 +48,14 @@ export class ComputerTargetSession {
   readonly #selected = new Map<string, BoundComputerTarget>();
   readonly #captures = new Map<
     string,
-    { bindingId: string; captureId: string; width: number; height: number }
+    {
+      bindingId: string;
+      captureId: string;
+      width: number;
+      height: number;
+      image: ComputerCaptureImage;
+      targetKey: string;
+    }
   >();
   constructor(readonly transport: TargetTransport) {}
 
@@ -58,7 +75,7 @@ export class ComputerTargetSession {
     return result;
   }
 
-  async capture<T extends { width: number; height: number }>(
+  async capture<T extends ComputerCaptureImage>(
     owner: string,
     target: ComputerTarget,
     signal: AbortSignal,
@@ -87,8 +104,61 @@ export class ComputerTargetSession {
       captureId,
       width: image.width,
       height: image.height,
+      image,
+      targetKey: captureTargetKey(target),
     });
     return { ...image, bindingId: binding.bindingId, captureId };
+  }
+
+  /** Read the existing exact capture; neither recaptures nor renews its age. */
+  async readCapture<T>(
+    owner: string,
+    target: ComputerTarget,
+    captureId: string,
+    signal: AbortSignal,
+    read: (
+      image: ComputerCaptureImage,
+      binding: BoundComputerTarget,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const capture = this.#captures.get(owner);
+    const binding = this.#selected.get(owner);
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (
+        !capture ||
+        !binding ||
+        this.#captures.get(owner) !== capture ||
+        this.#selected.get(owner) !== binding ||
+        capture.captureId !== captureId ||
+        capture.bindingId !== binding.bindingId ||
+        capture.targetKey !== captureTargetKey(target) ||
+        !capture.image.expiresAt ||
+        !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
+        Date.parse(capture.image.expiresAt) <= Date.now()
+      )
+        throw new Error(
+          "OCR requires this thread's current, unexpired screenshot of the same target; capture again",
+        );
+    };
+    assertCurrent();
+    await this.transport.request(
+      { operation: "verify", owner, bindingId: binding!.bindingId },
+      signal,
+    );
+    assertCurrent();
+    const result = await read(capture!.image, binding!);
+    assertCurrent();
+    await this.transport.request(
+      { operation: "verify", owner, bindingId: binding!.bindingId },
+      signal,
+    );
+    assertCurrent();
+    return result;
+  }
+
+  invalidateCaptures(): void {
+    this.#captures.clear();
   }
 
   selectedBindingId(owner: string): string {
@@ -149,6 +219,8 @@ export class ComputerTargetSession {
           (action.y * binding.bounds.height) / capture.height,
       };
     }
+    // Shared-desktop input cannot leave any old screenshot fresh for a later OCR read.
+    this.#captures.clear();
     try {
       await this.transport.request(
         {
@@ -175,4 +247,13 @@ export class ComputerTargetSession {
     this.#captures.clear();
     await this.transport.close();
   }
+}
+
+function captureTargetKey(target: ComputerTarget): string {
+  return JSON.stringify([
+    target.pid ?? null,
+    target.applicationId ?? null,
+    target.bundleId ?? null,
+    target.windowTitle ?? null,
+  ]);
 }

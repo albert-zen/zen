@@ -437,6 +437,7 @@ export function extractMacNativeHelperSources(source) {
     "MAC_BOUND_TARGET_SOURCE",
     "MAC_ACCESSIBILITY_SOURCE",
     "MAC_FOREGROUND_INPUT_SOURCE",
+    "MAC_OCR_SOURCE",
   ]);
   const sources = {};
   for (const statement of sourceFile.statements) {
@@ -469,7 +470,15 @@ export async function compileMacNativeHelpers(options) {
       path.join(zenx, "src", "main", "capabilities", "computer-provider.ts"),
       "utf8",
     ));
-  const sources = extractMacNativeHelperSources(providerSource);
+  const ocrSource =
+    options.ocrSource ??
+    (await readFile(
+      path.join(zenx, "src", "main", "capabilities", "computer-ocr.ts"),
+      "utf8",
+    ));
+  const sources = extractMacNativeHelperSources(
+    providerSource + "\n" + ocrSource,
+  );
   const compile =
     options.compile ??
     ((sourcePath, executablePath) =>
@@ -491,6 +500,7 @@ export async function compileMacNativeHelpers(options) {
       ["zenx-bound-target", sources.MAC_BOUND_TARGET_SOURCE],
       ["zenx-accessibility", sources.MAC_ACCESSIBILITY_SOURCE],
       ["zenx-foreground-input", sources.MAC_FOREGROUND_INPUT_SOURCE],
+      ["zenx-ocr", sources.MAC_OCR_SOURCE],
     ]) {
       const sourcePath = path.join(sourceDirectory, `${name}.swift`);
       const executablePath = path.join(options.destinationDirectory, name);

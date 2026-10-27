@@ -106,6 +106,7 @@ export function parseComputerOcrRecognition(
 export const MAC_OCR_SOURCE = `import Foundation
 import Vision
 import ImageIO
+import CryptoKit
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\\n").utf8))
@@ -115,16 +116,21 @@ let input = FileHandle.standardInput.readDataToEndOfFile()
 guard input.count <= 16384,
       let request = try JSONSerialization.jsonObject(with: input) as? [String: Any],
       let imagePath = request["imagePath"] as? String,
+      let expectedDigest = request["imageSha256"] as? String,
       let languages = request["languages"] as? [String],
       languages.count >= 1, languages.count <= 4,
       let expectedWidth = request["width"] as? Int,
       let expectedHeight = request["height"] as? Int else {
   fail("Invalid native OCR request")
 }
-let url = URL(fileURLWithPath: imagePath)
 let attributes = try FileManager.default.attributesOfItem(atPath: imagePath)
-guard let bytes = attributes[.size] as? NSNumber, bytes.intValue <= 16777216,
-      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+guard let bytes = attributes[.size] as? NSNumber, bytes.intValue <= 16777216 else {
+  fail("OCR image exceeds the byte limit")
+}
+let imageData = try Data(contentsOf: URL(fileURLWithPath: imagePath))
+let digest = SHA256.hash(data: imageData).map { String(format: "%02x", $0) }.joined()
+guard imageData.count <= 16777216, digest == expectedDigest,
+      let source = CGImageSourceCreateWithData(imageData as CFData, nil),
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let width = properties[kCGImagePropertyPixelWidth] as? Int,
       let height = properties[kCGImagePropertyPixelHeight] as? Int,

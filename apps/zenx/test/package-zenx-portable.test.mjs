@@ -387,7 +387,13 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     new URL("../src/main/capabilities/computer-provider.ts", import.meta.url),
     "utf8",
   );
-  const sources = extractMacNativeHelperSources(providerSource);
+  const ocrSource = await readFile(
+    new URL("../src/main/capabilities/computer-ocr.ts", import.meta.url),
+    "utf8",
+  );
+  const sources = extractMacNativeHelperSources(
+    providerSource + "\n" + ocrSource,
+  );
   assert.match(sources.MAC_ACCESSIBILITY_SOURCE, /AXIsProcessTrusted/u);
   assert.match(
     sources.MAC_ACCESSIBILITY_SOURCE,
@@ -497,6 +503,7 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     await compileMacNativeHelpers({
       destinationDirectory,
       providerSource,
+      ocrSource,
       compile: async (sourcePath, executablePath) => {
         if (process.platform === "darwin") {
           await run("/usr/bin/swiftc", ["-typecheck", sourcePath]);
@@ -510,11 +517,17 @@ test("extracts and compiles all fixed macOS Computer helpers into App Resources"
     });
     assert.deepEqual(
       compiled.map(({ name }) => name),
-      ["zenx-bound-target", "zenx-accessibility", "zenx-foreground-input"],
+      [
+        "zenx-bound-target",
+        "zenx-accessibility",
+        "zenx-foreground-input",
+        "zenx-ocr",
+      ],
     );
     assert.equal(compiled[0].source, sources.MAC_BOUND_TARGET_SOURCE);
     assert.equal(compiled[1].source, sources.MAC_ACCESSIBILITY_SOURCE);
     assert.equal(compiled[2].source, sources.MAC_FOREGROUND_INPUT_SOURCE);
+    assert.equal(compiled[3].source, sources.MAC_OCR_SOURCE);
     assert.equal((await stat(destinationDirectory)).mode & 0o777, 0o755);
     for (const { name } of compiled) {
       const mode = (await stat(path.join(destinationDirectory, name))).mode;

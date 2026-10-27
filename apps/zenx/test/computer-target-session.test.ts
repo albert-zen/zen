@@ -344,3 +344,140 @@ test("native text and shortcuts share owner/consent fences and never echo typed 
   );
   await capability.close();
 });
+
+const ocrTarget = { pid: 7, windowTitle: "Window" };
+const ocrImage = () => ({
+  width: 800,
+  height: 400,
+  artifactPath: "/synthetic/never-read.png",
+  capturedAt: new Date(Date.now() - 1000).toISOString(),
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+});
+
+test("OCR reads exactly the original capture with native checks and 2x image coordinates", async () => {
+  const { session, calls } = fixture();
+  const pixels = ocrImage();
+  const capture = await session.capture(
+    "a",
+    ocrTarget,
+    signal,
+    async () => pixels,
+  );
+  const before = calls.length;
+  const read = await session.readCapture(
+    "a",
+    ocrTarget,
+    capture.captureId,
+    signal,
+    async (image, binding) => {
+      assert.equal(image.capturedAt, pixels.capturedAt);
+      assert.equal(image.width / binding.bounds.width, 2);
+      return { text: "工作消息", x: 200, y: 100 };
+    },
+  );
+  assert.equal(read.text, "工作消息");
+  assert.deepEqual(
+    calls.slice(before).map((call) => call.operation),
+    ["verify", "verify"],
+  );
+  await session.input(
+    "a",
+    {
+      operation: "click",
+      captureId: capture.captureId,
+      x: read.x,
+      y: read.y,
+      button: "left",
+    },
+    signal,
+  );
+  assert.equal(calls.at(-1)?.x, 0); // -100 + 200 / 2
+  assert.equal(calls.at(-1)?.y, 70); // 20 + 100 / 2
+  await assert.rejects(
+    session.readCapture(
+      "a",
+      ocrTarget,
+      capture.captureId,
+      signal,
+      async () => "stale",
+    ),
+    /current, unexpired screenshot/,
+  );
+});
+
+test("OCR rejects foreign owner/target/capture and expired pixels without native work", async () => {
+  const { session, calls } = fixture();
+  const capture = await session.capture("a", ocrTarget, signal, async () =>
+    ocrImage(),
+  );
+  const before = calls.length;
+  let reads = 0;
+  const read = async () => {
+    reads++;
+  };
+  for (const [owner, target, id] of [
+    ["b", ocrTarget, capture.captureId],
+    ["a", { ...ocrTarget, windowTitle: "Other" }, capture.captureId],
+    ["a", ocrTarget, "other-capture"],
+  ] as const)
+    await assert.rejects(
+      session.readCapture(owner, target, id, signal, read),
+      /current, unexpired screenshot/,
+    );
+  assert.equal(calls.length, before);
+  assert.equal(reads, 0);
+  for (const expiresAt of [new Date(0).toISOString(), "invalid"]) {
+    const expired = await session.capture("a", ocrTarget, signal, async () => ({
+      ...ocrImage(),
+      expiresAt,
+    }));
+    await assert.rejects(
+      session.readCapture("a", ocrTarget, expired.captureId, signal, read),
+      /current, unexpired screenshot/,
+    );
+  }
+  assert.equal(reads, 0);
+});
+
+test("OCR discards late results after cancellation, replacement, mutation or geometry failure without retry", async () => {
+  for (const change of ["cancel", "replace", "mutate", "geometry"] as const) {
+    const { session, transport, calls } = fixture();
+    const controller = new AbortController();
+    const capture = await session.capture("a", ocrTarget, signal, async () =>
+      ocrImage(),
+    );
+    let reads = 0;
+    const original = transport.request;
+    await assert.rejects(
+      session.readCapture(
+        "a",
+        ocrTarget,
+        capture.captureId,
+        controller.signal,
+        async () => {
+          reads++;
+          if (change === "cancel") controller.abort();
+          if (change === "replace")
+            await session.capture("a", ocrTarget, signal, async () =>
+              ocrImage(),
+            );
+          if (change === "mutate") session.invalidateCaptures();
+          if (change === "geometry")
+            transport.request = async (request, ...rest) => {
+              if (request.operation === "verify")
+                throw Error("Window geometry changed");
+              return original(request, ...rest);
+            };
+          return "late OCR text";
+        },
+      ),
+      /abort|current, unexpired screenshot|geometry changed/iu,
+    );
+    assert.equal(reads, 1);
+    assert.ok(
+      calls.every((call) =>
+        ["select", "verify"].includes(String(call.operation)),
+      ),
+    );
+  }
+});
