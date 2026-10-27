@@ -269,6 +269,35 @@ test("application activity has no old-window pointer, live capture or fresh-fram
   assert.equal(targets.targets[0]?.target.windowTitle, undefined);
   assert.equal(targets.targets[0]?.pointer, undefined);
   assert.equal(captures, 0);
+  // A later native/result publication must not turn app identity metadata into
+  // a fresh window witness merely because an activity row already exists.
+  projection.publish("owner", "app-result", {
+    pid: 7,
+    applicationName: "Owned",
+  });
+  assert.equal(
+    captures,
+    0,
+    "app-only publication must not subscribe a window backend",
+  );
+  assert.equal(
+    events.some((event) => event.type === "frame"),
+    false,
+  );
+  assert.equal(
+    events.findLast((event) => event.type === "status")?.status,
+    "idle",
+  );
   done();
+  projection.publish("owner", "window-result", {
+    pid: 7,
+    applicationName: "Owned",
+    windowTitle: "Actual window",
+  });
+  assert.equal(
+    captures,
+    1,
+    "a real live window still subscribes after fresh publication",
+  );
   projection.close();
 });

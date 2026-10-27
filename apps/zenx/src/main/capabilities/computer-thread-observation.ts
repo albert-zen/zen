@@ -166,7 +166,9 @@ export class ComputerThreadObservation {
       ...(this.#activity(threadId, target)
         ? { activity: this.#activity(threadId, target) }
         : {}),
-      ...(pointer && validPointer(pointer) ? { pointer: { ...pointer } } : {}),
+      ...(target.windowTitle && pointer && validPointer(pointer)
+        ? { pointer: { ...pointer } }
+        : {}),
     };
     const targets = [
       ...prior.filter((candidate) => targetKey(candidate.target) !== key),
@@ -175,7 +177,8 @@ export class ComputerThreadObservation {
     for (const old of prior)
       if (!targets.some((target) => target.id === old.id))
         this.#freshFrames.delete(old.id);
-    if (freshObservation) this.#freshFrames.add(next.id);
+    if (freshObservation && next.mode === "live" && target.windowTitle)
+      this.#freshFrames.add(next.id);
     this.#targets.set(threadId, targets);
     this.#notify(threadId);
   }
@@ -231,7 +234,10 @@ export class ComputerThreadObservation {
       targets.find((target) => target.id === observer.request.targetId) ??
       (observer.request.targetId === undefined ? targets.at(-1) : undefined);
     const captureAllowed =
-      this.canCapture() && !!selected && this.#freshFrames.has(selected.id);
+      selected?.mode === "live" &&
+      !!selected.target.windowTitle &&
+      this.canCapture() &&
+      this.#freshFrames.has(selected.id);
     const continuing =
       observer.stop !== undefined &&
       observer.activeTargetId === selected?.id &&
@@ -268,13 +274,21 @@ export class ComputerThreadObservation {
       ...(selected ? { selectedId: selected.id } : {}),
     });
     if (continuing) return;
-    if (!selected || !observer.request.frames || this.#closed) {
+    if (
+      !selected ||
+      selected.mode !== "live" ||
+      !selected.target.windowTitle ||
+      !observer.request.frames ||
+      this.#closed
+    ) {
       send({
         type: "status",
         status: this.#closed ? "unavailable" : "idle",
         message: this.#closed
           ? "Computer observation is unavailable."
-          : "No Computer window is selected for this thread.",
+          : selected?.target.windowTitle && selected.mode !== "live"
+            ? "This Computer provider does not support a live window view."
+            : "No Computer window is selected for this thread.",
       });
       return;
     }
