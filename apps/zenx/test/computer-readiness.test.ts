@@ -172,6 +172,14 @@ test("locked readiness never treats a possible black thumbnail as successful cap
   });
   assert.equal(captures, 0);
   assert.equal(result.screenCapture.state, "unknown");
+  assert.match(
+    result.screenCapture.detail ?? "",
+    /preview verification.*checked per target/u,
+  );
+  assert.doesNotMatch(
+    result.screenCapture.detail ?? "",
+    /Window capture requires an active/u,
+  );
 });
 
 test("a capture completing after lock cannot be stamped as verified in the new session", async () => {

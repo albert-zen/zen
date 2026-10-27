@@ -628,6 +628,8 @@ export const en = {
     "Locked use is unsupported. Display off is separate from system sleep; display power is not reported here.",
   "pluginAccessReview.sessionNativeDetail":
     "Native macOS accessibility can be checked while locked; app support varies. Foreground control and window images require unlock. Display power is not reported here.",
+  "pluginAccessReview.sessionNativeWindowDetail":
+    "Native macOS can read a selected window and attempt a separately authorized background click while locked. Each operation checks the target again; application support varies. Foreground control requires unlock. Display power is not reported here.",
   "pluginAccessReview.idlePrevention": "Idle prevention",
   "pluginAccessReview.keepAwake.active-operation": "Active for this operation",
   "pluginAccessReview.keepAwake.inactive": "Inactive",
@@ -1936,6 +1938,8 @@ export const zhCN: Record<keyof typeof en, string> = {
     "不支持在锁屏状态下使用。显示器熄灭与系统休眠是不同状态；这里不报告显示器供电状态。",
   "pluginAccessReview.sessionNativeDetail":
     "锁屏时可实际检查原生辅助功能，能否操作取决于目标应用；前台控制和窗口图像需要解锁。这里不报告显示器供电状态。",
+  "pluginAccessReview.sessionNativeWindowDetail":
+    "原生 macOS 可在锁屏时读取指定窗口，并在单独授权后尝试后台点击。每次操作都会重新核对目标，能否操作取决于应用。前台控制需要解锁。这里不报告显示器供电状态。",
   "pluginAccessReview.idlePrevention": "闲置期间保持运行",
   "pluginAccessReview.keepAwake.active-operation": "本次操作期间生效",
   "pluginAccessReview.keepAwake.inactive": "未启用",
