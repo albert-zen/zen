@@ -11499,7 +11499,7 @@ button:disabled {
   display: block;
   min-height: 22px;
   padding: 2px 14px 4px;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   font-size: 11px;
   line-height: 16px;
   overflow: hidden;
