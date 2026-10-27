@@ -142,6 +142,28 @@ test("unchanged view emits small diff while action references resolve to the fre
   );
 });
 
+test("a local text edit returns a reversible UTF-16 splice instead of repeating the first page", () => {
+  const p = presenter();
+  const before = "前文 ".repeat(700) + "🙂 pending" + " 后文".repeat(700);
+  const after = before.replace("🙂 pending", "🙃 已完成");
+  const first = publish(p, "text-1", capture(1, 0, before));
+  const next = publish(p, "text-2", capture(2, 0, after), {
+    baseObservationId: "text-1",
+  });
+  assert.equal(next.observation.format, "diff");
+  assert.equal(next.visibleText, undefined);
+  const change = next.visibleTextChange;
+  assert.ok(change, "text difference must carry its reconstruction operation");
+  assert.equal(
+    first.visibleText.slice(0, change.start) +
+      change.text +
+      first.visibleText.slice(change.start + change.deleteCount),
+    after,
+  );
+  assert.equal(change.text, "🙃 已完成");
+  assert.ok(JSON.stringify(next).length < JSON.stringify(first).length / 2);
+});
+
 test("new document, missing base and explicit full produce self-contained resets", () => {
   const p = presenter();
   publish(p, "one", capture(1));
