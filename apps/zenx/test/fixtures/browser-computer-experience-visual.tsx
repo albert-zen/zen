@@ -14,9 +14,10 @@ import "./browser-computer-experience-visual.css";
 
 const scenario =
   new URLSearchParams(location.search).get("scenario") ?? "browser-working";
+const nativeLocked = scenario === "environment-mac-locked";
 document.documentElement.dataset.appearance = "dark";
 document.documentElement.dataset.themePreset = "graphite";
-document.documentElement.dataset.platform = "win32";
+document.documentElement.dataset.platform = nativeLocked ? "darwin" : "win32";
 document.body.dataset.scenario = scenario;
 
 const browserTab: WorkspaceBrowserTab = {
@@ -72,16 +73,19 @@ const browserTab: WorkspaceBrowserTab = {
   },
   computerReadiness: {
     probe: async () => ({
-      platform: "win32",
-      accessibility: "not-applicable",
-      screenRecording: "not-applicable",
+      platform: nativeLocked ? "darwin" : "win32",
+      accessibility: nativeLocked ? "granted" : "not-applicable",
+      screenRecording: nativeLocked ? "granted" : "not-applicable",
       foregroundControlEnabled: false,
       environment: {
-        platform: "win32",
-        sessionState: scenario === "environment-locked" ? "locked" : "unknown",
+        platform: nativeLocked ? "darwin" : "win32",
+        sessionState:
+          nativeLocked || scenario === "environment-locked"
+            ? "locked"
+            : "unknown",
         revision: 1,
         displayState: "unknown",
-        lockedUse: "unsupported",
+        lockedUse: nativeLocked ? "provider-dependent" : "unsupported",
         keepAwake: "inactive",
       },
     }),
@@ -113,7 +117,7 @@ void i18n.changeLanguage("en").then(() => {
         ? "Browser · human has control"
         : scenario === "computer-background"
           ? "Computer · exact background window activity"
-          : scenario === "environment-locked"
+          : nativeLocked || scenario === "environment-locked"
             ? "Computer settings · locked session"
             : "Computer settings · unknown session";
   createRoot(root).render(

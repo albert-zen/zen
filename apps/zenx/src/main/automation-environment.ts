@@ -5,13 +5,21 @@ export interface AutomationEnvironmentSnapshot {
   sessionState: DesktopSessionState;
   revision: number;
   displayState: "unknown";
-  lockedUse: "unsupported";
+  lockedUse: "provider-dependent" | "unsupported";
   keepAwake: "active-operation" | "inactive" | "unavailable";
 }
 
+/** Trusted Host backend selection; model arguments and plugin metadata never select this mode. */
+export type ComputerSessionAccess =
+  "interactive-desktop" | "native-targeted-accessibility";
+
 export interface ComputerEnvironmentPort {
   snapshot(): AutomationEnvironmentSnapshot;
-  acquire(signal: AbortSignal): {
+  refresh?(): Promise<void>;
+  acquire(
+    signal: AbortSignal,
+    access?: ComputerSessionAccess,
+  ): {
     signal: AbortSignal;
     revision: number;
     release(): void;
@@ -43,25 +51,78 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
   #blockerFailed = false;
   #closed = false;
   #invalidationFailed = false;
+  #nativeState: DesktopSessionState = "unknown";
+  #refreshPromise?: Promise<void>;
 
   constructor(
     readonly options: {
       platform: string;
       monitor: Monitor;
       blocker?: SleepBlocker;
+      nativeSessionProbe?: (
+        signal: AbortSignal,
+      ) => Promise<DesktopSessionState>;
     },
   ) {
     this.#monitor = options.monitor;
     this.#blocker = options.blocker;
     this.#state = this.#probe();
     this.#events = [
-      ["lock-screen", () => this.#transition("locked")],
-      ["unlock-screen", () => this.#transition("active", true)],
-      ["suspend", () => this.#transition("suspended")],
-      ["resume", () => this.#transition(this.#probe(), true)],
+      ["lock-screen", () => this.#event("locked")],
+      [
+        "unlock-screen",
+        () =>
+          this.#event(
+            this.options.platform === "darwin" ? "unknown" : "active",
+            true,
+          ),
+      ],
+      ["suspend", () => this.#event("suspended")],
+      [
+        "resume",
+        () =>
+          this.#event(
+            this.options.platform === "darwin" ? "unknown" : this.#probe(),
+            true,
+          ),
+      ],
     ];
     for (const [event, listener] of this.#events)
       this.#monitor.on(event, listener);
+  }
+
+  /** macOS Electron idle state does not establish lock; sample the native user session before admission. */
+  async refresh(): Promise<void> {
+    if (
+      this.options.platform !== "darwin" ||
+      this.#closed ||
+      this.#state === "suspended"
+    )
+      return;
+    if (this.#refreshPromise) return this.#refreshPromise;
+    const revision = this.#revision;
+    this.#refreshPromise = (async () => {
+      let state: DesktopSessionState = "unknown";
+      try {
+        const observed = await this.options.nativeSessionProbe?.(
+          this.#generation.signal,
+        );
+        if (observed === "active" || observed === "locked") state = observed;
+      } catch {
+        // Missing permission, helper, or session evidence is never an active desktop.
+      }
+      if (this.#closed || this.#revision !== revision) return;
+      this.#nativeState = state;
+      this.#transition(state);
+    })().finally(() => {
+      this.#refreshPromise = undefined;
+    });
+    return this.#refreshPromise;
+  }
+
+  #event(state: DesktopSessionState, force = false): void {
+    if (this.options.platform === "darwin") this.#nativeState = state;
+    this.#transition(state, force);
   }
 
   snapshot(): AutomationEnvironmentSnapshot {
@@ -72,7 +133,10 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       revision: this.#revision,
       // Idle/lock notifications do not establish whether a display has power.
       displayState: "unknown",
-      lockedUse: "unsupported",
+      lockedUse:
+        this.options.platform === "darwin"
+          ? "provider-dependent"
+          : "unsupported",
       keepAwake:
         this.#blockerFailed || !this.#blocker
           ? "unavailable"
@@ -82,7 +146,10 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
     };
   }
 
-  acquire(caller: AbortSignal) {
+  acquire(
+    caller: AbortSignal,
+    access: ComputerSessionAccess = "interactive-desktop",
+  ) {
     caller.throwIfAborted();
     if (this.#closed) throw new Error("Computer environment is closed");
     if (this.#invalidationFailed)
@@ -91,7 +158,14 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       );
     // Poll before admission to cover a missed notification; never infer unlock from a failed probe.
     this.#refreshSession();
-    if (this.#state !== "active")
+    // Only the native AX path can request scoped work in a locked macOS user
+    // session. It still has to obtain actual AX data and revalidate its selectors;
+    // this admission is not a claim that the target app will accept the operation.
+    const scopedLockedAccess =
+      this.options.platform === "darwin" &&
+      this.#state === "locked" &&
+      access === "native-targeted-accessibility";
+    if (this.#state !== "active" && !scopedLockedAccess)
       throw new Error(
         `Computer session is ${this.#state}; confirm the local desktop is available, then inspect again. No input dispatched.`,
       );
@@ -136,6 +210,7 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
   }
 
   #probe(): DesktopSessionState {
+    if (this.options.platform === "darwin") return this.#nativeState;
     try {
       const state = this.#monitor.getSystemIdleState(1);
       return state === "locked"

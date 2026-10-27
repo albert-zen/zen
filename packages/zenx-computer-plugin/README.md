@@ -3,9 +3,12 @@
 First-party Computer package distributed with ZenX and installed through the ordinary plugin profile.
 
 Start with `computer_environment({})` to read the current desktop availability.
-The Host refuses targeted work while the session is locked or suspended and
-invalidates observations on a state change. It never unlocks the desktop or
-replays input. On Windows and the bundled macOS provider,
+The Host invalidates observations on every session change. Native macOS AX
+window discovery, inspection and semantic actions can attempt scoped access while
+locked, using fresh controls and an actual post-action inspection; native errors
+remain failures. Other providers, window images and foreground input require an
+active session. System suspension blocks all Computer work. The Host never
+unlocks the desktop or replays input. On Windows and the bundled macOS provider,
 `computer_list_windows({})` returns up to 32 open windows with exact, owner-scoped
 short `ref` values. Pass a window ref to `computer_inspect`,
 `computer_screenshot` or `computer_select_target`. Native callers can still

@@ -67,6 +67,13 @@ export interface ComputerControlSelector {
   targetId: string;
 }
 
+const NATIVE_TARGETED_ACCESSIBILITY_TOOLS = [
+  "computer_list_windows",
+  "computer_inspect",
+  "computer_press",
+  "computer_set_value",
+] as const;
+
 export const COMPUTER_ACTION_PRESS = "press";
 export const COMPUTER_ACTION_SET_VALUE = "set_value";
 export type ComputerControlAction =
@@ -171,6 +178,8 @@ export interface ComputerOcrInspection extends ComputerOcrRecognition {
 }
 
 export interface ZenXComputerBackend {
+  /** Host-native AX implementation only; never inferred from plugin manifest capabilities. */
+  readonly nativeTargetedAccessibility?: true;
   /** Invalidate provider-owned native selectors after desktop state changes. */
   invalidateObservations?(): void;
   ocr?(
@@ -215,8 +224,8 @@ export interface ZenXComputerBackend {
     control: ComputerControlSelector;
     characterCount: number;
     valueReadback?: {
-      matchesRequested: true;
-      source: "native_value_pattern";
+      matchesRequested: boolean;
+      source: "native_value_pattern" | "native_ax_value";
     };
     pointer?: ComputerActionPointer;
   }>;
@@ -376,7 +385,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_environment",
       description:
-        "Read the current desktop session and power availability. Lock and suspension are reported explicitly; this read does not wake, unlock, or operate another app.",
+        "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
       inputSchema: objectSchema({}, []),
       permissions: ["computer.accessibility.inspect"],
       interactionMode: "background_safe",
@@ -643,7 +652,10 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     this.#stopEnvironmentObservation = environment?.onInvalidated(() =>
       this.invalidateObservations(),
     );
-    this.#threadObservation = new ComputerThreadObservation(backend);
+    this.#threadObservation = new ComputerThreadObservation(
+      backend,
+      () => !environment || environment.snapshot().sessionState === "active",
+    );
     this.manifest =
       manifest ??
       (backend.targetSession
@@ -664,27 +676,76 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   invalidateObservations(): void {
     this.#observationGeneration++;
     this.#presentation.invalidateAll();
+    this.#threadObservation.invalidateFrames();
     this.#backend.invalidateObservations?.();
     this.#backend.targetSession?.invalidateSelections();
   }
 
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
-    if (toolName === "computer_environment")
-      return (
-        this.#environment?.snapshot() ?? {
-          platform: process.platform,
-          sessionState: "unknown",
-          revision: 0,
-          lockedUse: "unsupported",
-          reason: "Computer environment monitoring is unavailable",
-        }
-      );
-    const lease =
-      toolName === "computer_list_windows"
-        ? undefined
-        : this.#environment?.acquire(invocation.signal);
+    const foregroundAtStart =
+      toolName.startsWith("computer_foreground_") ||
+      this.manifest.tools.some(
+        (tool) =>
+          tool.name === toolName &&
+          tool.interactionMode === "foreground_required",
+      )
+        ? this.#foregroundConsent.signal
+        : undefined;
+    if (foregroundAtStart) this.#assertForegroundControlAllowed(toolName);
+    if (this.#environment?.refresh) await this.#environment.refresh();
+    foregroundAtStart?.throwIfAborted();
+    invocation.signal.throwIfAborted();
+    // Derive actual locked capability from the selected Host backend, never from
+    // a model argument or a background_safe plugin manifest alone.
+    const lockedTools =
+      this.#backend.nativeTargetedAccessibility === true
+        ? NATIVE_TARGETED_ACCESSIBILITY_TOOLS.filter(
+            (name) =>
+              !this.manifest.tools.some(
+                (tool) =>
+                  tool.name === name &&
+                  tool.interactionMode === "foreground_required",
+              ),
+          )
+        : [];
+    if (toolName === "computer_environment") {
+      const snapshot = this.#environment?.snapshot();
+      return snapshot
+        ? {
+            ...snapshot,
+            lockedUse: lockedTools.length
+              ? "native-targeted-accessibility"
+              : "unsupported",
+            lockedTools,
+          }
+        : {
+            platform: process.platform,
+            sessionState: "unknown",
+            revision: 0,
+            lockedUse: "unsupported",
+            lockedTools: [],
+            reason: "Computer environment monitoring is unavailable",
+          };
+    }
+    const nativeAccessibility = lockedTools.some((name) => name === toolName);
+    const lease = this.#environment?.acquire(
+      invocation.signal,
+      nativeAccessibility
+        ? "native-targeted-accessibility"
+        : "interactive-desktop",
+    );
+    const lockedAccessibilityAction =
+      nativeAccessibility &&
+      this.#environment?.snapshot().sessionState === "locked" &&
+      (toolName === "computer_press" || toolName === "computer_set_value");
     const admitted = lease
-      ? { ...invocation, signal: lease.signal }
+      ? {
+          ...invocation,
+          signal: lease.signal,
+          arguments: lockedAccessibilityAction
+            ? { ...invocation.arguments, observe: true }
+            : invocation.arguments,
+        }
       : invocation;
     let settle: (() => void) | undefined;
     try {
@@ -1029,7 +1090,11 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         };
       }
     }
-    if (invocation.threadId !== undefined) {
+    if (
+      invocation.threadId !== undefined &&
+      observationGeneration === this.#observationGeneration &&
+      !invocation.signal.aborted
+    ) {
       const resolved =
         result && typeof result === "object" && "target" in result
           ? ((result as { target: ComputerTarget }).target ?? target)
@@ -1698,6 +1763,7 @@ function boundedDesktopCaptureError(error: unknown): string {
 }
 
 export class ElectronMacComputerBackend implements ZenXComputerBackend {
+  readonly nativeTargetedAccessibility = true;
   readonly targetSession: ComputerTargetSession;
   readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
@@ -2353,6 +2419,19 @@ export class MacAccessibilityDriver {
     this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
+  async sessionState(
+    signal?: AbortSignal,
+  ): Promise<"active" | "locked" | "unknown"> {
+    const observed = (await this.run(
+      { operation: "sessionState" },
+      signal,
+    )) as { sessionState?: unknown };
+    return observed.sessionState === "active" ||
+      observed.sessionState === "locked"
+      ? observed.sessionState
+      : "unknown";
+  }
+
   async run(
     request: Record<string, unknown>,
     signal?: AbortSignal,
@@ -2648,6 +2727,22 @@ if operation == "inspect" {
     fail("AX inspect requires the original host deadline")
   }
   inspectReadBudget = InspectReadBudget(deadlineUnixMs: deadline)
+}
+if operation == "sessionState" {
+  // A locked macOS session can report Electron idle=active at process startup.
+  // Read only this user's console session; do not infer from frontmost app/title.
+  var state = "unknown"
+  if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+     let onConsole = session[kCGSessionOnConsoleKey as String] as? Bool {
+    if let locked = session["CGSSessionScreenIsLocked"] as? Bool, locked {
+      state = "locked"
+    } else if onConsole {
+      state = "active"
+    }
+  }
+  let output = try! JSONSerialization.data(withJSONObject: ["sessionState": state])
+  FileHandle.standardOutput.write(output)
+  exit(0)
 }
 if operation == "desktopContext" {
   guard let frontmost = NSWorkspace.shared.frontmostApplication else { fail("frontmost application is unavailable") }
@@ -3046,6 +3141,15 @@ case "setValue":
   let error = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
   guard error == .success else { fail("AXValue failed with error " + String(error.rawValue)) }
   response = ["target": resolvedTarget, "control": selector(element), "characterCount": value.count]
+  // Read the exact element immediately after the acknowledged mutation. Return
+  // only equality, never the current value; neither equality nor ACK proves save.
+  var actualValue: CFTypeRef?
+  let readError = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &actualValue)
+  if readError == .success, let actualValue, CFGetTypeID(actualValue) == CFStringGetTypeID() {
+    response["valueReadback"] = ["matchesRequested": (actualValue as! String) == value, "source": "native_ax_value"]
+  } else {
+    response["valueReadbackError"] = "AXValue readback unavailable, error " + String(readError.rawValue)
+  }
   if let pointer { response["pointer"] = pointer }
 case "resolveWindow":
   guard let title = requestedWindowTitle else { fail("windowTitle is required") }

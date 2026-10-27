@@ -59,6 +59,23 @@ export function computerReadinessSnapshot(input: {
   };
 }
 
+/** Publish read-only verification only for the exact desktop generation it actually checked. */
+export async function probeCurrentComputerAccess(
+  read: () => Promise<ZenXComputerReadinessSnapshot>,
+  checks: Parameters<typeof probeComputerAccess>[1],
+): Promise<ZenXComputerReadinessSnapshot> {
+  const initial = await read();
+  const verification = await probeComputerAccess(initial, checks);
+  const { verification: _previous, ...current } = await read();
+  const sameEnvironment =
+    initial.platform === current.platform &&
+    initial.accessibility === current.accessibility &&
+    initial.screenRecording === current.screenRecording &&
+    initial.environment?.revision === current.environment?.revision &&
+    initial.environment?.sessionState === current.environment?.sessionState;
+  return sameEnvironment ? { ...current, verification } : current;
+}
+
 /** Check actual read-only capability paths without returning window or pixel data. */
 export async function probeComputerAccess(
   snapshot: ZenXComputerReadinessSnapshot,
@@ -94,6 +111,15 @@ export async function probeComputerAccess(
     snapshot.screenRecording === "restricted"
   ) {
     screenCapture = { state: "needs-setup" };
+  } else if (
+    snapshot.environment &&
+    snapshot.environment.sessionState !== "active"
+  ) {
+    screenCapture = {
+      state: "unknown",
+      detail:
+        "Window capture requires an active desktop session; unlock or resume and check again",
+    };
   } else {
     try {
       await checks.screenCapture();

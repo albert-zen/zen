@@ -53,9 +53,21 @@ export class ComputerThreadObservation {
   >();
   readonly #observers = new Set<Observer>();
   #closed = false;
+  readonly #freshFrames = new Set<string>();
 
-  constructor(backend: ZenXComputerBackend) {
+  constructor(
+    backend: ZenXComputerBackend,
+    readonly canCapture: () => boolean = () => true,
+  ) {
     this.#backend = backend;
+  }
+
+  /** Retire pixels and pointers independently from an admitted native action's lifetime. */
+  invalidateFrames(): void {
+    this.#freshFrames.clear();
+    for (const targets of this.#targets.values())
+      for (const target of targets) delete target.pointer;
+    for (const observer of this.#observers) this.#render(observer);
   }
 
   /** A disposable Host observation of an admitted call, not a durable run state. */
@@ -70,7 +82,7 @@ export class ComputerThreadObservation {
     const calls = this.#activities.get(key) ?? new Map();
     calls.set(invocationId, kind);
     this.#activities.set(key, calls);
-    this.publish(threadId, invocationId, target);
+    this.#publish(threadId, invocationId, target, undefined, false);
     let settled = false;
     return () => {
       if (settled) return;
@@ -117,6 +129,16 @@ export class ComputerThreadObservation {
     target: ComputerTarget,
     pointer?: ComputerActionPointer,
   ): void {
+    this.#publish(threadId, invocationId, target, pointer, true);
+  }
+
+  #publish(
+    threadId: string,
+    invocationId: string,
+    target: ComputerTarget,
+    pointer: ComputerActionPointer | undefined,
+    freshObservation: boolean,
+  ): void {
     if (this.#closed || !target.windowTitle) return;
     const key = targetKey(target);
     const prior = this.#targets.get(threadId) ?? [];
@@ -137,6 +159,10 @@ export class ComputerThreadObservation {
       ...prior.filter((candidate) => targetKey(candidate.target) !== key),
       next,
     ].slice(-8);
+    for (const old of prior)
+      if (!targets.some((target) => target.id === old.id))
+        this.#freshFrames.delete(old.id);
+    if (freshObservation) this.#freshFrames.add(next.id);
     this.#targets.set(threadId, targets);
     this.#notify(threadId);
   }
@@ -159,6 +185,7 @@ export class ComputerThreadObservation {
     this.#closed = true;
     this.#targets.clear();
     this.#activities.clear();
+    this.#freshFrames.clear();
     for (const observer of this.#observers) this.#stop(observer);
     this.#observers.clear();
   }
@@ -190,11 +217,14 @@ export class ComputerThreadObservation {
     const selected =
       targets.find((target) => target.id === observer.request.targetId) ??
       (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    const captureAllowed =
+      this.canCapture() && !!selected && this.#freshFrames.has(selected.id);
     const continuing =
       observer.stop !== undefined &&
       observer.activeTargetId === selected?.id &&
       observer.request.frames &&
-      !this.#closed;
+      !this.#closed &&
+      captureAllowed;
     if (!continuing) {
       observer.generation += 1;
       this.#stop(observer);
@@ -232,6 +262,15 @@ export class ComputerThreadObservation {
         message: this.#closed
           ? "Computer observation is unavailable."
           : "No Computer window is selected for this thread.",
+      });
+      return;
+    }
+    if (!captureAllowed) {
+      send({
+        type: "status",
+        status: "unavailable",
+        message:
+          "Window view requires an active desktop session and fresh observation. Targeted accessibility may remain available.",
       });
       return;
     }

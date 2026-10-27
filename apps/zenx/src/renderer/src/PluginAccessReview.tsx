@@ -236,7 +236,11 @@ export function PluginAccessReview({
                     `pluginAccessReview.session.${computer?.environment?.sessionState ?? "unknown"}`,
                   )
             }
-            detail={t("pluginAccessReview.sessionDetail")}
+            detail={t(
+              computer?.environment?.lockedUse === "provider-dependent"
+                ? "pluginAccessReview.sessionNativeDetail"
+                : "pluginAccessReview.sessionDetail",
+            )}
             action={null}
           />
           <AccessStatus

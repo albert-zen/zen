@@ -149,3 +149,109 @@ test("an unavailable session probe retires old observations and refuses new GUI 
     f.environment.close();
   }
 });
+
+test("macOS fresh native accessibility admission works while locked without admitting foreground input", async () => {
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "locked",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+    nativeSessionProbe: async () => "locked",
+  });
+  await environment.refresh();
+  const caller = new AbortController().signal;
+  const lease = environment.acquire(caller, "native-targeted-accessibility");
+  assert.equal(lease.signal.aborted, false);
+  assert.equal(environment.snapshot().sessionState, "locked");
+  assert.throws(() => environment.acquire(caller), /locked/);
+  monitor.emit("unlock-screen");
+  assert.equal(
+    lease.signal.aborted,
+    true,
+    "session changes retire even scoped admissions",
+  );
+  lease.release();
+  environment.close();
+});
+
+test("targeted accessibility does not admit unknown, suspended or non-macOS locked sessions", () => {
+  const caller = new AbortController().signal;
+  const f = fixture("locked");
+  assert.throws(
+    () => f.environment.acquire(caller, "native-targeted-accessibility"),
+    /locked/,
+  );
+  f.environment.close();
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "unknown",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+  });
+  assert.throws(
+    () => environment.acquire(caller, "native-targeted-accessibility"),
+    /unknown/,
+  );
+  monitor.emit("suspend");
+  assert.throws(
+    () => environment.acquire(caller, "native-targeted-accessibility"),
+    /suspended/,
+  );
+  environment.close();
+});
+
+test("macOS startup ignores Electron active when native session is already locked", async () => {
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "active",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+    nativeSessionProbe: async () => "locked",
+  });
+  assert.equal(
+    environment.snapshot().sessionState,
+    "unknown",
+    "no optimistic active state before native probe",
+  );
+  await environment.refresh();
+  assert.equal(environment.snapshot().sessionState, "locked");
+  assert.throws(
+    () => environment.acquire(new AbortController().signal),
+    /locked/,
+  );
+  environment.close();
+});
+
+test("native probe failure stays unknown and a late unlocked result cannot overwrite lock", async () => {
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "active",
+  });
+  let resolve!: (state: "active") => void;
+  const pending = new Promise<"active">((done) => {
+    resolve = done;
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+    nativeSessionProbe: () => pending,
+  });
+  const refresh = environment.refresh();
+  monitor.emit("lock-screen");
+  resolve("active");
+  await refresh;
+  assert.equal(environment.snapshot().sessionState, "locked");
+  environment.close();
+  const failed = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+    nativeSessionProbe: async () => {
+      throw new Error("native unavailable");
+    },
+  });
+  await failed.refresh();
+  assert.equal(failed.snapshot().sessionState, "unknown");
+  failed.close();
+});

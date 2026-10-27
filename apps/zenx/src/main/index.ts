@@ -29,7 +29,7 @@ import { ZenXProjectlessWorkspaceAllocator } from "./projectless-workspace.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
 import { FleetProductService } from "./fleet-product.js";
-import { realpath } from "node:fs/promises";
+import { realpath, rm } from "node:fs/promises";
 import { ZenXSubagentsCapabilityPackage } from "./capabilities/subagents-package.js";
 import { attachMainWindowDiagnostics } from "./main-window-diagnostics.js";
 import { SkillsService, type SkillMode } from "../../../cli/src/skills.js";
@@ -85,12 +85,13 @@ import {
 import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
   computerReadinessSnapshot,
-  probeComputerAccess,
+  probeCurrentComputerAccess,
   type ZenXComputerAccessVerification,
   type ZenXComputerReadinessSnapshot,
 } from "./computer-readiness.js";
 import {
   ElectronMacComputerBackend,
+  MacAccessibilityDriver,
   retryDesktopSourceEnumeration,
 } from "./capabilities/computer-provider.js";
 import {
@@ -721,10 +722,30 @@ async function bootstrapZenX(): Promise<void> {
       report: (error) =>
         console.error("Foreground computer activity failed", error),
     });
+    const sessionProbeDirectory = join(
+      app.getPath("temp"),
+      `zenx-session-probe-${process.pid}`,
+    );
+    const sessionProbe =
+      process.platform === "darwin"
+        ? new MacAccessibilityDriver(sessionProbeDirectory)
+        : undefined;
+    if (sessionProbe)
+      app.once("will-quit", () => {
+        void rm(sessionProbeDirectory, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      });
     automationEnvironment = new AutomationEnvironment({
       platform: process.platform,
       monitor: powerMonitor,
       blocker: powerSaveBlocker,
+      ...(sessionProbe
+        ? {
+            nativeSessionProbe: (signal: AbortSignal) =>
+              sessionProbe.sessionState(signal),
+          }
+        : {}),
     });
     capabilityService = new ZenXCapabilityService({
       foregroundActivity,
@@ -1952,44 +1973,46 @@ function installSettingsIpc(
   let computerVerification: ZenXComputerAccessVerification | undefined;
   let verificationStatus: string | undefined;
   let pendingComputerProbe: Promise<ZenXComputerReadinessSnapshot> | undefined;
-  const readComputerReadiness = (): ZenXComputerReadinessSnapshot => {
-    let accessibilityTrusted: boolean | undefined;
-    let screenRecording: string | undefined;
-    if (process.platform === "darwin") {
-      try {
-        accessibilityTrusted =
-          systemPreferences.isTrustedAccessibilityClient(false);
-      } catch {
-        // Keep the status unknown if the current process cannot read TCC.
+  const readComputerReadiness =
+    async (): Promise<ZenXComputerReadinessSnapshot> => {
+      await automationEnvironment?.refresh();
+      let accessibilityTrusted: boolean | undefined;
+      let screenRecording: string | undefined;
+      if (process.platform === "darwin") {
+        try {
+          accessibilityTrusted =
+            systemPreferences.isTrustedAccessibilityClient(false);
+        } catch {
+          // Keep the status unknown if the current process cannot read TCC.
+        }
+        try {
+          screenRecording = systemPreferences.getMediaAccessStatus("screen");
+        } catch {
+          // A failed status check is not evidence of denied capture.
+        }
       }
-      try {
-        screenRecording = systemPreferences.getMediaAccessStatus("screen");
-      } catch {
-        // A failed status check is not evidence of denied capture.
-      }
-    }
-    const snapshot = computerReadinessSnapshot({
-      platform: process.platform,
-      accessibilityTrusted,
-      screenRecording,
-      foregroundControlEnabled: settings.computerForegroundControlEnabled(),
-    });
-    if (automationEnvironment)
-      snapshot.environment = automationEnvironment.snapshot();
-    const status = `${snapshot.accessibility}:${snapshot.screenRecording}`;
-    if (verificationStatus !== status) computerVerification = undefined;
-    const result =
-      computerVerification === undefined
-        ? snapshot
-        : { ...snapshot, verification: computerVerification };
-    void operationalDiagnostics.observeComputer(result);
-    return result;
-  };
+      const snapshot = computerReadinessSnapshot({
+        platform: process.platform,
+        accessibilityTrusted,
+        screenRecording,
+        foregroundControlEnabled: settings.computerForegroundControlEnabled(),
+      });
+      if (automationEnvironment)
+        snapshot.environment = automationEnvironment.snapshot();
+      const status = `${snapshot.accessibility}:${snapshot.screenRecording}:${snapshot.environment?.revision ?? 0}`;
+      if (verificationStatus !== status) computerVerification = undefined;
+      const result =
+        computerVerification === undefined
+          ? snapshot
+          : { ...snapshot, verification: computerVerification };
+      void operationalDiagnostics.observeComputer(result);
+      return result;
+    };
   ipcMain.handle(ipcChannels.computerReadinessGet, readComputerReadiness);
   ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
     if (pendingComputerProbe !== undefined) return pendingComputerProbe;
     pendingComputerProbe = (async () => {
-      const verification = await probeComputerAccess(readComputerReadiness(), {
+      const result = await probeCurrentComputerAccess(readComputerReadiness, {
         accessibility: async () => {
           const backend = new ElectronMacComputerBackend(
             join(app.getPath("temp"), `zenx-readiness-${randomUUID()}`),
@@ -2001,6 +2024,14 @@ function installSettingsIpc(
           }
         },
         screenCapture: async () => {
+          await automationEnvironment?.refresh();
+          if (
+            automationEnvironment &&
+            automationEnvironment.snapshot().sessionState !== "active"
+          )
+            throw new Error(
+              "Window capture requires an active desktop session",
+            );
           const sources = await retryDesktopSourceEnumeration(() =>
             desktopCapturer.getSources({
               types: ["window"],
@@ -2014,10 +2045,8 @@ function installSettingsIpc(
         screenRecordingStatus: () =>
           systemPreferences.getMediaAccessStatus("screen"),
       });
-      const updated = readComputerReadiness();
-      computerVerification = verification;
-      verificationStatus = `${updated.accessibility}:${updated.screenRecording}`;
-      const result = { ...updated, verification };
+      computerVerification = result.verification;
+      verificationStatus = `${result.accessibility}:${result.screenRecording}:${result.environment?.revision ?? 0}`;
       void operationalDiagnostics.observeComputer(result);
       return result;
     })().finally(() => {
