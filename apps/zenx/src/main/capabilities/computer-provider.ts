@@ -114,6 +114,15 @@ export interface ComputerInspectionDiagnostics {
   encounteredWebArea: boolean;
   webAreaControlCount: number;
   webAreaActionableCount: number;
+  nativeRead?: {
+    status: "complete" | "partial";
+    readCount: number;
+    errorCount: number;
+    errorCodes: number[];
+    deadlineReached: boolean;
+    elapsedMs: number;
+    budgetMs: number;
+  };
 }
 
 export interface ComputerLiveObservationFrame {
@@ -1022,16 +1031,32 @@ interface ComputerObservation {
   observationId: string;
   targetIdentity?: string;
   targets: Map<string, ComputerControlFingerprint>;
+  readOnlyReason?: string;
 }
 
 export class ComputerObservationLedger {
   readonly #latest = new Map<string, ComputerObservation>();
 
+  /** Revokes only future actions for this exact target, never in-flight work. */
+  beginObservation(targetKey: string): string {
+    const observationId = randomUUID();
+    this.#latest.set(targetKey, { observationId, targets: new Map() });
+    return observationId;
+  }
+
   observe(
     targetKey: string,
     fingerprints: ComputerControlFingerprint[],
     targetIdentity?: string,
+    options: { pendingId?: string; readOnlyReason?: string } = {},
   ): { observationId: string; selectors: ComputerControlSelector[] } {
+    if (
+      options.pendingId !== undefined &&
+      this.#latest.get(targetKey)?.observationId !== options.pendingId
+    )
+      throw new Error(
+        "Computer inspection was superseded; inspect the target again",
+      );
     const observationId = randomUUID();
     const targets = new Map<string, ComputerControlFingerprint>();
     const selectors = fingerprints.map((fingerprint) => {
@@ -1039,7 +1064,14 @@ export class ComputerObservationLedger {
       targets.set(targetId, fingerprint);
       return { observationId, targetId };
     });
-    this.#latest.set(targetKey, { observationId, targets, targetIdentity });
+    this.#latest.set(targetKey, {
+      observationId,
+      targets,
+      targetIdentity,
+      ...(options.readOnlyReason === undefined
+        ? {}
+        : { readOnlyReason: options.readOnlyReason }),
+    });
     return { observationId, selectors };
   }
 
@@ -1063,6 +1095,8 @@ export class ComputerObservationLedger {
     if (fingerprint === undefined) {
       throw new Error("Computer target ID is forged, stale, or unknown");
     }
+    if (observation.readOnlyReason !== undefined)
+      throw new Error(observation.readOnlyReason);
     if (
       action === COMPUTER_ACTION_PRESS &&
       !fingerprint.actions.includes(COMPUTER_ACTION_PRESS)
@@ -1246,7 +1280,7 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly #captureScope = randomUUID();
   readonly #artifactDirectory: string;
   readonly #expiryTimers = new Set<NodeJS.Timeout>();
-  readonly #accessibility: MacAccessibilityDriver;
+  readonly #accessibility: Pick<MacAccessibilityDriver, "run">;
   readonly #foregroundInput: MacForegroundInputDriver;
   readonly #observations = new ComputerObservationLedger();
 
@@ -1255,9 +1289,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       os.tmpdir(),
       `zenx-capability-artifacts-${String(process.pid)}`,
     ),
+    accessibility?: Pick<MacAccessibilityDriver, "run">,
   ) {
     this.#artifactDirectory = path.join(artifactDirectory, randomUUID());
-    this.#accessibility = new MacAccessibilityDriver(this.#artifactDirectory);
+    this.#accessibility =
+      accessibility ?? new MacAccessibilityDriver(this.#artifactDirectory);
     this.#foregroundInput = new MacForegroundInputDriver(
       this.#artifactDirectory,
     );
@@ -1314,10 +1350,35 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
     signal?: AbortSignal,
   ): Promise<ComputerInspection> {
     requireMacOs();
+    signal?.throwIfAborted();
+    const targetKey = computerTargetKey(target);
+    const pendingId = this.#observations.beginObservation(targetKey);
     const result = (await this.#accessibility.run(
       { operation: "inspect", target },
       signal,
     )) as MacInspectionResult;
+    signal?.throwIfAborted();
+    const nativeRead = result.diagnostics.nativeRead;
+    if (
+      nativeRead === undefined ||
+      !["complete", "partial"].includes(nativeRead.status) ||
+      !Number.isSafeInteger(nativeRead.errorCount) ||
+      nativeRead.errorCount < 0 ||
+      typeof nativeRead.deadlineReached !== "boolean"
+    )
+      throw new Error(
+        "macOS accessibility helper returned invalid inspect read diagnostics",
+      );
+    const readOnly =
+      nativeRead.status === "partial" ||
+      nativeRead.errorCount > 0 ||
+      nativeRead.deadlineReached;
+    const fingerprint = (
+      control: MacRawControl,
+    ): ComputerControlFingerprint => ({
+      ...rawControlFingerprint(control),
+      ...(readOnly ? { actions: [] } : {}),
+    });
     const boundedControls = selectComputerInspectionControls(
       result.controls,
       (control) =>
@@ -1330,20 +1391,32 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
       ...result.controls.filter((control) => !selected.has(control)),
     ];
     const observation = this.#observations.observe(
-      computerTargetKey(target),
-      capturedControls.map(rawControlFingerprint),
+      targetKey,
+      capturedControls.map(fingerprint),
+      undefined,
+      {
+        pendingId,
+        ...(readOnly
+          ? {
+              readOnlyReason:
+                "Computer inspection is partial after an AX read failure or deadline; observation only, no input dispatched. Inspect the target again explicitly.",
+            }
+          : {}),
+      },
     );
     const controls = capturedControls.map((control, index) => ({
       selector: observation.selectors[index]!,
       role: control.role,
       title: control.title,
       enabled: control.enabled,
-      actions: rawControlFingerprint(control).actions,
+      actions: fingerprint(control).actions,
     }));
     const reasons = [
       ...(result.diagnostics.visitLimitReached ? ["visit_limit"] : []),
       ...(result.diagnostics.depthLimitReached ? ["depth_limit"] : []),
       ...(result.diagnostics.outputLimitReached ? ["native_output_limit"] : []),
+      ...(nativeRead.errorCount > 0 ? ["ax_read_error"] : []),
+      ...(nativeRead.deadlineReached ? ["inspect_deadline"] : []),
     ];
     return {
       platform: process.platform,
@@ -1371,15 +1444,24 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
         ),
         coverage: {
           scope: "scoped_window_accessibility_capture",
-          sourceComplete: !result.truncated,
+          sourceComplete: !result.truncated && !readOnly,
           reasons,
-          ...(!result.truncated ? { itemTotal: controls.length } : {}),
+          ...(!result.truncated && !readOnly
+            ? { itemTotal: controls.length }
+            : {}),
         },
       },
       truncated:
-        result.truncated || result.controls.length > boundedControls.length,
+        readOnly ||
+        result.truncated ||
+        result.controls.length > boundedControls.length,
       diagnostics: {
         ...result.diagnostics,
+        nativeRead: {
+          ...nativeRead,
+          status: readOnly ? "partial" : "complete",
+        },
+        ...(readOnly ? { actionableCount: 0, webAreaActionableCount: 0 } : {}),
         selectionLimit: MAX_COMPUTER_INSPECTION_CONTROLS,
         selectionLimitReached: result.controls.length > boundedControls.length,
       },
@@ -1735,12 +1817,30 @@ export class MacForegroundInputDriver {
   }
 }
 
-class MacAccessibilityDriver {
+const MAC_ACCESSIBILITY_TIMEOUT_MS = 10_000;
+const MAC_INSPECT_RESULT_RESERVE_MS = 250;
+
+export class MacAccessibilityDriver {
   readonly #directory: string;
+  readonly #compileHelper: () => Promise<string>;
+  readonly #runProcess: typeof runProcess;
   #executable: Promise<string> | undefined;
 
-  constructor(directory: string) {
+  constructor(
+    directory: string,
+    dependencies: {
+      compile?: () => Promise<string>;
+      runProcess?: typeof runProcess;
+    } = {},
+  ) {
     this.#directory = directory;
+    this.#compileHelper =
+      dependencies.compile ??
+      (() =>
+        resolveMacNativeHelperExecutable("zenx-accessibility", () =>
+          this.#compile(),
+        ));
+    this.#runProcess = dependencies.runProcess ?? runProcess;
   }
 
   async run(
@@ -1748,14 +1848,21 @@ class MacAccessibilityDriver {
     signal?: AbortSignal,
   ): Promise<unknown> {
     signal?.throwIfAborted();
-    const executable = await (this.#executable ??=
-      resolveMacNativeHelperExecutable("zenx-accessibility", () =>
-        this.#compile(),
-      ));
-    const output = await runProcess(
+    const executable = await (this.#executable ??= this.#compileHelper());
+    signal?.throwIfAborted();
+    if (request.operation === "inspect") {
+      request = {
+        ...request,
+        inspectDeadlineUnixMs:
+          Date.now() +
+          MAC_ACCESSIBILITY_TIMEOUT_MS -
+          MAC_INSPECT_RESULT_RESERVE_MS,
+      };
+    }
+    const output = await this.#runProcess(
       executable,
       [],
-      10_000,
+      MAC_ACCESSIBILITY_TIMEOUT_MS,
       JSON.stringify(request),
       signal,
     );
@@ -1824,6 +1931,10 @@ func fail(_ message: String) -> Never {
   exit(1)
 }
 
+func failAccessibilityDenied() -> Never {
+  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
+}
+
 func dictionary(_ value: Any?, _ name: String) -> [String: Any] {
   guard let result = value as? [String: Any] else { fail(name + " must be an object") }
   return result
@@ -1834,9 +1945,80 @@ func string(_ value: Any?) -> String? {
   return value
 }
 
+// Only inspect owns this budget. Other operations retain their existing reads
+// and mutation contracts; the parent still owns the unchanged 10-second limit.
+final class InspectReadBudget {
+  let now: () -> TimeInterval
+  let started: TimeInterval
+  let deadline: TimeInterval
+  var readCount = 0
+  var errorCount = 0
+  var errorCodes: [Int] = []
+  var deadlineReached = false
+  init(seconds: TimeInterval, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    let start = now()
+    self.now = now
+    self.started = start
+    self.deadline = start + max(0, min(9.75, seconds))
+  }
+  convenience init(deadlineUnixMs: Double, wallNow: () -> TimeInterval = { Date().timeIntervalSince1970 }, now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    self.init(seconds: deadlineUnixMs / 1000 - wallNow(), now: now)
+  }
+  func available() -> Bool {
+    if now() >= deadline { deadlineReached = true }
+    return !deadlineReached
+  }
+  func record(_ error: AXError, absent: [AXError] = []) -> Bool {
+    _ = available()
+    if error == .success { return true }
+    if error == .apiDisabled { failAccessibilityDenied() }
+    if !absent.contains(error) {
+      errorCount += 1
+      let code = Int(error.rawValue)
+      if errorCodes.count < 8 && !errorCodes.contains(code) { errorCodes.append(code) }
+    }
+    return false
+  }
+  func begin(_ element: AXUIElement) -> Bool {
+    guard available() else { return false }
+    // AX timeouts are object-local, not inherited from the application object.
+    // Never reset the deadline or give each child a fresh full-operation budget.
+    let remaining = deadline - now()
+    guard remaining > 0 else { deadlineReached = true; return false }
+    let timeout = Float(remaining).nextDown
+    guard timeout > 0 else { deadlineReached = true; return false }
+    let configured = AXUIElementSetMessagingTimeout(element, timeout)
+    guard record(configured), available() else { return false }
+    readCount += 1
+    return true
+  }
+  var partial: Bool { _ = available(); return deadlineReached || errorCount > 0 }
+  func diagnostics() -> [String: Any] {
+    return ["status": partial ? "partial" : "complete", "readCount": readCount,
+      "errorCount": errorCount, "errorCodes": errorCodes, "deadlineReached": deadlineReached,
+      "elapsedMs": max(0, (now() - started) * 1000), "budgetMs": max(0, (deadline - started) * 1000)]
+  }
+  func requireResolvedTarget() {
+    if partial {
+      fail("AX inspect could not resolve the exact target; read errors " + String(describing: errorCodes) +
+        (deadlineReached ? "; inspect deadline reached" : "") + "; no observation or action authority returned")
+    }
+  }
+}
+var inspectReadBudget: InspectReadBudget?
+
+func beginAXRead(_ element: AXUIElement) -> Bool {
+  return inspectReadBudget?.begin(element) ?? true
+}
+func acceptAXRead(_ error: AXError, absent: [AXError] = []) -> Bool {
+  return inspectReadBudget?.record(error, absent: absent) ?? (error == .success)
+}
+
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+  guard beginAXRead(element) else { return nil }
   var value: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
+  let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+  guard acceptAXRead(error, absent: [.attributeUnsupported, .noValue]),
         let value else { return nil }
   return value
 }
@@ -1849,14 +2031,31 @@ func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool {
   return attribute(element, name) as? Bool ?? false
 }
 
-func elementArrayAttribute(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
+func elementArrayCount(_ element: AXUIElement, _ name: String) -> CFIndex? {
+  guard beginAXRead(element) else { return nil }
   var count: CFIndex = 0
-  guard AXUIElementGetAttributeValueCount(element, name as CFString, &count) == .success,
-        count > 0 else { return [] }
+  let error = AXUIElementGetAttributeValueCount(element, name as CFString, &count)
+  guard acceptAXRead(error, absent: [.attributeUnsupported, .noValue]) else { return nil }
+  return max(0, count)
+}
+
+func elementArrayAttribute(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
+  guard let count = elementArrayCount(element, name), count > 0 else { return [] }
+  // inspect window discovery is bounded too, but cannot select from an omitted
+  // tail that might contain another matching window.
+  if inspectReadBudget != nil && count > 1024 {
+    fail("AX inspect target window list exceeds the bounded read; exact target unresolved")
+  }
+  return elementArrayValues(element, name, count: count)
+}
+
+func elementArrayValues(_ element: AXUIElement, _ name: String, count: CFIndex) -> [AXUIElement] {
+  guard count > 0, beginAXRead(element) else { return [] }
   var values: CFArray?
-  guard AXUIElementCopyAttributeValues(element, name as CFString, 0, count, &values) == .success,
+  let error = AXUIElementCopyAttributeValues(element, name as CFString, 0, count, &values)
+  guard acceptAXRead(error, absent: [.attributeUnsupported, .noValue]),
         let array = values else { return [] }
-  return (0..<CFArrayGetCount(array)).compactMap { index in
+  return (0..<min(count, CFArrayGetCount(array))).compactMap { index in
     guard let pointer = CFArrayGetValueAtIndex(array, index) else { return nil }
     return unsafeBitCast(pointer, to: AXUIElement.self)
   }
@@ -1869,14 +2068,18 @@ func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
 }
 
 func actions(_ element: AXUIElement) -> [String] {
+  guard beginAXRead(element) else { return [] }
   var names: CFArray?
-  guard AXUIElementCopyActionNames(element, &names) == .success else { return [] }
+  let error = AXUIElementCopyActionNames(element, &names)
+  guard acceptAXRead(error, absent: [.actionUnsupported, .noValue]) else { return [] }
   return (names as? [String] ?? []).sorted()
 }
 
 func isSettable(_ element: AXUIElement, _ name: String) -> Bool {
+  guard beginAXRead(element) else { return false }
   var settable: DarwinBoolean = false
-  return AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success && settable.boolValue
+  let error = AXUIElementIsAttributeSettable(element, name as CFString, &settable)
+  return acceptAXRead(error, absent: [.attributeUnsupported, .noValue]) && settable.boolValue
 }
 
 func elementFrame(_ element: AXUIElement) -> CGRect? {
@@ -1927,6 +2130,12 @@ let data = FileHandle.standardInput.readDataToEndOfFile()
 guard let raw = try? JSONSerialization.jsonObject(with: data),
       let request = raw as? [String: Any] else { fail("request must be JSON") }
 let operation = string(request["operation"]) ?? ""
+if operation == "inspect" {
+  guard let deadline = request["inspectDeadlineUnixMs"] as? Double, deadline.isFinite else {
+    fail("AX inspect requires the original host deadline")
+  }
+  inspectReadBudget = InspectReadBudget(deadlineUnixMs: deadline)
+}
 if operation == "desktopContext" {
   guard let frontmost = NSWorkspace.shared.frontmostApplication else { fail("frontmost application is unavailable") }
   let response: [String: Any] = [
@@ -1939,7 +2148,7 @@ if operation == "desktopContext" {
   exit(0)
 }
 guard AXIsProcessTrusted() else {
-  fail("macOS Accessibility denied for helper at " + CommandLine.arguments[0] + ". If the current ZenX.app is already enabled in System Settings > Privacy & Security > Accessibility, remove the old ZenX entry, add the current ZenX.app again, and relaunch ZenX.")
+  failAccessibilityDenied()
 }
 if operation == "listWindows" {
   var targets: [[String: Any]] = []
@@ -1999,6 +2208,7 @@ if let title = requestedWindowTitle {
       matchingWindows.append(window)
     }
   }
+  inspectReadBudget?.requireResolvedTarget()
   if matchingWindows.isEmpty {
     fail("target window was not found as a scoped AXWindow")
   }
@@ -2010,6 +2220,7 @@ if let title = requestedWindowTitle {
   selectedWindow = nil
 }
 let root = selectedWindow ?? appElement
+inspectReadBudget?.requireResolvedTarget()
 var resolvedTarget: [String: Any] = [
   "pid": Int(running.processIdentifier),
   "bundleId": running.bundleIdentifier ?? "",
@@ -2021,6 +2232,22 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
   let direct = elementArrayAttribute(element, kAXChildrenAttribute)
   if !direct.isEmpty { return direct }
   return elementArrayAttribute(element, "AXChildrenInNavigationOrder")
+}
+
+func inspectChildren(_ element: AXUIElement, limit: Int) -> (elements: [AXUIElement], omitted: Bool) {
+  for name in [kAXChildrenAttribute, "AXChildrenInNavigationOrder"] {
+    let errors = inspectReadBudget?.errorCount ?? 0
+    let count = elementArrayCount(element, name)
+    // Unsupported/absent children may use the existing navigation-order source;
+    // an actual failure never masquerades as absence or triggers that fallback.
+    if (inspectReadBudget?.errorCount ?? 0) != errors || !(inspectReadBudget?.available() ?? true) {
+      return ([], false)
+    }
+    guard let count, count > 0 else { continue }
+    let requested = min(count, max(0, limit))
+    return (elementArrayValues(element, name, count: requested), count > requested)
+  }
+  return ([], false)
 }
 
 func supportsTextValue(_ element: AXUIElement) -> Bool {
@@ -2106,29 +2333,48 @@ struct WalkResult {
   let depthLimitReached: Bool
 }
 
-func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24) -> WalkResult {
+func walk(_ root: AXUIElement, visitLimit: Int = 1024, maxDepth: Int = 24, visit: ((WalkEntry) -> Void)? = nil) -> WalkResult {
   var queue: [(AXUIElement, Int, Bool)] = [(root, 0, false)]
   var result: [WalkEntry] = []
   var cursor = 0
   var maxDepthVisited = 0
   var depthLimitReached = false
-  while cursor < queue.count && result.count < visitLimit {
+  var childrenOmitted = false
+  while cursor < queue.count && result.count < visitLimit && (inspectReadBudget?.available() ?? true) {
     let (element, depth, inheritedWebArea) = queue[cursor]
     cursor += 1
+    let roleErrors = inspectReadBudget?.errorCount ?? 0
     let inWebArea = inheritedWebArea || textAttribute(element, kAXRoleAttribute) == "AXWebArea"
-    result.append(WalkEntry(element: element, inWebArea: inWebArea))
+    if let budget = inspectReadBudget {
+      // A failed ancestry read is not evidence of a non-web subtree. Do not
+      // retry it through the row collector or propagate an invented false bit.
+      if budget.errorCount != roleErrors || !budget.available() { continue }
+    }
+    let entry = WalkEntry(element: element, inWebArea: inWebArea)
+    result.append(entry)
+    visit?(entry)
     maxDepthVisited = max(maxDepthVisited, depth)
-    let descendants = children(element)
-    if depth < maxDepth {
-      queue.append(contentsOf: descendants.map { ($0, depth + 1, inWebArea) })
-    } else if !descendants.isEmpty {
-      depthLimitReached = true
+    if inspectReadBudget != nil {
+      let descendants = inspectChildren(element, limit: depth < maxDepth ? visitLimit - queue.count : 0)
+      if depth < maxDepth {
+        queue.append(contentsOf: descendants.elements.map { ($0, depth + 1, inWebArea) })
+        childrenOmitted = childrenOmitted || descendants.omitted
+      } else {
+        depthLimitReached = depthLimitReached || descendants.omitted
+      }
+    } else {
+      let descendants = children(element)
+      if depth < maxDepth {
+        queue.append(contentsOf: descendants.map { ($0, depth + 1, inWebArea) })
+      } else if !descendants.isEmpty {
+        depthLimitReached = true
+      }
     }
   }
   return WalkResult(
     entries: result,
     visitLimit: visitLimit,
-    visitLimitReached: cursor < queue.count,
+    visitLimitReached: childrenOmitted || (result.count >= visitLimit && cursor < queue.count),
     maxDepth: maxDepth,
     maxDepthVisited: maxDepthVisited,
     depthLimitReached: depthLimitReached
@@ -2183,22 +2429,25 @@ func findControl(_ wanted: [String: Any]) -> AXUIElement {
 var response: [String: Any]
 switch operation {
 case "inspect":
-  let traversal = walk(root)
   var actionableControls: [[String: Any]] = []
   var semanticControls: [[String: Any]] = []
   var fallbackControls: [[String: Any]] = []
   var encounteredWebArea = false
   var webAreaControlCount = 0
   var webAreaActionableCount = 0
-  for entry in traversal.entries {
+  let traversal = walk(root, visit: { entry in
+    let errors = inspectReadBudget?.errorCount ?? 0
     let element = entry.element
     let controlSelector = selector(element)
-    if controlSelector.isEmpty { continue }
+    if controlSelector.isEmpty { return }
     let role = textAttribute(element, kAXRoleAttribute)
     if role == "AXWebArea" { encounteredWebArea = true }
     let label = displayLabel(element)
     let enabled = boolAttribute(element, kAXEnabledAttribute)
     let elementActions = supportedActions(element)
+    // A failed field is not an empty label/disabled control. Keep earlier fully
+    // read rows, and disclose this omitted node through the partial diagnostics.
+    if (inspectReadBudget?.errorCount ?? 0) != errors || !(inspectReadBudget?.available() ?? true) { return }
     if entry.inWebArea { webAreaControlCount += 1 }
     let control: [String: Any] = [
       "selector": controlSelector,
@@ -2216,10 +2465,10 @@ case "inspect":
     } else {
       fallbackControls.append(control)
     }
-  }
+  })
   let orderedControls = actionableControls + semanticControls + fallbackControls
   let outputLimit = 120
-  let controls = Array(orderedControls.prefix(outputLimit))
+  var controls = Array(orderedControls.prefix(outputLimit))
   let outputLimitReached = orderedControls.count > controls.count
   var targetContext: [String: Any] = [
     "pid": Int(running.processIdentifier),
@@ -2236,11 +2485,16 @@ case "inspect":
       targetContext["windowId"] = windowId
     }
   }
+  let nativeRead = inspectReadBudget!.diagnostics()
+  let readPartial = nativeRead["status"] as? String == "partial"
+  if readPartial {
+    for index in controls.indices { controls[index]["actions"] = [String]() }
+  }
   response = [
     "target": resolvedTarget,
     "targetContext": targetContext,
     "controls": controls,
-    "truncated": traversal.visitLimitReached || traversal.depthLimitReached || outputLimitReached,
+    "truncated": readPartial || traversal.visitLimitReached || traversal.depthLimitReached || outputLimitReached,
     "diagnostics": [
       "visitedCount": traversal.elements.count,
       "visitLimit": traversal.visitLimit,
@@ -2250,12 +2504,13 @@ case "inspect":
       "depthLimitReached": traversal.depthLimitReached,
       "outputLimit": outputLimit,
       "outputLimitReached": outputLimitReached,
-      "actionableCount": actionableControls.count,
+      "actionableCount": readPartial ? 0 : actionableControls.count,
       "semanticCount": semanticControls.count,
       "fallbackCount": fallbackControls.count,
       "encounteredWebArea": encounteredWebArea,
       "webAreaControlCount": webAreaControlCount,
-      "webAreaActionableCount": webAreaActionableCount
+      "webAreaActionableCount": readPartial ? 0 : webAreaActionableCount,
+      "nativeRead": nativeRead
     ]
   ]
 case "press":

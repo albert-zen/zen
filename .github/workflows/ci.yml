@@ -305,8 +305,8 @@ jobs:
           path: ${{ runner.temp }}/computer-event-construction.json
           if-no-files-found: warn
           retention-days: 14
-      - name: Verify native static-text labeling with synthetic attributes
-        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts
+      - name: Verify native inspection budgets and static-text labels with synthetic attributes
+        run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts apps/zenx/test/computer-native-inspect.test.ts
       - name: Exercise macOS login-shell PATH and first tool execution
         run: npm --workspace apps/zenx exec -- tsx --test test/login-shell-environment.test.ts
       - name: Verify native launch observer and hung-main cleanup contracts
