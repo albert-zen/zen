@@ -3723,6 +3723,7 @@ import Darwin
 
 // SIGTERM cooperatively cancels this helper. No allocation or AppKit in handler.
 var targetCancelled: sig_atomic_t = 0
+var backgroundSettledForRequest = false
 signal(SIGTERM) { _ in targetCancelled = 1 }
 func emit(_ value: [String: Any]) {
   if let data = try? JSONSerialization.data(withJSONObject: value) {
@@ -3900,6 +3901,7 @@ func backgroundClickPair(_ binding: Binding, _ request: [String: Any], _ posted:
     // Once down is possible, neither cancellation nor a stale window can skip up.
     if downPosted, let release { postToTarget(release, binding.app.processIdentifier); posted += 1 }
     if preparationPosted, let deactivation { postToTarget(deactivation, binding.app.processIdentifier) }
+    backgroundSettledForRequest = true
     emit(["phase": "backgroundSettled", "release": downPosted ? "posted" : "not_needed"])
   }
   try activeDesktop()
@@ -4017,6 +4019,8 @@ let keyCodes: [String: CGKeyCode] = ["enter":36, "escape":53, "tab":48, "backspa
 var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
+  var backgroundRequest = false
+  backgroundSettledForRequest = false
   var owner = ""
   var expectedBindingId: String?
   var reply: [String: Any]
@@ -4024,6 +4028,7 @@ while let line = readLine() {
     guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
     guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
+    backgroundRequest = operation == "backgroundClick"
     owner = requestedOwner
     expectedBindingId = request["bindingId"] as? String
     if operation == "select" {
@@ -4115,6 +4120,9 @@ while let line = readLine() {
     // A stale request must not revoke a newer selection for the same owner.
     if let expectedBindingId, bindings[owner]?.id == expectedBindingId {
       bindings.removeValue(forKey: owner)
+    }
+    if backgroundRequest && !backgroundSettledForRequest {
+      emit(["phase": "backgroundSettled", "release": "not_needed"])
     }
     let message = (error as? TargetError)?.message ?? "Invalid native target request"
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"

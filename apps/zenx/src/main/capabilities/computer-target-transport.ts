@@ -194,6 +194,10 @@ export class NativeComputerTargetTransport implements TargetTransport {
               : !("result" in response))
           )
             throw new Error("Invalid native target response");
+          if (pending.background && !pending.backgroundSettled)
+            throw new Error(
+              "Native background response lacks release settlement",
+            );
           if (
             !response.error &&
             pending.expectsInputReceipt &&

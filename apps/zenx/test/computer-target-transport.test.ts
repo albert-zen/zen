@@ -314,3 +314,31 @@ test("background cleanup grace expiry blocks further background input even after
   child.emit("close", 0);
   await transport.close();
 });
+
+test("pairStarted then error without settled cannot clear release uncertainty by reselection", async (t) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-background-truncated-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = path.join(directory, "fixture.cjs");
+  await writeFile(
+    executable,
+    `#!${process.execPath}
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.operation==='select') console.log(JSON.stringify({result:{pid:process.pid}}));else {console.log(JSON.stringify({phase:'backgroundPairStarted'}));console.log(JSON.stringify({error:'truncated release'}));}});
+`,
+    { mode: 0o700 },
+  );
+  const transport = new NativeComputerTargetTransport(async () => executable);
+  t.after(() => transport.close());
+  const signal = new AbortController().signal;
+  await transport.request({ operation: "select" }, signal);
+  await assert.rejects(
+    transport.request({ operation: "backgroundClick" }, signal),
+    /outcome unknown/,
+  );
+  await transport.request({ operation: "select" }, signal);
+  await assert.rejects(
+    transport.request({ operation: "backgroundClick" }, signal),
+    /release is unknown.*no input dispatched/,
+  );
+});
