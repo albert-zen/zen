@@ -8509,7 +8509,7 @@ button:disabled {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.ui-select > span:last-child {
+.ui-select > span:last-child:not(:first-child) {
   flex-shrink: 0;
   display: flex;
 }
