@@ -305,6 +305,8 @@ jobs:
           path: ${{ runner.temp }}/computer-event-construction.json
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify bound Computer process ownership and capture retirement
+        run: node --import tsx --test apps/zenx/test/computer-target-transport.test.ts apps/zenx/test/computer-target-session.test.ts
       - name: Verify native inspection budgets and static-text labels with synthetic attributes
         run: node --import tsx --test apps/zenx/test/computer-static-text-label.test.ts apps/zenx/test/computer-native-inspect.test.ts
       - name: Verify real local Vision OCR with synthetic English and CJK pixels

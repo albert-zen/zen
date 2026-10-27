@@ -18,7 +18,7 @@ function fixture() {
           windowId: 17,
           bounds: { x: -100, y: 20, width: 400, height: 200 },
         };
-      return {};
+      return { dispatch: "posted", applicationEffect: "unverified" };
     },
     async close() {},
   };
@@ -480,4 +480,122 @@ test("OCR discards late results after cancellation, replacement, mutation or geo
       ),
     );
   }
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((ok) => {
+    resolve = ok;
+  });
+  return { promise, resolve };
+}
+
+for (const receipt of [
+  undefined,
+  null,
+  {},
+  { dispatch: "completed" },
+  { dispatch: "posted", applicationEffect: "verified" },
+]) {
+  test(`invalid input receipt ${JSON.stringify(receipt)} stays unknown and cannot be replayed`, async () => {
+    const { session, transport } = fixture();
+    await session.select("a", { pid: 7 }, signal);
+    let calls = 0;
+    transport.request = async () => {
+      calls++;
+      return receipt;
+    };
+    await assert.rejects(
+      session.input("a", { operation: "key", key: "enter" }, signal),
+      /outcome unknown; do not retry automatically/,
+    );
+    await assert.rejects(
+      session.input("a", { operation: "key", key: "enter" }, signal),
+      /Select a Computer target/,
+    );
+    assert.equal(calls, 1);
+  });
+}
+
+test("late selection after close cannot restore an input binding or start another request", async () => {
+  const { session, transport } = fixture();
+  const original = transport.request;
+  const reply = deferred<unknown>();
+  let calls = 0;
+  transport.request = async () => {
+    calls++;
+    return reply.promise;
+  };
+  const select = session.select("a", { pid: 7 }, signal);
+  const rejected = assert.rejects(select, /session is closed/);
+  await session.close();
+  reply.resolve(await original({ operation: "select" }, signal));
+  await rejected;
+  assert.throws(
+    () => session.selectedBindingId("a"),
+    /Select a Computer target/,
+  );
+  await assert.rejects(
+    session.select("a", { pid: 7 }, signal),
+    /session is closed/,
+  );
+  assert.equal(calls, 1);
+});
+
+for (const change of [
+  "close",
+  "select",
+  "abort",
+  "input",
+  "invalidate",
+] as const) {
+  test(`capture ${change} race publishes no stale coordinates or later verification`, async () => {
+    const { session, calls } = fixture();
+    const image = deferred<{ width: number; height: number }>();
+    const entered = deferred<void>();
+    const controller = new AbortController();
+    const capture = session.capture(
+      "a",
+      { pid: 7 },
+      controller.signal,
+      async () => {
+        entered.resolve();
+        return image.promise;
+      },
+    );
+    const rejected = assert.rejects(capture, /target changed|abort/iu);
+    await entered.promise;
+    let newBinding: string | undefined;
+    if (change === "close") await session.close();
+    if (change === "select")
+      newBinding = (await session.select("a", { pid: 8 }, signal)).bindingId;
+    if (change === "abort") controller.abort();
+    if (change === "input")
+      await session.input("a", { operation: "key", key: "enter" }, signal);
+    if (change === "invalidate") session.invalidateCaptures();
+    const before = calls.length;
+    image.resolve({ width: 800, height: 400 });
+    await rejected;
+    assert.equal(
+      calls.length,
+      before,
+      "retired capture must not queue native reads",
+    );
+    if (newBinding) assert.equal(session.selectedBindingId("a"), newBinding);
+  });
+}
+
+test("late failed input does not clear a newer explicit selection", async () => {
+  const { session, transport } = fixture();
+  await session.select("a", { pid: 7 }, signal);
+  const reply = deferred<unknown>();
+  const original = transport.request;
+  transport.request = async (...args) =>
+    args[0].operation === "key" ? reply.promise : original(...args);
+  const input = session.input("a", { operation: "key", key: "enter" }, signal);
+  const rejected = assert.rejects(input, /outcome unknown/);
+  const next = await session.select("a", { pid: 8 }, signal);
+  reply.resolve({});
+  await rejected;
+  assert.equal(session.selectedBindingId("a"), next.bindingId);
 });

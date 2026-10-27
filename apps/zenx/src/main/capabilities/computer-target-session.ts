@@ -46,6 +46,8 @@ export type BoundComputerInput =
 /** Ephemeral per-provider, per-thread native target selection. Never persisted or inferred from the foreground app. */
 export class ComputerTargetSession {
   readonly #selected = new Map<string, BoundComputerTarget>();
+  #closed = false;
+  #captureGeneration = 0;
   readonly #captures = new Map<
     string,
     {
@@ -64,6 +66,8 @@ export class ComputerTargetSession {
     target: ComputerTarget,
     signal: AbortSignal,
   ): Promise<BoundComputerTarget> {
+    signal.throwIfAborted();
+    if (this.#closed) throw new Error("Computer target session is closed");
     this.#selected.delete(owner);
     this.#captures.delete(owner);
     const result = (await this.transport.request(
@@ -71,6 +75,7 @@ export class ComputerTargetSession {
       signal,
     )) as BoundComputerTarget;
     signal.throwIfAborted();
+    if (this.#closed) throw new Error("Computer target session is closed");
     this.#selected.set(owner, result);
     return result;
   }
@@ -82,13 +87,25 @@ export class ComputerTargetSession {
     capture: (binding: BoundComputerTarget) => Promise<T>,
   ): Promise<T & { bindingId: string; captureId: string }> {
     const binding = await this.select(owner, target, signal);
+    const generation = this.#captureGeneration;
+    const assertCurrent = () => {
+      signal.throwIfAborted();
+      if (
+        this.#closed ||
+        this.#selected.get(owner) !== binding ||
+        generation !== this.#captureGeneration
+      )
+        throw new Error(
+          "Computer target changed while capturing; capture again",
+        );
+    };
     const image = await capture(binding);
+    assertCurrent();
     await this.transport.request(
       { operation: "verify", owner, bindingId: binding.bindingId },
       signal,
     );
-    if (this.#selected.get(owner) !== binding)
-      throw new Error("Computer target changed while capturing; capture again");
+    assertCurrent();
     if (![image.width, image.height].every((v) => Number.isFinite(v) && v > 0))
       throw new Error("Invalid capture dimensions");
     // Electron must supply an uncropped full-window image; reject incoherent aspect ratios.
@@ -158,6 +175,7 @@ export class ComputerTargetSession {
   }
 
   invalidateCaptures(): void {
+    this.#captureGeneration++;
     this.#captures.clear();
   }
 
@@ -219,10 +237,10 @@ export class ComputerTargetSession {
           (action.y * binding.bounds.height) / capture.height,
       };
     }
-    // Shared-desktop input cannot leave any old screenshot fresh for a later OCR read.
-    this.#captures.clear();
+    // Shared-desktop input invalidates existing and still-acquiring screenshots.
+    this.invalidateCaptures();
     try {
-      await this.transport.request(
+      const receipt = await this.transport.request(
         {
           ...operation,
           owner,
@@ -232,6 +250,10 @@ export class ComputerTargetSession {
         signal,
         onStopping,
       );
+      if (!isPostedComputerInputReceipt(receipt))
+        throw new Error(
+          "Native input receipt is invalid; input outcome unknown; do not retry automatically",
+        );
     } catch (error) {
       // Refusal, cancellation and uncertain native posting all require explicit reselection.
       if (this.#selected.get(owner) === binding) {
@@ -243,8 +265,9 @@ export class ComputerTargetSession {
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
     this.#selected.clear();
-    this.#captures.clear();
+    this.invalidateCaptures();
     await this.transport.close();
   }
 }
@@ -256,4 +279,16 @@ function captureTargetKey(target: ComputerTarget): string {
     target.bundleId ?? null,
     target.windowTitle ?? null,
   ]);
+}
+
+export function isPostedComputerInputReceipt(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "dispatch" in value &&
+    value.dispatch === "posted" &&
+    "applicationEffect" in value &&
+    value.applicationEffect === "unverified"
+  );
 }
