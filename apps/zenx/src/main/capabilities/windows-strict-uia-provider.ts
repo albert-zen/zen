@@ -373,6 +373,11 @@ export class WinAppStrictUiaComputerBackend implements ZenXComputerBackend {
   async foregroundScroll(): Promise<void> {
     throw new Error("Strict UIA provider does not support global input");
   }
+  invalidateObservations(): void {
+    this.#observations.clear();
+    this.#stock.invalidateObservations();
+  }
+
   async close(): Promise<void> {
     this.#lifetime.abort(
       new Error("Strict UIA provider closed; invocation revoked"),

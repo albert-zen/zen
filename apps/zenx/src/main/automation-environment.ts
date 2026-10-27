@@ -65,6 +65,7 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
   }
 
   snapshot(): AutomationEnvironmentSnapshot {
+    if (!this.#closed && this.#probe() === "locked") this.#transition("locked");
     return {
       platform: this.options.platform,
       sessionState: this.#state,

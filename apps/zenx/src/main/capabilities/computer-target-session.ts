@@ -198,6 +198,22 @@ export class ComputerTargetSession {
     return binding.bindingId;
   }
 
+  /** Read-only activity label; does not select, renew or authorize a target. */
+  selectedTarget(
+    owner: string,
+    expectedBindingId?: string,
+  ): ComputerTarget | undefined {
+    const binding = this.#selected.get(owner);
+    if (
+      this.#closed ||
+      !binding ||
+      (expectedBindingId !== undefined &&
+        binding.bindingId !== expectedBindingId)
+    )
+      return;
+    return structuredClone(binding.target);
+  }
+
   async input(
     owner: string,
     action: BoundComputerInput,
