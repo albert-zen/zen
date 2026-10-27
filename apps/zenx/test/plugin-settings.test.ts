@@ -321,6 +321,7 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
   });
   let sessionState: "active" | "locked" | "suspended" | "unknown" = "locked";
   let reads = 0;
+  let nativeAccessibility = false;
   Object.defineProperty(dom.window, "zenx", {
     configurable: true,
     value: {
@@ -337,7 +338,9 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
               sessionState,
               revision: reads,
               displayState: "unknown",
-              lockedUse: "unsupported",
+              lockedUse: nativeAccessibility
+                ? "provider-dependent"
+                : "unsupported",
               keepAwake: "inactive",
             },
           };
@@ -411,6 +414,24 @@ test("Computer access review treats locked, suspended, and unknown sessions as u
   });
   assert.match(dom.window.document.body.textContent ?? "", /Session active/u);
   assert.equal(reads, 4);
+  nativeAccessibility = true;
+  sessionState = "locked";
+  await act(async () => {
+    refresh().click();
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Native macOS accessibility can be checked while locked/u,
+  );
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Foreground control and window images require unlock/u,
+  );
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /Locked use is unsupported/u,
+  );
   await act(async () => root.unmount());
   dom.window.close();
 });

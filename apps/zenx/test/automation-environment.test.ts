@@ -149,3 +149,53 @@ test("an unavailable session probe retires old observations and refuses new GUI 
     f.environment.close();
   }
 });
+
+test("macOS fresh native accessibility admission works while locked without admitting foreground input", () => {
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "locked",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+  });
+  const caller = new AbortController().signal;
+  const lease = environment.acquire(caller, "native-targeted-accessibility");
+  assert.equal(lease.signal.aborted, false);
+  assert.equal(environment.snapshot().sessionState, "locked");
+  assert.throws(() => environment.acquire(caller), /locked/);
+  monitor.emit("unlock-screen");
+  assert.equal(
+    lease.signal.aborted,
+    true,
+    "session changes retire even scoped admissions",
+  );
+  lease.release();
+  environment.close();
+});
+
+test("targeted accessibility does not admit unknown, suspended or non-macOS locked sessions", () => {
+  const caller = new AbortController().signal;
+  const f = fixture("locked");
+  assert.throws(
+    () => f.environment.acquire(caller, "native-targeted-accessibility"),
+    /locked/,
+  );
+  f.environment.close();
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "unknown",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+  });
+  assert.throws(
+    () => environment.acquire(caller, "native-targeted-accessibility"),
+    /unknown/,
+  );
+  monitor.emit("suspend");
+  assert.throws(
+    () => environment.acquire(caller, "native-targeted-accessibility"),
+    /suspended/,
+  );
+  environment.close();
+});

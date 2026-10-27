@@ -613,3 +613,138 @@ test("stale foreground binding never labels another selected window busy", async
   stop();
   await computer.close();
 });
+
+test("locked native AX uses fresh scoped observations while capture and foreground stay blocked", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { AutomationEnvironment } =
+    await import("../src/main/automation-environment.js");
+  const monitor = Object.assign(new EventEmitter(), {
+    idle: "active",
+    getSystemIdleState() {
+      return this.idle;
+    },
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+  });
+  let dispatched = 0;
+  const target = { pid: 431, windowTitle: "Fixture" };
+  const backend = {
+    nativeTargetedAccessibility: true,
+    inspect: async () => ({
+      platform: "darwin",
+      observationId: "fresh",
+      target: { ...target, applicationName: "Fixture" },
+      controls: [
+        {
+          selector: { observationId: "fresh", targetId: "button" },
+          role: "button",
+          title: "Save",
+          enabled: true,
+          actions: ["press"],
+        },
+      ],
+      truncated: false,
+    }),
+    press: async () => {
+      dispatched++;
+      return { target };
+    },
+    invalidateObservations() {},
+    close: async () => {},
+  } as unknown as ZenXComputerBackend;
+  const computer = new ComputerZenXCapabilityPackage(
+    backend,
+    undefined,
+    false,
+    undefined,
+    environment,
+  );
+  const call = (name: string, args: Record<string, unknown>) =>
+    computer.invoke(name, {
+      name,
+      callId: name,
+      threadId: "owner",
+      cwd: ".",
+      arguments: args,
+      signal: new AbortController().signal,
+    } as any);
+  const capability = (await call("computer_environment", {})) as any;
+  assert.equal(capability.lockedUse, "native-targeted-accessibility");
+  assert.deepEqual(capability.lockedTools, [
+    "computer_list_windows",
+    "computer_inspect",
+    "computer_press",
+    "computer_set_value",
+  ]);
+  const old = (await call("computer_inspect", { target })) as any;
+  monitor.idle = "locked";
+  monitor.emit("lock-screen");
+  await assert.rejects(
+    call("computer_press", {
+      target,
+      control: old.controls[0].selector,
+      observe: false,
+    }),
+    /expired|stale|inspect/i,
+  );
+  assert.equal(dispatched, 0);
+  const fresh = (await call("computer_inspect", { target })) as any;
+  const acted = (await call("computer_press", {
+    target,
+    control: fresh.controls[0].selector,
+    observe: false,
+  })) as any;
+  assert.ok(
+    acted.after,
+    "locked actions always return a fresh native readback even when observation was omitted",
+  );
+  assert.equal(acted.applicationEffect, "unverified");
+  assert.equal(dispatched, 1);
+  assert.equal(environment.snapshot().sessionState, "locked");
+  await assert.rejects(call("computer_screenshot", { target }), /locked/);
+  await assert.rejects(
+    call("computer_foreground_key", { key: "enter" }),
+    /locked/,
+  );
+  await computer.close();
+  environment.close();
+});
+
+test("generic provider metadata cannot grant locked native AX admission", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { AutomationEnvironment } =
+    await import("../src/main/automation-environment.js");
+  const monitor = Object.assign(new EventEmitter(), {
+    getSystemIdleState: () => "locked",
+  });
+  const environment = new AutomationEnvironment({
+    platform: "darwin",
+    monitor,
+  });
+  let dispatched = false;
+  const backend = {
+    inspect: async () => {
+      dispatched = true;
+    },
+    close: async () => {},
+  } as unknown as ZenXComputerBackend;
+  const computer = new ComputerZenXCapabilityPackage(
+    backend,
+    undefined,
+    true,
+    undefined,
+    environment,
+  );
+  await assert.rejects(
+    computer.invoke("computer_inspect", {
+      arguments: { target: { pid: 431, windowTitle: "Fixture" } },
+      signal: new AbortController().signal,
+    } as any),
+    /locked/,
+  );
+  assert.equal(dispatched, false);
+  await computer.close();
+  environment.close();
+});

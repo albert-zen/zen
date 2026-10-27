@@ -5,13 +5,20 @@ export interface AutomationEnvironmentSnapshot {
   sessionState: DesktopSessionState;
   revision: number;
   displayState: "unknown";
-  lockedUse: "unsupported";
+  lockedUse: "provider-dependent" | "unsupported";
   keepAwake: "active-operation" | "inactive" | "unavailable";
 }
 
+/** Trusted Host backend selection; model arguments and plugin metadata never select this mode. */
+export type ComputerSessionAccess =
+  "interactive-desktop" | "native-targeted-accessibility";
+
 export interface ComputerEnvironmentPort {
   snapshot(): AutomationEnvironmentSnapshot;
-  acquire(signal: AbortSignal): {
+  acquire(
+    signal: AbortSignal,
+    access?: ComputerSessionAccess,
+  ): {
     signal: AbortSignal;
     revision: number;
     release(): void;
@@ -72,7 +79,10 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       revision: this.#revision,
       // Idle/lock notifications do not establish whether a display has power.
       displayState: "unknown",
-      lockedUse: "unsupported",
+      lockedUse:
+        this.options.platform === "darwin"
+          ? "provider-dependent"
+          : "unsupported",
       keepAwake:
         this.#blockerFailed || !this.#blocker
           ? "unavailable"
@@ -82,7 +92,10 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
     };
   }
 
-  acquire(caller: AbortSignal) {
+  acquire(
+    caller: AbortSignal,
+    access: ComputerSessionAccess = "interactive-desktop",
+  ) {
     caller.throwIfAborted();
     if (this.#closed) throw new Error("Computer environment is closed");
     if (this.#invalidationFailed)
@@ -91,7 +104,14 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
       );
     // Poll before admission to cover a missed notification; never infer unlock from a failed probe.
     this.#refreshSession();
-    if (this.#state !== "active")
+    // Only the native AX path can request scoped work in a locked macOS user
+    // session. It still has to obtain actual AX data and revalidate its selectors;
+    // this admission is not a claim that the target app will accept the operation.
+    const scopedLockedAccess =
+      this.options.platform === "darwin" &&
+      this.#state === "locked" &&
+      access === "native-targeted-accessibility";
+    if (this.#state !== "active" && !scopedLockedAccess)
       throw new Error(
         `Computer session is ${this.#state}; confirm the local desktop is available, then inspect again. No input dispatched.`,
       );

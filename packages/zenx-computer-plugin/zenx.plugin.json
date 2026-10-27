@@ -58,7 +58,7 @@
   "tools": [
     {
       "name": "computer_environment",
-      "description": "Read the current desktop session and power availability. Lock and suspension are reported explicitly; this read does not wake, unlock, or operate another app.",
+      "description": "Read the current desktop session and power availability. Locked native macOS accessibility is provider-dependent: re-inspect for fresh controls; actual native access can fail. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},

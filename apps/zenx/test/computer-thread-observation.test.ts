@@ -258,3 +258,55 @@ function fakeBackend(): ZenXComputerBackend & {
     close: () => undefined,
   };
 }
+
+test("session invalidation stops preview and fences late pixels until a fresh active observation", () => {
+  const backend = fakeBackend();
+  let captureAllowed = true;
+  const observation = new ComputerThreadObservation(
+    backend,
+    () => captureAllowed,
+  );
+  observation.publish("thread-a", "call-a", windowTarget);
+  const events: ComputerThreadEvent[] = [];
+  observation.observe({ threadId: "thread-a", frames: true }, (event) =>
+    events.push(event),
+  );
+  const oldListener = backend.liveListener;
+  observation.publish("thread-b", "older-other-thread", windowTarget);
+  captureAllowed = false;
+  observation.invalidateFrames();
+  assert.equal(backend.stops, 1);
+  const count = events.length;
+  oldListener?.({
+    type: "status",
+    status: "live",
+    message: "late locked pixels",
+  });
+  assert.equal(events.length, count);
+  observation.publish("thread-a", "locked-ax-inspect", windowTarget);
+  assert.equal(
+    backend.liveTargets.length,
+    1,
+    "locked AX inspection never starts capture",
+  );
+  assert.equal(events.at(-1)?.type, "status");
+  assert.equal((events.at(-1) as any).status, "unavailable");
+  captureAllowed = true;
+  observation.invalidateFrames();
+  assert.equal(
+    backend.liveTargets.length,
+    1,
+    "unlock alone cannot revive old preview",
+  );
+  observation.publish("thread-a", "fresh-active-inspect", windowTarget);
+  assert.equal(backend.liveTargets.length, 2);
+  observation.observe({ threadId: "thread-b", frames: true }, (event) =>
+    events.push(event),
+  );
+  assert.equal(
+    backend.liveTargets.length,
+    2,
+    "another thread publication never revives old pixels",
+  );
+  observation.close();
+});
