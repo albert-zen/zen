@@ -830,3 +830,5 @@ Sidebar 的已提交 patch/state 日志是恢复真相源；当前 map / JSON �
 不能 ACK 或通知成功；下一次读取先核对日志，不凭旧缓存重试。旧 JSON 仅一次显式
 legacy import，导入时间不是历史点击时间。UI/tool 来源由可信入口固定，不等同于
 真人操作；这些产品事实不进入模型 ItemList。缓存写失败不撤销已经持久的事实。
+
+App-current-focus keyboard permission explains that the selected app’s own windows may reorder behind the current foreground app while foreign windows, global foreground and hardware pointer stay stable; it grants no exact-window guarantee and does not relax the separate exact-window click contract.

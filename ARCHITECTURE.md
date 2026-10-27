@@ -1580,3 +1580,5 @@ Trace clock wire declarations stay runtime-neutral; the Host clock reader and fi
   original capture identity and time; it creates no semantic controls, renewed
   input authority, automatic AX fallback, foreground activation or durable state.
   Its separate ten-second read budget never extends an AX inspection deadline.
+
+Native App-current-focus keyboard input may reorder only target-application windows behind every current foreground-application window, while preserving known console state, global foreground/pointer/display and all foreign window identities, owners and order; App authorization also requires complete positive unique window-ID/owner metadata for every original layer-zero CG row, without changing legacy readability; exact-window click and foreground input retain their original strict desktop equality.

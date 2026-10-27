@@ -264,3 +264,13 @@ exact window uniqueness, identity and geometry before capture or input.
 ## Background application keyboard
 
 Native macOS `computer_background_type` and `computer_background_key_press` derive the application identity from this thread’s existing selected binding. Input targets the application’s **current focus**, which may change inside the application; it is not scoped to the original window or control. The separate local-device `computer.app.background_keyboard` permission and an explicit new helper capability are required. Text accepts 1–1024 well-formed Unicode scalars in surrogate-safe chunks; basic keys have no modifiers or clipboard. There is no global activation, pointer movement, wake/unlock or fallback. Posted/release receipts do not prove application effect; partial/unknown input must never be replayed. Old helper capabilities fail before dispatch.
+
+Application keyboard desktop fencing permits only target-app window reordering
+behind every current foreground-app layer-zero window. Foreign window identities,
+PID owners and order must remain exactly stable, along with desktop foreground,
+hardware pointer, display and known console state. A foreground target app needs
+no behind restriction. A locked foreground with no layer-zero windows is accepted
+only when that fresh OS application has bundle ID `com.apple.loginwindow`; an
+active foreground without observable window scope is refused. This application
+policy does not change exact-window click or foreground input’s strict desktop
+comparison. Per-chunk fences and matching key-up cleanup remain mandatory.

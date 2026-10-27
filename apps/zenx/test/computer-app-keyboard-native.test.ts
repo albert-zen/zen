@@ -37,7 +37,7 @@ final class CGEvent {
  init?(keyboardEventSource: CGEventSource?, virtualKey: UInt16, keyDown: Bool) { down = keyDown }
  func keyboardSetUnicodeString(stringLength: Int, unicodeString: UnsafePointer<UniChar>?) { units = Array(UnsafeBufferPointer(start: unicodeString, count: stringLength)) }
 }
-struct DesktopFence: Equatable { let foreground: Int32 = 1 }
+struct DesktopFence: Equatable { let foreground: Int32 = 1; func matchesApplicationContext(from: Self, targetPID: Int32) -> Bool { true }; func allowsApplicationInput(from: Self, targetPID: Int32) -> Bool { true } }
 struct App { let processIdentifier: Int32 = 7 }
 struct Failure: Error {}
 func refuse(_ message: String) throws -> Never { throw Failure() }

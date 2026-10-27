@@ -506,14 +506,14 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
   },
   mainDocument:
     computerCapabilityManifest.mainDocument +
-    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click. Native background_type/background_key_press derive only the selected application identity from binding and target its current focus; no original-window guarantee. Separate app keyboard permission is required, internal focus may change, and unknown input is never replayed.",
+    " Native macOS global input requires this thread's selected target. computer_select_target or computer_screenshot selects one exact window; it does not activate it. Input activates and checks that same window after approval. Click x/y are screenshot image pixels and require its captureId, not desktop coordinates. Key/scroll/type/shortcut require the bindingId returned by select/screenshot; reuse it without a screenshot per key, so pending approval cannot silently follow a later selection. After stale geometry, closed target, cancelled or uncertain input, reselect/reobserve; never replay an uncertain action automatically. A full desktop image never selects a target. Other providers do not inherit this binding guarantee. When AX is empty or partial, explicitly capture the same window then call computer_ocr with that captureId for local visual text. OCR boxes are not accessibility controls and do not authorize semantic press. OCR never activates, wakes or unlocks the desktop. Screenshot captureSource/backgroundInputEligible distinguish verified native window input proof from legacy read-only images. Older macOS and known oversized SCK images retain active-only legacy screenshots/OCR, which never authorize background click. Native background_type/background_key_press derive only the selected application identity from binding and target its current focus; no original-window guarantee. Separate app keyboard permission is required; internal focus and this app’s windows behind the foreground app may reorder, while foreign windows, desktop foreground and pointer must remain stable. Unknown input is never replayed.",
   permissions: [
     ...computerCapabilityManifest.permissions,
     {
       id: "computer.app.background_keyboard",
       title: "Type into a background app",
       description:
-        "Send bounded text or a basic key to the selected application current focus; internal focus may change. No exact-window guarantee or global takeover.",
+        "Send bounded text or a basic key to the selected application current focus. Its windows may reorder behind the foreground app; foreign windows, desktop foreground and pointer stay stable. No exact-window guarantee or global takeover.",
       scope: "local-device",
     },
     {
@@ -531,8 +531,8 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
       name,
       description:
         name === "computer_background_type"
-          ? "Type 1–1024 Unicode scalars into this binding's selected application CURRENT FOCUS using target-PID Unicode events. Application-internal focus may change; no exact-window/control guarantee, desktop activation, pointer movement or clipboard. Separate app keyboard permission; native console session including locked. Partial or unknown input must not be replayed. Receipt does not prove application effect."
-          : "Send one basic key to this binding's selected application CURRENT FOCUS. Application-internal focus may change; not an exact-window/control operation. No modifiers, shortcuts, desktop activation, pointer movement or clipboard. Separate app keyboard permission; native console session including locked. Never replay unknown input; posting does not prove effect.",
+          ? "Type 1–1024 Unicode scalars into this binding's selected application CURRENT FOCUS using target-PID Unicode events. Application-internal focus may change; no exact-window/control guarantee, desktop activation, pointer movement or clipboard. Only this app’s windows may reorder behind the current foreground app; foreign windows, desktop focus and pointer must stay stable. Separate app keyboard permission; native console session including locked. Partial or unknown input must not be replayed. Receipt does not prove application effect."
+          : "Send one basic key to this binding's selected application CURRENT FOCUS. Application-internal focus may change; not an exact-window/control operation. No modifiers, shortcuts, desktop activation, pointer movement or clipboard. Only this app’s windows may reorder behind the current foreground app; foreign windows, desktop focus and pointer must stay stable. Separate app keyboard permission; native console session including locked. Never replay unknown input; posting does not prove effect.",
       inputSchema: objectSchema(
         {
           bindingId: stringSchema(),
@@ -4039,12 +4039,74 @@ struct DesktopFence: Equatable {
   let pointer: CGPoint
   let displayAsleep: Bool
   let windows: [Int]
+  let windowOwners: [Int: pid_t]
+  let consoleLocked: Bool
+  let onConsole: Bool
+  let foregroundIsLoginWindow: Bool
+  let metadataComplete: Bool
+  // Preserve exact-window/foreground's original four-field contract.
+  static func == (_ lhs: DesktopFence, _ rhs: DesktopFence) -> Bool {
+    return lhs.foreground == rhs.foreground && lhs.pointer == rhs.pointer && lhs.displayAsleep == rhs.displayAsleep && lhs.windows == rhs.windows
+  }
+  func matchesApplicationContext(from baseline: DesktopFence, targetPID: pid_t) -> Bool {
+    guard metadataComplete, baseline.metadataComplete,
+          targetPID > 0, foreground == baseline.foreground, pointer == baseline.pointer,
+          displayAsleep == baseline.displayAsleep, onConsole, baseline.onConsole,
+          consoleLocked == baseline.consoleLocked,
+          Set(windows).count == windows.count, Set(baseline.windows).count == baseline.windows.count,
+          windowOwners.count == windows.count, baseline.windowOwners.count == baseline.windows.count,
+          windows.allSatisfy({ $0 > 0 && (windowOwners[$0] ?? 0) > 0 }),
+          baseline.windows.allSatisfy({ $0 > 0 && (baseline.windowOwners[$0] ?? 0) > 0 }) else { return false }
+    let foreign = windows.filter { windowOwners[$0] != targetPID }
+    let oldForeign = baseline.windows.filter { baseline.windowOwners[$0] != targetPID }
+    return foreign == oldForeign && foreign.allSatisfy { windowOwners[$0] == baseline.windowOwners[$0] }
+  }
+  func allowsApplicationInput(from baseline: DesktopFence, targetPID: pid_t) -> Bool {
+    guard matchesApplicationContext(from: baseline, targetPID: targetPID) else { return false }
+    if foreground == targetPID { return true }
+    let frontIndices = windows.indices.filter { windowOwners[windows[$0]] == foreground }
+    guard let lastFront = frontIndices.last else {
+      // Loginwindow can have no layer-zero window while this known console is
+      // locked. No AX key-window inference is made from that absence.
+      return consoleLocked && foregroundIsLoginWindow && baseline.foregroundIsLoginWindow
+    }
+    return windows.indices.allSatisfy { windowOwners[windows[$0]] != targetPID || $0 > lastFront }
+  }
+}
+// Keep legacy projections readable, but retain evidence that compactMap would
+// otherwise erase an incomplete raw layer-zero row before App authorization.
+func projectAppWindowRows(_ rows: [[String: Any]]) -> (windows: [Int], owners: [Int: pid_t], metadataComplete: Bool) {
+  let windows = rows.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue }
+  var owners: [Int: pid_t] = [:]
+  var seen = Set<Int>()
+  var complete = true
+  for row in rows {
+    let rawId = row[kCGWindowNumber as String] as? NSNumber
+    let rawPid = row[kCGWindowOwnerPID as String] as? NSNumber
+    if let id = rawId?.intValue, let pid = rawPid?.int32Value { owners[id] = pid }
+    guard let rawId, let rawPid, rawId.doubleValue.isFinite, rawPid.doubleValue.isFinite,
+          rawId.doubleValue > 0, rawId.doubleValue <= Double(UInt32.max),
+          rawPid.doubleValue > 0, rawPid.doubleValue <= Double(Int32.max),
+          Double(rawId.intValue) == rawId.doubleValue, Double(rawPid.int32Value) == rawPid.doubleValue else { complete = false; continue }
+    if !seen.insert(rawId.intValue).inserted { complete = false }
+  }
+  return (windows, owners, complete)
+}
+extension DesktopFence {
   init() throws {
     guard let front = NSWorkspace.shared.frontmostApplication, let event = CGEvent(source: nil),
           let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { try refuse("Desktop focus/pointer/window order unavailable") }
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     foreground = front.processIdentifier; pointer = event.location
     displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
-    windows = rows.filter { ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue }
+    let ordered = rows.filter { ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0 }
+    let projection = projectAppWindowRows(ordered)
+    windows = projection.windows
+    windowOwners = projection.owners
+    metadataComplete = projection.metadataComplete
+    onConsole = session?[kCGSessionOnConsoleKey as String] as? Bool == true
+    consoleLocked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    foregroundIsLoginWindow = front.bundleIdentifier == "com.apple.loginwindow"
   }
 }
 func appStateEvent(_ subtype: Int16) throws -> CGEvent {
@@ -4491,13 +4553,13 @@ func backgroundAppKeyboard(_ binding: Binding, _ request: [String: Any], _ poste
   if baseline.foreground != binding.app.processIdentifier {
     let activation = try appStateEvent(1)
     try windowInputPermission(); try binding.verifyApplication()
-    guard try DesktopFence() == baseline else { try refuse("Desktop changed before app preparation") }
+    guard try DesktopFence().matchesApplicationContext(from: baseline, targetPID: binding.app.processIdentifier) else { try refuse("Desktop changed before app preparation") }
     postToTarget(activation, binding.app.processIdentifier); preparationPosted = true; posted += 1
     usleep(30_000)
   }
   for (down, up, units) in pairs {
     try windowInputPermission(); try binding.verifyApplication()
-    guard try DesktopFence() == baseline else { try refuse("Desktop changed before app keyboard input") }
+    guard try DesktopFence().allowsApplicationInput(from: baseline, targetPID: binding.app.processIdentifier) else { try refuse("Desktop changed before app keyboard input") }
     if !started { emit(["phase": "backgroundPairStarted"]); started = true }
     held = up
     postToTarget(down, binding.app.processIdentifier); posted += 1; keyboardEvents += 1; postedChunks += 1; postedUnits += units
@@ -4507,7 +4569,7 @@ func backgroundAppKeyboard(_ binding: Binding, _ request: [String: Any], _ poste
     postToTarget(up, binding.app.processIdentifier); posted += 1; keyboardEvents += 1; held = nil
   }
   try windowInputPermission(); try binding.verifyApplication()
-  guard try DesktopFence() == baseline else { try refuse("Desktop changed after app keyboard posting; application effect unknown") }
+  guard try DesktopFence().allowsApplicationInput(from: baseline, targetPID: binding.app.processIdentifier) else { try refuse("Desktop changed after app keyboard posting; application effect unknown") }
   return ["dispatch": "posted", "applicationEffect": "unverified", "release": "posted", "targetScope": "application_current_focus", "internalFocusMayChange": true, "postedChunks": postedChunks, "postedUtf16Units": postedUnits, "keyboardEventsPosted": keyboardEvents]
 }
 
