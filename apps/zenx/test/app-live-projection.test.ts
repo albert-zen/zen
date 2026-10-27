@@ -45,6 +45,7 @@ import {
 } from "../src/renderer/src/bundled-automation-ui.js";
 import { pluginUiRegistry } from "../src/renderer/src/PluginProductPage.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
+import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
 const { act, createElement } = React;
@@ -2895,6 +2896,222 @@ test("full App consumes Room panel=open once; background collapse sticks and exp
     await waitFor(() => document.querySelector(".auxiliary-panel"));
     assert.equal(state.open, true);
     assert.ok(writes.length > count);
+  } finally {
+    await harness.unmount();
+    dispose();
+  }
+});
+
+test("Room Side chat drafts stay visible locally, close without creating, and first Send promotes in the Room workspace", async () => {
+  const room = {
+    id: "side-chat-room",
+    name: "Side chat Room",
+    members: [{ threadId: "thread-1", name: "Member" }],
+    assistant: { threadId: "thread-1", triggerId: "synthetic" },
+    messages: [],
+    createdAt: 0,
+  };
+  let navigate: ((route: string) => void) | undefined;
+  const dispose = pluginUiRegistry.registerTrusted("room-side-chat-test", {
+    overview: ({ sdk }) => {
+      navigate = sdk.navigation.navigate;
+      return createElement("div", null, "Synthetic Room body");
+    },
+  });
+  const roomPlugin = {
+    id: "zenx-rooms",
+    displayName: "Rooms",
+    enabled: true,
+    available: true,
+    lifecycle: "enabled",
+    contributionCount: 1,
+    version: "1",
+    source: "bundled",
+  } as const;
+  const snapshot: ZenXPluginSnapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: [
+      ...workspaceLauncherSnapshot.plugins.filter(
+        (plugin) => plugin.id === "zenx-subagents",
+      ),
+      roomPlugin,
+    ],
+    pages: [
+      {
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        id: "rooms",
+        title: "Rooms",
+        route: "/plugins/zenx-rooms/rooms",
+        surfaceId: "overview",
+      },
+    ],
+    bundles: [
+      ...workspaceLauncherSnapshot.bundles,
+      {
+        key: "zenx-rooms:main",
+        pluginId: "zenx-rooms",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "room-side-chat-test",
+      },
+    ],
+    surfaces: [
+      ...workspaceLauncherSnapshot.surfaces,
+      {
+        key: "zenx-rooms:overview",
+        pluginId: "zenx-rooms",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+  };
+  let state = applySidebarPatch(
+    emptySidebarState({ kind: "room", id: room.id }),
+    { resourceThreadId: "thread-1" },
+  );
+  const listeners = new Set<(s: ThreadSidebarState) => void>();
+  const writes: ThreadSidebarPatch[] = [];
+  const sidebarApi: ThreadSidebarApi = {
+    read: async (owner) =>
+      typeof owner !== "string" && owner.kind === "room"
+        ? structuredClone(state)
+        : emptySidebarState(owner),
+    onChanged: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    update: async (request) => {
+      assert.deepEqual(request.owner, { kind: "room", id: room.id });
+      if (request.expectedRevision !== state.revision)
+        return { applied: false, state: structuredClone(state) };
+      state = applySidebarPatch(state, request.patch);
+      writes.push(request.patch);
+      for (const listener of listeners) listener(structuredClone(state));
+      return { applied: true, state: structuredClone(state) };
+    },
+  };
+  const creates: unknown[] = [];
+  const sends: unknown[] = [];
+  const harness = await mountApp({
+    pluginSnapshot: snapshot,
+    titles: {
+      get: async () => ({}),
+      onChange: () => () => undefined,
+      observe: async () => undefined,
+    } as typeof window.zenx.titles,
+    sidebarApi,
+    request: async (method, params) => {
+      if (method === "zen/thread/read")
+        return { thread: resumed(thread()).thread };
+      if (method === "zen/thread/resume")
+        return resumed(thread((params as { threadId: string }).threadId));
+      if (method === "zen/thread/create-child-configured") {
+        creates.push(params);
+        return { thread: resumed(thread("room-child")).thread };
+      }
+      if (method === "zen/turn/send") {
+        sends.push(params);
+        return {};
+      }
+      if (method === "zen/trace/client-activation") return { observed: true };
+      throw Error(`Unexpected ${method}`);
+    },
+    executeCommand: async (plugin, command) => {
+      if (plugin === "zenx-rooms" && command === "list")
+        return { rooms: [room] };
+      if (plugin === "zenx-rooms" && command === "workspace")
+        return { revision: 1, matters: [], memory: [] };
+      if (plugin === "zenx-subagents" && command === "list")
+        return { threads: [] };
+      throw Error(`Unexpected ${plugin}/${command}`);
+    },
+  });
+  try {
+    const roomRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Open PAW Side chat Room"]',
+      ),
+    );
+    await act(async () => roomRow.click());
+    assert.ok(navigate);
+    await act(async () =>
+      navigate!(`/plugins/zenx-rooms/rooms?roomId=${room.id}&panel=open`),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".workspace-add-tab")?.click(),
+    );
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => open.click());
+    await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    assert.equal(creates.length, 0);
+    assert.doesNotMatch(JSON.stringify(writes), /side-chat-draft/);
+    const close = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Close tab Side chat"]',
+      ),
+    );
+    await act(async () => close.click());
+    await waitFor(
+      () => document.querySelector('[id^="side-chat-draft-"]') === null,
+    );
+    assert.equal(creates.length, 0);
+    // The actual Room launcher opens another local draft with the same true member parent.
+    await act(async () =>
+      navigate!(`/plugins/zenx-rooms/rooms?roomId=${room.id}&panel=open`),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".workspace-add-tab")?.click(),
+    );
+    const reopen = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => reopen.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    const props = (element: Element) =>
+      (element as any)[
+        Object.keys(element).find((key) => key.startsWith("__reactProps"))!
+      ];
+    await act(async () =>
+      props(composer).onChange({ target: { value: "Room side request" } }),
+    );
+    const send = composer
+      .closest("form")!
+      .querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    await act(async () => {
+      props(send).onClick();
+      props(send).onClick();
+    });
+    assert.equal(creates.length, 1, document.body.textContent ?? "");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
+    assert.equal(sends.length, 1, document.body.textContent ?? "");
+    assert.ok(
+      state.tabs.some(
+        (tab) => tab.kind === "thread" && tab.threadId === "room-child",
+      ),
+      JSON.stringify({ state, writes, body: document.body.textContent }),
+    );
+    assert.equal(creates.length, 1);
+    assert.deepEqual(creates[0], {
+      parentThreadId: "thread-1",
+      mode: "side-chat",
+      snapshot: { itemId: "thread-1-metadata", contextItemId: null },
+    });
+    assert.equal(sends.length, 1);
+    assert.equal(state.selectedTab, "thread:room-child");
+    assert.equal(state.resourceThreadId, "thread-1");
+    assert.equal(room.members.length, 1);
+    assert.doesNotMatch(JSON.stringify(writes), /side-chat-draft/);
+    assert.ok(document.querySelector('[role="tab"][id*="thread:room-child"]'));
+    assert.match(document.body.textContent ?? "", /Synthetic Room body/);
   } finally {
     await harness.unmount();
     dispose();

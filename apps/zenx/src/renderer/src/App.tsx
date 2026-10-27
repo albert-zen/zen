@@ -3059,6 +3059,8 @@ function AppContent() {
     React.ContextType<typeof SideChatDraftContext>
   > = async (input) => {
     const parent = input.parentThreadId;
+    const roomId = selectedRoom?.id;
+    const presentationOwner = roomId ? `room:${roomId}` : parent;
     // Capture only authoritative prefix IDs, never a second copy of transcript semantics.
     const { thread } = await window.zenx.protocol.request("zen/thread/read", {
       threadId: parent,
@@ -3074,14 +3076,19 @@ function AppContent() {
       },
       {
         ...input,
+        ...(roomId ? { roomId } : {}),
         inheritedModel: encodeModelKey(thread),
         inheritedEffort: thread.reasoningEffort,
       },
     );
-    setBrowserPanels((current) => ({ ...current, [parent]: true }));
+    if (roomId) {
+      void sidebarState.controller.edit({ kind: "room", id: roomId }, () => ({
+        open: true,
+      }));
+    } else setBrowserPanels((current) => ({ ...current, [parent]: true }));
     setSideChatSelections((current) => ({
       ...current,
-      [parent]: `custom:side-chat-draft-${draft.id}`,
+      [presentationOwner]: `custom:side-chat-draft-${draft.id}`,
     }));
   };
 
@@ -3212,18 +3219,25 @@ function AppContent() {
           const current = sideChatDrafts.get(id);
           if (current?.threadId && current.composer.submission === null) {
             const child = current.threadId;
-            const owner = current.parentThreadId;
+            const owner = current.roomId
+              ? `room:${current.roomId}`
+              : current.parentThreadId;
+            const nativeOwner = current.roomId
+              ? { kind: "room" as const, id: current.roomId }
+              : current.parentThreadId;
             updateComposer(child, () => current.composer);
             const draftTab = `custom:side-chat-draft-${id}`;
             const order = (
               sideChatTabOrdersRef.current[owner] ??
-              workspaceTabOrder[owner] ??
+              (current.roomId
+                ? roomWorkspaceStates[current.roomId]?.tabs
+                : workspaceTabOrder[owner]) ??
               []
             ).map((tab) => (tab === draftTab ? `thread:${child}` : tab));
             if (!order.includes(`thread:${child}`))
               order.push(`thread:${child}`);
             setSideChatTabOrders((orders) => ({ ...orders, [owner]: order }));
-            await sidebarState.controller.edit(owner, (state) => {
+            await sidebarState.controller.edit(nativeOwner, (state) => {
               const tabs = [
                 ...state.tabs,
                 { kind: "thread" as const, threadId: child },
@@ -3242,7 +3256,16 @@ function AppContent() {
                 ...selection,
                 [owner]: "",
               }));
-              setPanelTabs((tabs) => ({ ...tabs, [owner]: `thread:${child}` }));
+              if (current.roomId) {
+                await sidebarState.controller.select(
+                  nativeOwner,
+                  `thread:${child}`,
+                );
+              } else
+                setPanelTabs((tabs) => ({
+                  ...tabs,
+                  [owner]: `thread:${child}`,
+                }));
             }
             sideChatDrafts.close(id);
             void loadThreadSummaries();
@@ -3867,18 +3890,62 @@ function AppContent() {
                 key={selectedRoom.id}
                 room={selectedRoom}
                 presentationState={roomSidebarState}
+                ephemeralTabs={sideChatDrafts
+                  .entries()
+                  .filter((draft) => draft.roomId === selectedRoom.id)
+                  .map((draft) => ({
+                    id: `side-chat-draft-${draft.id}`,
+                    title: i18n.t("panels:sideChat"),
+                    icon: "users" as const,
+                    render: () =>
+                      sideChatSelections[`room:${selectedRoom.id}`] ===
+                      `custom:side-chat-draft-${draft.id}`
+                        ? renderSideChatDraft(draft.id)
+                        : null,
+                  }))}
+                localSelectedTab={sideChatSelections[`room:${selectedRoom.id}`]}
+                localTabOrder={sideChatTabOrders[`room:${selectedRoom.id}`]}
+                onLocalSelectTab={(tab) =>
+                  setSideChatSelections((current) => ({
+                    ...current,
+                    [`room:${selectedRoom.id}`]: tab.startsWith(
+                      "custom:side-chat-draft-",
+                    )
+                      ? tab
+                      : "",
+                  }))
+                }
+                onLocalTabsChange={(tabs) =>
+                  setSideChatTabOrders((current) => ({
+                    ...current,
+                    [`room:${selectedRoom.id}`]: tabs,
+                  }))
+                }
+
                 onFullscreenChange={(fullscreen) => {
                   void sidebarState.controller.edit(
                     { kind: "room", id: selectedRoom.id },
                     () => ({ fullscreen }),
                   );
                 }}
-                onRemoveTab={(id) =>
-                  sidebarState.controller.remove(
-                    { kind: "room", id: selectedRoom.id },
-                    id,
-                  )
-                }
+                onRemoveTab={(id) => {
+                  if (id.startsWith("custom:side-chat-draft-")) {
+                    sideChatDrafts.close(
+                      id.slice("custom:side-chat-draft-".length),
+                    );
+                    setSideChatSelections((current) => ({
+                      ...current,
+                      [`room:${selectedRoom.id}`]:
+                        current[`room:${selectedRoom.id}`] === id
+                          ? ""
+                          : (current[`room:${selectedRoom.id}`] ?? ""),
+                    }));
+                  } else
+                    sidebarState.controller.remove(
+                      { kind: "room", id: selectedRoom.id },
+                      id,
+                    );
+                }}
                 onReplaceTab={(oldId, tab) =>
                   replaceSidebarTab(
                     { kind: "room", id: selectedRoom.id },
@@ -3942,7 +4009,10 @@ function AppContent() {
                 }}
                 customTabs={sideChatDrafts
                   .entries()
-                  .filter((draft) => draft.parentThreadId === threadDetail.id)
+                  .filter(
+                    (draft) =>
+                      !draft.roomId && draft.parentThreadId === threadDetail.id,
+                  )
                   .map((draft) => ({
                     id: `side-chat-draft-${draft.id}`,
                     title: i18n.t("panels:sideChat"),

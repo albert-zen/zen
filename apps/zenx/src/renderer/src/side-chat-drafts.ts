@@ -12,6 +12,7 @@ import {
 export interface SideChatDraft<Boundary = unknown> {
   id: string;
   parentThreadId: string;
+  roomId?: string;
   boundary: Boundary;
   inheritedModel?: string;
   inheritedEffort?: string | null;
@@ -41,6 +42,7 @@ export class SideChatDrafts<Boundary = unknown> {
     parentThreadId: string,
     boundary: Boundary,
     options: {
+      roomId?: string;
       model?: string;
       effort?: string;
       inheritedModel?: string;

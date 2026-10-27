@@ -13,7 +13,7 @@ import type {
   ZenXTrigger,
 } from "../../main/trigger-types.js";
 import type { RoomConversation } from "./room-conversations.js";
-import { AuxiliaryPanel } from "./auxiliary-panel.js";
+import { AuxiliaryPanel, type AuxiliaryCustomTab } from "./auxiliary-panel.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { threadEditTitle, threadTitle } from "./thread-list.js";
 
@@ -43,8 +43,18 @@ export function CompanionWorkspace({
   renderConversation,
   onRenameThread,
   triggerSourceRequest,
+  ephemeralTabs = [],
+  localSelectedTab,
+  localTabOrder,
+  onLocalSelectTab,
+  onLocalTabsChange,
 }: {
   presentationState?: ThreadSidebarState;
+  ephemeralTabs?: readonly AuxiliaryCustomTab[];
+  localSelectedTab?: string;
+  localTabOrder?: string[];
+  onLocalSelectTab?(id: string): void;
+  onLocalTabsChange?(ids: string[]): void;
   onFullscreenChange?(fullscreen: boolean): void;
   onRemoveTab?(id: string): Promise<void> | void;
   onReplaceTab?(
@@ -623,13 +633,24 @@ export function CompanionWorkspace({
         });
       }}
       snapshot={snapshot}
-      selectedTab={selected}
-      onSelectTab={setSelected}
-      openedTabs={tabs}
-      onTabsChange={setTabs}
+      selectedTab={localSelectedTab || selected}
+      onSelectTab={(id) => {
+        onLocalSelectTab?.(id);
+        if (!ephemeralTabs.some((tab) => `custom:${tab.id}` === id))
+          setSelected(id);
+      }}
+      openedTabs={localTabOrder ?? tabs}
+      onTabsChange={(ids) => {
+        onLocalTabsChange?.(ids);
+        setTabs(
+          ids.filter(
+            (id) => !ephemeralTabs.some((tab) => `custom:${tab.id}` === id),
+          ),
+        );
+      }}
       navigate={navigate}
       threadContext={{ threads, triggerSourceRequest }}
-      customTabs={tabsContent}
+      customTabs={[...tabsContent, ...ephemeralTabs]}
       contextControl={
         <label className="companion-context">
           {i18n.t("panels:resourcesFrom")}
