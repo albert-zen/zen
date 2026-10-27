@@ -84,7 +84,7 @@ import {
 import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
   computerReadinessSnapshot,
-  probeComputerAccess,
+  probeCurrentComputerAccess,
   type ZenXComputerAccessVerification,
   type ZenXComputerReadinessSnapshot,
 } from "./computer-readiness.js";
@@ -1989,46 +1989,41 @@ function installSettingsIpc(
   ipcMain.handle(ipcChannels.computerReadinessProbe, () => {
     if (pendingComputerProbe !== undefined) return pendingComputerProbe;
     pendingComputerProbe = (async () => {
-      const verification = await probeComputerAccess(
-        await readComputerReadiness(),
-        {
-          accessibility: async () => {
-            const backend = new ElectronMacComputerBackend(
-              join(app.getPath("temp"), `zenx-readiness-${randomUUID()}`),
-            );
-            try {
-              await backend.listWindows();
-            } finally {
-              await backend.close().catch(() => undefined);
-            }
-          },
-          screenCapture: async () => {
-            await automationEnvironment?.refresh();
-            if (
-              automationEnvironment &&
-              automationEnvironment.snapshot().sessionState !== "active"
-            )
-              throw new Error(
-                "Window capture requires an active desktop session",
-              );
-            const sources = await retryDesktopSourceEnumeration(() =>
-              desktopCapturer.getSources({
-                types: ["window"],
-                thumbnailSize: { width: 32, height: 32 },
-                fetchWindowIcons: false,
-              }),
-            );
-            if (!sources.some((source) => !source.thumbnail.isEmpty()))
-              throw new Error("No window preview was available for capture");
-          },
-          screenRecordingStatus: () =>
-            systemPreferences.getMediaAccessStatus("screen"),
+      const result = await probeCurrentComputerAccess(readComputerReadiness, {
+        accessibility: async () => {
+          const backend = new ElectronMacComputerBackend(
+            join(app.getPath("temp"), `zenx-readiness-${randomUUID()}`),
+          );
+          try {
+            await backend.listWindows();
+          } finally {
+            await backend.close().catch(() => undefined);
+          }
         },
-      );
-      const updated = await readComputerReadiness();
-      computerVerification = verification;
-      verificationStatus = `${updated.accessibility}:${updated.screenRecording}:${updated.environment?.revision ?? 0}`;
-      const result = { ...updated, verification };
+        screenCapture: async () => {
+          await automationEnvironment?.refresh();
+          if (
+            automationEnvironment &&
+            automationEnvironment.snapshot().sessionState !== "active"
+          )
+            throw new Error(
+              "Window capture requires an active desktop session",
+            );
+          const sources = await retryDesktopSourceEnumeration(() =>
+            desktopCapturer.getSources({
+              types: ["window"],
+              thumbnailSize: { width: 32, height: 32 },
+              fetchWindowIcons: false,
+            }),
+          );
+          if (!sources.some((source) => !source.thumbnail.isEmpty()))
+            throw new Error("No window preview was available for capture");
+        },
+        screenRecordingStatus: () =>
+          systemPreferences.getMediaAccessStatus("screen"),
+      });
+      computerVerification = result.verification;
+      verificationStatus = `${result.accessibility}:${result.screenRecording}:${result.environment?.revision ?? 0}`;
       void operationalDiagnostics.observeComputer(result);
       return result;
     })().finally(() => {

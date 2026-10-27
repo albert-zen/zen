@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   computerReadinessSnapshot,
   probeComputerAccess,
+  probeCurrentComputerAccess,
 } from "../src/main/computer-readiness.js";
 
 test("unknown screen status stays unknown instead of being reported as denial", () => {
@@ -171,4 +172,45 @@ test("locked readiness never treats a possible black thumbnail as successful cap
   });
   assert.equal(captures, 0);
   assert.equal(result.screenCapture.state, "unknown");
+});
+
+test("a capture completing after lock cannot be stamped as verified in the new session", async () => {
+  let locked = false;
+  const read = async () => ({
+    ...computerReadinessSnapshot({
+      platform: "darwin",
+      accessibilityTrusted: true,
+      screenRecording: "granted",
+      foregroundControlEnabled: false,
+    }),
+    environment: {
+      platform: "darwin",
+      sessionState: locked ? ("locked" as const) : ("active" as const),
+      revision: locked ? 2 : 1,
+      displayState: "unknown" as const,
+      lockedUse: "provider-dependent" as const,
+      keepAwake: "inactive" as const,
+    },
+  });
+  const result = await probeCurrentComputerAccess(read, {
+    accessibility: async () => {},
+    screenCapture: async () => {
+      locked = true;
+    },
+    screenRecordingStatus: () => "granted",
+  });
+  assert.equal(result.environment?.sessionState, "locked");
+  assert.equal(
+    result.verification,
+    undefined,
+    "old active-session probe is discarded, not relabeled r2",
+  );
+  const stable = await probeCurrentComputerAccess(read, {
+    accessibility: async () => {},
+    screenCapture: async () => {
+      throw new Error("must not capture while locked");
+    },
+    screenRecordingStatus: () => "granted",
+  });
+  assert.equal(stable.verification?.screenCapture.state, "unknown");
 });
