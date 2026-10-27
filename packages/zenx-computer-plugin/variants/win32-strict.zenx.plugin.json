@@ -53,7 +53,7 @@
   "tools": [
     {
       "name": "computer_environment",
-      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
+      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},

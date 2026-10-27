@@ -195,8 +195,12 @@ screenshot `capture` short reference and `x`/`y` pixels from that exact full-win
 image. The capture is consumed once. The native helper checks availability of its
 Apple window-local primitive and revalidates the original PID launch, retained
 window, bounds and desktop before posting. It never substitutes AXPress or global
-input. The initial implementation requires an active desktop; it is absent from
-Windows and Peekaboo variants and from the native locked AX whitelist.
+input. The native route supports known console sessions, including locked or display-off,
+when fresh exact OS geometry and full-window SCK capture are available. It never
+unlocks or wakes a display. Unknown/suspended/off-console states fail closed.
+Windows and Peekaboo variants omit this tool; foreground takeover remains active-only.
+SCK requires macOS14+ and existing Screen Recording permission; older systems keep
+their existing AX/foreground path and refuse exact SCK capture explicitly.
 
 This operation does not activate/raise the desktop window or move the hardware
 pointer; application-internal focus may change. App-local deactivation is best
@@ -207,3 +211,11 @@ posting the prebuilt matching up after a possible down; the Host retains the
 process until real close and permits a two-second cleanup grace. Forced termination
 or missing cleanup proof makes release unknown and blocks further background input
 on that provider instance, even after reselection.
+
+Native target identity is scoped to the current provider/session epoch, independently
+queried process birth (libproc PID/start time/UID), and fresh CG window ID/title/frame;
+macOS does not expose an immutable window-birth token. Same-app/title ambiguity,
+closed/offscreen/inactive windows, changed geometry and incoherent SCK image mapping
+are refused; the helper never chooses an arbitrary first/main window. OCR can read
+the existing exact SCK image while locked under the same native scope; it does not
+recapture, renew its expiry or authorize input.

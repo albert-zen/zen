@@ -711,7 +711,7 @@ for (const denial of [
     );
   });
 
-test("background click is distinct native permission and never part of the locked AX tools", async () => {
+test("native window input has distinct permission and locked admission still requires its own capture", async () => {
   const { ComputerZenXCapabilityPackage, boundComputerCapabilityManifest } =
     await import("../src/main/capabilities/computer-provider.js");
   const { AutomationEnvironment } =
@@ -767,7 +767,7 @@ test("background click is distinct native permission and never part of the locke
   };
   assert.equal(
     availability.lockedTools.includes("computer_background_click"),
-    false,
+    true,
   );
   await assert.rejects(
     invoke("computer_background_click", {
@@ -777,7 +777,7 @@ test("background click is distinct native permission and never part of the locke
       x: 1,
       y: 1,
     }),
-    /locked/,
+    /no input dispatched/i,
   );
   assert.equal(calls.length, 0);
   await capability.close();

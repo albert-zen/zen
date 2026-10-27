@@ -5,6 +5,7 @@ export interface BoundComputerTarget {
   bindingId: string;
   /** Native runtime capability, absent on older/missing-SPI helpers. */
   windowLocalInputAvailable?: true;
+  exactWindowCaptureAvailable?: true;
   target: {
     pid: number;
     applicationName: string;
@@ -156,7 +157,8 @@ export class ComputerTargetSession {
         this.#selected.get(owner) !== binding ||
         capture.captureId !== captureId ||
         capture.bindingId !== binding.bindingId ||
-        capture.targetKey !== captureTargetKey(target) ||
+        (capture.targetKey !== captureTargetKey(target) &&
+          captureTargetKey(binding.target) !== captureTargetKey(target)) ||
         !capture.image.expiresAt ||
         !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
         Date.parse(capture.image.expiresAt) <= Date.now()

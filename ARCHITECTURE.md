@@ -1473,17 +1473,16 @@ ZenX trigger message bubbles are a disposable UI projection: only the exact know
 
 ZenX's native macOS Computer provider owns an ephemeral, thread-scoped target
 session in its native helper: explicit window selection and scoped window
-capture bind the same retained AX window, while foreground input revalidates
-that binding after existing approval/arbitration. This host device-control state
+capture bind the same fresh CG window and OS process birth, with a retained AX window additionally required for foreground input after existing approval/arbitration. This host device-control state
 is not conversation truth, is never journaled or restored, and cannot authorize
-input without the existing foreground consent. Helper termination invalidates
+foreground input without the existing foreground consent. Helper termination invalidates
 all bindings; uncertain input is never automatically replayed. Its existing
 process owner retains stopping activity through failed termination requests until
 actual child/pipe close; only the native posted/unverified receipt records posted
 input, and closed sessions or invalidated in-flight captures cannot publish fresh
 bindings or screenshot authority.
 
-Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, active-session admission, PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
+Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, native scoped-session admission with fresh CG/SCK full-window geometry (including locked console sessions), PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
 
 The existing foreground presenter supplies only live, painted, mouse-ignoring
 edge-indicator native window IDs through a trusted main-only read projection;

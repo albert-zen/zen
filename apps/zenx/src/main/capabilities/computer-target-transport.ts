@@ -81,8 +81,9 @@ export class NativeComputerTargetTransport implements TargetTransport {
         background: request.operation === "backgroundClick",
         backgroundSettled: false,
         pairStarted: false,
-        expectsInputReceipt:
-          request.operation !== "select" && request.operation !== "verify",
+        expectsInputReceipt: !["select", "verify", "capture"].includes(
+          String(request.operation),
+        ),
       };
     });
     const stop = (message: string) =>

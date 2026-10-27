@@ -65,7 +65,7 @@
   "tools": [
     {
       "name": "computer_background_click",
-      "description": "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS active session only; uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
+      "description": "Left-click x/y image pixels of this thread's current exact-window screenshot without desktop activation, raising or pointer movement. Native macOS 14+ console session, including locked; requires a fresh full-window SCK screenshot and uses a runtime-checked window-local primitive and separate permission. Consumes the capture. Application-internal focus may change. Posted/release receipts do not verify application effect; never retry unknown input automatically.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -127,7 +127,7 @@
     },
     {
       "name": "computer_environment",
-      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Window capture and foreground input require an active session. This read does not wake, unlock, or operate another app.",
+      "description": "Read the current desktop session and power availability. lockedTools names this provider’s scoped capabilities while locked; re-inspect for fresh controls and treat native failures as failures. Only explicitly listed native scoped tools may work while locked; foreground input requires an active session. This read does not wake, unlock, or operate another app.",
       "inputSchema": {
         "type": "object",
         "properties": {},
