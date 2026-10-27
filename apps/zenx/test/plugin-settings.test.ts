@@ -131,6 +131,10 @@ test("Computer enablement first explains requested access and keeps OS setup exp
     /Capture a targeted window/u,
   );
   assert.match(dom.window.document.body.textContent ?? "", /Needs setup/u);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Session state unknown/u,
+  );
   assert.equal(accessProbes, 1);
   assert.match(
     dom.window.document.body.textContent ?? "",
@@ -306,6 +310,105 @@ test("Browser setup keeps ZenX independent and recognizes an Edge-only connector
   await act(async () => button("Open Browser settings").click());
   assert.deepEqual(openedGeneral, ["browser"]);
   await act(async () => root.unmount());
+});
+
+test("Computer access review treats locked, suspended, and unknown sessions as unavailable without changing access", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "https://zenx.local" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let sessionState: "active" | "locked" | "suspended" | "unknown" = "locked";
+  let reads = 0;
+  Object.defineProperty(dom.window, "zenx", {
+    configurable: true,
+    value: {
+      computerReadiness: {
+        probe: async () => {
+          reads += 1;
+          return {
+            platform: "win32",
+            accessibility: "not-applicable",
+            screenRecording: "not-applicable",
+            foregroundControlEnabled: false,
+            environment: {
+              platform: "win32",
+              sessionState,
+              revision: reads,
+              displayState: "unknown",
+              lockedUse: "unsupported",
+              keepAwake: "inactive",
+            },
+          };
+        },
+      },
+    },
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  const render = async () => {
+    await act(async () => {
+      root.render(
+        React.createElement(PluginAccessReview, {
+          pluginId: "computer",
+          permissions: [],
+        }),
+      );
+      await Promise.resolve();
+    });
+  };
+  await render();
+  assert.match(dom.window.document.body.textContent ?? "", /Session locked/u);
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Locked use is unsupported/u,
+  );
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Display off is separate from system sleep/u,
+  );
+  const refresh = () =>
+    [...dom.window.document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Refresh status",
+    )!;
+  sessionState = "suspended";
+  await act(async () => {
+    refresh().dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(dom.window.document.body.textContent ?? "", /System suspended/u);
+  sessionState = "unknown";
+  await act(async () => {
+    refresh().dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /Session state unknown/u,
+  );
+  assert.doesNotMatch(
+    dom.window.document.body.textContent ?? "",
+    /Session active/u,
+  );
+  assert.match(
+    dom.window.document.body.textContent ?? "",
+    /only during an active Computer operation/u,
+  );
+  sessionState = "active";
+  await act(async () => {
+    refresh().dispatchEvent(
+      new dom.window.MouseEvent("click", { bubbles: true }),
+    );
+    await Promise.resolve();
+  });
+  assert.match(dom.window.document.body.textContent ?? "", /Session active/u);
+  assert.equal(reads, 4);
+  await act(async () => root.unmount());
+  dom.window.close();
 });
 
 test("Browser status leaves Checking after a failed read and refreshes on return", async () => {

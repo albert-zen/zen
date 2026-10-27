@@ -619,6 +619,19 @@ export const en = {
   "pluginAccessReview.openScreenRecordingSettings":
     "Open Screen Recording settings",
   "pluginAccessReview.foregroundControl": "Foreground control",
+  "pluginAccessReview.computerSession": "Computer session",
+  "pluginAccessReview.session.active": "Session active",
+  "pluginAccessReview.session.locked": "Session locked",
+  "pluginAccessReview.session.suspended": "System suspended",
+  "pluginAccessReview.session.unknown": "Session state unknown",
+  "pluginAccessReview.sessionDetail":
+    "Locked use is unsupported. Display off is separate from system sleep; display power is not reported here.",
+  "pluginAccessReview.idlePrevention": "Idle prevention",
+  "pluginAccessReview.keepAwake.active-operation": "Active for this operation",
+  "pluginAccessReview.keepAwake.inactive": "Inactive",
+  "pluginAccessReview.keepAwake.unavailable": "Unavailable",
+  "pluginAccessReview.idlePreventionDetail":
+    "ZenX prevents app suspension only during an active Computer operation. It does not keep the display on or block system sleep.",
   "pluginAccessReview.openGeneralSettings": "Open General settings",
   "pluginAccessReview.completeMacosSetup": "Complete macOS setup",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
@@ -1902,6 +1915,19 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.screenRecording": "屏幕录制",
   "pluginAccessReview.openScreenRecordingSettings": "打开屏幕录制设置",
   "pluginAccessReview.foregroundControl": "前台控制",
+  "pluginAccessReview.computerSession": "电脑会话",
+  "pluginAccessReview.session.active": "会话可用",
+  "pluginAccessReview.session.locked": "会话已锁定",
+  "pluginAccessReview.session.suspended": "系统已休眠",
+  "pluginAccessReview.session.unknown": "会话状态未知",
+  "pluginAccessReview.sessionDetail":
+    "不支持在锁屏状态下使用。显示器熄灭与系统休眠是不同状态；这里不报告显示器供电状态。",
+  "pluginAccessReview.idlePrevention": "闲置期间保持运行",
+  "pluginAccessReview.keepAwake.active-operation": "本次操作期间生效",
+  "pluginAccessReview.keepAwake.inactive": "未启用",
+  "pluginAccessReview.keepAwake.unavailable": "不可用",
+  "pluginAccessReview.idlePreventionDetail":
+    "ZenX 仅在 Computer 操作进行时防止应用挂起；不会保持显示器亮起，也不会阻止系统休眠。",
   "pluginAccessReview.openGeneralSettings": "打开“通用”设置",
   "pluginAccessReview.completeMacosSetup": "完成 macOS 设置",
   "pluginAccessReview.inSystemSettingsPrivacySecurityAccessibilityTurnOnThe":
