@@ -39,3 +39,20 @@ Metadata polling can skip artifact verification explicitly. Opening artifacts ve
 Local capture does not redact body fields merely because they are named `password`, `token` or similar. Authentication credential header omission is explicit in request metadata (`authorization`, `proxy-authorization`, `x-api-key`, `api-key`). First-party requests currently send the configured key/access token as Authorization Bearer. Other headers, including cookies, are not silently omitted; there is no general body redaction. Credentials are not model-context content.
 
 External publication/export must be a **separate sanitized, reviewable copy**, never the private live Trace directory. The implementation has no automatic public export. Development fixtures are synthetic: no real credentials, user screenshots, private traces or real application state belong in GitHub.
+
+## UI activation and Host ingress
+
+A synchronous Composer/manual-retry handler captures a fresh renderer clock-domain,
+local monotonic time and wall time before asynchronous preparation. This is reported
+UI evidence, not proof of a human actor. A small native observation message can
+retain activation before Thread creation (the `ui-activations` Trace partition),
+without admitting input, starting a model sample or copying a message body.
+The actual input request separately carries that observation and receives an
+independent Host receipt clock. Client and Host clocks are never subtracted as
+network latency. An absent input receipt means unobserved, not safely cancelled.
+
+Native send/retry/queue edit/cancel/steer receipts retain exact admission outcomes.
+Accepted queue or cancellation is not model completion; ambiguous replies remain
+unknown. Malformed optional timing cannot change input authority. Capture failures
+are explicitly reported, but these passive observations neither authorize replay
+nor replace the durable control facts that govern admission.

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
+import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
 
 import {
   AppServerError,
@@ -35,13 +37,43 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
+import { compileItemList } from "../src/item-list.js";
+import { validateModelReferenceBindings } from "../src/model-references.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { Thread } from "../src/thread.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import { FileItemListStore } from "../src/item-list-store.js";
+import type { AuxiliaryModelOptions } from "../src/auxiliary-model.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
 
-const SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
+test("compaction fixtures distinguish request purpose from ordinary user text", () => {
+  const request: ModelRequest = {
+    model: "recording-model",
+    reasoningEffort: null,
+    messages: [{ role: "user", text: "ZEN_CONTEXT_COMPACTION_V1" }],
+    tools: [],
+    signal: new AbortController().signal,
+    debugContext: {
+      threadId: "thread",
+      turnId: "turn",
+      sampleId: "sample",
+      contextBoundaryItemId: "input",
+      sampleAttempt: 1,
+      purpose: "turn",
+    },
+  };
+  assert.equal(isSummaryRequest({}), false);
+  assert.equal(isSummaryRequest(request), false);
+  assert.equal(
+    isSummaryRequest({
+      debugContext: { ...request.debugContext!, purpose: "compaction" },
+    }),
+    true,
+  );
+});
 
 test("R1 regression: second reset selects admitted late steer by full-journal Turn identity", () => {
   const base = {
@@ -514,16 +546,42 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
     compaction.retainedItemIds.filter((id) => id === firstUserId),
     [firstUserId],
   );
-  assert(
-    requests[2]?.messages.some(
-      (message) =>
-        message.role === "user" &&
-        "text" in message &&
-        message.text.includes(
-          `zen-thread://${thread.id}/items?through=${compaction.coveredThroughItemId}`,
-        ),
-    ),
+  const semanticCompaction = snapshot.itemList?.find(
+    (item) => item.id === compaction.id,
   );
+  assert(semanticCompaction?.kind === "selection");
+  assert.deepEqual(
+    validateModelReferenceBindings(
+      semanticCompaction.source.metadata?.referenceBindings,
+    ),
+    [
+      {
+        ref: "s1",
+        ownerThreadId: thread.id,
+        namespace: "selected-reference",
+        kind: "history",
+        value: {
+          threadId: thread.id,
+          throughItemId: compaction.coveredThroughItemId,
+        },
+      },
+    ],
+    "short original-history reference must retain the exact owner and bounded source prefix",
+  );
+  assert.equal(
+    semanticCompaction.content.text,
+    "[Zen compacted context]\nhandwritten summary\n[Original conversation history; s1; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]",
+  );
+  assert.deepEqual(requests[2]?.messages[0], {
+    role: "user",
+    text: semanticCompaction.content.text,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(requests[2]?.messages),
+    /zen-thread:\/\//u,
+  );
+  assert(requests[2] !== undefined);
+  assertSampleMatchesStoredContext(requests[2], snapshot.itemList);
   assert(
     requests[2]?.messages.some(
       (message) =>
@@ -586,8 +644,10 @@ test("agentic compaction preserves user steering unseen by its model sample", as
     { role: "user", text: "[Zen compacted context]\ncontinuation" },
     {
       role: "user",
-      content: [{ type: "text", text: "new instruction" }],
-      userTimestamp: userTimestamps[1],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[1]}]` },
+        { type: "text", text: "new instruction" },
+      ],
     },
   ]);
 });
@@ -976,7 +1036,15 @@ test("agentic compaction accepts a sample following an active settings change", 
     },
   ]);
   assert.equal(snapshot.modelId, "other-model");
-  assert(requests.every((request) => request.model === "recording-model"));
+  assert.deepEqual(
+    requests.map((request) => request.model),
+    ["recording-model", "other-model", "other-model"],
+    "selection freezes per sample; the next sample must see the accepted settings update",
+  );
+  assert.deepEqual(
+    requests.map((request) => request.debugContext?.configuration?.model),
+    requests.map((request) => request.model),
+  );
   const restarted = createServer({ journal, model, modelCatalog });
   assert.deepEqual(
     compileModelMessages((await restarted.readThread(thread.id)).items),
@@ -1187,8 +1255,11 @@ test("agentic compaction stays off by default and mixed calls fail locally", asy
           (message) =>
             message.role === "user" &&
             "content" in message &&
-            message.content[0]?.type === "text" &&
-            message.content[0].text === "keep the original context",
+            message.content.some(
+              (part) =>
+                part.type === "text" &&
+                part.text === "keep the original context",
+            ),
         ),
       );
     });
@@ -1356,18 +1427,16 @@ test("agentic compaction abort and journal failure never admit another sample", 
   });
 });
 
-test("manually compacts long history without changing the complete transcript", async () => {
+test("manually compacts long history without changing the complete transcript", async (t) => {
   const requests: ModelRequest[] = [];
+  let verifyPersistedRequest:
+    ((request: ModelRequest) => Promise<void>) | undefined;
   const model: ModelAdapter = {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
+      await verifyPersistedRequest?.(request);
       requests.push(cloneRequest(request));
-      const latest = request.messages.at(-1);
-      if (
-        latest?.role === "user" &&
-        "text" in latest &&
-        latest.text.includes(SUMMARY_MARKER)
-      ) {
+      if (isSummaryRequest(request)) {
         yield { type: "text_delta", delta: "summary bytes\nkept verbatim" };
         yield { type: "usage", inputTokens: 101, outputTokens: 7 };
         return;
@@ -1375,8 +1444,44 @@ test("manually compacts long history without changing the complete transcript", 
       yield { type: "text_delta", delta: `answer-${String(requests.length)}` };
     },
   };
-  const journal = new InMemoryThreadJournal();
-  const server = createServer({ journal, model });
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-compaction-contract-"),
+  );
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  let journal = new DomainThreadJournal({
+    directory: path.join(directory, "threads"),
+    trace,
+    metadata: new InMemoryThreadMetadataStore(),
+  });
+  t.after(async () => {
+    await journal.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const itemListStore = new FileItemListStore(
+    path.join(directory, "auxiliary-context"),
+  );
+  const auxiliaryModel = { trace, itemListStore };
+  verifyPersistedRequest = async (request) => {
+    const identity = request.debugContext;
+    assert(identity !== undefined);
+    const stored = isSummaryRequest(request)
+      ? await itemListStore.read(identity.threadId)
+      : await journal.readItemList(identity.threadId);
+    assertSampleMatchesStoredContext(request, stored);
+    if (isSummaryRequest(request)) {
+      assert.match(identity.threadId, /^auxiliary-/u);
+      assert.equal(identity.turnId, null);
+      const facts = (await trace.read(identity.threadId)).records;
+      assert.deepEqual(
+        facts
+          .filter((fact) => fact.type === "context_source")
+          .map((fact) => (fact.data as { item: unknown }).item),
+        stored,
+        "exact summary inputs must be durable before adapter invocation",
+      );
+    }
+  };
+  const server = createServer({ journal, model, auxiliaryModel });
   const thread = await server.startThread();
   for (const input of ["first", "second", "third"]) {
     await (
@@ -1386,6 +1491,9 @@ test("manually compacts long history without changing the complete transcript", 
 
   const before = await server.readThread(thread.id);
   const beforeBytes = before.items.map((item) => JSON.stringify(item));
+  const sourceTraceBefore = (await trace.read(thread.id)).records.map(
+    (record) => JSON.stringify(record),
+  );
   const events: AppServerEvent[] = [];
   const unsubscribe = server.subscribe((event) => events.push(event));
   const result = await server.compactThread(thread.id, {
@@ -1399,6 +1507,13 @@ test("manually compacts long history without changing the complete transcript", 
       .slice(0, before.items.length)
       .map((item) => JSON.stringify(item)),
     beforeBytes,
+  );
+  assert.deepEqual(
+    (await trace.read(thread.id)).records
+      .slice(0, sourceTraceBefore.length)
+      .map((record) => JSON.stringify(record)),
+    sourceTraceBefore,
+    "compaction must not rewrite original source facts or observations",
   );
   const item = compacted.items.at(-1);
   assert(item?.type === "context_compaction");
@@ -1451,22 +1566,47 @@ test("manually compacts long history without changing the complete transcript", 
   assert.deepEqual(postCompactionRequest.messages, [
     {
       role: "user",
-      content: [{ type: "text", text: "third" }],
-      userTimestamp: userTimestamps[2],
-    },
-    { role: "assistant", text: "answer-3" },
-    {
-      role: "user",
       text: "[Zen compacted context]\nsummary bytes\nkept verbatim",
     },
     {
       role: "user",
-      content: [{ type: "text", text: "after compaction" }],
-      userTimestamp: userTimestamps[3],
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[2]}]` },
+        { type: "text", text: "third" },
+      ],
+    },
+    { role: "assistant", text: "answer-3" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `[Message received at ${userTimestamps[3]}]` },
+        { type: "text", text: "after compaction" },
+      ],
     },
   ]);
 
-  const transcript = projectThread(await server.readThread(thread.id), {
+  const after = await server.readThread(thread.id);
+  assertSampleMatchesStoredContext(postCompactionRequest, after.itemList);
+  const requestsBeforeColdRead = requests.length;
+  await journal.close();
+  journal = new DomainThreadJournal({
+    directory: path.join(directory, "threads"),
+    trace: new FileTraceStore(path.join(directory, "trace")),
+    metadata: new InMemoryThreadMetadataStore(),
+  });
+  const restarted = createServer({ journal, model, auxiliaryModel });
+  assert.deepEqual(
+    (await restarted.readThread(thread.id)).itemList,
+    after.itemList,
+    "cold replay must retain exact semantic contents, not regenerate roles or parts",
+  );
+
+  assert.equal(
+    requests.length,
+    requestsBeforeColdRead,
+    "cold reads must not invoke a provider",
+  );
+  const transcript = projectThread(after, {
     includeTurns: true,
   });
   assert.equal(transcript.turns.length, 4);
@@ -1492,12 +1632,11 @@ test("uses the configured context compaction prompt exactly", async () => {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(cloneRequest(request));
-      const latest = request.messages.at(-1);
-      if (
-        latest?.role === "user" &&
-        "text" in latest &&
-        latest.text === prompt
-      ) {
+      if (isSummaryRequest(request)) {
+        assert.deepEqual(request.messages.at(-1), {
+          role: "developer",
+          text: prompt,
+        });
         yield { type: "text_delta", delta: "custom summary" };
         return;
       }
@@ -1520,7 +1659,7 @@ test("uses the configured context compaction prompt exactly", async () => {
   assert(summaryRequest !== undefined);
   assert.deepEqual(summaryRequest.tools, []);
   assert.deepEqual(summaryRequest.messages.at(-1), {
-    role: "user",
+    role: "developer",
     text: prompt,
   });
   assert.equal(
@@ -2253,20 +2392,29 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   const thread = await server.startThread();
   const handle = await server.startTurn(thread.id, "one");
   await normalStarted.promise;
-  const updated = await server.updateThreadSettings(thread.id, {
-    model: "other-model",
-  });
-  assert.equal(updated.modelId, "other-model");
   releaseNormal.resolve();
-  await summaryStarted.promise;
+  await expectSummaryStarted(summaryStarted.promise, handle.done);
+  let updateSettled = false;
+  const update = server
+    .updateThreadSettings(thread.id, { model: "other-model" })
+    .then((snapshot) => {
+      updateSettled = true;
+      return snapshot;
+    });
   let handleSettled = false;
   void handle.done.then(() => {
     handleSettled = true;
   });
   await Promise.resolve();
   assert.equal(handleSettled, false);
+  assert.equal(
+    updateSettled,
+    false,
+    "the admitted auxiliary sample retains its frozen selection",
+  );
   releaseSummary.resolve();
   await handle.done;
+  assert.equal((await update).modelId, "other-model");
 
   const snapshot = await server.readThread(thread.id);
   const compacted = snapshot.items.find(
@@ -2280,6 +2428,80 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   assert.equal(compacted.modelId, "recording-model");
   assert.equal(compacted.reasoningEffort, "medium");
   assert.equal(compacted.initiator, "automatic");
+});
+
+test("automatic compaction resolves current model and window only when the auxiliary sample is admitted", async (t) => {
+  for (const contextWindow of [200, 1_000]) {
+    await t.test(`updated model window ${contextWindow}`, async () => {
+      const normalStarted = deferred<void>();
+      const releaseNormal = deferred<void>();
+      const normalSelections: string[] = [];
+      const summarySelections: string[] = [];
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          if (isSummaryRequest(request)) {
+            summarySelections.push(request.model);
+            yield { type: "text_delta", delta: "new model summary" };
+            return;
+          }
+          normalSelections.push(request.model);
+          if (normalSelections.length === 1) {
+            yield { type: "usage", inputTokens: 160, outputTokens: 1 };
+            normalStarted.resolve();
+            await releaseNormal.promise;
+          }
+          yield { type: "text_delta", delta: "answer" };
+        },
+      };
+      const journal = new InMemoryThreadJournal();
+      const server = createServer({
+        journal,
+        model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "recording-model", isDefault: true, contextWindow: 200 },
+          { id: "other-model", contextWindow },
+        ]),
+      });
+      const thread = await server.startThread();
+      const active = await server.startTurn(thread.id, "one");
+      await normalStarted.promise;
+      const updated = await server.updateThreadSettings(thread.id, {
+        model: "other-model",
+      });
+      assert.equal(updated.modelId, "other-model");
+      assert.deepEqual(normalSelections, ["recording-model"]);
+      releaseNormal.resolve();
+      await active.done;
+
+      const snapshot = await server.readThread(thread.id);
+      assert.equal(snapshot.turns[0]?.status, "completed");
+      const compactions = snapshot.items.filter(
+        (item) => item.type === "context_compaction",
+      );
+      if (contextWindow === 200) {
+        assert.deepEqual(summarySelections, ["other-model"]);
+        assert.equal(compactions.length, 1);
+        assert.equal(compactions[0]?.modelId, "other-model");
+        assert.equal(compactions[0]?.initiator, "automatic");
+      } else {
+        assert.deepEqual(summarySelections, []);
+        assert.deepEqual(
+          compactions,
+          [],
+          "the new larger window must not inherit the old model's trigger",
+        );
+      }
+      await (
+        await server.startTurn(thread.id, "two")
+      ).done;
+      assert.deepEqual(normalSelections, ["recording-model", "other-model"]);
+      assert.equal(
+        (await server.readThread(thread.id)).turns.at(-1)?.status,
+        "completed",
+      );
+    });
+  }
 });
 
 test("automatic compaction failure does not fail a completed Turn", async (t) => {
@@ -2809,7 +3031,7 @@ test("generation, abort, invalid summary, and journal failures append no compact
   const compaction = aborting.compactThread(abortThread.id, {
     signal: controller.signal,
   });
-  await summaryStarted.promise;
+  await expectSummaryStarted(summaryStarted.promise, compaction);
   controller.abort(new DOMException("stop", "AbortError"));
   await expectAppServerCode(compaction, "compaction_aborted");
   assert.equal(abortCalls, 1);
@@ -2944,7 +3166,7 @@ test("freezes the admitted Provider selection while a settings update waits", as
   const compaction = server.compactThread(thread.id, {
     includeOriginalReference: false,
   });
-  await summaryStarted.promise;
+  await expectSummaryStarted(summaryStarted.promise, compaction);
   let updateResolved = false;
   const update = server
     .updateThreadSettings(thread.id, { model: "other-model" })
@@ -2977,7 +3199,7 @@ test("agentic threshold gives one host notice before the same Turn continues", a
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(cloneRequest(request));
-      if (request.tools.length === 0) {
+      if (isSummaryRequest(request)) {
         yield { type: "text_delta", delta: "summary" };
         yield { type: "usage", inputTokens: 5, outputTokens: 1 };
         return;
@@ -3004,8 +3226,12 @@ test("agentic threshold gives one host notice before the same Turn continues", a
           ?.messages.some(
             (message) =>
               message.role === "user" &&
-              "text" in message &&
-              message.text.startsWith("[Host context notice]"),
+              "content" in message &&
+              message.content.some(
+                (part) =>
+                  part.type === "text" &&
+                  part.text.startsWith("[Host context notice]"),
+              ),
           ),
       );
       yield { type: "text_delta", delta: "continued" };
@@ -3034,8 +3260,12 @@ test("agentic threshold gives one host notice before the same Turn continues", a
       request.messages.some(
         (message) =>
           message.role === "user" &&
-          "text" in message &&
-          message.text.startsWith("[Host context notice]"),
+          "content" in message &&
+          message.content.some(
+            (part) =>
+              part.type === "text" &&
+              part.text.startsWith("[Host context notice]"),
+          ),
       ),
     ).length,
     1,
@@ -3055,7 +3285,7 @@ test("active Turn hard budget fallback compacts before the next model sample", a
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(cloneRequest(request));
-      if (request.tools.length === 0) {
+      if (isSummaryRequest(request)) {
         yield { type: "text_delta", delta: "summary" };
         yield { type: "usage", inputTokens: 5, outputTokens: 1 };
         return;
@@ -3108,6 +3338,8 @@ test("active Turn hard budget fallback compacts before the next model sample", a
   ).done;
 
   const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "completed");
+  assert.equal(samples, 3);
   assert(
     snapshot.items.some(
       (item) =>
@@ -3183,6 +3415,11 @@ test("agentic-off active compaction runs at the trigger threshold", async () => 
     await server.startTurn(thread.id, "active request")
   ).done;
   assert.equal(summaryCalls, 1);
+  assert.equal(normalSamples, 3);
+  assert.equal(
+    (await server.readThread(thread.id)).turns.at(-1)?.status,
+    "completed",
+  );
 });
 
 test("active compaction estimates the complete post-tool projection", async () => {
@@ -3306,8 +3543,10 @@ test("active host compaction preserves same-Turn late steering", async () => {
         request.messages.some(
           (message) =>
             message.role === "user" &&
-            "text" in message &&
-            message.text.includes("late steer"),
+            "content" in message &&
+            message.content.some(
+              (part) => part.type === "text" && part.text === "late steer",
+            ),
         ),
       );
       yield { type: "text_delta", delta: "finished" };
@@ -3326,13 +3565,18 @@ test("active host compaction preserves same-Turn late steering", async () => {
   ).done;
   const active = await server.startTurn(thread.id, "active request");
   activeTurnId = active.id;
-  await summaryStarted.promise;
+  await expectSummaryStarted(summaryStarted.promise, active.done);
   const steer = server.steerTurn(thread.id, activeTurnId, "late steer", {
     clientId: "late-steer",
   });
   releaseSummary.resolve();
   await steer;
   await active.done;
+  assert.equal(normalSamples, 3);
+  assert.equal(
+    (await server.readThread(thread.id)).turns.at(-1)?.status,
+    "completed",
+  );
 });
 
 test("active compaction preserves unknown journal outcomes and stop handling", async () => {
@@ -3433,7 +3677,7 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
       await server.startTurn(thread.id, "seed request")
     ).done;
     const active = await server.startTurn(thread.id, "active request");
-    await summaryStarted.promise;
+    await expectSummaryStarted(summaryStarted.promise, active.done);
     await server.interruptTurn(thread.id, active.id);
     await active.done;
     const snapshot = await server.readThread(thread.id);
@@ -3471,6 +3715,7 @@ function createServer(options: {
   modelCatalog?: ModelCatalog;
   runtime?: AgentRuntime;
   contextCompaction?: ContextCompactionConfig;
+  auxiliaryModel?: Pick<AuxiliaryModelOptions, "trace" | "itemListStore">;
 }): ZenAppServer {
   const modelCatalog =
     options.modelCatalog ??
@@ -3479,6 +3724,9 @@ function createServer(options: {
     ]);
   return new ZenAppServer({
     journal: options.journal,
+    ...(options.auxiliaryModel === undefined
+      ? {}
+      : { auxiliaryModel: options.auxiliaryModel }),
     runtime:
       options.runtime ??
       new HistoryBudgetRuntime({
@@ -3548,6 +3796,34 @@ function malformedCompactionShape(): Record<string, unknown> {
   };
 }
 
+function assertSampleMatchesStoredContext(
+  request: ModelRequest,
+  items: Awaited<ReturnType<ZenAppServer["readThread"]>>["itemList"],
+): void {
+  assert(
+    items !== undefined,
+    "Host sample must have persisted semantic ItemList",
+  );
+  const identity = request.debugContext;
+  assert(identity !== undefined);
+  assert(identity.selectedItemIds !== undefined);
+  const selected = new Set(identity.selectedItemIds);
+  const compiled = compileItemList(
+    items.filter((item) => selected.has(item.id)),
+    {
+      sampleId: identity.sampleId,
+      selection: {
+        providerProfileId: "recording",
+        modelId: request.model,
+      },
+      inputModalities: ["text"],
+    },
+  );
+  assert.deepEqual(compiled.selectedItemIds, identity.selectedItemIds);
+  assert.deepEqual(compiled.messages, request.messages);
+  assert.deepEqual(compiled.tools, request.tools);
+}
+
 function cloneRequest(request: ModelRequest): ModelRequest {
   return {
     model: request.model,
@@ -3555,6 +3831,9 @@ function cloneRequest(request: ModelRequest): ModelRequest {
     messages: structuredClone(request.messages),
     tools: structuredClone(request.tools),
     signal: request.signal,
+    ...(request.debugContext === undefined
+      ? {}
+      : { debugContext: structuredClone(request.debugContext) }),
     ...(request.sessionId === undefined
       ? {}
       : { sessionId: request.sessionId }),
@@ -3897,13 +4176,22 @@ function summaryModel(onSummary?: () => void): ModelAdapter {
   };
 }
 
-function isSummaryRequest(request: Pick<ModelRequest, "messages">): boolean {
-  const latest = request.messages.at(-1);
-  return (
-    latest?.role === "user" &&
-    "text" in latest &&
-    latest.text.includes(SUMMARY_MARKER)
-  );
+async function expectSummaryStarted(
+  started: Promise<void>,
+  operation: Promise<unknown>,
+): Promise<void> {
+  await Promise.race([
+    started,
+    operation.then(() => {
+      assert.fail("operation completed without entering its compaction sample");
+    }),
+  ]);
+}
+
+function isSummaryRequest(
+  request: Pick<ModelRequest, "debugContext">,
+): boolean {
+  return request.debugContext?.purpose === "compaction";
 }
 
 async function expectAppServerCode(

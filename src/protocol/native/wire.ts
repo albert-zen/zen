@@ -1,3 +1,4 @@
+import type { ClientSendObservation } from "../../client-observation.js";
 import type { AppServerEvent } from "../../app-server.js";
 import type {
   CreateChildThreadInput,
@@ -37,6 +38,8 @@ export interface NativeHostWakeupResult {
 /** Dedicated method makes older Hosts reject rather than ignore retry fencing. */
 export const NATIVE_TURN_RETRY_METHOD = "zen/turn/retry";
 export interface NativeTurnRetryParams {
+  /** Optional client-reported timing; never admission or execution authority. */
+  clientObservation?: ClientSendObservation;
   threadId: string;
   expectedTurnId: string;
   clientUserMessageId: string;
@@ -47,6 +50,8 @@ export interface NativeTurnRetryResult {
 }
 
 export interface NativeTurnSendParams {
+  /** Optional client-reported timing; never admission or execution authority. */
+  clientObservation?: ClientSendObservation;
   threadId: string;
   /** Omitted means soft steer active work, or start when idle. */
   mode?: "start" | "queue" | "batch-next" | "steer" | "replace";

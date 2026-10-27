@@ -37,36 +37,11 @@ export function replaceTrigger(
   };
 }
 
-export type Reference =
-  | {
-      kind: "file";
-      name: string;
-      cwd: string;
-      path: string;
-      /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
-      position?: number;
-    }
-  | {
-      kind: "thread";
-      name: string;
-      cwd: string;
-      id: string;
-      /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
-      position?: number;
-    }
-  | MessageQuoteReference;
-
-export interface MessageQuoteReference {
-  kind: "message";
-  name: string;
-  cwd: string;
-  /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
-  position?: number;
-  threadId: string;
-  id: string;
-  /** The exact browser-selected rendered text. */
-  excerpt: string;
-}
+export type {
+  Reference,
+  MessageQuoteReference,
+} from "../../../../../src/selected-reference-protocol.js";
+import type { Reference } from "../../../../../src/selected-reference-protocol.js";
 
 // JSON string quoting retains spaces, Unicode, newlines and punctuation without
 // giving display names or paths a second parser/authority in the conversation.

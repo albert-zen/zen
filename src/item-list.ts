@@ -86,6 +86,8 @@ export type ContextItem = ContextBase &
           coveredThroughItemId: string;
           coveredSequence: number;
           retainedItemIds: string[];
+          excludedItemIds?: string[];
+          excludedCallIds?: string[];
         };
       }
     | { kind: "tools"; role: "developer"; content: { tools: ModelTool[] } }
@@ -143,7 +145,10 @@ const metadataKeys = new Set([
   "generatedReference",
   "reasoningSummaryOnly",
   "mediaOccurrence",
+  "originalModelContentLength",
   "omittedMedia",
+  "summaryOffset",
+  "summaryLength",
 ]);
 
 /** Strict at the writer boundary: unknown runtime variants/fields cannot leak into ItemList. */
@@ -177,6 +182,12 @@ export function decodeContextItem(value: unknown): ContextItem {
     for (const key of Object.keys(metadata))
       if (!metadataKeys.has(key))
         throw new Error(`Nonsemantic source metadata: ${key}`);
+    for (const field of ["summaryOffset", "summaryLength"])
+      if (
+        metadata[field] !== undefined &&
+        (!Number.isSafeInteger(metadata[field]) || Number(metadata[field]) < 0)
+      )
+        throw Error(`Invalid ${field}`);
     if (metadata.omittedMedia !== undefined) {
       if (!Array.isArray(metadata.omittedMedia))
         throw Error("Invalid semantic media selection");
@@ -193,6 +204,36 @@ export function decodeContextItem(value: unknown): ContextItem {
           !/^[a-f0-9]{64}$/.test(entry.sha256)
         )
           throw Error("Invalid media occurrence");
+      }
+    }
+    if (
+      metadata.originalModelContentLength !== undefined &&
+      metadata.originalModelContentLength !== null &&
+      (!Number.isSafeInteger(metadata.originalModelContentLength) ||
+        Number(metadata.originalModelContentLength) < 0)
+    )
+      throw Error("Invalid original media part count");
+    if (metadata.mediaOccurrence !== undefined) {
+      if (!Array.isArray(metadata.mediaOccurrence))
+        throw Error("Invalid media provenance");
+      for (const value of metadata.mediaOccurrence) {
+        if (value === null) continue;
+        const entry = record(value, "mediaOccurrence");
+        keys(
+          entry,
+          ["itemId", "field", "partIndex", "sha256"],
+          "mediaOccurrence",
+        );
+        string(entry.itemId, "itemId", false);
+        if (entry.field !== "content" && entry.field !== "modelContent")
+          throw Error("Invalid media provenance field");
+        if (
+          !Number.isSafeInteger(entry.partIndex) ||
+          Number(entry.partIndex) < 0 ||
+          typeof entry.sha256 !== "string" ||
+          !/^[a-f0-9]{64}$/.test(entry.sha256)
+        )
+          throw Error("Invalid media provenance address");
       }
     }
     json(metadata, "source.metadata");
@@ -275,7 +316,14 @@ export function decodeContextItem(value: unknown): ContextItem {
     case "selection":
       keys(
         content,
-        ["text", "coveredThroughItemId", "coveredSequence", "retainedItemIds"],
+        [
+          "text",
+          "coveredThroughItemId",
+          "coveredSequence",
+          "retainedItemIds",
+          "excludedItemIds",
+          "excludedCallIds",
+        ],
         "selection.content",
       );
       if (item.role !== "user" || source.kind !== "context_compaction")
@@ -297,6 +345,16 @@ export function decodeContextItem(value: unknown): ContextItem {
         new Set(content.retainedItemIds).size !== content.retainedItemIds.length
       )
         throw new Error("Invalid retained semantic IDs");
+      for (const field of ["excludedItemIds", "excludedCallIds"]) {
+        const values = content[field];
+        if (
+          values !== undefined &&
+          (!Array.isArray(values) ||
+            values.some((id) => typeof id !== "string" || !id) ||
+            new Set(values).size !== values.length)
+        )
+          throw Error(`Invalid ${field}`);
+      }
       break;
     case "tools":
       keys(content, ["tools"], "tools.content");
@@ -361,6 +419,37 @@ export function compileItemList(
     selected = selected.filter(
       (item) => item.kind !== "selection" || item === selection,
     );
+    // The replacement summary introduces retained/suffix conversation content,
+    // even when an unseen user steer was admitted before the reset fact.
+    selected = [
+      ...selected.filter(
+        (item) => item.role === "system" || item.role === "developer",
+      ),
+      selection,
+      ...selected.filter(
+        (item) =>
+          item !== selection &&
+          item.role !== "system" &&
+          item.role !== "developer",
+      ),
+    ];
+  }
+  // Agent-authored resets also omit their own source response and receipt.
+  // These immutable selections remain in force after later compactions; they
+  // never remove raw facts or change an already observed sample.
+  for (const reset of validated) {
+    if (reset.kind !== "selection") continue;
+    const excluded = new Set(reset.content.excludedItemIds ?? []);
+    const calls = new Set(reset.content.excludedCallIds ?? []);
+    selected = selected.filter(
+      (item) =>
+        !excluded.has(item.id) &&
+        !(
+          item.turnId === reset.turnId &&
+          (item.kind === "tool_call" || item.kind === "tool_result") &&
+          calls.has(item.content.callId)
+        ),
+    );
   }
   selected = selected.filter(
     (item) =>
@@ -411,7 +500,10 @@ export function compileItemList(
   const projectParts = (item: ContextItem, content: UserInput): UserInput =>
     content.flatMap<UserInput[number]>((part, index) => {
       if (part.type === "text") return [structuredClone(part)];
-      const origin = {
+      const origin = ((Array.isArray(item.source.metadata?.mediaOccurrence)
+        ? item.source.metadata.mediaOccurrence[index]
+        : undefined) as
+        import("./item.js").RecoveryMediaOccurrence | undefined) ?? {
         itemId: item.id,
         field:
           item.kind === "tool_result"

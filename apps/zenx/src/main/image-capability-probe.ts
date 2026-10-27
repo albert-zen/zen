@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
+import type { AttachmentStore } from "../../../../src/attachment.js";
+import { OpenAiCompatibleModel } from "../../../../src/model/openai-compatible.js";
 
-import type { AttachmentRef } from "../../../../src/attachment.js";
-import {
-  OpenAiCompatibleModel,
-  OpenAiCompatibleModelError,
-} from "../../../../src/model/openai-compatible.js";
+import { OpenAiResponsesModel } from "../../../../src/model/openai-responses.js";
+import { streamAuxiliaryModel } from "../../../../src/auxiliary-model.js";
+import type { FileItemListStore } from "../../../../src/item-list-store.js";
+import type { RuntimeTrace } from "../../../../src/trace.js";
 
 export type ImageCapabilityProbeOutcome =
   "supported" | "unsupported" | "inconclusive";
@@ -15,16 +15,13 @@ const PROBE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
-const PROBE_REF: AttachmentRef = Object.freeze({
-  type: "attachment",
-  sha256: createHash("sha256").update(PROBE_PNG).digest("hex"),
-  mediaType: "image/png",
-  byteLength: PROBE_PNG.byteLength,
-  width: 1,
-  height: 1,
-});
 
 export async function probeOpenAiCompatibleImage(options: {
+  trace: RuntimeTrace;
+  attachments: Pick<AttachmentStore, "importBytes" | "read">;
+  itemListStore: Pick<FileItemListStore, "create">;
+  protocol?: "chat-completions" | "responses";
+  assertDispatchAllowed?: () => void;
   baseUrl: string;
   apiKey: string;
   provider: string;
@@ -34,22 +31,43 @@ export async function probeOpenAiCompatibleImage(options: {
 }): Promise<ImageCapabilityProbeOutcome> {
   const controller = new AbortController();
   const signal = options.signal ?? controller.signal;
-  const adapter = new OpenAiCompatibleModel({
+  const probeRef = await options.attachments.importBytes(
+    PROBE_PNG,
+    "image/png",
+  );
+  const Adapter =
+    options.protocol === "responses"
+      ? OpenAiResponsesModel
+      : OpenAiCompatibleModel;
+  const adapter = new Adapter({
     baseUrl: options.baseUrl,
     apiKey: options.apiKey,
     provider: options.provider,
-    defaultParams: { max_tokens: 1 },
+    defaultParams:
+      options.protocol === "responses"
+        ? { max_output_tokens: 1 }
+        : { max_tokens: 1 },
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-    attachments: {
-      read: async (ref) => {
-        if (ref.sha256 !== PROBE_REF.sha256)
-          throw new Error("Unknown probe image");
-        return PROBE_PNG;
-      },
-    },
+    attachments: options.attachments,
   });
+  let prepared = false;
   try {
-    for await (const _event of adapter.stream({
+    for await (const _event of streamAuxiliaryModel({
+      adapter,
+      trace: options.trace,
+      itemListStore: options.itemListStore,
+      purpose: "image-probe",
+      onPrepared: () => {
+        prepared = true;
+      },
+      inputModalities: ["text", "image"],
+      ...(options.assertDispatchAllowed === undefined
+        ? {}
+        : { assertDispatchAllowed: options.assertDispatchAllowed }),
+      configuration: {
+        baseUrl: options.baseUrl,
+        protocol: options.protocol ?? "chat-completions",
+      },
       model: options.model,
       reasoningEffort: "medium",
       messages: [
@@ -57,7 +75,7 @@ export async function probeOpenAiCompatibleImage(options: {
           role: "user",
           content: [
             { type: "text", text: "Reply OK." },
-            { type: "image", attachment: PROBE_REF },
+            { type: "image", attachment: probeRef },
           ],
         },
       ],
@@ -68,14 +86,18 @@ export async function probeOpenAiCompatibleImage(options: {
     }
     return "supported";
   } catch (error) {
+    if (!prepared) throw error;
     return isExplicitImageUnsupported(error) ? "unsupported" : "inconclusive";
   }
 }
 
 function isExplicitImageUnsupported(error: unknown): boolean {
-  if (!(error instanceof OpenAiCompatibleModelError) || error.kind !== "http") {
+  if (
+    !(error instanceof Error) ||
+    !("status" in error) ||
+    typeof error.status !== "number"
+  )
     return false;
-  }
   if (
     error.status === 401 ||
     error.status === 402 ||
@@ -88,5 +110,8 @@ function isExplicitImageUnsupported(error: unknown): boolean {
   ) {
     return false;
   }
-  return error.explicitlyRejectsImageInput;
+  return (
+    "explicitlyRejectsImageInput" in error &&
+    error.explicitlyRejectsImageInput === true
+  );
 }

@@ -7,6 +7,14 @@ import {
   type JsonValue,
   type UserInput,
 } from "./item.js";
+import {
+  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  itemsAfterLatestAgenticCompaction,
+} from "./context-compaction.js";
+import {
+  compileSelectedReferenceInput,
+  compileOriginalHistoryReference,
+} from "./selected-reference-input.js";
 import { recordedUserTimestamps } from "./model.js";
 import { recoveryContext } from "./loop-recovery.js";
 import {
@@ -74,6 +82,12 @@ export function contextItemsFromLegacy(
     case "user_message": {
       metadata.inputShape = item.content === undefined ? "text" : "content";
       metadata.bodyStart = 1;
+      const selected = compileSelectedReferenceInput(item, existingContext);
+      if (selected !== undefined) {
+        metadata.generatedReference = true;
+        metadata.referenceBindings =
+          selected.referenceBindings as unknown as JsonValue;
+      }
       const timestamp =
         recordedUserTimestamps([...previous, item]).get(item.id) ?? null;
       return message("user", [
@@ -84,7 +98,7 @@ export function contextItemsFromLegacy(
               ? "[Message receipt time unavailable]"
               : `[Message received at ${timestamp}]`,
         },
-        ...contentFromUserMessage(item),
+        ...(selected?.parts ?? contentFromUserMessage(item)),
       ]);
     }
     case "host_message":
@@ -135,6 +149,76 @@ export function contextItemsFromLegacy(
       );
       if (call?.type === "tool_call" && call.parentCallId !== undefined)
         return [];
+      const parts = [...(item.modelContent ?? [])];
+      const origins: JsonValue[] = parts.map((part, index) =>
+        part.type === "text"
+          ? null
+          : {
+              itemId: item.id,
+              field: "modelContent",
+              partIndex: index,
+              sha256: part.attachment.sha256,
+            },
+      );
+      const parents = new Map(
+        previous.flatMap((candidate) =>
+          candidate.type === "tool_call" &&
+          candidate.turnId === item.turnId &&
+          candidate.parentCallId !== undefined
+            ? [[candidate.callId, candidate.parentCallId] as const]
+            : [],
+        ),
+      );
+      const seen = new Set(
+        parts.flatMap((part) =>
+          part.type === "text"
+            ? []
+            : [`${part.type}:${part.attachment.sha256}`],
+        ),
+      );
+      for (const candidate of previous) {
+        if (
+          candidate.type !== "tool_result" ||
+          candidate.turnId !== item.turnId
+        )
+          continue;
+        let parent = parents.get(candidate.callId);
+        const visited = new Set<string>();
+        while (
+          parent !== undefined &&
+          parent !== item.callId &&
+          !visited.has(parent)
+        ) {
+          visited.add(parent);
+          parent = parents.get(parent);
+        }
+        if (parent !== item.callId) continue;
+        for (const [index, part] of (candidate.modelContent ?? []).entries()) {
+          if (
+            part.type !== "text" &&
+            seen.has(`${part.type}:${part.attachment.sha256}`)
+          )
+            continue;
+          parts.push(part);
+          origins.push(
+            part.type === "text"
+              ? null
+              : {
+                  itemId: candidate.id,
+                  field: "modelContent",
+                  partIndex: index,
+                  sha256: part.attachment.sha256,
+                },
+          );
+          if (part.type !== "text")
+            seen.add(`${part.type}:${part.attachment.sha256}`);
+        }
+      }
+      if (parts.length !== (item.modelContent?.length ?? 0)) {
+        metadata.mediaOccurrence = origins;
+        metadata.originalModelContentLength =
+          item.modelContent === undefined ? null : item.modelContent.length;
+      }
       const prefix =
         item.exitCode === null
           ? "Outcome: unknown\n"
@@ -150,9 +234,9 @@ export function contextItemsFromLegacy(
             callId: item.callId,
             text: prefix + item.output,
             exitCode: item.exitCode,
-            ...(item.modelContent === undefined
+            ...(parts.length === 0 && item.modelContent === undefined
               ? {}
-              : { parts: item.modelContent }),
+              : { parts }),
           },
         }),
       ];
@@ -163,7 +247,9 @@ export function contextItemsFromLegacy(
         (candidate) =>
           candidate.type === "turn_started" && candidate.turnId === item.turnId,
       );
-      if (start?.type === "turn_started" && start.selection !== undefined)
+      if ("selection" in item && item.selection !== undefined)
+        metadata.selection = { ...item.selection };
+      else if (start?.type === "turn_started" && start.selection !== undefined)
         metadata.selection = { ...start.selection };
       if (item.reasoningContent === undefined)
         metadata.reasoningSummaryOnly = true;
@@ -223,6 +309,33 @@ export function contextItemsFromLegacy(
             ).length > 0,
         ),
       );
+      const reference = compileOriginalHistoryReference(item, existingContext);
+      if (reference)
+        metadata.referenceBindings =
+          reference.referenceBindings as unknown as JsonValue;
+      metadata.summaryOffset = CONTEXT_COMPACTION_SUMMARY_PREFIX.length;
+      metadata.summaryLength = item.summary.length;
+      const eligible = new Set(
+        itemsAfterLatestAgenticCompaction([...previous, item]).map(
+          (candidate) => candidate.id,
+        ),
+      );
+      const exclusions =
+        item.provenance === "agentic"
+          ? {
+              excludedItemIds: previous
+                .slice(coveredIndex + 1)
+                .filter((candidate) => !eligible.has(candidate.id))
+                .map((candidate) => candidate.id),
+              excludedCallIds: previous.flatMap((candidate) =>
+                candidate.type === "tool_call" &&
+                candidate.turnId === item.turnId &&
+                candidate.modelResponseId === item.sourceModelResponseId
+                  ? [candidate.callId]
+                  : [],
+              ),
+            }
+          : {};
       return [
         decodeContextItem({
           ...base,
@@ -230,7 +343,8 @@ export function contextItemsFromLegacy(
           kind: "selection",
           role: "user",
           content: {
-            text: item.summary,
+            text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${reference ? `\n${reference.text}` : ""}`,
+            ...exclusions,
             coveredThroughItemId: item.coveredThroughItemId,
             coveredSequence,
             retainedItemIds,
@@ -299,7 +413,15 @@ export function legacyItemFromContext(
     typeof metadata.bodyStart === "number" ? metadata.bodyStart : 0;
   const inputShape = metadata.inputShape;
   const selection = metadata.selection;
+  if (metadata.generatedReference === true) return undefined; // Original submission belongs to the source log, not this compiled projection.
+  const summaryOffset =
+    typeof metadata.summaryOffset === "number" ? metadata.summaryOffset : 0;
+  const summaryLength =
+    typeof metadata.summaryLength === "number"
+      ? metadata.summaryLength
+      : undefined;
   const summaryOnly = metadata.reasoningSummaryOnly === true;
+  const originalModelContentLength = metadata.originalModelContentLength;
   for (const key of [
     "bodyStart",
     "inputShape",
@@ -308,6 +430,10 @@ export function legacyItemFromContext(
     "onlySampleId",
     "category",
     "generatedReference",
+    "mediaOccurrence",
+    "originalModelContentLength",
+    "summaryOffset",
+    "summaryLength",
   ])
     delete metadata[key];
   Object.assign(base, metadata, { type: kind });
@@ -335,14 +461,23 @@ export function legacyItemFromContext(
         output: item.content.text.slice(bodyStart),
         exitCode: item.content.exitCode,
       },
-      ...(item.content.parts === undefined
+      ...(item.content.parts === undefined ||
+      originalModelContentLength === null
         ? []
-        : [{ modelContent: item.content.parts }]),
+        : [
+            {
+              modelContent:
+                typeof originalModelContentLength === "number"
+                  ? item.content.parts?.slice(0, originalModelContentLength)
+                  : item.content.parts,
+            },
+          ]),
     );
     for (const key of ["contentType", "structuredContent"])
       if (annotation[key] !== undefined)
         base[key] = structuredClone(annotation[key]);
   } else if (item.kind === "reasoning") {
+    if (selection !== undefined) base.selection = selection;
     if (summaryOnly) base.summary = item.content.summary;
     else
       Object.assign(
@@ -362,8 +497,12 @@ export function legacyItemFromContext(
           : [{ providerItemId: item.content.providerItemId }]),
       );
   } else if (item.kind === "selection") {
+    delete base.referenceBindings;
     Object.assign(base, {
-      summary: item.content.text,
+      summary: item.content.text.slice(
+        summaryOffset,
+        summaryLength === undefined ? undefined : summaryOffset + summaryLength,
+      ),
       coveredThroughItemId: item.content.coveredThroughItemId,
       retainedItemIds: item.content.retainedItemIds,
     });

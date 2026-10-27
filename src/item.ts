@@ -442,6 +442,8 @@ export type ReasoningItem =
       /** Stable provider identity retained only when its adapter requires replay. */
       providerItemId?: string;
       opaqueReplayProvenance?: OpaqueReasoningReplayProvenance;
+      /** Exact producing sample selection, not the mutable current Turn choice. */
+      selection?: CanonicalProviderSelection;
     })
   /** Existing summary-only journals remain readable without a rewrite. */
   | (ItemBase & {
@@ -1165,6 +1167,11 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "reasoning":
       requireTurnId(item, type);
+      if (item.selection !== undefined)
+        validateSelection(
+          requireRecord(item.selection, "reasoning.selection"),
+          "reasoning.selection",
+        );
       if (item.incomplete !== undefined && item.incomplete !== true) {
         throw new Error("reasoning.incomplete must be true when present");
       }

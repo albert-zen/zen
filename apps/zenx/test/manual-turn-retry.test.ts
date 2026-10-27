@@ -30,7 +30,7 @@ test("manual retry coalesces main/side duplicate clicks with one stable request 
   const duplicate = retry(thread, thread.turns[0]!.id);
   assert.equal(first, duplicate);
   await Promise.resolve();
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.map(withoutObservation), [
     {
       threadId: thread.id,
       expectedTurnId: thread.turns[0]!.id,
@@ -65,7 +65,11 @@ test("ambiguous retry failure retains request identity and never reads or rewrit
   const before = structuredClone(draft);
   await assert.rejects(retry(thread, thread.turns[0]!.id), /disconnected/);
   await retry(thread, thread.turns[0]!.id);
-  assert.deepEqual(calls[0], calls[1]);
+  assert.deepEqual(withoutObservation(calls[0]), withoutObservation(calls[1]));
+  assert.notDeepEqual(
+    (calls[0] as { clientObservation: unknown }).clientObservation,
+    (calls[1] as { clientObservation: unknown }).clientObservation,
+  );
   assert.equal(ids, 1);
   assert.deepEqual(draft, before);
 });
@@ -121,10 +125,22 @@ test("retry freezes localized continuation language across ambiguous acknowledge
     calls.map(({ language }) => language),
     ["zh-CN", "zh-CN"],
   );
-  assert.deepEqual(calls[0], calls[1]);
+  assert.deepEqual(withoutObservation(calls[0]), withoutObservation(calls[1]));
+  assert.notDeepEqual(
+    (calls[0] as { clientObservation: unknown }).clientObservation,
+    (calls[1] as { clientObservation: unknown }).clientObservation,
+  );
   assert.equal(
     "input" in calls[0]!,
     false,
     "unsent composer input is never a retry parameter",
   );
 });
+
+function withoutObservation(value: unknown) {
+  const { clientObservation: _observation, ...semantic } = value as Record<
+    string,
+    unknown
+  >;
+  return semantic;
+}

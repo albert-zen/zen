@@ -1,3 +1,4 @@
+import { recordTraceObservation } from "../../../src/trace-observation.js";
 import { FileItemListStore } from "../../../src/item-list-store.js";
 import { FileTraceStore, type RuntimeTrace } from "../../../src/trace.js";
 import {
@@ -60,7 +61,10 @@ import {
 } from "../../../src/tool-output-spool.js";
 import type { ToolPresentation } from "../../../src/tool-presentation.js";
 import { ViewImageToolRuntime } from "../../../src/view-image.js";
-import { OpenAiSubscriptionAuthProfile } from "./subscription-auth.js";
+import {
+  OpenAiSubscriptionAuthProfile,
+  type SubscriptionSessionEvent,
+} from "./subscription-auth.js";
 import { legacyModelCatalogEntries } from "./model-presets.js";
 
 export type HostProvider =
@@ -351,7 +355,11 @@ export function createHostedAppServer(
     let closeTransportPromise: Promise<void> | undefined;
     const closeProviderTransport = async () => {
       closeTransportPromise ??= (async () => {
-        const toolResults = await Promise.allSettled([toolEnvironment.close()]);
+        const stopping = appServer.stopActiveTurns();
+        const toolResults = await Promise.allSettled([
+          toolEnvironment.close(),
+          stopping,
+        ]);
         const results = [
           ...toolResults,
           ...(await Promise.allSettled([
@@ -547,6 +555,7 @@ function createProviderResource(
   trace: RuntimeTrace,
 ): ProviderResource {
   const fetch = createProviderFetch(profile.transport);
+  const authObservationId = `authentication-${randomUUID()}`;
   let closePromise: Promise<void> | undefined;
   try {
     const adapter = createModel(
@@ -554,6 +563,13 @@ function createProviderResource(
       fetch,
       attachments,
       onStreamFailure,
+      async (event) => {
+        await recordTraceObservation(trace, {
+          threadId: authObservationId,
+          type: "authentication_session_observed",
+          data: { providerProfileId: profile.providerProfileId, ...event },
+        });
+      },
     );
     return {
       providerProfileId: profile.providerProfileId,
@@ -580,6 +596,53 @@ interface InternalConfigurationCandidate {
   readonly options: ZenHostOptions;
   readonly resources: Map<string, ProviderResource>;
   readonly prepared: PreparedRuntimeConfiguration;
+}
+
+/** Nonsecret settings evidence; profile/credential stores retain external authority. */
+function observableHostConfiguration(
+  options: ZenHostOptions,
+): Record<string, unknown> {
+  const profiles =
+    options.providers ??
+    (options.provider === undefined
+      ? []
+      : [
+          {
+            providerProfileId: providerRuntimeIdentity(options.provider),
+            provider: options.provider,
+            model: options.model,
+            modelCatalog: options.modelCatalog,
+          },
+        ]);
+  return {
+    defaultSelection: options.defaultSelection ?? null,
+    approvalPolicy: options.approvalPolicy,
+    toolPresentation: options.toolPresentation ?? "both",
+    contextCompaction: options.contextCompaction ?? null,
+    maxToolRounds: options.maxToolRounds ?? null,
+    maxConcurrentToolBodies: options.maxConcurrentToolBodies ?? null,
+    providers: profiles.map((profile) => {
+      const provider = profile.provider;
+      const endpoint =
+        provider.type === "openai-compatible"
+          ? new URL(provider.baseUrl)
+          : undefined;
+      return {
+        providerProfileId: profile.providerProfileId,
+        type: provider.type,
+        protocol:
+          provider.type === "openai-compatible"
+            ? (provider.protocol ?? "chat-completions")
+            : null,
+        endpoint:
+          endpoint === undefined
+            ? null
+            : `${endpoint.origin}${endpoint.pathname}`,
+        model: profile.model ?? null,
+        modelIds: profile.modelCatalog?.map((model) => model.id) ?? [],
+      };
+    }),
+  };
 }
 
 class HostRuntimeConfiguration {
@@ -625,6 +688,14 @@ class HostRuntimeConfiguration {
       processEpoch: this.processEpoch,
       revision: options.initialRevision,
       pendingRestart: [],
+    });
+    void recordTraceObservation(this.#trace, {
+      threadId: `configuration-${this.processEpoch}`,
+      type: "host_configuration_observed",
+      data: {
+        phase: "startup",
+        configuration: observableHostConfiguration(options.initialOptions),
+      },
     });
   }
 
@@ -727,6 +798,16 @@ class HostRuntimeConfiguration {
       current: this.#current,
     });
     this.#pending = undefined;
+    void recordTraceObservation(this.#trace, {
+      threadId: `configuration-${this.processEpoch}`,
+      type: "host_configuration_published",
+      data: {
+        previous: observableHostConfiguration(previousOptions),
+        current: observableHostConfiguration(this.#currentOptions),
+        revision: this.#current.revision,
+        pendingRestart: this.#current.pendingRestart,
+      },
+    });
     return structuredClone(this.#current);
   }
 
@@ -1019,6 +1100,7 @@ function createModel(
   fetch: typeof globalThis.fetch,
   attachments: AttachmentStore,
   onStreamFailure?: ReturnType<typeof createModelDiagnosticWriter>,
+  onSessionEvent?: (event: SubscriptionSessionEvent) => Promise<void>,
 ): ModelAdapter {
   if (provider.type === "fake") {
     return new FakeModel();
@@ -1026,6 +1108,7 @@ function createModel(
   if (provider.type === "openai-subscription") {
     const profile = new OpenAiSubscriptionAuthProfile(provider.profilePath, {
       fetch,
+      ...(onSessionEvent === undefined ? {} : { onSessionEvent }),
     });
     return new OpenAiSubscriptionModel({
       acquireAccessLease: async (signal) =>

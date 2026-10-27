@@ -1,3 +1,7 @@
+import {
+  observeSendActivation,
+  reportSendActivation,
+} from "./send-observation.js";
 import { i18n } from "./i18n.js";
 import type { Thread } from "../../protocol-client/index.js";
 
@@ -51,11 +55,12 @@ export function createManualTurnRetryRequester(
       requests.set(key, request);
     }
     const current = request;
+    const clientObservation = observeSendActivation("retry");
     // Defer dispatch until pending is installed so synchronous duplicate clicks
     // across main/side viewports share exactly one request and one identity.
     current.pending = Promise.resolve()
       .then(async () => {
-        const result = await send({ ...current.params });
+        const result = await send({ ...current.params, clientObservation });
         if (typeof result?.turnId !== "string" || result.turnId.length === 0)
           throw new Error(i18n.t("shell:manualRetryUnconfirmed"));
         current.accepted = true;
@@ -68,6 +73,10 @@ export function createManualTurnRetryRequester(
 }
 
 /** Shared by main and side viewports; composer text/images/selection are untouched. */
-export const requestManualTurnRetry = createManualTurnRetryRequester((params) =>
-  window.zenx.protocol.request("zen/turn/retry", params),
+export const requestManualTurnRetry = createManualTurnRetryRequester(
+  (params) => {
+    if (params.clientObservation)
+      reportSendActivation(params.clientObservation, params.threadId);
+    return window.zenx.protocol.request("zen/turn/retry", params);
+  },
 );

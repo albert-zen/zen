@@ -240,3 +240,39 @@ test("live revocation records prepared/blocked, never dispatched", async (t) => 
     false,
   );
 });
+
+test("semantic bundle write failure keeps committed source facts but never dispatches or retries", async (t) => {
+  const f = await fixture(t);
+  let fetches = 0;
+  const adapter = {
+    provider: "synthetic",
+    async *stream() {
+      fetches++;
+    },
+  };
+  await assert.rejects(async () => {
+    for await (const _event of streamAuxiliaryModel({
+      ...f,
+      itemListStore: {
+        create: async () => {
+          throw new Error("Synthetic bundle failure");
+        },
+      },
+      adapter,
+      purpose: "title",
+      model: "model",
+      reasoningEffort: null,
+      signal: new AbortController().signal,
+      messages: [{ role: "user", text: "Input" }],
+      tools: [],
+    })) {
+    }
+  }, /Synthetic bundle failure/u);
+  assert.equal(fetches, 0);
+  const ids = await f.trace.listThreadIds();
+  assert.equal(ids.length, 1);
+  const records = (await f.trace.read(ids[0]!)).records;
+  assert.equal(records.length, 2);
+  assert.ok(records.every((record) => record.type === "context_source"));
+  assert.deepEqual(await f.itemListStore.listThreadIds(), []);
+});

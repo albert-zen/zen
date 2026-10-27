@@ -1,3 +1,4 @@
+import type { RuntimeTrace, TraceEvent } from "../src/trace.js";
 import assert from "node:assert/strict";
 import os from "node:os";
 import test from "node:test";
@@ -65,6 +66,7 @@ const image = () => ({
 });
 function createServer(
   options: {
+    trace?: RuntimeTrace;
     journal?: InMemoryThreadJournal;
     attachments?: InMemoryAttachmentStore;
     runtime?: AgentRuntime;
@@ -79,6 +81,14 @@ function createServer(
     },
   };
   return new ZenAppServer({
+    ...(options.trace === undefined
+      ? {}
+      : {
+          auxiliaryModel: {
+            trace: options.trace,
+            itemListStore: { create: async () => {} },
+          },
+        }),
     journal: options.journal ?? new InMemoryThreadJournal(),
     attachments: options.attachments ?? new InMemoryAttachmentStore(),
     runtime:
@@ -879,6 +889,208 @@ test("inline bytes cannot admit an uninitialized, missing, archived or deleted t
     assert.deepEqual(await journal.read("missing"), []);
     assert(imports > 0); // Imported orphan bytes do not imply queue admission.
   } finally {
+    client.close();
+  }
+});
+
+test("client activation, independent Host receipt and rejected admission are Trace-only facts", async () => {
+  const observations: TraceEvent[] = [];
+  const trace: RuntimeTrace = {
+    async record(event) {
+      observations.push(event);
+      return {
+        durability: "durable",
+        recordId: String(observations.length),
+        sequence: observations.length,
+        sync: "file",
+      };
+    },
+  };
+  const server = createServer({ trace });
+  const client = connect(server);
+  try {
+    result(await client.rpc("zen/initialize"));
+    const thread = await server.startThread();
+    const clientObservation = {
+      requestId: "synthetic-click",
+      action: "send",
+      clock: {
+        domain: "renderer-synthetic",
+        monotonicNs: "1",
+        wallTime: "2099-01-01T00:00:00.000Z",
+      },
+    };
+    result(
+      await client.rpc("zen/trace/client-activation", {
+        observation: clientObservation,
+      }),
+    );
+    assert.equal(observations[0]?.threadId, "ui-activations");
+    const reply = await client.rpc("zen/turn/send", {
+      threadId: thread.id,
+      clientUserMessageId: "synthetic-client",
+      input: [],
+      clientObservation,
+    });
+    assert("error" in reply);
+    const received = observations.find(
+      (e) => e.type === "client_request_received",
+    )!;
+    const facts = received.data as {
+      clientObservation: unknown;
+      hostReceived: { domain: string; wallTime: string };
+      requestId: string;
+    };
+    assert.deepEqual(facts.clientObservation, clientObservation);
+    assert.notEqual(facts.hostReceived.domain, clientObservation.clock.domain);
+    assert.notEqual(
+      facts.hostReceived.wallTime,
+      clientObservation.clock.wallTime,
+    );
+    const finished = observations.find(
+      (e) => e.type === "client_request_finished",
+    )!.data as { requestId: string; outcome: string };
+    assert.equal(finished.requestId, facts.requestId);
+    assert.equal(finished.outcome, "rejected");
+    assert(!observations.some((e) => e.type.startsWith("model_")));
+    assert.equal(
+      (await server.readThread(thread.id)).items.filter(
+        (e) => e.type === "user_message",
+      ).length,
+      0,
+    );
+  } finally {
+    client.close();
+  }
+});
+
+test("malformed optional client clocks cannot change admission; failed activation capture is explicit", async () => {
+  const observations: TraceEvent[] = [];
+  const trace: RuntimeTrace = {
+    async record(event) {
+      observations.push(event);
+      return { durability: "degraded", error: "synthetic disk failure" };
+    },
+  };
+  const server = createServer({ trace });
+  const client = connect(server);
+  const original = console.error;
+  console.error = () => {};
+  try {
+    result(await client.rpc("zen/initialize"));
+    const thread = await server.startThread();
+    const activation = result<{ observed: boolean }>(
+      await client.rpc("zen/trace/client-activation", {
+        observation: {
+          requestId: "click",
+          action: "send",
+          clock: {
+            domain: "renderer",
+            monotonicNs: "1",
+            wallTime: "2026-01-01T00:00:00Z",
+          },
+        },
+      }),
+    );
+    assert.equal(activation.observed, false);
+    const finished = event(server, "turn_completed");
+    const admission = result<NativeTurnSendResult>(
+      await client.rpc("zen/turn/send", {
+        ...send(thread.id, "malformed-clock", text("synthetic"), "start"),
+        clientObservation: { clock: { monotonicNs: "not a clock" } },
+      }),
+    );
+    assert(admission.turnId);
+    await finished;
+    const received = observations.find(
+      (e) => e.type === "client_request_received",
+    )!.data as Record<string, unknown>;
+    assert.equal(received.clientObservationStatus, "invalid");
+    assert.equal(received.clientObservation, undefined);
+    assert.equal(
+      (await server.readThread(thread.id)).items.filter(
+        (e) => e.type === "user_message",
+      ).length,
+      1,
+    );
+  } finally {
+    console.error = original;
+    client.close();
+  }
+});
+
+test("queued and cancelled input receipts create no pretend sample or execution completion", async () => {
+  const observations: TraceEvent[] = [];
+  const gate = deferred();
+  const entered = deferred();
+  let calls = 0;
+  const server = createServer({
+    trace: {
+      async record(event) {
+        observations.push(event);
+        return {
+          durability: "durable",
+          recordId: String(observations.length),
+          sequence: observations.length,
+          sync: "file",
+        };
+      },
+    },
+    model: {
+      provider: "synthetic-queue",
+      async *stream() {
+        calls++;
+        entered.resolve();
+        await gate.promise;
+        yield { type: "text_delta", delta: "done" };
+      },
+    },
+  });
+  const client = connect(server);
+  try {
+    result(await client.rpc("zen/initialize"));
+    const thread = await server.startThread();
+    const active = await server.startTurn(thread.id, text("active"));
+    await entered.promise;
+    const queued = result<NativeTurnSendResult>(
+      await client.rpc(
+        "zen/turn/send",
+        send(thread.id, "queued-observed", text("queued"), "queue"),
+      ),
+    );
+    assert.equal(queued.admission?.state, "queued");
+    result(
+      await client.rpc("zen/thread/queue/cancel", {
+        threadId: thread.id,
+        items: [
+          {
+            clientId: "queued-observed",
+            queuedItemId: queued.admission!.queuedItemId,
+          },
+        ],
+      }),
+    );
+    assert.equal(calls, 1);
+    const receipts = observations
+      .filter((e) => e.type === "client_request_finished")
+      .map(
+        (e) => e.data as { outcome: string; result: Record<string, unknown> },
+      );
+    assert.equal(receipts.length, 2);
+    assert(receipts.every((e) => e.outcome === "accepted"));
+    assert.equal(
+      (receipts[0]!.result.admission as { state: string }).state,
+      "queued",
+    );
+    assert.equal(
+      (receipts[1]!.result.results as Array<{ status: string }>)[0]!.status,
+      "cancelled",
+    );
+    gate.resolve();
+    await active.done;
+    assert.equal(calls, 1);
+  } finally {
+    gate.resolve();
     client.close();
   }
 });

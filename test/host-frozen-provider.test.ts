@@ -196,6 +196,22 @@ for (const mode of ["edit", "delete-readd", "delete-after-dispatch"] as const)
     }
     assert.equal(JSON.stringify(records).includes("synthetic-old-key"), false);
     assert.equal(JSON.stringify(records).includes("synthetic-new-key"), false);
+    await host.closeHostResources();
+    const globalIds = (await trace.listThreadIds()).filter((id) =>
+      id.startsWith("configuration-"),
+    );
+    assert.equal(globalIds.length, 1);
+    const changes = (await trace.read(globalIds[0]!)).records;
+    assert(
+      changes.some((record) => record.type === "host_configuration_observed"),
+    );
+    assert.equal(
+      changes.filter((record) => record.type === "host_configuration_published")
+        .length,
+      mode === "delete-readd" ? 2 : 1,
+    );
+    assert.equal(JSON.stringify(changes).includes("synthetic-old-key"), false);
+    assert.equal(JSON.stringify(changes).includes("synthetic-new-key"), false);
     const observed = records.filter(
       (record) => record.type === "model_request_dispatched",
     );

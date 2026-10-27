@@ -1,3 +1,4 @@
+import { compileItemList } from "../src/item-list.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -157,7 +158,11 @@ test("public runtime seam executes isolated JavaScript, nested shell, and explic
   const model: ModelAdapter = {
     provider: "tracer",
     async *stream(request): AsyncIterable<ModelEvent> {
-      requests.push(structuredClone(request));
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      });
       sample += 1;
       if (sample === 1) {
         yield {
@@ -185,6 +190,8 @@ test("public runtime seam executes isolated JavaScript, nested shell, and explic
       await server.startTurn(thread.id, "run tracer")
     ).done;
     const snapshot = await server.readThread(thread.id);
+    assert.equal(snapshot.turns.at(-1)?.status, "completed");
+    assert(snapshot.itemList);
     const outer = snapshot.items.find(
       (item) => item.type === "tool_call" && item.callId === "outer-call",
     );
@@ -246,7 +253,7 @@ test("public runtime seam executes isolated JavaScript, nested shell, and explic
     );
     assert.deepEqual(
       requests[1]?.messages,
-      compileModelMessages(snapshot.items).slice(0, -1),
+      compileItemList(snapshot.itemList).messages.slice(0, -1),
     );
     assert.equal(
       requests[1]?.messages.some(
@@ -1164,7 +1171,11 @@ test("experimental shell presentation reduces direct model input while run_code 
   const model: ModelAdapter = {
     provider: "rtk-compat",
     async *stream(request): AsyncIterable<ModelEvent> {
-      requests.push(structuredClone(request));
+      requests.push({
+        ...request,
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+      });
       if (requests.length === 1)
         yield {
           type: "tool_call",

@@ -15,7 +15,12 @@ function profile(provider: string): ProviderProfile {
       },
     },
     modelCatalog: new StaticModelCatalog([
-      { id: "model", isDefault: true, contextWindow: 32768, defaultReasoningEffort: "medium" },
+      {
+        id: "model",
+        isDefault: true,
+        contextWindow: 32768,
+        defaultReasoningEffort: "medium",
+      },
     ]),
   };
 }
@@ -35,7 +40,12 @@ test("ordinary profile edits preserve frozen resource; delete/re-add permanently
     modelId: "model",
   });
   assert.equal(next.adapter.provider, "new-endpoint");
-  registry.publishSnapshot(registry.prepareSnapshot([{...profile("other"), providerProfileId: "other"}], 2));
+  registry.publishSnapshot(
+    registry.prepareSnapshot(
+      [{ ...profile("other"), providerProfileId: "other" }],
+      2,
+    ),
+  );
   assert.throws(() => old.assertDispatchAllowed(), /revoked/);
   assert.throws(() => next.assertDispatchAllowed(), /revoked/);
   registry.publishSnapshot(

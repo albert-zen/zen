@@ -70,6 +70,7 @@ try {
       const image = await attachments.importBytes(png1x1(), "image/png");
       let hostSequence = 0,
         runtimeSequence = 0;
+      let nextHostIdentity;
       let phase = "seed";
       let capturedRaw, capturedModelRequest;
       const dispatchBodies = [];
@@ -142,6 +143,7 @@ try {
       const wrapped = {
         provider: adapter.provider,
         requestPayloadFormat: adapter.requestPayloadFormat,
+        contextInstructions: adapter.contextInstructions,
         async *stream(request) {
           if (phase === "capture")
             capturedModelRequest = {
@@ -187,12 +189,24 @@ try {
           sandbox: "read-only",
           approvalPolicy: "always",
         },
-        idFactory: () => `synthetic-host-${++hostSequence}`,
+        idFactory: () => {
+          if (nextHostIdentity) {
+            const id = nextHostIdentity;
+            nextHostIdentity = undefined;
+            return id;
+          }
+          return `synthetic-host-generated-${++hostSequence}`;
+        },
         now: () => timestamp,
       });
+      // Preserve existing synthetic source/Turn identities while the compiler
+      // allocates its own additional instruction Items between operations.
+      nextHostIdentity = "synthetic-host-1";
       const target = await server.startThread();
+      nextHostIdentity = "synthetic-host-3";
       const source = await server.startThread();
       await metadata.setName(source.id, fixture.threadTitle);
+      nextHostIdentity = "synthetic-host-5";
       await (
         await server.sendMessage(source.id, fixture.sourcePrompt, {
           clientId: "synthetic-source-submission",
@@ -203,6 +217,7 @@ try {
         (item) => item.type === "agent_message",
       );
       assert.equal(sourceMessage.text, fixture.fullMessage);
+      nextHostIdentity = "synthetic-host-7";
       const child = await server.createChildThread({
         parentThreadId: target.id,
         mode: "fresh",
@@ -278,6 +293,7 @@ try {
       ];
       phase = "capture";
       const nativeInput = await prepareNativeInput(wireInput, server);
+      nextHostIdentity = "synthetic-host-9";
       await (
         await server.sendMessage(target.id, nativeInput, {
           clientId: submission.clientUserMessageId,
@@ -288,17 +304,55 @@ try {
       const userMessage = saved.find((item) => item.type === "user_message");
       assert.deepEqual(userMessage.content, nativeInput);
       assert.equal(userMessage.clientId, fixture.clientId);
-      const last = (captured.messages ?? captured.input).at(-1);
-      const textParts = last.content.filter((part) =>
+      const last = (captured.messages ?? captured.input).find(
+        (message) =>
+          message.role === "user" &&
+          (typeof message.content === "string"
+            ? message.content.includes(canonicalText)
+            : message.content.some((part) => part.text === canonicalText)),
+      );
+      assert.ok(
+        last,
+        "the exact submitted user input is present, not a later Host instruction",
+      );
+      const contentParts = Array.isArray(last.content)
+        ? last.content
+        : [{ type: "text", text: last.content }];
+      const textParts = contentParts.filter((part) =>
         ["text", "input_text"].includes(part.type),
       );
-      assert.equal(textParts[1].text, canonicalText);
-      if (variant === "with-image")
+      const actualText = textParts.map((part) => part.text).join("\n");
+      assert.equal(
+        actualText,
+        `[Message received at ${userMessage.createdAt}]\n${canonicalText}`,
+      );
+      const compiledUser = capturedModelRequest.messages.find(
+        (message) =>
+          message.role === "user" &&
+          message.content?.some(
+            (part) => part.type === "text" && part.text === canonicalText,
+          ),
+      );
+      assert.ok(compiledUser);
+      const compiledText = compiledUser.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
+      assert.equal(
+        actualText,
+        compiledText,
+        "actual provider text equals compiler-prepared user parts, including the recorded receipt",
+      );
+      const media = contentParts.filter(
+        (part) => !["text", "input_text"].includes(part.type),
+      );
+      if (variant === "with-image") {
+        assert.equal(media.length, 1);
         assert.equal(
-          last.content[2].type,
+          media[0].type,
           format === "chat-completions" ? "image_url" : "input_image",
         );
-      else assert.equal(last.content.length, 2);
+      } else assert.equal(media.length, 0);
       assert(!capturedRaw.includes("FILE_CONTENT_NOT_INCLUDED"));
       assert(!capturedRaw.includes("THREAD_CONTENT_NOT_INCLUDED"));
       assert.equal(
@@ -373,6 +427,8 @@ try {
         sourceMessageId: sourceMessage.id,
         requestCount: 1,
         assertions: "passed",
+        originalInputUnchanged: true,
+        recordedReceiptInCompilerAndWire: true,
         networkRequests: 0,
       });
       await server.closeRuntimeConfiguration();

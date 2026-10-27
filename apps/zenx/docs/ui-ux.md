@@ -796,3 +796,8 @@ styles or scripts, and editor scrolling stays inside its bounded pane.
 - 本机原始内容仅省略认证 headers 的 API Key，不 broadly redact body；导出清理另行处理。元数据索引不声称已验证所有 artifacts，逐次读取校验原始 hash/length；部分/损坏/缺失显示未知与原因，同时保留已知事实。
 - Trace IPC 仅允许 owned ZenX window 的 main frame、精确 renderer URL，拒绝 webview/subframe/foreign window/origin。All local 范围明示含辅助 title/probe，不能为了日志制造假用户消息或隐藏 chat Thread。
 - UI 验收必须使用生产组件、合成数据、精确 source/bundle SHA 的真实截图与原始 lifecycle receipt。JSDOM、HTML bundle 和未运行 CI 不等于视觉通过；未完成截图不能合并。
+
+发送时间线保留 UI handler 在任何异步准备前取得的 renderer-reported activation，
+与 Host 实际收到请求的时刻分开。UI/tool 入口不等于已验证的“真人操作”。
+新建 Thread 前的点击只是一条本机 Trace 观察，不制造空 Thread、用户消息或模型请求。
+独立观察无法送达或写入失败须显式报告；没有 Host 收件/采样记录只能显示未观测。

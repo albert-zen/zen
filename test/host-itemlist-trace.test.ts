@@ -66,6 +66,37 @@ test("actual Host logs source facts before semantic compile/dispatch and restart
       const sample = records.findLast(
         (r) => r.type === "model_sample_started",
       )!;
+      for (const stage of [
+        "context_preparation",
+        "context_materialize",
+        "context_compile",
+      ]) {
+        const started = records.findLast(
+          (record) =>
+            record.sampleId === sample.sampleId &&
+            record.type === `${stage}_started`,
+        );
+        const finished = records.findLast(
+          (record) =>
+            record.sampleId === sample.sampleId &&
+            record.type === `${stage}_finished`,
+        );
+        assert(started && finished, `${stage} must finish before actual fetch`);
+        const startData = started.data as { spanId: string };
+        const finishData = finished.data as {
+          spanId: string;
+          outcome: string;
+          elapsedNs: string;
+        };
+        assert.equal(finishData.spanId, startData.spanId);
+        assert.equal(finishData.outcome, "completed");
+        assert(BigInt(finishData.elapsedNs) >= 0n);
+        assert.equal(started.clock.domain, finished.clock.domain);
+        assert(
+          BigInt(started.clock.monotonicNs) <=
+            BigInt(finished.clock.monotonicNs),
+        );
+      }
       const compiled = compileItemList(items, {
         sampleId: sample.sampleId!,
         selection: {

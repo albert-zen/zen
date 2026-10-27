@@ -73,13 +73,26 @@ test("Host bootstrap, trigger and room defaults soft steer a busy Turn with hone
   }
   await active.done;
   assert.equal(f.requests.length, 2);
-  assert.equal(
+  assert.deepEqual(
     f.requests[1]!.messages.filter(
-      (m) =>
-        "text" in m &&
-        m.text?.includes("not a human message or new authorization"),
-    ).length,
-    3,
+      (message) =>
+        message.role === "user" &&
+        "content" in message &&
+        message.content.some(
+          (part) =>
+            part.type === "text" && part.text.startsWith("[Host-supplied "),
+        ),
+    ),
+    ["bootstrap", "trigger", "room"].map((source) => ({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `[Host-supplied ${source} context, not a human message or new authorization.]`,
+        },
+        { type: "text", text: `${source} context` },
+      ],
+    })),
   );
   assert.equal((await f.server.readThread(target.id)).turns.length, 1);
 });
@@ -335,7 +348,16 @@ test("Host wake retains target approval and waits for the whole tool boundary", 
     assert.equal(requests.length, 2);
     const messages = requests[1]!.messages;
     const correction = messages.findIndex(
-      (m) => "text" in m && m.text?.includes("correction"),
+      (message) =>
+        message.role === "user" &&
+        "content" in message &&
+        message.content.some(
+          (part) => part.type === "text" && part.text === "correction",
+        ),
+    );
+    assert.ok(
+      correction >= 0,
+      "the admitted Host correction must reach the first safe sample",
     );
     assert.equal(
       messages.slice(0, correction).filter((m) => m.role === "tool").length,

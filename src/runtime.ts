@@ -1,3 +1,8 @@
+import { compileItemList } from "./item-list.js";
+import {
+  contextForFacts,
+  prepareSampleContext,
+} from "./context-preparation.js";
 import {
   createToolTraceCapture,
   readKnownToolResult,
@@ -63,15 +68,12 @@ import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
   AGENTIC_CONTEXT_COMPACTION_TOOL,
   AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-  compactionSummaryText,
   normalizeContextCompactionConfig,
   planCompactionRetention,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
 } from "./context-compaction.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 import {
-  compileModelMessages,
-  compileWorkspaceInstructionMessages,
   type ModelAdapter,
   type ModelMessage,
   type ModelTool,
@@ -1138,6 +1140,11 @@ export class AgentRuntime {
               type: "reasoning",
               reasoningContent: event.reasoningContent,
               contentVisibility: event.contentVisibility,
+              selection: {
+                providerProfileId: sampleConfiguration.providerProfileId,
+                modelId: sampleConfiguration.model,
+                reasoningEffort: sampleConfiguration.reasoningEffort,
+              },
               ...(event.summary === undefined
                 ? {}
                 : { summary: event.summary }),
@@ -1576,18 +1583,45 @@ export class AgentRuntime {
           if (cutoff < 0)
             throw new Error("Context compaction sample boundary is missing");
           const boundaryItem = options.thread.items[cutoff]!;
-          const summaryTokens = estimateModelMessageInputTokens([
-            {
-              role: "user",
-              text: compactionSummaryText(compaction),
-            },
+          const projected = (facts: readonly CanonicalItem[]) => {
+            const itemList = contextForFacts(facts, options.thread.itemList);
+            const sampleId = `${refreshed.id}-estimate`;
+            const additions = prepareSampleContext({
+              threadId: options.thread.id,
+              turnId: toolCall.turnId,
+              sampleId,
+              items: facts,
+              itemList,
+              sandbox: options.configuration.sandbox,
+              ...(options.modelAdapter.contextInstructions === undefined
+                ? {}
+                : { instructions: options.modelAdapter.contextInstructions }),
+              tools: this.projectToolPresentation(facts, true).modelTools,
+              ...(workspaceInstructions === undefined
+                ? {}
+                : { workspaceInstructions }),
+              inputModalities: options.configuration.inputModalities ?? null,
+              id: this.#id,
+              now: this.#now,
+            });
+            return compileItemList([...itemList, ...additions], {
+              sampleId,
+              selection: {
+                providerProfileId: options.configuration.providerProfileId,
+                modelId: options.configuration.model,
+              },
+              inputModalities: options.configuration.inputModalities ?? null,
+            });
+          };
+          const baseProjection = projected([
+            ...options.thread.items,
+            refreshed,
           ]);
-          const instructionTokens = estimateModelInput(
-            compileWorkspaceInstructionMessages(workspaceInstructions),
-            this.projectToolPresentation(options.thread.items, true).modelTools,
-            options.modelAdapter.contextInstructions,
+          const baseTokens = estimateModelInput(
+            baseProjection.messages,
+            baseProjection.tools,
           ).total;
-          if (summaryTokens + instructionTokens > configuration.contextWindow) {
+          if (baseTokens > configuration.contextWindow) {
             throw new Error(
               "Compacted context and repository instructions exceed the selected model context window",
             );
@@ -1600,33 +1634,33 @@ export class AgentRuntime {
               retainedItemIds: [],
             },
             {
-              retainedTokenBudget:
-                configuration.contextWindow - summaryTokens - instructionTokens,
+              retainedTokenBudget: configuration.contextWindow - baseTokens,
               retention,
               estimateRetainedTokens: (retainedItems) =>
                 estimateModelMessageInputTokens(
-                  projectModelMessages(
-                    compileModelMessages(retainedItems),
-                    options.configuration.inputModalities,
-                  ),
+                  compileItemList(
+                    contextForFacts(retainedItems, options.thread.itemList),
+                    {
+                      selection: {
+                        providerProfileId:
+                          options.configuration.providerProfileId,
+                        modelId: options.configuration.model,
+                      },
+                      inputModalities:
+                        options.configuration.inputModalities ?? null,
+                    },
+                  ).messages,
                 ),
             },
           );
           refreshed.retainedItemIds = planned.retainedItemIds;
+          const fullProjection = projected([
+            ...options.thread.items,
+            refreshed,
+          ]);
           const fullProjectionTokens = estimateModelInput(
-            projectModelMessages(
-              compileModelMessages(
-                [...options.thread.items, refreshed],
-                undefined,
-                workspaceInstructions,
-              ),
-              options.configuration.inputModalities,
-            ),
-            this.projectToolPresentation(
-              [...options.thread.items, refreshed],
-              true,
-            ).modelTools,
-            options.modelAdapter.contextInstructions,
+            fullProjection.messages,
+            fullProjection.tools,
           ).total;
           if (fullProjectionTokens > configuration.contextWindow) {
             throw new Error(

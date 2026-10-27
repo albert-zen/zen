@@ -4,6 +4,7 @@ export const clientRequestMethods = [
   "zen/initialize",
   "zen/thread/message",
   "zen/turn/send",
+  "zen/trace/client-activation",
   "zen/turn/retry",
   "zen/turn/wake",
   "zen/turn/send-unarchived",

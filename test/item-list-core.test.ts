@@ -289,3 +289,203 @@ test("steered user contents select after the complete observed tool batch withou
   assert.equal(JSON.stringify(context), serialized);
   assert.equal(compiled.messages.at(-1)?.role, "user");
 });
+
+test("opaque reasoning uses exact producing sample selection after an in-flight settings edit", () => {
+  const start: CanonicalItem = {
+    id: "start",
+    threadId: "t",
+    turnId: "turn",
+    createdAt: "2026-10-27T00:00:00Z",
+    type: "turn_started",
+    selection: {
+      providerProfileId: "p",
+      modelId: "old",
+      reasoningEffort: null,
+    },
+  };
+  const reasoning: CanonicalItem = {
+    id: "reason",
+    threadId: "t",
+    turnId: "turn",
+    createdAt: "2026-10-27T00:00:01Z",
+    type: "reasoning",
+    reasoningContent: "opaque-bytes",
+    contentVisibility: "opaque",
+    selection: {
+      providerProfileId: "p",
+      modelId: "new",
+      reasoningEffort: null,
+    },
+    opaqueReplayProvenance: {
+      version: 1,
+      adapter: "public-responses",
+      endpointSha256: "a".repeat(64),
+    },
+  };
+  const items = contextItemsFromLegacy(reasoning, [start]);
+  assert.equal(
+    compileItemList(items, {
+      selection: { providerProfileId: "p", modelId: "old" },
+    }).messages.length,
+    0,
+  );
+  const compiled = compileItemList(items, {
+    selection: { providerProfileId: "p", modelId: "new" },
+  });
+  assert.equal(compiled.messages[0]?.role, "reasoning");
+  assert.deepEqual(legacyItemFromContext(items[0]!)?.type, "reasoning");
+});
+
+test("nested media is committed in the outer semantic receipt with exact child occurrence provenance", async () => {
+  const base = {
+    threadId: "t",
+    turnId: "turn",
+    createdAt: "2026-10-27T00:00:00Z",
+  };
+  const media = {
+    type: "image" as const,
+    attachment: {
+      type: "attachment" as const,
+      sha256: "a".repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 68,
+      width: 1,
+      height: 1,
+    },
+  };
+  const facts: CanonicalItem[] = [
+    {
+      ...base,
+      id: "root",
+      type: "tool_call",
+      callId: "root-call",
+      name: "run_code",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child",
+      type: "tool_call",
+      callId: "child-call",
+      parentCallId: "root-call",
+      name: "observe",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child-result",
+      type: "tool_result",
+      callId: "child-call",
+      output: "image observed",
+      exitCode: 0,
+      modelContent: [media],
+    },
+  ];
+  const result: CanonicalItem = {
+    ...base,
+    id: "root-result",
+    type: "tool_result",
+    callId: "root-call",
+    output: "program finished",
+    exitCode: 0,
+  };
+  const semantic = contextItemsFromLegacy(result, facts);
+  const compiled = compileItemList(semantic, {
+    inputModalities: ["text", "image"],
+  });
+  const { sampledMediaOccurrences } = await import("../src/loop-recovery.js");
+  assert.deepEqual(
+    sampledMediaOccurrences([...facts, result], compiled.messages, [
+      "text",
+      "image",
+    ]),
+    [
+      {
+        itemId: "child-result",
+        field: "modelContent",
+        partIndex: 0,
+        sha256: media.attachment.sha256,
+      },
+    ],
+  );
+  assert.equal(legacyItemFromContext(semantic[0]!)?.type, "tool_result");
+  assert.equal("modelContent" in legacyItemFromContext(semantic[0]!)!, false);
+});
+
+test("agentic reset persists exact source exclusions, keeps unseen steering and never restores reset receipts", () => {
+  const facts: CanonicalItem[] = [
+    { ...base, id: "user", type: "user_message", text: "old" },
+    {
+      ...base,
+      id: "reason",
+      type: "reasoning",
+      reasoningContent: "discard",
+      summary: "discard",
+      contentVisibility: "public",
+    },
+    { ...base, id: "response", type: "agent_message", text: "discard" },
+    {
+      ...base,
+      id: "call",
+      type: "tool_call",
+      callId: "compact",
+      name: "compact_context",
+      arguments: {},
+      modelResponseId: "response",
+    },
+    { ...base, id: "steer", type: "user_message", text: "unseen" },
+    {
+      ...base,
+      id: "reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      initiator: "agent",
+      algorithmVersion: "zen.context-compaction.agentic.v2",
+      coveredThroughItemId: "user",
+      sourceModelResponseId: "response",
+      callId: "compact",
+      retainedItemIds: [],
+      includeOriginalReference: false,
+      summary: "  exact continuation  ",
+    },
+    {
+      ...base,
+      id: "receipt",
+      type: "tool_result",
+      callId: "compact",
+      output: "working context reset",
+      exitCode: 0,
+    },
+  ];
+  const items: ContextItem[] = [];
+  for (const [index, fact] of facts.entries())
+    items.push(
+      ...contextItemsFromLegacy(fact, facts.slice(0, index), index, items),
+    );
+  const frozen = JSON.stringify(items);
+  const selected = compileItemList(items);
+  assert.deepEqual(selected.selectedItemIds, ["reset", "steer"]);
+  assert.deepEqual(selected.messages[0], {
+    role: "user",
+    text: "[Zen compacted context]\n  exact continuation  ",
+  });
+  const reset = items.find((item) => item.id === "reset")!;
+  assert.equal(reset.kind, "selection");
+  if (reset.kind !== "selection") throw Error("selection expected");
+  assert.deepEqual(reset.content.excludedCallIds, ["compact"]);
+  assert.deepEqual(reset.content.excludedItemIds, [
+    "reason",
+    "response",
+    "call",
+  ]);
+  assert.deepEqual(compileItemList(JSON.parse(frozen)), selected);
+  assert.equal(JSON.stringify(items), frozen);
+  assert.equal(
+    (
+      legacyItemFromContext(reset, contextAnnotationFromLegacy(facts[5]!)) as {
+        summary: string;
+      }
+    ).summary,
+    "  exact continuation  ",
+  );
+});

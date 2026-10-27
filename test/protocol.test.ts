@@ -7,6 +7,9 @@ import test from "node:test";
 import { png1x1, shellPrintCommand } from "./fixtures.js";
 
 import { createHostedAppServer } from "../apps/cli/src/host.js";
+import { FileItemListStore } from "../src/item-list-store.js";
+import { FileTraceStore } from "../src/trace.js";
+import { decodeCanonicalItem } from "../src/item.js";
 import { ZenAppServer } from "../src/app-server.js";
 import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
@@ -3103,17 +3106,44 @@ test("CLI executes one full local protocol turn", async () => {
       "hello CLI",
     ]);
     assert.equal(echo.stderr, "");
-    assert.match(echo.stdout, /Echo: hello CLI/);
-    const [persistedThreadFile] = await readdir(
-      path.join(temporaryDirectory, "threads"),
+    const itemListStore = new FileItemListStore(
+      path.join(temporaryDirectory, "threads", "items"),
     );
-    if (
-      persistedThreadFile === undefined ||
-      !persistedThreadFile.endsWith(".jsonl")
-    ) {
-      throw new Error("CLI did not persist the expected Thread journal");
-    }
-    const persistedThreadId = persistedThreadFile.slice(0, -".jsonl".length);
+    const persistedThreads = await itemListStore.listThreadIds();
+    assert.equal(
+      persistedThreads.length,
+      1,
+      "CLI must persist exactly one semantic Thread",
+    );
+    const persistedThreadId = persistedThreads[0]!;
+    const trace = new FileTraceStore(path.join(temporaryDirectory, "trace"));
+    const assertEcho = async (stdout: string, prompt: string) => {
+      const stored = await itemListStore.read(persistedThreadId);
+      const user = stored.findLast(
+        (item) => item.source.kind === "user_message",
+      );
+      assert(user?.kind === "message" && user.role === "user");
+      const facts = (await trace.read(persistedThreadId)).records
+        .filter((record) => record.type === "runtime_item")
+        .map((record) =>
+          decodeCanonicalItem((record.data as { item: unknown }).item),
+        );
+      const input = facts.findLast((item) => item.type === "user_message");
+      assert(input?.type === "user_message");
+      assert.deepEqual(input.content, [{ type: "text", text: prompt }]);
+      assert.deepEqual(user.content.parts, [
+        { type: "text", text: `[Message received at ${input.createdAt}]` },
+        { type: "text", text: prompt },
+      ]);
+      assert.equal(stdout, `Echo: ${user.content.text}\n`);
+      const completed = facts.findLast(
+        (item) => item.type === "turn_completed",
+      );
+      assert(completed?.type === "turn_completed");
+      assert.equal(completed.turnId, input.turnId);
+      assert.equal(completed.status, "completed");
+    };
+    await assertEcho(echo.stdout, "hello CLI");
 
     for (const [options, expected] of [
       [["--approval", "always", "--approve"], /approvalPolicy does not match/u],
@@ -3143,7 +3173,7 @@ test("CLI executes one full local protocol turn", async () => {
       "different-model",
       "resume with a different model",
     ]);
-    assert.match(switchedModel.stdout, /Echo: resume with a different model/u);
+    await assertEcho(switchedModel.stdout, "resume with a different model");
 
     const switchedFromCatalog = await executeCli([
       "run",
@@ -3157,9 +3187,9 @@ test("CLI executes one full local protocol turn", async () => {
       "fake,different-model",
       "resume with a host model catalog",
     ]);
-    assert.match(
+    await assertEcho(
       switchedFromCatalog.stdout,
-      /Echo: resume with a host model catalog/u,
+      "resume with a host model catalog",
     );
 
     const matchingResume = await executeCli([
@@ -3172,7 +3202,7 @@ test("CLI executes one full local protocol turn", async () => {
       "never",
       "resume with matching settings",
     ]);
-    assert.match(matchingResume.stdout, /Echo: resume with matching settings/u);
+    await assertEcho(matchingResume.stdout, "resume with matching settings");
 
     const fullAccessTool = await executeCli([
       "run",
@@ -3181,7 +3211,10 @@ test("CLI executes one full local protocol turn", async () => {
       `!shell ${shellPrintCommand("cli-full-access")}`,
     ]);
     assert.equal(fullAccessTool.stderr, "");
-    assert.match(fullAccessTool.stdout, /Command result:\s+cli-full-access/u);
+    assert.match(
+      fullAccessTool.stdout,
+      /Command result:\s+Exit code: 0\s+cli-full-access/u,
+    );
 
     const approvedTool = await executeCli([
       "run",
@@ -3191,7 +3224,10 @@ test("CLI executes one full local protocol turn", async () => {
       `!shell ${shellPrintCommand("cli-approved")}`,
     ]);
     assert.equal(approvedTool.stderr, "");
-    assert.match(approvedTool.stdout, /Command result:\s+cli-approved/u);
+    assert.match(
+      approvedTool.stdout,
+      /Command result:\s+Exit code: 0\s+cli-approved/u,
+    );
 
     const deniedTool = await executeCli([
       "run",

@@ -195,7 +195,7 @@ test("bootstrap persists only honest Host input, snapshots AGENTS and deduplicat
     assert.match(JSON.stringify(requests), /BOOTSTRAP_REPOSITORY_RULES/u);
     assert.match(
       JSON.stringify(requests),
-      /Host wakeup\. Source: bootstrap.*not a human message or new authorization/u,
+      /Host-supplied bootstrap context, not a human message or new authorization\./u,
     );
     assert.equal(requests.length, 1);
     await writeFile(path.join(cwd, "AGENTS.md"), "LATER_RULES");
@@ -305,10 +305,16 @@ test("Host steer at a streamed final response forces another sample, preserving 
   assert.equal(snapshot.turns.length, 2);
   assert.equal(samples.length, 3);
   assert.equal(samples[1]!.at(-1)?.role, "user");
-  assert.match(
-    JSON.stringify(samples[1]!.at(-1)),
-    /Host wakeup\. Source: bootstrap/u,
-  );
+  assert.deepEqual(samples[1]!.at(-1), {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "[Host-supplied bootstrap context, not a human message or new authorization.]",
+      },
+      { type: "text", text: bootstrap.text },
+    ],
+  });
   const projected = compileModelMessages(snapshot.items);
   const streamedIndex = projected.findIndex(
     (message) => "text" in message && message.text === "Already streaming",
@@ -725,10 +731,16 @@ test("Host steer received during a tool batch is projected after that batch's re
   assert.equal(requests.length, 2);
   const sample = requests[1]!;
   assert.equal(sample.at(-2)?.role, "tool");
-  assert.match(
-    JSON.stringify(sample.at(-1)),
-    /Host wakeup\. Source: bootstrap/u,
-  );
+  assert.deepEqual(sample.at(-1), {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "[Host-supplied bootstrap context, not a human message or new authorization.]",
+      },
+      { type: "text", text: bootstrap.text },
+    ],
+  });
   assert.equal(
     (await server.readThread(thread.id)).items.filter(
       (item) => item.type === "user_message",

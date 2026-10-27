@@ -8,6 +8,7 @@ import {
   compileModelMessages,
   type ModelAdapter,
   type ModelEvent,
+  type ModelRequest,
 } from "../src/model.js";
 import {
   estimateModelInput,
@@ -20,6 +21,7 @@ import { ToolEnvironment } from "../src/tool.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { testToolRuntime } from "./tool-fixtures.js";
 import type { CanonicalItem } from "../src/item.js";
+import { compileItemList } from "../src/item-list.js";
 
 function fixture(window: number, description: string, instructions = "") {
   let requests = 0;
@@ -346,6 +348,7 @@ test("post-discovery expansion blocks the next sample in direct/code/both modes 
 test("text-only capability projection budgets media receipts, preserving UI categories and actual sample totals", async () => {
   const { projectModelMessages } = await import("../src/model-content.js");
   let calls = 0;
+  let lastRequest: ModelRequest | undefined;
   const environment = new ToolEnvironment({
     runtimes: [
       testToolRuntime({
@@ -376,12 +379,12 @@ test("text-only capability projection budgets media receipts, preserving UI cate
     contextInstructions: "static system",
     async *stream(request) {
       calls++;
-      assert(
-        estimateModelInput(
-          request.messages,
-          request.tools,
-          this.contextInstructions,
-        ).total < 4000,
+      lastRequest = request;
+      assert(estimateModelInput(request.messages, request.tools).total < 4000);
+      assert.deepEqual(
+        request.messages.filter((message) => message.role === "system"),
+        [{ role: "system", text: "static system" }],
+        "the compiler must materialize static instructions exactly once",
       );
       if (calls === 1)
         yield {
@@ -392,8 +395,28 @@ test("text-only capability projection budgets media receipts, preserving UI cate
         };
       else {
         assert(!JSON.stringify(request.messages).includes('"type":"image"'));
-        assert(
-          JSON.stringify(request.messages).includes("image input unavailable"),
+        assert.deepEqual(
+          request.messages.filter(
+            (message) =>
+              message.role === "user" &&
+              "content" in message &&
+              message.content.some(
+                (part) =>
+                  part.type === "text" &&
+                  part.text.startsWith("[image input is unavailable"),
+              ),
+          ),
+          [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "[image input is unavailable for this selected model. Stored image attachments were not sent or read in this sample.]",
+                },
+              ],
+            },
+          ],
         );
         yield { type: "text_delta", delta: "read receipt" };
       }
@@ -441,19 +464,24 @@ test("text-only capability projection budgets media receipts, preserving UI cate
     ),
   );
   assert.equal(calls, 2);
-  const messages = compileModelMessages(snapshot.items);
-  const tools = runtime.projectToolPresentation(
-    snapshot.items,
-    false,
-  ).modelTools;
-  assert(
-    estimateModelInput(messages, tools, model.contextInstructions).total > 4000,
+  assert(snapshot.itemList !== undefined);
+  assert(lastRequest?.debugContext !== undefined);
+  const compilation = {
+    sampleId: lastRequest.debugContext.sampleId,
+    selection: { providerProfileId: "fixture", modelId: "fixture" },
+  };
+  const complete = compileItemList(snapshot.itemList, compilation);
+  assert(estimateModelInput(complete.messages, complete.tools).total > 4000);
+  const projected = compileItemList(snapshot.itemList, {
+    ...compilation,
+    inputModalities: ["text"],
+  });
+  const expected = estimateModelInput(projected.messages, projected.tools);
+  const originalResult = snapshot.items.find(
+    (item) => item.type === "tool_result",
   );
-  const expected = estimateModelInput(
-    projectModelMessages(messages, ["text"]),
-    tools,
-    model.contextInstructions,
-  );
+  assert(originalResult?.type === "tool_result");
+  assert.equal(originalResult.modelContent?.[0]?.type, "image");
   assert.deepEqual(
     (await server.readModelUsage(thread.id)).context.estimate,
     expected,
@@ -552,13 +580,11 @@ test("Host/UI calibrates from the exact sent sample, not thread totals or cached
   const f = fixture(10000, "small tool");
   let requestEstimate = 0;
   let calls = 0;
+  let lastSampleId: string | undefined;
   f.adapter.stream = async function* (request) {
     calls++;
-    requestEstimate = estimateModelInput(
-      request.messages,
-      request.tools,
-      f.adapter.contextInstructions,
-    ).total;
+    lastSampleId = request.debugContext?.sampleId;
+    requestEstimate = estimateModelInput(request.messages, request.tools).total;
     yield { type: "text_delta", delta: "response" };
     yield {
       type: "usage",
@@ -573,10 +599,14 @@ test("Host/UI calibrates from the exact sent sample, not thread totals or cached
       await f.server.startTurn(thread.id, "next")
     ).done;
     const snapshot = await f.server.readThread(thread.id);
-    const raw = estimateModelInput(
-      compileModelMessages(snapshot.items),
-      f.runtime.projectToolPresentation(snapshot.items, false).modelTools,
-    );
+    assert(snapshot.itemList !== undefined);
+    assert(lastSampleId !== undefined);
+    const compiled = compileItemList(snapshot.itemList, {
+      sampleId: lastSampleId,
+      selection: { providerProfileId: "fixture", modelId: "fixture" },
+      inputModalities: ["text"],
+    });
+    const raw = estimateModelInput(compiled.messages, compiled.tools);
     const usage = await f.server.readModelUsage(thread.id);
     assert.equal(
       usage.context.inputTokens,

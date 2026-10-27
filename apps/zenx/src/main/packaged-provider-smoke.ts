@@ -220,6 +220,23 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     },
     execute: async () => ({ output: "nested:".padEnd(4096, "x"), exitCode: 0 }),
   };
+  let markAbortReady!: () => void;
+  const abortReady = new Promise<void>((resolve) => {
+    markAbortReady = resolve;
+  });
+  const readinessRuntime: ToolRuntime = {
+    name: "packaged_smoke_abort_ready",
+    specification: {
+      name: "packaged_smoke_abort_ready",
+      description:
+        "Confirm the interrupt smoke Worker entered program execution",
+      inputSchema: { type: "object", additionalProperties: false },
+    },
+    execute: async () => {
+      markAbortReady();
+      return { output: "ready", exitCode: 0 };
+    },
+  };
   const host = createHostedAppServer({
     cwd: directory,
     dataDirectory: path.join(directory, "data"),
@@ -232,7 +249,7 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
       bundles: [
         {
           identity: { kind: "external", id: "packaged-smoke-nested" },
-          tools: [nestedRuntime],
+          tools: [nestedRuntime, readinessRuntime],
         },
       ],
     }),
@@ -281,13 +298,28 @@ async function runPackagedProgrammaticToolSmoke(): Promise<{
     const aborted = await host.startThread();
     const running = await host.startTurn(
       aborted.id,
-      '!tool run_code {"code":"for (;;) {}"}',
+      '!tool run_code {"code":"await tools.packaged_smoke_abort_ready({}); for (;;) {}"}',
     );
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Source/context fsync can take longer than a fixed sleep. Interrupt only
+    // once the actual Worker has invoked its nested readiness tool; otherwise
+    // cancellation before dispatch correctly has no tool receipt at all.
+    await Promise.race([
+      abortReady,
+      running.done.then(() => {
+        throw new Error(
+          "Interrupt smoke ended before the Worker entered execution",
+        );
+      }),
+    ]);
     await host.interruptTurn(aborted.id, running.id);
+    await running.done;
     const abortedSnapshot = await host.readThread(aborted.id);
+    const abortCall = abortedSnapshot.items.find(
+      (item) => item.type === "tool_call" && item.name === "run_code",
+    );
+    assert(abortCall?.type === "tool_call");
     const abortResult = abortedSnapshot.items.find(
-      (item) => item.type === "tool_result",
+      (item) => item.type === "tool_result" && item.callId === abortCall.callId,
     );
     assert.equal(abortResult?.exitCode, 130);
 
