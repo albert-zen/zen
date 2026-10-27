@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "pr": 535,
+  "sourceHead": "5821c6b3aede50f1e6d56f598c27d2a554b25263",
+  "sourceTree": "821c1fdf474f72d192d51a2c45acd52f9d4f0605",
+  "testedMerge": "97ee0b7d6939106b96f027e835b4ff4fa6d39a9a",
+  "runUrl": "https://github.com/albert-zen/zen/actions/runs/40458415830",
+  "artifactId": 12714055217,
+  "artifactSha256": "e697146b2cb3696ffc6c9263e225bcb990e6760bc37d70742a47eb4ac9098ee9",
+  "mainAfter542": "96400dd6ec5ca28257f2f6e4061b0c18593213d6",
+  "localMergeTreeWithMain": "821c1fdf474f72d192d51a2c45acd52f9d4f0605",
+  "captureStatus": "passed",
+  "configurations": 24,
+  "selectionStates": 576,
+  "normalExpandedInteractionFlows": 36,
+  "shortChoosers": [
+    {
+      "theme": "light",
+      "body": {
+        "top": 44,
+        "height": 776
+      },
+      "menu": {
+        "top": 190,
+        "height": 484
+      },
+      "first": true,
+      "last": true
+    },
+    {
+      "theme": "dark",
+      "body": {
+        "top": 44,
+        "height": 776
+      },
+      "menu": {
+        "top": 194.5,
+        "height": 475
+      },
+      "first": true,
+      "last": true
+    }
+  ],
+  "captureStepSeconds": 236,
+  "source": {
+    "commit": "97ee0b7d6939106b96f027e835b4ff4fa6d39a9a",
+    "scope": "Actual WindowTitleBar and AuxiliaryPanel with production styles, synthetic native-control markers and tabs. No Host, private files or profile. Browser CDP input and Darwin CSS marker, not native Electron or physical OS acceptance.",
+    "sources": {
+      "src/renderer/src/App.tsx": "fc796a5e3900d08c58a63850114e559f028d775d0c21a45042ccb33c986c1c6f",
+      "src/renderer/src/auxiliary-panel.tsx": "9ccb4efba2eacc0c4c7eb3c189daafc045681943be7aa5fba7659f7b4a959e2a",
+      "src/renderer/src/styles.css": "b28d6ad7b3d7addf4c9ad52e5496f39fdec02d5fc4442f32b2c4c81640395272",
+      "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+      "scripts/titlebar-safe-area-preview.tsx": "b2959721df3626f2ebba2868e800cc22147da08987923d490c234527230a582f",
+      "scripts/build-titlebar-safe-area-preview.mjs": "1305d035b40f60e145df766983f66d694e4128e24e99092b7bd3e82835ec8e53",
+      "scripts/capture-titlebar-safe-area-preview.mjs": "3f3eba057adf0703b3becf6097c6263b47cbdd9fec2cc4b7baafbf79c4cf7b09",
+      "scripts/capture-workspace-tab-overflow.mjs": "8f64a80efc7b0093c1cbadb6f502836f7c83e97deba00c5c31feea287dee560b"
+    }
+  },
+  "syntheticBoundary": "Actual production AuxiliaryPanel and WindowTitleBar, synthetic English/CJK labels and native-control markers only. No user files, profile, Host, or network; browser input and platform CSS, not native OS acceptance.",
+  "visualReview": "All 11 selected PNGs inspected from this exact CI artifact; no transformations. No historical or failed-run PNGs included. Native OS acceptance is not claimed. Full CI status is tracked separately in PR.",
+  "images": [
+    {
+      "file": "darwin-360-closed-normal-after.png",
+      "bytes": 14491,
+      "sha256": "ee6a618f10670de4f860312f6efc53b0ff4c040ab0ff9a2fa1d1b783030599bd",
+      "gitBlob": "9d6768e18a1fae8abe3589dd425894ee538af777"
+    },
+    {
+      "file": "darwin-1440-closed-expanded-after.png",
+      "bytes": 27405,
+      "sha256": "13181e3379d92f97178a038d8013f081fc8ec4f36c0d29e1a8baeb8c08ada1eb",
+      "gitBlob": "209d63b6cd3053341871577ce28cc4d3b77b1ee0"
+    },
+    {
+      "file": "darwin-760-open-normal-after.png",
+      "bytes": 19494,
+      "sha256": "e9bc7e07e5f88fce85bff3a615502174f4685d7ad8e9bea5d4bb0b4d96b9ef34",
+      "gitBlob": "cde9879e5465d047e18ae14db425ad63cc4797f2"
+    },
+    {
+      "file": "darwin-760-open-expanded-after.png",
+      "bytes": 19741,
+      "sha256": "5caa2e229a9b5d085c931022f2228c343679b8da18f4242f4e04092e9cc5094d",
+      "gitBlob": "c701e2b83cca904e25cdf4979feb308d4d2f1676"
+    },
+    {
+      "file": "darwin-760-open-normal-chooser-first-after.png",
+      "bytes": 51228,
+      "sha256": "953abb308ed09bd866a33a234bdc14b59be18f074509ccbd1006642ae28d0de3",
+      "gitBlob": "79fca33351f70a1ec7014a3805332152ea86aa32"
+    },
+    {
+      "file": "darwin-760-open-normal-chooser-last-after.png",
+      "bytes": 51490,
+      "sha256": "0b65d63bef274a8133b5c8d1ca14b8df9f0f038e7c866685aa6696b6bbe7b26a",
+      "gitBlob": "e340905488490c498dd52bf86aac11aa5cd7ea99"
+    },
+    {
+      "file": "darwin-760-open-expanded-chooser-first-after.png",
+      "bytes": 51262,
+      "sha256": "84c1afb35fec7dd1bfea31fb5cae06ee17d9a462235cf01bc8abcd6b8adb7665",
+      "gitBlob": "5ed6ef15d72b6f593381af870e15cff815892840"
+    },
+    {
+      "file": "darwin-760-open-expanded-chooser-last-after.png",
+      "bytes": 51533,
+      "sha256": "64ba1f064ce7193b2d37b43514114df92fbb0c3b19500223c9a9ce6e14dac8b9",
+      "gitBlob": "6f9c95dc9570b42213d10698e40ad41c9a94c53c"
+    },
+    {
+      "file": "short-chooser-light-after.png",
+      "bytes": 34572,
+      "sha256": "ef062d8654cd220bfa7c40d224815ab3feac77f2c54dae974e99d5d6d6e0f42f",
+      "gitBlob": "df299db248f7a898f647d9a75732f372f99976b5"
+    },
+    {
+      "file": "short-chooser-dark-after.png",
+      "bytes": 35244,
+      "sha256": "9aeb84dd7399d9ec643829e66ef0dd19a7f16c0bf18e7bf43146ba3cc5f1037e",
+      "gitBlob": "2dcc0d32b1d78d75814eb04d642db2d56a3d17ee"
+    },
+    {
+      "file": "win32-600-closed-normal-after.png",
+      "bytes": 16459,
+      "sha256": "ac0b159c5f89b59c25af8965f0920315dc7c357f265701de6684f2b35898b296",
+      "gitBlob": "db9f4edc9304a6c32224dd2f5bcbcab4afdb752b"
+    }
+  ],
+  "githubMergePreviewAfter542": {
+    "sha": "1627998d356985bd07f809a74670ae3bdb10b774",
+    "tree": "821c1fdf474f72d192d51a2c45acd52f9d4f0605",
+    "parents": [
+      "96400dd6ec5ca28257f2f6e4061b0c18593213d6",
+      "5821c6b3aede50f1e6d56f598c27d2a554b25263"
+    ]
+  }
+}
+
