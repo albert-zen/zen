@@ -226,7 +226,7 @@
     },
     {
       "name": "computer_set_value",
-      "description": "Set and verify the exact supplied text on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.",
+      "description": "Set and verify the exact supplied text on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. A completed action reports exact immediate ValuePattern readback match without echoing the text; application save or submit remains unverified. The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.",
       "inputSchema": {
         "type": "object",
         "properties": {
