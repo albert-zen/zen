@@ -21,6 +21,9 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import type { CanonicalItem } from "../../../src/item.js";
+import { DomainThreadJournal } from "../../../src/domain-journal.js";
+import { FileTraceStore } from "../../../src/trace.js";
+import { JsonlThreadMetadataStore } from "../../../src/thread-metadata.js";
 import { requestPluginDevLink } from "@zenx/plugin-sdk";
 import { npmInvocation } from "../../../packages/zenx-plugin-sdk/dist/npm-invocation.mjs";
 import { AppServerManager } from "../src/main/app-server-manager.js";
@@ -3060,11 +3063,29 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function journalItems(journalPath: string): Promise<CanonicalItem[]> {
-  return (await readFile(journalPath, "utf8"))
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as CanonicalItem);
+async function journalItems(filename: string): Promise<CanonicalItem[]> {
+  // The supplied legacy-shaped path identifies the data root and Thread only.
+  // Read actual persisted source facts through the production read-only accessor,
+  // not semantic ItemList/fence JSON and not the live Host's in-memory projection.
+  const directory = path.dirname(filename);
+  const root = path.dirname(directory);
+  const threadId = path.basename(filename, ".jsonl");
+  const trace = new FileTraceStore(path.join(root, "trace"));
+  assert.equal((await trace.read(threadId)).completeness, "complete");
+  const journal = new DomainThreadJournal({
+    directory,
+    trace,
+    metadata: new JsonlThreadMetadataStore(
+      path.join(root, "thread-metadata.jsonl"),
+    ),
+    access: "read-only",
+  });
+  try {
+    await journal.assertRecoverySafe(threadId);
+    return await journal.read(threadId);
+  } finally {
+    await journal.close();
+  }
 }
 
 test("profile update caller receives committed activation failure without rolling back storage or profile", async () => {

@@ -42,6 +42,56 @@ await withPreviewBrowser(
       });
       await delay(50);
     };
+    const showTimingStage = async (stage) => {
+      const selector = JSON.stringify(`[data-timing-stage="${stage}"]`);
+      await evaluate(`(() => {
+        const row = document.querySelector(${selector});
+        const reader = row?.closest('.trace-inspector-detail-scroll');
+        if (!row || !reader) throw Error('Missing timing row or its real reader');
+        const target = row.getBoundingClientRect();
+        const bounds = reader.getBoundingClientRect();
+        reader.scrollTo({
+          top: reader.scrollTop + target.top - bounds.top - (reader.clientHeight - target.height) / 2,
+          behavior: 'instant'
+        });
+        row.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+      })()`);
+      // CDP can capture the last composited frame immediately after a DOM scroll.
+      // Wait for layout/paint, then prove the named row is inside every clip.
+      await evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      const geometry = await evaluate(`(() => {
+        const row = document.querySelector(${selector});
+        const bounds = row.getBoundingClientRect();
+        let top = 0, bottom = innerHeight, left = 0, right = innerWidth;
+        for (let parent = row.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent), rect = parent.getBoundingClientRect();
+          if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+            top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom);
+          }
+          if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+            left = Math.max(left, rect.left); right = Math.min(right, rect.right);
+          }
+        }
+        const center = document.elementFromPoint((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2);
+        return {
+          stage: ${JSON.stringify(stage)},
+          readerScrollTop: row.closest('.trace-inspector-detail-scroll').scrollTop,
+          top: bounds.top, bottom: bounds.bottom, clipTop: top, clipBottom: bottom,
+          fullyVisible: bounds.top >= top - 1 && bounds.bottom <= bottom + 1 && bounds.left >= left - 1 && bounds.right <= right + 1 && Boolean(center && row.contains(center))
+        };
+      })()`);
+      assert(
+        geometry.readerScrollTop > 0,
+        `Timing reader did not scroll: ${JSON.stringify(geometry)}`,
+      );
+      assert(
+        geometry.fullyVisible,
+        `Named timing milestone is clipped or covered: ${JSON.stringify(geometry)}`,
+      );
+      return geometry;
+    };
     const button = (text) =>
       `Array.from(document.querySelectorAll('button')).find(e=>e.textContent.includes(${JSON.stringify(text)}))`;
     const open = async (width, lang, theme, scene = "requests") => {
@@ -122,10 +172,10 @@ await withPreviewBrowser(
             ),
           );
           await screenshot(`${name}-timing-milestones.png`);
-          await evaluate(
-            "document.querySelector('[data-timing-stage=raw_eof]').scrollIntoView({block:'end'})",
-          );
-          await screenshot(`${name}-timing-first-content-eof.png`);
+          const firstContent = await showTimingStage("first_exposed_text");
+          await screenshot(`${name}-timing-first-content.png`);
+          const rawEof = await showTimingStage("raw_eof");
+          await screenshot(`${name}-timing-raw-eof.png`);
 
           await activate(
             button(lang === "en" ? "Back to records" : "返回记录"),
@@ -162,6 +212,8 @@ await withPreviewBrowser(
             rawEscaped: true,
             frozenSettings: true,
             separateClocksAndFirstContent: true,
+            firstContentGeometry: firstContent,
+            rawEofGeometry: rawEof,
             dualOutcome: true,
             blockedNotSent: true,
             keyboardBackFocus: true,

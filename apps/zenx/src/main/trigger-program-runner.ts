@@ -692,7 +692,7 @@ export async function verifyAndTerminateWindowsProcessTree(
       return processTableDiscoveryFailure(error);
     }
     try {
-      tracked = addWindowsDescendants(tracked, table.entries);
+      tracked = addWindowsDescendants(tracked, table.entries, tree.root);
     } catch (error) {
       return { ok: false, error: describeError(error) };
     }
@@ -1038,10 +1038,17 @@ function addDescendants(
 // Windows retains a numeric PPID after parent exit; it does not prove which
 // generation created a newly observed process. Keep prior identities, but
 // require a live matching parent and ordered creation times for every new edge.
+// A process older than the original owned root cannot belong to this invocation,
+// even when Windows retains a PPID that now names one of our descendants.
 function addWindowsDescendants(
   tracked: readonly ProcessIdentity[],
   entries: readonly ProcessIdentity[],
+  root: ProcessIdentity,
 ): ProcessIdentity[] {
+  const rootCreated =
+    root.startTime !== null && /^\d+$/u.test(root.startTime)
+      ? BigInt(root.startTime)
+      : null;
   const result = [...tracked];
   const known = new Set(result.map((identity) => identity.pid));
   let changed = true;
@@ -1053,6 +1060,13 @@ function addWindowsDescendants(
         (identity) => identity.pid === entry.parentPid,
       );
       if (parent === undefined) continue;
+      if (
+        rootCreated !== null &&
+        entry.startTime !== null &&
+        /^\d+$/u.test(entry.startTime) &&
+        BigInt(entry.startTime) < rootCreated
+      )
+        continue;
       const currentParent = entries.find(
         (candidate) => candidate.pid === parent.pid,
       );
@@ -1378,9 +1392,11 @@ async function captureWindowsProcessTree(
       throw new Error(
         "the live owned root process identity or parent relationship was unavailable; containment was not proven",
       );
-    const descendants = addWindowsDescendants([root], table.entries).filter(
-      (entry) => entry.pid !== root.pid,
-    );
+    const descendants = addWindowsDescendants(
+      [root],
+      table.entries,
+      root,
+    ).filter((entry) => entry.pid !== root.pid);
     return { root, descendants };
   } finally {
     child.removeListener("exit", onExit);

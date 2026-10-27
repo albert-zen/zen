@@ -173,7 +173,6 @@
             "description": "Exact Thread identity; alternative to semantic target."
           }
         },
-        "required": [],
         "additionalProperties": false,
         "oneOf": [
           {

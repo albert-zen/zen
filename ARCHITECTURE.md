@@ -2,7 +2,9 @@
 
 ## ItemList / Trace / current product state contract
 
+- **Typed model references** — Short model refs are disposable projections of exact Host bindings carried in existing trusted Context/tool-result provenance and raw Trace; resolution never grants authority or changes native freshness/CAS, and per-producer publication budgets cannot truncate already-issued provenance.
 - **Builtin model handles** — Compaction's `cN` references bind exact selected semantic sources and local task `tN` references bind exact accepted tool-call/task receipts; their separate numeric families are reconstructed from existing immutable provenance, never grant permission or replace native IDs, and resolve only under the current Thread and existing selection/task ownership checks without an alias store or replay.
+- **Shell session observation handles** — Model-facing `shell_sessions` preserves the exact native observation in Trace and projects current-owner session IDs through the same `tN` family; human terminals receive a distinct read-observation binding from the accepted reader call, never an invented model-created task, and existing human-input, termination, expiration and restart restrictions remain authoritative.
 - **Sample media selection** — Exact compiler-produced media occurrences retain typed ephemeral source links. Rejected occurrences are omitted only by a persisted per-sample semantic selection manifest with visible unavailable-content text; original inputs and observed results remain unchanged.
 - **Interrupted calls** — Cold inspection is read-only. Explicit continuation appends an exact locally accepted result when verified durable evidence exists; otherwise it appends an unknown-outcome receipt. Neither path dispatches a historical call, and missing Trace is never proof of non-dispatch.
 - **Semantic ItemList** — `ContextItem` is the strict append-only model-semantic format: explicit roles, real text/parts, tool calls/results, exposed reasoning and immutable compression selection; provenance is not a second editable body. `compileItemList` selects and encodes these committed contents, never manufactures late instructions. Legacy mixed `CanonicalItem` decoding remains a migration/read projection, not a second writable authority.
@@ -16,7 +18,7 @@
 - **Auxiliary model samples** — Title, image-probe and compaction requests persist exact source facts and a strict semantic context bundle before the sole compiler; unique auxiliary Trace partitions are observation identities, never hidden Threads, execution objects or another store. The owner closes its passive transport captures.
 - **Storage ownership** — One cooperative writer holds a native kernel file lock for admitted IO lifetime; no PID/TTL reclamation, SQLite same-process lock, service, durable execution state or automatic side-effect replay is introduced. Missing backend fails closed.
 
-Reconstruction is being landed in independently tested source checkpoints. The default CLI/ZenX Host now uses the log-first Domain journal and durable Trace, and ordinary agent samples persist compiler inputs before adapter dispatch. Compaction now uses durable auxiliary context bundles; title/probe call-site integration and full cross-app acceptance remain explicit gates; this checkpoint is not a completed migration/release claim. These contracts replace conflicting older mixed-journal descriptions below.
+Reconstruction is being landed in independently tested source checkpoints. The default CLI/ZenX Host now uses the log-first Domain journal and durable Trace, and ordinary agent samples persist compiler inputs before adapter dispatch. Compaction, title and image-probe call sites now use durable auxiliary context bundles; full cross-app and platform acceptance remain explicit gates; this checkpoint is not a completed migration/release claim. These contracts replace conflicting older mixed-journal descriptions below.
 
 - **Selected source semantic input** — Before dispatch, exact submission-bound v3 input may persist compact names/excerpts and owner-scoped read-only `sN` provenance; raw input remains the durable fact, literal text is never rewritten, and source time is unavailable unless a recorded original receipt is present. Compaction uses the same exact history-prefix mapping; imported/forked references do not gain local ownership and current native permissions remain authoritative.
 
@@ -404,7 +406,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   无 credential 的 HTTP(S) proxy URL，并保证 abort 与脱敏错误，不进入 Agent Runtime 状态。
 - **ZenXTriggerRegistry** — `zenx-triggers` Plugin Package 在自身 storage namespace 持久化的可审计
   唤醒条件与命中历史；每次命中以稳定幂等 key 通过 native Host wake 提交带真实来源的输入，缺省 soft steer；只有该 Trigger 显式 queue 才等待下一轮，失败明确记录且不自动补偿。
-  Windows program cleanup captures ownership only while the spawned root remains live, verifies its direct parent, and admits new descendants only through a simultaneously observed matching parent generation with nondecreasing creation times; ambiguous lineage is an explicit containment failure. Previously captured descendants remain tracked after parent exit, and termination remains bound to each exact identity. Process-table snapshots do not prove exhaustive ownership of unobserved generations.
+  Windows program cleanup captures ownership only while the spawned root remains live, verifies its direct parent, and admits new descendants only through a simultaneously observed matching parent generation with nondecreasing creation times; ambiguous lineage is an explicit containment failure. A newly observed process with validated creation time strictly before the original owned root is excluded as unrelated despite a stale numeric PPID; post-root ancestry ambiguity still fails closed. Previously captured descendants remain tracked after parent exit, and termination remains bound to each exact identity. Process-table snapshots do not prove exhaustive ownership of unobserved generations.
 - **ZenXRoom** — `zenx-rooms` Plugin Package 在自身 storage namespace 持有的共享协作转录与 Thread 路由表面；Room 本身不是
   Agent 上下文，只有明确命中 membership / mention 时才把带来源的内容投递给成员 Thread；读取转录使用有界分页而非把全部历史压入一次插件命令结果。
 - **ZenXRoomSendOperation** — ZenX Rooms plugin storage 中有界的 Host 可信发送准备/提交回执，按 Host 持有的 Room epoch 与客户端非权威 UUID 绑定 Room 与正文、保存稳定消息 ID 和提交时成员唤醒匹配事实；它只供 UI 查询/明确确认，不是 Thread/Turn 会话状态或重试调度器，丢失回执只表示未知而非可重发。
@@ -1549,6 +1551,7 @@ ZenX main's existing file-loading session transforms only its exact trusted pack
 Browser 的模型短引用通过私有可信 sideband 保留现有 native session epoch 与 product target 精确对应；只读 lookup 与既有 ordered dispatch 验证它，不新增路由权威或持久 alias store。
 
 Trace clock wire declarations stay runtime-neutral; the Host clock reader and file store are not dependencies of native mobile wire types.
+
 - **Native Computer OCR** — An explicit read-only macOS OCR request applies local
   Apple Vision to the current thread-owned, exact-window screenshot under its
   existing binding and expiry, returning bounded text/geometry observations with

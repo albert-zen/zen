@@ -11,6 +11,11 @@ import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
 import type { ModelAdapter } from "../../../src/model.js";
 import { ToolEnvironment } from "../../../src/tool.js";
 import { AgentRuntime } from "../../../src/runtime.js";
+import { ModelReferenceRegistry } from "../../../src/model-references.js";
+import {
+  invokeModelToolFacade,
+  modelToolDefinition,
+} from "../src/main/capabilities/model-tool-facade.js";
 import { StaticModelCatalog } from "../../../src/model-catalog.js";
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { serveCodexWebSocket } from "../../../src/protocol/codex/websocket.js";
@@ -797,7 +802,9 @@ test("a model calls the advertised bounded original-history tool after compactio
   let stage = 0;
   let threadId = "";
   let throughItemId = "";
-  let itemId = "";
+  let itemRef = "";
+  let sourceRef = "";
+  const references = new ModelReferenceRegistry();
   let exact = "";
   const originalOutput = "Original tool output 世界\n".repeat(650);
   const port = new MutableAppServerRequestPort();
@@ -814,13 +821,19 @@ test("a model calls the advertised bounded original-history tool after compactio
         tools: [
           {
             name: read.name,
-            specification: read,
-            execute: async (invocation) => ({
-              output: JSON.stringify(
-                await f.control.invoke(read.name, invocation),
-              ),
-              exitCode: 0,
-            }),
+            specification: modelToolDefinition(read),
+            execute: async (invocation) =>
+              invokeModelToolFacade({
+                invocation,
+                epoch: "original-history-fixture",
+                references,
+                dispatch: async (native) => ({
+                  output: JSON.stringify(
+                    await f.control.invoke(read.name, native),
+                  ),
+                  exitCode: 0,
+                }),
+              }),
           },
           {
             name: "fixture_output",
@@ -839,13 +852,7 @@ test("a model calls the advertised bounded original-history tool after compactio
     {
       provider: "test",
       async *stream(request) {
-        if (
-          request.messages.some(
-            (message) =>
-              "text" in message &&
-              message.text?.includes("ZEN_CONTEXT_COMPACTION_V1"),
-          )
-        ) {
+        if (request.debugContext?.purpose === "compaction") {
           yield {
             type: "text_delta",
             delta: "Continue using the enabled original reference if needed.",
@@ -868,22 +875,33 @@ test("a model calls the advertised bounded original-history tool after compactio
           request.tools.some(
             (tool) =>
               tool.name === "zenx_threads_read" &&
-              tool.description.includes("throughItemId"),
+              tool.description.includes(
+                "Selected sources permit only exact history reads",
+              ),
           ),
         );
         if (stage++ === 0) {
           const summary = request.messages.find(
             (message) =>
-              "text" in message && message.text?.includes("zen-thread://"),
+              "text" in message &&
+              message.text?.includes("Original conversation history;"),
           );
           assert(summary && "text" in summary && summary.text);
-          assert(summary.text.includes(`through=${throughItemId}`));
-          assert(!summary.text.includes("use authorized thread/original/read"));
+          const match = /Original conversation history; (s[1-9][0-9]*);/u.exec(
+            summary.text,
+          );
+          assert(
+            match,
+            "the compiler must expose the exact accepted read-only source ref",
+          );
+          sourceRef = match[1]!;
+          assert(!summary.text.includes(throughItemId));
+          assert(!summary.text.includes("zen-thread://"));
           yield {
             type: "tool_call",
             callId: "original-page",
             name: "zenx_threads_read",
-            arguments: { threadId, throughItemId, maxItemsPerTurn: 25 },
+            arguments: { ref: sourceRef, maxItemsPerTurn: 25 },
           };
           return;
         }
@@ -891,17 +909,25 @@ test("a model calls the advertised bounded original-history tool after compactio
           (message) => message.role === "tool",
         );
         assert(resultMessage?.role === "tool");
-        const result = JSON.parse(resultMessage.text);
+        assert.equal(resultMessage.exitCode, 0);
+        const prefix = "Exit code: 0\n";
+        assert(resultMessage.text.startsWith(prefix));
+        const result = JSON.parse(resultMessage.text.slice(prefix.length));
         if (result.granularity === "items") {
           const preview = result.items.find(
             (item: { type: string }) => item.type === "tool_result",
           );
-          itemId = preview.itemId;
+          assert(
+            preview,
+            "the bounded source page must contain the exact historical result",
+          );
+          itemRef = preview.ref;
+          assert.match(itemRef, /^r[1-9][0-9]*$/u);
           yield {
             type: "tool_call",
             callId: "original-detail",
             name: "zenx_threads_read",
-            arguments: preview.read,
+            arguments: { ref: sourceRef, item: itemRef, granularity: "item" },
           };
         } else {
           assert.equal(result.offset, exact.length);
@@ -912,10 +938,9 @@ test("a model calls the advertised bounded original-history tool after compactio
               callId: `original-chunk-${stage}`,
               name: "zenx_threads_read",
               arguments: {
-                threadId,
-                throughItemId,
+                ref: sourceRef,
                 granularity: "item",
-                itemId,
+                item: itemRef,
                 cursor: result.nextCursor,
               },
             };
@@ -945,6 +970,19 @@ test("a model calls the advertised bounded original-history tool after compactio
     );
     assert(compaction?.type === "context_compaction");
     throughItemId = compaction.coveredThroughItemId;
+    const semanticCompaction = (
+      await f.app.readThread(threadId)
+    ).itemList!.find((item) => item.id === compaction.id)!;
+    assert.equal(semanticCompaction.kind, "selection");
+    assert.deepEqual(semanticCompaction.source.metadata?.referenceBindings, [
+      {
+        ref: "s1",
+        ownerThreadId: threadId,
+        namespace: "selected-reference",
+        kind: "history",
+        value: { threadId, throughItemId },
+      },
+    ]);
     retrieve = true;
     await (
       await f.app.startTurn(
@@ -952,7 +990,20 @@ test("a model calls the advertised bounded original-history tool after compactio
         "Read the original result using its reference.",
       )
     ).done;
-    assert.equal(JSON.parse(exact).output, originalOutput);
+    const retrieval = await f.app.readThread(threadId);
+    assert.equal(
+      retrieval.turns.at(-1)?.status,
+      "completed",
+      JSON.stringify(retrieval.items.filter((item) => item.type === "failure")),
+    );
+    const recovered = JSON.parse(exact);
+    const originalResult = before.items.find(
+      (item) => item.type === "tool_result",
+    )!;
+    assert.equal(recovered.output, originalOutput);
+    assert.equal(recovered.id, originalResult.id);
+    assert.equal(recovered.threadId, threadId);
+    assert.equal(recovered.callId, originalResult.callId);
     assert(
       stage >= 4,
       "the model really requested and consumed multiple chunks",

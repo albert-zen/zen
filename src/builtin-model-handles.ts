@@ -164,6 +164,7 @@ export function allocateBuiltinTaskBinding(options: {
   ownerThreadId: string;
   sourceToolCallId: string;
   taskId: string;
+  kind?: "task" | "shell-session";
   history: readonly ModelReferenceBinding[];
   occupied: readonly ModelReferenceBinding[];
   /** Existing manager's issued highwater, including receipts not yet committed by Runtime. */
@@ -176,6 +177,7 @@ export function allocateBuiltinTaskBinding(options: {
   )
     throw unavailable();
   const existing = bindings([...options.history, ...options.occupied]);
+  const kind = options.kind ?? "task";
   const value = {
     taskId: options.taskId,
     sourceToolCallId: options.sourceToolCallId,
@@ -185,7 +187,7 @@ export function allocateBuiltinTaskBinding(options: {
       entry.ownerThreadId === options.ownerThreadId &&
       entry.ref.startsWith("t") &&
       entry.namespace === TASK &&
-      entry.kind === "task" &&
+      entry.kind === kind &&
       entry.epoch === undefined &&
       JSON.stringify(entry.value) === JSON.stringify(value),
   );
@@ -199,7 +201,7 @@ export function allocateBuiltinTaskBinding(options: {
     ref: `t${next}`,
     ownerThreadId: options.ownerThreadId,
     namespace: TASK,
-    kind: "task",
+    kind,
     value,
   });
   budget([binding], CAPABILITY_REFERENCE_BUDGET);
@@ -218,7 +220,7 @@ export function resolveBuiltinTaskReference(
       entry.ref === ref &&
       /^t[1-9][0-9]*$/u.test(ref) &&
       entry.namespace === TASK &&
-      entry.kind === "task" &&
+      (entry.kind === "task" || entry.kind === "shell-session") &&
       entry.epoch === undefined,
   );
   const value = binding?.value;
