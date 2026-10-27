@@ -19,7 +19,8 @@ const measure = `(() => {
     const tab=item.querySelector('[role=tab]'), icon=rect(tab.querySelector('svg')), bounds=rect(item);
     return {id:tab.id,active:tab.getAttribute('aria-selected')==='true',bounds,icon,iconlessLeading:bounds.left<r.left-1 && bounds.right>r.left+12 && icon.right<=r.left};
   });
-  return {rail:r,spacer:{basis:spacer.flexBasis,transitionProperty:spacer.transitionProperty,transitionDuration:spacer.transitionDuration},endGap:rail.style.getPropertyValue("--workspace-tab-end-gap"),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
+  const chrome=['.window-titlebar','.window-titlebar-session','.window-titlebar-drag'].map(selector=>{const e=document.querySelector(selector);if(!e)return {selector,bounds:null};const s=getComputedStyle(e);return {selector,bounds:rect(e),visibility:s.visibility,pointerEvents:s.pointerEvents,opacity:s.opacity};});
+  return {rail:r,chrome,spacer:{basis:spacer.flexBasis,transitionProperty:spacer.transitionProperty,transitionDuration:spacer.transitionDuration},endGap:rail.style.getPropertyValue("--workspace-tab-end-gap"),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
 })()`;
 await withPreviewBrowser(
   directory,
@@ -41,7 +42,10 @@ await withPreviewBrowser(
         const rail=e.closest('[role=tablist]')?.getBoundingClientRect();
         const left=Math.max(r.left,rail?.left??r.left),right=Math.min(r.right,rail?.right??r.right);
         const x=(left+right)/2,y=r.top+r.height/2;
-        if(right<=left||!e.contains(document.elementFromPoint(x,y)))throw new Error('Obscured '+${JSON.stringify(selector)});
+        if(right<=left||!e.contains(document.elementFromPoint(x,y))){
+          const describe=node=>{if(!node)return null;const b=node.getBoundingClientRect(),s=getComputedStyle(node);return {tag:node.tagName,id:node.id,className:String(node.className).slice(0,160),bounds:{left:b.left,right:b.right,top:b.top,bottom:b.bottom},style:{width:s.width,pointerEvents:s.pointerEvents,visibility:s.visibility,opacity:s.opacity,zIndex:s.zIndex,transitionProperty:s.transitionProperty,transitionDuration:s.transitionDuration},animations:node.getAnimations().slice(0,4).map(a=>({playState:a.playState,currentTime:a.currentTime,transitionProperty:a.transitionProperty??null}))};};
+          throw new Error('Obscured '+${JSON.stringify(selector)}+' '+JSON.stringify({point:{x,y},target:describe(e),stack:document.elementsFromPoint(x,y).slice(0,6).map(describe),chrome:['.window-titlebar','.window-titlebar-session','.window-titlebar-drag'].map(s=>({selector:s,...describe(document.querySelector(s))}))}));
+        }
         return {x,y};
       })()`);
       for (const type of ["mousePressed", "mouseReleased"])
@@ -180,6 +184,7 @@ await withPreviewBrowser(
                   "window.__titlebarPreview.setTabs(Array.from({length:12},(_,i)=>'custom:synthetic-'+i));window.__titlebarPreview.setSelected('custom:synthetic-0')",
                 );
                 await stable();
+                evidence.phase = `${name}/${expanded ? "expanded" : "normal"}: first pointer`;
                 await click('[id="aux-tab-custom:synthetic-1"]');
                 assert.ok(
                   (await evaluate(measure)).tabs[1].active,
