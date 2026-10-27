@@ -5,6 +5,8 @@
   "type": "module",
   "files": [
     "dist/runtime.js",
+    "dist/model-contract.js",
+    "dist/model-contract.d.ts",
     "zenx.plugin.json",
     "README.md"
   ],

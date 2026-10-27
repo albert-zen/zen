@@ -9,6 +9,7 @@ import {
 import { ComputerTargetSession } from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
 import type { ForegroundActivityRunner } from "../foreground-activity.js";
+import type { ComputerEnvironmentPort } from "../automation-environment.js";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -169,6 +170,8 @@ export interface ComputerOcrInspection extends ComputerOcrRecognition {
 }
 
 export interface ZenXComputerBackend {
+  /** Invalidate provider-owned native selectors after desktop state changes. */
+  invalidateObservations?(): void;
   ocr?(
     target: ComputerTarget,
     captureId: string,
@@ -317,13 +320,14 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/computer" },
   mainDocument:
-    "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Pass an exact returned target to computer_inspect. Inspect coverage and follow nextCursor with the same target to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions always require the latest observationId plus targetId and native revalidation. Pass baseObservationId only when retaining that first-page baseline and applied controlChanges; omit it or set full:true after context compaction/lost context. Apply added/updated/removedFromView and optional order; update every retained control.selector.observationId to observation.actionObservationId before acting. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls.",
+    "If available, start with computer_list_windows; its query filters windows only. Otherwise use the supplied exact window target. Prefer a returned exact window ref with computer_inspect; providers without discovery accept an explicit native window target. Inspect coverage and follow nextCursor alone to read the immutable captured controls beyond the first page; native traversal omissions remain explicit and are not recoverable by paging. References express exact-fingerprint presentation continuity, not proven native object identity. Actions use exact control refs and native revalidation. Pass since with a retained observation ref for a diff; omit since or set full:true after context compaction/lost context. For retained controls, pass the control ref with an explicit latest observation ref; native action checks still decide freshness. Cursor pages do not replace the first-page diff baseline or renew action authority. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Prefer background-safe semantic controls.",
   provider: {
     id: "macos-desktop",
     platforms: ["darwin"],
     interactionModes: ["background_safe", "foreground_required"],
     capabilities: [
       "window.list",
+      "desktop.environment.read",
       "accessibility.inspect",
       "semantic.press",
       "semantic.set_value",
@@ -365,9 +369,19 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
   ],
   tools: [
     {
+      name: "computer_environment",
+      description:
+        "Read the current desktop session and power availability. Lock and suspension are reported explicitly; this read does not wake, unlock, or operate another app.",
+      inputSchema: objectSchema({}, []),
+      permissions: ["computer.accessibility.inspect"],
+      interactionMode: "background_safe",
+      capabilities: ["desktop.environment.read", "no_global_input"],
+      maxOutputBytes: 4096,
+    },
+    {
       name: "computer_list_windows",
       description:
-        "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Copy a returned target directly into computer_inspect; this is not a catalog of installed apps.",
+        "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
       inputSchema: objectSchema(
         { query: { type: "string", minLength: 1, maxLength: 256 } },
         [],
@@ -380,9 +394,14 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_inspect",
       description:
-        "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. baseObservationId requests a diff only of a retained first-page baseline; omit it or set full:true to resync. target.windowTitle is required.",
+        "Inspect a bounded first page of at most 32 controls in one exact app window, or follow nextCursor without recapture. Coverage separately reports available pages and native omissions; this is not a complete accessibility tree. Model callers use since with an exact observation ref to request a diff; omit it or set full:true to resync. target.windowTitle is required.",
       inputSchema: objectSchema(
-        { target: targetSchema(), ...observationReadProperties },
+        {
+          target: targetSchema(),
+          ...observationReadProperties,
+          query: { type: "string", minLength: 1, maxLength: 128 },
+          limit: { type: "integer", minimum: 1, maximum: 32 },
+        },
         ["target"],
       ),
       permissions: ["computer.accessibility.inspect"],
@@ -593,15 +612,23 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly #foregroundActivity?: ForegroundActivityRunner;
   #foregroundControlAllowed: boolean;
   #foregroundConsent = new AbortController();
+  #observationGeneration = 0;
+  readonly #environment?: ComputerEnvironmentPort;
+  readonly #stopEnvironmentObservation?: () => void;
 
   constructor(
     backend: ZenXComputerBackend,
     manifest?: ZenXPluginManifestV2,
     foregroundControlAllowed = false,
     foregroundActivity?: ForegroundActivityRunner,
+    environment?: ComputerEnvironmentPort,
   ) {
     this.#backend = backend;
     this.#foregroundActivity = foregroundActivity;
+    this.#environment = environment;
+    this.#stopEnvironmentObservation = environment?.onInvalidated(() =>
+      this.invalidateObservations(),
+    );
     this.#threadObservation = new ComputerThreadObservation(backend);
     this.manifest =
       manifest ??
@@ -619,8 +646,108 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     else this.#revokeForegroundConsent();
   }
 
+  /** Environment lock/suspend fence: retire observations without closing the provider. */
+  invalidateObservations(): void {
+    this.#observationGeneration++;
+    this.#presentation.invalidateAll();
+    this.#backend.invalidateObservations?.();
+    this.#backend.targetSession?.invalidateCaptures();
+    // A selected binding must also be revoked by ComputerTargetSession's
+    // environment invalidation hook when that Host-owned target port exists.
+    const session = this.#backend.targetSession as unknown as
+      | { invalidateAll?: () => void; invalidateSelections?: () => void }
+      | undefined;
+    if (session?.invalidateAll) session.invalidateAll();
+    else session?.invalidateSelections?.();
+  }
+
   async invoke(toolName: string, invocation: ToolInvocation): Promise<unknown> {
+    if (toolName === "computer_environment")
+      return (
+        this.#environment?.snapshot() ?? {
+          platform: process.platform,
+          sessionState: "unknown",
+          revision: 0,
+          lockedUse: "unsupported",
+          reason: "Computer environment monitoring is unavailable",
+        }
+      );
+    const lease =
+      toolName === "computer_list_windows"
+        ? undefined
+        : this.#environment?.acquire(invocation.signal);
+    const admitted = lease
+      ? { ...invocation, signal: lease.signal }
+      : invocation;
+    const activity = this.#threadObservation as ComputerThreadObservation & {
+      startActivity?: (
+        threadId: string,
+        invocationId: string,
+        target: ComputerTarget,
+        kind: "background-window" | "foreground" | "waiting-human" | "unknown",
+      ) => () => void;
+    };
+    let settle: (() => void) | undefined;
+    try {
+      const candidate = admitted.arguments.target;
+      const target =
+        candidate && typeof candidate === "object" && !Array.isArray(candidate)
+          ? requiredTarget(admitted.arguments)
+          : undefined;
+      settle =
+        admitted.threadId && target
+          ? activity.startActivity?.(
+              admitted.threadId,
+              admitted.callId,
+              target,
+              toolName.startsWith("computer_foreground_") ||
+                this.manifest.tools.some(
+                  (tool) =>
+                    tool.name === toolName &&
+                    tool.interactionMode === "foreground_required",
+                )
+                ? "foreground"
+                : "background-window",
+            )
+          : undefined;
+      const result = await this.#invoke(toolName, admitted);
+      if (lease && this.#environment?.snapshot().revision !== lease.revision) {
+        if (
+          result &&
+          typeof result === "object" &&
+          ((result as Record<string, unknown>).actionCompleted === true ||
+            (result as Record<string, unknown>).dispatch === "posted" ||
+            (result as Record<string, unknown>).dispatch === "completed")
+        ) {
+          const { after: _after, ...completed } = result as Record<
+            string,
+            unknown
+          >;
+          return {
+            ...completed,
+            observationError:
+              "Computer environment changed after dispatch; fresh observation required",
+            nextAction:
+              "Inspect the exact target; do not repeat the action automatically",
+          };
+        }
+        throw new Error(
+          "Computer environment changed before observation completed; inspect again",
+        );
+      }
+      return result;
+    } finally {
+      settle?.();
+      lease?.release();
+    }
+  }
+
+  async #invoke(
+    toolName: string,
+    invocation: ToolInvocation,
+  ): Promise<unknown> {
     invocation.signal.throwIfAborted();
+    const observationGeneration = this.#observationGeneration;
     if (toolName === "computer_list_windows") {
       const query = optionalString(invocation.arguments, "query");
       if (query !== undefined && query.length > 256)
@@ -671,6 +798,13 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         requireScopedWindow(target, "computer_inspect");
         const options = observationReadOptions(invocation.arguments);
         if (options.cursor !== undefined) {
+          if (
+            invocation.arguments.query !== undefined ||
+            invocation.arguments.limit !== undefined
+          )
+            throw new Error(
+              "Cursor already binds its captured scope; omit query and limit",
+            );
           result = await this.#presentation.read(
             key,
             options.cursor,
@@ -682,12 +816,16 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           target,
           invocation.signal,
         );
+        if (observationGeneration !== this.#observationGeneration)
+          throw new Error(
+            "Computer desktop state changed during inspection; inspect again",
+          );
         const {
           controls,
           [OBSERVATION_CAPTURE]: captured,
           ...header
         } = inspected;
-        const capture: ObservationCapture<
+        let capture: ObservationCapture<
           ComputerInspection["controls"][number]
         > = captured ?? {
           scopeKey: computerTargetKey(inspected.target),
@@ -698,6 +836,9 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
             reasons: ["backend_capture_coverage_unknown"],
           },
         };
+        const focus = computerInspectionFocus(invocation.arguments, capture);
+        capture = focus.capture;
+        if (focus.description !== undefined) header.focus = focus.description;
         result = this.#presentation.publish(
           key,
           inspected.observationId,
@@ -805,6 +946,58 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         break;
       default:
         throw new Error(`Unsupported computer tool: ${toolName}`);
+    }
+    if (
+      (toolName === "computer_press" || toolName === "computer_set_value") &&
+      invocation.arguments.observe === true &&
+      result &&
+      typeof result === "object"
+    ) {
+      const completed = result as Record<string, unknown>;
+      try {
+        const inspected = await this.#backend.inspect(
+          target,
+          invocation.signal,
+        );
+        if (observationGeneration !== this.#observationGeneration)
+          throw new Error("Computer desktop state changed after action");
+        const {
+          controls,
+          [OBSERVATION_CAPTURE]: captured,
+          ...header
+        } = inspected;
+        const capture: ObservationCapture<
+          ComputerInspection["controls"][number]
+        > = captured ?? {
+          scopeKey: computerTargetKey(inspected.target),
+          entries: controls.map((value) => ({ value })),
+          coverage: {
+            scope: "backend-provided bounded window observation",
+            sourceComplete: null,
+            reasons: ["backend_capture_coverage_unknown"],
+          },
+        };
+        result = {
+          ...completed,
+          actionCompleted: true,
+          after: this.#presentation.publish(
+            key,
+            inspected.observationId,
+            header,
+            capture,
+            { full: true },
+          ),
+        };
+      } catch (error) {
+        result = {
+          ...completed,
+          actionCompleted: true,
+          observationError:
+            error instanceof Error ? error.message : String(error),
+          nextAction:
+            "Inspect the exact window again; do not repeat the completed action automatically",
+        };
+      }
     }
     if (invocation.threadId !== undefined) {
       const resolved =
@@ -1083,6 +1276,7 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
   }
 
   async close(): Promise<void> {
+    this.#stopEnvironmentObservation?.();
     this.#presentation.close();
     this.#threadObservation.close();
     await this.#backend.close();
@@ -1313,6 +1507,68 @@ function computerTargetKey(target: ComputerTarget): string {
   });
 }
 
+function computerInspectionFocus(
+  args: Readonly<Record<string, unknown>>,
+  capture: ObservationCapture<ComputerInspection["controls"][number]>,
+): {
+  capture: ObservationCapture<ComputerInspection["controls"][number]>;
+  description?: {
+    query?: string;
+    limit?: number;
+    scanned: number;
+    matched: number;
+  };
+} {
+  const query = args.query;
+  if (
+    query !== undefined &&
+    (typeof query !== "string" || query.length < 1 || query.length > 128)
+  )
+    throw new Error("Computer inspect query must be 1–128 characters");
+  const limit = args.limit;
+  if (
+    limit !== undefined &&
+    (!Number.isSafeInteger(limit) || Number(limit) < 1 || Number(limit) > 32)
+  )
+    throw new Error("Computer inspect limit must be an integer from 1 to 32");
+  if (query === undefined && limit === undefined) return { capture };
+  const matched =
+    query === undefined
+      ? capture.entries
+      : capture.entries.filter(({ value }) =>
+          `${value.role} ${value.title}`
+            .toLocaleLowerCase()
+            .includes(query.toLocaleLowerCase()),
+        );
+  const entries =
+    limit === undefined ? matched : matched.slice(0, Number(limit));
+  const limitTruncated = entries.length < matched.length;
+  return {
+    capture: {
+      ...capture,
+      entries,
+      coverage: {
+        ...capture.coverage,
+        scope: `${capture.coverage.scope}; focused projection of captured controls`,
+        sourceComplete: limitTruncated
+          ? false
+          : capture.coverage.sourceComplete,
+        reasons: [
+          ...capture.coverage.reasons,
+          "focused_projection",
+          ...(limitTruncated ? ["focus_limit"] : []),
+        ],
+      },
+    },
+    description: {
+      ...(query === undefined ? {} : { query }),
+      ...(limit === undefined ? {} : { limit: Number(limit) }),
+      scanned: capture.entries.length,
+      matched: matched.length,
+    },
+  };
+}
+
 export async function retryDesktopSourceEnumeration<T>(
   getSources: () => Promise<T>,
 ): Promise<T> {
@@ -1356,6 +1612,11 @@ export class ElectronMacComputerBackend implements ZenXComputerBackend {
   readonly #accessibility: Pick<MacAccessibilityDriver, "run">;
   readonly #foregroundInput: MacForegroundInputDriver;
   readonly #observations = new ComputerObservationLedger();
+
+  invalidateObservations(): void {
+    this.#observations.clear();
+    this.targetSession.invalidateCaptures();
+  }
   #ocrExecutable?: Promise<string>;
 
   constructor(
