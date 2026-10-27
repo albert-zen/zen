@@ -213,9 +213,27 @@ test("Computer unchanged diffs renew action observation identity without resendi
     added: [],
     updated: [],
     removedFromView: [],
+    order: first.controls!.map(({ selector }) => selector.targetId),
   });
+  assert.equal(delta.controls, undefined);
   assert.notEqual(delta.observation.actionObservationId, first.observationId);
-  const retained = applyControlDiff(first.controls!, delta)[0]!;
+  const reconstructed = applyControlDiff(first.controls!, delta);
+  assert.deepEqual(
+    reconstructed,
+    first.controls!.map((control) => ({
+      ...control,
+      selector: { ...control.selector, observationId: delta.observationId },
+    })),
+  );
+  await assert.rejects(
+    fixture.invoke("computer_press", "thread-a", {
+      target,
+      control: first.controls![0]!.selector,
+    }),
+    /stale/u,
+  );
+  assert.equal(fixture.backend.actions.length, 0);
+  const retained = reconstructed[0]!;
   await fixture.invoke("computer_press", "thread-a", {
     target,
     control: retained.selector,
@@ -224,6 +242,30 @@ test("Computer unchanged diffs renew action observation identity without resendi
     fixture.backend.actions[0]!.control,
     fixture.backend.lastCapture[0]!.selector,
   );
+});
+
+test("Computer tiny unchanged observations resync when exact diff metadata exceeds a full view", async (t) => {
+  const fixture = createFixture(1);
+  fixture.backend.scene = [
+    { role: "button", title: "", enabled: true, actions: [] },
+  ];
+  t.after(() => fixture.capability.close());
+  const first = await fixture.inspect("thread-a");
+  const next = await fixture.inspect("thread-a", {
+    baseObservationId: first.observationId,
+  });
+  assert.equal(next.observation.format, "full");
+  assert.equal(next.observation.resetReason, "diff-not-smaller");
+  assert.equal(next.controlChanges, undefined);
+  assert.deepEqual(next.controls, [
+    {
+      ...first.controls![0],
+      selector: {
+        ...first.controls![0]!.selector,
+        observationId: next.observationId,
+      },
+    },
+  ]);
 });
 
 test("Computer cursor reads reach every retained control without recapture or completeness inflation", async (t) => {

@@ -145,11 +145,26 @@ test("a successful Computer action explicitly restarts a failed same-window capt
     assert.equal(starts, 1, "a terminal failure must not automatically retry");
     assert.equal(captures, 1);
 
+    const beforeAction = events.length;
     await press("fresh-action");
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(starts, 2, "an explicit successful action restarts capture");
     assert.equal(captures, 2);
-    assert.equal(events.at(-1)?.type, "frame");
+    const freshEvents = events.slice(beforeAction);
+    const frame = freshEvents.find((event) => event.type === "frame");
+    assert.ok(frame, "the restarted capture delivers a new frame");
+    assert.equal(
+      frame.frame.data,
+      Buffer.from("fresh frame").toString("base64"),
+    );
+    assert.ok(
+      freshEvents.some(
+        (event) => event.type === "status" && event.status === "live",
+      ),
+    );
+    const settled = events.findLast((event) => event.type === "targets");
+    assert.equal(settled?.targets[0]?.activity, undefined);
+    assert.equal(settled?.targets[0]?.pointer?.action, "press");
 
     control = (await inspectOwned(capability)).controls[0]!.selector;
     await press("continuing-action");
