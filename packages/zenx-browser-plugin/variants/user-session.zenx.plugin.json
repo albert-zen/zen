@@ -73,7 +73,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -118,7 +118,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -153,6 +153,12 @@
           },
           "tabId": {
             "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Search role/name/value among backend-captured targets only; follow nextCursor for more matches."
           },
           "cursor": {
             "type": "string",
@@ -200,7 +206,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -241,7 +247,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -290,7 +296,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -347,7 +353,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -397,7 +403,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -450,7 +456,7 @@
           },
           "observe": {
             "type": "boolean",
-            "description": "Return a fresh observation after the action; prefer true to avoid a separate browser_inspect call. Surviving DOM nodes retain targetId, but observationId is always fresh. baseObservationId may request a diff of the retained first page. Defaults to false."
+            "description": "Return a fresh observation after the action; defaults to true. Set false for a summary-only result."
           },
           "baseObservationId": {
             "type": "string",
@@ -551,7 +557,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Browser for bounded tab inspection and interaction. Inspect coverage: a full response is a self-contained bounded view, not necessarily the whole page. Follow nextCursor with browser_inspect cursor to read the same immutable capture without renewing its observationId; native omissions remain explicit. Stable targetId values only act with the latest observationId and are revalidated. Prefer observe:true on actions. Pass baseObservationId only while retaining that first-page baseline (and applied targetChanges); omitted base or full:true resynchronizes, including after context compaction. Diffs use added/updated/removedFromView and optional complete order, with visibleText replaced only when present; removedFromView never proves DOM deletion. Cursor pages do not change the first-page diff baseline. Discard all prior continuation pages when adopting a new observation or first-page diff; use the new nextCursor to read its tails. If actionCompleted:true includes observationError, inspect again without repeating the completed action. Shared Workspace tabs expose control and mutationsRequireObservation. Human control blocks Agent mutations; only the user can return control. After takeover, every mutation, including browser_navigate/browser_close, must carry the latest observationId from a new browser_inspect after return. In-flight/unknown actions are not cancelled; never replay them automatically.",
+  "mainDocument": "Browser actions observe by default and use exact backend-scoped refs. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
   "ui": {
     "bundles": [
       {
