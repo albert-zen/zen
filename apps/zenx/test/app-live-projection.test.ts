@@ -2902,7 +2902,13 @@ test("full App consumes Room panel=open once; background collapse sticks and exp
   }
 });
 
-test("Room Side chat drafts stay visible locally, close without creating, and first Send promotes in the Room workspace", async () => {
+test("Room Side chat drafts stay visible locally, close without creating, and first Send promotes in the Room workspace", () =>
+  roomSideChatScenario(false));
+
+test("Room Side chat promotion waits for its receipt and preserves a newer user tab selection", () =>
+  roomSideChatScenario(true));
+
+async function roomSideChatScenario(navigateWhilePromoting: boolean) {
   const room = {
     id: "side-chat-room",
     name: "Side chat Room",
@@ -2974,6 +2980,8 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
   );
   const listeners = new Set<(s: ThreadSidebarState) => void>();
   const writes: ThreadSidebarPatch[] = [];
+  const promotionRelease = deferred<void>();
+  let promotionBlocked = false;
   const sidebarApi: ThreadSidebarApi = {
     read: async (owner) =>
       typeof owner !== "string" && owner.kind === "room"
@@ -2985,6 +2993,16 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
     },
     update: async (request) => {
       assert.deepEqual(request.owner, { kind: "room", id: room.id });
+      if (
+        navigateWhilePromoting &&
+        !promotionBlocked &&
+        request.patch.tabs?.some(
+          (tab) => tab.kind === "thread" && tab.threadId === "room-child",
+        )
+      ) {
+        promotionBlocked = true;
+        await promotionRelease.promise;
+      }
       if (request.expectedRevision !== state.revision)
         return { applied: false, state: structuredClone(state) };
       state = applySidebarPatch(state, request.patch);
@@ -3001,7 +3019,13 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
       get: async () => ({}),
       onChange: () => () => undefined,
       observe: async () => undefined,
-    } as typeof window.zenx.titles,
+      rename: async () => {
+        throw Error("No title rename expected");
+      },
+      retry: async () => {
+        throw Error("No title retry expected");
+      },
+    },
     sidebarApi,
     request: async (method, params) => {
       if (method === "zen/thread/read")
@@ -3091,6 +3115,33 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
       props(send).onClick();
     });
     assert.equal(creates.length, 1, document.body.textContent ?? "");
+    if (navigateWhilePromoting) {
+      await waitFor(() => promotionBlocked);
+      assert.equal(
+        sends.length,
+        1,
+        "native create and Send already succeeded before the Room tab receipt is released",
+      );
+      assert.equal(
+        state.tabs.some(
+          (tab) => tab.kind === "thread" && tab.threadId === "room-child",
+        ),
+        false,
+      );
+      const overview = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '[role="tab"][id*="custom:overview"]',
+        ),
+      );
+      await act(async () => overview.click());
+      assert.equal(
+        overview.getAttribute("aria-selected"),
+        "true",
+        "user selection takes effect while the promotion receipt is pending",
+      );
+      await act(async () => promotionRelease.resolve());
+      await waitFor(() => state.selectedTab === "custom:overview");
+    }
     await act(async () => new Promise((resolve) => setTimeout(resolve, 30)));
     assert.equal(sends.length, 1, document.body.textContent ?? "");
     assert.ok(
@@ -3106,14 +3157,31 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
       snapshot: { itemId: "thread-1-metadata", contextItemId: null },
     });
     assert.equal(sends.length, 1);
-    assert.equal(state.selectedTab, "thread:room-child");
+    assert.equal(
+      state.selectedTab,
+      navigateWhilePromoting ? "custom:overview" : "thread:room-child",
+    );
+    if (navigateWhilePromoting) {
+      assert.equal(
+        writes.some((patch) => patch.selectedTab === "thread:room-child"),
+        false,
+        "late promotion never queues a child selection after newer navigation",
+      );
+      assert.equal(
+        document
+          .querySelector('[role="tab"][id*="custom:overview"]')
+          ?.getAttribute("aria-selected"),
+        "true",
+      );
+    }
     assert.equal(state.resourceThreadId, "thread-1");
     assert.equal(room.members.length, 1);
     assert.doesNotMatch(JSON.stringify(writes), /side-chat-draft/);
     assert.ok(document.querySelector('[role="tab"][id*="thread:room-child"]'));
     assert.match(document.body.textContent ?? "", /Synthetic Room body/);
   } finally {
+    promotionRelease.resolve();
     await harness.unmount();
     dispose();
   }
-});
+}
