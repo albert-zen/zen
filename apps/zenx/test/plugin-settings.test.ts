@@ -448,6 +448,7 @@ test("Computer access review explains session and selected-provider limits witho
     dom.window.document.body.textContent ?? "",
     /read a selected window and attempt a separately authorized background click while locked/u,
   );
+  assert.match(dom.window.document.body.textContent ?? "", /macOS 14\+/u);
   assert.match(
     dom.window.document.body.textContent ?? "",
     /Foreground control requires unlock/u,
