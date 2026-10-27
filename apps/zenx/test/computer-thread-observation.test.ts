@@ -17,6 +17,28 @@ const windowTarget: ComputerTarget = {
   windowTitle: "Fixture window",
 };
 
+test("Computer activity remains visible for the exact window until provider settlement", () => {
+  const observation = new ComputerThreadObservation(fakeBackend());
+  const events: ComputerThreadEvent[] = [];
+  observation.observe({ threadId: "thread-a", frames: false }, (event) =>
+    events.push(event),
+  );
+  const settle = observation.startActivity(
+    "thread-a",
+    "call-a",
+    windowTarget,
+    "background-window",
+  );
+  const current = () =>
+    [...events].reverse().find((event) => event.type === "targets");
+  assert.equal(current()?.targets[0]?.activity?.kind, "background-window");
+  assert.equal(current()?.targets[0]?.activity?.count, 1);
+  observation.publish("thread-a", "call-a", windowTarget);
+  assert.equal(current()?.targets[0]?.activity?.count, 1);
+  settle();
+  assert.equal(current()?.targets[0]?.activity, undefined);
+});
+
 test("Computer observation is thread and invocation scoped and stops the exact live window", () => {
   const backend = fakeBackend();
   const observation = new ComputerThreadObservation(backend);

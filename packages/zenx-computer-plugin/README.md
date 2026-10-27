@@ -2,19 +2,22 @@
 
 First-party Computer package distributed with ZenX and installed through the ordinary plugin profile.
 
-On Windows (WinApp CLI) and the bundled macOS provider, start with
-`computer_list_windows({})`. It returns up to 32 open windows with their running
-application name and an exact `target` that can be passed directly to
-`computer_inspect`, `computer_screenshot`, and subsequent semantic actions. It
-does not activate windows or enumerate installed applications. Use `query` to
-match an application name, PID, or window title when `truncated` is true. Query
-matching is case insensitive and happens before the result limit.
+Start with `computer_environment({})` to read the current desktop availability.
+The Host refuses targeted work while the session is locked or suspended and
+invalidates observations on a state change. It never unlocks the desktop or
+replays input. On Windows and the bundled macOS provider,
+`computer_list_windows({})` returns up to 32 open windows with exact, owner-scoped
+short `ref` values. Pass a window ref to `computer_inspect`,
+`computer_screenshot` or `computer_select_target`. Native callers can still
+use the exact target object. Listing does not activate windows or enumerate
+installed applications. Use `query` to filter by application name, PID or
+title before the result limit.
 
 Titles are preserved exactly, including empty titles and titles longer than 256
 characters; targeted operations accept titles up to 4096 characters. Re-list after a window closes or is renamed. Identical titles within
 one Windows process remain ambiguous and explicitly fail; do not guess a target.
-Discovery supplies targets, not control selectors: inspect the selected window
-before acting.
+Discovery supplies windows, not control selectors: inspect the window before
+acting. A ref is an exact scoped reference, not a persistent window identity.
 
 The bundled macOS discovery uses its existing Accessibility helper and requires
 Accessibility permission. Packaged helpers are precompiled; explicit development
@@ -25,9 +28,18 @@ Mac for live verification.
 
 ## Observation pages and diffs
 
-Bundled macOS 1.0.2, Peekaboo 1.0.1 and WinApp 1.1.2 add optional `cursor`,
-`baseObservationId` and `full` to `computer_inspect`. Update the installed
-Computer package in Plugin settings to expose the new schema.
+The model-facing `computer_inspect` accepts an exact `target` window ref,
+optional `query` and `limit` to narrow the captured controls, `since` with a
+retained observation ref for a diff, or `full:true` to rebuild a first page.
+The result's coverage names the captured scope; a query miss does not claim
+the entire window is empty. Native callers retain `baseObservationId`.
+The pinned strict Windows UIA inspection protocol intentionally omits a control's
+current Value, including password values. `computer_set_value` on that provider
+reports `valueReadback.matchesRequested` only after an exact native
+ValuePattern readback; it does not echo the supplied text. That establishes the
+immediate control value and does not establish that an application saved or
+submitted it. Verify the latter through a fresh app-visible status when one
+exists. Other providers may have different inspection/readback limits.
 
 The first reply still contains at most 32 controls. `nextCursor` reads another
 page of the same immutable capture using the same exact target, observation
@@ -43,13 +55,18 @@ Inspect `coverage.scope`, `sourceComplete`, `reasons` and `items.hasMore`.
 Native incompleteness remains explicit after the final page. `full` means a
 self-contained bounded view; it does not mean a complete accessibility tree.
 Screenshots and foreground scrolling are separate operations, not complete
-text/tree retrieval substitutes. Control search/subtree queries are not added.
+text/tree retrieval substitutes.
 
-Pass `baseObservationId` only while retaining that first-page baseline and its
-applied diffs. A smaller matching diff contains `controlChanges` with `added`,
-`updated`, `removedFromView` and optional complete `order`. Apply those changes,
-then replace every retained `control.selector.observationId` with
-`observation.actionObservationId`. All actions must use that current frame.
+Pass `since` only while retaining that first-page baseline and its applied
+diffs. A matching diff contains `controlChanges` with `added`, `updated`,
+`removedFromView`, complete `order`, and `replacements` mapping every retained
+old ref to its fresh ref. Apply those changes in order; model callers do not
+edit selectors. A retained control can be used with an explicit latest
+`observation` ref for the same window, subject to native freshness checks.
+`computer_press` and `computer_set_value` observe by default and return a small,
+self-contained focused view after the action. Pass `since` for an exact diff or
+`full:true` for a full first page. If the result says `actionCompleted` with
+`observationError`, inspect again without repeating the action.
 Discard old continuation pages on each fresh observation/diff and follow its
 new cursor for tails. Omit the base or use `full: true` after context compaction
 or lost context. Missing/expired bases and scope changes produce a full reset.

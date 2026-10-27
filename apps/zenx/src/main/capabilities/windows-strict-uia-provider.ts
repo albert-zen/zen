@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
 import type { ZenXPluginManifestV2 } from "./types.js";
 import {
   ComputerObservationLedger,
@@ -32,7 +33,7 @@ import {
 
 export const windowsStrictUiaCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(windowsComputerCapabilityManifest),
-  version: "1.2.0",
+  version: COMPUTER_PLUGIN_VERSION,
   description:
     "Verified ZenX downstream UIA client with automatic focus disabled. Exact native controls support single semantic actions without requested activation; the target application may still change focus itself. Strict capture never restores or activates windows.",
   provider: {
@@ -61,7 +62,7 @@ export const windowsStrictUiaCapabilityManifest: ZenXPluginManifestV2 = {
       capabilities: tool.capabilities
         .filter((capability) => capability !== "may_activate_target")
         .concat("uia.auto_set_focus_disabled", "native_identity_revalidated"),
-      description: `${tool.name === "computer_press" ? "Invoke once" : "Set and verify the exact supplied text"} on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.`,
+      description: `${tool.name === "computer_press" ? "Invoke once" : "Set and verify the exact supplied text"} on one freshly observed, uniquely identified native HWND control using the verified downstream UIA client with AutoSetFocus=false. No selector, other-pattern, activation or global-input fallback. Virtual and stale controls are refused. ${tool.name === "computer_set_value" ? "A completed action reports exact immediate ValuePattern readback match without echoing the text; application save or submit remains unverified. " : ""}The target application itself can still change focus; interruption after possible dispatch has an unknown outcome and must not be retried automatically.`,
     };
   }),
 };
@@ -279,7 +280,15 @@ export class WinAppStrictUiaComputerBackend implements ZenXComputerBackend {
         "set_value",
         "exact Unicode readback did not match",
       );
-    return { target: identity.target, control, characterCount: value.length };
+    return {
+      target: identity.target,
+      control,
+      characterCount: value.length,
+      valueReadback: {
+        matchesRequested: true as const,
+        source: "native_value_pattern" as const,
+      },
+    };
   }
   #consume(
     target: ComputerTarget,
@@ -373,6 +382,11 @@ export class WinAppStrictUiaComputerBackend implements ZenXComputerBackend {
   async foregroundScroll(): Promise<void> {
     throw new Error("Strict UIA provider does not support global input");
   }
+  invalidateObservations(): void {
+    this.#observations.clear();
+    this.#stock.invalidateObservations();
+  }
+
   async close(): Promise<void> {
     this.#lifetime.abort(
       new Error("Strict UIA provider closed; invocation revoked"),

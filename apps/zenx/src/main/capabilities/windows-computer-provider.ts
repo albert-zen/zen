@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -35,7 +36,7 @@ export const MINIMUM_WINAPP_CLI_VERSION = "0.3.1";
 
 export const windowsComputerCapabilityManifest: ZenXPluginManifestV2 = {
   ...structuredClone(computerCapabilityManifest),
-  version: "1.1.5",
+  version: COMPUTER_PLUGIN_VERSION,
   description:
     "Optional Windows desktop operations backed by Microsoft's WinApp CLI: targeted UI Automation and strict PrintWindow capture. UIA Invoke and set-value may activate the target and require explicit foreground permission; unsupported global input never silently substitutes for semantic operations.",
   provider: {
@@ -716,6 +717,10 @@ export class WinAppCliComputerBackend implements ZenXComputerBackend {
 
   async foregroundScroll(): Promise<void> {
     throw unsupportedForeground();
+  }
+
+  invalidateObservations(): void {
+    this.#observations.clear();
   }
 
   async close(): Promise<void> {

@@ -1,10 +1,10 @@
 {
   "name": "@zenx/browser-plugin",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "First-party ZenX Browser plugin",
   "type": "module",
   "files": [
-    "dist/runtime.js",
+    "dist/",
     "zenx.plugin.json",
     "README.md"
   ],

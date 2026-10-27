@@ -481,13 +481,22 @@ export class ObservationPresentation<T> {
       JSON.stringify([...oldItems.keys()]) !==
       JSON.stringify([...nowItems.keys()]);
     const textChanged = state.first.text !== previous.first.text;
-    if (!textChanged && this.adapter.textField !== undefined)
+    if (this.adapter.textField !== undefined) {
       delete output[this.adapter.textField];
+      if (textChanged)
+        output[`${this.adapter.textField}Change`] = textChange(
+          previous.first.text ?? "",
+          state.first.text ?? "",
+        );
+    }
     output[this.adapter.changesField] = {
       added,
       updated,
       removedFromView,
-      ...(changedOrder ? { order: [...nowItems.keys()] } : {}),
+      // A new observation also renews action refs for retained entries. The
+      // complete bounded order lets a model-facing adapter publish that exact
+      // correspondence without guessing which old refs survived prior diffs.
+      order: [...nowItems.keys()],
     };
     Object.assign(output.observation as object, {
       baseObservationId: previous.id,
@@ -524,6 +533,33 @@ export class ObservationPresentation<T> {
 
 function size(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+/** One reversible splice against the declared first-page baseline, in UTF-16 offsets. */
+function textChange(before: string, after: string) {
+  let start = 0;
+  const limit = Math.min(before.length, after.length);
+  while (start < limit && before[start] === after[start]) start++;
+  // Keep code points intact when two emoji share a high surrogate.
+  if (start > 0 && lowSurrogate(before.charCodeAt(start))) start--;
+  let suffix = 0;
+  while (
+    suffix < before.length - start &&
+    suffix < after.length - start &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  )
+    suffix++;
+  if (suffix > 0 && lowSurrogate(before.charCodeAt(before.length - suffix)))
+    suffix--;
+  return {
+    start,
+    deleteCount: before.length - start - suffix,
+    text: after.slice(start, after.length - suffix),
+  };
+}
+
+function lowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 function textSlice(text: string, start: number, end: number): string {

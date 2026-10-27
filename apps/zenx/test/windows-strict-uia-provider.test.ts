@@ -152,6 +152,11 @@ test("verified strict route performs one Unicode mutation without foreground per
       (receipt as { characterCount: number }).characterCount,
       value.length,
     );
+    assert.deepEqual((receipt as { valueReadback: unknown }).valueReadback, {
+      matchesRequested: true,
+      source: "native_value_pattern",
+    });
+    assert.equal(JSON.stringify(receipt).includes(value), false);
     assert.equal(
       f.requests.filter((r) => r.operation === "set_value").length,
       1,

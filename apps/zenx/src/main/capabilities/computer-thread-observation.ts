@@ -14,6 +14,10 @@ export interface ComputerThreadTarget {
   target: ComputerTarget;
   mode: "live" | "snapshot";
   pointer?: ComputerActionPointer;
+  activity?: {
+    kind: "background-window" | "foreground" | "waiting-human" | "unknown";
+    count: number;
+  };
 }
 export interface ComputerThreadRequest {
   threadId: string;
@@ -43,11 +47,68 @@ const POINTER_TTL_MS = 3_000;
 export class ComputerThreadObservation {
   readonly #backend: ZenXComputerBackend;
   readonly #targets = new Map<string, ComputerThreadTarget[]>();
+  readonly #activities = new Map<
+    string,
+    Map<string, NonNullable<ComputerThreadTarget["activity"]>["kind"]>
+  >();
   readonly #observers = new Set<Observer>();
   #closed = false;
 
   constructor(backend: ZenXComputerBackend) {
     this.#backend = backend;
+  }
+
+  /** A disposable Host observation of an admitted call, not a durable run state. */
+  startActivity(
+    threadId: string,
+    invocationId: string,
+    target: ComputerTarget,
+    kind: NonNullable<ComputerThreadTarget["activity"]>["kind"],
+  ): () => void {
+    if (this.#closed || !target.windowTitle) return () => {};
+    const key = JSON.stringify([threadId, targetKey(target)]);
+    const calls = this.#activities.get(key) ?? new Map();
+    calls.set(invocationId, kind);
+    this.#activities.set(key, calls);
+    this.publish(threadId, invocationId, target);
+    let settled = false;
+    return () => {
+      if (settled) return;
+      settled = true;
+      const current = this.#activities.get(key);
+      if (current?.get(invocationId) !== kind) return;
+      current.delete(invocationId);
+      if (current.size === 0) this.#activities.delete(key);
+      const targets = this.#targets.get(threadId);
+      const found = targets?.find(
+        (item) => targetKey(item.target) === targetKey(target),
+      );
+      if (found) {
+        const activity = this.#activity(threadId, target);
+        if (activity) found.activity = activity;
+        else delete found.activity;
+        this.#notify(threadId);
+      }
+    };
+  }
+
+  #activity(
+    threadId: string,
+    target: ComputerTarget,
+  ): ComputerThreadTarget["activity"] {
+    const calls = this.#activities.get(
+      JSON.stringify([threadId, targetKey(target)]),
+    );
+    if (!calls?.size) return undefined;
+    const kinds = [...calls.values()];
+    const kind = kinds.includes("foreground")
+      ? "foreground"
+      : kinds.includes("waiting-human")
+        ? "waiting-human"
+        : kinds.includes("background-window")
+          ? "background-window"
+          : "unknown";
+    return { kind, count: calls.size };
   }
 
   publish(
@@ -67,6 +128,9 @@ export class ComputerThreadObservation {
       invocationId,
       target: { ...target },
       mode: this.#backend.observeWindow ? "live" : "snapshot",
+      ...(this.#activity(threadId, target)
+        ? { activity: this.#activity(threadId, target) }
+        : {}),
       ...(pointer && validPointer(pointer) ? { pointer: { ...pointer } } : {}),
     };
     const targets = [
@@ -94,6 +158,7 @@ export class ComputerThreadObservation {
   close(): void {
     this.#closed = true;
     this.#targets.clear();
+    this.#activities.clear();
     for (const observer of this.#observers) this.#stop(observer);
     this.#observers.clear();
   }

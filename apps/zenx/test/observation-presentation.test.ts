@@ -125,6 +125,10 @@ test("unchanged view emits small diff while action references resolve to the fre
   const second = publish(p, "obs2", capture(2), { baseObservationId: "obs1" });
   assert.equal(second.observation.format, "diff");
   assert.equal(second.observation.unchanged, true);
+  assert.deepEqual(
+    second.targetChanges.order,
+    first.targets.map((item: Item) => item.targetId),
+  );
   assert.equal(second.visibleText, undefined);
   assert.equal(
     await p.resolveAction("owner/tab", "obs2", first.targets[0].targetId),
@@ -140,6 +144,28 @@ test("unchanged view emits small diff while action references resolve to the fre
   process.stdout.write(
     `observation fixture serialized bytes: full=${fullBytes}, unchanged diff=${deltaBytes}\n`,
   );
+});
+
+test("a local text edit returns a reversible UTF-16 splice instead of repeating the first page", () => {
+  const p = presenter();
+  const before = "前文 ".repeat(700) + "🙂 pending" + " 后文".repeat(700);
+  const after = before.replace("🙂 pending", "🙃 已完成");
+  const first = publish(p, "text-1", capture(1, 0, before));
+  const next = publish(p, "text-2", capture(2, 0, after), {
+    baseObservationId: "text-1",
+  });
+  assert.equal(next.observation.format, "diff");
+  assert.equal(next.visibleText, undefined);
+  const change = next.visibleTextChange;
+  assert.ok(change, "text difference must carry its reconstruction operation");
+  assert.equal(
+    first.visibleText.slice(0, change.start) +
+      change.text +
+      first.visibleText.slice(change.start + change.deleteCount),
+    after,
+  );
+  assert.equal(change.text, "🙃 已完成");
+  assert.ok(JSON.stringify(next).length < JSON.stringify(first).length / 2);
 });
 
 test("new document, missing base and explicit full produce self-contained resets", () => {

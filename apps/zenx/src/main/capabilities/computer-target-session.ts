@@ -68,6 +68,7 @@ export class ComputerTargetSession {
   ): Promise<BoundComputerTarget> {
     signal.throwIfAborted();
     if (this.#closed) throw new Error("Computer target session is closed");
+    const generation = this.#captureGeneration;
     this.#selected.delete(owner);
     this.#captures.delete(owner);
     const result = (await this.transport.request(
@@ -76,6 +77,10 @@ export class ComputerTargetSession {
     )) as BoundComputerTarget;
     signal.throwIfAborted();
     if (this.#closed) throw new Error("Computer target session is closed");
+    if (generation !== this.#captureGeneration)
+      throw new Error(
+        "Computer selection retired while the desktop session changed; select again",
+      );
     this.#selected.set(owner, result);
     return result;
   }
@@ -174,6 +179,11 @@ export class ComputerTargetSession {
     return result;
   }
 
+  invalidateSelections(): void {
+    this.#selected.clear();
+    this.invalidateCaptures();
+  }
+
   invalidateCaptures(): void {
     this.#captureGeneration++;
     this.#captures.clear();
@@ -186,6 +196,22 @@ export class ComputerTargetSession {
         "Select a Computer target before input; no input dispatched",
       );
     return binding.bindingId;
+  }
+
+  /** Read-only activity label; does not select, renew or authorize a target. */
+  selectedTarget(
+    owner: string,
+    expectedBindingId?: string,
+  ): ComputerTarget | undefined {
+    const binding = this.#selected.get(owner);
+    if (
+      this.#closed ||
+      !binding ||
+      (expectedBindingId !== undefined &&
+        binding.bindingId !== expectedBindingId)
+    )
+      return;
+    return structuredClone(binding.target);
   }
 
   async input(

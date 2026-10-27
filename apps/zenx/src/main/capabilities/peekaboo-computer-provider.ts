@@ -355,6 +355,10 @@ export class PeekabooComputerBackend implements ZenXComputerBackend {
     );
   }
 
+  invalidateObservations(): void {
+    this.#observations.clear();
+  }
+
   async close(): Promise<void> {
     this.#observations.clear();
     for (const snapshotId of [...this.#snapshotIds]) {
