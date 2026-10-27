@@ -1,4 +1,7 @@
-import type { LocalEncryption } from "./credential-vault.js";
+import {
+  CredentialStorageError,
+  type LocalEncryption,
+} from "./credential-vault.js";
 
 export interface LocalEncryptionBackend extends LocalEncryption {
   getSelectedStorageBackend?(): string;
@@ -22,9 +25,7 @@ export function secureLocalEncryption(
   };
   const requireAvailable = () => {
     if (!available())
-      throw new Error(
-        "Operating-system credential encryption is unavailable; no plaintext fallback is used",
-      );
+      throw new CredentialStorageError("credential-storage-unavailable");
   };
   return {
     isEncryptionAvailable: available,

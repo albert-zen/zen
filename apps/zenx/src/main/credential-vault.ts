@@ -8,6 +8,26 @@ export interface LocalEncryption {
   decryptString(value: Buffer): string;
 }
 
+export const credentialStorageFailureMessages = {
+  "credential-storage-unavailable":
+    "Operating-system credential encryption is unavailable; unlock the system keychain and try again. No plaintext fallback is used",
+  "credential-encryption-failed": "Could not encrypt the Provider API key",
+  "credential-decryption-failed": "Could not decrypt a Provider API key",
+  "credential-read-failed": "Could not read the Provider credential store",
+  "credential-write-failed":
+    "Could not persist the encrypted Provider credential store",
+} as const;
+
+export type CredentialStorageFailureCode =
+  keyof typeof credentialStorageFailureMessages;
+
+/** A fixed boundary observation, never a native error, path, or secret. */
+export class CredentialStorageError extends Error {
+  constructor(readonly code: CredentialStorageFailureCode) {
+    super(credentialStorageFailureMessages[code]);
+  }
+}
+
 interface StoredVaultV1 {
   version: 1;
   apiKey: string;
@@ -143,8 +163,13 @@ export class ZenXCredentialVault {
     this.#requireEncryption();
     try {
       return this.#encryption.encryptString(apiKey).toString("base64");
-    } catch {
-      throw new Error("Could not encrypt the Provider API key");
+    } catch (error) {
+      if (
+        error instanceof CredentialStorageError &&
+        error.code === "credential-storage-unavailable"
+      )
+        throw error;
+      throw new CredentialStorageError("credential-encryption-failed");
     }
   }
 
@@ -153,64 +178,77 @@ export class ZenXCredentialVault {
     let value: string;
     try {
       value = this.#encryption.decryptString(Buffer.from(encrypted, "base64"));
-    } catch {
-      throw new Error("Could not decrypt a Provider API key");
+    } catch (error) {
+      if (
+        error instanceof CredentialStorageError &&
+        error.code === "credential-storage-unavailable"
+      )
+        throw error;
+      throw new CredentialStorageError("credential-decryption-failed");
     }
     if (value.length === 0)
-      throw new Error("ZenX credential vault contained an empty API key");
+      throw new CredentialStorageError("credential-decryption-failed");
     return value;
   }
 
   #requireEncryption(): void {
-    if (!this.#encryption.isEncryptionAvailable()) {
-      throw new Error(
-        "Operating-system credential encryption is unavailable; unlock the system keychain and try again",
-      );
+    let available = false;
+    try {
+      available = this.#encryption.isEncryptionAvailable();
+    } catch {
+      // An unreadable availability check cannot authorize secret storage.
     }
+    if (!available)
+      throw new CredentialStorageError("credential-storage-unavailable");
   }
 
   async #readStored(): Promise<StoredVault | undefined> {
-    let handle;
     try {
-      handle = await open(this.#filePath, "r");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-    try {
-      const metadata = await handle.stat();
-      if (!metadata.isFile())
-        throw new Error("ZenX credential vault is not a regular file");
-      if (process.platform !== "win32" && (metadata.mode & 0o044) !== 0) {
-        throw new Error("ZenX credential vault permissions are too broad");
+      let handle;
+      try {
+        handle = await open(this.#filePath, "r");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return undefined;
+        throw error;
       }
-      const stored: unknown = JSON.parse(await handle.readFile("utf8"));
-      if (!isStoredVault(stored))
-        throw new Error("ZenX credential vault is invalid");
-      return stored;
-    } catch (error) {
-      if (error instanceof SyntaxError)
-        throw new Error("ZenX credential vault is invalid");
-      throw error;
-    } finally {
-      await handle.close();
+      try {
+        const metadata = await handle.stat();
+        if (
+          !metadata.isFile() ||
+          (process.platform !== "win32" && (metadata.mode & 0o044) !== 0)
+        )
+          throw new CredentialStorageError("credential-read-failed");
+        const stored: unknown = JSON.parse(await handle.readFile("utf8"));
+        if (!isStoredVault(stored))
+          throw new CredentialStorageError("credential-read-failed");
+        return stored;
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      throw new CredentialStorageError("credential-read-failed");
     }
   }
 
   async #writeStored(stored: StoredVaultV2): Promise<void> {
-    const directory = path.dirname(this.#filePath);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const temporary = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temporary, `${JSON.stringify(stored)}\n`, {
-        mode: 0o600,
-        encoding: "utf8",
-      });
-      await rename(temporary, this.#filePath);
-    } finally {
-      await unlink(temporary).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      });
+      const directory = path.dirname(this.#filePath);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const temporary = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(stored)}\n`, {
+          mode: 0o600,
+          encoding: "utf8",
+        });
+        await rename(temporary, this.#filePath);
+      } finally {
+        await unlink(temporary).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
+      }
+    } catch {
+      throw new CredentialStorageError("credential-write-failed");
     }
   }
 }

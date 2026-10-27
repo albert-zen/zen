@@ -70,14 +70,13 @@ import type {
   ZenXSidebarOrder,
 } from "./host-profile.js";
 import {
-  ConfigurationPreCommitError,
+  providerKnownRejectionCode,
   ZenXSettingsService,
 } from "./settings-service.js";
 import {
   isRendererSettingsDiagnostic,
   SettingsDiagnosticLog,
   runDiagnosedProviderMutation,
-  type ProviderKnownRejectionCode,
 } from "./settings-diagnostic-log.js";
 import { OperationalDiagnosticLog } from "./operational-diagnostic-log.js";
 import {
@@ -501,7 +500,7 @@ async function bootstrapZenX(): Promise<void> {
     zenDataDirectory,
     vault: new ZenXCredentialVault(
       join(userDataDirectory, "credentials.vault"),
-      safeStorage,
+      secureLocalEncryption(safeStorage),
     ),
   });
   const settingsDiagnostics = new SettingsDiagnosticLog(userDataDirectory);
@@ -2649,16 +2648,6 @@ function isApprovalDecision(value: unknown): value is ApprovalDecision {
     value === "decline" ||
     value === "cancel"
   );
-}
-
-function providerKnownRejectionCode(
-  error: unknown,
-): ProviderKnownRejectionCode | undefined {
-  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
-  const reason = "reason" in error ? error.reason : undefined;
-  if (reason === "conflict") return "revision-conflict";
-  if (reason === "validation") return "validation-rejected";
-  return "save-rejected";
 }
 
 function requireConfigurationRevision(value: unknown): void {

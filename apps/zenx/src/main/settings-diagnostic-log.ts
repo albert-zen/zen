@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  credentialStorageFailureMessages,
+  type CredentialStorageFailureCode,
+} from "./credential-vault.js";
 import { BoundedLocalDiagnosticLog } from "./bounded-diagnostic-log.js";
 
 export const providerValidationReasons = [
@@ -29,7 +33,10 @@ export type ProviderOperation = "add" | "edit";
 export type ProviderSaveOutcome =
   "success" | "failed" | "committed-error" | "unconfirmed";
 export type ProviderKnownRejectionCode =
-  "revision-conflict" | "validation-rejected" | "save-rejected";
+  | "revision-conflict"
+  | "validation-rejected"
+  | "save-rejected"
+  | CredentialStorageFailureCode;
 export type ProviderMutationFailureCode =
   ProviderKnownRejectionCode | "save-finalization-failed" | "save-unconfirmed";
 
@@ -60,6 +67,7 @@ export type SettingsDiagnosticEvent =
       attemptId: string;
       operation: ProviderOperation;
       outcome: ProviderSaveOutcome;
+      code?: ProviderMutationFailureCode;
     };
 
 type DiagnosticRecord = SettingsDiagnosticEvent & { timestamp: string };
@@ -71,6 +79,14 @@ const outcomes = new Set<ProviderSaveOutcome>([
   "failed",
   "committed-error",
   "unconfirmed",
+]);
+const failureCodes = new Set<string>([
+  "revision-conflict",
+  "validation-rejected",
+  "save-rejected",
+  "save-finalization-failed",
+  "save-unconfirmed",
+  ...Object.keys(credentialStorageFailureMessages),
 ]);
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -117,12 +133,22 @@ export function normalizeSettingsDiagnostic(
   }
   if (value.event === "provider-save-outcome") {
     if (!outcomes.has(value.outcome as ProviderSaveOutcome)) return null;
+    if (
+      value.code !== undefined &&
+      (typeof value.code !== "string" ||
+        !failureCodes.has(value.code) ||
+        value.outcome === "success")
+    )
+      return null;
     return {
       timestamp: common.timestamp,
       event: "provider-save-outcome",
       attemptId: common.attemptId,
       operation: common.operation,
       outcome: value.outcome as ProviderSaveOutcome,
+      ...(value.code === undefined
+        ? {}
+        : { code: value.code as ProviderMutationFailureCode }),
     };
   }
   return null;
@@ -212,23 +238,20 @@ export async function runDiagnosedProviderMutation<T>(options: {
         : committed
           ? "committed-error"
           : "unconfirmed";
+    const code: ProviderMutationFailureCode =
+      outcome === "failed"
+        ? (rejectionCode ?? "save-rejected")
+        : outcome === "committed-error"
+          ? "save-finalization-failed"
+          : "save-unconfirmed";
     await recordSafely(options.log, {
       event: "provider-save-outcome",
       attemptId,
       operation: options.operation,
       outcome,
+      code,
     });
-    return {
-      ok: false,
-      outcome,
-      code:
-        outcome === "failed"
-          ? (rejectionCode ?? "save-rejected")
-          : outcome === "committed-error"
-            ? "save-finalization-failed"
-            : "save-unconfirmed",
-      attemptId,
-    };
+    return { ok: false, outcome, code, attemptId };
   }
 }
 

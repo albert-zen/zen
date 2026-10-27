@@ -1,3 +1,4 @@
+import type { ProviderKnownRejectionCode } from "./settings-diagnostic-log.js";
 import {
   normalizeExternalApplications,
   type ExternalApplicationId,
@@ -59,7 +60,11 @@ import {
   validateConfiguredModelContexts,
   validateHostProfile,
 } from "./host-profile.js";
-import { ZenXCredentialVault } from "./credential-vault.js";
+import {
+  CredentialStorageError,
+  type CredentialStorageFailureCode,
+  ZenXCredentialVault,
+} from "./credential-vault.js";
 import {
   discoverOpenAiCompatibleCatalog,
   type DeclaredInputModalities,
@@ -93,21 +98,39 @@ export class ConfigurationPreCommitError extends Error {
       | "application-unconfirmed"
       | "validation"
       | "save-rejected" = "save-rejected",
+    readonly credentialFailure?: CredentialStorageFailureCode,
   ) {
     super(message);
   }
+}
+
+export function providerKnownRejectionCode(
+  error: unknown,
+): ProviderKnownRejectionCode | undefined {
+  if (!(error instanceof ConfigurationPreCommitError)) return undefined;
+  if (error.credentialFailure) return error.credentialFailure;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason === "conflict") return "revision-conflict";
+  if (reason === "validation") return "validation-rejected";
+  return "save-rejected";
 }
 
 function asConfigurationPreCommitError(
   error: unknown,
   reason: "validation" | "save-rejected",
 ): ConfigurationPreCommitError {
-  return error instanceof ConfigurationPreCommitError
-    ? error
-    : new ConfigurationPreCommitError(
-        error instanceof Error ? error.message : String(error),
-        reason,
-      );
+  if (error instanceof ConfigurationPreCommitError) return error;
+  // Candidate cleanup can also fail; retain only the original boundary's fixed
+  // observation, not the native error text or cleanup details.
+  const original = error instanceof AggregateError ? error.errors[0] : error;
+  const credentialFailure =
+    original instanceof CredentialStorageError ? original : undefined;
+  return new ConfigurationPreCommitError(
+    credentialFailure?.message ??
+      (error instanceof Error ? error.message : String(error)),
+    reason,
+    credentialFailure?.code,
+  );
 }
 
 type SubscriptionAuth = Pick<
