@@ -88,6 +88,20 @@ jobs:
           path: ${{ runner.temp }}/zenx-titlebar-safe-area
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify workspace tab overflow on production components
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-tab-overflow"
+          node apps/zenx/scripts/capture-workspace-tab-overflow.mjs "${{ runner.temp }}/zenx-tab-overflow"
+      - name: Retain synthetic workspace tab overflow evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-tab-overflow-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-tab-overflow
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture foreground activity renderer (synthetic, not native OS acceptance)
         if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
         timeout-minutes: 3
