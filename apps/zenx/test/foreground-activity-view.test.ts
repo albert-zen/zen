@@ -332,3 +332,21 @@ test("Escape copy states only confirmed shortcut availability in both languages"
     );
   }
 });
+
+test("foreground status identifies the admitted action without exposing typed content", () => {
+  const english = view({ actions: ["type"] });
+  const chinese = view({ language: "zh-CN", actions: ["scroll"] });
+  try {
+    assert.equal(
+      english.window.document.querySelector("#action-detail")?.textContent,
+      "Typing · current foreground app",
+    );
+    assert.equal(
+      chinese.window.document.querySelector("#action-detail")?.textContent,
+      "滚动 · 当前前台应用",
+    );
+  } finally {
+    english.window.close();
+    chinese.window.close();
+  }
+});

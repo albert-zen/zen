@@ -355,6 +355,30 @@ test("unknown outcome keeps a reserved toolbar status slot when cleared", async 
   });
 });
 
+test("page chrome distinguishes live inspection, dispatched actions, and human control", async () => {
+  await withPanel(async ({ render }) => {
+    await render({ agentInspectionsInFlight: 1 });
+    assert.match(
+      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
+      /inspecting this page/u,
+    );
+    await render({
+      agentInspectionsInFlight: 0,
+      agentActionsInFlight: 1,
+      control: "human",
+    });
+    assert.match(
+      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
+      /action.*finishing/u,
+    );
+    await render({ agentActionsInFlight: 0, control: "human" });
+    assert.match(
+      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
+      /You have control/u,
+    );
+  });
+});
+
 test("blank viewport distinguishes websites, loading and errors; theme updates retain native lease", async () => {
   await withPanel(async ({ render, mounts }) => {
     const viewport = () =>

@@ -11,7 +11,12 @@ export interface ForegroundActivityRunner {
 }
 
 export interface ForegroundActivitySnapshot {
-  activities: readonly { id: string; agentName: string; stopping: boolean }[];
+  activities: readonly {
+    id: string;
+    agentName: string;
+    action?: string;
+    stopping: boolean;
+  }[];
 }
 
 export interface ForegroundActivityPresenter {
@@ -33,6 +38,7 @@ export class ForegroundActivity implements ForegroundActivityRunner {
       invocation: ToolInvocation;
       controller: AbortController;
       agentName: string;
+      action: string;
       signal: AbortSignal;
       stopping: boolean;
     }
@@ -56,6 +62,7 @@ export class ForegroundActivity implements ForegroundActivityRunner {
       activities: [...this.#active].map(([id, activity]) => ({
         id,
         agentName: activity.agentName,
+        action: activity.action,
         stopping: activity.stopping || activity.signal.aborted,
       })),
     };
@@ -80,6 +87,7 @@ export class ForegroundActivity implements ForegroundActivityRunner {
       controller,
       signal,
       agentName: this.#agentName(invocation),
+      action: foregroundAction(invocation.name),
       stopping: false,
     };
     this.#active.set(id, active);
@@ -147,5 +155,22 @@ export class ForegroundActivity implements ForegroundActivityRunner {
     void this.#presenter
       .update(this.snapshot)
       .catch((error: unknown) => this.unavailable(error));
+  }
+}
+
+function foregroundAction(name: string): string {
+  switch (name) {
+    case "computer_foreground_click":
+      return "click";
+    case "computer_foreground_key_press":
+      return "key";
+    case "computer_foreground_type":
+      return "type";
+    case "computer_foreground_shortcut":
+      return "shortcut";
+    case "computer_foreground_scroll":
+      return "scroll";
+    default:
+      return "input";
   }
 }
