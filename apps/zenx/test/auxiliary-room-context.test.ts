@@ -338,7 +338,14 @@ test("external active Room tabs scroll only their bounded rail into view and pre
     const rail = document.querySelector<HTMLDivElement>('[role="tablist"]')!;
     Object.defineProperties(rail, {
       clientWidth: { configurable: true, value: 200 },
-      scrollWidth: { configurable: true, value: 500 },
+      scrollWidth: {
+        configurable: true,
+        get: () =>
+          500 +
+          parseFloat(
+            rail.style.getPropertyValue("--workspace-tab-end-gap") || "0",
+          ),
+      },
     });
     prototype.getBoundingClientRect = function () {
       const left =
@@ -373,8 +380,8 @@ test("external active Room tabs scroll only their bounded rail into view and pre
     await h.selectFromHost("custom:memory");
     assert.equal(
       rail.scrollLeft,
-      250,
-      "the clipped active tab must become visible inside its rail",
+      348,
+      "the active tab is revealed at a whole leading edge inside its rail",
     );
     assert(
       document.activeElement === outside,
