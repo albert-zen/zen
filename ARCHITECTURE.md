@@ -1518,3 +1518,10 @@ File reading positions are disposable window-owned state beside `WorkspaceFileDr
 ZenX main's existing file-loading session transforms only its exact trusted packaged renderer entry, generating a cryptographically random style nonce per document response; all CodeMirror editors consume that document nonce. The existing CSP remains unchanged except for this narrowly authorized style source, and script policy is never broadened. Adjacent local assets retain the built-in file fetch path without recursive interception; no nonce becomes Thread/Turn/history state or a stored preference.
 
 - **CI CJK font prerequisite** — Synthetic UI capture requires a normally installed font package resolved from the runner’s authenticated current Ubuntu indexes; only its exact OS/release/architecture/version/SHA-256 .deb is cached and reverified, with bounded downloads restricted to already configured official archives and no source/key or product-state changes.
+
+- **Native Computer OCR** — An explicit read-only macOS OCR request applies local
+  Apple Vision to the current thread-owned, exact-window screenshot under its
+  existing binding and expiry, returning bounded text/geometry observations with
+  original capture identity and time; it creates no semantic controls, renewed
+  input authority, automatic AX fallback, foreground activation or durable state.
+  Its separate ten-second read budget never extends an AX inspection deadline.
