@@ -3887,6 +3887,14 @@ func postToTarget(_ event: CGEvent, _ pid: pid_t) {
 
 
 struct TargetError: Error { let message: String }
+func nativeTargetFailure(_ error: Error, _ stage: String) -> String {
+  if let known = error as? TargetError { return known.message }
+  let failure = error as NSError
+  let domain = String(failure.domain.prefix(96)).map { character -> Character in
+    character.isASCII && (character.isLetter || character.isNumber || ".-_".contains(character)) ? character : "_"
+  }
+  return "Native target failed at " + stage + "; NSError domain=" + String(domain) + ", code=" + String(failure.code)
+}
 func refuse(_ message: String) throws -> Never { throw TargetError(message: message) }
 func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
   var value: CFTypeRef?
@@ -4097,7 +4105,7 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
   let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
   let completion = WindowCaptureResult()
   SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
-    guard let content, error == nil else { completion.finish(.failure(error ?? TargetError(message: "SCK content unavailable"))); return }
+    guard let content, error == nil else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-shareable-content")) } ?? TargetError(message: "SCK content unavailable"))); return }
     let matches = content.windows.filter { $0.windowID == CGWindowID(binding.windowId) && $0.owningApplication?.processID == binding.app.processIdentifier }
     guard matches.count == 1, let window = matches.first, window.isActive, window.isOnScreen, window.frame == binding.bounds else { completion.finish(.failure(TargetError(message: "Fresh SCK exact window/geometry unavailable"))); return }
     let filter = SCContentFilter(desktopIndependentWindow: window)
@@ -4112,7 +4120,7 @@ func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] {
     config.ignoreShadowsSingleWindow = true; config.preservesAspectRatio = true; config.scalesToFit = true
     config.captureResolution = .best; config.colorSpaceName = CGColorSpace.sRGB
     SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
-      guard let image, error == nil, image.width == width, image.height == height else { completion.finish(.failure(error ?? TargetError(message: "SCK image dimensions disagree with exact full-window mapping"))); return }
+      guard let image, error == nil, image.width == width, image.height == height else { completion.finish(.failure(error.map { TargetError(message: nativeTargetFailure($0, "sck-capture-image")) } ?? TargetError(message: "SCK image dimensions disagree with exact full-window mapping"))); return }
       completion.finish(.success(image))
     }
   }
@@ -4267,6 +4275,7 @@ var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
   var backgroundRequest = false
+  var nativeStage = "request-decode"
   backgroundSettledForRequest = false
   var owner = ""
   var expectedBindingId: String?
@@ -4274,6 +4283,7 @@ while let line = readLine() {
   do {
     guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
+    nativeStage = ["select", "verify", "capture", "backgroundClick", "click", "key", "type", "shortcut", "scroll"].contains(operation) ? operation : "request-validate"
     backgroundRequest = operation == "backgroundClick"
     owner = requestedOwner
     expectedBindingId = request["bindingId"] as? String
@@ -4376,7 +4386,7 @@ while let line = readLine() {
     if backgroundRequest && !backgroundSettledForRequest {
       emit(["phase": "backgroundSettled", "release": "not_needed"])
     }
-    let message = (error as? TargetError)?.message ?? "Invalid native target request"
+    let message = nativeTargetFailure(error, nativeStage)
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
     reply = ["error": message + outcome]
   }

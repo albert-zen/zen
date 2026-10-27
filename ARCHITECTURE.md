@@ -1484,6 +1484,8 @@ bindings or screenshot authority.
 
 Native macOS background click consumes one owner-scoped exact-window capture through the existing target session and serialized helper, with separate local permission, native scoped-session admission with fresh CG/SCK full-window geometry (including locked console sessions), PID/window-local event posting, cooperative bounded pair release, no desktop activation or pointer movement, and no automatic replay; application-internal focus may change and posting never proves application effect.
 
+Native Computer failures retain only a bounded static operation stage and sanitized NSError domain/code; private error descriptions and userInfo never enter tool results, and an error never grants retry or fallback authority.
+
 Exact Computer captures retain their trusted image source and background-input eligibility: explicitly unavailable SCK or pre-capture pixel-budget refusal may use the existing active-session-only window thumbnail route, but legacy pixels never authorize native background input and unknown capture failures never fall back.
 
 The existing foreground presenter supplies only live, painted, mouse-ignoring
