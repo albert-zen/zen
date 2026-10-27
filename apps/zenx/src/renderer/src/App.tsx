@@ -919,7 +919,7 @@ function AppContent() {
   };
 
   const changeNewThreadProject = (
-    workspace: string,
+    workspace: string | null,
     carryDraftToNewProject = false,
   ) => {
     setModelUpdateError(null);
@@ -1872,10 +1872,6 @@ function AppContent() {
   };
 
   const openNewThreadDraft = (workspace?: string) => {
-    if (workspace === undefined && configuredProjects.length === 0) {
-      openProjectPicker("new-thread");
-      return;
-    }
     showNewThreadDraft(workspace ?? lastUsedWorkspace);
   };
 
@@ -1888,12 +1884,7 @@ function AppContent() {
       newThreadDraftRef.current !== null
     )
       return;
-    showNewThreadDraft(
-      lastUsedWorkspace ??
-        configuredProjects.find((project) => project.isDefault)?.workspace ??
-        configuredProjects[0]?.workspace ??
-        null,
-    );
+    showNewThreadDraft(lastUsedWorkspace);
   }, [
     configuredProjects,
     lastUsedWorkspace,
@@ -2179,21 +2170,17 @@ function AppContent() {
       });
       return;
     }
-    if (current.workspace === null) {
-      setModelUpdateError(i18n.t("shell:chooseAProjectBeforeSending"));
-      return;
-    }
     const project = projectsRef.current.projects.find(
       (candidate) =>
         candidate.configured && candidate.workspace === current.workspace,
     );
-    if (project === undefined) {
+    if (current.workspace !== null && project === undefined) {
       setModelUpdateError(
         i18n.t("shell:thisProjectIsNoLongerAvailableChooseAnotherProject"),
       );
       return;
     }
-    const workspace = project.workspace;
+    const workspace = project?.workspace ?? null;
     const draftSettings = current.settings ?? defaultDraftSettings(models);
     if (current.composer.draft.images.length > 0) {
       const capabilityError = imageCapabilityMessage(
@@ -2240,14 +2227,22 @@ function AppContent() {
     const draftId = current.id;
     let createdThreadId: string | null = null;
     try {
-      await window.zenx.settings.addWorkspace(workspace);
-      const result = await window.zenx.projects.startThread(workspace, {
+      if (workspace !== null)
+        await window.zenx.settings.addWorkspace(workspace);
+      const selection = {
         sandbox: current.permissionMode ?? "danger-full-access",
         model: draftSettings.model,
         ...(draftSettings.reasoningEffort === null
           ? {}
           : { effort: draftSettings.reasoningEffort }),
-      });
+      };
+      const result =
+        workspace === null
+          ? await window.zenx.projects.startProjectlessThread(
+              submission.text,
+              selection,
+            )
+          : await window.zenx.projects.startThread(workspace, selection);
       createdThreadId = result.thread.id;
       const createdProjection: ThreadProjectionCacheEntry = {
         thread: result.thread,
@@ -2287,11 +2282,16 @@ function AppContent() {
         setThreadAttachments({});
         setThreadUsage(undefined);
         setSelectedSettings(createdProjection.settings);
-        retainedNewThreadDraftsRef.current.delete(workspace);
+        retainedNewThreadDraftsRef.current.delete(
+          newThreadDraftRetentionKey(workspace),
+        );
         confirmNewThreadDraft(null);
       }
-      void window.zenx.settings
-        .markWorkspaceUsed(workspace)
+      void (
+        workspace === null
+          ? Promise.resolve()
+          : window.zenx.settings.markWorkspaceUsed(workspace)
+      )
         .then(async () => await loadProjects())
         .catch((error: unknown) => {
           if (selectedThreadIdRef.current === createdThreadId)
@@ -4568,7 +4568,7 @@ function AgentSurface({
   onNewThreadDraftChange(draft: string): void;
   onNewThreadModelChange(model: string): void;
   onNewThreadReasoningChange(effort: string): void;
-  onNewThreadProjectChange(workspace: string): void;
+  onNewThreadProjectChange(workspace: string | null): void;
   onAddNewThreadProject(): void;
   onInterrupt(turnId: string): Promise<void>;
   onRetryTurn(turnId: string): Promise<void>;
@@ -4918,7 +4918,7 @@ function NewThreadProjectSelector({
 }: {
   disabled: boolean;
   onAddProject(): void;
-  onChange(workspace: string): void;
+  onChange(workspace: string | null): void;
   projects: readonly ZenXProjectProjectionEntry[];
   selectedWorkspace: string | null;
   /** "heading" is the inline underlined name in the welcome sentence;
@@ -4926,9 +4926,7 @@ function NewThreadProjectSelector({
    * switcher. Both open the same searchable Project popover. */
   variant?: "heading" | "chip";
 }) {
-  const [open, setOpen] = useState(
-    variant !== "chip" && selectedWorkspace === null,
-  );
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [popoverLayout, setPopoverLayout] = useState<{
     placement: "above" | "below";
@@ -4946,7 +4944,7 @@ function NewThreadProjectSelector({
   );
   const selectedLabel =
     selectedWorkspace === null
-      ? i18n.t("shell:chooseAProject")
+      ? i18n.t("shell:noProject")
       : selectedProject === undefined
         ? i18n.t("shell:projectUnavailable", {
             project: projectLabel(selectedWorkspace),
@@ -5042,11 +5040,6 @@ function NewThreadProjectSelector({
   }, [disabled, open]);
 
   useEffect(() => {
-    if (variant !== "heading") return;
-    if (selectedWorkspace === null && !disabled) setOpen(true);
-  }, [disabled, selectedWorkspace, variant]);
-
-  useEffect(() => {
     if (!open) return;
     queueMicrotask(() => searchRef.current?.focus());
     // The Composer-context chip is a portaled Radix Popover: Radix already
@@ -5095,16 +5088,18 @@ function NewThreadProjectSelector({
       aria-haspopup="dialog"
       aria-label={
         selectedWorkspace === null
-          ? i18n.t("shell:chooseAProject")
+          ? i18n.t("shell:chooseProject")
           : i18n.t("shell:changeCurrentProject", {
               project: selectedWorkspace,
             })
       }
       disabled={disabled}
       title={
-        variant === "chip" && selectedWorkspace !== null
-          ? selectedWorkspace
-          : undefined
+        selectedWorkspace === null
+          ? i18n.t("shell:projectlessDirectoryHint")
+          : variant === "chip"
+            ? selectedWorkspace
+            : undefined
       }
       onClick={() => {
         if (variant === "chip") return;
@@ -5175,6 +5170,28 @@ function NewThreadProjectSelector({
           options[nextIndex]?.focus();
         }}
       >
+        {normalizedQuery.length === 0 ||
+        i18n
+          .t("shell:noProject")
+          .toLocaleLowerCase()
+          .includes(normalizedQuery) ? (
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={selectedWorkspace === null}
+            title={i18n.t("shell:projectlessDirectoryHint")}
+            onClick={() => {
+              onChange(null);
+              closeMenu(true);
+            }}
+          >
+            <Icon name="folder" size={13} />
+            <span>{i18n.t("shell:noProject")}</span>
+            {selectedWorkspace === null ? (
+              <Icon name="check" size={13} />
+            ) : null}
+          </button>
+        ) : null}
         {filteredProjects.map((project) => {
           const selected = project.workspace === selectedWorkspace;
           return (

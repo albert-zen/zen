@@ -538,9 +538,7 @@ export function Sidebar({
               <span>{i18n.t("shell:newThread")}</span>
               <small title={lastUsedProject?.workspace}>
                 {lastUsedProject === undefined
-                  ? configuredProjects.length === 0
-                    ? i18n.t("shell:addProjectFirst")
-                    : i18n.t("shell:chooseProject")
+                  ? i18n.t("shell:noProject")
                   : (lastUsedProject.name ??
                     projectLabelForSidebar(lastUsedProject.workspace))}
               </small>
@@ -1169,13 +1167,14 @@ function ProjectsView({
   );
   if (
     projects.projects.length === 0 &&
+    (projects.projectlessThreadIds?.length ?? 0) === 0 &&
     projects.unavailableThreadIds.length === 0
   ) {
     return (
       <div className="projects-zero-state">
         <Icon name="folder" size={18} />
         <strong>{i18n.t("shell:noProjectsYet")}</strong>
-        <p>{i18n.t("shell:addAFolderBeforeStartingAThread")}</p>
+        <p>{i18n.t("shell:startWithoutProjectOrAddFolder")}</p>
       </div>
     );
   }
@@ -1204,7 +1203,7 @@ function ProjectsView({
       pinnedThreadIds={pinnedThreadIds}
       watchingThreadIds={watchingThreadIds}
       projectReorder={
-        onReorderProject === undefined || group.key === "__unavailable__"
+        onReorderProject === undefined || group.workspace === null
           ? undefined
           : {
               controlId: sidebarOrderControlId("project", group.key),
@@ -1273,8 +1272,7 @@ function ProjectsView({
                     : event.key === "ArrowDown"
                       ? groups[projectIndex + 1]
                       : undefined;
-                if (target === undefined || target.key === "__unavailable__")
-                  return;
+                if (target === undefined || target.workspace === null) return;
                 event.preventDefault();
                 void reorderAndRestoreFocus(
                   sidebarOrderControlId("project", group.key),
@@ -1291,7 +1289,7 @@ function ProjectsView({
             }
       }
       threadReorder={
-        onReorderThread === undefined || group.key === "__unavailable__"
+        onReorderThread === undefined || group.workspace === null
           ? undefined
           : {
               targetId:

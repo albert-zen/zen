@@ -21,6 +21,7 @@ import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
 const params = new URLSearchParams(location.search);
+const projectlessScene = params.get("scene") === "projectless";
 document.documentElement.dataset.appearance = params.get("theme") ?? "light";
 document.documentElement.dataset.platform = params.get("platform") ?? "win32";
 // Slow the same production transition for inspectable intermediate-frame QA.
@@ -168,7 +169,10 @@ const zenx = {
       archived
         ? []
         : [
-            summary(),
+            ...(params.has("noProjects") ? [] : [summary()]),
+            ...(projectlessScene
+              ? [summary("projectless-existing", "Trip planning")]
+              : []),
             ...(params.has("conversationTabs") ? sideConversations : []),
           ],
   },
@@ -192,39 +196,44 @@ const zenx = {
   },
   projects: {
     get: async () => ({
-      projects: [
-        {
-          key: "/work/zen",
-          workspace: "/work/zen",
-          name: "Zen",
-          configured: true,
-          isDefault: true,
-          threadIds: [
-            "thread-1",
-            ...(params.has("conversationTabs")
-              ? sideConversations.map((entry) => entry.threadId)
-              : []),
+      projects: params.has("noProjects")
+        ? []
+        : [
+            {
+              key: "/work/zen",
+              workspace: "/work/zen",
+              name: "Zen",
+              configured: true,
+              isDefault: true,
+              threadIds: [
+                "thread-1",
+                ...(params.has("conversationTabs")
+                  ? sideConversations.map((entry) => entry.threadId)
+                  : []),
+              ],
+            },
+            {
+              key: "/work/design-system",
+              workspace: "/work/design-system",
+              name: "Design system",
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
+            {
+              key: "/work/field-notes",
+              workspace: "/work/field-notes",
+              name: "Field notes",
+              configured: true,
+              isDefault: false,
+              threadIds: [],
+            },
           ],
-        },
-        {
-          key: "/work/design-system",
-          workspace: "/work/design-system",
-          name: "Design system",
-          configured: true,
-          isDefault: false,
-          threadIds: [],
-        },
-        {
-          key: "/work/field-notes",
-          workspace: "/work/field-notes",
-          name: "Field notes",
-          configured: true,
-          isDefault: false,
-          threadIds: [],
-        },
-      ],
       unavailableThreadIds: [],
-      lastUsedWorkspace: "/work/zen",
+      ...(projectlessScene
+        ? { projectlessThreadIds: ["projectless-existing"] }
+        : {}),
+      lastUsedWorkspace: projectlessScene ? null : "/work/zen",
     }),
   },
   settings: {
@@ -595,7 +604,10 @@ function summary(
     currentMetadata: {
       model: "fake",
       provider: "fake",
-      cwd: "/work/zen",
+      cwd:
+        threadId === "projectless-existing"
+          ? "/synthetic/Documents/ZenX/2026-10-27/trip-planning"
+          : "/work/zen",
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },

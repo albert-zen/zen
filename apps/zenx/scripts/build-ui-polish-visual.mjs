@@ -66,6 +66,8 @@ const sources = [
   "scripts/preview-browser.mjs",
   "scripts/preview-browser-lifecycle.mjs",
   "src/renderer/src/App.tsx",
+  "src/renderer/src/thread-list.ts",
+  "src/renderer/src/i18n/shell.ts",
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/FleetComposerSurface.tsx",
   "src/renderer/src/ThreadView.tsx",

@@ -2,7 +2,7 @@
 
 更新日期：2026-10-05
 
-New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
+New thread 打开临时本地编辑页；选择或添加 Project 不创建 Thread，第一条有效 Send 才配置所选 Project 或分配无项目目录、创建真实 Thread，并在 Sidebar、usage 等辅助元数据独立刷新时立即启动 Turn。全局入口使用最近 Project，Project 内入口使用该精确 Project；失败以明确、可恢复且不遮盖会话的通知呈现。
 
 ## 1. 文档权威与规则等级
 
@@ -39,7 +39,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 ### 2.2 Project 身份与 cwd
 
 - Project 是 ZenX 基于 host-profile workspace 与 Thread cwd 派生的产品投影，不是 Core/runtime 对象，也不是 repository aggregate。
-- 当前规则是 **one canonical cwd = one Project**。symlink/junction aliases 指向同一 filesystem cwd 时必须归一为一个 Project identity，同时保留稳定、可理解的用户 display path。
+- 配置的 Project 与普通外部 Thread 继续使用 **one canonical cwd = one Project**；Host 明确分配并在 profile 记录的无项目目录归入“无项目”会话组，不逐个注册成 Project。显式把该精确 cwd 添加为 Project 时，以配置为准。symlink/junction aliases 指向同一 filesystem cwd 时必须归一为一个 Project identity，同时保留稳定、可理解的用户 display path。
 - Canonical identity 的 realpath、platform case 与 lexical fallback 规则由 `ARCHITECTURE.md` 中的 `ZenXProjectProjection` 定义；UI 只消费该投影，不另建或简化路径身份算法。
 - renderer 与 Agent self-control 必须消费同一个 main-process Project projection，不得各自实现路径归一或 Project 分组。
 - Add project 使用 ZenX 只读 directory picker。移除 Project 只改变 host profile，不删除目录、目录内容或 Thread journal。
@@ -118,10 +118,10 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 
 - Projects 标题旁提供 icon-only **Add project**，具备 tooltip、accessible name、focus state 和完整 hit target。
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
-- Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则要求用户明确选择。不得用默认 Project、Documents 或 `process.cwd()` 隐式替代。
+- Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则显示“无项目”选择。用户也可在同一个选择器显式选择“无项目”；首条有效 Send 时由目标 Host 在其 Documents/ZenX/YYYY-MM-DD/安全名称 分配独立持久目录，碰撞时创建唯一目录，不复用旧目录、不自动初始化 Git。目录创建或 profile 记录失败时明确失败，不派发 Thread 创建。归档不删除目录。不以 process.cwd() 或默认 Project 隐式替代。
 - 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
 - Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。Composer 旁的 Project chip 与机器切换使用同一交互体验：可点击打开同一个带搜索、键盘导航与 Add project 的 Project popover，不是只读展示。
-- welcome draft 的未发送输入按 Project 独立保留在 renderer-local 状态（与 Thread Composer 草稿同一层级，不持久化、不进入 journal/profile）：切到 Thread 或其它页面再回到某个 Project 的 New thread 时恢复该 Project 的未发送文本与图片；不同 Project 各自保留互不覆盖；首发成功创建 Thread 后该 Project 的保留内容即被消费。首发前的 Project 切换因此是在两个 Project 的 draft 之间交换，而不是把文本跟随过去。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
+- welcome draft 的未发送输入按 Project（含独立的“无项目”选项）分别保留在 renderer-local 状态（与 Thread Composer 草稿同一层级，不持久化、不进入 journal/profile）：切到 Thread 或其它页面再回到某个 Project 的 New thread 时恢复该 Project 的未发送文本与图片；不同 Project 各自保留互不覆盖；首发成功创建 Thread 后该 Project 的保留内容即被消费。首发前的 Project 切换因此是在两个 Project 的 draft 之间交换，而不是把文本跟随过去。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
 
 ### 3.4 原生应用菜单与按需面板
 

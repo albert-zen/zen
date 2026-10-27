@@ -199,6 +199,19 @@ export function deriveProjectGroups(
     (left, right) =>
       Number(pinnedKeys.has(right.key)) - Number(pinnedKeys.has(left.key)),
   );
+  const projectless = (projection.projectlessThreadIds ?? []).flatMap((id) => {
+    const thread = byId.get(id);
+    return thread === undefined ? [] : [thread];
+  });
+  if (projectless.length > 0)
+    orderedGroups.push({
+      key: "__projectless__",
+      label: i18n.t("shell:noProject"),
+      workspace: null,
+      configured: false,
+      isDefault: false,
+      threads: sortByRecency(projectless),
+    });
   const unavailable = projection.unavailableThreadIds.flatMap((threadId) => {
     const thread = byId.get(threadId);
     return thread === undefined ? [] : [thread];

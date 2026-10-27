@@ -49,6 +49,7 @@ export const ipcChannels = {
   threadUsageRead: "zenx:thread-usage:read",
   projectsGet: "zenx:projects:get",
   projectThreadStart: "zenx:projects:thread-start",
+  projectlessThreadStart: "zenx:projects:projectless-thread-start",
   fleetControl: "zenx:fleet:control",
   settingsGet: "zenx:settings:get",
   settingsSafeRestart: "zenx:settings:safe-restart",

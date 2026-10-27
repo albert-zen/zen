@@ -346,6 +346,15 @@ contextBridge.exposeInMainWorld("zenx", {
       await ipcRenderer.invoke(ipcChannels.threadUsageRead, threadId),
   },
   projects: {
+    startProjectlessThread: async (
+      directoryName?: string,
+      selection?: import("../main/project-projection.js").ProjectThreadStartOptions,
+    ): Promise<ClientRequestResults["thread/start"]> =>
+      await ipcRenderer.invoke(
+        ipcChannels.projectlessThreadStart,
+        directoryName,
+        selection,
+      ),
     get: async (
       options: ThreadSummaryListOptions = {},
     ): Promise<ZenXProjectProjectionSnapshot> =>

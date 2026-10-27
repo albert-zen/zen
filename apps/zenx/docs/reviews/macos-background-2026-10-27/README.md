@@ -35,4 +35,14 @@ The deterministic baseline contains 12 checks: 11 pass and one Electron AXPress 
 - Node/Web and Computer package typecheck, 7 same-version digest repair/startup checks, and 5 first-party packaging checks pass.
 - Ordinary package upgrades compare exact trusted tarball digests, including changed content at the same version. Explicit uninstall and non-bundled overrides retain their existing behavior.
 
-Actual display-off and lock/unlock transitions require a coordinated user window. No test here actively locked, unlocked or changed display state; existing locked state was observed. Daily app installation and real-user profile/history migration were not performed.
+## User-authorized physical state window
+
+A later coordinated run used integrated source `da6178e9782fd353bd777616706b9b6fccc8544d`. The user explicitly allowed brief display sleep and then authorized the operator to lock the Mac; the user unlocked manually. The operator used `pmset displaysleepnow`, one normal OS lock shortcut, and a short display-wake request. The evaluation controller itself performs no system-state changes or global input.
+
+- At 19:05:40 (Asia/Shanghai), display sleep also locked the session under the Mac's current security policy. Old native AX references were retired, fresh locked AX could not find the owned window, and Browser CDP confirmed its counter increment.
+- A second run observed lock with the display still awake, followed by automatic display sleep. CDP produced actual increments in both states; native AX remained unavailable.
+- The final passive run observed display wake at 19:15:57.333, the real unlock event at 19:15:59.758 (unknown/revision 2), and native refresh to active/revision 3 at 19:16:00.693. Fresh native text value readback matched at 19:16:01.063; a native button count advanced to 1 at 19:16:01.581. Browser CDP also advanced its counter after unlock. No locked-era AX reference existed in this last run, so unlock-era stale-ref rejection is not claimed from that run.
+- Across the three runs, eight independent CDP count increments were observed. Locked screenshots were refused by the OS-session admission guard. Foreground input was disabled throughout and refused by the permission guard, which is not separate proof of a lock-only foreground guard.
+- All three runs finished within their deadlines. Independent post-exit checks confirmed temporary profiles absent, owned process groups/PIDs gone and loopback ports closed.
+
+A separate display-off-but-unlocked sample was not obtained because this Mac's existing policy locks on display sleep; its security settings were not changed. Native locked-GUI availability and the Electron AXPress task failure remain unresolved. Daily app installation and real-user profile/history migration were not performed.
