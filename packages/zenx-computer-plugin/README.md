@@ -33,6 +33,13 @@ optional `query` and `limit` to narrow the captured controls, `since` with a
 retained observation ref for a diff, or `full:true` to rebuild a first page.
 The result's coverage names the captured scope; a query miss does not claim
 the entire window is empty. Native callers retain `baseObservationId`.
+The pinned strict Windows UIA inspection protocol intentionally omits a control's
+current Value, including password values. `computer_set_value` on that provider
+reports `valueReadback.matchesRequested` only after an exact native
+ValuePattern readback; it does not echo the supplied text. That establishes the
+immediate control value and does not establish that an application saved or
+submitted it. Verify the latter through a fresh app-visible status when one
+exists. Other providers may have different inspection/readback limits.
 
 The first reply still contains at most 32 controls. `nextCursor` reads another
 page of the same immutable capture using the same exact target, observation

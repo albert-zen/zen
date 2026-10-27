@@ -160,8 +160,11 @@ test("native target effect observer reads actual multiline text on its UI timer"
   );
   assert.match(
     target,
-    /Write\("editor-value", currentEditorValue\);\s*observedEditorValue = currentEditorValue;/u,
+    /Write\("editor-value", currentEditorValue\);\s*updateDraft\(currentEditorValue\);\s*observedEditorValue = currentEditorValue;/u,
   );
+  assert.match(target, /draftStatus\.AccessibleName = draftStatus\.Text;/u);
+  assert.match(target, /appliedStatus\.AccessibleName = appliedStatus\.Text;/u);
+  assert.match(target, /editor\.ValueChanged = updateDraft;/u);
   assert.doesNotMatch(
     WINDOWS_PACKAGED_UIA_FIXTURE,
     /TextChanged \+=|Write\("editor-value", ""\)/u,
