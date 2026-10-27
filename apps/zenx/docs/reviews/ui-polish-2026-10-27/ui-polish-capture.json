@@ -1,5 +1,5 @@
 {
-  "commit": "3fa8dd902da3f8391a2cf1cf0bc18a8087e585c7",
+  "commit": "e64492b838193c611ba77c860b8cc8abe1061448",
   "scope": "Synthetic local UI fixture using production App/Project selector/Fleet machine selector/AuxiliaryPanel. Network is blocked by fixture CSP; no real Host, profile, user data, model, filesystem or native desktop action.",
   "welcome": [
     {
@@ -941,7 +941,7 @@
         "top": 6.5,
         "bottom": 36.5
       },
-      "tabId": "aux-tab-custom:side-chat-draft-53affb96-d5c1-4a6d-a56f-889a41d127ed",
+      "tabId": "aux-tab-custom:side-chat-draft-5e8f5e21-950d-4476-b3e9-ec8390b6044e",
       "tabIcon": "users",
       "icon": {
         "left": 902.125,
@@ -949,7 +949,7 @@
         "top": 14.5,
         "bottom": 28.5
       },
-      "iconHitTabId": "aux-tab-custom:side-chat-draft-53affb96-d5c1-4a6d-a56f-889a41d127ed"
+      "iconHitTabId": "aux-tab-custom:side-chat-draft-5e8f5e21-950d-4476-b3e9-ec8390b6044e"
     },
     "sideDraftAfterClose": {
       "nativeCreateCalls": 0,

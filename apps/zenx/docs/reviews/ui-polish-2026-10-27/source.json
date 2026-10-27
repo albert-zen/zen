@@ -1,10 +1,10 @@
 {
-  "commit": "3fa8dd902da3f8391a2cf1cf0bc18a8087e585c7",
+  "commit": "e64492b838193c611ba77c860b8cc8abe1061448",
   "dirtyFiles": [],
   "scope": "Production App welcome/Project selector/Fleet machine selector and AuxiliaryPanel. All app bridge facts and tab contents are synthetic. CSP blocks all network connections. No user profile, real Host, filesystem, model or native desktop action.",
   "artifact": {
     "html": "ui-polish-visual.html",
-    "htmlSha256": "9257486e07826ed05fb88be1a3a01a4b7b4da19f69d87589f66c60325bc8875c"
+    "htmlSha256": "f7f0e36b5210fbfc84a0f2e22e476d9de7140ff13b9fe0efede654326375af97"
   },
   "sources": {
     "scripts/build-ui-polish-visual.mjs": "8579ebc6beabe03ab4ddfb2e0629a61da9d98d7dcc656aa6f1cd45a84046c214",
@@ -19,7 +19,7 @@
     "src/renderer/src/auxiliary-tab-reorder.css": "18bd26e9fc029ccb8e6a974c065b2fd7f42caefe7dcfd8848a6d55659bcdd548",
     "src/renderer/src/fleet-ui.css": "f32e632da1d303aac1ada916a90e27704646c0db73ad6820ee37e7abf453601d",
     "src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
-    "src/renderer/src/styles.css": "2c5df83d9cbf4a8380464d9b427e07959750544b07aabf3abe63bfc79953c27e",
+    "src/renderer/src/styles.css": "c75468ff1696dfe5e5452fd8aa1d11965cd7fe807121ade9a33872621054ae59",
     "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
     "test/fixtures/ui-polish-visual.tsx": "c7358441d4d6627e2558776fc2eb26005929a5c6269a8dcc75a267b2a900629c",
     "test/fixtures/ui-polish-visual.html": "7a7c4c2f5b20fa8164ac4eb1196d5aa4e513b1735750ea04ff56b124d8a6f882"
