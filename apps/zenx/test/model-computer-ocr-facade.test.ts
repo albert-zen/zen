@@ -201,3 +201,75 @@ test("background click accepts only one capture ref and restores its sole exact 
     /capture/,
   );
 });
+
+test("bare AppKit capture ref omits an absent bundle while retaining exact PID authority and image source", () => {
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const bare = {
+    pid: 9,
+    applicationName: "Bare AppKit",
+    windowTitle: "Owned native window",
+  };
+  const result = projectComputerResult(
+    {
+      ...screenshot,
+      target: bare,
+      captureSource: "legacy_desktop_capturer",
+      backgroundInputEligible: false,
+    },
+    { target: bare },
+    refs,
+    epoch,
+  );
+  assert.equal(result.captureSource, "legacy_desktop_capturer");
+  assert.equal(result.backgroundInputEligible, false);
+  const decoded = decodeComputerArguments(
+    "computer_background_click",
+    { capture: result.capture, x: 10, y: 20 },
+    refs,
+    epoch,
+  );
+  assert.deepEqual(decoded.target, bare);
+  assert.equal("bundleId" in (decoded.target as object), false);
+  assert.throws(
+    () =>
+      decodeComputerArguments(
+        "computer_background_click",
+        {
+          capture: result.capture,
+          x: 10,
+          y: 20,
+          backgroundInputEligible: true,
+        },
+        refs,
+        epoch,
+      ),
+    /only|capture/,
+  );
+});
+
+test("OCR model projection keeps downsample diagnostics without changing capture provenance or expiry", () => {
+  const refs = new ModelReferenceRegistry().scope("owner");
+  const result = projectComputerResult(
+    {
+      ...screenshot,
+      observationOnly: true,
+      recognitionSize: { width: 2530, height: 1581 },
+      downsampled: true,
+      expiresAt: "2026-01-01T01:05:00.000Z",
+    },
+    { target },
+    refs,
+    epoch,
+  );
+  assert.deepEqual(result.recognitionSize, { width: 2530, height: 1581 });
+  assert.equal(result.downsampled, true);
+  assert.equal(result.capturedAt, screenshot.capturedAt);
+  assert.equal(result.expiresAt, "2026-01-01T01:05:00.000Z");
+  const decoded = decodeComputerArguments(
+    "computer_ocr",
+    { capture: result.capture },
+    refs,
+    epoch,
+  );
+  assert.deepEqual(decoded, { target, captureId: screenshot.captureId });
+});

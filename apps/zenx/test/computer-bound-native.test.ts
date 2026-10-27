@@ -44,7 +44,10 @@ let kCGWindowOwnerPID = "owner"
 let kCGNullWindowID = CGWindowID(0)
 enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
 func fixtureWindowList(_ options: CGWindowListOption, _ id: CGWindowID) -> Any? {
-  return [["owner": NSNumber(value: 42), "number": NSNumber(value: 17), "layer": NSNumber(value: 0), "onscreen": true, "title": "Fixture", "bounds": ["X": -100.0, "Y": 20.0, "Width": fixtureOperation != "select" && mode == "resize" ? 401.0 : 400.0, "Height": 200.0]]] as [[String: Any]]
+  var row: [String: Any] = ["owner": NSNumber(value: 42), "number": NSNumber(value: 17), "layer": NSNumber(value: 0), "onscreen": true, "title": "Fixture", "bounds": ["X": -100.0, "Y": 20.0, "Width": fixtureOperation != "select" && mode == "resize" ? 401.0 : 400.0, "Height": 200.0]]
+  if mode == "active-no-cg-title" || mode == "locked-no-cg-title" { row.removeValue(forKey: "title") }
+  if mode == "geometry-ambiguous" { var other = row; other["number"] = NSNumber(value: 18); return [row, other] }
+  return [row]
 }
 func fixtureWindowList(_ options: [WindowListOption], _ id: CGWindowID) -> Any? {
   let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
@@ -83,6 +86,8 @@ func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
   return nil
 }
 func windows(_ app: AXUIElement) -> [AXUIElement] {
+  if mode == "locked-no-cg-title" { return [] }
+  if mode == "same-title-ambiguous" { return [original, replacement] }
   if fixtureOperation != "select" && mode == "closed" { return [] }
   if fixtureOperation != "select" && mode == "reused-id" { return [replacement] }
   return [original]
@@ -96,7 +101,7 @@ final class NSRunningApplication {
   init?(processIdentifier: Int32) { self.processIdentifier = processIdentifier }
   var launchDate: Date? { mode == "missing-launch-date" ? nil : Date(timeIntervalSince1970: fixtureOperation != "select" && mode == "restarted" ? 2 : 1) }
   var isTerminated: Bool { false }
-  var bundleIdentifier: String? { "fixture.app" }
+  var bundleIdentifier: String? { mode == "no-bundle" ? nil : "fixture.app" }
   var localizedName: String? { "Fixture" }
   enum ActivationOption { case activateIgnoringOtherApps }
   func activate(options: [ActivationOption]) -> Bool { mode != "activation-failed" }
@@ -163,6 +168,7 @@ test(
       MAC_BOUND_TARGET_SOURCE.slice(headerEnd, windowStart) +
       `func backgroundClick(_ binding: Binding, _ request: [String: Any], _ posted: inout Int) throws { try refuse("Background input is outside the foreground stub fixture") }
        func captureWindow(_ binding: Binding, _ path: String) throws -> [String: Any] { try refuse("SCK is outside the foreground stub fixture") }
+       func lockedSession() throws -> Bool { mode.hasPrefix("locked-") }
       ` +
       MAC_BOUND_TARGET_SOURCE.slice(windowEnd);
     // libproc is a platform observation too; never query a synthetic PID 42.
@@ -225,6 +231,11 @@ test(
     for (const mode of [
       "normal",
       "missing-launch-date",
+      "active-no-cg-title",
+      "no-bundle",
+      "locked-no-cg-title",
+      "same-title-ambiguous",
+      "geometry-ambiguous",
       "wrong-window",
       "closed",
       "reused-id",
@@ -268,7 +279,10 @@ test(
         const line = await lines.next();
         assert.equal(line.done, false, stderr);
         return JSON.parse(line.value!) as {
-          result?: { bindingId: string };
+          result?: {
+            bindingId: string;
+            target?: { pid: number; bundleId?: string };
+          };
           error?: string;
         };
       };
@@ -278,7 +292,30 @@ test(
           owner: "thread-a",
           target: { pid: 42, windowTitle: "Fixture" },
         });
+        if (
+          [
+            "locked-no-cg-title",
+            "same-title-ambiguous",
+            "geometry-ambiguous",
+          ].includes(mode)
+        ) {
+          assert.match(selected.error!, /available|ambiguous|title/i);
+          child.stdin.end();
+          await new Promise<void>((resolve) =>
+            child.once("close", () => resolve()),
+          );
+          assert.equal((stderr.match(/POST:/g) ?? []).length, 0);
+          continue;
+        }
         assert.ok(selected.result?.bindingId, JSON.stringify(selected));
+        if (mode === "no-bundle") {
+          assert.equal(selected.result.target?.pid, 42);
+          assert.equal(
+            "bundleId" in selected.result.target!,
+            false,
+            "missing bundle is omitted, never an empty target selector",
+          );
+        }
         if (mode === "normal") {
           const next = await request({
             operation: "select",
@@ -325,6 +362,8 @@ test(
           [
             "normal",
             "missing-launch-date",
+            "active-no-cg-title",
+            "no-bundle",
             "typing",
             "shortcut-alt",
             "shortcut-option",
@@ -370,6 +409,8 @@ test(
                 : [
                       "normal",
                       "missing-launch-date",
+                      "active-no-cg-title",
+                      "no-bundle",
                       "shortcut-alt",
                       "shortcut-option",
                     ].includes(mode)

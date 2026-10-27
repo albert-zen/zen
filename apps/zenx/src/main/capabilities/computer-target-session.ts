@@ -22,6 +22,8 @@ export interface ComputerCaptureImage {
   bytes?: number;
   imageSha256?: string;
   capturedAt?: string;
+  captureSource?: "native_sck_exact_window" | "legacy_desktop_capturer";
+  backgroundInputEligible?: boolean;
   expiresAt?: string;
 }
 
@@ -215,6 +217,13 @@ export class ComputerTargetSession {
     )
       throw new Error(
         "Background click requires this owner's current unexpired exact-window capture; no input dispatched",
+      );
+    if (
+      capture.image.backgroundInputEligible !== true ||
+      capture.image.captureSource !== "native_sck_exact_window"
+    )
+      throw new Error(
+        "This legacy/read-only capture is not eligible for background input; no input dispatched",
       );
     if (
       !Number.isFinite(x) ||

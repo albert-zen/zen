@@ -166,3 +166,34 @@ test("Vision Chinese/English tags normalize without dropping languages; impossib
     /cannot combine Chinese/,
   );
 });
+
+test("bounded OCR processing metadata preserves original coordinates and rejects oversized recognition surfaces", () => {
+  const raw = {
+    ...result(),
+    recognitionSize: { width: 400, height: 200 },
+    downsampled: true,
+  };
+  const parsed = parseComputerOcrRecognition(
+    JSON.stringify(raw),
+    image,
+    languages,
+  );
+  assert.deepEqual(parsed.recognitionSize, { width: 400, height: 200 });
+  assert.equal(parsed.downsampled, true);
+  assert.deepEqual(parsed.texts, raw.texts);
+  assert.equal(parsed.width, 800);
+  for (const changed of [
+    { recognitionSize: { width: 801, height: 400 } },
+    { downsampled: false },
+    { recognitionSize: { width: 0, height: 200 } },
+  ])
+    assert.throws(
+      () =>
+        parseComputerOcrRecognition(
+          JSON.stringify({ ...raw, ...changed }),
+          image,
+          languages,
+        ),
+      /recognition image/,
+    );
+});

@@ -167,7 +167,7 @@ capture, attempted input, provider retirement, expiry, changed window identity
 or geometry, and changed PNG bytes invalidate the read. A screenshot may still
 show older app content; the returned capture time is not a promise of live state.
 
-Limits: 4 million pixels, 16 MiB encoded PNG, 96 text boxes, 16 KiB recognized
+Limits: 16 million source pixels, 4 million recognition pixels, 16 MiB encoded PNG, 96 text boxes, 16 KiB recognized
 UTF-8 text; `truncated` reports omitted recognized results. The existing macOS
 screenshot path requests a 1600×1000-bounded Electron thumbnail, including on
 Retina displays, so its image fits the OCR pixel limit without a second resize.
@@ -219,3 +219,22 @@ closed/offscreen/inactive windows, changed geometry and incoherent SCK image map
 are refused; the helper never chooses an arbitrary first/main window. OCR can read
 the existing exact SCK image while locked under the same native scope; it does not
 recapture, renew its expiry or authorize input.
+
+Compatibility: on macOS12/13 (or an older helper without the SCK capability), a
+fresh native active-session check preserves the existing exact-window thumbnail
+screenshot and OCR route. A known SCK pixel-budget refusal before image capture
+may use that same read-only route while active. Results retain trusted
+`captureSource` and `backgroundInputEligible`; legacy pixels are always ineligible
+for background input. Locked legacy use, TCC denials, changed geometry, unknown
+SCK failures and timeouts never trigger an image fallback. Foreground input keeps
+its existing separate approval and binding fences. Active AX exact-window
+selection does not depend on optional CG titles; CG-only selection still requires
+an independent unique title. Missing optional bundle IDs are omitted, preserving
+exact PID/process-birth authority for bare AppKit apps.
+
+OCR accepts the immutable original source PNG up to16MP/16MiB. For sources over
+4MP, ImageIO creates an aspect-preserving recognition image bounded to4MP. The
+result reports `recognitionSize` and `downsampled`; all text boxes, dimensions,
+hash, capture reference and time still describe the original capture. It never
+recaptures, renews expiry or changes input eligibility. The existing10-second,
+96-box and16KiB-text limits remain in force.

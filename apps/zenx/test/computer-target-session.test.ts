@@ -638,6 +638,8 @@ test("background click consumes exact unexpired capture and maps Retina pixels i
   const image = await session.capture("a", target, signal, async () => ({
     width: 800,
     height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
   }));
   await session.backgroundClick(
@@ -798,6 +800,8 @@ test("old or missing-SPI helper cannot receive a background operation or activat
   const image = await session.capture("a", target, signal, async () => ({
     width: 800,
     height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
   }));
   await assert.rejects(
@@ -825,6 +829,8 @@ test("background native ACK without matching up receipt is unknown and consumes 
   const image = await session.capture("a", target, signal, async () => ({
     width: 800,
     height: 400,
+    captureSource: "native_sck_exact_window" as const,
+    backgroundInputEligible: true,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
   }));
   transport.request = async (...args) =>

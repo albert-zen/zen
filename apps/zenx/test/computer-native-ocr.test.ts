@@ -16,16 +16,18 @@ import { runProcess } from "../src/main/capabilities/computer-provider.js";
 // The 1600x1000 image represents an 800x500 logical window at 2x scale.
 const FIXTURE_SOURCE = `import AppKit
 let destination = CommandLine.arguments[1]
-let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1600, pixelsHigh: 1000,
+let large = CommandLine.arguments.contains("large")
+let factor = large ? 2 : 1
+let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1600 * factor, pixelsHigh: 1000 * factor,
   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
 NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 let context = NSGraphicsContext.current!.cgContext
 context.setFillColor(NSColor.white.cgColor)
-context.fill(CGRect(x: 0, y: 0, width: 1600, height: 1000))
-if CommandLine.arguments.count < 3 {
-  context.scaleBy(x: 2, y: 2)
+context.fill(CGRect(x: 0, y: 0, width: 1600 * factor, height: 1000 * factor))
+if CommandLine.arguments.count < 3 || large {
+  context.scaleBy(x: CGFloat(2 * factor), y: CGFloat(2 * factor))
   let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 32), .foregroundColor: NSColor.black]
   ("HELLO OCR" as NSString).draw(at: NSPoint(x: 40, y: 390), withAttributes: attributes)
   ("工作消息" as NSString).draw(at: NSPoint(x: 40, y: 290), withAttributes: attributes)
@@ -123,6 +125,75 @@ test(
         assert.ok(text.box.height > 35 && text.box.height < 95);
       }
       assert.equal(recognized.truncated, false);
+      const largePath = path.join(directory, "large.png");
+      await runProcess(fixtureExecutable, [largePath, "large"], 10_000);
+      const largeBytes = await readFile(largePath),
+        largeDimensions = { width: 3200, height: 2000 };
+      const largeOutput = await runProcess(
+        executable,
+        [],
+        COMPUTER_OCR_BUDGET_MS,
+        JSON.stringify({
+          ...largeDimensions,
+          imagePath: largePath,
+          imageSha256: createHash("sha256").update(largeBytes).digest("hex"),
+          languages,
+        }),
+      );
+      const large = parseComputerOcrRecognition(
+        largeOutput,
+        largeDimensions,
+        languages,
+      );
+      console.log(
+        "Native Vision large synthetic recognition:",
+        JSON.stringify(large),
+      );
+      if (process.env.ZENX_COMPUTER_OCR_EVIDENCE)
+        await writeFile(
+          process.env.ZENX_COMPUTER_OCR_EVIDENCE,
+          JSON.stringify(
+            {
+              scope: "synthetic bitmap only",
+              stage: "small-and-large-recognition-returned",
+              recognized,
+              largeRecognized: large,
+              imageSha256,
+              largeImageSha256: createHash("sha256")
+                .update(largeBytes)
+                .digest("hex"),
+            },
+            null,
+            2,
+          ),
+        );
+      assert.equal(large.downsampled, true);
+      assert.ok(
+        large.recognitionSize!.width * large.recognitionSize!.height <=
+          4_000_000,
+      );
+      assert.equal(large.width, 3200);
+      assert.equal(large.height, 2000);
+      const largeEnglish = large.texts.find((t) =>
+        t.text.includes("HELLO OCR"),
+      );
+      const largeChinese = large.texts.find((t) =>
+        t.text.replace(/\s/gu, "").includes("工作消息"),
+      );
+      assert.ok(largeEnglish);
+      assert.ok(largeChinese);
+      for (const [text, top, bottom] of [
+        [largeEnglish, 200, 540],
+        [largeChinese, 600, 940],
+      ] as const) {
+        assert.ok(
+          text.box.x >= 120 && text.box.x <= 240,
+          "scaled recognition boxes return original capture pixels",
+        );
+        assert.ok(text.box.y >= top && text.box.y + text.box.height <= bottom);
+        assert.ok(text.box.height > 70 && text.box.height < 190);
+      }
+
       await assert.rejects(
         runProcess(
           executable,
@@ -196,10 +267,17 @@ test(
               deploymentTarget: "macOS 12.0",
               logicalWindow: { width: 800, height: 500 },
               recognized,
+              largeRecognized: large,
+              sourceImageSha256: imageSha256,
+              largeImageSha256: createHash("sha256")
+                .update(largeBytes)
+                .digest("hex"),
               checks: [
                 "english",
                 "simplified-chinese",
                 "2x-geometry",
+                "6.4MP-source-with-recognition-under-4MP",
+                "large-original-pixel-boxes",
                 "empty",
                 "unsupported-language",
                 "unsupported-language-combination",
