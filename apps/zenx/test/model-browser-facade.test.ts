@@ -51,7 +51,10 @@ test("Browser full projection keeps literal text, exact private targets, native 
       target: first.targets[0].ref,
       text: LITERAL,
     });
-    assert.equal(f.calls.find((c) => c.name === "type")!.args[3], "RAW-native-node-0");
+    assert.equal(
+      f.calls.find((c) => c.name === "type")!.args[3],
+      "RAW-native-node-0",
+    );
     assert.equal(f.calls.find((c) => c.name === "type")!.args[4], LITERAL);
     await assert.rejects(
       f.bridge.call("browser_workspace_click", {
@@ -77,7 +80,9 @@ test("Browser action observes by default and accepts an exact short baseline", a
   const f = await workspaceFixture();
   try {
     const list = await f.bridge.call("browser_workspace_list_tabs", {});
-    const first = await f.bridge.call("browser_workspace_inspect", { tab: list.tabs[0].tab });
+    const first = await f.bridge.call("browser_workspace_inspect", {
+      tab: list.tabs[0].tab,
+    });
     const next = await f.bridge.call("browser_workspace_click", {
       target: first.targets[0].ref,
       since: first.observation,
@@ -96,19 +101,43 @@ test("Browser consecutive diffs replace exact action refs while preserving the f
   const f = await workspaceFixture();
   try {
     const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
-    const first = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
+    const first = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
     let current = first.targets as Array<{ ref: string; name: string }>;
     let baseline = first.observation as string;
     for (let i = 0; i < 2; i++) {
-      const result = await f.bridge.call("browser_workspace_click", { target: current[0]!.ref, since: baseline });
+      const result = await f.bridge.call("browser_workspace_click", {
+        target: current[0]!.ref,
+        since: baseline,
+      });
       assert.equal(result.page.format, "diff");
-      const replacements = new Map<string, string>(result.targetChanges.replacements.map((pair: { beforeRef: string; ref: string }): [string, string] => [pair.beforeRef, pair.ref]));
-      current = current.map((item) => ({ ...item, ref: replacements.get(item.ref)! }));
-      assert.equal(current.every((item) => /^r[1-9][0-9]*$/u.test(item.ref)), true);
-      assert.deepEqual(current.map((item) => item.name), first.targets.map((item: { name: string }) => item.name));
+      const replacements = new Map<string, string>(
+        result.targetChanges.replacements.map(
+          (pair: { beforeRef: string; ref: string }): [string, string] => [
+            pair.beforeRef,
+            pair.ref,
+          ],
+        ),
+      );
+      current = current.map((item) => ({
+        ...item,
+        ref: replacements.get(item.ref)!,
+      }));
+      assert.equal(
+        current.every((item) => /^r[1-9][0-9]*$/u.test(item.ref)),
+        true,
+      );
+      assert.deepEqual(
+        current.map((item) => item.name),
+        first.targets.map((item: { name: string }) => item.name),
+      );
       baseline = result.observation;
     }
-    await f.bridge.call("browser_workspace_click", { target: current[0]!.ref, observe: false });
+    await f.bridge.call("browser_workspace_click", {
+      target: current[0]!.ref,
+      observe: false,
+    });
     assert.equal(f.calls.filter((call) => call.name === "click").length, 3);
   } finally {
     await f.bridge.close();
@@ -118,8 +147,12 @@ test("Browser action without a retained baseline returns a small self-contained 
   const f = await workspaceFixture();
   try {
     const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
-    const first = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
-    const action = await f.bridge.call("browser_workspace_click", { target: first.targets[0].ref });
+    const first = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
+    const action = await f.bridge.call("browser_workspace_click", {
+      target: first.targets[0].ref,
+    });
     assert.equal(action.page.format, "full");
     assert.equal(action.view.kind, "focused-capture");
     assert.ok(action.targets.length > 0 && action.targets.length <= 7);
@@ -134,14 +167,23 @@ test("Browser query searches captured target metadata, keeps actionable refs and
   const f = await workspaceFixture();
   try {
     const list = await f.bridge.call("browser_workspace_list_tabs", {});
-    const first = await f.bridge.call("browser_workspace_inspect", { tab: list.tabs[0].tab, query: "Save" });
+    const first = await f.bridge.call("browser_workspace_inspect", {
+      tab: list.tabs[0].tab,
+      query: "Save",
+    });
     assert.equal(first.search.matchedCapturedTargets, 89);
     assert.equal(first.targets.length, 80);
     assert.match(first.coverage.scope, /query within/);
     ref(first.nextCursor);
-    const tail = await f.bridge.call("browser_workspace_inspect", { cursor: first.nextCursor });
+    const tail = await f.bridge.call("browser_workspace_inspect", {
+      cursor: first.nextCursor,
+    });
     assert.equal(tail.targets.length, 9);
-    const action = await f.bridge.call("browser_workspace_click", { target: tail.targets[0].ref, observation: first.observation, observe: false });
+    const action = await f.bridge.call("browser_workspace_click", {
+      target: tail.targets[0].ref,
+      observation: first.observation,
+      observe: false,
+    });
     assert.equal(action.observation, undefined);
   } finally {
     await f.bridge.close();
@@ -151,11 +193,25 @@ test("Browser reuses a retained target only with an exact newer observation and 
   const f = await workspaceFixture();
   try {
     const tabs = await f.bridge.call("browser_workspace_list_tabs", {});
-    const old = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
-    const fresh = await f.bridge.call("browser_workspace_inspect", { tab: tabs.tabs[0].tab });
-    await f.bridge.call("browser_workspace_click", { target: old.targets[0].ref, observation: fresh.observation, observe: false });
+    const old = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
+    const fresh = await f.bridge.call("browser_workspace_inspect", {
+      tab: tabs.tabs[0].tab,
+    });
+    await f.bridge.call("browser_workspace_click", {
+      target: old.targets[0].ref,
+      observation: fresh.observation,
+      observe: false,
+    });
     assert.equal(f.calls.filter((c) => c.name === "click").length, 1);
-    await assert.rejects(f.bridge.call("browser_workspace_click", { target: old.targets[0].ref, observation: old.observation }), /stale|unavailable|consumed/);
+    await assert.rejects(
+      f.bridge.call("browser_workspace_click", {
+        target: old.targets[0].ref,
+        observation: old.observation,
+      }),
+      /stale|unavailable|consumed/,
+    );
     assert.equal(f.calls.filter((c) => c.name === "click").length, 1);
   } finally {
     await f.bridge.close();

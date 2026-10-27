@@ -111,3 +111,41 @@ test("a missed OS lock notification is caught at the next admission probe", () =
   );
   f.environment.close();
 });
+
+test("an unavailable session probe retires old observations and refuses new GUI admission", () => {
+  for (const unavailable of ["unknown", "throws"]) {
+    const f = fixture();
+    let retired = 0;
+    f.environment.onInvalidated(() => retired++);
+    const pending = f.environment.acquire(new AbortController().signal);
+    f.monitor.getSystemIdleState = () => {
+      if (unavailable === "throws") throw new Error("OS probe unavailable");
+      return unavailable;
+    };
+    assert.throws(
+      () => f.environment.acquire(new AbortController().signal),
+      /unknown.*No input dispatched/,
+    );
+    assert.equal(pending.signal.aborted, true);
+    assert.equal(retired, 1);
+    assert.equal(f.environment.snapshot().sessionState, "unknown");
+    assert.equal(f.started.length, 1, "rejected admission starts no blocker");
+    assert.deepEqual(
+      f.stopped,
+      [],
+      "pending native work still owns its blocker",
+    );
+    pending.release();
+    assert.deepEqual(f.stopped, [1]);
+    f.monitor.getSystemIdleState = () => "active";
+    const fresh = f.environment.acquire(new AbortController().signal);
+    assert.equal(
+      retired,
+      2,
+      "fresh active evidence still requires new observations",
+    );
+    assert.equal(fresh.signal.aborted, false);
+    fresh.release();
+    f.environment.close();
+  }
+});

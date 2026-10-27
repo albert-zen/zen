@@ -28,7 +28,15 @@ import {
   type BrowserModelRoute,
 } from "./model-browser-metadata.js";
 import { browserConnectionScopeKey } from "./browser-connections.js";
-import { browserOperations, browserOperation as operation, browserNamespace as namespace, buildBrowserModelDefinition, sessionTools, targetTools, observationTools } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
+import {
+  browserOperations,
+  browserOperation as operation,
+  browserNamespace as namespace,
+  buildBrowserModelDefinition,
+  sessionTools,
+  targetTools,
+  observationTools,
+} from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
 import { projectTargetChanges } from "../../../../../packages/zenx-browser-plugin/src/model-observation.js";
 export { browserModelDocument } from "../../../../../packages/zenx-browser-plugin/src/model-contract.js";
 export type BrowserModelConnections = ReadonlyMap<
@@ -160,7 +168,10 @@ export function decodeBrowserArguments(
       args.observationId = bound.observationId;
     if (field === "target") args.targetId = bound.targetId;
     if (field === "cursor") args.cursor = bound.cursor;
-    if ((["navigate", "close"].includes(op) || targetTools.has(op)) && input.observation !== undefined) {
+    if (
+      (["navigate", "close"].includes(op) || targetTools.has(op)) &&
+      input.observation !== undefined
+    ) {
       const observed = resolve(input.observation, "observation");
       if (JSON.stringify(routeFrom(observed)) !== JSON.stringify(route))
         throw Error("Observation belongs to another exact tab");
@@ -225,7 +236,11 @@ export function decodeBrowserArguments(
     args.baseObservationId = base.observationId;
   }
   if (input.full !== undefined) args.full = input.full;
-  else if (op === "inspect" && args.cursor === undefined && input.since === undefined)
+  else if (
+    op === "inspect" &&
+    args.cursor === undefined &&
+    input.since === undefined
+  )
     args.full = true;
   return args;
 }
@@ -256,7 +271,14 @@ function projectBrowserResult(
   refs: ModelReferenceScope,
   epoch: string,
   connections?: BrowserModelConnections,
-  history: readonly { namespace: string; kind: string; value: unknown; ref: string; ownerThreadId: string; epoch?: string }[] = [],
+  history: readonly {
+    namespace: string;
+    kind: string;
+    value: unknown;
+    ref: string;
+    ownerThreadId: string;
+    epoch?: string;
+  }[] = [],
 ): unknown {
   const op = operation(name),
     bind = (kind: string, value: unknown) =>
@@ -351,7 +373,10 @@ function projectBrowserResult(
       const page = record(out.page);
       const nativePage = record(v.observation);
       if (page && typeof nativePage?.baseObservationId === "string")
-        page.base = bind("observation", { route, observationId: nativePage.baseObservationId });
+        page.base = bind("observation", {
+          route,
+          observationId: nativePage.baseObservationId,
+        });
       if (record(v.screenshot)) {
         const screenshot = object(v.screenshot);
         out.screenshot = {
@@ -395,26 +420,61 @@ function projectBrowserResult(
         const changes = object(v.targetChanges);
         const bindTarget = (targetId: string, observationId: string) =>
           bind("target", { route, observationId, targetId });
-        const projectTarget = (target: Record<string, unknown>, observationId: string) => {
+        const projectTarget = (
+          target: Record<string, unknown>,
+          observationId: string,
+        ) => {
           return {
             ref: bindTarget(target.targetId as string, observationId),
-            ...pick(target, ["role", "name", "actions", "value", "checked", "selected", "options", "optionsTruncated"]),
+            ...pick(target, [
+              "role",
+              "name",
+              "actions",
+              "value",
+              "checked",
+              "selected",
+              "options",
+              "optionsTruncated",
+            ]),
           };
         };
         const baseId = nativePage?.baseObservationId;
         if (typeof baseId !== "string") throw new ProjectionUnavailable();
         const oldIds: string[] = [];
         for (const binding of history) {
-          if (binding.namespace !== "browser" || binding.kind !== "target" || binding.ownerThreadId !== refs.ownerThreadId || binding.epoch !== epoch) continue;
+          if (
+            binding.namespace !== "browser" ||
+            binding.kind !== "target" ||
+            binding.ownerThreadId !== refs.ownerThreadId ||
+            binding.epoch !== epoch
+          )
+            continue;
           const old = record(binding.value);
-          if (old?.observationId !== baseId || typeof old.targetId !== "string" || !record(old.route) || JSON.stringify(old.route) !== JSON.stringify(route)) continue;
+          if (
+            old?.observationId !== baseId ||
+            typeof old.targetId !== "string" ||
+            !record(old.route) ||
+            JSON.stringify(old.route) !== JSON.stringify(route)
+          )
+            continue;
           // Candidate provenance is still checked by the typed ref resolver.
           refs.resolve(binding.ref, "browser", "target", epoch);
           if (!oldIds.includes(old.targetId)) oldIds.push(old.targetId);
         }
         const itemCoverage = record(record(v.coverage)?.items);
-        const returned = typeof itemCoverage?.returned === "number" ? itemCoverage.returned : oldIds.length;
-        out.targetChanges = projectTargetChanges(changes, oldIds, returned, baseId, v.observationId, bindTarget, projectTarget);
+        const returned =
+          typeof itemCoverage?.returned === "number"
+            ? itemCoverage.returned
+            : oldIds.length;
+        out.targetChanges = projectTargetChanges(
+          changes,
+          oldIds,
+          returned,
+          baseId,
+          v.observationId,
+          bindTarget,
+          projectTarget,
+        );
       }
     }
     if (typeof v.nextCursor === "string") {

@@ -65,7 +65,7 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
   }
 
   snapshot(): AutomationEnvironmentSnapshot {
-    if (!this.#closed && this.#probe() === "locked") this.#transition("locked");
+    if (!this.#closed) this.#refreshSession();
     return {
       platform: this.options.platform,
       sessionState: this.#state,
@@ -90,11 +90,10 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
         "Computer observation invalidation failed; restart this provider before input",
       );
     // Poll before admission to cover a missed notification; never infer unlock from a failed probe.
-    const state = this.#probe();
-    if (state === "locked") this.#transition("locked");
-    if (this.#state === "locked" || this.#state === "suspended")
+    this.#refreshSession();
+    if (this.#state !== "active")
       throw new Error(
-        `Computer session is ${this.#state}; unlock or resume locally, then inspect again. No input dispatched.`,
+        `Computer session is ${this.#state}; confirm the local desktop is available, then inspect again. No input dispatched.`,
       );
     if (this.#calls++ === 0 && this.#blocker) {
       try {
@@ -147,6 +146,13 @@ export class AutomationEnvironment implements ComputerEnvironmentPort {
     } catch {
       return "unknown";
     }
+  }
+
+  #refreshSession(): void {
+    // An active probe cannot substitute for the unlock/resume lifecycle event.
+    if (this.#state === "suspended") return;
+    const state = this.#probe();
+    if (state === "locked" || this.#state !== "locked") this.#transition(state);
   }
 
   #transition(state: DesktopSessionState, force = false): void {
