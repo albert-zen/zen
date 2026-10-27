@@ -1,6 +1,6 @@
 {
-  "source": "c506fd567f5d60b6f674cb4d26e622ff25bf1f9f",
-  "tree": "5913e023222fa146ab1bdc76cc7e8a463fbab4e8",
+  "source": "d442cac0141ee01a756921712adf43fc33ad1f0a",
+  "tree": "c0867db91568756c3cd8470be39ddad9c30d9251",
   "scope": "Actual production PluginAccessReview, styles and i18n; selected native manifest; synthetic locked Host readiness. Headless isolated Chrome. No native app, profile, permission, window capture or input connected.",
   "sourceFiles": [
     {
@@ -145,7 +145,7 @@
     },
     {
       "path": "packages/zenx-computer-plugin/zenx.plugin.json",
-      "sha256": "bd3c7760521e2084928bb4efbae8b4bb66fbe30d9098807f034a576a74e5c298"
+      "sha256": "210a28709c2a03c9973121e2e49e28b2df588297a3d81c7b8c75a26d2171756b"
     }
   ],
   "evidence": [

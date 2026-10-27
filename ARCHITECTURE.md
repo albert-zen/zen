@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+Native Computer diagnostics capture a bounded, allowlisted per-request observation context before transport enqueue and write into the invoking harness ToolTraceCapture; this context has no authority, result or replay semantics.
+
 - **Projectless workspaces** — The local Host exclusively allocates a persistent dated directory and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
@@ -1486,9 +1488,9 @@ Native macOS background click consumes one owner-scoped exact-window capture thr
 
 Native macOS background app keyboard input derives the selected application's identity from the owner's existing native binding and revalidates the same process birth, user and bundle before bounded Unicode or basic-key input to that application's current focus under a separate local-device permission. It does not promise an exact window or control, and target-PID preparation may change application-internal focus; the existing helper owns cancellation, paired release and close settlement without global activation, pointer movement, clipboard, wake/unlock, fallback or replay. Posted, partial and unknown receipts never prove application effect, and no binding survives provider retirement as execution authority.
 
-Native Computer failures retain only a bounded static operation stage and sanitized NSError domain/code; private error descriptions and userInfo never enter tool results, and an error never grants retry or fallback authority.
+Native Computer failures retain only a bounded static operation stage and sanitized NSError domain/code; native capture stderr progress uses static stages, monotonic time and thread affinity without target or image data, with an optional validated Host-only UUID retained immutably per capture callback; correlated stages and terminal replies share atomic JSONL frames, and plan-ready is distinct from completed image authority; private error descriptions and userInfo never enter tool results, and an error never grants retry or fallback authority.
 
-The existing native capture seam selects WindowServer single-window capture only from an observed asleep display, otherwise SCK; routes never retry each other on failure, and both must prove the same fresh owner/window geometry, permissions, source pixels and epoch before granting capture authority.
+The existing native capture seam selects WindowServer single-window capture only from an observed asleep display, otherwise SCK; routes never retry each other on failure, and both must prove the same fresh owner/window geometry, permissions, source pixels and epoch before granting capture authority. SCK callbacks publish validated immutable capture plans; synchronous WindowServer image acquisition runs only on the original native request thread, without changing its metadata or permission authority.
 
 Computer window discovery retains AX results and supplements unique current-user CG window hints when AX is unavailable; discovery never grants a binding or input authority and the existing native target selection revalidates exact process/window identity.
 

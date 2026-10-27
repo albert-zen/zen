@@ -1,6 +1,6 @@
 {
-  "source": "3c0f53effba5935f7836e9d2d248997c28ca5f0c",
-  "tree": "644a2e8d6d0554b4695bde1b2f423e5490336a77",
+  "source": "bd99e55e1af55c77a15e46c98857b6257f893018",
+  "tree": "be0ab6109af9443629e47cb08fec3a71b01a8f0f",
   "scope": "Actual production PluginAccessReview and ComputerThreadPanel, styles and i18n; selected native manifest; synthetic app-current-focus activity and locked Host readiness. Headless isolated Chrome. No native app, profile, permission, window capture or input connected.",
   "sourceFiles": [
     {
@@ -145,7 +145,7 @@
     },
     {
       "path": "packages/zenx-computer-plugin/zenx.plugin.json",
-      "sha256": "8ddfe8e28710b47221ff69a6e72257f88e246c360df5913d1e42b72937f67e9d"
+      "sha256": "0f25f301fe5aa4e3c157e68859301e46a9a79397fe415d802190a1673967bec1"
     }
   ],
   "evidence": [
@@ -209,13 +209,13 @@
       "scenario": "computer-app-permission",
       "appearance": "light",
       "width": 1280,
-      "height": 1053,
+      "height": 1096,
       "language": "en",
       "geometry": {
         "width": 1280,
         "scrollWidth": 1280,
-        "height": 1053,
-        "scrollHeight": 1053
+        "height": 1096,
+        "scrollHeight": 1096
       },
       "screenshot": "computer-app-permission-light-1280.png"
     },
@@ -223,13 +223,13 @@
       "scenario": "computer-app-permission",
       "appearance": "light",
       "width": 390,
-      "height": 1598,
+      "height": 1638,
       "language": "zh",
       "geometry": {
         "width": 390,
         "scrollWidth": 390,
-        "height": 1598,
-        "scrollHeight": 1598
+        "height": 1638,
+        "scrollHeight": 1638
       },
       "screenshot": "computer-app-permission-light-390.png"
     },
@@ -237,13 +237,13 @@
       "scenario": "computer-app-permission",
       "appearance": "dark",
       "width": 1280,
-      "height": 1053,
+      "height": 1096,
       "language": "en",
       "geometry": {
         "width": 1280,
         "scrollWidth": 1280,
-        "height": 1053,
-        "scrollHeight": 1053
+        "height": 1096,
+        "scrollHeight": 1096
       },
       "screenshot": "computer-app-permission-dark-1280.png"
     },
@@ -251,13 +251,13 @@
       "scenario": "computer-app-permission",
       "appearance": "dark",
       "width": 390,
-      "height": 1598,
+      "height": 1638,
       "language": "zh",
       "geometry": {
         "width": 390,
         "scrollWidth": 390,
-        "height": 1598,
-        "scrollHeight": 1598
+        "height": 1638,
+        "scrollHeight": 1638
       },
       "screenshot": "computer-app-permission-dark-390.png"
     }
