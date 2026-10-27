@@ -296,7 +296,17 @@ test("workflow prepares fonts before every capture and never caches apt state", 
   const zenx = workflow
     .split("  zenx:\n")[1]
     .split("  zenx-capability-smoke:\n")[0];
-  assert.ok(zenx.includes("timeout-minutes: 20"));
+  // Preserve the existing 20-minute workload budget plus only the bounded
+  // six-minute normal/expanded tab acceptance added by this workflow.
+  assert.ok(zenx.includes("timeout-minutes: 26"));
+  const tabCapture = zenx
+    .split("      - ")
+    .find((step) =>
+      step.startsWith(
+        "name: Verify workspace tab overflow on production components",
+      ),
+    );
+  assert.ok(tabCapture?.includes("timeout-minutes: 6"));
   assert.ok(
     zenx.indexOf("id: zenx-fonts") <
       zenx.indexOf("capture-titlebar-safe-area-preview.mjs"),
