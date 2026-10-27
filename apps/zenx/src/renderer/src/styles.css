@@ -8294,6 +8294,7 @@ button:disabled {
   gap: 3px;
 }
 .auxiliary-heading [role="tablist"] {
+  --workspace-tab-end-gap: 0px;
   flex: 0 1 auto;
   gap: 4px;
   scrollbar-width: none;
@@ -8301,11 +8302,17 @@ button:disabled {
   padding: 2px;
   scroll-padding-inline: 2px;
 }
+.auxiliary-heading [role="tablist"]::after {
+  content: "";
+  flex: 0 0 var(--workspace-tab-end-gap, 0px);
+  margin-inline-start: -4px;
+  transition: none;
+}
 .workspace-content-tab {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  max-width: 210px;
+  max-width: min(210px, 100%);
   min-width: 0;
   height: 30px;
   border-radius: 8px;
@@ -8371,7 +8378,7 @@ button:disabled {
   }
 }
 .workspace-new-tab {
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
 }
 .workspace-tab-types {
