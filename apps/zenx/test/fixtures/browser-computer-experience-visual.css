@@ -1,0 +1,77 @@
+body {
+  margin: 0;
+  background: #17191d;
+}
+.synthetic-stage {
+  width: min(920px, calc(100vw - 48px));
+  margin: 36px auto;
+  color: var(--text-1);
+}
+.synthetic-eyebrow,
+.synthetic-boundary {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.synthetic-stage h1 {
+  margin: 8px 0 22px;
+  font-size: 22px;
+  font-weight: 600;
+}
+.synthetic-panel {
+  height: 580px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--color-surface-main);
+}
+body[data-scenario^="environment-"] .synthetic-panel {
+  height: auto;
+  padding: 20px;
+}
+.synthetic-boundary {
+  margin-top: 16px;
+}
+.synthetic-desktop {
+  position: fixed;
+  inset: 0;
+  color: #e3e8f3;
+  background:
+    radial-gradient(ellipse at 65% 30%, #29314b, transparent 65%), #191d25;
+  font:
+    14px "Segoe UI",
+    sans-serif;
+}
+.synthetic-desktop-label {
+  position: absolute;
+  top: 114px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #aab3c5;
+}
+.synthetic-window {
+  position: absolute;
+  inset: 180px 22% 140px;
+  padding: 24px;
+  border: 1px solid #4b5261;
+  border-radius: 12px;
+  background: #252b35;
+  box-shadow: 0 24px 80px #090d15a0;
+}
+.synthetic-desktop iframe {
+  position: absolute;
+  border: 0;
+  background: transparent;
+}
+.synthetic-desktop #edge {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.synthetic-desktop #status {
+  top: 8px;
+  left: 50%;
+  width: min(480px, 100vw);
+  height: 64px;
+  transform: translateX(-50%);
+}
