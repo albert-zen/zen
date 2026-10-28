@@ -38,7 +38,7 @@ export async function requestQueuedSteer(
               )
             ? "shell:queueSteerNoLongerPending"
             : "shell:queueSteerRejected";
-      throw new Error(i18n.t(key));
+      throw new Error(i18n.t(key), { cause: error });
     }
     try {
       const { thread } = await window.zenx.protocol.request("zen/thread/read", {
@@ -81,6 +81,6 @@ export async function requestQueuedSteer(
     } catch {
       /* An unreadable Thread cannot prove delivery. */
     }
-    throw new Error(i18n.t("shell:queueSteerUnconfirmed"));
+    throw new Error(i18n.t("shell:queueSteerUnconfirmed"), { cause: error });
   }
 }

@@ -43,6 +43,7 @@ async function harness(
     ): Promise<boolean>;
   }) => Promise<void>,
   includeChildren = false,
+  extraRecent = 0,
 ) {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
   const previous = {
@@ -74,6 +75,12 @@ async function harness(
       summary("Pinned", "/a"),
       summary("Alpha", "/a"),
       summary("Beta", "/b"),
+      ...(extraRecent
+        ? Array.from({ length: extraRecent }, (_, index) => ({
+            ...summary(`Recent ${index}`, `/synthetic/no-project/${index}`),
+            updatedAt: new Date(10_000 + index * 1000).toISOString(),
+          }))
+        : []),
       ...(includeChildren
         ? [
             { ...summary("Child", "/b"), parentThreadId: "Beta" },
@@ -89,6 +96,7 @@ async function harness(
       open: true,
       onClose: noop,
       onNewThread: (workspace) => created.push(workspace),
+      onNewProjectlessThread: () => created.push(undefined),
       onAddProject: noop,
       onRemoveProject: noop,
       onSetDefaultProject: noop,
@@ -348,7 +356,12 @@ test("Cmd/Ctrl digits follow expanded row order and N uses the New thread action
     await click('[data-project-key="/a"] .project-toggle');
     await key("2");
     assert.equal(selected.at(-1), "Beta");
-    assert.equal(await key("3"), false);
+    assert.equal(await key("3"), true);
+    assert.equal(
+      selected.at(-1),
+      "Alpha",
+      "Recent retains the collapsed project conversation",
+    );
     await key("n");
     assert.deepEqual(created, ["/b"]);
     Object.assign(window.zenx, { platform: "win32" });
@@ -429,4 +442,113 @@ test("per-child Sidebar preference filters ordinary and Pinned lists and ignores
       "child Pin preference survives hiding",
     );
   }, true);
+});
+
+test("Pinned, Projects and Recent are independent disclosures and Recent creates without a project", async () => {
+  await harness(async ({ remount, created }) => {
+    const pin = button("#sidebar-pinned-heading");
+    const projects = button("#sidebar-thread-list-heading");
+    const recent = button("#sidebar-recent-heading");
+    assert.ok(
+      pin.compareDocumentPosition(projects) &
+        window.Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    assert.ok(
+      projects.compareDocumentPosition(recent) &
+        window.Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    assert.equal(
+      document.querySelectorAll(".recent-thread-group .thread-row-shell")
+        .length,
+      3,
+    );
+    const ids = [...document.querySelectorAll("[id]")].map((item) => item.id);
+    assert.equal(
+      new Set(ids).size,
+      ids.length,
+      "duplicate projections need unique accessibility IDs",
+    );
+    await act(async () => pin.click());
+    assert.equal(
+      document.querySelectorAll(".pinned-thread-group .thread-row-shell")
+        .length,
+      0,
+    );
+    assert.equal(
+      document.querySelectorAll(".recent-thread-group .thread-row-shell")
+        .length,
+      3,
+    );
+    await act(async () => recent.click());
+    assert.equal(
+      document.querySelectorAll(".recent-thread-group .thread-row-shell")
+        .length,
+      0,
+    );
+    assert.ok(document.querySelector(".project-group .thread-row-shell"));
+    await remount();
+    assert.equal(
+      button("#sidebar-pinned-heading").getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(
+      button("#sidebar-recent-heading").getAttribute("aria-expanded"),
+      "false",
+    );
+    await act(async () => button(".recent-new-thread").click());
+    assert.deepEqual(
+      created,
+      [undefined],
+      "explicit no-project action does not use last-used project",
+    );
+  });
+});
+
+test("Recent sorts all visible conversations by activity and reveals more without changing project order", async () => {
+  await harness(
+    async () => {
+      const recentIds = () =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            ".recent-thread-group [data-thread-id]",
+          ),
+        ].map((row) => row.dataset.threadId);
+      assert.equal(recentIds().length, 30);
+      assert.equal(recentIds()[0], "Recent 39");
+      assert.equal(recentIds()[29], "Recent 10");
+      await act(async () => button(".sidebar-show-more").click());
+      assert.equal(recentIds().length, 43);
+      assert.ok(recentIds().includes("Pinned"));
+      assert.ok(recentIds().includes("Alpha"));
+      assert.equal(document.querySelector(".sidebar-show-more"), null);
+      const firstProject =
+        document.querySelector<HTMLElement>("[data-project-key]");
+      assert.equal(firstProject?.dataset.projectKey, "/a");
+    },
+    false,
+    40,
+  );
+});
+
+test("Show more keeps keyboard focus on the newly revealed Recent row, including the final batch", async () => {
+  await harness(
+    async () => {
+      for (const count of [60, 73]) {
+        const more = button(".sidebar-show-more");
+        more.focus();
+        const previousCount = document.querySelectorAll(
+          ".recent-thread-group .thread-row",
+        ).length;
+        await act(async () => more.click());
+        const rows = document.querySelectorAll(
+          ".recent-thread-group .thread-row",
+        );
+        assert.equal(rows.length, count);
+        assert.equal(document.activeElement, rows[previousCount]);
+      }
+      assert.equal(document.querySelector(".sidebar-show-more"), null);
+    },
+    false,
+    70,
+  );
 });

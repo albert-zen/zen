@@ -1,3 +1,4 @@
+import { unwrapCompactionIpcReply } from "../src/preload/compaction-ipc.js";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -160,8 +161,9 @@ for (const [code, key] of [
     assert.deepEqual(raw, {
       type: "zenx.queue-edit-rejection.v1",
       data: { zenCode: code },
+      message: "raw /Users/private/attachment.png secret=never-display",
     });
-    assert(!JSON.stringify(raw).includes("private"));
+    assert(JSON.stringify(raw).includes("/Users/private/attachment.png"));
     calls.length = 0;
     await withBridge(bridge.request, async () => {
       await assert.rejects(requestQueuedEdit(params), {
@@ -185,7 +187,7 @@ test("successful edit result is unchanged across the real registration and prelo
   );
 });
 
-test("unknown edit failures omit Host diagnostics and retain exactly one read-only recovery", async () => {
+test("unknown edit failures preserve Host diagnostics and retain exactly one read-only recovery", async () => {
   const calls: string[] = [];
   const bridge = boundary(async (method) => {
     calls.push(method);
@@ -196,7 +198,7 @@ test("unknown edit failures omit Host diagnostics and retain exactly one read-on
     });
   });
   await assert.rejects(bridge.request("zen/thread/queue/edit", params), {
-    message: "Queue edit outcome is unconfirmed.",
+    message: "unknown /private/secret-host-path",
   });
   calls.length = 0;
   let recovered = 0;
@@ -311,4 +313,56 @@ test("queue edit recovery rejects a snapshot from another thread without refresh
     ),
   );
   assert.equal(recovered, 0);
+});
+
+test("compaction service code and original diagnostic survive main, preload and contextBridge", async () => {
+  const message =
+    "HTTP 400 invalid_parameter_error: developer is not an allowed role";
+  const bridge = boundary(async () => {
+    throw Object.assign(new Error(message), {
+      code: -32000,
+      data: { zenCode: "compaction_generation_failed" },
+    });
+  });
+  const reply = await bridge.request("thread/compact", {
+    threadId: "synthetic",
+  });
+  assert.throws(() => unwrapCompactionIpcReply(reply as never), {
+    message,
+    zenCode: "compaction_generation_failed",
+  });
+});
+
+test("compaction unknown failure preserves diagnostics without inventing a semantic code", async () => {
+  const bridge = boundary(async () => {
+    throw new Error("Connection closed after dispatch");
+  });
+  const reply = await bridge.request("thread/compact", {
+    threadId: "synthetic",
+  });
+  assert.throws(
+    () => unwrapCompactionIpcReply(reply as never),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === "Connection closed after dispatch" &&
+      (error as { zenCode?: unknown }).zenCode === undefined,
+  );
+});
+
+test("compaction successful receipt survives the same bridge unchanged", async () => {
+  const receipt = { compactionItemId: "synthetic-compaction" };
+  const bridge = boundary(async () => receipt);
+  const reply = await bridge.request("thread/compact", {
+    threadId: "synthetic",
+  });
+  assert.deepEqual(unwrapCompactionIpcReply(reply as never), receipt);
+});
+
+test("missing compaction receipt cannot be presented as confirmed success", () => {
+  for (const reply of [null, undefined, {}, { compactionItemId: "" }]) {
+    assert.throws(
+      () => unwrapCompactionIpcReply(reply as never),
+      /did not contain a committed compaction receipt/u,
+    );
+  }
 });

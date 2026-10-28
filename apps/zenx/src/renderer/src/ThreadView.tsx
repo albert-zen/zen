@@ -501,6 +501,7 @@ function ThreadViewContent({
     queuedItemId: string;
     revision: number;
     message: string;
+    detail?: string;
   } | null>(null);
   const editLocks = useRef(new Set<string>());
   const editOwner = useRef(Symbol("queue editor viewport"));
@@ -1019,6 +1020,7 @@ function ThreadViewContent({
           ...current,
           pending: false,
           error: describeError(error),
+          errorDetail: errorCauseDetail(error),
         });
       throw error;
     } finally {
@@ -1061,6 +1063,7 @@ function ThreadViewContent({
           queuedItemId: message.id,
           revision: message.revision ?? 0,
           message: describeError(error),
+          detail: errorCauseDetail(error),
         });
     } finally {
       steerLocks.current.delete(threadId);
@@ -1655,7 +1658,9 @@ function ThreadViewContent({
             }
           />
         ) : null}
-        {composer.compaction?.status === "failed" ? (
+        {composer.compaction?.status === "failed" ||
+        (composer.compaction?.status === "succeeded" &&
+          composer.compaction.detail) ? (
           <ContextCompactionProgress
             state={composer.compaction}
             onDismiss={onDismissCompaction}
@@ -2079,6 +2084,7 @@ function ThreadViewContent({
             initialDraft={session.draft}
             pending={session.pending}
             error={session.error}
+            errorDetail={session.error ? session.errorDetail : undefined}
             trigger={session.trigger}
             canRestoreFocus={() =>
               currentThreadRef.current === session.threadId &&
@@ -2245,14 +2251,16 @@ function ContextCompactionProgress({
         <span className="context-compaction-mark" aria-hidden="true">
           {failed ? (
             <Icon name="warning" size={14} />
-          ) : (
+          ) : state.status === "pending" ? (
             <span className="mini-spinner" />
+          ) : (
+            <Icon name="check" size={14} />
           )}
         </span>
         <span className="context-compaction-progress-content">
           {state.message}
         </span>
-        {failed && onDismiss ? (
+        {state.status !== "pending" && onDismiss ? (
           <button
             type="button"
             className="context-compaction-dismiss"
@@ -2263,11 +2271,11 @@ function ContextCompactionProgress({
           </button>
         ) : null}
       </div>
-      {failed && state.detail ? (
+      {state.detail ? (
         <div className="context-compaction-error-actions">
           <details className="context-compaction-error-detail">
             <summary tabIndex={0}>{i18n.t("shell:technicalDetails")}</summary>
-            <p tabIndex={0}>{state.detail}</p>
+            <pre tabIndex={0}>{state.detail}</pre>
           </details>
         </div>
       ) : null}
@@ -4323,4 +4331,10 @@ function formatDuration(milliseconds: number): string {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorCauseDetail(error: unknown): string | undefined {
+  if (error instanceof Error && error.cause !== undefined)
+    return describeError(error.cause);
+  return undefined;
 }

@@ -1,3 +1,4 @@
+import type { CompactionIpcReply } from "./compaction-ipc.js";
 import type {
   NativeQueueSteerResult,
   NativeQueueEditResult,
@@ -33,18 +34,21 @@ const knownCodes = new Set([
   "operation_forbidden",
 ]);
 
-/** Private Electron reply: only safe codes cross IPC and contextBridge as data. */
+/** Local reply: preserve diagnostics as data; only known codes control recovery. */
 export interface QueueEditIpcRejection {
   type: typeof rejectionType;
   data: { zenCode: string };
+  message?: string;
 }
 export type QueueEditIpcReply = NativeQueueEditResult | QueueEditIpcRejection;
 export type ProtocolIpcResult<M extends ClientRequestMethod> =
-  M extends "zen/thread/queue/edit"
-    ? QueueEditIpcReply
-    : M extends "zen/thread/queue/steer"
-      ? NativeQueueSteerResult | QueueEditIpcRejection
-      : ClientRequestResults[M];
+  M extends "thread/compact"
+    ? CompactionIpcReply
+    : M extends "zen/thread/queue/edit"
+      ? QueueEditIpcReply
+      : M extends "zen/thread/queue/steer"
+        ? NativeQueueSteerResult | QueueEditIpcRejection
+        : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,
@@ -52,7 +56,13 @@ export function queueEditIpcRejection(
   const data = isRecord(error) && isRecord(error.data) ? error.data : undefined;
   const code = data?.zenCode;
   return typeof code === "string" && knownCodes.has(code)
-    ? { type: rejectionType, data: { zenCode: code } }
+    ? {
+        type: rejectionType,
+        data: { zenCode: code },
+        ...(isRecord(error) && typeof error.message === "string"
+          ? { message: error.message }
+          : {}),
+      }
     : undefined;
 }
 
@@ -70,9 +80,12 @@ export function unwrapQueueMutationIpcReply<
     const safe = queueEditIpcRejection(reply);
     if (safe === undefined)
       throw new Error("Queue operation outcome is unconfirmed.");
-    throw Object.assign(new Error("Queued message operation was rejected."), {
-      data: safe.data,
-    });
+    throw Object.assign(
+      new Error(safe.message ?? "Queued message operation was rejected."),
+      {
+        data: safe.data,
+      },
+    );
   }
   return reply as T;
 }

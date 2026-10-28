@@ -1,3 +1,4 @@
+import { compactionIpcRejection } from "../preload/compaction-ipc.js";
 import { ipcMain } from "electron";
 import type { AppServerManager } from "./app-server-manager.js";
 import { ipcChannels } from "../preload/ipc.js";
@@ -20,6 +21,7 @@ export function registerProtocolRequestIpc(
       try {
         result = await manager.request(method, params as never);
       } catch (error) {
+        if (method === "thread/compact") return compactionIpcRejection(error);
         if (
           method !== "zen/thread/queue/edit" &&
           method !== "zen/thread/queue/steer"
@@ -27,8 +29,8 @@ export function registerProtocolRequestIpc(
           throw error;
         const rejection = queueEditIpcRejection(error);
         if (rejection !== undefined) return rejection;
-        // Neither raw Host errors nor custom Error fields survive this boundary.
-        throw new Error("Queue edit outcome is unconfirmed.");
+        // Unknown outcomes still need receipt recovery; retain the local cause.
+        throw error;
       }
       if (method === "thread/resume" || method === "thread/read") {
         const snapshot =

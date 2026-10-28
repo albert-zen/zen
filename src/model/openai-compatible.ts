@@ -162,6 +162,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
       model: request.model,
       defaultParams: this.#defaultParams,
     });
+    const developerRole = compatibleDeveloperRole(this.#endpoint);
     const messages: Readonly<Record<string, unknown>>[] = [];
     const mediaPaths = new Map<string, object>();
     const toolMediaTransport: ToolMediaTransportSummary = {
@@ -202,7 +203,11 @@ export class OpenAiCompatibleModel implements ModelAdapter {
         continue;
       }
       if (message.role !== "tool") flushToolMedia();
-      let encoded = await toChatMessage(message, this.#attachments);
+      let encoded = await toChatMessage(
+        message,
+        this.#attachments,
+        developerRole,
+      );
       const decision =
         message.role === "tool" && message.modelContent !== undefined
           ? selectChatToolMediaTransport(
@@ -599,6 +604,25 @@ function compatibleDefaultParams(
   return snapshot;
 }
 
+/** Wire-only projection for the documented instruction role of bundled providers.
+ * Keep canonical roles and ordering intact; never demote instructions to user text.
+ * Unknown gateways and native OpenAI retain their existing protocol contract.
+ */
+function compatibleDeveloperRole(endpoint: string): "system" | "developer" {
+  const hostname = new URL(endpoint).hostname.toLowerCase();
+  return isDashScopeHostname(hostname) ||
+    [
+      "api.deepseek.com",
+      "api.siliconflow.cn",
+      "api.siliconflow.com",
+      "api.moonshot.cn",
+      "api.moonshot.ai",
+      "open.bigmodel.cn",
+    ].includes(hostname)
+    ? "system"
+    : "developer";
+}
+
 function isDashScopeHostname(hostname: string): boolean {
   if (
     hostname === "dashscope.aliyuncs.com" ||
@@ -770,6 +794,7 @@ function toChatTool(tool: ModelTool): ChatTool {
 async function toChatMessage(
   message: ModelMessage,
   attachments: Pick<AttachmentStore, "read"> | undefined,
+  developerRole: "system" | "developer",
 ): Promise<Readonly<Record<string, unknown>>> {
   if (message.role === "reasoning") {
     throw modelError(
@@ -811,7 +836,10 @@ async function toChatMessage(
     return await toChatUserContent(contextUserContent(message), attachments);
   }
 
-  return { role: message.role, content: message.text };
+  return {
+    role: message.role === "developer" ? developerRole : message.role,
+    content: message.text,
+  };
 }
 
 async function toChatUserContent(

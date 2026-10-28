@@ -773,7 +773,8 @@ button:disabled {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-.projects-section-toggle {
+.projects-section-toggle,
+.sidebar-section-toggle {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -782,10 +783,12 @@ button:disabled {
   background: transparent;
   color: inherit;
 }
-.projects-section-toggle svg {
+.projects-section-toggle svg,
+.sidebar-section-toggle svg {
   transition: transform 180ms ease;
 }
-.projects-section-toggle svg:not(.expanded) {
+.projects-section-toggle svg:not(.expanded),
+.sidebar-section-toggle svg:not(.expanded) {
   transform: rotate(-90deg);
 }
 .sidebar-view-head span {
@@ -7899,7 +7902,7 @@ button:disabled {
 .context-compaction-error-detail summary:hover {
   background: var(--surface-2);
 }
-.context-compaction-error-detail p {
+.context-compaction-error-detail pre {
   max-height: min(240px, 30dvh);
   overflow: auto;
   margin: 4px 0 0;
@@ -7911,7 +7914,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 .context-compaction-error-detail summary:focus-visible,
-.context-compaction-error-detail p:focus-visible,
+.context-compaction-error-detail pre:focus-visible,
 .context-compaction-dismiss:focus-visible {
   outline: 1px solid var(--color-focus-ring);
   outline-offset: 2px;
@@ -11697,4 +11700,20 @@ button:disabled {
     min-height: 44px;
     min-width: 44px;
   }
+}
+
+/* Sidebar navigation sections retain independent disclosure controls. */
+.pinned-section-toggle {
+  margin: 8px 8px 4px;
+}
+.recent-thread-group {
+  margin-top: 16px;
+}
+.sidebar-show-more {
+  margin: 6px 10px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
 }

@@ -9,6 +9,7 @@ export interface ContextCompactionRequest {
   threadId: string | null;
   active: boolean;
   clearCommandDraft: boolean;
+  refresh?(): Promise<void>;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
   compact(
@@ -21,6 +22,7 @@ export interface ContextCompactionRequest {
 export async function handleCompactCommand(options: {
   threadId: string | null;
   active: boolean;
+  refresh?(): Promise<void>;
   read(): ComposerState;
   update(change: (state: ComposerState) => ComposerState): void;
   compact(
@@ -97,6 +99,12 @@ export async function requestContextCompaction(
         state.draft.text.trim() === "/compact --no-reference"
       ),
     );
+    let refreshFailure: string | undefined;
+    try {
+      await options.refresh?.();
+    } catch (reason) {
+      refreshFailure = localErrorText(reason);
+    }
     options.update((current) =>
       current.compaction !== pending
         ? current
@@ -108,7 +116,14 @@ export async function requestContextCompaction(
                 : current.draft,
             compaction: {
               status: "succeeded",
-              message: i18n.t("common:compacted"),
+              message: i18n.t(
+                refreshFailure === undefined
+                  ? "common:compacted"
+                  : "common:compactedRefreshFailed",
+              ),
+              ...(refreshFailure === undefined
+                ? {}
+                : { detail: refreshFailure }),
             },
           },
     );
@@ -125,34 +140,63 @@ export async function requestContextCompaction(
 }
 
 function compactError(reason: unknown): { message: string; detail: string } {
-  // Do not infer a semantic error code from Electron's free-form IPC message.
-  // Only a preserved typed code is authoritative. Never render raw rejection text:
-  // it may include provider output, credentials, or a private conversation.
+  // Typed service codes determine outcome. Free-form provider/transport text is
+  // local diagnostic evidence, never a source of inferred commit status.
   const value = reason !== null && typeof reason === "object" ? reason : null;
+  const data =
+    value !== null &&
+    "data" in value &&
+    typeof value.data === "object" &&
+    value.data !== null
+      ? value.data
+      : null;
   const code =
-    value !== null && "code" in value && typeof value.code === "string"
-      ? value.code
+    data !== null && "zenCode" in data && typeof data.zenCode === "string"
+      ? data.zenCode
       : value !== null &&
           "zenCode" in value &&
           typeof value.zenCode === "string"
         ? value.zenCode
-        : null;
-  const detail =
-    code === "thread_busy" || code === "compaction_not_available"
-      ? i18n.t("common:compactRejected", { code })
-      : i18n.t("common:compactUnknown");
+        : value !== null && "code" in value && typeof value.code === "string"
+          ? value.code
+          : null;
+  const original = localErrorText(reason);
+  const detail = [code, original].filter(Boolean).join("\n");
   if (code === "thread_busy")
-    return {
-      message: i18n.t("common:compactWait"),
-      detail,
-    };
+    return { message: i18n.t("common:compactWait"), detail };
   if (code === "compaction_not_available")
-    return {
-      message: i18n.t("common:compactNoNew"),
-      detail,
-    };
+    return { message: i18n.t("common:compactNoNew"), detail };
+  // These service failures are raised before the compaction record is appended.
+  const notApplied = new Set([
+    "compaction_generation_failed",
+    "compaction_boundary_changed",
+    "compaction_invalid_summary",
+    "compaction_incomplete_turn",
+    "compaction_invalid_options",
+    "compaction_budget_unavailable",
+    "compaction_budget_exceeded",
+    "compaction_aborted",
+  ]);
+  if (code !== null && notApplied.has(code))
+    return { message: i18n.t("common:compactFailedNotApplied"), detail };
   return {
     message: i18n.t("common:compactUnconfirmed"),
-    detail,
+    detail: `${i18n.t("common:compactUnknown")}\n\n${detail}`,
   };
+}
+
+function localErrorText(reason: unknown): string {
+  if (
+    reason !== null &&
+    typeof reason === "object" &&
+    "message" in reason &&
+    typeof reason.message === "string"
+  )
+    return reason.message;
+  if (typeof reason === "string") return reason;
+  try {
+    return JSON.stringify(reason, null, 2) ?? String(reason);
+  } catch {
+    return String(reason);
+  }
 }

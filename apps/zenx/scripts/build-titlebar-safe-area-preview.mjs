@@ -50,6 +50,8 @@ await writeFile(
 );
 const sources = [
   "src/renderer/src/App.tsx",
+  "src/renderer/src/Sidebar.tsx",
+  "src/renderer/src/sidebar-expansion.ts",
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",

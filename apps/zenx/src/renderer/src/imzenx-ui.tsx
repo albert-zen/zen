@@ -154,7 +154,7 @@ function OwnImSetup({
   const busyRef = useRef(true);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<
-    { key: string } | { message: string } | null
+    (({ key: string } | { message: string }) & { detail?: string }) | null
   >(null);
   const [notice, setNotice] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -214,8 +214,12 @@ function OwnImSetup({
       .then((result) => {
         if (mounted.current) applySnapshot(result);
       })
-      .catch(() => {
-        if (mounted.current) setError({ key: "imReadSettingsFailed" });
+      .catch((reason: unknown) => {
+        if (mounted.current)
+          setError({
+            key: "imReadSettingsFailed",
+            detail: reason instanceof Error ? reason.message : String(reason),
+          });
       })
       .finally(() => {
         busyRef.current = false;
@@ -264,7 +268,10 @@ function OwnImSetup({
         } else
           setError(
             result.runtime.error
-              ? { message: result.runtime.error }
+              ? {
+                  message: result.runtime.error,
+                  detail: result.runtime.errorDetail,
+                }
               : { key: "imRuntimePreparationIncomplete" },
           );
       } else if (action === "save") {
@@ -305,15 +312,27 @@ function OwnImSetup({
           else applySnapshot(result);
         }
       }
-    } catch {
+    } catch (reason) {
       clearPasswords();
       if (mounted.current)
         setError(
           action === "save"
-            ? { key: "imChannelSaveFailed" }
+            ? {
+                key: "imChannelSaveFailed",
+                detail:
+                  reason instanceof Error ? reason.message : String(reason),
+              }
             : action === "runtime"
-              ? { key: "imRuntimePreparationFailed" }
-              : { key: "imReadSettingsFailed" },
+              ? {
+                  key: "imRuntimePreparationFailed",
+                  detail:
+                    reason instanceof Error ? reason.message : String(reason),
+                }
+              : {
+                  key: "imReadSettingsFailed",
+                  detail:
+                    reason instanceof Error ? reason.message : String(reason),
+                },
         );
     } finally {
       busyRef.current = false;
@@ -324,6 +343,14 @@ function OwnImSetup({
     }
   };
   const channel = snapshot?.channels.find((entry) => entry.id === channelId);
+  const shownError =
+    error ??
+    (snapshot?.runtime.error
+      ? {
+          message: snapshot.runtime.error,
+          detail: snapshot.runtime.errorDetail,
+        }
+      : null);
   return (
     <section
       className="imzenx-connection imzenx-routing imzenx-own-setup"
@@ -333,10 +360,18 @@ function OwnImSetup({
       <p className="imzenx-hint">
         {i18n.t("panels:imCredentialStorageNotice")}
       </p>
-      {error ? (
-        <p className="imzenx-error" role="alert">
-          {"key" in error ? i18n.t(`panels:${error.key}`) : error.message}
-        </p>
+      {shownError ? (
+        <div className="imzenx-error" role="alert">
+          {"key" in shownError
+            ? i18n.t(`panels:${shownError.key}`)
+            : shownError.message}
+          {shownError.detail ? (
+            <details className="context-compaction-error-detail">
+              <summary>{i18n.t("shell:technicalDetails")}</summary>
+              <pre tabIndex={0}>{shownError.detail}</pre>
+            </details>
+          ) : null}
+        </div>
       ) : null}
       {snapshot ? (
         <>

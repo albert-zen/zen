@@ -449,6 +449,31 @@ export function safeProgramFailure(entry: TriggerHistoryEntry): string | null {
   });
 }
 
+/** Owner-only, plain-text disclosure. Summary classification is not a replacement for evidence. */
+export function programFailureDetail(
+  entry: TriggerHistoryEntry,
+): string | null {
+  if (entry.status !== "failed") return null;
+  const outcomes = entry.programOutcomes?.length
+    ? entry.programOutcomes
+    : entry.programOutcome
+      ? [entry.programOutcome]
+      : [];
+  const parts = [
+    entry.error,
+    ...outcomes.map((outcome) =>
+      [
+        `${outcome.stage}: ${outcome.status} (exit ${String(outcome.exitCode)})`,
+        outcome.error,
+        outcome.output,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    ),
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n\n") : null;
+}
+
 function useTriggerData(sdk: PluginUiSdkV1) {
   const [data, setData] = useState<TriggerListResult>({
     triggers: [],
@@ -1479,6 +1504,12 @@ function TriggerManager({
                 <p role="status">{safeProgramFailure(entry)}</p>
               ) : entry.error ? (
                 <p role="status">{entry.error}</p>
+              ) : null}
+              {programFailureDetail(entry) ? (
+                <details className="context-compaction-error-detail">
+                  <summary>{i18n.t("shell:technicalDetails")}</summary>
+                  <pre tabIndex={0}>{programFailureDetail(entry)}</pre>
+                </details>
               ) : null}
               <div className="trigger-actions">
                 {entry.sourceThreadId ? (

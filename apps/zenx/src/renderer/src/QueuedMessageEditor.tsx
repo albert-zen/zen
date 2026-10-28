@@ -25,6 +25,7 @@ export interface QueuedMessageEditorProps {
   onDraftChange?(draft: ComposerDraft): void;
   pending?: boolean;
   error?: string | null;
+  errorDetail?: string;
   disabledReason?: string | null;
   /** Resolves only after an authoritative native edit receipt. */
   onSave(draft: ComposerDraft): Promise<void>;
@@ -482,6 +483,12 @@ function EditorSession(props: QueuedMessageEditorProps) {
             >
               {error}
             </p>
+          ) : null}
+          {error && error === props.error && props.errorDetail ? (
+            <details className="context-compaction-error-detail">
+              <summary>{t("technicalDetails")}</summary>
+              <pre tabIndex={0}>{props.errorDetail}</pre>
+            </details>
           ) : null}
           <p
             className="queue-editor-hint"

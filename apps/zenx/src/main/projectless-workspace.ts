@@ -1,6 +1,17 @@
 import { lstat, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+/** Product work folders live beside, never inside, journal/Trace storage. */
+export function projectlessWorkspaceRoot(
+  homeDirectory: string,
+  dataDirectory?: string,
+): string {
+  return path.join(
+    path.resolve(dataDirectory ?? path.join(homeDirectory, ".zenx")),
+    "workspaces",
+  );
+}
+
 export interface ZenXProjectlessWorkspaceAllocatorOptions {
   rootDirectory: string;
   registerWorkspace(cwd: string): Promise<void>;

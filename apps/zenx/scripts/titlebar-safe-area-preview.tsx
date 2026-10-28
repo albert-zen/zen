@@ -2,6 +2,8 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { WindowTitleBar } from "../src/renderer/src/App.js";
+import { Sidebar } from "../src/renderer/src/Sidebar.js";
+import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
@@ -35,9 +37,11 @@ const customTabs = Array.from(
       query.get("tabs") === "overflow"
         ? overflowLabels[index]!
         : index === 0
-          ? "workspace.md"
+          ? query.has("navigation")
+            ? "Subagents"
+            : "workspace.md"
           : `Synthetic review ${index}`,
-    icon: "file" as const,
+    icon: query.has("navigation") ? ("users" as const) : ("file" as const),
     render: () => (
       <p style={{ padding: 24 }}>
         Synthetic tab {index}. No Host, filesystem, network or user data.
@@ -45,7 +49,32 @@ const customTabs = Array.from(
     ),
   }),
 );
+const previewThreads: NativeThreadSummary[] = [
+  "pinned",
+  "project",
+  "recent",
+].map((id, index) => ({
+  threadId: id,
+  name: ["Pinned synthetic task", "Project task", "Recent no-project task"][
+    index
+  ]!,
+  preview: "",
+  archived: false,
+  status: "idle",
+  createdAt: new Date(1000).toISOString(),
+  updatedAt: new Date(2000 + index * 1000).toISOString(),
+  currentMetadata: {
+    model: "synthetic-model",
+    provider: "fake",
+    cwd:
+      id === "recent" ? "/synthetic/workspaces/recent" : "/synthetic/project",
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+  },
+}));
 function Preview() {
+  const [newProjectless, setNewProjectless] = useState(false);
+  const [selectedThread, setSelectedThread] = useState("recent");
   const [collapsed, setCollapsed] = useState(query.get("sidebar") !== "open");
   const [open, setOpen] = useState(true);
   const [width, setWidth] = useState(0);
@@ -102,17 +131,67 @@ function Preview() {
           ))}
         </div>
       )}
-      <aside
-        className={`sidebar${!collapsed ? " open" : ""}`}
-        id="primary-sidebar"
-      >
-        <p style={{ padding: 16 }}>Synthetic Sidebar</p>
-      </aside>
+      {query.has("navigation") ? (
+        <Sidebar
+          collapsed={collapsed}
+          mode="projects"
+          open={!collapsed}
+          onClose={() => setCollapsed(true)}
+          onNewThread={() => setNewProjectless(false)}
+          onNewProjectlessThread={() => {
+            setNewProjectless(true);
+            document.body.dataset.projectlessDraft = "true";
+          }}
+          onAddProject={() => {}}
+          onRemoveProject={() => {}}
+          onSetDefaultProject={() => {}}
+          onOpenContribution={() => {}}
+          onOpenSettings={() => {}}
+          onRetryThreads={() => {}}
+          onChangeThreadLifecycle={async () => {}}
+          onChangeThreadPinned={async () => {}}
+          onRenameThread={async () => {}}
+          onSelectThread={setSelectedThread}
+          pendingApprovalThreadIds={new Set()}
+          pluginContributions={[]}
+          selectedPage="agent"
+          selectedThreadId={selectedThread}
+          serverStatus={{ type: "ready", reconnected: false }}
+          liveThread={null}
+          threadError={null}
+          threadLoading={false}
+          projects={{
+            projects: [
+              {
+                key: "/synthetic/project",
+                workspace: "/synthetic/project",
+                name: "Synthetic project",
+                configured: true,
+                isDefault: true,
+                threadIds: ["pinned", "project"],
+              },
+            ],
+            unavailableThreadIds: [],
+            projectlessThreadIds: ["recent"],
+            lastUsedWorkspace: "/synthetic/project",
+          }}
+          pinnedThreads={[previewThreads[0]!]}
+          threads={previewThreads}
+        />
+      ) : (
+        <aside
+          className={`sidebar${!collapsed ? " open" : ""}`}
+          id="primary-sidebar"
+        >
+          <p style={{ padding: 16 }}>Synthetic Sidebar</p>
+        </aside>
+      )}
       <main className="workspace">
         <section className="agent-surface">
           <p style={{ padding: 24 }}>
-            Actual WindowTitleBar and AuxiliaryPanel. Synthetic tabs and
-            native-control markers only.
+            {newProjectless
+              ? "No-project draft. No folder or Thread has been created."
+              : "Actual WindowTitleBar, Sidebar and AuxiliaryPanel. Synthetic data only."}
           </p>
         </section>
         <AuxiliaryPanel

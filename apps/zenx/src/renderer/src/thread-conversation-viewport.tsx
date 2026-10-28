@@ -1,3 +1,4 @@
+import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { requestQueuedSteer } from "./queue-steer-request.js";
@@ -308,10 +309,14 @@ export function ThreadConversationViewport({
     }
   };
   const compact = async (id: string, includeOriginalReference = true) => {
-    await window.zenx.protocol.request("thread/compact", {
-      threadId: id,
-      ...(includeOriginalReference ? {} : { includeOriginalReference: false }),
-    });
+    unwrapCompactionIpcReply(
+      await window.zenx.protocol.request("thread/compact", {
+        threadId: id,
+        ...(includeOriginalReference
+          ? {}
+          : { includeOriginalReference: false }),
+      }),
+    );
     if (id === threadId) reload();
   };
   const submit = async (

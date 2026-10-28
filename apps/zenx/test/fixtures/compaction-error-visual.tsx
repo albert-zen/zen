@@ -78,8 +78,11 @@ function Fixture() {
       read: () => emptyComposerState(),
       update: (change) => setComposer((current) => change(current)),
       compact: async () => {
-        throw new Error(
-          "Error invoking remote method 'zenx:protocol:request': private=fixture-secret",
+        throw Object.assign(
+          new Error(
+            "HTTP 400 invalid_parameter_error: developer is not an allowed role. Allowed roles: system, assistant, user, tool, function.\nSynthetic diagnostic only; no real request was sent.",
+          ),
+          { zenCode: "compaction_generation_failed" },
         );
       },
     });

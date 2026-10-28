@@ -12,11 +12,16 @@ import {
 } from "../../thread-sidebar-state.js";
 export class ThreadSidebarController {
   #states: Record<string, ThreadSidebarState> = {};
+  #presentation: Record<string, ThreadSidebarState> = {};
+  #pendingPresentation = new Map<
+    string,
+    { owner: SidebarOwner; patches: Map<symbol, ThreadSidebarPatch> }
+  >();
   #listeners = new Set<() => void>();
   #queues = new Map<string, Promise<number>>();
   #error: string | null = null;
   constructor(readonly api?: ThreadSidebarApi) {}
-  snapshot = () => this.#states;
+  snapshot = () => this.#presentation;
   get = (owner: SidebarOwner | string) => this.#states[sidebarOwnerKey(owner)];
   error = () => this.#error;
   subscribe = (listener: () => void) => {
@@ -26,6 +31,15 @@ export class ThreadSidebarController {
     };
   };
   #emit() {
+    this.#presentation = { ...this.#states };
+    for (const [key, pending] of this.#pendingPresentation) {
+      const committed = this.#states[key] ?? emptySidebarState(pending.owner);
+      this.#presentation[key] = Object.assign(
+        {},
+        committed,
+        ...pending.patches.values(),
+      );
+    }
     for (const listener of this.#listeners) listener();
   }
   accept = (state: ThreadSidebarState) => {
@@ -58,6 +72,32 @@ export class ThreadSidebarController {
         "Sidebar state: Sidebar changed elsewhere. Your edit was not applied; try again.";
       this.#emit();
       return Promise.resolve();
+    }
+    // Opening/fullscreen are immediate local presentation, not durable receipts.
+    // Keep the authoritative state/revision separate until the Host commits.
+    const pendingId = Symbol();
+    const visible = this.#presentation[key] ?? emptySidebarState(owner);
+    try {
+      const preview = makePatch(visible);
+      if (
+        Object.keys(preview).length > 0 &&
+        Object.entries(preview).every(
+          ([field, value]) =>
+            (field === "open" || field === "fullscreen") &&
+            typeof value === "boolean",
+        )
+      ) {
+        let pending = this.#pendingPresentation.get(key);
+        if (!pending)
+          this.#pendingPresentation.set(
+            key,
+            (pending = { owner, patches: new Map() }),
+          );
+        pending.patches.set(pendingId, preview);
+        this.#emit();
+      }
+    } catch {
+      // The queued edit reports validation errors through the existing UI error path.
     }
     const observed = renderedRevision ?? this.#states[key]?.revision;
     const previous = this.#queues.get(key);
@@ -96,6 +136,11 @@ export class ThreadSidebarController {
         this.#emit();
       })
       .finally(() => {
+        const pending = this.#pendingPresentation.get(key);
+        if (pending?.patches.delete(pendingId)) {
+          if (!pending.patches.size) this.#pendingPresentation.delete(key);
+          this.#emit();
+        }
         if (this.#queues.get(key) === result) this.#queues.delete(key);
       });
   }

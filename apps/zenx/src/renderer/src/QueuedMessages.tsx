@@ -44,6 +44,7 @@ export interface QueuedMessagesProps {
     queuedItemId: string;
     revision: number;
     message: string;
+    detail?: string;
   } | null;
   busy?: boolean;
   resuming?: boolean;
@@ -347,7 +348,7 @@ function QueueShelf({
               steerError={
                 steerError?.queuedItemId === message.id &&
                 steerError.revision === (message.revision ?? 0)
-                  ? steerError.message
+                  ? steerError
                   : null
               }
               disabled={busy || resuming}
@@ -422,7 +423,7 @@ function QueuedMessageRow({
   steering: boolean;
   running: boolean;
   onSteer: QueuedMessagesProps["onSteer"];
-  steerError: string | null;
+  steerError: { message: string; detail?: string } | null;
   disabled: boolean;
   failure: QueuedMessagesProps["queueFailure"];
   onCancel: QueuedMessagesProps["onCancel"];
@@ -717,9 +718,15 @@ function QueuedMessageRow({
         </div>
       </div>
       {steerError ? (
-        <p className="queue-row-error" role="alert">
-          {steerError}
-        </p>
+        <div className="queue-row-error" role="alert">
+          {steerError.message}
+          {steerError.detail ? (
+            <details className="context-compaction-error-detail">
+              <summary>{t("technicalDetails")}</summary>
+              <pre tabIndex={0}>{steerError.detail}</pre>
+            </details>
+          ) : null}
+        </div>
       ) : null}
       {failure ? (
         <p className="queue-row-error" role="alert" tabIndex={-1}>

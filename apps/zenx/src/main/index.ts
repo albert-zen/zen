@@ -25,7 +25,10 @@ import { restoreLoginShellPath } from "./login-shell-environment.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { FleetSettingsService } from "./fleet-settings.js";
-import { ZenXProjectlessWorkspaceAllocator } from "./projectless-workspace.js";
+import {
+  projectlessWorkspaceRoot,
+  ZenXProjectlessWorkspaceAllocator,
+} from "./projectless-workspace.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
 import { FleetProductService } from "./fleet-product.js";
@@ -2397,7 +2400,10 @@ async function allocateProjectlessWorkspace(
   if (!settingsService) throw new Error("Host settings unavailable");
   const settings = settingsService;
   return await new ZenXProjectlessWorkspaceAllocator({
-    rootDirectory: join(app.getPath("documents"), "ZenX"),
+    rootDirectory: projectlessWorkspaceRoot(
+      app.getPath("home"),
+      process.env["ZENX_DATA_DIR"],
+    ),
     registerWorkspace: async (cwd) => {
       await settings.registerProjectlessWorkspace(cwd);
       await syncProjectProjection(settings);

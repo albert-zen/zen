@@ -120,26 +120,40 @@ test("context action shares the command executor without consuming an unrelated 
   assert.equal(state.compaction?.status, "succeeded");
 });
 
-test("compaction failures classify only typed codes and never expose raw IPC or private text", async () => {
-  for (const [reason, expected] of [
+test("compaction distinguishes a confirmed pre-commit failure from unknown transport and preserves local details", async () => {
+  for (const [reason, expected, detail] of [
     [
-      Object.assign(new Error("secret"), { code: "thread_busy" }),
+      Object.assign(new Error("Thread is running"), { code: "thread_busy" }),
       /Wait for the current reply/u,
+      "Thread is running",
     ],
     [
-      Object.assign(new Error("secret"), {
+      Object.assign(new Error("Already compacted"), {
         zenCode: "compaction_not_available",
       }),
       /no new completed conversation/u,
+      "Already compacted",
     ],
     [
-      new Error(
-        "Error invoking remote method 'zenx:protocol:request': token=secret",
+      Object.assign(
+        new Error(
+          "HTTP 400 invalid_parameter_error: developer is not an allowed role",
+        ),
+        { data: { zenCode: "compaction_generation_failed" } },
       ),
-      /Could not confirm/u,
+      /failed.*not.*applied/iu,
+      "HTTP 400 invalid_parameter_error: developer is not an allowed role",
     ],
-    [new Error("thread_busy private token=secret"), /Could not confirm/u],
-    [{ nested: { token: "secret" } }, /Could not confirm/u],
+    [
+      new Error("Connection closed after dispatch"),
+      /Could not confirm/u,
+      "Connection closed after dispatch",
+    ],
+    [
+      new Error("thread_busy in free-form text"),
+      /Could not confirm/u,
+      "thread_busy in free-form text",
+    ],
   ] as const) {
     let state = emptyComposerState();
     await requestContextCompaction({
@@ -156,11 +170,7 @@ test("compaction failures classify only typed codes and never expose raw IPC or 
     });
     assert.equal(state.compaction?.status, "failed");
     assert.match(state.compaction.message, expected);
-    assert.doesNotMatch(
-      JSON.stringify(state.compaction),
-      /secret|invoking remote method/u,
-    );
-    assert.ok(state.compaction.detail);
+    assert.ok(state.compaction.detail?.includes(detail));
   }
 });
 
@@ -238,4 +248,28 @@ test("slash command disables original reference only when explicitly requested",
   });
   assert.deepEqual(flags, [false]);
   assert.equal(state.draft.text, "");
+});
+
+test("a failed view refresh cannot turn a committed compaction into an unknown outcome", async () => {
+  let state = emptyComposerState();
+  let calls = 0;
+  await requestContextCompaction({
+    threadId: "synthetic",
+    active: false,
+    clearCommandDraft: false,
+    read: () => state,
+    update: (change) => {
+      state = change(state);
+    },
+    compact: async () => {
+      calls++;
+    },
+    refresh: async () => {
+      throw new Error("Snapshot connection closed");
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(state.compaction?.status, "succeeded");
+  assert.match(state.compaction.message, /compacted.*could not refresh/u);
+  assert.equal(state.compaction.detail, "Snapshot connection closed");
 });
