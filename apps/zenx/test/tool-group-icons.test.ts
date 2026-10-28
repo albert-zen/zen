@@ -75,15 +75,27 @@ test("adding tool types preserves the mounted decorative slot, activity and disc
       );
     assert.deepEqual(glyphs(), ["terminal"]);
     assert.equal(slot.getAttribute("aria-hidden"), "true");
-    assert.equal(slot.querySelector("[tabindex], [role], button, a"), null);
+    assert.ok(
+      slot.querySelector("[tabindex], [role], button, a") === null,
+      "Decorative glyphs do not add focusable or semantic controls",
+    );
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
 
     const page = call("page", "browser_inspect");
     await h.render(runtimeThread([first, second, page]));
-    assert.equal(toggle.querySelector(".trace-tool-icons"), slot);
-    assert.equal(toggle.querySelector(".trace-activity-title"), title);
+    assert.ok(
+      toggle.querySelector(".trace-tool-icons") === slot,
+      "Adding a capability preserves the mounted icon slot",
+    );
+    assert.ok(
+      toggle.querySelector(".trace-activity-title") === title,
+      "Adding a capability preserves the mounted activity title",
+    );
     assert.equal(title.textContent, label);
-    assert.equal(title.getAttribute("title"), label);
+    assert.equal(
+      title.getAttribute("title"),
+      `Agent is still working · ${label}`,
+    );
     assert.deepEqual(glyphs(), ["terminal", "browser"]);
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
     assert.equal(
@@ -95,7 +107,10 @@ test("adding tool types preserves the mounted decorative slot, activity and disc
     await h.render(
       runtimeThread([first, second, page, call("image", "view_image")]),
     );
-    assert.equal(document.querySelector(".trace-toggle"), toggle);
+    assert.ok(
+      document.querySelector(".trace-toggle") === toggle,
+      "Adding another capability preserves the expanded disclosure",
+    );
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.deepEqual(glyphs(), ["terminal", "browser"]);
     assert.equal(
