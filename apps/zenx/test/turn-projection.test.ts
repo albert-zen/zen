@@ -82,11 +82,11 @@ test("thread send and rename summaries report successful actions without redunda
   assert.equal(traceSummary([renamed]), "Renamed thread");
   assert.equal(
     traceSummary([sent, renamed]),
-    "Send message ×1 · Rename thread ×1",
+    "Renamed thread and sent a message",
   );
   assert.equal(
     traceSummary([sent, { ...renamed, status: "failed" }]),
-    "Send message ×1 · Rename thread ×1",
+    "Attempted to rename thread and sent a message",
   );
 });
 
@@ -339,7 +339,7 @@ test("collapsed trace groups action calls without implying successful outcomes",
     toolName: "shell",
     toolArguments: { command: `echo ${value}` },
   }));
-  assert.equal(traceSummary([reasoning("r", ""), ...items]), "Run command ×4");
+  assert.equal(traceSummary([reasoning("r", ""), ...items]), "Ran 4 commands");
   const activity = summarizeTraceActivity([
     { ...items[0]!, status: "failed" },
     ...items.slice(1),

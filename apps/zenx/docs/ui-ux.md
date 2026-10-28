@@ -202,7 +202,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
 
-Trace Group 默认收起，主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
+Trace Group 默认收起，主标题用中英文本地确定性模板显示自然动作摘要，不调用模型、不采用“动作 ×N”清单。摘要最多突出两个动作：上下文压缩边界优先，其余按最近出现顺序，等待/执行包装降级；省略动作保留总数提示。重复命令/消息可自然计数，图片等观察不推断资源数量。只有已确认完成的动作使用完成时态；完整调用数与原始顺序仍可展开查看。主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
 
