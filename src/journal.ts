@@ -9,7 +9,8 @@ import { decodeCanonicalItem, type CanonicalItem } from "./item.js";
 const THREAD_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export interface ThreadJournal {
-  append(item: CanonicalItem): Promise<void>;
+  /** Optional exact durable ItemList receipt, scoped to this successful append. */
+  append(item: CanonicalItem): Promise<void | ContextItem[]>;
   /** Atomically publishes a complete new Thread when supported by the store. */
   create?(
     items: readonly CanonicalItem[],

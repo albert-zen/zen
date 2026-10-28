@@ -8,7 +8,10 @@ test("initial durable input delay displays preparation, not elapsed agent work b
     // A real turn_started may arrive before user_message append completes.
     const admitting = runtimeThread([]);
     await h.render(admitting);
-    assert.equal(document.querySelector(".user-row"), null);
+    assert.ok(
+      document.querySelector(".user-row") === null,
+      "uncommitted input must not appear as an accepted user bubble",
+    );
     assert.equal(Boolean(document.querySelector(".turn-duration")), false);
     assert.equal(
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),

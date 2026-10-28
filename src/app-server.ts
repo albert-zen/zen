@@ -5298,8 +5298,9 @@ export class ZenAppServer {
     thread.validateAppend(item);
     let persistedContext: ContextItem[] | undefined;
     try {
-      await this.#journal.append(item);
-      persistedContext = await this.#journal.readItemList?.(thread.id);
+      const appendedContext = await this.#journal.append(item);
+      persistedContext =
+        appendedContext ?? (await this.#journal.readItemList?.(thread.id));
     } catch (error) {
       if (this.#threads.get(thread.id) === thread) {
         this.#threads.delete(thread.id);

@@ -3751,7 +3751,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
   }
 });
 
-test("selected archive fences a submission already staging its title", async () => {
+test("selected archive fences later sends without waiting for an earlier auxiliary title", async () => {
   const titleResponse = deferred<undefined>();
   const archiveResponse = deferred<unknown>();
   let turnStartCalls = 0;
@@ -3804,7 +3804,13 @@ test("selected archive fences a submission already staging its title", async () 
       send.click();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      turnStartCalls,
+      1,
+      "the earlier send does not wait for its title",
+    );
+    assert.equal(composer.value, "");
+    await setTextareaValue(composer, "Retry after archive failure");
 
     await act(async () => threadMenuButton("Thread one").click());
     const archive = await waitFor(() => exactMenuButton("Archive"));
@@ -3815,7 +3821,11 @@ test("selected archive fences a submission already staging its title", async () 
       await Promise.resolve();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      turnStartCalls,
+      1,
+      "title completion cannot resend accepted input",
+    );
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#thread-composer")?.disabled,
       true,
@@ -3840,7 +3850,7 @@ test("selected archive fences a submission already staging its title", async () 
       await Promise.resolve();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 1);
+    assert.equal(turnStartCalls, 2);
   } finally {
     await unmountApp(harness);
   }
@@ -7258,3 +7268,125 @@ for (const scenario of ["idle", "steer", "new"] as const) {
     }
   });
 }
+
+test("send presentation clears only the matching admitted draft and shows its bubble before elapsed work while title and reply are delayed", async (t) => {
+  const title = deferred<undefined>();
+  const admission = deferred<unknown>();
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let clientId: string | undefined;
+  let sends = 0;
+  const harness = await mountThreadApp({
+    observeTitle: async () => title.promise,
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params: any) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "zen/turn/send") {
+        sends++;
+        clientId = params.clientUserMessageId;
+        return admission.promise;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let watermark = 0;
+  const emit = async (
+    event: import("../../../src/app-server.js").AppServerEvent,
+  ) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        processEpoch: "test-process-epoch",
+        threadId: "thread-1",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Synthetic canonically admitted message");
+    const activatedAt = performance.now();
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => clientId);
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "turn_started",
+        id: "started",
+        turnId: "turn-delayed",
+        threadId: "thread-1",
+        createdAt: new Date().toISOString(),
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    await emit({
+      type: "turn_started",
+      turnId: "turn-delayed",
+      threadId: "thread-1",
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+    assert.equal(document.querySelectorAll(".user-row").length, 0);
+    assert.equal(document.querySelectorAll(".turn-duration").length, 0);
+    assert.equal(composer.value, "Synthetic canonically admitted message");
+    const committedAt = performance.now();
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "admitted-user",
+        turnId: "turn-delayed",
+        threadId: "thread-1",
+        createdAt: new Date().toISOString(),
+        clientId: clientId!,
+        text: "Synthetic canonically admitted message",
+      },
+    });
+    const bubble = document.querySelector(".user-row");
+    assert.ok(bubble);
+    assert.match(
+      bubble.textContent ?? "",
+      /Synthetic canonically admitted message/u,
+    );
+    assert.equal(
+      composer.value,
+      "",
+      "canonical admission clears the exact draft without waiting for the RPC reply or title",
+    );
+    assert.equal(document.querySelectorAll(".turn-duration").length, 1);
+    const turn = bubble.closest(".turn")!;
+    assert.ok(
+      [...turn.children].indexOf(bubble) <
+        [...turn.children].indexOf(turn.querySelector(".turn-running-label")!),
+    );
+    t.diagnostic(
+      JSON.stringify({
+        durableInputHoldMs: 200,
+        activationToBubbleMs: Math.round(performance.now() - activatedAt),
+        canonicalEventToBubbleMs: Math.round(performance.now() - committedAt),
+        titleAndRpcStillPending: true,
+      }),
+    );
+    await setTextareaValue(composer, "New draft survives old acknowledgements");
+    await act(async () => {
+      admission.resolve({});
+      title.reject(new Error("Synthetic auxiliary title failure"));
+    });
+    assert.equal(composer.value, "New draft survives old acknowledgements");
+    assert.equal(sends, 1);
+    assert.match(
+      document.body.textContent ?? "",
+      /Synthetic auxiliary title failure/u,
+    );
+    assert.equal(document.querySelectorAll(".user-row").length, 1);
+  } finally {
+    title.resolve(undefined);
+    admission.resolve({});
+    await unmountApp(harness);
+  }
+});
