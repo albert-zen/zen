@@ -114,7 +114,7 @@ async function harness(
         pluginId: label,
         id: label,
         label,
-        icon: "settings",
+        icon: "settings" as const,
         pageId: label,
         page: {
           pluginId: label,
