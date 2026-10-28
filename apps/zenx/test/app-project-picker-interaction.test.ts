@@ -7171,3 +7171,90 @@ test("Side chat drafts stay with their parent across actual Sidebar navigation",
     await unmountApp(harness);
   }
 });
+
+for (const scenario of ["idle", "steer", "new"] as const) {
+  test(`send latency: ${scenario} admission does not wait for auxiliary title persistence`, async (t) => {
+    const title = deferred<undefined>();
+    const admission = deferred<unknown>();
+    const sendTimes: number[] = [];
+    let titleStarted = false;
+    const options: Parameters<typeof mountApp>[1] = {
+      observeTitle: async () => {
+        titleStarted = true;
+        return title.promise;
+      },
+      startProjectThread: async (workspace) => started(liveThread(), workspace),
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(scenario === "steer" ? runningThread() : liveThread());
+        if (method === "zen/turn/send") {
+          sendTimes.push(performance.now());
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    };
+    const harness =
+      scenario === "new"
+        ? await mountApp(oneProject(), options)
+        : await mountThreadApp(options);
+    try {
+      const composer =
+        scenario === "new"
+          ? await waitFor(() =>
+              document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+            )
+          : await selectedComposer();
+      await setTextareaValue(composer, "Synthetic delayed title send");
+      const activatedAt = performance.now();
+      await dispatchComposerKey(composer, { key: "Enter" });
+      await waitFor(() => titleStarted);
+      // Hold an auxiliary operation while observing the real production App
+      // send entry. No Provider requests or fabricated successful messages.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+      const dispatchedBeforeTitle = sendTimes.length === 1;
+      assert.equal(
+        composer.value,
+        "Synthetic delayed title send",
+        "unconfirmed input stays recoverable",
+      );
+      assert.equal(
+        document.querySelectorAll(".user-row").length,
+        0,
+        "no invented accepted bubble",
+      );
+      await act(async () => title.resolve(undefined));
+      await waitFor(() => sendTimes.length === 1);
+      t.diagnostic(
+        JSON.stringify({
+          scenario,
+          titleHoldMs: 200,
+          activationToSendMs: Math.round(sendTimes[0]! - activatedAt),
+          dispatchedBeforeTitle,
+        }),
+      );
+      await act(async () =>
+        admission.reject(
+          new Error("Synthetic admission rejected before commit"),
+        ),
+      );
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Synthetic delayed title send",
+      );
+      assert.match(
+        document.body.textContent ?? "",
+        /Synthetic admission rejected/u,
+      );
+      assert.equal(sendTimes.length, 1, "failure never automatically resends");
+      assert.ok(
+        dispatchedBeforeTitle,
+        "auxiliary title staging must not block input admission",
+      );
+    } finally {
+      title.resolve(undefined);
+      admission.resolve({});
+      await unmountApp(harness);
+    }
+  });
+}

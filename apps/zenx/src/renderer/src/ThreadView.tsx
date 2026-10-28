@@ -2488,7 +2488,11 @@ function RunningTurnLabel({
       </span>
       <span className="turn-work-label">
         {startedAt === null ? (
-          i18n.t("shell:working")
+          phase === "admitting" ? (
+            i18n.t("shell:admitting")
+          ) : (
+            i18n.t("shell:working")
+          )
         ) : (
           <span className="turn-duration">
             {i18n.t("shell:workingFor", {
@@ -2722,7 +2726,12 @@ function TurnBlock({
       ) : (
         <RunningTurnLabel
           recovery={turn.liveRecovery}
-          startedAt={turn.liveRecovery ? null : turn.startedAt}
+          // turn_started is durable before the initial message is committed.
+          // Keep that preparation visible without claiming elapsed agent work
+          // ahead of the actual input (or an already-observed runtime item).
+          startedAt={
+            turn.liveRecovery || turn.items.length === 0 ? null : turn.startedAt
+          }
           activity={activity}
           stopping={stopping}
           approval={approvals.length > 0}

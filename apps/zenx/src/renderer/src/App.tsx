@@ -2006,8 +2006,10 @@ function AppContent() {
       skillDraft.references,
       submission.clientUserMessageId,
     );
+    // Auxiliary naming has its own receipt/error path and must not hold input
+    // admission behind title persistence or an unrelated title operation.
     if (submission.text.length > 0)
-      await window.zenx.titles
+      void window.zenx.titles
         .observe(
           threadId,
           referenceTitle(skillDraft.text, skillDraft.references),
