@@ -77,18 +77,14 @@
   "copyOnlyDelta": {
     "commit": "8a94baeafc642e60f08c55cce6078d9ca49b8376",
     "base": "114367097197fc010f941d8914a044f00aac4fe7",
-    "productionFiles": [
-      "apps/zenx/src/renderer/src/i18n/shell.ts"
-    ],
+    "productionFiles": ["apps/zenx/src/renderer/src/i18n/shell.ts"],
     "description": "Only ongoingTurnActivity tooltip/screen-reader labels shortened to Agent is still working / Agent \u4ecd\u5728\u5de5\u4f5c; no layout, activity or authority logic change. Exact-copy tests updated. All preview HTML rebuilt at final 898de810 with this copy; root owns screenshot capture.",
     "tests": "35/35 affected runtime-interaction, latest-process-shimmer and i18n tests passed; formatting and git diff --check passed."
   },
   "debuggerFixtureDelta": {
     "commit": "898de81093a2c3ecd899a6ebd004c79c603b8eb7",
     "base": "8a94baeafc642e60f08c55cce6078d9ca49b8376",
-    "files": [
-      "apps/zenx/test/thread-debugger-regression.test.ts"
-    ],
+    "files": ["apps/zenx/test/thread-debugger-regression.test.ts"],
     "reason": "Both CI failures reproduced locally: interrupted partial Markdown is correctly collapsed. Tests now explicitly expand real history before checking unchanged image cwd and exact file-link routing.",
     "validation": "Entire specialized production-reader contract command passes 54/54; no product changes."
   },
