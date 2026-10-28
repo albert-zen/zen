@@ -1992,9 +1992,9 @@ test("Chat first turn, tool continuation and manual compaction use durable role-
                                 id: "synthetic-call",
                                 type: "function",
                                 function: {
-                                  name: "shell",
+                                  name: "fixture_echo",
                                   arguments: JSON.stringify({
-                                    command: "printf synthetic-tool-result",
+                                    value: "synthetic-tool-result",
                                   }),
                                 },
                               },
@@ -2015,7 +2015,36 @@ test("Chat first turn, tool continuation and manual compaction use durable role-
               );
             },
           });
+          let toolExecutions = 0;
+          // This regression exercises the actual tool dispatch and continuation,
+          // not platform-specific shell sandbox setup on CI runners.
+          const environment = new ToolEnvironment();
+          environment.registerRuntime(
+            {
+              name: "fixture_echo",
+              enforcesSandbox: true, // Pure in-memory builtin; no filesystem effects.
+              specification: {
+                name: "fixture_echo",
+                description: "Synthetic echo",
+                inputSchema: {
+                  type: "object",
+                  properties: { value: { type: "string" } },
+                  required: ["value"],
+                },
+              },
+              execute: async (invocation) => {
+                toolExecutions++;
+                assert.equal(
+                  invocation.arguments.value,
+                  "synthetic-tool-result",
+                );
+                return { output: "synthetic-tool-result", exitCode: 0 };
+              },
+            },
+            { kind: "builtin", id: "fixture" },
+          );
           const server = createServer({
+            runtime: new HistoryBudgetRuntime({ toolEnvironment: environment }),
             journal,
             model: adapter,
             modelCatalog: new StaticModelCatalog([
@@ -2032,6 +2061,7 @@ test("Chat first turn, tool continuation and manual compaction use durable role-
           await (
             await server.startTurn(thread.id, "hi")
           ).done;
+          assert.equal(toolExecutions, 1, "the real tool body executes once");
           assert.equal(
             bodies.length,
             2,
