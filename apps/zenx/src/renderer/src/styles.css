@@ -745,7 +745,8 @@ button:disabled {
   padding: 0 8px;
   color: var(--text-3);
 }
-.sidebar-view-head strong {
+.sidebar-view-head strong,
+.pinned-section-toggle strong {
   color: var(--text-2);
   font-size: 13px;
   font-weight: 500;

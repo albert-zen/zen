@@ -602,6 +602,17 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          <PluginSpaces
+            contributions={
+              roomConversations === undefined
+                ? pluginContributions
+                : pluginContributions.filter(
+                    (contribution) => contribution.page.route !== ROOM_ROUTE,
+                  )
+            }
+            onOpen={onOpenContribution}
+            selectedPage={selectedPage}
+          />
           {mode !== "projects" ||
           pinnedThreads.length === 0 ||
           threadLoading ||
@@ -623,17 +634,6 @@ export function Sidebar({
               watchingThreadIds={watchingThreadIds}
             />
           )}
-          <PluginSpaces
-            contributions={
-              roomConversations === undefined
-                ? pluginContributions
-                : pluginContributions.filter(
-                    (contribution) => contribution.page.route !== ROOM_ROUTE,
-                  )
-            }
-            onOpen={onOpenContribution}
-            selectedPage={selectedPage}
-          />
           {roomConversations === undefined ? null : (
             <RoomConversationNavigation
               {...roomConversations}

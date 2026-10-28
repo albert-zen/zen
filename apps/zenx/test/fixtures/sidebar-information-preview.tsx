@@ -9,6 +9,7 @@ import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 import "../../src/renderer/src/room-conversations.css";
 const search = new URLSearchParams(location.search);
+const navigationSections = search.get("navigation") === "sections";
 document.documentElement.dataset.appearance = search.get("theme") ?? "dark";
 document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = "linux";
@@ -239,6 +240,23 @@ function Fixture() {
                 title: "自动化",
               },
             },
+            ...(navigationSections
+              ? [
+                  {
+                    pluginId: "zenx-fleet",
+                    id: "fleet",
+                    key: "fleet",
+                    label: "Fleet",
+                    icon: "layers",
+                    page: {
+                      id: "fleet",
+                      route: "/plugins/zenx-fleet/fleet",
+                      pluginId: "zenx-fleet",
+                      title: "Fleet",
+                    },
+                  },
+                ]
+              : []),
           ] as any
         }
         selectedPage="agent"
@@ -261,7 +279,7 @@ function Fixture() {
           unavailableThreadIds: [],
           lastUsedWorkspace: "/Projects/Zen",
         }}
-        pinnedThreads={[]}
+        pinnedThreads={navigationSections ? (values.slice(0, 2) as any) : []}
         threads={values as any}
         unreadThreadIds={new Set(["unread"])}
       />
