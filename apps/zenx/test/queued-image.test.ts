@@ -249,7 +249,7 @@ test("switching thread closes the previous queue viewer without moving focus int
   });
 });
 
-test("unavailable queue image offers a bounded retry and never exposes a raw host path", async () => {
+test("unavailable queue image offers bounded retry and closed owner-readable details", async () => {
   await withRuntimeDom(async (h) => {
     let reads = 0;
     await h.render(queueScenario(9), {
@@ -268,10 +268,14 @@ test("unavailable queue image offers a bounded retry and never exposes a raw hos
       /unavailable/iu,
     );
     assert.match(failed.textContent!, /Retry/iu);
-    assert.doesNotMatch(
-      document.querySelector(".queue-shelf")!.textContent!,
-      /private\/host/u,
-    );
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".queue-shelf .image-error-detail",
+    )!;
+    assert.equal(details.open, false);
+    assert.match(details.textContent!, /private\/host/u);
+    await act(async () => details.querySelector("summary")!.click());
+    assert.equal(details.open, true);
+    assert.doesNotMatch(failed.textContent!, /private\/host/u);
     const before = reads;
     const first = imageButtons()[0]!;
     assert.equal(first.disabled, false);

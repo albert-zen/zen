@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import type { DeclaredInputModalities } from "../../main/model-discovery.js";
 import { i18n } from "./i18n.js";
 import { useTranslation } from "react-i18next";
@@ -1228,6 +1229,9 @@ function ModelsPanel({
   const addProviderButton = useRef<HTMLButtonElement>(null);
   const addCustomProviderButton = useRef<HTMLButtonElement>(null);
   const restoreEditorFocus = useRef(false);
+  const [providerDiagnostic, setProviderDiagnostic] = useState<
+    string | undefined
+  >();
   const [providerSaveError, setProviderSaveError] = useState<{
     message: string;
   } | null>(null);
@@ -1359,9 +1363,11 @@ function ModelsPanel({
     setBusy(operation);
     setError(null);
     setProviderSaveError(null);
+    setProviderDiagnostic(undefined);
     setStatus(null);
     try {
       const reply = await mutation();
+      setProviderDiagnostic(reply.detail);
       if (reply.ok) {
         acceptSettings(reply.settings, message);
         if (reply.outcome === "unconfirmed")
@@ -1378,7 +1384,12 @@ function ModelsPanel({
           setSettings(authoritative);
           setDraft(authoritative.profile);
           setStatus(configurationSaveToast(authoritative));
-        } catch {
+        } catch (reason) {
+          setProviderDiagnostic(
+            [reply.detail, localErrorDetail(reason)]
+              .filter(Boolean)
+              .join("\n\nRefresh failure:\n"),
+          );
           // Host confirmed the commit; a failed refresh does not undo it.
         }
         setError(
@@ -1422,7 +1433,8 @@ function ModelsPanel({
       } as const;
       setProviderSaveError({ message: messageByCode[reply.code] });
       return "failed";
-    } catch {
+    } catch (reason) {
+      setProviderDiagnostic(localErrorDetail(reason));
       setProviderSaveError({
         message: i18n.t(
           "settings:settingsView.couldNotConfirmWhetherThisProviderWasSavedCheck",
@@ -1473,6 +1485,7 @@ function ModelsPanel({
     });
     setError(null);
     setProviderSaveError(null);
+    setProviderDiagnostic(undefined);
     setStatus(null);
   };
 
@@ -1498,6 +1511,7 @@ function ModelsPanel({
     });
     setError(null);
     setProviderSaveError(null);
+    setProviderDiagnostic(undefined);
     setStatus(null);
   };
 
@@ -1516,6 +1530,9 @@ function ModelsPanel({
           {error}
         </div>
       )}
+      {editor === null && providerDiagnostic ? (
+        <LocalSettingsDiagnostic detail={providerDiagnostic} />
+      ) : null}
       <div className="page-card settings-card model-routing-card">
         <div className="settings-card-head">
           <div>
@@ -1676,6 +1693,7 @@ function ModelsPanel({
             )}
             mode={editor.mode}
             saveError={providerSaveError?.message ?? null}
+            saveDetail={providerDiagnostic}
             provider={editor.provider}
             logoDataUrl={
               settings.providerLogoDataUrls?.[editor.provider.providerProfileId]
@@ -1954,6 +1972,7 @@ function ProviderEditor({
   hasApiKey,
   mode,
   saveError,
+  saveDetail,
   onCancel,
   onSubmit,
   provider: initialProvider,
@@ -1966,6 +1985,7 @@ function ProviderEditor({
   hasApiKey: boolean;
   mode: "add" | "edit";
   saveError: string | null;
+  saveDetail?: string;
   onCancel(): void;
   onSubmit(
     provider: ZenXProviderProfile,
@@ -2913,7 +2933,10 @@ function ProviderEditor({
               tabIndex={-1}
             >
               <Icon name="warning" />
-              {saveError}
+              <div>
+                {saveError}
+                <LocalSettingsDiagnostic detail={saveDetail} />
+              </div>
             </div>
           )}
           <div className="provider-editor-actions">
@@ -3860,6 +3883,9 @@ function GeneralPanel({
   );
   const [maximumError, setMaximumError] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [diagnosticsDetail, setDiagnosticsDetail] = useState<
+    string | undefined
+  >();
   useEffect(() => {
     setMaximumInput(draft.maxToolRounds?.toString() ?? "");
   }, [draft.maxToolRounds]);
@@ -4097,22 +4123,27 @@ function GeneralPanel({
             type="button"
             onClick={() => {
               setDiagnosticsError(null);
+              setDiagnosticsDetail(undefined);
               void window.zenx.settings
                 .openDiagnosticsFolder()
-                .catch(() =>
+                .catch((reason) => {
+                  setDiagnosticsDetail(localErrorDetail(reason));
                   setDiagnosticsError(
                     t("settingsView.couldNotOpenDiagnosticsFolder"),
-                  ),
-                );
+                  );
+                });
             }}
           >
             {t("settingsView.openDiagnosticsFolder")}
           </button>
         </div>
         {diagnosticsError === null ? null : (
-          <p className="settings-error" role="alert">
-            {diagnosticsError}
-          </p>
+          <div className="settings-error" role="alert">
+            <div>
+              {diagnosticsError}
+              <LocalSettingsDiagnostic detail={diagnosticsDetail} />
+            </div>
+          </div>
         )}
       </div>
     </>
@@ -4372,4 +4403,14 @@ function configurationSaveToast(value: PublicHostSettings): string | null {
   if (value.configuration && value.configuration.status !== "applied")
     return null;
   return i18n.t("settings:settingsView.settingsSaved");
+}
+
+function LocalSettingsDiagnostic({ detail }: { detail?: string }) {
+  if (!detail) return null;
+  return (
+    <details className="context-compaction-error-detail">
+      <summary>{i18n.t("shell:technicalDetails")}</summary>
+      <pre tabIndex={0}>{detail}</pre>
+    </details>
+  );
 }

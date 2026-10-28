@@ -11728,3 +11728,15 @@ button:disabled {
   color: var(--color-text-secondary);
   cursor: pointer;
 }
+
+.image-error-detail {
+  max-width: min(420px, 100%);
+  flex-basis: 100%;
+  font-size: 12px;
+}
+.image-error-detail pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+}

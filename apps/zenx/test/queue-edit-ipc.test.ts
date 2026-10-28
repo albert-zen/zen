@@ -202,9 +202,16 @@ test("unknown edit failures preserve Host diagnostics and retain exactly one rea
       data: { zenCode: "/private/untrusted-code" },
     });
   });
-  await assert.rejects(bridge.request("zen/thread/queue/edit", params), {
-    message: "unknown /private/secret-host-path",
-  });
+  const unknown = (await bridge.request("zen/thread/queue/edit", params)) as {
+    type: string;
+    message: string;
+    detail: string;
+    data?: unknown;
+  };
+  assert.equal(unknown.type, "zenx.queue-outcome-unknown.v1");
+  assert.equal(unknown.message, "unknown /private/secret-host-path");
+  assert.equal(unknown.data, undefined);
+  assert.match(unknown.detail, /unknown \/private\/secret-host-path/);
   calls.length = 0;
   let recovered = 0;
   await withBridge(bridge.request, async () => {
@@ -370,4 +377,29 @@ test("missing compaction receipt cannot be presented as confirmed success", () =
       /did not contain a committed compaction receipt/u,
     );
   }
+});
+
+test("unknown queue envelope preserves causal details without a rejection code or replay", async () => {
+  const calls: string[] = [];
+  const bridge = boundary(async (method) => {
+    calls.push(method);
+    if (method === "zen/thread/read")
+      return { thread: { id: "thread", items: [original] } };
+    throw new Error("Transport receipt unavailable", {
+      cause: new Error("synthetic connection closed"),
+    });
+  });
+  await withBridge(bridge.request, async () => {
+    await assert.rejects(requestQueuedEdit(params), (error) => {
+      const cause = (error as Error).cause as {
+        data?: unknown;
+        localDiagnosticDetail?: string;
+      };
+      assert.equal(cause.data, undefined);
+      assert.match(cause.localDiagnosticDetail!, /synthetic connection closed/);
+      assert.match(cause.localDiagnosticDetail!, /queue-edit-ipc.test/);
+      return true;
+    });
+  });
+  assert.deepEqual(calls, ["zen/thread/queue/edit", "zen/thread/read"]);
 });

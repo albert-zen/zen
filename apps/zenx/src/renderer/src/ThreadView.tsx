@@ -2164,7 +2164,6 @@ function ThreadViewContent({
             preview.queueOwner ? readQueuedImage : onReadAttachment
           }
           trigger={preview.trigger}
-          safeError={preview.queueOwner !== undefined}
           restoreFocus={
             preview.queueOwner
               ? () => {

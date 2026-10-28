@@ -1,3 +1,4 @@
+import type { ProviderProcessDiagnosticReporter } from "./provider-process-diagnostics.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -30,7 +31,10 @@ export interface ExternalProviderProcessRunner {
 const DEFAULT_MAX_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 
 export class SystemExternalProviderProcessRunner implements ExternalProviderProcessRunner {
-  constructor(private readonly spawnProcess: typeof spawn = spawn) {}
+  constructor(
+    private readonly spawnProcess: typeof spawn = spawn,
+    private readonly reportFailure?: ProviderProcessDiagnosticReporter,
+  ) {}
 
   async run(
     executable: string,
@@ -155,21 +159,38 @@ export class SystemExternalProviderProcessRunner implements ExternalProviderProc
       child.once("error", (error) => fail(error));
       child.once("close", (code, signal) => {
         finish(() => {
-          if (stopping) {
-            reject(failure);
-            return;
-          }
           const output = Buffer.concat(stdout).toString("utf8");
           const diagnostic = Buffer.concat(stderr).toString("utf8");
-          if (code === 0) {
-            resolve({ stdout: output, stderr: diagnostic });
-            return;
-          }
-          reject(
-            new Error(
-              `${path.basename(executable)} failed (${signal ?? String(code)}): ${redactExternalDiagnostic(diagnostic || output)}`,
-            ),
-          );
+          const report =
+            stopping || code !== 0
+              ? Promise.resolve()
+                  .then(() =>
+                    this.reportFailure?.({
+                      executable,
+                      code,
+                      signal,
+                      stdout: output,
+                      stderr: diagnostic,
+                      failure,
+                    }),
+                  )
+                  .catch(() => undefined)
+              : Promise.resolve();
+          void report.then(() => {
+            if (stopping) {
+              reject(failure);
+              return;
+            }
+            if (code === 0) {
+              resolve({ stdout: output, stderr: diagnostic });
+              return;
+            }
+            reject(
+              new Error(
+                `${path.basename(executable)} failed (${signal ?? String(code)}): ${redactExternalDiagnostic(diagnostic || output)}`,
+              ),
+            );
+          });
         });
       });
       if (options.signal?.aborted === true) abort();

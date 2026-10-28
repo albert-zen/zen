@@ -518,7 +518,6 @@ function EditorSession(props: QueuedMessageEditorProps) {
           onReadAttachment={props.onReadAttachment}
           onClose={() => setPreview(null)}
           portalContainer={previewHost.current}
-          safeError
           restoreFocus={() => {
             if (!mounted.current || !latest.current.open) return;
             if (preview.trigger.isConnected)

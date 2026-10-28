@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../src/local-error-detail.js";
 import assert from "node:assert/strict";
 import {
   lstat,
@@ -35,7 +36,7 @@ test("renderer cannot submit a forged Host save outcome", () => {
   );
 });
 
-test("a rejected Provider mutation returns the same safe outcome and attempt as its Host log", async () => {
+test("a rejected Provider mutation returns the same outcome and owner-readable diagnostic and attempt as its Host log", async () => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "zenx-settings-diagnostic-"),
   );
@@ -60,6 +61,7 @@ test("a rejected Provider mutation returns the same safe outcome and attempt as 
       outcome: "failed",
       code: "revision-conflict",
       attemptId,
+      detail: localErrorDetail(failure),
     });
     const raw = await readFile(
       path.join(root, "diagnostics", "settings.jsonl"),
@@ -72,9 +74,10 @@ test("a rejected Provider mutation returns the same safe outcome and attempt as 
       operation: "edit",
       outcome: reply.outcome,
       code: reply.code,
+      detail: localErrorDetail(failure),
     });
-    assert.equal(JSON.stringify(reply).includes(failure.message), false);
-    assert.equal(raw.includes(failure.message), false);
+    assert.equal(JSON.stringify(reply).includes(failure.message), true);
+    assert.equal(raw.includes(failure.message), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -347,40 +350,43 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         mutate: async () => "saved but application unconfirmed",
       }),
     );
-    assert.deepEqual(replies, [
-      { ok: true, settings: "saved", outcome: "success", attemptId },
-      { ok: false, outcome: "failed", code: "save-rejected", attemptId },
-      {
-        ok: false,
-        outcome: "unconfirmed",
-        code: "save-unconfirmed",
-        attemptId,
-      },
-      {
-        ok: false,
-        outcome: "failed",
-        code: "validation-rejected",
-        attemptId,
-      },
-      {
-        ok: false,
-        outcome: "committed-error",
-        code: "save-finalization-failed",
-        attemptId,
-      },
-      {
-        ok: false,
-        outcome: "committed-error",
-        code: "save-finalization-failed",
-        attemptId,
-      },
-      {
-        ok: true,
-        settings: "saved but application unconfirmed",
-        outcome: "unconfirmed",
-        attemptId,
-      },
-    ]);
+    assert.deepEqual(
+      replies.map(({ detail: _detail, ...reply }) => reply),
+      [
+        { ok: true, settings: "saved", outcome: "success", attemptId },
+        { ok: false, outcome: "failed", code: "save-rejected", attemptId },
+        {
+          ok: false,
+          outcome: "unconfirmed",
+          code: "save-unconfirmed",
+          attemptId,
+        },
+        {
+          ok: false,
+          outcome: "failed",
+          code: "validation-rejected",
+          attemptId,
+        },
+        {
+          ok: false,
+          outcome: "committed-error",
+          code: "save-finalization-failed",
+          attemptId,
+        },
+        {
+          ok: false,
+          outcome: "committed-error",
+          code: "save-finalization-failed",
+          attemptId,
+        },
+        {
+          ok: true,
+          settings: "saved but application unconfirmed",
+          outcome: "unconfirmed",
+          attemptId,
+        },
+      ],
+    );
     const raw = await readFile(
       path.join(root, "diagnostics", "settings.jsonl"),
       "utf8",
@@ -413,8 +419,8 @@ test("host outcome distinguishes rejected, committed error, and unconfirmed save
         .split("\n")
         .every((line) => JSON.parse(line).attemptId === attemptId),
     );
-    assert.equal(raw.includes(failed.message), false);
-    assert.equal(JSON.stringify(replies).includes(failed.message), false);
+    assert.equal(raw.includes(failed.message), true);
+    assert.equal(JSON.stringify(replies).includes(failed.message), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -468,12 +474,17 @@ test("a failed fallback status read cannot turn an uncertain save into success",
       return "saved";
     },
   });
-  assert.deepEqual(reply, {
-    ok: true,
-    settings: "saved",
-    outcome: "unconfirmed",
-    attemptId,
-  });
+  assert.ok(reply.detail?.includes("settings projection failed after save"));
+  assert.deepEqual(
+    { ...reply, detail: undefined },
+    {
+      ok: true,
+      settings: "saved",
+      outcome: "unconfirmed",
+      attemptId,
+      detail: undefined,
+    },
+  );
   assert.equal((outcomes[0] as { outcome: string }).outcome, "unconfirmed");
 });
 
@@ -499,6 +510,34 @@ test("diagnostic write failure never changes a save result", async () => {
       }),
       { ok: true, settings: 42, outcome: "success", attemptId },
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("owner log detail is bounded explicitly without changing the save outcome", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zenx-settings-detail-"));
+  try {
+    const log = new SettingsDiagnosticLog(root);
+    assert.equal(
+      await log.record({
+        event: "provider-save-outcome",
+        attemptId,
+        operation: "edit",
+        outcome: "unconfirmed",
+        code: "save-unconfirmed",
+        detail: "\u0001".repeat(70_000),
+      }),
+      true,
+    );
+    const raw = await readFile(
+      path.join(root, "diagnostics", "settings.jsonl"),
+      "utf8",
+    );
+    assert.ok(Buffer.byteLength(raw) < 256 * 1024);
+    const record = JSON.parse(raw);
+    assert.equal(record.outcome, "unconfirmed");
+    assert.match(record.detail, /local diagnostic log detail limit reached/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

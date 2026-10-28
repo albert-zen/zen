@@ -947,12 +947,18 @@ test("bounds recovery attempts after a fatal hosted startup failure", async () =
 test("projects outer-host startup failures as a visible terminal status", () => {
   const manager = managerFor(os.tmpdir());
   manager.reportStartupError(
-    new Error("ZenX trigger registry has an invalid entry shape"),
+    new Error("ZenX trigger registry has an invalid entry shape", {
+      cause: new Error("synthetic EIO reading registry"),
+    }),
   );
-  assert.deepEqual(manager.status, {
-    type: "error",
-    message: "ZenX trigger registry has an invalid entry shape",
-  });
+  assert.equal(manager.status.type, "error");
+  if (manager.status.type !== "error") throw new Error("expected error status");
+  assert.equal(
+    manager.status.message,
+    "ZenX trigger registry has an invalid entry shape",
+  );
+  assert.match(manager.status.detail!, /synthetic EIO reading registry/);
+  assert.match(manager.status.detail!, /app-server-manager.test/);
 });
 
 test("bridges a granted structured capability through the real App Server host", async () => {
@@ -1541,3 +1547,62 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("pre-dispatch startup rejection retains causal detail without changing its summary", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-startup-detail-"),
+  );
+  const manager = managerFor(directory);
+  try {
+    const failure = new Error("synthetic startup rejected", {
+      cause: new Error("synthetic prerequisite unavailable"),
+    });
+    await assert.rejects(
+      manager.start({
+        assertCanPublish() {
+          throw failure;
+        },
+      }),
+      /synthetic startup rejected/,
+    );
+    assert.equal(manager.status.type, "error");
+    if (manager.status.type !== "error")
+      throw new Error("expected error status");
+    assert.equal(manager.status.message, "synthetic startup rejected");
+    assert.match(manager.status.detail!, /synthetic prerequisite unavailable/);
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("non-Error startup rejection keeps its original cause when rethrown", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-startup-object-"),
+  );
+  const manager = managerFor(directory);
+  const original = {
+    code: "synthetic_precondition",
+    explanation: "synthetic prerequisite missing",
+  };
+  try {
+    await assert.rejects(
+      manager.start({
+        assertCanPublish() {
+          throw original;
+        },
+      }),
+      (error) => {
+        assert.equal((error as Error).cause, original);
+        return true;
+      },
+    );
+    assert.equal(manager.status.type, "error");
+    if (manager.status.type !== "error")
+      throw new Error("expected error status");
+    assert.match(manager.status.detail!, /synthetic prerequisite missing/);
+  } finally {
+    await manager.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -3533,7 +3533,9 @@ test("Provider IPC failure stays unconfirmed even if another window now has matc
           pendingRestart: [],
         },
       };
-      throw new Error("IPC reply lost");
+      throw new Error("IPC reply lost", {
+        cause: new Error("<script>synthetic diagnostic</script>"),
+      });
     },
   });
   try {
@@ -3546,6 +3548,16 @@ test("Provider IPC failure stays unconfirmed even if another window now has matc
       document.body.textContent ?? "",
       /could not confirm|unknown/iu,
     );
+    const detail = document.querySelector(
+      ".provider-save-error details",
+    ) as HTMLDetailsElement;
+    assert.ok(detail);
+    assert.equal(detail.open, false);
+    assert.match(detail.textContent ?? "", /IPC reply lost/);
+    assert.match(detail.textContent ?? "", /synthetic diagnostic/);
+    assert.equal(detail.querySelector("script"), null);
+    await click(detail.querySelector("summary")! as HTMLButtonElement);
+    assert.equal(detail.open, true);
   } finally {
     await unmount(harness);
   }
@@ -4601,6 +4613,54 @@ test("changing protocol retires an in-flight discovery identity and stale result
     );
     assert(!document.body.textContent!.includes("Stale Chat discovery"));
     assert.equal((await labeledSelect("API protocol"))!.value, "responses");
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("failed local diagnostics folder opening retains cause in closed details", async () => {
+  const harness = await mountSettings("general", {
+    openDiagnosticsFolder: async () => {
+      throw new Error("Synthetic OS open failure", {
+        cause: new Error("ENOENT viewer unavailable"),
+      });
+    },
+  });
+  try {
+    await click(await waitFor(() => exactButton("Open diagnostics folder")));
+    const detail = document.querySelector(
+      "details.context-compaction-error-detail",
+    ) as HTMLDetailsElement;
+    assert.ok(detail);
+    assert.equal(detail.open, false);
+    assert.match(detail.textContent ?? "", /ENOENT viewer unavailable/);
+  } finally {
+    await unmount(harness);
+  }
+});
+
+test("committed Provider save failure keeps local diagnostic after editor closes", async () => {
+  const harness = await mountSettings("models", {
+    initialSettings: multiProviderSettings,
+    editProvider: async () => ({
+      ok: false,
+      outcome: "committed-error",
+      code: "save-finalization-failed",
+      attemptId: "10e870b0-3264-46b4-8a9b-e079f08ad985",
+      detail: "Synthetic application failure: worker unavailable after save",
+    }),
+  });
+  try {
+    await click(await waitFor(() => labeledButton("Edit Alpha")));
+    await click(exactButtonRequired("Save provider"));
+    await waitFor(() => !exactButton("Save provider"));
+    const detail = document.querySelector(
+      "details.context-compaction-error-detail",
+    ) as HTMLDetailsElement;
+    assert.ok(detail);
+    assert.equal(detail.open, false);
+    assert.match(detail.textContent ?? "", /worker unavailable after save/);
+    assert.match(document.body.textContent ?? "", /saved.*finalization/iu);
   } finally {
     await unmount(harness);
   }

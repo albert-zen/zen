@@ -1,3 +1,4 @@
+import { recordChromeNativeHostFailure } from "./chrome-native-host-diagnostics.js";
 import path from "node:path";
 
 import { ZENX_CHROME_EXTENSION_ORIGIN } from "./chrome-extension-bridge.js";
@@ -9,6 +10,7 @@ import {
   type ChromeNativeHostStage,
 } from "./chrome-native-host.js";
 
+let userDataDirectory: string | undefined;
 let stage: ChromeNativeHostStage = "resolve-user-data";
 try {
   const origin = chromeNativeHostOrigin(
@@ -17,7 +19,7 @@ try {
   );
   if (origin === undefined)
     throw new Error("Chrome native host origin is missing");
-  const userDataDirectory = chromeNativeHostUserDataDirectory({
+  userDataDirectory = chromeNativeHostUserDataDirectory({
     argv: process.argv,
     commandLineValue:
       process.platform === "win32" && process.env.APPDATA !== undefined
@@ -42,5 +44,8 @@ try {
   process.exit(0);
 } catch (error) {
   process.stderr.write(chromeNativeHostFailureDiagnostic(error, stage));
+  process.stderr.write(
+    await recordChromeNativeHostFailure(userDataDirectory, stage, error),
+  );
   process.exit(1);
 }

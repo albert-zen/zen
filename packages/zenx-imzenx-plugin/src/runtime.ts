@@ -15,6 +15,12 @@ const STATE_MIGRATION_BLOCKED =
 
 export interface ImZenXHost {
   readonly dataDirectory: string;
+  /** Trusted native owner-only sink; never part of plugin/model status. */
+  recordGatewayDiagnostic?(event: {
+    stage: "startup" | "exit";
+    error: unknown;
+    stderr: string;
+  }): Promise<void>;
   setRuntimeProject?(directory: string): void;
   registerManagedEdit?(
     edit: (
@@ -78,6 +84,7 @@ export class ImZenXRuntime {
   readonly #managedContentEpochs = new Map<string, number>();
   #state: State = "unconfigured";
   #error: string | undefined;
+  #diagnosticWrites: Promise<unknown> = Promise.resolve();
   #channels: ImZenXChannelStatus[] = [];
   #channelStatusAt = 0;
 
@@ -366,6 +373,7 @@ export class ImZenXRuntime {
     // Stop promptly even if the queue is waiting for the child's ready message.
     await this.#stop();
     await this.#queue.catch(() => {});
+    await this.#diagnosticWrites;
     this.#state = "stopped";
   }
 
@@ -429,6 +437,10 @@ export class ImZenXRuntime {
       return;
     }
     this.#state = "starting";
+    let stderr = "";
+    let stderrTruncated = false;
+    const diagnosticStderr = () =>
+      `${stderrTruncated ? "[Earlier stderr truncated at 64 Ki characters]\n" : ""}${stderr}`;
     try {
       const descriptor = await this.#host.readConnection();
       // Only the Host-owned exact configuration reference can resolve private
@@ -459,17 +471,34 @@ export class ImZenXRuntime {
       this.#child = child;
       this.#activeConfig = config;
       // SDK/channel stdout cannot be interpreted as model output or a transcript.
-      child.stderr.resume();
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+        if (stderr.length > 65_536) {
+          stderr = stderr.slice(-65_536);
+          stderrTruncated = true;
+        }
+      });
       child.stdin.on("error", () => {});
-      child.once("exit", () => {
-        if (this.#child !== child) return;
+      child.once("close", (code, signal) => {
+        if (this.#child !== child || this.#state === "starting") return;
         this.#child = undefined;
         this.#activeConfig = undefined;
         this.#channels = [];
         this.#channelStatusAt = 0;
         this.#state = "failed";
         this.#error =
-          "IM Gateway exited. Check configuration, then Connect again.";
+          "IM Gateway exited. See Settings → Local diagnostics (im-gateway.jsonl), then Connect again.";
+        void this.#recordGatewayDiagnostic(
+          "exit",
+          new Error(
+            `IM Gateway exited (code=${String(code)}, signal=${String(signal)})`,
+          ),
+          diagnosticStderr(),
+        ).then((stored) => {
+          if (!stored && this.#state === "failed")
+            this.#error += " Local diagnostic storage unavailable.";
+        });
       });
       this.#detachPaw = attachPawPipe(
         child,
@@ -517,8 +546,13 @@ export class ImZenXRuntime {
       await this.#stop();
       if (this.#closed) return;
       this.#state = "failed";
-      // Host, SDK and filesystem diagnostics may contain private data. Only our
-      // fixed startup failures belong in status or a tool's exception message.
+      const diagnosticStored = await this.#recordGatewayDiagnostic(
+        "startup",
+        error,
+        diagnosticStderr(),
+      );
+      // Status is also a model tool result. Actual causes stay in the owner-local
+      // diagnostic sink, not the model/IM channel boundary.
       this.#error =
         error instanceof Error &&
         ["IM Gateway startup timed out", STATE_MIGRATION_BLOCKED].includes(
@@ -526,8 +560,30 @@ export class ImZenXRuntime {
         )
           ? error.message
           : "IM Gateway failed to start. Check Python and channel configuration.";
+      this.#error += diagnosticStored
+        ? " See Settings → Local diagnostics (im-gateway.jsonl) for the local cause."
+        : " Local diagnostic storage unavailable.";
       throw new Error(this.#error);
     }
+  }
+
+  #recordGatewayDiagnostic(
+    stage: "startup" | "exit",
+    error: unknown,
+    stderr: string,
+  ): Promise<boolean> {
+    const write = this.#diagnosticWrites.then(async () => {
+      if (!this.#host.recordGatewayDiagnostic) return false;
+      try {
+        await this.#host.recordGatewayDiagnostic({ stage, error, stderr });
+        return true;
+      } catch {
+        // Observation cannot change gateway settlement or authorize restart.
+        return false;
+      }
+    });
+    this.#diagnosticWrites = write;
+    return write;
   }
 
   async #stop(): Promise<void> {
@@ -541,8 +597,9 @@ export class ImZenXRuntime {
     if (
       child === undefined ||
       child.pid === undefined ||
-      child.exitCode !== null ||
-      child.signalCode !== null
+      ((child.exitCode !== null || child.signalCode !== null) &&
+        child.stdout.destroyed &&
+        child.stderr.destroyed)
     )
       return;
     await new Promise<void>((resolve) => {
@@ -551,7 +608,7 @@ export class ImZenXRuntime {
         clearTimeout(timeout);
         resolve();
       };
-      child.once("exit", finish);
+      child.once("close", finish);
       child.once("error", finish);
       child.stdin.end();
     });
@@ -566,10 +623,17 @@ function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
       () => finish(new Error("IM Gateway startup timed out")),
       15000,
     );
-    const failed = () =>
+    const failed = (cause?: unknown) =>
       finish(
         new Error(
           "IM Gateway failed to start. Check Python and channel configuration.",
+          { cause },
+        ),
+      );
+    const exited = (code: number | null, signal: NodeJS.Signals | null) =>
+      failed(
+        new Error(
+          `Gateway exited before ready (code=${String(code)}, signal=${String(signal)})`,
         ),
       );
     const data = (chunk: Buffer) => {
@@ -598,8 +662,8 @@ function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
           }
           if (value.type === "failed") {
             if (value.code === "state_migration_blocked")
-              finish(new Error(STATE_MIGRATION_BLOCKED));
-            else failed();
+              finish(new Error(STATE_MIGRATION_BLOCKED, { cause: value }));
+            else failed(value);
             return;
           }
         } catch {
@@ -611,14 +675,14 @@ function waitForReady(child: ChildProcessWithoutNullStreams): Promise<void> {
       clearTimeout(timer);
       child.stdout.off("data", data);
       child.off("error", failed);
-      child.off("exit", failed);
+      child.off("close", exited);
       child.stdout.resume();
       if (error === undefined) resolve();
       else reject(error);
     };
     child.stdout.on("data", data);
     child.once("error", failed);
-    child.once("exit", failed);
+    child.once("close", exited);
   });
 }
 

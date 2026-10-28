@@ -9,6 +9,7 @@ import type {
   ClientRequestResults,
 } from "../protocol-client/types.js";
 
+const unknownType = "zenx.queue-outcome-unknown.v1";
 const rejectionType = "zenx.queue-edit-rejection.v1";
 const knownCodes = new Set([
   "queue_not_found",
@@ -42,14 +43,30 @@ export interface QueueEditIpcRejection {
   message?: string;
   detail?: string;
 }
-export type QueueEditIpcReply = NativeQueueEditResult | QueueEditIpcRejection;
+export interface QueueIpcUnknown {
+  type: typeof unknownType;
+  message: string;
+  detail: string;
+}
+export function queueIpcUnknown(error: unknown): QueueIpcUnknown {
+  return {
+    type: unknownType,
+    message:
+      isRecord(error) && typeof error.message === "string"
+        ? error.message
+        : String(error),
+    detail: localErrorDetail(error),
+  };
+}
+export type QueueEditIpcReply =
+  NativeQueueEditResult | QueueEditIpcRejection | QueueIpcUnknown;
 export type ProtocolIpcResult<M extends ClientRequestMethod> =
   M extends "thread/compact"
     ? CompactionIpcReply
     : M extends "zen/thread/queue/edit"
       ? QueueEditIpcReply
       : M extends "zen/thread/queue/steer"
-        ? NativeQueueSteerResult | QueueEditIpcRejection
+        ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
         : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
@@ -78,7 +95,20 @@ export function unwrapQueueEditIpcReply(
 
 export function unwrapQueueMutationIpcReply<
   T extends NativeQueueEditResult | NativeQueueSteerResult,
->(reply: T | QueueEditIpcRejection): T {
+>(reply: T | QueueEditIpcRejection | QueueIpcUnknown): T {
+  if (isRecord(reply) && reply.type === unknownType) {
+    // No rejection code: callers must retain read-only receipt recovery, never resend.
+    throw Object.assign(
+      new Error(
+        typeof reply.message === "string"
+          ? reply.message
+          : "Queue operation outcome is unconfirmed.",
+      ),
+      {
+        localDiagnosticDetail: reply.detail,
+      },
+    );
+  }
   if (isRecord(reply) && reply.type === rejectionType) {
     const safe = queueEditIpcRejection(reply);
     if (safe === undefined)

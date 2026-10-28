@@ -1,3 +1,5 @@
+import { createProviderProcessDiagnosticReporter } from "./provider-process-diagnostics.js";
+import { SpawnWinAppCliRunner } from "./windows-computer-provider.js";
 import {
   LifecycleWaitUnconfirmedError,
   waitForLifecycle,
@@ -94,7 +96,12 @@ const MAX_PEEKABOO_EXCLUSIVE = [4, 0, 0] as const;
 export async function selectBrowserProvider(
   options: ZenXCapabilityProviderCatalogOptions,
 ): Promise<ZenXOptionalCapabilityProviderSelection<ZenXBrowserBackend>> {
-  const runner = options.runner ?? new SystemExternalProviderProcessRunner();
+  const runner =
+    options.runner ??
+    new SystemExternalProviderProcessRunner(
+      undefined,
+      createProviderProcessDiagnosticReporter(options.userDataDirectory),
+    );
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
   const browserMode = environment.ZENX_BROWSER_MODE ?? "isolated";
@@ -472,7 +479,12 @@ async function selectComputerProviderForId(
 ): Promise<ZenXOptionalCapabilityProviderSelection<ZenXComputerBackend>> {
   if (providerId === STRICT_UIA_PROVIDER_ID)
     return await selectStrictWindowsProvider(options);
-  const runner = options.runner ?? new SystemExternalProviderProcessRunner();
+  const runner =
+    options.runner ??
+    new SystemExternalProviderProcessRunner(
+      undefined,
+      createProviderProcessDiagnosticReporter(options.userDataDirectory),
+    );
   const environment = options.environment ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
@@ -516,7 +528,14 @@ async function selectComputerProviderForId(
     }
     const backend = new WinAppCliComputerBackend({
       command,
-      runner: options.winAppRunner,
+      captureRunner: new SpawnWinAppCliRunner(
+        createProviderProcessDiagnosticReporter(options.userDataDirectory),
+      ),
+      runner:
+        options.winAppRunner ??
+        new SpawnWinAppCliRunner(
+          createProviderProcessDiagnosticReporter(options.userDataDirectory),
+        ),
       platform,
       expectedVersion: bundled?.provider?.version,
       ...(bundled?.provider === undefined
@@ -1109,7 +1128,11 @@ async function selectStrictWindowsProvider(
   const backend = new WinAppStrictUiaComputerBackend({
     command: provider.executable,
     platform,
-    runner: options.winAppRunner,
+    runner:
+      options.winAppRunner ??
+      new SpawnWinAppCliRunner(
+        createProviderProcessDiagnosticReporter(options.userDataDirectory),
+      ),
     bindBeforeSpawn: async () =>
       await bindBundledProviderLaunch(provider, {
         resourcesDirectory: options.resourcesDirectory!,

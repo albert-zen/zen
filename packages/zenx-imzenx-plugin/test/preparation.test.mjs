@@ -426,6 +426,9 @@ test("private Host connection failures do not enter status or tool errors", asyn
   const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
   const runtime = new ImZenXRuntime({
     dataDirectory: os.tmpdir(),
+    recordGatewayDiagnostic: async () => {
+      throw new Error("synthetic log write failure");
+    },
     isServerReady: () => true,
     onServerStatus: () => () => {},
     readConnection: async () => {
@@ -444,7 +447,7 @@ test("private Host connection failures do not enter status or tool errors", asyn
       }),
       (error) =>
         error.message ===
-        "IM Gateway failed to start. Check Python and channel configuration.",
+        "IM Gateway failed to start. Check Python and channel configuration. Local diagnostic storage unavailable.",
     );
     assert.ok(!JSON.stringify(runtime.status()).includes(SECRET));
   } finally {

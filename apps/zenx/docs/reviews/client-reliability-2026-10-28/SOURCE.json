@@ -1,0 +1,267 @@
+{
+  "commit": "29b4fbb43d7876c8c95f8a8ad887405ef3a0733b",
+  "tree": "d604a628eded5da6aeede7c414cc0180438b6b64",
+  "electron": "43.2.0",
+  "platform": "linux-x64",
+  "buildCommand": "npm_config_cache=<workspacecache> npm run build --workspace @zen/zenx",
+  "boundary": "Ordinary production Electron on the assistant cloud Linux desktop, exercised manually with isolated synthetic profiles and built-in FakeModel; not macOS native or user-machine acceptance. GUI steps and later-source boundaries are in README.md.",
+  "files": [
+    {
+      "path": "source/apps/zenx/out/main/app-server-host.js",
+      "sha256": "5a225834eb357b298af0afbee7095bae32411a477bc850619c1f5592e49aa404"
+    },
+    {
+      "path": "source/apps/zenx/out/main/capability-smoke.js",
+      "sha256": "55ff742e91efa7d19c145f60d7f817aa0146f6d0263f148acc7cc11684462990"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chrome-native-host-cli.js",
+      "sha256": "769d1586c2a4466cfb562dfc1aba933c869c3dab44eca040b1b4098366981e48"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/app-server-CjfhnMm2.js",
+      "sha256": "9d0b0a9f7c7228856e77b1be501dabb4369350c008c2a33d285fad122eb81b93"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/browser-provider-CP-B6TIr.js",
+      "sha256": "36ad79875ddd1ef3f5b413b68b701dd7fbc036529e564a53a43045653472334f"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/capability-service-pUe8nJoH.js",
+      "sha256": "84c6a7fba0da21cd7ce9a09e70497b1b7b88d64a355c810560e0901aa2124aa2"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/chrome-native-host-BdkrPVBL.js",
+      "sha256": "cbd67610688e4cf783c07e904bbcbcbcc7bceb7ba3beb338d390623a151ed57e"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/computer-provider-Whj7r1Rj.js",
+      "sha256": "e8d3cf267ffbc8e012ed4e5576a05671bea0c0f0748ff5c1091fa7016dac6675"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/external-link-policy-D3OMVtTG.js",
+      "sha256": "faa0bf3a8f4ae4a8df740d0e9c7495c69e80fae41b4f56f16bc40a2bc6fe3a41"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/fleet-relay-BKOFwMsC.js",
+      "sha256": "fe8fb966cebe50889e137b69de753f5d5139a34d363c315c440e66d755c3094e"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/fleet-tool-router-BvsT8JH6.js",
+      "sha256": "53b8cadbde004b0c63f999fbe2f667c71bf21e71238c94fa223e028f6b84e087"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/foreground-activity-electron-BePjEaAY.js",
+      "sha256": "ed06163812f7763ddfd97602df540d39efdfdfd0023e3da5bf3255c206bab0b2"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/foreground-activity-smoke-7WgcsNda.js",
+      "sha256": "8414cb3232b1fe6549a72e436779a4cb0631d59405c99c6e04fe09f7943ea804"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/host-BYoR38Wq.js",
+      "sha256": "5b92f0c9d0ff7ce443aeae6f3bc81c95e139f1f32022595150e5e5f962cfec6e"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/model-browser-metadata-OX1oha0Z.js",
+      "sha256": "f496832496914ece7770b23d9c9e161c46d2c74b8b09bf997eee3bd5249f1c11"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/model-observation-DW0Ad-ZS.js",
+      "sha256": "d181f11d0d178e5d1073767ea2460147432ccfd63e7e34e7ac5b2afcff8e4d01"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/packaged-provider-integrity-9gaGzvl-.js",
+      "sha256": "775c0dd1e93146bd52524ed24767c4882a79bf7c469fcff8f13d1f08126dbadb"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/provider-catalog-BWcNbeFE.js",
+      "sha256": "cc72baa176721e60d4355b5b1d7e1e1f37b905db4a26e31981fd88bd21b05b1a"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/self-control-package-BUWyFiA-.js",
+      "sha256": "c6f400968679fb80372e47a3be30e5b4fddaff03fd51bb51862e5df0e16b0440"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/shell-process-termination-DG9v9dmR.js",
+      "sha256": "2229f23a3c932641b421eb8ef4bf107449ebf5a08ebd6bf77cef722dbbed8320"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/subscription-auth-eTprN06k.js",
+      "sha256": "a3ff8ad21fd8db84b3a1180d2ba70723e44d0cb031c17dbcdace437ff632c3e8"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/thread-sidebar-state-B-lMrLrx.js",
+      "sha256": "f685952d13bf84a0d20a7e92c9049191ec9358597bc2f76b91ee450c6f02cddd"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/user-browser-provider-B2FihFnL.js",
+      "sha256": "fa8fa44963554fc10d6fd0d0b37af6d6d38426c4a00d30ea028bb43d02c5d520"
+    },
+    {
+      "path": "source/apps/zenx/out/main/chunks/workspace-browser-electron-QZzK7nm0.js",
+      "sha256": "32c25bc7d8a76d8e74939a09c4d200a93e6102274672df11bc637679d48e5a83"
+    },
+    {
+      "path": "source/apps/zenx/out/main/code-runtime-worker.js",
+      "sha256": "b423a95018e1f8da14191baa86e7d7d296448721200abda4302e305dff9c6bfa"
+    },
+    {
+      "path": "source/apps/zenx/out/main/fleet-bridge.js",
+      "sha256": "d8010bdadd21c96f18ee19359dd5831eb1ac365adc8b380d6e620eba5ec0ba21"
+    },
+    {
+      "path": "source/apps/zenx/out/main/fleet-relay-cli.js",
+      "sha256": "25f26a4c000081f340d7525f6368f619bcfd3dbc797777f186a330f4ea598d4c"
+    },
+    {
+      "path": "source/apps/zenx/out/main/index.js",
+      "sha256": "878a86bf90032704d05e3fcd35d5ddd0eb86112c1e5f159f299eef0346963078"
+    },
+    {
+      "path": "source/apps/zenx/out/main/packaged-provider-smoke.js",
+      "sha256": "77e22505d401ba5ea54da8381c65652ef789f86ecacf217f104493df33622d53"
+    },
+    {
+      "path": "source/apps/zenx/out/main/provider-smoke.js",
+      "sha256": "a95040789e8254b1e4b306eeae522ef0cbaf6895558dbc7e413f5284cc273f8c"
+    },
+    {
+      "path": "source/apps/zenx/out/main/real-smoke.js",
+      "sha256": "ab2c9bff9efa615d6342ee4357330fb73cd05d35f867ee6281c7b89337a82377"
+    },
+    {
+      "path": "source/apps/zenx/out/main/renderer-file-protocol.js",
+      "sha256": "e180ca36473fb2903533097d5ba82fbc41c9681e26a45343f3b6fae4fe4269f4"
+    },
+    {
+      "path": "source/apps/zenx/out/main/workspace-browser-persistence-smoke.js",
+      "sha256": "64ee0cbb0f37352027b00b5b7916a15f44873510747a2a22702e33345220a372"
+    },
+    {
+      "path": "source/apps/zenx/out/main/workspace-browser-smoke.js",
+      "sha256": "817fcce8169c235e397bcd7df4aa74bfcf6209fb55b5c54481af5e9d6c507681"
+    },
+    {
+      "path": "source/apps/zenx/out/preload/foreground-activity.cjs",
+      "sha256": "914f51d5666e1ad6c85334d4dca708c48dc969e34dbc09db770a3349f6a14705"
+    },
+    {
+      "path": "source/apps/zenx/out/preload/index.cjs",
+      "sha256": "fc81ac1714538d7df651eace24cb7c0f3e44f68b8f8a98f71f2f46b5ae16ca36"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/addon-fit-D89xfLfG.js",
+      "sha256": "7660e4b495d46df65c5f1e044b4bc3eab456eba66f39bf5d716d8d6a7a09365f"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/dashscope-CPKVCMlC.png",
+      "sha256": "8581c2d0f5647837c69b040d357978f6dff28544235f68cc7fd7865bb1e042c1"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/index-Bwh9YAce.css",
+      "sha256": "67705a741980b0b617204f14c6d5e982e4e85fb31966952e8a70eca5aed35b3a"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/index-C4HwWKB3.js",
+      "sha256": "987a71532bb0a83d9f9cb207154b3c85ff2349e1c6876420e4ad85f9a3c1e977"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/xterm-Csd6G67z.js",
+      "sha256": "98b6c1cb1eb349493978c87d6edb3512adb142caac9a266c82921491eab2a949"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/assets/xterm-R4LLEgbX.js",
+      "sha256": "cd97457abca60cb3137f3757e9bf5b7e99f2af20899713869082324196d578d0"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/index.html",
+      "sha256": "46ed75a9b478effa55a521a4c820e9fd1ae75c66f817a4aba446390694263c12"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/plugin-frame.html",
+      "sha256": "384d294a16fcfb191b7c972e5e2393407214364da8f3f3acf8bf7a87739e319a"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/startup.html",
+      "sha256": "d5371bf055835412d5ef36084d5600db8403f7ebcbf9b29889525ee0b27c23b8"
+    },
+    {
+      "path": "source/apps/zenx/out/renderer/terminal-frame.html",
+      "sha256": "ef0db89e211b38b63a93eb9bfe3c2ace12cc066978a6fc9fdc00c2dbd478c5f3"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-browser-plugin-concurrent-1.1.0.tgz",
+      "sha256": "dbf28c2821710064b7045b300de6908c80124392da16c8f181b64181419f3895"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-browser-plugin-electron-1.1.0.tgz",
+      "sha256": "6f8a3f81ae1a2548dc15df9f67e01ec9eef5a500f1d0dd292169c1a8c6bdac59"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-browser-plugin-multi-1.1.0.tgz",
+      "sha256": "ac72398c9975d8d5503d2b3137f6f1cae084e5039deb8503f27820314f7d3310"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-browser-plugin-playwright-1.1.0.tgz",
+      "sha256": "7dbcdfb06b6521b6720c68a24c68f13c691ef71b0b261b78f6ed166fb81df873"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-browser-plugin-user-session-1.1.0.tgz",
+      "sha256": "a71d70fbac29c090784452fcf0d2d996b01113b02157e063d9151b961f4d9427"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-computer-plugin-macos-1.4.0.tgz",
+      "sha256": "6cfddc160768ceb9b49367508245fae69bc40aa9c66e468971dbf30fdaa67c0c"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-computer-plugin-peekaboo-1.4.0.tgz",
+      "sha256": "f94ea5df2602dbc933f95b290a3f51a8ae7b8d0ac1f402d6bc4aaa227135a16c"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-computer-plugin-win32-1.4.0.tgz",
+      "sha256": "9e76651c0a265c6bbd7c2fb83854c999ba2fc57c40088fec8ac1daf9d2912086"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-computer-plugin-win32-strict-1.4.0.tgz",
+      "sha256": "f0003faab41557fd0e37e2542aa755ae06f883fd7307f9b67089270095bb667e"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-fleet-plugin-1.0.0.tgz",
+      "sha256": "c1c2df5ca46c552b07627c25b868a6b3c995645d7070a0870c000b33459210dc"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-imzenx-plugin-1.0.3.tgz",
+      "sha256": "369a23802f88c60e41502f385f32d33053c1fa40d05f53765afd381c7960d075"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-rooms-plugin-1.0.8.tgz",
+      "sha256": "6c120eb611d0041ba46374da93fec4b742d69621f3c0017ef345923d8b49087e"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-self-control-plugin-1.1.0.tgz",
+      "sha256": "1c2690ddacf0bba7b9d663a275640a42b133ae65d18b663cde8f909040a85539"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-subagents-plugin-1.0.0.tgz",
+      "sha256": "70e1d1a01c3a7822dd7b67429508a8a6c8ac2416c643b5f2c8ebfdff763cf7c2"
+    },
+    {
+      "path": "source/apps/zenx/resources/plugins/zenx-triggers-plugin-1.0.1.tgz",
+      "sha256": "6a400fd45a1522a041925c662d2f62cec0fe2d686cb184d42c3a31e55f81f3ee"
+    }
+  ],
+  "screenshots": {
+    "compaction-failure.jpg": "fe9cb1241c035e70b621036eda3fc118dc3061a1dad41ed98dc01d2a3fd713ff",
+    "compaction-refresh-warning.jpg": "92a7a87bc8d9694ceae867f2fef30a333deaee190200b85700549e2c7199ed66",
+    "compaction-unknown-narrow.jpg": "fc2b54c9654ee5eb6360081a70ddf13bad6b6e0bd147446ae10d2efb70568625",
+    "native-collapsed-fullscreen.jpg": "1f7cbab42526fb9d25f8ec7517c569620195a691d3b6127269ccffebe77eb4a8",
+    "native-default-home.jpg": "68bb97bdc07e605d23499be0f380fb6b019215bd76921e209c91a69b1cc58ccc",
+    "native-first-send.jpg": "b329b328ff2258764f2b03b2dfe7d6b623a1997fbdc62ee69a35e84252e79388",
+    "native-pinned-collapsed.jpg": "3d13a60f057eabd84a2b48a7df169ea5b01418cea9cbbf4d235d7ee74bf26747",
+    "native-subject-fullscreen.jpg": "722810c826e59c9b80174828d5f5b78f774034b324a93598016a3fca11c46f07",
+    "sidebar-narrow.jpg": "cb040e0060aeccd4705bc5b171ba4699452259daeb63994ab3dc70f000059a93",
+    "subject-after.jpg": "148f33c388b3ec54a9fb889db3d3277985b0ffa8bc57ba3c6c0bb742472d0f3f",
+    "subject-before.jpg": "e7766bd9f0f1ca256d38076119f98d066bda5df4f16a0d087a10ec0954be8358"
+  }
+}

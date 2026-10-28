@@ -21,10 +21,13 @@ export const credentialStorageFailureMessages = {
 export type CredentialStorageFailureCode =
   keyof typeof credentialStorageFailureMessages;
 
-/** A fixed boundary observation, never a native error, path, or secret. */
+/** Stable classification plus the available local cause; never attaches key input. */
 export class CredentialStorageError extends Error {
-  constructor(readonly code: CredentialStorageFailureCode) {
-    super(credentialStorageFailureMessages[code]);
+  constructor(
+    readonly code: CredentialStorageFailureCode,
+    options?: ErrorOptions,
+  ) {
+    super(credentialStorageFailureMessages[code], options);
   }
 }
 
@@ -169,7 +172,9 @@ export class ZenXCredentialVault {
         error.code === "credential-storage-unavailable"
       )
         throw error;
-      throw new CredentialStorageError("credential-encryption-failed");
+      throw new CredentialStorageError("credential-encryption-failed", {
+        cause: error,
+      });
     }
   }
 
@@ -184,7 +189,9 @@ export class ZenXCredentialVault {
         error.code === "credential-storage-unavailable"
       )
         throw error;
-      throw new CredentialStorageError("credential-decryption-failed");
+      throw new CredentialStorageError("credential-decryption-failed", {
+        cause: error,
+      });
     }
     if (value.length === 0)
       throw new CredentialStorageError("credential-decryption-failed");
@@ -195,8 +202,10 @@ export class ZenXCredentialVault {
     let available = false;
     try {
       available = this.#encryption.isEncryptionAvailable();
-    } catch {
-      // An unreadable availability check cannot authorize secret storage.
+    } catch (error) {
+      throw new CredentialStorageError("credential-storage-unavailable", {
+        cause: error,
+      });
     }
     if (!available)
       throw new CredentialStorageError("credential-storage-unavailable");
@@ -226,8 +235,10 @@ export class ZenXCredentialVault {
       } finally {
         await handle.close();
       }
-    } catch {
-      throw new CredentialStorageError("credential-read-failed");
+    } catch (error) {
+      throw new CredentialStorageError("credential-read-failed", {
+        cause: error,
+      });
     }
   }
 
@@ -247,8 +258,10 @@ export class ZenXCredentialVault {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         });
       }
-    } catch {
-      throw new CredentialStorageError("credential-write-failed");
+    } catch (error) {
+      throw new CredentialStorageError("credential-write-failed", {
+        cause: error,
+      });
     }
   }
 }

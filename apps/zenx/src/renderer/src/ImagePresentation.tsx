@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
@@ -79,62 +80,70 @@ export function AttachmentImage({
     observer.observe(element);
     return () => observer.disconnect();
   }, [lazy, visible]);
-  const { url, error, retry, invalidate } = useAttachmentUrl(
+  const { url, error, detail, retry, invalidate } = useAttachmentUrl(
     attachment,
     onReadAttachment,
     !lazy || visible,
   );
   const retryable = retryOnError && error !== null;
   return (
-    <button
-      ref={buttonRef}
-      className="image-thumbnail"
-      type="button"
-      aria-label={i18n.t(
-        retryable ? "panels:retryImage" : "panels:previewImage",
-        { name },
-      )}
-      aria-busy={visible && url === null && error === null}
-      disabled={url === null && !retryable}
-      title={
-        url === null
-          ? i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")
-          : name
-      }
-      onClick={(event) =>
-        retryable ? retry() : onOpen(attachment, name, event.currentTarget)
-      }
-    >
-      {url === null ? (
-        <span
-          className="image-placeholder"
-          role={error ? "alert" : undefined}
-          aria-label={
-            compact
-              ? `${name}: ${i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")}`
-              : undefined
-          }
-        >
-          {compact ? (
-            <>
-              <Icon name={error ? "warning" : "image"} size={15} />
-              {retryable ? <span>{i18n.t("panels:retry")}</span> : null}
-            </>
-          ) : error ? (
-            `${i18n.t("panels:imageUnavailable")}${retryable ? ` · ${i18n.t("panels:retry")}` : ""}`
-          ) : (
-            i18n.t("panels:loadingImage")
-          )}
-        </span>
-      ) : (
-        <img
-          alt={name}
-          src={url}
-          loading={lazy ? "lazy" : undefined}
-          onError={invalidate}
-        />
-      )}
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        className="image-thumbnail"
+        type="button"
+        aria-label={i18n.t(
+          retryable ? "panels:retryImage" : "panels:previewImage",
+          { name },
+        )}
+        aria-busy={visible && url === null && error === null}
+        disabled={url === null && !retryable}
+        title={
+          url === null
+            ? i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")
+            : name
+        }
+        onClick={(event) =>
+          retryable ? retry() : onOpen(attachment, name, event.currentTarget)
+        }
+      >
+        {url === null ? (
+          <span
+            className="image-placeholder"
+            role={error ? "alert" : undefined}
+            aria-label={
+              compact
+                ? `${name}: ${i18n.t(error ? "panels:imageUnavailable" : "panels:loadingImage")}`
+                : undefined
+            }
+          >
+            {compact ? (
+              <>
+                <Icon name={error ? "warning" : "image"} size={15} />
+                {retryable ? <span>{i18n.t("panels:retry")}</span> : null}
+              </>
+            ) : error ? (
+              `${i18n.t("panels:imageUnavailable")}${retryable ? ` · ${i18n.t("panels:retry")}` : ""}`
+            ) : (
+              i18n.t("panels:loadingImage")
+            )}
+          </span>
+        ) : (
+          <img
+            alt={name}
+            src={url}
+            loading={lazy ? "lazy" : undefined}
+            onError={invalidate}
+          />
+        )}
+      </button>
+      {error && detail ? (
+        <details className="image-error-detail">
+          <summary>{i18n.t("shell:technicalDetails")}</summary>
+          <pre tabIndex={0}>{detail}</pre>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -145,7 +154,6 @@ export function ImagePreview({
   onReadAttachment,
   trigger,
   restoreFocus,
-  safeError = false,
   portalContainer,
 }: {
   attachment: AttachmentRef;
@@ -154,20 +162,18 @@ export function ImagePreview({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
   trigger: HTMLButtonElement;
   restoreFocus?(): void;
-  safeError?: boolean;
   portalContainer?: HTMLElement;
 }) {
   useTranslation("panels");
-  const { url, error, invalidate } = useAttachmentUrl(
+  const { url, error, detail, invalidate } = useAttachmentUrl(
     attachment,
     onReadAttachment,
   );
   return (
     <ImageUrlPreview
       url={url}
-      error={
-        safeError && error !== null ? i18n.t("panels:imageUnavailable") : error
-      }
+      error={error !== null ? i18n.t("panels:imageUnavailable") : null}
+      errorDetail={detail}
       name={name}
       onClose={onClose}
       trigger={trigger}
@@ -181,6 +187,7 @@ export function ImagePreview({
 export function ImageUrlPreview({
   url,
   error,
+  errorDetail,
   name,
   onClose,
   trigger,
@@ -190,6 +197,7 @@ export function ImageUrlPreview({
 }: {
   url: string | null;
   error: string | null;
+  errorDetail?: string | null;
   name: string;
   onClose(): void;
   trigger: HTMLElement;
@@ -199,30 +207,48 @@ export function ImageUrlPreview({
 }) {
   useTranslation("panels");
   const closeRef = useRef<HTMLButtonElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onClose, restoreFocus });
   callbacks.current = { onClose, restoreFocus };
   useEffect(() => {
     closeRef.current?.focus();
+    const layer = layerRef.current;
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         callbacks.current.onClose();
       } else if (event.key === "Tab") {
         event.preventDefault();
-        closeRef.current?.focus();
+        const controls = [
+          ...(layerRef.current?.querySelectorAll<HTMLElement>(
+            "button, summary, [tabindex='0']",
+          ) ?? []),
+        ];
+        const available = controls.filter((control) => {
+          const details = control.closest("details");
+          return !details || details.open || control.tagName === "SUMMARY";
+        });
+        const current = available.indexOf(
+          document.activeElement as HTMLElement,
+        );
+        available[
+          (current + (event.shiftKey ? -1 : 1) + available.length) %
+            available.length
+        ]?.focus();
       }
     };
     document.addEventListener("keydown", keydown);
     return () => {
       document.removeEventListener("keydown", keydown);
       const active = document.activeElement;
-      if (active !== document.body && active !== closeRef.current) return;
+      if (active !== document.body && !layer?.contains(active)) return;
       if (callbacks.current.restoreFocus) callbacks.current.restoreFocus();
       else if (trigger.isConnected) trigger.focus({ preventScroll: true });
     };
   }, [trigger]);
   return createPortal(
     <div
+      ref={layerRef}
       className="image-preview-layer"
       role="dialog"
       aria-modal="true"
@@ -248,6 +274,12 @@ export function ImageUrlPreview({
         ) : (
           <img alt={name} src={url} onError={onImageError} />
         )}
+        {error && errorDetail ? (
+          <details className="image-error-detail">
+            <summary>{i18n.t("shell:technicalDetails")}</summary>
+            <pre tabIndex={0}>{errorDetail}</pre>
+          </details>
+        ) : null}
       </div>
     </div>,
     portalContainer ?? document.body,
@@ -307,6 +339,7 @@ function useAttachmentUrl(
 ): {
   url: string | null;
   error: string | null;
+  detail?: string;
   retry(): void;
   invalidate(): void;
 } {
@@ -315,6 +348,7 @@ function useAttachmentUrl(
   const [state, setState] = useState<{
     url: string | null;
     error: string | null;
+    detail?: string;
   }>(() => ({
     url: attachmentUrlCache.get(cacheKey)?.url ?? null,
     error: null,
@@ -357,6 +391,7 @@ function useAttachmentUrl(
           setState({
             url: null,
             error: error instanceof Error ? error.message : String(error),
+            detail: localErrorDetail(error),
           });
       });
     return () => {

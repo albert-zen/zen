@@ -4678,3 +4678,49 @@ test("committed compaction refresh failure is visible, settled, readable and dis
     assert.equal(document.querySelector(".context-compaction-progress"), null);
   });
 });
+
+test("image failure details are closed, plain text and keyboard reachable in the preview", async () => {
+  const { ImageUrlPreview } =
+    await import("../src/renderer/src/ImagePresentation.js");
+  await withDom(async (root) => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    let closed = 0;
+    await act(async () =>
+      root.render(
+        createElement(ImageUrlPreview, {
+          url: null,
+          error: "Image unavailable",
+          errorDetail: "Synthetic <script>no()</script> attachment failure",
+          name: "Fixture",
+          trigger,
+          onClose: () => {
+            closed++;
+          },
+        }),
+      ),
+    );
+    const detail = document.querySelector<HTMLDetailsElement>(
+      ".image-preview-layer details",
+    )!;
+    assert.equal(detail.open, false);
+    assert.equal(detail.querySelector("script"), null);
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+    );
+    assert.equal(document.activeElement, detail.querySelector("summary"));
+    await act(async () => detail.querySelector("summary")!.click());
+    assert.equal(detail.open, true);
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+    );
+    assert.equal(document.activeElement, detail.querySelector("pre"));
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    assert.equal(closed, 1);
+    await act(async () => root.render(null));
+    assert.equal(document.activeElement, trigger);
+    trigger.remove();
+  });
+});
