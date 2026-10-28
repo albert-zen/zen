@@ -219,6 +219,7 @@ export function toolPresentation(name: string): {
   category: string;
   icon: IconName;
   action?: string;
+  completedAction?: string;
 } {
   const key = name
     .replace(/^zenx_/u, "")
@@ -228,6 +229,7 @@ export function toolPresentation(name: string): {
       category: i18n.t("shell:image"),
       icon: "image",
       action: i18n.t("shell:viewImages"),
+      completedAction: i18n.t("shell:traceViewedImages"),
     };
   }
   if (key === "shell")
@@ -235,12 +237,27 @@ export function toolPresentation(name: string): {
       category: i18n.t("shell:shell"),
       icon: "terminal",
       action: i18n.t("shell:runCommand"),
+      completedAction: i18n.t("shell:ranCommand"),
     };
   if (key === "wait")
     return {
       category: i18n.t("shell:wait"),
       icon: "clock",
       action: i18n.t("shell:waitForTask"),
+      completedAction: i18n.t("shell:waitedForTask"),
+    };
+  if (key === "run_code" || key === "compact_context")
+    return {
+      category: i18n.t(key === "run_code" ? "shell:code" : "shell:context"),
+      icon: key === "run_code" ? "terminal" : "compress",
+      action: i18n.t(
+        key === "run_code" ? "shell:traceRunCode" : "shell:compactContext",
+      ),
+      completedAction: i18n.t(
+        key === "run_code"
+          ? "shell:traceRanCode"
+          : "shell:traceCompactedContext",
+      ),
     };
   const threadAction = Object.hasOwn(threadActions(), key)
     ? threadActions()[key]
@@ -250,8 +267,9 @@ export function toolPresentation(name: string): {
       category: i18n.t("shell:thread"),
       icon: threadAction.icon,
       action: threadAction.action,
+      completedAction: threadAction.completed,
     };
-  const action = actions()[key];
+  const action = Object.hasOwn(actions(), key) ? actions()[key] : undefined;
   if (action)
     return {
       category: key.startsWith("browser_")
@@ -263,6 +281,9 @@ export function toolPresentation(name: string): {
         : i18n.t("shell:computer"),
       icon: key.startsWith("browser_") ? "browser" : "computer",
       action,
+      completedAction: Object.hasOwn(completedActions(), key)
+        ? completedActions()[key]
+        : undefined,
     };
   return {
     category: name === "run_code" ? i18n.t("shell:code") : i18n.t("shell:tool"),

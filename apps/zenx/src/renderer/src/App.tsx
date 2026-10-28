@@ -1,3 +1,5 @@
+import { resolveDeliveredMessage } from "./tool-action-targets.js";
+import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
@@ -1183,6 +1185,7 @@ function AppContent() {
     propagateFailure = false,
     debugMode = false,
   ) => {
+    setMessageTargetRequest(null);
     discardRecoverableDraft();
     const epoch = ++selectionEpoch.current;
     const cached = threadProjectionCacheRef.current.get(threadId);
@@ -2006,8 +2009,10 @@ function AppContent() {
       skillDraft.references,
       submission.clientUserMessageId,
     );
+    // Auxiliary naming has its own receipt/error path and must not hold input
+    // admission behind title persistence or an unrelated title operation.
     if (submission.text.length > 0)
-      await window.zenx.titles
+      void window.zenx.titles
         .observe(
           threadId,
           referenceTitle(skillDraft.text, skillDraft.references),
@@ -2643,6 +2648,7 @@ function AppContent() {
   };
 
   const openPage = (next: ProductPage) => {
+    setMessageTargetRequest(null);
     if (next.startsWith("/threads/")) {
       const target = new URL(next, "https://zenx.local");
       const threadId = decodeURIComponent(
@@ -2759,6 +2765,8 @@ function AppContent() {
     () => setTriggerSourceRequest(null),
     [selectedThreadId, selectedRoom?.id],
   );
+  const [messageTargetRequest, setMessageTargetRequest] =
+    useState<MessageTargetRequest | null>(null);
   const sourceNavigationIntent = useRef(0);
   const sourceNavigationState = useRef({ page, selectedThreadId });
   sourceNavigationState.current = { page, selectedThreadId };
@@ -2798,7 +2806,7 @@ function AppContent() {
         throw new Error(i18n.t("shell:sourceNavigationUnavailable"));
       setTriggerSourceRequest({
         viewportId,
-        threadId: owner.threadId,
+        threadId: target.threadId ?? owner.threadId,
         triggerId: target.id,
         requestId: intent,
       });
@@ -2833,12 +2841,27 @@ function AppContent() {
       throw new Error(i18n.t("shell:sourceThreadUnavailable"));
     if (result.thread.archived)
       throw new Error(i18n.t("shell:sourceThreadArchived"));
+    const message = target.itemId
+      ? resolveDeliveredMessage(result.thread.items, target.itemId)
+      : undefined;
+    if (message === "missing")
+      throw new Error(i18n.t("shell:toolMessageMissing"));
+    if (message === "cancelled")
+      throw new Error(i18n.t("shell:toolMessageCancelled"));
+    if (message === "pending")
+      throw new Error(i18n.t("shell:toolMessagePending"));
     const panel =
       (selectedRoom !== undefined && selectedRoom !== null) ||
       owner.threadId !== selectedThreadIdRef.current;
     openPage(
       `/threads/${encodeURIComponent(target.id)}${panel ? "?view=panel" : ""}`,
     );
+    if (message)
+      setMessageTargetRequest({
+        threadId: target.id,
+        itemId: message.itemId,
+        requestId: intent,
+      });
   };
 
   const renameThread = async (threadId: string, title: string) => {
@@ -3391,6 +3414,12 @@ function AppContent() {
       openSideChatDraft={openSideChatDraft}
       fork={forkMessage}
       source={openMessageSource}
+      messageTarget={messageTargetRequest}
+      onMessageTargetConsumed={(requestId) =>
+        setMessageTargetRequest((current) =>
+          current?.requestId === requestId ? null : current,
+        )
+      }
       models={models}
       modelCatalogError={modelCatalogError}
     >

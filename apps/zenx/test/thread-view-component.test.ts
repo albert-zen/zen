@@ -818,17 +818,19 @@ test("compaction progress is a transcript item and completed items reveal exact 
         "workflow-status",
       ),
     );
-    assert.match(event.textContent ?? "", /Keep this request/u);
-    assert.match(event.textContent ?? "", /Kept answer/u);
+    assert.doesNotMatch(event.textContent ?? "", /Keep this request/u);
+    assert.doesNotMatch(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
     );
-    assert.equal(
-      requiredElement(".compaction-projection").hasAttribute("open"),
-      false,
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
+    assert.equal(requiredElement(".compaction-projection").tagName, "DIV");
+    assert.match(event.textContent ?? "", /Keep this request/u);
+    assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /not tokens/u);
     assert.match(
       event.textContent ?? "",
@@ -930,6 +932,9 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
         requiredElement(".compaction-summary").textContent ?? "",
         /Continue with the accepted plan/u,
       );
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
+      );
       const diagnostics = requiredElement(".compaction-projection");
       assert.match(diagnostics.textContent ?? "", /unavailable/u);
       assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
@@ -963,6 +968,10 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
       await renderView(partial);
       await act(async () =>
         requiredButton(".context-compaction-toggle").click(),
+      );
+
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
       );
 
       // A later authoritative read restores exact diagnostics, with no invented context while waiting.
@@ -1019,6 +1028,9 @@ test("compaction with a present boundary but missing retained items keeps its su
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
+    );
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
     assert.match(
       requiredElement(".compaction-projection").textContent ?? "",
@@ -3564,6 +3576,7 @@ test("tool details disclose full input independently of scrollable output", asyn
 
 test("running and completed durations share second, minute and hour formatting", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 10_000 });
+  // Elapsed work belongs to admitted input; an empty initial Turn is Preparing.
   await withDom(async (root) => {
     for (const [duration, label] of [
       [0, "0s"],
@@ -3577,7 +3590,10 @@ test("running and completed durations share second, minute and hour formatting",
       [90_061_000, "25h 1m 1s"],
     ] as const) {
       t.mock.timers.setTime(10_000 + duration);
-      await renderInteractive(root, turnWithItems("inProgress", []));
+      await renderInteractive(
+        root,
+        turnWithItems("inProgress", [user("Admitted synthetic input")]),
+      );
       assert.equal(
         requiredElement(".turn-running-label .turn-work-label").textContent,
         `Working for ${label}`,
@@ -3593,8 +3609,12 @@ test("running and completed durations share second, minute and hour formatting",
 
 test("running duration ticks from turn start and stops on completion", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
+  // Elapsed work belongs to admitted input; an empty initial Turn is Preparing.
   await withDom(async (root) => {
-    await renderInteractive(root, turnWithItems("inProgress", []));
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [user("Admitted synthetic input")]),
+    );
     assert.equal(
       requiredElement(".turn-running-label .turn-work-label").textContent,
       "Working for 12s",
@@ -3615,7 +3635,10 @@ test("running duration ticks from turn start and stops on completion", async (t)
       "Working for 1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
-    assert.equal(document.querySelector(".turn-running-label"), null);
+    assert.ok(
+      document.querySelector(".turn-running-label") === null,
+      "completed work has no live timer",
+    );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
       requiredElement(".turn-toggle").textContent,

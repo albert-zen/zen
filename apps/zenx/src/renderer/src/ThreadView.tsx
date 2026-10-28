@@ -15,7 +15,8 @@ import {
   parseSentReferenceContent,
   type SentMessageQuote,
 } from "./reference-draft.js";
-import { OriginalHistoryReference } from "./OriginalHistory.js";
+import { ContextCompactionEvent } from "./ContextCompactionEvent.js";
+export { ContextCompactionEvent } from "./ContextCompactionEvent.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
   MessageSourceLink,
@@ -125,7 +126,6 @@ import {
 } from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
-import type { ModelMessage } from "../../../../../src/model.js";
 import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
@@ -136,6 +136,12 @@ import {
 import { activeTurn } from "./thread-view-state.js";
 import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
+import { ToolActionLink, ToolActionTargetsProvider } from "./ToolActionLink.js";
+import {
+  MessageTargetNavigationContext,
+  useMessageTargetNavigation,
+  type MessageTargetRequest,
+} from "./message-target-navigation.js";
 import {
   groupReasoningWithoutDetailsRows,
   projectTurn,
@@ -155,7 +161,6 @@ import type { WorkflowCommand } from "./workflow-commands.js";
 import { useComposerSelector } from "./use-composer-selector.js";
 import { Dialog } from "./ui/controls.js";
 import {
-  compactionInitiatorLabel,
   projectContextCompactions,
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
@@ -173,8 +178,12 @@ export const MessageForkContext = createContext<MessageForkHandler | null>(
 export function ThreadViewActionsProvider({
   fork,
   source,
+  messageTarget,
+  onMessageTargetConsumed,
   children,
 }: {
+  messageTarget?: MessageTargetRequest | null;
+  onMessageTargetConsumed?(requestId: number): void;
   fork: MessageForkHandler;
   source: MessageSourceNavigator;
   children: ReactNode;
@@ -182,7 +191,14 @@ export function ThreadViewActionsProvider({
   return (
     <MessageForkContext.Provider value={fork}>
       <MessageSourceNavigationContext.Provider value={source}>
-        {children}
+        <MessageTargetNavigationContext.Provider
+          value={{
+            request: messageTarget ?? null,
+            consumed: onMessageTargetConsumed ?? (() => {}),
+          }}
+        >
+          {children}
+        </MessageTargetNavigationContext.Provider>
       </MessageSourceNavigationContext.Provider>
     </MessageForkContext.Provider>
   );
@@ -369,42 +385,44 @@ export function ThreadView(props: ThreadViewProps) {
   // also removes old references synchronously; never merge stale Host results.
 
   return (
-    <ThreadReadingContext.Provider value={readingState}>
-      <CanonicalInputContentContext.Provider value={canonicalInputs}>
-        <CanonicalMessageForkContext.Provider value={forkContext}>
-          <MessageSourceViewportContext.Provider
-            value={props.thread?.id ?? null}
-          >
-            <div className="thread-conversation-surface">
-              {debugging && props.thread && items !== undefined ? (
-                <ThreadDebugger
-                  key={props.thread.id}
-                  thread={props.thread}
-                  items={props.thread.itemList}
-                  currentSettings={{
-                    provider: props.thread.modelProvider,
-                    model: props.selectedModel,
-                    effort: props.selectedReasoningEffort,
-                    permission: props.permissionMode,
-                  }}
-                  localModelDebug={props.localModelDebug}
-                  onExit={props.onExitDebug}
-                  onOpenMessageLink={props.onOpenMessageLink}
-                  onReadAttachment={props.onReadAttachment}
-                />
-              ) : (
-                <ThreadViewContent
-                  {...props}
-                  threadAttachments={
-                    canonicalAttachments ?? props.threadAttachments
-                  }
-                />
-              )}
-            </div>
-          </MessageSourceViewportContext.Provider>
-        </CanonicalMessageForkContext.Provider>
-      </CanonicalInputContentContext.Provider>
-    </ThreadReadingContext.Provider>
+    <ToolActionTargetsProvider thread={props.thread}>
+      <ThreadReadingContext.Provider value={readingState}>
+        <CanonicalInputContentContext.Provider value={canonicalInputs}>
+          <CanonicalMessageForkContext.Provider value={forkContext}>
+            <MessageSourceViewportContext.Provider
+              value={props.thread?.id ?? null}
+            >
+              <div className="thread-conversation-surface">
+                {debugging && props.thread && items !== undefined ? (
+                  <ThreadDebugger
+                    key={props.thread.id}
+                    thread={props.thread}
+                    items={props.thread.itemList}
+                    currentSettings={{
+                      provider: props.thread.modelProvider,
+                      model: props.selectedModel,
+                      effort: props.selectedReasoningEffort,
+                      permission: props.permissionMode,
+                    }}
+                    localModelDebug={props.localModelDebug}
+                    onExit={props.onExitDebug}
+                    onOpenMessageLink={props.onOpenMessageLink}
+                    onReadAttachment={props.onReadAttachment}
+                  />
+                ) : (
+                  <ThreadViewContent
+                    {...props}
+                    threadAttachments={
+                      canonicalAttachments ?? props.threadAttachments
+                    }
+                  />
+                )}
+              </div>
+            </MessageSourceViewportContext.Provider>
+          </CanonicalMessageForkContext.Provider>
+        </CanonicalInputContentContext.Provider>
+      </ThreadReadingContext.Provider>
+    </ToolActionTargetsProvider>
   );
 }
 
@@ -840,6 +858,8 @@ function ThreadViewContent({
     );
     saveReadingPosition();
   }, [readingState, saveReadingPosition]);
+
+  useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -2283,132 +2303,6 @@ function ContextCompactionProgress({
   );
 }
 
-export function ContextCompactionEvent({
-  projection,
-}: {
-  projection: ContextCompactionProjection;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const { item, effectiveMessages } = projection;
-  const [copyState, setCopyState] = useState("");
-  const detailId = useId();
-  return (
-    <section
-      className="context-compaction-event"
-      aria-label={i18n.t("shell:contextCompacted")}
-    >
-      <button
-        className="context-compaction-toggle workflow-status"
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={detailId}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="context-compaction-mark" aria-hidden="true">
-          <Icon name="compress" size={14} />
-        </span>
-        <span className="context-compaction-label">
-          <strong>{i18n.t("shell:contextCompacted")}</strong>
-          <small>{compactionInitiatorLabel(item)}</small>
-        </span>
-        <Icon name="chevron-down" size={13} />
-      </button>
-      <OriginalHistoryReference key={item.id} item={item} />
-      {expanded ? (
-        <div className="context-compaction-detail" id={detailId}>
-          <p className="context-compaction-metadata">
-            {i18n.t("shell:summaryCharacters", {
-              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
-                Array.from(item.summary).length,
-              ),
-            })}
-          </p>
-          <div className="compaction-summary-heading">
-            <h3>{i18n.t("shell:savedSummary")}</h3>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => {
-                void navigator.clipboard.writeText(item.summary).then(
-                  () => setCopyState(i18n.t("shell:summaryCopied")),
-                  () =>
-                    setCopyState(
-                      i18n.t("shell:couldNotCopySelectTheSummaryTextToCopyIt"),
-                    ),
-                );
-              }}
-            >
-              {i18n.t("shell:copySummary")}
-            </button>
-          </div>
-          <span role="status">{copyState}</span>
-          <div className="compaction-summary">
-            <Markdown text={item.summary} />
-          </div>
-          <p>
-            {i18n.t("shell:retainedItemsDetail", {
-              count: item.retainedItemIds.length,
-            })}
-          </p>
-          <details className="compaction-projection">
-            <summary>{i18n.t("shell:retainedContextAndDiagnostics")}</summary>
-            {effectiveMessages === null ? (
-              <p role="status">
-                {i18n.t("shell:retainedContextUnavailable")}
-                {projection.snapshotError
-                  ? ` ${projection.snapshotError}`
-                  : null}
-              </p>
-            ) : (
-              <>
-                <p>
-                  {i18n.t("shell:projectedHistoryDetail", {
-                    count: effectiveMessages.length,
-                  })}
-                </p>
-                <ol>
-                  {effectiveMessages.map((message, index) => (
-                    <li key={`${item.id}:${String(index)}`}>
-                      <span>{modelMessageRole(message)}</span>
-                      <pre>{formatModelMessage(message)}</pre>
-                    </li>
-                  ))}
-                </ol>
-              </>
-            )}
-          </details>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function modelMessageRole(message: ModelMessage): string {
-  if (message.role === "tool") return i18n.t("shell:tool");
-  if (message.role === "reasoning") return i18n.t("shell:reasoning");
-  return message.role === "assistant"
-    ? i18n.t("shell:assistant")
-    : i18n.t("shell:user");
-}
-
-function formatModelMessage(message: ModelMessage): string {
-  if (message.role === "reasoning") {
-    return [message.summary, message.reasoningContent]
-      .filter((part): part is string => part !== undefined && part.length > 0)
-      .join("\n");
-  }
-  if (message.role === "tool") {
-    return message.modelContent === undefined
-      ? message.text
-      : `${message.text}\n${JSON.stringify(message.modelContent, null, 2)}`;
-  }
-  if ("content" in message) return JSON.stringify(message.content, null, 2);
-  if ("toolCalls" in message) {
-    return `${message.text ?? ""}\n${JSON.stringify(message.toolCalls, null, 2)}`.trim();
-  }
-  return message.text;
-}
-
 function TraceCounts({
   activity,
   terminal = false,
@@ -2488,7 +2382,11 @@ function RunningTurnLabel({
       </span>
       <span className="turn-work-label">
         {startedAt === null ? (
-          i18n.t("shell:working")
+          phase === "admitting" ? (
+            i18n.t("shell:admitting")
+          ) : (
+            i18n.t("shell:working")
+          )
         ) : (
           <span className="turn-duration">
             {i18n.t("shell:workingFor", {
@@ -2724,7 +2622,12 @@ function TurnBlock({
       ) : (
         <RunningTurnLabel
           recovery={turn.liveRecovery}
-          startedAt={turn.liveRecovery ? null : turn.startedAt}
+          // turn_started is durable before the initial message is committed.
+          // Keep that preparation visible without claiming elapsed agent work
+          // ahead of the actual input (or an already-observed runtime item).
+          startedAt={
+            turn.liveRecovery || turn.items.length === 0 ? null : turn.startedAt
+          }
           activity={activity}
           stopping={stopping}
           approval={approvals.length > 0}
@@ -3486,6 +3389,7 @@ function TraceSequence({
           />
         </div>
       )}
+      {singleton ? <ToolActionLink item={singleton} /> : null}
       {!grouped && singletonExpandable ? (
         <TraceReveal open={expanded} id={detailsId}>
           {visited || expanded ? (
@@ -3599,6 +3503,7 @@ function TraceSequence({
                           />
                         </div>
                       )}
+                      <ToolActionLink item={item} />
                       {expandable ? (
                         <TraceReveal open={open}>
                           {visitedItems.has(item.id) || open ? (
@@ -3886,6 +3791,7 @@ function InputMessage({
     <article
       ref={article}
       data-sent-message-id={item.id}
+      tabIndex={-1}
       className={
         item.type === "threadMessage"
           ? "user-row thread-message-row"

@@ -5611,3 +5611,270 @@ test("queue admission preserves causal diagnostics in owner Trace without changi
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("send admission uses the domain journal durable append snapshot without a second semantic reconciliation", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zen-send-receipt-"));
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  const metadata = new InMemoryThreadMetadataStore();
+  let traceReads = 0;
+  let semanticReads = 0;
+  let sampled = 0;
+  const modelRelease = testDeferred<void>();
+  class MeasuredJournal extends DomainThreadJournal {
+    override async readItemList(threadId: string) {
+      semanticReads += 1;
+      return await super.readItemList(threadId);
+    }
+  }
+  const journal = new MeasuredJournal({
+    directory: path.join(directory, "threads"),
+    metadata,
+    trace: {
+      record: trace.record.bind(trace),
+      readArtifact: trace.readArtifact.bind(trace),
+      read: async (...args) => {
+        traceReads += 1;
+        // Controlled I/O latency exposes repeated full source-log scans.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return await trace.read(...args);
+      },
+    },
+  });
+  const model: ModelAdapter = {
+    provider: "fake",
+    async *stream() {
+      sampled += 1;
+      await modelRelease.promise;
+      yield { type: "text_delta", delta: "Synthetic completion" };
+    },
+  };
+  const server = createServer({ journal, model, threadMetadata: metadata });
+  let done: Promise<void> | undefined;
+  try {
+    const thread = await server.startThread();
+    traceReads = 0;
+    semanticReads = 0;
+    const started = performance.now();
+    let messageAt = 0;
+    let startAt = 0;
+    const dispose = server.subscribe((event) => {
+      if (event.type === "turn_started") startAt = performance.now();
+      if (event.type === "item_completed" && event.item.type === "user_message")
+        messageAt = performance.now();
+    });
+    const turn = await server.startTurn(
+      thread.id,
+      "Synthetic exact admitted input",
+      { clientId: "measured-client" },
+    );
+    done = turn.done;
+    const semanticReadsAtAdmission = semanticReads;
+    t.diagnostic(
+      JSON.stringify({
+        traceReadDelayMs: 20,
+        traceReads,
+        semanticReadsAtAdmission,
+        admissionMs: Math.round(performance.now() - started),
+        startToBubbleMs: Math.round(messageAt - startAt),
+      }),
+    );
+    dispose();
+    modelRelease.resolve();
+    await done;
+    assert.equal(sampled, 1, "only one model sample");
+    const snapshot = await server.readThread(thread.id);
+    assert.deepEqual(
+      snapshot.itemList,
+      await journal.readItemList(thread.id),
+      "published input remains exactly the durable ItemList",
+    );
+    assert.equal(
+      semanticReadsAtAdmission,
+      0,
+      "a successful domain append already supplies its durable semantic snapshot",
+    );
+  } finally {
+    modelRelease.resolve();
+    await done?.catch(() => undefined);
+    await journal.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("long-history send admission measures exact append-receipt reuse without changing compiled input", async (t) => {
+  const measurements: Array<{
+    path: string;
+    historyItems: number;
+    traceReads: number;
+    semanticReads: number;
+    admissionMs: number;
+    startToBubbleMs: number;
+  }> = [];
+  for (const useReceipt of [false, true]) {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-send-history-"),
+    );
+    const trace = new FileTraceStore(path.join(directory, "trace"));
+    const metadata = new InMemoryThreadMetadataStore();
+    let traceReads = 0;
+    let semanticReads = 0;
+    const journal = new DomainThreadJournal({
+      directory: path.join(directory, "threads"),
+      metadata,
+      trace: {
+        record: trace.record.bind(trace),
+        readArtifact: trace.readArtifact.bind(trace),
+        read: async (...args) => {
+          traceReads++;
+          return trace.read(...args);
+        },
+      },
+    });
+    const history: CanonicalItem[] = [
+      {
+        id: "metadata",
+        threadId: "history",
+        type: "thread_metadata",
+        createdAt: "2026-10-28T00:00:00.000Z",
+        cwd: os.tmpdir(),
+        providerProfileId: "fake",
+        modelId: "fake",
+        reasoningEffort: "medium",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    ];
+    for (let index = 0; index < 250; index++) {
+      const base = {
+        threadId: "history",
+        turnId: `turn-${index}`,
+        createdAt: new Date(1793145600000 + index * 1000).toISOString(),
+      };
+      history.push(
+        {
+          ...base,
+          id: `start-${index}`,
+          type: "turn_started",
+          selection: {
+            providerProfileId: "fake",
+            modelId: "fake",
+            reasoningEffort: "medium",
+          },
+        },
+        {
+          ...base,
+          id: `user-${index}`,
+          type: "user_message",
+          text: `Synthetic historical user input ${index}: ` + "x".repeat(2048),
+        },
+        {
+          ...base,
+          id: `agent-${index}`,
+          type: "agent_message",
+          text: `Synthetic historical answer ${index}: ` + "y".repeat(2048),
+        },
+        {
+          ...base,
+          id: `end-${index}`,
+          type: "turn_completed",
+          status: "completed",
+        },
+      );
+    }
+    const release = testDeferred<void>();
+    let sampled = 0;
+    let done: Promise<void> | undefined;
+    try {
+      await journal.create(history);
+      const port: ThreadJournal = {
+        append: async (item) => {
+          const receipt = await journal.append(item);
+          return useReceipt ? receipt : undefined;
+        },
+        read: journal.read.bind(journal),
+        appendContext: journal.appendContext.bind(journal),
+        readItemList: async (id) => {
+          semanticReads++;
+          return journal.readItemList(id);
+        },
+        assertRecoverySafe: journal.assertRecoverySafe.bind(journal),
+        listThreadIds: journal.listThreadIds.bind(journal),
+      };
+      const model: ModelAdapter = {
+        provider: "fake",
+        async *stream(request) {
+          sampled++;
+          assert.ok(
+            JSON.stringify(request.messages).includes(
+              "Exact measured new input",
+            ),
+          );
+          await release.promise;
+          yield { type: "text_delta", delta: "Measured completion" };
+        },
+      };
+      const server = createServer({
+        journal: port,
+        threadMetadata: metadata,
+        model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "fake", isDefault: true, contextWindow: 1_000_000 },
+        ]),
+      });
+      await server.readThread("history");
+      await server.listThreadSummaries();
+      traceReads = 0;
+      semanticReads = 0;
+      let startAt = 0;
+      let messageAt = 0;
+      let traceReadsAtMessage = 0;
+      let semanticReadsAtMessage = 0;
+      const unsubscribe = server.subscribe((event) => {
+        if (event.type === "turn_started") startAt = performance.now();
+        if (
+          event.type === "item_completed" &&
+          event.item.type === "user_message"
+        ) {
+          messageAt = performance.now();
+          traceReadsAtMessage = traceReads;
+          semanticReadsAtMessage = semanticReads;
+        }
+      });
+      const start = performance.now();
+      const turn = await server.startTurn(
+        "history",
+        "Exact measured new input",
+        { clientId: "measured-new-input" },
+      );
+      done = turn.done;
+      measurements.push({
+        path: useReceipt ? "append-receipt" : "legacy-reread",
+        historyItems: history.length,
+        traceReads: traceReadsAtMessage,
+        semanticReads: semanticReadsAtMessage,
+        admissionMs: Math.round(performance.now() - start),
+        startToBubbleMs: Math.round(messageAt - startAt),
+      });
+      unsubscribe();
+      release.resolve();
+      await done;
+      assert.equal(sampled, 1);
+      const snapshot = await server.readThread("history");
+      assert.deepEqual(
+        snapshot.itemList,
+        await journal.readItemList("history"),
+      );
+    } finally {
+      release.resolve();
+      await done?.catch(() => undefined);
+      await journal.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+  t.diagnostic(JSON.stringify(measurements));
+  assert.equal(
+    measurements[0]!.semanticReads - measurements[1]!.semanticReads,
+    2,
+  );
+  assert.equal(measurements[0]!.traceReads - measurements[1]!.traceReads, 2);
+});
