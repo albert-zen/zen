@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -108,23 +109,21 @@ async function harness(
       onRetryThreads: noop,
       onSelectThread: (id) => selected.push(id),
       pendingApprovalThreadIds: new Set<string>(),
-      pluginContributions: [
-        {
-          key: "rooms",
-          pluginId: "rooms",
-          id: "rooms",
-          label: "Rooms",
-          icon: "users",
-          pageId: "rooms",
-          page: {
-            pluginId: "rooms",
-            id: "rooms",
-            key: "rooms",
-            route: "rooms",
-            title: "Rooms",
-          },
+      pluginContributions: ["Automations", "Fleet"].map((label) => ({
+        key: label,
+        pluginId: label,
+        id: label,
+        label,
+        icon: "settings",
+        pageId: label,
+        page: {
+          pluginId: label,
+          id: label,
+          key: label,
+          route: label,
+          title: label,
         },
-      ],
+      })),
       projects: {
         projects: [
           {
@@ -446,6 +445,70 @@ test("per-child Sidebar preference filters ordinary and Pinned lists and ignores
       "child Pin preference survives hiding",
     );
   }, true);
+});
+
+test("New conversation and plugin actions precede Pinned, Projects and Recent", async () => {
+  await harness(async ({ remount }) => {
+    const assertNavigationOrder = () => {
+      const actions = [
+        ...document.querySelectorAll<HTMLButtonElement>(".plugin-space-link"),
+      ];
+      assert.deepEqual(
+        actions.map((action) => action.textContent),
+        ["Automations", "Fleet"],
+      );
+      const controls = [
+        button(".new-thread-action"),
+        ...actions,
+        button("#sidebar-pinned-heading"),
+        button("#sidebar-thread-list-heading"),
+        button("#sidebar-recent-heading"),
+      ];
+      for (let index = 1; index < controls.length; index++) {
+        assert.ok(
+          controls[index - 1]!.compareDocumentPosition(controls[index]!) &
+            window.Node.DOCUMENT_POSITION_FOLLOWING,
+          `${controls[index - 1]!.textContent} must precede ${controls[index]!.textContent}`,
+        );
+      }
+    };
+    assertNavigationOrder();
+    await click("#sidebar-pinned-heading");
+    await click("#sidebar-thread-list-heading");
+    await click("#sidebar-recent-heading");
+    assertNavigationOrder();
+    await remount();
+    assertNavigationOrder();
+  });
+});
+
+test("Pinned uses the same non-bold heading typography as Projects and Recent", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  await harness(async () => {
+    const style = document.createElement("style");
+    style.textContent = styles.replace(/^@import[^;]+;$/gmu, "");
+    document.head.append(style);
+    const headings = [
+      "#sidebar-pinned-heading",
+      "#sidebar-thread-list-heading",
+      "#sidebar-recent-heading",
+    ].map((selector) => {
+      const label = button(selector).querySelector("strong");
+      assert.ok(label);
+      const computed = window.getComputedStyle(label);
+      return {
+        weight: computed.fontWeight,
+        size: computed.fontSize,
+        color: computed.color,
+      };
+    });
+    assert.deepEqual(headings[0], headings[1]);
+    assert.deepEqual(headings[0], headings[2]);
+    assert.equal(headings[0]!.weight, "500");
+  });
 });
 
 test("Pinned, Projects and Recent are independent disclosures and Recent creates without a project", async () => {

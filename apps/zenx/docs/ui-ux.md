@@ -93,7 +93,7 @@ Thread
 
 ### Sidebar navigation sections
 
-全局新建会话入口保留在固定顶部。主滚动区按独立置顶、既有插件/Room 导航、项目、最近排列；置顶不再嵌在项目标题之下。置顶、项目、最近分别可折叠并保留本地展开偏好。项目内既有展开与排序保持不变，不引入自定义分区对象。无项目会话只在最近与可选置顶中导航，不在项目区增加“无项目”伪文件夹；其工作目录与会话详情不变。
+全局新建会话入口保留在固定顶部，紧随其后的插件入口共同构成操作区；主滚动区保留现有滚动方式，先显示插件入口，再进入展示区，依次为独立置顶、既有 PAW / Room 导航、项目、最近。置顶不能出现在插件入口上方，也不嵌在项目标题之下。置顶标题复用项目、最近、PAW 和 Room 标题的字号、字重与颜色，不单独加粗。置顶、项目、最近分别可折叠并保留本地展开偏好。项目内既有展开与排序保持不变，不引入自定义分区对象。无项目会话只在最近与可选置顶中导航，不在项目区增加“无项目”伪文件夹；其工作目录与会话详情不变。
 
 最近按现有 ThreadSummary 的 updatedAt 降序展示所有当前可见未归档会话（包含项目会话与无项目会话，子 Agent 仍遵循显式可见偏好）；它是同一会话的导航投影，不复制 Thread。首批显示 30 条，用户可连续展开更多。重复出现在置顶/项目/最近的行使用独立无障碍 ID；平台数字快捷键按可见顺序对同一 Thread 去重。
 
@@ -121,7 +121,7 @@ Thread
 - **Settings** 是左下常规导航 row，不是浮动齿轮 tile。
 - 插件只能使用受控导航 contribution slot；它们不能重排、隐藏或覆写 Inbox、New thread、Projects/Threads 或 Settings。
 
-New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视觉顺序仍可继续迭代，但全局入口与 Project 内入口的选择和创建语义已经确定。
+New thread 保留独立 row，插件入口紧随其后且位于置顶等展示区之前；全局入口与 Project 内入口的选择和创建语义保持不变。
 
 ### 3.3 Project 与 Thread 创建
 
@@ -403,6 +403,7 @@ ThreadView
 
 - [ ] 默认是 active Thread Sidebar + Chat 两栏；Inbox 只由品牌区 icon 切换。
 - [ ] Sidebar 无 Active/Archived segmented control；Archived Threads 只在 Settings 管理并可 Unarchive。
+- [ ] New thread 与其下方的插件入口构成操作区，随后才是置顶、PAW / Room、项目、最近展示区；置顶标题与其他区标题同样式、不单独加粗，折叠和重新打开后顺序不变。
 - [ ] 产品壳保留正式 ZenX logo/wordmark 位置；Thread Provider logo 不替代产品标识。
 - [ ] Add project 可发现、可聚焦并遵守 canonical cwd；New thread 在首次有效 Send 前不创建 Thread，且全局/Project 内入口遵守各自已确认的选择语义。
 - [ ] canonical cwd aliases 归一为一个 Project，同时保留稳定 display path。
