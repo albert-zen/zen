@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import { Dialog, Select } from "./ui/controls.js";
@@ -218,7 +219,7 @@ function OwnImSetup({
         if (mounted.current)
           setError({
             key: "imReadSettingsFailed",
-            detail: reason instanceof Error ? reason.message : String(reason),
+            detail: localErrorDetail(reason),
           });
       })
       .finally(() => {
@@ -319,19 +320,16 @@ function OwnImSetup({
           action === "save"
             ? {
                 key: "imChannelSaveFailed",
-                detail:
-                  reason instanceof Error ? reason.message : String(reason),
+                detail: localErrorDetail(reason),
               }
             : action === "runtime"
               ? {
                   key: "imRuntimePreparationFailed",
-                  detail:
-                    reason instanceof Error ? reason.message : String(reason),
+                  detail: localErrorDetail(reason),
                 }
               : {
                   key: "imReadSettingsFailed",
-                  detail:
-                    reason instanceof Error ? reason.message : String(reason),
+                  detail: localErrorDetail(reason),
                 },
         );
     } finally {

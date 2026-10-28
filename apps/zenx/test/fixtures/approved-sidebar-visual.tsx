@@ -24,6 +24,11 @@ void i18n.changeLanguage(lang);
 
 // Only this fixture's renderer-local preferences are reset. No Host is present.
 localStorage.setItem("zenx.sidebar.thread-density", "detailed");
+// This focused shortcut/status fixture compares exactly five Project rows.
+// Recent is independently covered by the navigation fixture; leave its real
+// disclosure present but collapsed so duplicate projections do not double the
+// readiness/status counts or silently turn screenshot checks into timeouts.
+localStorage.setItem("zenx.sidebar.expanded.recent", "false");
 for (const identity of ["projects", `project:${workspace}`]) {
   localStorage.removeItem(
     `zenx.sidebar.expanded.${encodeURIComponent(identity)}`,

@@ -98,6 +98,13 @@ test("the exact CI-generated approved UI HTML parses, boots and uses real modifi
           } else if (kind === "sidebar") {
             await waitFor(() => dom.window.__sidebarVisual?.ready);
             assert.equal(
+              document
+                .querySelector(".recent-section-toggle")
+                ?.getAttribute("aria-expanded"),
+              "false",
+              "focused row comparison keeps Recent explicitly collapsed",
+            );
+            assert.equal(
               document.querySelectorAll(".thread-row-shell").length,
               5,
             );

@@ -353,7 +353,10 @@ test("explicit runtime preparation copies the locked project, deduplicates calls
     assert.equal(failure.runtime.prepared, false);
     assert.match(failure.runtime.error!, /Runtime preparation failed/);
     assert.doesNotMatch(failure.runtime.error!, new RegExp(secret));
-    assert.equal(failure.runtime.errorDetail, secret);
+    assert.ok(failure.runtime.errorDetail?.includes(secret));
+    assert.ok(
+      failure.runtime.errorDetail?.includes("imzenx-setup-service.test"),
+    );
   } finally {
     await f.close();
   }

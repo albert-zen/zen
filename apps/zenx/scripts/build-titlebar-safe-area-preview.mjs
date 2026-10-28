@@ -53,6 +53,8 @@ const sources = [
   "src/renderer/src/Sidebar.tsx",
   "src/renderer/src/sidebar-expansion.ts",
   "src/renderer/src/auxiliary-panel.tsx",
+  "../../packages/zenx-subagents-plugin/src/manifest.ts",
+  "src/thread-sidebar-state.ts",
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",
   "scripts/titlebar-safe-area-preview.tsx",

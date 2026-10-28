@@ -158,11 +158,16 @@ for (const [code, key] of [
       );
     });
     const raw = await bridge.handler({}, "zen/thread/queue/edit", params);
-    assert.deepEqual(raw, {
-      type: "zenx.queue-edit-rejection.v1",
-      data: { zenCode: code },
-      message: "raw /Users/private/attachment.png secret=never-display",
-    });
+    assert.ok(typeof (raw as { detail?: string }).detail === "string");
+    assert.deepEqual(
+      { ...(raw as object), detail: undefined },
+      {
+        detail: undefined,
+        type: "zenx.queue-edit-rejection.v1",
+        data: { zenCode: code },
+        message: "raw /Users/private/attachment.png secret=never-display",
+      },
+    );
     assert(JSON.stringify(raw).includes("/Users/private/attachment.png"));
     calls.length = 0;
     await withBridge(bridge.request, async () => {

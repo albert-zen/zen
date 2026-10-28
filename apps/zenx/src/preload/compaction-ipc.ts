@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import type { ClientRequestResults } from "../protocol-client/types.js";
 
 const rejectionType = "zenx.compaction-rejection.v1";
@@ -5,6 +6,7 @@ const rejectionType = "zenx.compaction-rejection.v1";
 export interface CompactionIpcRejection {
   type: typeof rejectionType;
   message: string;
+  detail?: string;
   zenCode?: string;
 }
 export type CompactionIpcReply =
@@ -17,6 +19,7 @@ export function compactionIpcRejection(
   const code = record(value?.data)?.zenCode ?? value?.zenCode ?? value?.code;
   return {
     type: rejectionType,
+    detail: localErrorDetail(reason),
     message:
       typeof value?.message === "string"
         ? value.message
@@ -35,6 +38,7 @@ export function unwrapCompactionIpcReply(
     const failure = reply as CompactionIpcRejection;
     throw Object.assign(new Error(failure.message), {
       zenCode: failure.zenCode,
+      localDiagnosticDetail: failure.detail,
     });
   }
   if (

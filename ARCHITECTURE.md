@@ -1590,3 +1590,5 @@ Native App-current-focus keyboard input may reorder only target-application wind
 ### Local operation diagnostics
 
 ZenX compaction IPC carries a plain-data diagnostic rejection across Electron main/preload/contextBridge, then decodes it in the renderer; typed service codes preserve known pre-commit failures, while transport ambiguity remains unknown. This ephemeral reply is not a new persistent domain. Local error details are available to their owner as plain text; export cleaning is a separate boundary, not a reason to suppress local evidence. A successful commit followed by a failed view refresh remains a successful commit with a refresh diagnostic.
+
+本机错误详情投影 `localErrorDetail` 在 Electron 边界保留可用 stack/cause/聚合错误，遍历限制为 8 层、256 字段/对象与 64 Ki 字符并显式标记截断；它仅服务本机展开详情，不替代原始 Trace、不参与恢复判定或对外导出。

@@ -1897,154 +1897,262 @@ test("manually compacts long history without changing the complete transcript", 
   );
 });
 
-test("manual compaction uses the real Chat serializer and durable inputs, with no commit or retry on HTTP 400", async (t) => {
-  for (const fails of [false, true]) {
-    await t.test(
-      fails ? "provider rejection" : "compatible success",
-      async (t) => {
-        const directory = await mkdtemp(
-          path.join(os.tmpdir(), "zen-compaction-chat-"),
-        );
-        const trace = new FileTraceStore(path.join(directory, "trace"));
-        const journal = new DomainThreadJournal({
-          directory: path.join(directory, "threads"),
-          trace,
-          metadata: new InMemoryThreadMetadataStore(),
-        });
-        const itemListStore = new FileItemListStore(
-          path.join(directory, "auxiliary"),
-        );
-        t.after(async () => {
-          await closeModelTrace(trace);
-          await journal.close();
-          await rm(directory, { recursive: true, force: true });
-        });
-        const prompt = "Synthetic summary instruction";
-        const bodies: Array<{
-          messages: Array<{ role: string; content: unknown }>;
-        }> = [];
-        let summaryCalls = 0;
-        const adapter = new OpenAiCompatibleModel({
-          provider: "dashscope",
-          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          apiKey: "synthetic-compaction-key",
-          fetch: async (_url, init) => {
-            const body = JSON.parse(String(init?.body));
-            bodies.push(body);
-            assert(
-              body.messages.every((message: { role: string }) =>
-                ["system", "assistant", "user", "tool"].includes(message.role),
-              ),
-              "DashScope wire input must not contain developer messages",
-            );
-            const isSummary = body.messages.at(-1)?.content === prompt;
-            if (isSummary) {
-              summaryCalls++;
-              assert.equal(body.messages.at(-1)?.role, "system");
-              if (fails)
-                return new Response(
-                  JSON.stringify({
-                    error: {
-                      code: "invalid_parameter_error",
-                      message: "Synthetic unsupported parameter",
+test("Chat first turn, tool continuation and manual compaction use durable role-compatible inputs without retrying HTTP 400", async (t) => {
+  const targets = [
+    [
+      "dashscope",
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "deepseek-v4.1-flash-1017",
+    ],
+    [
+      "dashscope",
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "kimi-k3",
+    ],
+    ["deepseek", "https://api.deepseek.com/v1"],
+    ["siliconflow", "https://api.siliconflow.cn/v1"],
+    ["moonshot", "https://api.moonshot.cn/v1"],
+    ["zhipu", "https://open.bigmodel.cn/api/paas/v4"],
+  ] as const;
+  for (const [
+    provider,
+    baseUrl,
+    model = "deepseek-v4.1-flash-1017",
+  ] of targets) {
+    for (const fails of [false, true]) {
+      await t.test(
+        `${provider} ${model}: ${fails ? "provider rejection" : "compatible success"}`,
+        async (t) => {
+          const directory = await mkdtemp(
+            path.join(os.tmpdir(), "zen-compaction-chat-"),
+          );
+          const trace = new FileTraceStore(path.join(directory, "trace"));
+          const journal = new DomainThreadJournal({
+            directory: path.join(directory, "threads"),
+            trace,
+            metadata: new InMemoryThreadMetadataStore(),
+          });
+          const itemListStore = new FileItemListStore(
+            path.join(directory, "auxiliary"),
+          );
+          t.after(async () => {
+            await closeModelTrace(trace);
+            await journal.close();
+            await rm(directory, { recursive: true, force: true });
+          });
+          const prompt = "Synthetic summary instruction";
+          const bodies: Array<{
+            messages: Array<{ role: string; content: unknown }>;
+          }> = [];
+          let summaryCalls = 0;
+          const adapter = new OpenAiCompatibleModel({
+            provider,
+            baseUrl,
+            apiKey: "synthetic-compaction-key",
+            fetch: async (_url, init) => {
+              const body = JSON.parse(String(init?.body));
+              bodies.push(body);
+              assert(
+                body.messages.every((message: { role: string }) =>
+                  ["system", "assistant", "user", "tool"].includes(
+                    message.role,
+                  ),
+                ),
+                "Compatible wire input must not contain developer messages",
+              );
+              const isSummary = body.messages.at(-1)?.content === prompt;
+              if (isSummary) {
+                summaryCalls++;
+                assert.equal(body.messages.at(-1)?.role, "system");
+                if (fails)
+                  return new Response(
+                    JSON.stringify({
+                      error: {
+                        code: "invalid_parameter_error",
+                        message: "Synthetic unsupported parameter",
+                      },
+                    }),
+                    {
+                      status: 400,
+                      headers: { "content-type": "application/json" },
                     },
-                  }),
-                  {
-                    status: 400,
-                    headers: { "content-type": "application/json" },
-                  },
-                );
-            }
-            return new Response(
-              `data: ${JSON.stringify({
-                choices: [
-                  {
-                    index: 0,
-                    delta: {
-                      content: isSummary
-                        ? "Synthetic summary"
-                        : "Synthetic answer",
+                  );
+              }
+              const firstTurn = bodies.length === 1;
+              return new Response(
+                `data: ${JSON.stringify({
+                  choices: [
+                    {
+                      index: 0,
+                      delta: firstTurn
+                        ? {
+                            tool_calls: [
+                              {
+                                index: 0,
+                                id: "synthetic-call",
+                                type: "function",
+                                function: {
+                                  name: "fixture_echo",
+                                  arguments: JSON.stringify({
+                                    value: "synthetic-tool-result",
+                                  }),
+                                },
+                              },
+                            ],
+                          }
+                        : {
+                            content: isSummary
+                              ? "Synthetic summary"
+                              : "Synthetic answer",
+                          },
+                      finish_reason: firstTurn ? "tool_calls" : "stop",
                     },
-                    finish_reason: "stop",
-                  },
-                ],
-              })}\n\ndata: [DONE]\n\n`,
-              {
-                headers: { "content-type": "text/event-stream" },
+                  ],
+                })}\n\ndata: [DONE]\n\n`,
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              );
+            },
+          });
+          let toolExecutions = 0;
+          // This regression exercises the actual tool dispatch and continuation,
+          // not platform-specific shell sandbox setup on CI runners.
+          const environment = new ToolEnvironment();
+          environment.registerRuntime(
+            {
+              name: "fixture_echo",
+              enforcesSandbox: true, // Pure in-memory builtin; no filesystem effects.
+              specification: {
+                name: "fixture_echo",
+                description: "Synthetic echo",
+                inputSchema: {
+                  type: "object",
+                  properties: { value: { type: "string" } },
+                  required: ["value"],
+                },
               },
-            );
-          },
-        });
-        const server = createServer({
-          journal,
-          model: adapter,
-          modelCatalog: new StaticModelCatalog([
-            { id: "kimi-k3", isDefault: true, contextWindow: 32768 },
-          ]),
-          auxiliaryModel: { trace, itemListStore },
-          contextCompaction: { summaryInstruction: prompt },
-        });
-        const thread = await server.startThread({ sandbox: "read-only" });
-        await (
-          await server.startTurn(thread.id, "Synthetic original request")
-        ).done;
-        const before = await journal.read(thread.id);
-        if (fails) {
-          await assert.rejects(
-            server.compactThread(thread.id),
-            (error: unknown) =>
-              error instanceof AppServerError &&
-              error.code === "compaction_generation_failed" &&
-              error.message.includes("HTTP 400"),
+              execute: async (invocation) => {
+                toolExecutions++;
+                assert.equal(
+                  invocation.arguments.value,
+                  "synthetic-tool-result",
+                );
+                return { output: "synthetic-tool-result", exitCode: 0 };
+              },
+            },
+            { kind: "builtin", id: "fixture" },
           );
-          assert.deepEqual(await journal.read(thread.id), before);
-        } else {
-          await server.compactThread(thread.id);
-          const after = await journal.read(thread.id);
+          const server = createServer({
+            runtime: new HistoryBudgetRuntime({ toolEnvironment: environment }),
+            journal,
+            model: adapter,
+            modelCatalog: new StaticModelCatalog([
+              {
+                id: model,
+                isDefault: true,
+                contextWindow: 32768,
+              },
+            ]),
+            auxiliaryModel: { trace, itemListStore },
+            contextCompaction: { summaryInstruction: prompt },
+          });
+          const thread = await server.startThread({ sandbox: "read-only" });
+          await (
+            await server.startTurn(thread.id, "hi")
+          ).done;
+          assert.equal(toolExecutions, 1, "the real tool body executes once");
           assert.equal(
-            after.filter((item) => item.type === "context_compaction").length,
-            1,
+            bodies.length,
+            2,
+            "one first request and one tool-result continuation",
           );
-          assert.deepEqual(after.slice(0, before.length), before);
-        }
-        assert.equal(summaryCalls, 1, "a rejected compaction is not retried");
-        const owners = await itemListStore.listThreadIds();
-        assert.equal(owners.length, 1);
-        const bundle = await itemListStore.read(owners[0]!);
-        const compiled = compileItemList(bundle);
-        assert.deepEqual(compiled.messages.at(-1), {
-          role: "developer",
-          text: prompt,
-        });
-        assert(
-          compiled.messages.filter((message) => message.role === "developer")
-            .length >= 2,
-          "permission and summary instructions both require projection",
-        );
-        await closeModelTrace(trace);
-        const records = (await trace.read(owners[0]!)).records;
-        const requestRecord = records.find(
-          (record) => record.type === "model_request",
-        );
-        assert(requestRecord !== undefined);
-        const savedBody = JSON.parse(
-          Buffer.from(
-            await trace.readArtifact(requestRecord.artifacts[0]!.ref),
-          ).toString(),
-        );
-        const sentBody = bodies.at(-1);
-        assert(sentBody !== undefined);
-        assert.deepEqual(
-          savedBody,
-          sentBody,
-          "Trace saves the actual adapted wire input",
-        );
-        assert.deepEqual(savedBody.messages.at(-1), {
-          role: "system",
-          content: prompt,
-        });
-      },
-    );
+          assert(
+            bodies[0]!.messages.some((message) => message.role === "system"),
+          );
+          assert(
+            bodies[0]!.messages.some(
+              (message) =>
+                message.role === "user" &&
+                JSON.stringify(message.content).includes("hi"),
+            ),
+          );
+          const toolResult = bodies[1]!.messages.find(
+            (message) => message.role === "tool",
+          );
+          assert(
+            toolResult !== undefined,
+            "the continuation includes the tool result",
+          );
+          assert(
+            JSON.stringify(toolResult.content).includes(
+              "synthetic-tool-result",
+            ),
+            "the tool actually ran",
+          );
+          const before = await journal.read(thread.id);
+          if (fails) {
+            await assert.rejects(
+              server.compactThread(thread.id),
+              (error: unknown) =>
+                error instanceof AppServerError &&
+                error.code === "compaction_generation_failed" &&
+                error.message.includes("HTTP 400"),
+            );
+            assert.deepEqual(await journal.read(thread.id), before);
+          } else {
+            await server.compactThread(thread.id);
+            const after = await journal.read(thread.id);
+            assert.equal(
+              after.filter((item) => item.type === "context_compaction").length,
+              1,
+            );
+            assert.deepEqual(after.slice(0, before.length), before);
+          }
+          assert.equal(
+            bodies.length,
+            3,
+            "no duplicate first, continuation, or summary request",
+          );
+          assert.equal(summaryCalls, 1, "a rejected compaction is not retried");
+          const owners = await itemListStore.listThreadIds();
+          assert.equal(owners.length, 1);
+          const bundle = await itemListStore.read(owners[0]!);
+          const compiled = compileItemList(bundle);
+          assert.deepEqual(compiled.messages.at(-1), {
+            role: "developer",
+            text: prompt,
+          });
+          assert(
+            compiled.messages.filter((message) => message.role === "developer")
+              .length >= 2,
+            "permission and summary instructions both require projection",
+          );
+          await closeModelTrace(trace);
+          const records = (await trace.read(owners[0]!)).records;
+          const requestRecord = records.find(
+            (record) => record.type === "model_request",
+          );
+          assert(requestRecord !== undefined);
+          const savedBody = JSON.parse(
+            Buffer.from(
+              await trace.readArtifact(requestRecord.artifacts[0]!.ref),
+            ).toString(),
+          );
+          const sentBody = bodies.at(-1);
+          assert(sentBody !== undefined);
+          assert.deepEqual(
+            savedBody,
+            sentBody,
+            "Trace saves the actual adapted wire input",
+          );
+          assert.deepEqual(savedBody.messages.at(-1), {
+            role: "system",
+            content: prompt,
+          });
+        },
+      );
+    }
   }
 });
 

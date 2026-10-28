@@ -1,10 +1,16 @@
 /** Real titlebar and auxiliary tabs; all content and native dots are synthetic. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { WindowTitleBar } from "../src/renderer/src/App.js";
 import { Sidebar } from "../src/renderer/src/Sidebar.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
+import { subagentsManifest } from "../../../packages/zenx-subagents-plugin/src/manifest.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
+import {
+  sidebarTabFromId,
+  type ThreadSidebarState,
+} from "../src/thread-sidebar-state.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
@@ -13,7 +19,39 @@ const platform = query.get("platform") ?? "darwin";
 document.documentElement.dataset.platform = platform;
 document.documentElement.dataset.appearance = query.get("theme") ?? "light";
 document.documentElement.dataset.themePreset = "graphite";
-Object.assign(window, { zenx: { platform } });
+Object.assign(window, {
+  zenx: {
+    platform,
+    plugins: {
+      executeCommand: async () => {
+        throw new Error("Synthetic preview has no Host");
+      },
+      readHandle: async () => {
+        throw new Error("Synthetic preview has no Host");
+      },
+    },
+  },
+});
+const realSubject = query.get("subject") === "plugin";
+// Use the bundled manifest contribution, not a custom tab with an assigned icon.
+// Bundle execution is intentionally absent: this fixture exercises shell chrome only.
+const subjectSnapshot: ZenXPluginSnapshot = {
+  plugins: [],
+  bundles: [],
+  surfaces: [],
+  sidebar: [],
+  pages: [],
+  subroutes: [],
+  settings: [],
+  commands: [],
+  menus: [],
+  panels: subagentsManifest.contributions.panels.map((panel) => ({
+    ...panel,
+    pluginId: subagentsManifest.id,
+    key: `${subagentsManifest.id}:${panel.id}`,
+  })),
+};
+const subjectId = `plugin:${subjectSnapshot.panels[0]!.key}`;
 void i18n.changeLanguage(query.get("lang") ?? "en");
 const overflowLabels = [
   "app.ts",
@@ -78,8 +116,43 @@ function Preview() {
   const [collapsed, setCollapsed] = useState(query.get("sidebar") !== "open");
   const [open, setOpen] = useState(true);
   const [width, setWidth] = useState(0);
-  const [selected, setSelected] = useState("custom:synthetic-0");
-  const [tabs, setTabs] = useState(customTabs.map((tab) => `custom:${tab.id}`));
+  const widthTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportWidth = useCallback((value: number) => {
+    if (widthTimer.current) clearTimeout(widthTimer.current);
+    const delay = Math.min(
+      60000,
+      Math.max(0, Number(query.get("widthDelay")) || 0),
+    );
+    if (delay) widthTimer.current = setTimeout(() => setWidth(value), delay);
+    else setWidth(value);
+  }, []);
+  useEffect(
+    () => () => {
+      if (widthTimer.current) clearTimeout(widthTimer.current);
+    },
+    [],
+  );
+  const [selected, setSelected] = useState(
+    realSubject ? subjectId : "custom:synthetic-0",
+  );
+  const fixtureTabs = realSubject ? customTabs.slice(1) : customTabs;
+  const [tabs, setTabs] = useState([
+    ...(realSubject ? [subjectId] : []),
+    ...fixtureTabs.map((tab) => `custom:${tab.id}`),
+  ]);
+  const [fullscreen, setFullscreen] = useState(false);
+  const presentation: ThreadSidebarState | undefined =
+    query.get("state") === "durable"
+      ? {
+          owner: { kind: "thread", id: "synthetic-safe-area-thread" },
+          revision: 1,
+          open,
+          fullscreen,
+          selectedTab: selected,
+          resourceThreadId: "synthetic-safe-area-thread",
+          tabs: tabs.map(sidebarTabFromId).filter((tab) => tab !== null),
+        }
+      : undefined;
   useEffect(() => {
     Object.assign(window, {
       __titlebarPreview: { setCollapsed, setSelected, setTabs },
@@ -199,13 +272,15 @@ function Preview() {
           title="Synthetic workspace"
           open={open}
           onOpenChange={setOpen}
-          onWidthChange={setWidth}
-          snapshot={null}
+          onWidthChange={reportWidth}
+          snapshot={realSubject ? subjectSnapshot : null}
+          presentationState={presentation}
+          onFullscreenChange={presentation ? setFullscreen : undefined}
           selectedTab={selected}
           onSelectTab={setSelected}
           openedTabs={tabs}
           onTabsChange={setTabs}
-          customTabs={customTabs}
+          customTabs={fixtureTabs}
         />
       </main>
     </div>

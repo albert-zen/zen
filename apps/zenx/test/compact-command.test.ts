@@ -271,5 +271,5 @@ test("a failed view refresh cannot turn a committed compaction into an unknown o
   assert.equal(calls, 1);
   assert.equal(state.compaction?.status, "succeeded");
   assert.match(state.compaction.message, /compacted.*could not refresh/u);
-  assert.equal(state.compaction.detail, "Snapshot connection closed");
+  assert.ok(state.compaction.detail?.includes("Snapshot connection closed"));
 });

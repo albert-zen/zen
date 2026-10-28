@@ -3,7 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { ThreadSummary } from "../../../src/thread-summary.js";
 import type { ZenXSidebarOrder } from "../src/main/host-profile.js";
 
 Object.assign(globalThis, { React });
@@ -11,7 +11,7 @@ const { Sidebar } = await import("../src/renderer/src/Sidebar.js");
 const { act, createElement, useState } = React;
 const noop = () => undefined;
 
-function summary(id: string, cwd: string): NativeThreadSummary {
+function summary(id: string, cwd: string): ThreadSummary {
   return {
     threadId: id,
     name: id,
@@ -144,6 +144,10 @@ async function harness(
             threadIds: ["Beta", "Child", "Independent fork"],
           },
         ],
+        projectlessThreadIds: Array.from(
+          { length: extraRecent },
+          (_, index) => `Recent ${index}`,
+        ),
         unavailableThreadIds: [],
         lastUsedWorkspace: "/b",
       },
@@ -513,6 +517,16 @@ test("Recent sorts all visible conversations by activity and reveals more withou
             ".recent-thread-group [data-thread-id]",
           ),
         ].map((row) => row.dataset.threadId);
+      assert.equal(
+        document.querySelector('[data-project-key="__projectless__"]'),
+        null,
+        "No project must not become a fake project folder",
+      );
+      assert.equal(
+        document.querySelectorAll("[data-project-key]").length,
+        2,
+        "real project groups are retained",
+      );
       assert.equal(recentIds().length, 30);
       assert.equal(recentIds()[0], "Recent 39");
       assert.equal(recentIds()[29], "Recent 10");

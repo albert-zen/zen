@@ -1336,7 +1336,6 @@ function ProjectsView({
   );
   if (
     projects.projects.length === 0 &&
-    (projects.projectlessThreadIds?.length ?? 0) === 0 &&
     projects.unavailableThreadIds.length === 0
   ) {
     return (
@@ -1347,7 +1346,11 @@ function ProjectsView({
       </div>
     );
   }
-  const groups = deriveProjectGroups(threads, projects, sidebarOrder);
+  // Projectless conversations belong to Recent (and optionally Pinned), not
+  // a synthetic project folder. Keep the Host projection unchanged.
+  const groups = deriveProjectGroups(threads, projects, sidebarOrder).filter(
+    (group) => group.key !== "__projectless__",
+  );
   return groups.map((group, projectIndex) => (
     <ProjectRows
       pinnedProject={

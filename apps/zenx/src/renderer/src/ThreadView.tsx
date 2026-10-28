@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import {
   observeSendActivation,
   reportSendActivation,
@@ -4335,6 +4336,6 @@ function describeError(error: unknown): string {
 
 function errorCauseDetail(error: unknown): string | undefined {
   if (error instanceof Error && error.cause !== undefined)
-    return describeError(error.cause);
+    return localErrorDetail(error.cause);
   return undefined;
 }

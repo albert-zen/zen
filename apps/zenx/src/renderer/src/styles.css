@@ -8191,6 +8191,17 @@ button:disabled {
     min-width: var(--native-leading-safe-area);
     padding-right: 0;
   }
+  /* Fullscreen starts at the actual animated Sidebar grid boundary. Never
+     let a delayed ResizeObserver width leave the z-index 50 titlebar covering
+     the workspace tabs. The zero-width collapsed column still reserves native
+     controls through min-width; narrow/non-mac title rows remain independent. */
+  :root[data-platform="darwin"]
+    .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
+    > .window-titlebar {
+    grid-column: 1;
+    width: auto;
+    min-width: var(--native-leading-safe-area);
+  }
   /* The native controls own the leading viewport strip, independent of the
      Sidebar and tab order. A right-aligned panel can enter that strip while
      expanding or while the Sidebar animates; reserve only the intersecting

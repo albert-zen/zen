@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import { i18n } from "./i18n.js";
 import type { ComposerState } from "./composer-state.js";
 
@@ -186,17 +187,5 @@ function compactError(reason: unknown): { message: string; detail: string } {
 }
 
 function localErrorText(reason: unknown): string {
-  if (
-    reason !== null &&
-    typeof reason === "object" &&
-    "message" in reason &&
-    typeof reason.message === "string"
-  )
-    return reason.message;
-  if (typeof reason === "string") return reason;
-  try {
-    return JSON.stringify(reason, null, 2) ?? String(reason);
-  } catch {
-    return String(reason);
-  }
+  return localErrorDetail(reason);
 }

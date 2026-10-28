@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   cp,
@@ -233,7 +234,7 @@ export class ImZenXSetupService {
               this.#encryption.isEncryptionAvailable()
                 ? "IM channel could not be saved. Check the selected fields and try again. No connection was started."
                 : "Operating-system credential encryption is unavailable. Unlock the system keychain before saving IM credentials. No plaintext fallback is used.",
-              error instanceof Error ? error.message : String(error),
+              localErrorDetail(error),
             ].join("\n"),
           );
         }
@@ -348,8 +349,7 @@ export class ImZenXSetupService {
           );
         }
       } catch (error) {
-        this.#runtimeErrorDetail =
-          error instanceof Error ? error.message : String(error);
+        this.#runtimeErrorDetail = localErrorDetail(error);
         this.#runtimeBlocked = error instanceof ImRuntimeSetupOwnershipError;
         this.#runtimeError = this.#runtimeBlocked
           ? "IM setup process termination could not be confirmed. Further setup is blocked. Stop the remaining IM setup processes using your operating system, then restart ZenX. No IM connection was started."
@@ -408,7 +408,7 @@ export class ImZenXSetupService {
     try {
       runtime = await this.#runtimeLocation();
     } catch (error) {
-      runtimeReadError = error instanceof Error ? error.message : String(error);
+      runtimeReadError = localErrorDetail(error);
     }
     const channels = await Promise.all(
       IM_CHANNEL_SCHEMAS.map(async (schema) => {
@@ -498,7 +498,7 @@ export class ImZenXSetupService {
       throw new Error(
         [
           "Encrypted IM configuration could not be read.",
-          error instanceof Error ? error.message : String(error),
+          localErrorDetail(error),
         ].join("\n"),
       );
     }

@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import type { CompactionIpcReply } from "./compaction-ipc.js";
 import type {
   NativeQueueSteerResult,
@@ -39,6 +40,7 @@ export interface QueueEditIpcRejection {
   type: typeof rejectionType;
   data: { zenCode: string };
   message?: string;
+  detail?: string;
 }
 export type QueueEditIpcReply = NativeQueueEditResult | QueueEditIpcRejection;
 export type ProtocolIpcResult<M extends ClientRequestMethod> =
@@ -59,6 +61,7 @@ export function queueEditIpcRejection(
     ? {
         type: rejectionType,
         data: { zenCode: code },
+        detail: localErrorDetail(error),
         ...(isRecord(error) && typeof error.message === "string"
           ? { message: error.message }
           : {}),
@@ -84,6 +87,7 @@ export function unwrapQueueMutationIpcReply<
       new Error(safe.message ?? "Queued message operation was rejected."),
       {
         data: safe.data,
+        localDiagnosticDetail: reply.detail,
       },
     );
   }
