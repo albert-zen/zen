@@ -5,21 +5,15 @@ import type {
   OriginalHistoryPage,
   PublicHistoryItem,
 } from "../../../../../src/thread-history.js";
-import { originalItemListReference } from "../../../../../src/context-compaction.js";
 import { i18n } from "./i18n.js";
 
 type Scope = { threadId: string; throughItemId: string };
 type ItemPage = Extract<OriginalHistoryPage, { granularity: "items" }>;
 type DetailPage = Extract<OriginalHistoryPage, { granularity: "item" }>;
 
-/** An on-demand public journal projection, never a cached transcript authority. */
-export function OriginalHistoryReference({
-  item,
-}: {
-  item: ContextCompactionItem;
-}) {
+/** Mounted only for the selected view; unmount discards late read results. */
+export function OriginalHistory({ item }: { item: ContextCompactionItem }) {
   useTranslation("shell");
-  const [open, setOpen] = useState(false);
   if (item.includeOriginalReference !== true)
     return (
       <p className="original-history-unavailable">
@@ -27,25 +21,11 @@ export function OriginalHistoryReference({
       </p>
     );
   return (
-    <div className="original-history-reference">
-      <button
-        className="quiet-button original-history-open"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        {i18n.t(
-          open ? "shell:closeOriginalHistory" : "shell:viewOriginalHistory",
-        )}
-      </button>
-      {open ? (
-        <OriginalHistoryReader
-          key={`${item.threadId}:${item.id}:${item.coveredThroughItemId}`}
-          threadId={item.threadId}
-          throughItemId={item.coveredThroughItemId}
-        />
-      ) : null}
-    </div>
+    <OriginalHistoryReader
+      key={`${item.threadId}:${item.id}:${item.coveredThroughItemId}`}
+      threadId={item.threadId}
+      throughItemId={item.coveredThroughItemId}
+    />
   );
 }
 
@@ -98,14 +78,7 @@ function OriginalHistoryReader(scope: Scope) {
       aria-label={i18n.t("shell:originalHistory")}
       aria-busy={loading}
     >
-      <h3>{i18n.t("shell:originalHistory")}</h3>
       <p>{i18n.t("shell:originalHistoryExplanation")}</p>
-      <details className="original-history-locator">
-        <summary>{i18n.t("shell:logicalReference")}</summary>
-        <code>
-          {originalItemListReference(scope.threadId, scope.throughItemId)}
-        </code>
-      </details>
       {loading ? (
         <p role="status">{i18n.t("shell:loadingOriginalHistory")}</p>
       ) : null}

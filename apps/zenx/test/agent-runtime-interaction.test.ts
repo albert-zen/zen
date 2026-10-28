@@ -86,7 +86,7 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(document.querySelector(".trace-activity-title"), title);
     assert.equal(document.querySelector(".turn-running-label"), metadata);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
-    assert.equal(title.textContent, "Run command ×1 · Inspect page ×1");
+    assert.equal(title.textContent, "Inspected page and ran a command");
     assert.equal(title.getAttribute("title"), title.textContent);
     assert.equal(
       title.querySelector(".activity-text")?.getAttribute("data-active"),
@@ -121,7 +121,7 @@ test("returned wait and approval retain static metadata rather than duplicate ac
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
-      "Wait for task ×1 · Run command ×1",
+      "Ran a command and waited for task",
     );
     await h.render(
       runtimeThread([

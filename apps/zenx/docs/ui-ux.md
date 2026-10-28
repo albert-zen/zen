@@ -489,7 +489,7 @@ ThreadView
 - 插件与内建功能入口平级，长插件导航在自身区域滚动。会话标题与可操作状态优先，模型元信息按需查看。右栏的平级内容 tabs 不改变实例/草稿/执行生命周期；新建页解释每种内容的用途。
 - 设置保存栏与滚动内容分区；任意设置页存在未保存 Host 草稿时都保留保存入口。离开设置再返回保留草稿；异步保存不覆盖保存开始后继续编辑的值。Appearance 仍即时生效，Host 设置显式 Apply；错误保留草稿并允许重试。Uninstall 位于更多动作，保留数据；永久数据删除在同一菜单的独立危险分区，禁用前不可用，并有独立确认。
 - 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
-- 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
+- 每次压缩只从 canonical compaction 派生一条完成行：压缩状态、发起者与唯一展开入口，不再附加第二行“查看原始历史”。展开后以并列、键盘可切换的“保留的上下文 / 原始历史 / 诊断信息”视图组织内容，不叠加同义 disclosure。“保留的上下文”默认呈现可选取和复制的 Markdown 摘要、摘要字符数与“完整输入占用未知”，并说明保留原始 Items 数量、时点与后续增长；字符不是 tokens。“原始历史”保留准确范围、分页与完整原始条目读取；“诊断信息”独立呈现真实 Core 消息投影、逻辑引用与 canonical 压缩记录。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
 - `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。
 
 ## Room 与 Thread 的共享输入体验
@@ -616,7 +616,7 @@ Reuse the shared switch visual and native hover title; the stable accessible lab
 
 ### Original history after compaction
 
-Each compaction with an enabled original reference offers “View original history” directly on its event. The inline reader shows the logical locator and exact canonical cutoff, pages the existing public journal projection, and offers explicit full-Item chunk reads. Disabled or legacy references have no lookup action; unavailable targets and failures remain visible with an explicit retry. Closing, changing compaction or navigating away discards pending display results without changing the journal or current conversation.
+Each compaction has one collapsed event and one disclosure. Its Original history peer view mounts the inline reader on demand, pages the existing public journal projection at the exact canonical cutoff, and offers explicit full-Item chunk reads. The logical locator and canonical record belong to the Diagnostics peer view, not another nested disclosure. Disabled or legacy references show an explicit unavailable explanation without a lookup action; unavailable targets and failures remain visible with an explicit retry. Closing, switching views, changing compaction or navigating away discards pending display results without changing the journal or current conversation.
 
 ### Message-level Fork
 

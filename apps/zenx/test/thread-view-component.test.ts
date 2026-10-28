@@ -813,17 +813,19 @@ test("compaction progress is a transcript item and completed items reveal exact 
         "workflow-status",
       ),
     );
-    assert.match(event.textContent ?? "", /Keep this request/u);
-    assert.match(event.textContent ?? "", /Kept answer/u);
+    assert.doesNotMatch(event.textContent ?? "", /Keep this request/u);
+    assert.doesNotMatch(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
     );
-    assert.equal(
-      requiredElement(".compaction-projection").hasAttribute("open"),
-      false,
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
+    assert.equal(requiredElement(".compaction-projection").tagName, "DIV");
+    assert.match(event.textContent ?? "", /Keep this request/u);
+    assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /not tokens/u);
     assert.match(
       event.textContent ?? "",
@@ -925,6 +927,9 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
         requiredElement(".compaction-summary").textContent ?? "",
         /Continue with the accepted plan/u,
       );
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
+      );
       const diagnostics = requiredElement(".compaction-projection");
       assert.match(diagnostics.textContent ?? "", /unavailable/u);
       assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
@@ -958,6 +963,10 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
       await renderView(partial);
       await act(async () =>
         requiredButton(".context-compaction-toggle").click(),
+      );
+
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
       );
 
       // A later authoritative read restores exact diagnostics, with no invented context while waiting.
@@ -1014,6 +1023,9 @@ test("compaction with a present boundary but missing retained items keeps its su
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
+    );
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
     assert.match(
       requiredElement(".compaction-projection").textContent ?? "",

@@ -15,7 +15,8 @@ import {
   parseSentReferenceContent,
   type SentMessageQuote,
 } from "./reference-draft.js";
-import { OriginalHistoryReference } from "./OriginalHistory.js";
+import { ContextCompactionEvent } from "./ContextCompactionEvent.js";
+export { ContextCompactionEvent } from "./ContextCompactionEvent.js";
 import { ThreadDebugger } from "./ThreadDebugger.js";
 import {
   MessageSourceLink,
@@ -125,7 +126,6 @@ import {
 } from "./queued-message-images.js";
 import { PermissionSelect } from "./PermissionSelect.js";
 import type { FilePermissionMode } from "../../protocol-client/types.js";
-import type { ModelMessage } from "../../../../../src/model.js";
 import { Markdown, MessageLinkContext } from "./Markdown.js";
 import {
   AttachmentImage,
@@ -155,7 +155,6 @@ import type { WorkflowCommand } from "./workflow-commands.js";
 import { useComposerSelector } from "./use-composer-selector.js";
 import { Dialog } from "./ui/controls.js";
 import {
-  compactionInitiatorLabel,
   projectContextCompactions,
   type ContextCompactionProjection,
 } from "./context-compaction-projection.js";
@@ -2281,132 +2280,6 @@ function ContextCompactionProgress({
       ) : null}
     </div>
   );
-}
-
-export function ContextCompactionEvent({
-  projection,
-}: {
-  projection: ContextCompactionProjection;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const { item, effectiveMessages } = projection;
-  const [copyState, setCopyState] = useState("");
-  const detailId = useId();
-  return (
-    <section
-      className="context-compaction-event"
-      aria-label={i18n.t("shell:contextCompacted")}
-    >
-      <button
-        className="context-compaction-toggle workflow-status"
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={detailId}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="context-compaction-mark" aria-hidden="true">
-          <Icon name="compress" size={14} />
-        </span>
-        <span className="context-compaction-label">
-          <strong>{i18n.t("shell:contextCompacted")}</strong>
-          <small>{compactionInitiatorLabel(item)}</small>
-        </span>
-        <Icon name="chevron-down" size={13} />
-      </button>
-      <OriginalHistoryReference key={item.id} item={item} />
-      {expanded ? (
-        <div className="context-compaction-detail" id={detailId}>
-          <p className="context-compaction-metadata">
-            {i18n.t("shell:summaryCharacters", {
-              count: new Intl.NumberFormat(i18n.resolvedLanguage).format(
-                Array.from(item.summary).length,
-              ),
-            })}
-          </p>
-          <div className="compaction-summary-heading">
-            <h3>{i18n.t("shell:savedSummary")}</h3>
-            <button
-              type="button"
-              className="quiet-button"
-              onClick={() => {
-                void navigator.clipboard.writeText(item.summary).then(
-                  () => setCopyState(i18n.t("shell:summaryCopied")),
-                  () =>
-                    setCopyState(
-                      i18n.t("shell:couldNotCopySelectTheSummaryTextToCopyIt"),
-                    ),
-                );
-              }}
-            >
-              {i18n.t("shell:copySummary")}
-            </button>
-          </div>
-          <span role="status">{copyState}</span>
-          <div className="compaction-summary">
-            <Markdown text={item.summary} />
-          </div>
-          <p>
-            {i18n.t("shell:retainedItemsDetail", {
-              count: item.retainedItemIds.length,
-            })}
-          </p>
-          <details className="compaction-projection">
-            <summary>{i18n.t("shell:retainedContextAndDiagnostics")}</summary>
-            {effectiveMessages === null ? (
-              <p role="status">
-                {i18n.t("shell:retainedContextUnavailable")}
-                {projection.snapshotError
-                  ? ` ${projection.snapshotError}`
-                  : null}
-              </p>
-            ) : (
-              <>
-                <p>
-                  {i18n.t("shell:projectedHistoryDetail", {
-                    count: effectiveMessages.length,
-                  })}
-                </p>
-                <ol>
-                  {effectiveMessages.map((message, index) => (
-                    <li key={`${item.id}:${String(index)}`}>
-                      <span>{modelMessageRole(message)}</span>
-                      <pre>{formatModelMessage(message)}</pre>
-                    </li>
-                  ))}
-                </ol>
-              </>
-            )}
-          </details>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function modelMessageRole(message: ModelMessage): string {
-  if (message.role === "tool") return i18n.t("shell:tool");
-  if (message.role === "reasoning") return i18n.t("shell:reasoning");
-  return message.role === "assistant"
-    ? i18n.t("shell:assistant")
-    : i18n.t("shell:user");
-}
-
-function formatModelMessage(message: ModelMessage): string {
-  if (message.role === "reasoning") {
-    return [message.summary, message.reasoningContent]
-      .filter((part): part is string => part !== undefined && part.length > 0)
-      .join("\n");
-  }
-  if (message.role === "tool") {
-    return message.modelContent === undefined
-      ? message.text
-      : `${message.text}\n${JSON.stringify(message.modelContent, null, 2)}`;
-  }
-  if ("content" in message) return JSON.stringify(message.content, null, 2);
-  if ("toolCalls" in message) {
-    return `${message.text ?? ""}\n${JSON.stringify(message.toolCalls, null, 2)}`.trim();
-  }
-  return message.text;
 }
 
 function TraceCounts({

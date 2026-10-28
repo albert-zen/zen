@@ -187,3 +187,26 @@ test("Chinese templates combine context boundaries and recent observations witho
     await i18n.changeLanguage("en");
   }
 });
+
+test("Object prototype names remain unknown capabilities in either summary position", () => {
+  for (const key of Object.getOwnPropertyNames(Object.prototype)) {
+    for (const name of [key, `zenx_${key}`]) {
+      const unknown = call("unknown", name);
+      const image = call("image", "view_image");
+      assert.equal(
+        traceSummary([unknown, image]),
+        `Viewed images and called ${name}`,
+        `${name} before a known capability`,
+      );
+      assert.equal(
+        traceSummary([image, unknown]),
+        `Called ${name} and viewed images`,
+        `${name} after a known capability`,
+      );
+      assert.deepEqual(traceGroupIcons([unknown, image]), [
+        "terminal",
+        "image",
+      ]);
+    }
+  }
+});

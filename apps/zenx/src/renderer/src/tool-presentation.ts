@@ -269,7 +269,7 @@ export function toolPresentation(name: string): {
       action: threadAction.action,
       completedAction: threadAction.completed,
     };
-  const action = actions()[key];
+  const action = Object.hasOwn(actions(), key) ? actions()[key] : undefined;
   if (action)
     return {
       category: key.startsWith("browser_")
@@ -281,7 +281,9 @@ export function toolPresentation(name: string): {
         : i18n.t("shell:computer"),
       icon: key.startsWith("browser_") ? "browser" : "computer",
       action,
-      completedAction: completedActions()[key],
+      completedAction: Object.hasOwn(completedActions(), key)
+        ? completedActions()[key]
+        : undefined,
     };
   return {
     category: name === "run_code" ? i18n.t("shell:code") : i18n.t("shell:tool"),
