@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import { randomUUID } from "node:crypto";
 import {
   credentialStorageFailureMessages,
@@ -46,12 +47,14 @@ export type ProviderMutationReply<T> =
       settings: T;
       outcome: "success" | "unconfirmed";
       attemptId: string;
+      detail?: string;
     }
   | {
       ok: false;
       outcome: Exclude<ProviderSaveOutcome, "success">;
       code: ProviderMutationFailureCode;
       attemptId: string;
+      detail?: string;
     };
 
 export type SettingsDiagnosticEvent =
@@ -65,6 +68,7 @@ export type SettingsDiagnosticEvent =
   | {
       event: "provider-save-outcome";
       attemptId: string;
+      detail?: string;
       operation: ProviderOperation;
       outcome: ProviderSaveOutcome;
       code?: ProviderMutationFailureCode;
@@ -92,7 +96,8 @@ const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 // Never serialize a renderer object directly: it may contain keys, URLs,
-// profile/model identifiers, error text, or unexpected enumerable properties.
+// profile/model identifiers or unexpected enumerable properties. Host outcomes may
+// additionally carry the bounded owner-readable diagnostic projection.
 export function normalizeSettingsDiagnostic(
   input: unknown,
   now = new Date(),
@@ -146,6 +151,14 @@ export function normalizeSettingsDiagnostic(
       attemptId: common.attemptId,
       operation: common.operation,
       outcome: value.outcome as ProviderSaveOutcome,
+      ...(typeof value.detail === "string"
+        ? {
+            detail:
+              value.detail.length <= 32_768
+                ? value.detail
+                : `${value.detail.slice(0, 32_768)}\n[local diagnostic log detail limit reached]`,
+          }
+        : {}),
       ...(value.code === undefined
         ? {}
         : { code: value.code as ProviderMutationFailureCode }),
@@ -202,11 +215,13 @@ export async function runDiagnosedProviderMutation<T>(options: {
       },
     });
     let status: string | undefined;
+    let detail: string | undefined;
     try {
       status = options.configurationStatusFromResult
         ? options.configurationStatusFromResult(result)
         : await options.configurationStatus?.();
-    } catch {
+    } catch (error) {
+      detail = localErrorDetail(error);
       // The mutation completed, but application status could not be read.
       status = undefined;
     }
@@ -221,8 +236,15 @@ export async function runDiagnosedProviderMutation<T>(options: {
       attemptId,
       operation: options.operation,
       outcome,
+      ...(detail === undefined ? {} : { detail }),
     });
-    return { ok: true, settings: result, outcome, attemptId };
+    return {
+      ok: true,
+      settings: result,
+      outcome,
+      attemptId,
+      ...(detail === undefined ? {} : { detail }),
+    };
   } catch (error) {
     let rejectionCode: ProviderKnownRejectionCode | undefined;
     if (preflightPassed && !committed) {
@@ -244,14 +266,16 @@ export async function runDiagnosedProviderMutation<T>(options: {
         : outcome === "committed-error"
           ? "save-finalization-failed"
           : "save-unconfirmed";
+    const detail = localErrorDetail(error);
     await recordSafely(options.log, {
       event: "provider-save-outcome",
       attemptId,
       operation: options.operation,
       outcome,
       code,
+      detail,
     });
-    return { ok: false, outcome, code, attemptId };
+    return { ok: false, outcome, code, attemptId, detail };
   }
 }
 

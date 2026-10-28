@@ -2837,6 +2837,24 @@ export class ZenAppServer {
   }
 
   #reportQueueFailure(threadId: string, error: unknown): void {
+    // Owner-local evidence is independent of the safe notification projection.
+    // Passive capture must not delay queue ACKs or authorize another admission.
+    const identified = error instanceof QueueAdmissionRejection;
+    void this.observeTrace({
+      threadId,
+      type: "queue_admission_failed",
+      data: {
+        ...(identified
+          ? {
+              queuedItemId: error.item.id,
+              clientId: error.item.clientId,
+              revision: error.item.revision,
+              attemptId: error.attemptId,
+            }
+          : {}),
+        error: queueFailureDiagnostic(identified ? error.reason : error),
+      },
+    });
     if (!(error instanceof QueueAdmissionRejection)) {
       console.error("Queue admission failed without a known queued Item");
       return;
@@ -6140,6 +6158,85 @@ class QueueAdmissionRejection extends Error {
   }
 }
 
+/** Local diagnostic projection: only error fields, never request/config/header objects.
+ * Limits are explicit evidence loss, not an assertion of a complete original. */
+function queueFailureDiagnostic(error: unknown): unknown {
+  const seen = new WeakSet<object>();
+  let remaining = 65_536;
+  let nodes = 128;
+  const text = (value: string): string => {
+    if (value.length <= remaining) {
+      remaining -= value.length;
+      return value;
+    }
+    const prefix = value.slice(0, remaining);
+    remaining = 0;
+    return prefix + "[diagnostic text limit reached]";
+  };
+  const visit = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") return text(value);
+    if (value === null || typeof value !== "object") return String(value);
+    if (seen.has(value)) return "[circular/shared diagnostic reference]";
+    if (depth >= 8 || nodes-- <= 0 || remaining === 0)
+      return "[diagnostic traversal limit reached]";
+    seen.add(value);
+    const result: Record<string, unknown> = {};
+    for (const key of ["name", "message", "stack", "code", "cause", "errors"]) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor) continue;
+      if (!("value" in descriptor)) {
+        // V8's lazy stack getter itself reads name/message. Never let that
+        // invoke custom accessors or coercions while collecting local evidence.
+        if (
+          key === "stack" &&
+          value instanceof Error &&
+          descriptor.get &&
+          Function.prototype.toString
+            .call(descriptor.get)
+            .includes("[native code]")
+        ) {
+          try {
+            const safeNameAndMessage = ["name", "message"].every((field) => {
+              let owner: object | null = value;
+              while (owner !== null) {
+                const fieldDescriptor = Object.getOwnPropertyDescriptor(
+                  owner,
+                  field,
+                );
+                if (fieldDescriptor)
+                  return (
+                    "value" in fieldDescriptor &&
+                    (typeof fieldDescriptor.value === "string" ||
+                      fieldDescriptor.value === undefined)
+                  );
+                owner = Object.getPrototypeOf(owner);
+              }
+              return true;
+            });
+            result[key] = safeNameAndMessage
+              ? visit(descriptor.get.call(value), depth + 1)
+              : "[lazy stack skipped: unsafe name/message accessor]";
+          } catch {
+            result[key] = "[stack unavailable]";
+          }
+        } else result[key] = "[accessor not evaluated]";
+      } else if (key === "errors" && Array.isArray(descriptor.value)) {
+        result[key] = descriptor.value
+          .slice(0, 32)
+          .map((item) => visit(item, depth + 1));
+        if (descriptor.value.length > 32)
+          (result[key] as unknown[]).push("[aggregate error limit reached]");
+      } else result[key] = visit(descriptor.value, depth + 1);
+    }
+    return result;
+  };
+  try {
+    return visit(error, 0);
+  } catch {
+    return "[diagnostic inspection failed]";
+  }
+}
+
 function safeQueueFailure(error: unknown): { code: string; message: string } {
   const code =
     error instanceof AppServerError ? error.code : "queue_admission_failed";
@@ -6183,6 +6280,7 @@ function safeQueueFailure(error: unknown): { code: string; message: string } {
     default:
       // Never transmit arbitrary Provider/attachment errors or their
       // potentially sensitive payload over the native UI notification.
+      // The original available error fields are retained in owner-local Trace.
       return {
         code: "queue_admission_failed",
         message:

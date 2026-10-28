@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import {
   attachBrowserModelRoute,
   attachBrowserSidebarTargets,
@@ -56,7 +57,7 @@ export type AppServerHostStatus =
   | { type: "starting" }
   | { type: "ready"; reconnected: boolean }
   | { type: "reconnecting"; attempt: number; delayMs: number }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; detail?: string }
   | { type: "stopped" };
 
 export interface AppServerManagerOptions {
@@ -254,7 +255,11 @@ export class AppServerManager {
     if (this.#child !== undefined) {
       throw new Error("Cannot replace the status of a running App Server host");
     }
-    this.#setStatus({ type: "error", message: asError(error).message });
+    this.#setStatus({
+      type: "error",
+      message: asError(error).message,
+      detail: localErrorDetail(error),
+    });
   }
 
   async start(options: AppServerStartOptions = {}): Promise<void> {
@@ -305,7 +310,15 @@ export class AppServerManager {
         if (result.status === "rejected") failures.push(asError(result.reason));
       }
       if (lifecycle === this.#lifecycle && !this.#stopping) {
-        this.#setStatus({ type: "error", message: failure.message });
+        this.#setStatus({
+          type: "error",
+          message: failure.message,
+          detail: localErrorDetail(
+            failures.length === 1
+              ? error
+              : new AggregateError(failures, "Zen App Server startup failed"),
+          ),
+        });
       }
       if (failures.length === 1) throw failure;
       throw new AggregateError(failures, "Zen App Server startup failed");
@@ -1245,7 +1258,11 @@ export class AppServerManager {
       } else if (status.type === "ready" && status.reconnected) {
         this.#setStatus({ type: "ready", reconnected: true });
       } else if (status.type === "protocolError") {
-        this.#setStatus({ type: "error", message: status.error.message });
+        this.#setStatus({
+          type: "error",
+          message: status.error.message,
+          detail: localErrorDetail(status.error),
+        });
       }
     });
     client.onServerRequest(
@@ -1419,6 +1436,7 @@ export class AppServerManager {
         this.#setStatus({
           type: "error",
           message: `Zen App Server recovery failed after ${String(delays.length)} attempts: ${lastError.message}`,
+          detail: localErrorDetail(lastError),
         });
       }
     })();
@@ -2171,7 +2189,9 @@ async function terminalWithin(
 }
 
 function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return error instanceof Error
+    ? error
+    : new Error(String(error), { cause: error });
 }
 
 function readHostMessageRequestId(value: unknown): string | undefined {

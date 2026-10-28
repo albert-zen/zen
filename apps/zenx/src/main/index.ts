@@ -1,3 +1,5 @@
+import { createImGatewayDiagnosticSink } from "./im-gateway-diagnostics.js";
+import { recordChromeNativeHostFailure } from "./chrome-native-host-diagnostics.js";
 import { LifecycleWaitUnconfirmedError } from "./lifecycle-wait.js";
 import { installRendererFileProtocol } from "./renderer-file-protocol.js";
 import {
@@ -25,7 +27,10 @@ import { restoreLoginShellPath } from "./login-shell-environment.js";
 import { createImZenXPawHandler } from "./imzenx-paw.js";
 import { createFleetRoomsHandler } from "./fleet-rooms.js";
 import { FleetSettingsService } from "./fleet-settings.js";
-import { ZenXProjectlessWorkspaceAllocator } from "./projectless-workspace.js";
+import {
+  projectlessWorkspaceRoot,
+  ZenXProjectlessWorkspaceAllocator,
+} from "./projectless-workspace.js";
 import { ZenXFleetCapabilityPackage } from "./capabilities/fleet-package.js";
 import { FleetToolTransportAdapter } from "./fleet-tool-router.js";
 import { FleetProductService } from "./fleet-product.js";
@@ -203,13 +208,14 @@ configureChromeNativeHostActivationPolicy({
 if (nativeHostCaller !== undefined) {
   void (async () => {
     let stage: ChromeNativeHostStage = "resolve-user-data";
+    let userDataDirectory: string | undefined;
     try {
       const explicitUserDataDirectory = chromeNativeHostUserDataDirectory({
         argv: process.argv,
         commandLineValue:
           app.commandLine.getSwitchValue("user-data-dir") || undefined,
       });
-      let userDataDirectory = explicitUserDataDirectory;
+      userDataDirectory = explicitUserDataDirectory;
       if (userDataDirectory === undefined) {
         stage = "electron-ready";
         await app.whenReady();
@@ -232,6 +238,9 @@ if (nativeHostCaller !== undefined) {
       process.exit(0);
     } catch (error) {
       process.stderr.write(chromeNativeHostFailureDiagnostic(error, stage));
+      process.stderr.write(
+        await recordChromeNativeHostFailure(userDataDirectory, stage, error),
+      );
       process.exit(1);
     }
   })();
@@ -783,6 +792,8 @@ async function bootstrapZenX(): Promise<void> {
         : join(__dirname, "../../../../node_modules/pnpm/bin/pnpm.cjs"),
       trustedProfileLoaders: {
         imzenx: createImZenXProfileLoader({
+          recordGatewayDiagnostic:
+            createImGatewayDiagnosticSink(userDataDirectory),
           dataDirectory: join(userDataDirectory, "plugin-data", "imzenx"),
           setRuntimeProject: (directory) =>
             imZenXSetupService!.setRuntimeProject(directory),
@@ -1048,7 +1059,7 @@ async function bootstrapZenX(): Promise<void> {
     try {
       await capabilityService.initialize();
     } catch (error) {
-      void operationalDiagnostics.recordPluginStartupFailure();
+      void operationalDiagnostics.recordPluginStartupFailure(error);
       throw error;
     }
     try {
@@ -1116,7 +1127,7 @@ async function bootstrapZenX(): Promise<void> {
       error,
     );
     if (appServerManager === undefined) {
-      void operationalDiagnostics.recordBootstrapFailure();
+      void operationalDiagnostics.recordBootstrapFailure(error);
       installFailedProtocolIpc(
         error instanceof Error ? error.message : String(error),
       );
@@ -2397,7 +2408,10 @@ async function allocateProjectlessWorkspace(
   if (!settingsService) throw new Error("Host settings unavailable");
   const settings = settingsService;
   return await new ZenXProjectlessWorkspaceAllocator({
-    rootDirectory: join(app.getPath("documents"), "ZenX"),
+    rootDirectory: projectlessWorkspaceRoot(
+      app.getPath("home"),
+      process.env["ZENX_DATA_DIR"],
+    ),
     registerWorkspace: async (cwd) => {
       await settings.registerProjectlessWorkspace(cwd);
       await syncProjectProjection(settings);

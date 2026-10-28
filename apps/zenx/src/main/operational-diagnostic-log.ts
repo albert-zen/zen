@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import { BoundedLocalDiagnosticLog } from "./bounded-diagnostic-log.js";
 import type { AppServerHostStatus } from "./app-server-manager.js";
 import type { ZenXComputerReadinessSnapshot } from "./computer-readiness.js";
@@ -45,7 +46,7 @@ export type MainWindowEvent =
       mainPid?: number;
     };
 
-type OperationalEvent =
+type OperationalEvent = (
   | MainWindowEvent
   | { event: "desktop-bootstrap"; status: "failed" }
   | { event: "app-server"; status: AppServerCode }
@@ -60,7 +61,8 @@ type OperationalEvent =
       event: "plugin";
       reason: PluginFailureCode;
       capability: PluginCapabilityCode;
-    };
+    }
+) & { detail?: string };
 
 type OperationalRecord = OperationalEvent & { timestamp: string };
 
@@ -131,7 +133,15 @@ const pluginFailures = new Set<PluginFailureCode>([
   "provider-integrity-failed",
 ]);
 
-/** Strictly project fixed operational codes; never persist arbitrary source fields. */
+/** Owner-local bounded detail, not a complete raw Trace or an export. */
+function diagnosticDetail(reason: unknown): string {
+  const value = localErrorDetail(reason);
+  return value.length <= 16_384
+    ? value
+    : value.slice(0, 16_384) + "\n[operational diagnostic detail truncated]";
+}
+
+/** Project fixed operational codes plus explicit owner-local diagnostic detail. */
 export function normalizeOperationalDiagnostic(
   input: unknown,
   now = new Date(),
@@ -139,6 +149,10 @@ export function normalizeOperationalDiagnostic(
   if (input === null || typeof input !== "object") return null;
   const value = input as Record<string, unknown>;
   const timestamp = now.toISOString();
+  const detail =
+    typeof value.detail === "string"
+      ? { detail: diagnosticDetail(value.detail) }
+      : {};
   if (value.event === "main-window") {
     const identity = {
       ...(boundedNumber(value.windowId, 1, 10_000_000) === undefined
@@ -184,7 +198,12 @@ export function normalizeOperationalDiagnostic(
   }
   if (value.event === "desktop-bootstrap") {
     if (value.status !== "failed") return null;
-    return { timestamp, event: "desktop-bootstrap", status: "failed" };
+    return {
+      timestamp,
+      event: "desktop-bootstrap",
+      status: "failed",
+      ...detail,
+    };
   }
   if (value.event === "app-server") {
     if (!appServerCodes.has(value.status as AppServerCode)) return null;
@@ -192,6 +211,7 @@ export function normalizeOperationalDiagnostic(
       timestamp,
       event: "app-server",
       status: value.status as AppServerCode,
+      ...detail,
     };
   }
   if (value.event === "computer-readiness") {
@@ -222,6 +242,7 @@ export function normalizeOperationalDiagnostic(
       event: "plugin",
       reason: value.reason as PluginFailureCode,
       capability: value.capability as PluginCapabilityCode,
+      ...detail,
     };
   }
   return null;
@@ -254,11 +275,11 @@ function pluginCapabilityCode(value: string): PluginCapabilityCode {
 /** Best-effort support observations. No operation depends on diagnostic I/O. */
 export class OperationalDiagnosticLog {
   readonly #sink: BoundedLocalDiagnosticLog<OperationalRecord>;
-  #lastAppServer?: AppServerCode;
+  #lastAppServer?: string;
   #lastComputer?: string;
   #discoveryErrorCount = 0;
   #bundledStartupFailureCount = 0;
-  #providerFailures = new Map<string, PluginFailureCode | "healthy">();
+  #providerFailures = new Map<string, string>();
   #pendingObservation: Promise<void> = Promise.resolve();
 
   constructor(userDataDirectory: string, options: { maxBytes?: number } = {}) {
@@ -273,9 +294,20 @@ export class OperationalDiagnosticLog {
   observeAppServer(status: AppServerHostStatus): Promise<void> {
     return this.#enqueue(async () => {
       const code = appServerCode(status);
-      if (code === this.#lastAppServer) return;
-      if (await this.#append({ event: "app-server", status: code }))
-        this.#lastAppServer = code;
+      const detail =
+        status.type === "error"
+          ? diagnosticDetail(status.detail ?? status.message)
+          : undefined;
+      const signature = JSON.stringify([code, detail]);
+      if (signature === this.#lastAppServer) return;
+      if (
+        await this.#append({
+          event: "app-server",
+          status: code,
+          ...(detail === undefined ? {} : { detail }),
+        })
+      )
+        this.#lastAppServer = signature;
     });
   }
 
@@ -285,9 +317,13 @@ export class OperationalDiagnosticLog {
     });
   }
 
-  recordBootstrapFailure(): Promise<void> {
+  recordBootstrapFailure(error?: unknown): Promise<void> {
     return this.#enqueue(async () => {
-      await this.#append({ event: "desktop-bootstrap", status: "failed" });
+      await this.#append({
+        event: "desktop-bootstrap",
+        status: "failed",
+        ...(error === undefined ? {} : { detail: diagnosticDetail(error) }),
+      });
     });
   }
 
@@ -319,6 +355,9 @@ export class OperationalDiagnosticLog {
           event: "plugin",
           reason: "discovery-error",
           capability: "other",
+          detail: diagnosticDetail({
+            discoveryErrorsSnapshot: diagnostics.discoveryErrors,
+          }),
         }))
       )
         this.#discoveryErrorCount = errorCount;
@@ -331,11 +370,14 @@ export class OperationalDiagnosticLog {
           event: "plugin",
           reason: "plugin-startup-failed",
           capability: "other",
+          detail: diagnosticDetail({
+            discoveryErrorsSnapshot: diagnostics.discoveryErrors,
+          }),
         }))
       )
         this.#bundledStartupFailureCount = startupCount;
 
-      const current = new Map<string, PluginFailureCode | "healthy">();
+      const current = new Map<string, string>();
       for (const diagnostic of diagnostics.providerDiagnostics) {
         const key = `${diagnostic.capabilityId}\0${diagnostic.providerId}`;
         const reason: PluginFailureCode | "healthy" =
@@ -346,9 +388,14 @@ export class OperationalDiagnosticLog {
               : diagnostic.status === "fallback"
                 ? "provider-fallback"
                 : "healthy";
+        const detail =
+          diagnostic.reason === undefined
+            ? undefined
+            : diagnosticDetail(diagnostic.reason);
+        const signature = JSON.stringify([reason, detail]);
         const previous = this.#providerFailures.get(key);
-        if (reason === "healthy" || previous === reason) {
-          current.set(key, reason);
+        if (reason === "healthy" || previous === signature) {
+          current.set(key, signature);
           continue;
         }
         if (
@@ -356,21 +403,23 @@ export class OperationalDiagnosticLog {
             event: "plugin",
             reason,
             capability: pluginCapabilityCode(diagnostic.capabilityId),
+            ...(detail === undefined ? {} : { detail }),
           })
         )
-          current.set(key, reason);
+          current.set(key, signature);
         else if (previous !== undefined) current.set(key, previous);
       }
       this.#providerFailures = current;
     });
   }
 
-  recordPluginStartupFailure(): Promise<void> {
+  recordPluginStartupFailure(error?: unknown): Promise<void> {
     return this.#enqueue(async () => {
       await this.#append({
         event: "plugin",
         reason: "plugin-startup-failed",
         capability: "other",
+        ...(error === undefined ? {} : { detail: diagnosticDetail(error) }),
       });
     });
   }

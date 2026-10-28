@@ -12,7 +12,7 @@ import {
   type TriggerProgramRunResult,
 } from "../src/main/trigger-program-runner.js";
 
-test("runtime setup uses the existing tree-owned runner with locked own environment and discards diagnostics", async () => {
+test("runtime setup uses the existing tree-owned runner with locked own environment and retains available failure diagnostics", async () => {
   let invocation: any;
   const project = path.resolve("synthetic-im-runtime");
   await runTrustedImRuntimeSetup(project, new AbortController().signal, {
@@ -54,8 +54,9 @@ test("runtime setup uses the existing tree-owned runner with locked own environm
         },
       }),
       (error: any) =>
-        /failed or was cancelled/.test(error.message) &&
-        !error.message.includes("synthetic-secret"),
+        /IM runtime preparation/.test(error.message) &&
+        error.message.includes("synthetic-secret") &&
+        error.message.includes(result.status),
     );
   await assert.rejects(
     runTrustedImRuntimeSetup(project, new AbortController().signal, {
@@ -95,7 +96,7 @@ test(
             ),
         },
       });
-      const outcome = assert.rejects(running, /failed or was cancelled/);
+      const outcome = assert.rejects(running, /IM runtime preparation/);
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline) {
         try {

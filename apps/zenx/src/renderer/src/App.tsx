@@ -1,3 +1,4 @@
+import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
 import { useThreadSidebar } from "./use-thread-sidebar.js";
@@ -2393,13 +2394,18 @@ function AppContent() {
         read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
         update: (change) => updateComposer(threadId, change),
         compact: async (id, includeOriginalReference) => {
-          await window.zenx.protocol.request("thread/compact", {
-            threadId: id,
-            ...(includeOriginalReference
-              ? {}
-              : { includeOriginalReference: false }),
-          });
-          if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+          unwrapCompactionIpcReply(
+            await window.zenx.protocol.request("thread/compact", {
+              threadId: id,
+              ...(includeOriginalReference
+                ? {}
+                : { includeOriginalReference: false }),
+            }),
+          );
+        },
+        refresh: async () => {
+          if (selectedThreadIdRef.current === threadId)
+            await resumeThread(threadId, true);
         },
       });
       return;
@@ -2503,8 +2509,15 @@ function AppContent() {
       read: () => composerStatesRef.current[threadId] ?? emptyComposerState(),
       update: (change) => updateComposer(threadId, change),
       compact: async (id) => {
-        await window.zenx.protocol.request("thread/compact", { threadId: id });
-        if (selectedThreadIdRef.current === id) await resumeThread(id, true);
+        unwrapCompactionIpcReply(
+          await window.zenx.protocol.request("thread/compact", {
+            threadId: id,
+          }),
+        );
+      },
+      refresh: async () => {
+        if (selectedThreadIdRef.current === threadId)
+          await resumeThread(threadId, true);
       },
     });
   };
@@ -3567,6 +3580,7 @@ function AppContent() {
             onNewThread={(workspace) => {
               openNewThreadDraft(workspace);
             }}
+            onNewProjectlessThread={() => showNewThreadDraft(null)}
             onAddProject={() => openProjectPicker("add-project")}
             newThreadDisabled={newThreadPending}
             onRemoveProject={(workspace) => {

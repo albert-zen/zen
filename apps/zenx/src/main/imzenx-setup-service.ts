@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   cp,
@@ -45,6 +46,7 @@ export interface ImZenXSetupView {
     prepared: boolean;
     preparing: boolean;
     error?: string;
+    errorDetail?: string;
     source: string;
   };
   channels: Array<{
@@ -80,6 +82,7 @@ export class ImZenXSetupService {
   #preparation: Promise<ImZenXSetupView> | undefined;
   #runtimePreparing = false;
   #runtimeError: string | undefined;
+  #runtimeErrorDetail: string | undefined;
   #runtimeBlocked = false;
   #setupAbort: AbortController | undefined;
   #closed = false;
@@ -225,11 +228,14 @@ export class ImZenXSetupService {
             JSON.stringify({ version: 1, configuration }),
           );
           return await this.#inspect();
-        } catch {
+        } catch (error) {
           throw new Error(
-            this.#encryption.isEncryptionAvailable()
-              ? "IM channel could not be saved. Check the selected fields and try again. No connection was started."
-              : "Operating-system credential encryption is unavailable. Unlock the system keychain before saving IM credentials. No plaintext fallback is used.",
+            [
+              this.#encryption.isEncryptionAvailable()
+                ? "IM channel could not be saved. Check the selected fields and try again. No connection was started."
+                : "Operating-system credential encryption is unavailable. Unlock the system keychain before saving IM credentials. No plaintext fallback is used.",
+              localErrorDetail(error),
+            ].join("\n"),
           );
         }
       });
@@ -308,6 +314,7 @@ export class ImZenXSetupService {
     if (this.#preparation) return this.#preparation;
     if (this.#runtimeBlocked) return this.inspect();
     this.#runtimeError = undefined;
+    this.#runtimeErrorDetail = undefined;
     this.#runtimePreparing = true;
     const abort = new AbortController();
     this.#setupAbort = abort;
@@ -342,10 +349,11 @@ export class ImZenXSetupService {
           );
         }
       } catch (error) {
+        this.#runtimeErrorDetail = localErrorDetail(error);
         this.#runtimeBlocked = error instanceof ImRuntimeSetupOwnershipError;
         this.#runtimeError = this.#runtimeBlocked
           ? "IM setup process termination could not be confirmed. Further setup is blocked. Stop the remaining IM setup processes using your operating system, then restart ZenX. No IM connection was started."
-          : "Runtime preparation could not finish. Install uv from its official source and verify access to the pinned private IM Agent SDK repository, then try again. No IM connection was started.";
+          : "Runtime preparation failed. See the local diagnostic details for the cause. No IM connection was started.";
       }
       this.#runtimePreparing = false;
       if (this.#setupAbort === abort) this.#setupAbort = undefined;
@@ -376,8 +384,15 @@ export class ImZenXSetupService {
       prepared =
         (await readFile(path.join(projectDirectory, ".prepared"), "utf8")) ===
           "ready\n" && (await stat(pythonExecutable)).isFile();
-    } catch {
-      /* Missing is not ready. */
+    } catch (error) {
+      // A not-yet-created environment is normal; other read failures are diagnostic.
+      if (!(
+        error !== null &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
     }
     return { projectDirectory, pythonExecutable, prepared };
   }
@@ -389,10 +404,11 @@ export class ImZenXSetupService {
       pythonExecutable: "",
       prepared: false,
     };
+    let runtimeReadError: string | undefined;
     try {
       runtime = await this.#runtimeLocation();
-    } catch {
-      /* Surface unavailable, never path/parse diagnostics. */
+    } catch (error) {
+      runtimeReadError = localErrorDetail(error);
     }
     const channels = await Promise.all(
       IM_CHANNEL_SCHEMAS.map(async (schema) => {
@@ -426,7 +442,14 @@ export class ImZenXSetupService {
       runtime: {
         ...runtime,
         preparing: this.#runtimePreparing,
-        ...(this.#runtimeError ? { error: this.#runtimeError } : {}),
+        ...(this.#runtimeError
+          ? { error: this.#runtimeError, errorDetail: this.#runtimeErrorDetail }
+          : runtimeReadError
+            ? {
+                error: "IM runtime readiness could not be checked.",
+                errorDetail: runtimeReadError,
+              }
+            : {}),
         source:
           "Locked IMZen project and pinned private IM Agent SDK; uv may download Python 3.13 and dependencies. Requires private repository access. No IM consumer is started.",
       },
@@ -471,9 +494,12 @@ export class ImZenXSetupService {
         }
       }
       return normalizeManagedChannel(schema.id, values, secrets);
-    } catch {
+    } catch (error) {
       throw new Error(
-        "Encrypted IM configuration could not be read. Unlock the system keychain and check your IM settings.",
+        [
+          "Encrypted IM configuration could not be read.",
+          localErrorDetail(error),
+        ].join("\n"),
       );
     }
   }

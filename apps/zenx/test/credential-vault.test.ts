@@ -193,7 +193,7 @@ test("cleans credential staging when atomic replacement fails", async () => {
 });
 
 for (const failure of ["availability", "encrypt", "decrypt"] as const) {
-  test(`native ${failure} failures report only a fixed credential boundary code`, async () => {
+  test(`native ${failure} failures keep fixed summaries and retain the native local cause`, async () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "zenx-vault-native-"),
     );
@@ -233,7 +233,8 @@ for (const failure of ["availability", "encrypt", "decrypt"] as const) {
           assert.equal(JSON.stringify(error).includes(secret), false);
           assert.equal(error.message.includes(secret), false);
           assert.equal(error.message.includes(file), false);
-          assert.equal(error.cause, undefined);
+          assert.ok(error.cause instanceof Error);
+          assert.equal(error.cause.message, `${secret} ${file}`);
           return true;
         },
       );

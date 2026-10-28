@@ -19,7 +19,7 @@ export function registerDiagnosticsFolderIpc(locations: {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const failure = await shell.openPath(directory);
       if (failure.length > 0)
-        throw new Error("Could not open diagnostics folder");
+        throw new Error(`Could not open diagnostics folder: ${failure}`);
     },
   );
 }

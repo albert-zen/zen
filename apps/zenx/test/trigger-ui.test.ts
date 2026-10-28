@@ -8,6 +8,7 @@ import {
   editorFromTrigger,
   localDateTime,
   safeProgramFailure,
+  programFailureDetail,
   triggerEditorInput,
 } from "../src/renderer/src/bundled-automation-ui.js";
 import type { TriggerHistoryEntry } from "../src/main/trigger-types.js";
@@ -28,6 +29,10 @@ test("program failure summary contains only Host-classified fields", () => {
   const summary = safeProgramFailure(entry);
   assert.match(summary!, /Program action: nonzero_exit \(exit 12\).*history-1/);
   assert.doesNotMatch(summary!, /SECRET|private|command|stdout/);
+  const detail = programFailureDetail(entry)!;
+  assert.match(detail, /private raw error/u);
+  assert.match(detail, /SECRET env and command/u);
+  assert.match(detail, /private stdout/u);
 });
 import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 

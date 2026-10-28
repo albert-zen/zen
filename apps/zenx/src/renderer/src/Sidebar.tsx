@@ -79,7 +79,10 @@ interface SidebarProps {
   mode: SidebarMode;
   open: boolean;
   onClose(): void;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onChangeProjectPinned?(key: string): Promise<void>;
   onReorderProject?(
@@ -102,6 +105,7 @@ interface SidebarProps {
     placement: SidebarOrderPlacement,
   ): Promise<void>;
   onNewThread(workspace?: string): void;
+  onNewProjectlessThread?(): void;
   newThreadDisabled?: boolean;
   onAddProject(): void;
   onRemoveProject(workspace: string): void;
@@ -150,6 +154,7 @@ export function Sidebar({
   onReorderThread,
   onReorderPinnedThread,
   onNewThread,
+  onNewProjectlessThread,
   newThreadDisabled = false,
   onAddProject,
   onRemoveProject,
@@ -197,9 +202,42 @@ export function Sidebar({
       return "detailed";
     }
   });
-  const visibleThreads = deriveSidebarThreads(
-    threads,
-    visibleSubagentThreadIds,
+  const visibleThreads = useMemo(
+    () => deriveSidebarThreads(threads, visibleSubagentThreadIds),
+    [threads, visibleSubagentThreadIds],
+  );
+  const [recentLimit, setRecentLimit] = useState(30);
+  const recentRevealFocus = useRef<{
+    origin: HTMLButtonElement;
+    index: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const pending = recentRevealFocus.current;
+    recentRevealFocus.current = null;
+    if (
+      !pending ||
+      (document.activeElement !== pending.origin &&
+        !(
+          document.activeElement === document.body &&
+          !pending.origin.isConnected
+        ))
+    )
+      return;
+    document
+      .querySelectorAll<HTMLButtonElement>(".recent-thread-group .thread-row")
+      [pending.index]?.focus({ preventScroll: true });
+  }, [recentLimit]);
+  const [recentOpen, toggleRecent, recentExpansionError] =
+    useSidebarExpansion("recent");
+  const recentThreads = useMemo(
+    () =>
+      [...visibleThreads].sort(
+        (a, b) =>
+          (Date.parse(b.updatedAt ?? "") || 0) -
+            (Date.parse(a.updatedAt ?? "") || 0) ||
+          a.threadId.localeCompare(b.threadId),
+      ),
+    [visibleThreads],
   );
   const pinnedThreads = useMemo(
     () => deriveSidebarThreads(allPinnedThreads, visibleSubagentThreadIds),
@@ -253,14 +291,20 @@ export function Sidebar({
       restoreSidebarRemoval(snapshot);
     }
   });
-  const changeThreadLifecycle = async (thread: NativeThreadSummary) => {
+  const changeThreadLifecycle = async (
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ) => {
     if (lifecyclePending.current.has(thread.threadId)) return;
     lifecyclePending.current.add(thread.threadId);
     removalTracking.current.get(thread.threadId)?.();
     removalTracking.current.delete(thread.threadId);
-    const row = [
-      ...document.querySelectorAll<HTMLElement>(".thread-row-shell"),
-    ].find((entry) => entry.dataset.threadId === thread.threadId);
+    const row =
+      originRow?.isConnected && originRow.dataset.threadId === thread.threadId
+        ? originRow
+        : [...document.querySelectorAll<HTMLElement>(".thread-row-shell")].find(
+            (entry) => entry.dataset.threadId === thread.threadId,
+          );
     if (row !== undefined) {
       const snapshot = captureSidebarRemoval(row);
       if (snapshot !== null)
@@ -371,6 +415,7 @@ export function Sidebar({
     let shortcutObserver: MutationObserver | null = null;
     const shortcutTargets = () => {
       const sidebar = document.getElementById("primary-sidebar");
+      const seen = new Set<string>();
       return {
         newThread:
           sidebar?.querySelector<HTMLButtonElement>(".new-thread-action") ??
@@ -382,7 +427,14 @@ export function Sidebar({
                 sidebar.querySelectorAll<HTMLButtonElement>(
                   ".thread-row-shell > button.thread-row",
                 ),
-              ).filter((row) => !row.closest("[inert]")),
+              ).filter((row) => {
+                const id =
+                  row.closest<HTMLElement>("[data-thread-id]")?.dataset
+                    .threadId;
+                if (row.closest("[inert]") || !id || seen.has(id)) return false;
+                seen.add(id);
+                return true;
+              }),
       };
     };
     const clearShortcutHints = () => {
@@ -550,6 +602,27 @@ export function Sidebar({
           className="sidebar-scroll"
           aria-labelledby="sidebar-thread-list-heading"
         >
+          {mode !== "projects" ||
+          pinnedThreads.length === 0 ||
+          threadLoading ||
+          threadError !== null ||
+          serverStatus.type !== "ready" ? null : (
+            <PinnedThreadsView
+              liveThread={liveThread}
+              onChangeThreadLifecycle={changeThreadLifecycle}
+              onChangeThreadPinned={changeThreadPinned}
+              onRenameThread={onRenameThread}
+              onForkThread={onForkThread}
+              onSelectThread={onSelectThread}
+              onReorderPinnedThread={onReorderPinnedThread}
+              onSidebarOrderError={reportSidebarOrderError}
+              onSidebarOrderAttempt={clearSidebarOrderError}
+              pendingApprovalThreadIds={pendingApprovalThreadIds}
+              selectedThreadId={selectedThreadId}
+              threads={pinnedThreads}
+              watchingThreadIds={watchingThreadIds}
+            />
+          )}
           <PluginSpaces
             contributions={
               roomConversations === undefined
@@ -700,23 +773,6 @@ export function Sidebar({
             />
           ) : (
             <>
-              {pinnedThreads.length === 0 ? null : (
-                <PinnedThreadsView
-                  liveThread={liveThread}
-                  onChangeThreadLifecycle={changeThreadLifecycle}
-                  onChangeThreadPinned={changeThreadPinned}
-                  onRenameThread={onRenameThread}
-                  onForkThread={onForkThread}
-                  onSelectThread={onSelectThread}
-                  onReorderPinnedThread={onReorderPinnedThread}
-                  onSidebarOrderError={reportSidebarOrderError}
-                  onSidebarOrderAttempt={clearSidebarOrderError}
-                  pendingApprovalThreadIds={pendingApprovalThreadIds}
-                  selectedThreadId={selectedThreadId}
-                  threads={pinnedThreads}
-                  watchingThreadIds={watchingThreadIds}
-                />
-              )}
               {!projectsOpen ? null : (
                 <ProjectsView
                   projects={projects}
@@ -746,6 +802,84 @@ export function Sidebar({
                   watchingThreadIds={watchingThreadIds}
                 />
               )}
+              <section
+                className="recent-thread-group"
+                aria-labelledby="sidebar-recent-heading"
+              >
+                <div className="sidebar-view-head">
+                  <button
+                    id="sidebar-recent-heading"
+                    className="recent-section-toggle sidebar-section-toggle"
+                    type="button"
+                    aria-expanded={recentOpen}
+                    onClick={toggleRecent}
+                  >
+                    <Icon
+                      className={recentOpen ? "expanded" : undefined}
+                      name="chevron-down"
+                      size={13}
+                    />
+                    <strong>{i18n.t("shell:recentThreads")}</strong>
+                  </button>
+                  {onNewProjectlessThread ? (
+                    <button
+                      className="sidebar-inline-action recent-new-thread"
+                      type="button"
+                      aria-label={i18n.t("shell:newProjectlessThread")}
+                      title={i18n.t("shell:newProjectlessThread")}
+                      disabled={newThreadDisabled}
+                      onClick={onNewProjectlessThread}
+                    >
+                      <Icon name="plus" size={14} />
+                    </button>
+                  ) : null}
+                </div>
+                {recentExpansionError ? (
+                  <p role="alert">{recentExpansionError}</p>
+                ) : null}
+                {recentOpen
+                  ? recentThreads
+                      .slice(0, recentLimit)
+                      .map((thread) => (
+                        <ThreadRow
+                          key={thread.threadId}
+                          rowScope="recent"
+                          thread={thread}
+                          hasActiveTurn={threadHasActiveTurn(
+                            thread,
+                            liveThread,
+                          )}
+                          onChangeThreadLifecycle={changeThreadLifecycle}
+                          onChangeThreadPinned={changeThreadPinned}
+                          onRenameThread={onRenameThread}
+                          onForkThread={onForkThread}
+                          onSelectThread={onSelectThread}
+                          pendingApproval={pendingApprovalThreadIds.has(
+                            thread.threadId,
+                          )}
+                          pinned={pinnedThreadIds.has(thread.threadId)}
+                          selected={thread.threadId === selectedThreadId}
+                          watching={watchingThreadIds.has(thread.threadId)}
+                        />
+                      ))
+                  : null}
+                {recentOpen && recentLimit < recentThreads.length ? (
+                  <button
+                    className="sidebar-show-more"
+                    type="button"
+                    onClick={(event) => {
+                      if (document.activeElement === event.currentTarget)
+                        recentRevealFocus.current = {
+                          origin: event.currentTarget,
+                          index: recentLimit,
+                        };
+                      setRecentLimit((value) => value + 30);
+                    }}
+                  >
+                    {i18n.t("shell:showMoreThreads")}
+                  </button>
+                ) : null}
+              </section>
             </>
           )}
         </div>
@@ -868,7 +1002,10 @@ function InboxView({
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
@@ -923,7 +1060,10 @@ function PinnedThreadsView({
   watchingThreadIds,
 }: {
   liveThread: Thread | null;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
@@ -936,6 +1076,8 @@ function PinnedThreadsView({
   threads: readonly NativeThreadSummary[];
   watchingThreadIds: ReadonlySet<string>;
 }) {
+  const [expanded, toggleExpanded, expansionError] =
+    useSidebarExpansion("pinned");
   // The Pinned section reorders the pinnedThreadIds preference by dragging
   // rows onto each other, mirroring per-Project Thread sorting semantics.
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -955,115 +1097,138 @@ function PinnedThreadsView({
       className="pinned-thread-group"
       aria-labelledby="sidebar-pinned-heading"
     >
-      <h2 id="sidebar-pinned-heading" tabIndex={-1}>
-        {i18n.t("shell:pinned")}
-      </h2>
-      {threads.map((thread, threadIndex) => (
-        <ThreadRow
-          hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
-          key={thread.threadId}
-          onChangeThreadLifecycle={onChangeThreadLifecycle}
-          onChangeThreadPinned={onChangeThreadPinned}
-          onRenameThread={onRenameThread}
-          onForkThread={onForkThread}
-          onSelectThread={onSelectThread}
-          pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
-          pinned
-          selected={thread.threadId === selectedThreadId}
-          thread={thread}
-          watching={watchingThreadIds.has(thread.threadId)}
-          reorder={
-            onReorderPinnedThread === undefined
-              ? undefined
-              : {
-                  controlId: sidebarOrderControlId("thread", thread.threadId),
-                  dragging: draggingId === thread.threadId,
-                  placement:
-                    drop?.targetId === thread.threadId
-                      ? drop.placement
-                      : undefined,
-                  onDragLeave: (event) => {
-                    if (
-                      !(event.relatedTarget instanceof Node) ||
-                      !event.currentTarget.contains(event.relatedTarget)
-                    )
-                      setDrop(null);
-                  },
-                  onDragStart: (event) => {
-                    dragCleanup.current?.();
-                    setDraggingId(thread.threadId);
-                    setDrop(null);
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("text/plain", thread.threadId);
-                    dragCleanup.current = startSidebarDrag(
-                      event.currentTarget,
-                      event.dataTransfer,
-                      threadTitle(thread),
-                      "thread",
-                      event,
-                      clearDrag,
-                    );
-                  },
-                  onDragEnd: clearDrag,
-                  onDragOver: (event) => {
-                    if (draggingId === null || draggingId === thread.threadId)
-                      return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    event.stopPropagation();
-                    setDrop({
-                      targetId: thread.threadId,
-                      placement: dropPlacement(event),
-                    });
-                  },
-                  onDrop: (event) => {
-                    const sourceThreadId = draggingId;
-                    clearDrag();
-                    if (
-                      sourceThreadId === null ||
-                      sourceThreadId === thread.threadId
-                    )
-                      return;
-                    event.preventDefault();
-                    const placement = dropPlacement(event);
-                    void reorderAndRestoreFocus(
-                      sidebarOrderControlId("thread", sourceThreadId),
-                      () =>
-                        onReorderPinnedThread(
-                          sourceThreadId,
-                          thread.threadId,
-                          placement,
-                        ),
-                      onSidebarOrderAttempt,
-                      onSidebarOrderError,
-                    );
-                  },
-                  onKeyDown: (event) => {
-                    if (!event.altKey) return;
-                    const target =
-                      event.key === "ArrowUp"
-                        ? threads[threadIndex - 1]
-                        : event.key === "ArrowDown"
-                          ? threads[threadIndex + 1]
-                          : undefined;
-                    if (target === undefined) return;
-                    event.preventDefault();
-                    void reorderAndRestoreFocus(
-                      sidebarOrderControlId("thread", thread.threadId),
-                      () =>
-                        onReorderPinnedThread(
-                          thread.threadId,
-                          target.threadId,
-                          event.key === "ArrowUp" ? "before" : "after",
-                        ),
-                      onSidebarOrderAttempt,
-                      onSidebarOrderError,
-                    );
-                  },
-                }
-          }
+      <button
+        id="sidebar-pinned-heading"
+        className="pinned-section-toggle sidebar-section-toggle"
+        type="button"
+        aria-expanded={expanded}
+        onClick={toggleExpanded}
+      >
+        <Icon
+          className={expanded ? "expanded" : undefined}
+          name="chevron-down"
+          size={13}
         />
-      ))}
+        <strong>{i18n.t("shell:pinned")}</strong>
+      </button>
+      {expansionError ? <p role="alert">{expansionError}</p> : null}
+      {expanded
+        ? threads.map((thread, threadIndex) => (
+            <ThreadRow
+              hasActiveTurn={threadHasActiveTurn(thread, liveThread)}
+              key={thread.threadId}
+              onChangeThreadLifecycle={onChangeThreadLifecycle}
+              onChangeThreadPinned={onChangeThreadPinned}
+              onRenameThread={onRenameThread}
+              onForkThread={onForkThread}
+              onSelectThread={onSelectThread}
+              pendingApproval={pendingApprovalThreadIds.has(thread.threadId)}
+              pinned
+              selected={thread.threadId === selectedThreadId}
+              thread={thread}
+              watching={watchingThreadIds.has(thread.threadId)}
+              reorder={
+                onReorderPinnedThread === undefined
+                  ? undefined
+                  : {
+                      controlId: sidebarOrderControlId(
+                        "thread",
+                        thread.threadId,
+                      ),
+                      dragging: draggingId === thread.threadId,
+                      placement:
+                        drop?.targetId === thread.threadId
+                          ? drop.placement
+                          : undefined,
+                      onDragLeave: (event) => {
+                        if (
+                          !(event.relatedTarget instanceof Node) ||
+                          !event.currentTarget.contains(event.relatedTarget)
+                        )
+                          setDrop(null);
+                      },
+                      onDragStart: (event) => {
+                        dragCleanup.current?.();
+                        setDraggingId(thread.threadId);
+                        setDrop(null);
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData(
+                          "text/plain",
+                          thread.threadId,
+                        );
+                        dragCleanup.current = startSidebarDrag(
+                          event.currentTarget,
+                          event.dataTransfer,
+                          threadTitle(thread),
+                          "thread",
+                          event,
+                          clearDrag,
+                        );
+                      },
+                      onDragEnd: clearDrag,
+                      onDragOver: (event) => {
+                        if (
+                          draggingId === null ||
+                          draggingId === thread.threadId
+                        )
+                          return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        event.stopPropagation();
+                        setDrop({
+                          targetId: thread.threadId,
+                          placement: dropPlacement(event),
+                        });
+                      },
+                      onDrop: (event) => {
+                        const sourceThreadId = draggingId;
+                        clearDrag();
+                        if (
+                          sourceThreadId === null ||
+                          sourceThreadId === thread.threadId
+                        )
+                          return;
+                        event.preventDefault();
+                        const placement = dropPlacement(event);
+                        void reorderAndRestoreFocus(
+                          sidebarOrderControlId("thread", sourceThreadId),
+                          () =>
+                            onReorderPinnedThread(
+                              sourceThreadId,
+                              thread.threadId,
+                              placement,
+                            ),
+                          onSidebarOrderAttempt,
+                          onSidebarOrderError,
+                        );
+                      },
+                      onKeyDown: (event) => {
+                        if (!event.altKey) return;
+                        const target =
+                          event.key === "ArrowUp"
+                            ? threads[threadIndex - 1]
+                            : event.key === "ArrowDown"
+                              ? threads[threadIndex + 1]
+                              : undefined;
+                        if (target === undefined) return;
+                        event.preventDefault();
+                        void reorderAndRestoreFocus(
+                          sidebarOrderControlId("thread", thread.threadId),
+                          () =>
+                            onReorderPinnedThread(
+                              thread.threadId,
+                              target.threadId,
+                              event.key === "ArrowUp" ? "before" : "after",
+                            ),
+                          onSidebarOrderAttempt,
+                          onSidebarOrderError,
+                        );
+                      },
+                    }
+              }
+            />
+          ))
+        : null}
     </section>
   );
 }
@@ -1096,6 +1261,7 @@ function ProjectsView({
   projects: ZenXProjectProjectionSnapshot;
   sidebarOrder: ZenXSidebarOrder;
   onNewThread(workspace?: string): void;
+  onNewProjectlessThread?(): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
   onEditProject?(workspace: string, name: string): void;
@@ -1103,7 +1269,10 @@ function ProjectsView({
   threads: readonly NativeThreadSummary[];
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
@@ -1167,7 +1336,6 @@ function ProjectsView({
   );
   if (
     projects.projects.length === 0 &&
-    (projects.projectlessThreadIds?.length ?? 0) === 0 &&
     projects.unavailableThreadIds.length === 0
   ) {
     return (
@@ -1178,7 +1346,11 @@ function ProjectsView({
       </div>
     );
   }
-  const groups = deriveProjectGroups(threads, projects, sidebarOrder);
+  // Projectless conversations belong to Recent (and optionally Pinned), not
+  // a synthetic project folder. Keep the Host projection unchanged.
+  const groups = deriveProjectGroups(threads, projects, sidebarOrder).filter(
+    (group) => group.key !== "__projectless__",
+  );
   return groups.map((group, projectIndex) => (
     <ProjectRows
       pinnedProject={
@@ -1453,13 +1625,17 @@ function ProjectRows({
   pinnedProject: boolean;
   onChangeProjectPinned?: SidebarProps["onChangeProjectPinned"];
   onNewThread(workspace?: string): void;
+  onNewProjectlessThread?(): void;
   newThreadDisabled: boolean;
   onRemoveProject(workspace: string): void;
   onEditProject?(workspace: string, name: string): void;
   onSetDefaultProject(workspace: string): void;
   selectedThreadId: string | null;
   onSelectThread(threadId: string): void;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
@@ -1844,13 +2020,17 @@ function ThreadRow({
   pinned,
   watching,
   inbox = false,
+  rowScope = "",
   reorder,
 }: {
   thread: NativeThreadSummary;
   projectWorkspace?: string | null;
   selected: boolean;
   hasActiveTurn: boolean;
-  onChangeThreadLifecycle(thread: NativeThreadSummary): Promise<void>;
+  onChangeThreadLifecycle(
+    thread: NativeThreadSummary,
+    originRow?: HTMLElement,
+  ): Promise<void>;
   onChangeThreadPinned(thread: NativeThreadSummary): Promise<void>;
   onRenameThread(threadId: string, title: string): Promise<void>;
   onForkThread(threadId: string): Promise<void>;
@@ -1859,8 +2039,10 @@ function ThreadRow({
   pinned: boolean;
   watching: boolean;
   inbox?: boolean;
+  rowScope?: string;
   reorder?: ThreadRowReorderHandlers;
 }) {
+  const rowIdentity = `${rowScope ? `${rowScope}-` : ""}${thread.threadId}`;
   const rowRef = useRef<HTMLDivElement>(null);
   const information = useContext(SidebarSettingsContext);
   const debugMenu = useContext(ThreadDebugMenuContext);
@@ -2362,15 +2544,13 @@ function ThreadRow({
           ref={menuTriggerRef}
           className="thread-menu-trigger"
           type="button"
-          id={`thread-menu-trigger-${thread.threadId}`}
+          id={`thread-menu-trigger-${rowIdentity}`}
           aria-label={i18n.t("shell:manageThread", {
             title: threadTitle(thread),
           })}
           aria-haspopup={renaming ? "dialog" : "menu"}
           aria-expanded={menuOpen}
-          aria-controls={
-            menuOpen ? `thread-menu-${thread.threadId}` : undefined
-          }
+          aria-controls={menuOpen ? `thread-menu-${rowIdentity}` : undefined}
           title={i18n.t("shell:manageThread", { title: threadTitle(thread) })}
           onClick={() => {
             if (menuOpen) {
@@ -2427,8 +2607,8 @@ function ThreadRow({
         busyAction={busyAction}
         error={menuError}
         hasActiveTurn={hasActiveTurn}
-        labelledBy={`thread-menu-trigger-${thread.threadId}`}
-        menuId={`thread-menu-${thread.threadId}`}
+        labelledBy={`thread-menu-trigger-${rowIdentity}`}
+        menuId={`thread-menu-${rowIdentity}`}
         menuRef={menuOpen ? menuRef : detailsRef}
         menuTriggerRef={menuOpen ? menuTriggerRef : rowRef}
         open={menuOpen || detailsOpen}
@@ -2436,7 +2616,9 @@ function ThreadRow({
         renaming={renaming}
         renameDraft={renameDraft}
         onArchive={() =>
-          void runAction("archive", () => onChangeThreadLifecycle(thread))
+          void runAction("archive", () =>
+            onChangeThreadLifecycle(thread, rowRef.current ?? undefined),
+          )
         }
         onBeginRename={beginRename}
         onFork={() =>
@@ -2456,7 +2638,9 @@ function ThreadRow({
           )
         }
         onUnarchive={() =>
-          void runAction("unarchive", () => onChangeThreadLifecycle(thread))
+          void runAction("unarchive", () =>
+            onChangeThreadLifecycle(thread, rowRef.current ?? undefined),
+          )
         }
       />
     </div>

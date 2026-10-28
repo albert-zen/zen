@@ -296,7 +296,7 @@ test("unconfirmed setup process ownership blocks retries and reports shutdown fa
   }
 });
 
-test("explicit runtime preparation copies the locked project, deduplicates calls and redacts errors", async () => {
+test("explicit runtime preparation copies the locked project, deduplicates calls and exposes local error details", async () => {
   const f = await fixture();
   const source = path.join(f.root, "bundled-project");
   await mkdir(path.join(source, "src"), { recursive: true });
@@ -351,8 +351,25 @@ test("explicit runtime preparation copies the locked project, deduplicates calls
     failed.setRuntimeProject(source);
     const failure = await failed.prepareRuntime();
     assert.equal(failure.runtime.prepared, false);
-    assert.match(failure.runtime.error!, /private IM Agent SDK/);
-    assert.doesNotMatch(JSON.stringify(failure), new RegExp(secret));
+    assert.match(failure.runtime.error!, /Runtime preparation failed/);
+    assert.doesNotMatch(failure.runtime.error!, new RegExp(secret));
+    assert.ok(failure.runtime.errorDetail?.includes(secret));
+    assert.ok(
+      failure.runtime.errorDetail?.includes("imzenx-setup-service.test"),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("readiness preserves a broken bundled runtime path as local diagnostic evidence", async () => {
+  const f = await fixture();
+  try {
+    f.service.setRuntimeProject(path.join(f.root, "missing-bundled-project"));
+    const result = await f.service.inspect();
+    assert.equal(result.runtime.prepared, false);
+    assert.match(result.runtime.error!, /readiness could not be checked/u);
+    assert.match(result.runtime.errorDetail!, /ENOENT.*uv.lock/u);
   } finally {
     await f.close();
   }

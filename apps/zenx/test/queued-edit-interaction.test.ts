@@ -236,8 +236,24 @@ test("same-tick Save submits once and exact-content retry retains edit identity 
     assert.equal(requests.length, 1);
     assert.equal(save.disabled, true);
     assert.equal(document.querySelectorAll(".queue-row").length, 2);
-    await act(async () => reject(new Error("Transport rejected")));
+    await act(async () =>
+      reject(
+        new Error("Transport rejected", {
+          cause: new Error("Synthetic host diagnostic"),
+        }),
+      ),
+    );
     assert.match(editor()!.textContent!, /Transport rejected/u);
+    assert.match(
+      editor()!.querySelector("details pre")?.textContent ?? "",
+      /Synthetic host diagnostic/u,
+    );
+    assert.equal(
+      editor()!.querySelector<HTMLDetailsElement>(
+        "details.context-compaction-error-detail",
+      )?.open,
+      false,
+    );
     assert.equal(text().value, "Retry without dropping my changes");
     await h.click(".queue-editor-save");
     assert.equal(requests.length, 2);

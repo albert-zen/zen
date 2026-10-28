@@ -1,3 +1,5 @@
+import { ModelRequestDebugStore } from "../apps/cli/src/model-request-debug.js";
+import type { RuntimeTrace } from "../src/trace.js";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -72,6 +74,7 @@ import { testToolBundle, testToolRuntime } from "./tool-fixtures.js";
 function createServer(
   options: {
     journal?: ThreadJournal;
+    trace?: RuntimeTrace;
     approvalPolicy?: "always" | "never";
     model?: ModelAdapter;
     modelCatalog?: ModelCatalog;
@@ -92,6 +95,20 @@ function createServer(
     ]);
   return new ZenAppServer({
     journal: options.journal ?? new InMemoryThreadJournal(),
+    ...(options.trace === undefined
+      ? {}
+      : {
+          auxiliaryModel: {
+            trace: options.trace,
+            itemListStore: {
+              async create() {
+                throw new Error(
+                  "This queue fixture must not start an auxiliary model sample",
+                );
+              },
+            },
+          },
+        }),
     ...(options.attachments === undefined
       ? {}
       : { attachments: options.attachments }),
@@ -5434,4 +5451,163 @@ test("mixed bulk cancellation reports a delivered item without undoing it and ca
     false,
   );
   assert.equal(calls, 2);
+});
+
+test("queue admission preserves causal diagnostics in owner Trace without changing safe notification or retrying", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-queue-diagnostic-"),
+  );
+  const trace = new FileTraceStore(path.join(directory, "trace"));
+  const recorded = testDeferred<void>();
+  const entered = testDeferred<void>();
+  const release = testDeferred<void>();
+  const failed = testDeferred<void>();
+  let calls = 0;
+  let broken = false;
+  let rejectTrace = false;
+  const attachments = new InMemoryAttachmentStore();
+  const read = attachments.read.bind(attachments);
+  const cause = new Error("synthetic local disk EIO");
+  Object.assign(cause, {
+    cause,
+    headers: { Authorization: "must-not-record-header" },
+  });
+  let accessorCalls = 0;
+  const unsafeName = new Error("retained message beside unsafe name");
+  Object.defineProperty(unsafeName, "name", {
+    get() {
+      accessorCalls++;
+      throw new Error("must not invoke name");
+    },
+  });
+  const unsafeMessage = new Error("original");
+  Object.defineProperty(unsafeMessage, "message", {
+    get() {
+      accessorCalls++;
+      return "must not invoke message";
+    },
+  });
+  const inheritedName = new Error("retained message beside inherited name");
+  const prototype = Object.create(Error.prototype);
+  Object.defineProperty(prototype, "name", {
+    get() {
+      accessorCalls++;
+      throw new Error("must not invoke inherited name");
+    },
+  });
+  Object.setPrototypeOf(inheritedName, prototype);
+  const failure = new AggregateError(
+    [cause, unsafeName, unsafeMessage, inheritedName],
+    "synthetic attachment reader failed",
+  );
+  Object.assign(failure, {
+    request: { secret: "must-not-record-request" },
+    config: { secret: "must-not-record-config" },
+  });
+  attachments.read = async (reference) => {
+    if (broken) throw failure;
+    return read(reference);
+  };
+  const server = createServer({
+    attachments,
+    trace: {
+      async record(event) {
+        if (rejectTrace) throw new Error("synthetic Trace unavailable");
+        const receipt = await trace.record(event);
+        if (event.type === "queue_admission_failed") recorded.resolve();
+        return receipt;
+      },
+    },
+    model: {
+      provider: "synthetic-queue-failure",
+      async *stream() {
+        calls++;
+        entered.resolve();
+        await release.promise;
+        yield { type: "text_delta" as const, delta: "done" };
+      },
+    },
+    modelCatalog: new StaticModelCatalog([
+      {
+        id: "fake",
+        isDefault: true,
+        contextWindow: 32_768,
+        inputModalities: ["text", "image"],
+      },
+    ]),
+  });
+  const failures: Extract<AppServerEvent, { type: "queue_failed" }>[] = [];
+  server.subscribe((event) => {
+    if (event.type === "queue_failed") {
+      failures.push(event);
+      failed.resolve();
+    }
+  });
+  try {
+    const thread = await server.startThread();
+    const turn = await server.startTurn(thread.id, "synthetic first");
+    await entered.promise;
+    const image = await server.importImageBytes(png1x1());
+    await server.queueMessage(
+      thread.id,
+      [{ type: "image", attachment: image }],
+      "synthetic-queued",
+    );
+    broken = true;
+    release.resolve();
+    await turn.done;
+    await failed.promise;
+    await recorded.promise;
+    assert.equal(calls, 1);
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.code, "queue_admission_failed");
+    assert.doesNotMatch(
+      JSON.stringify(failures),
+      /synthetic local disk|synthetic attachment reader/,
+    );
+    assert.equal(
+      pendingQueuedMessages((await server.readThread(thread.id)).items).length,
+      1,
+    );
+    // Same owner-local service used by the ZenX Durable Trace Events inspector.
+    const inspector = new ModelRequestDebugStore(
+      new FileTraceStore(path.join(directory, "trace")),
+    );
+    const events = await inspector.control({
+      action: "list",
+      threadId: thread.id,
+      mode: "events",
+      query: "queue_admission_failed",
+    });
+    assert.equal(events.records?.length, 1);
+    const details = await inspector.control({
+      action: "read",
+      threadId: thread.id,
+      id: events.records![0]!.id,
+      view: "timeline",
+    });
+    assert.match(details.page!.text, /synthetic local disk EIO/);
+    assert.match(details.page!.text, /circular\/shared diagnostic reference/);
+    assert.match(details.page!.text, /runtime.test/);
+    assert.match(details.page!.text, new RegExp(failures[0]!.attemptId));
+    assert.doesNotMatch(details.page!.text, /must-not-record/);
+    assert.equal(accessorCalls, 0);
+    assert.match(details.page!.text, /lazy stack skipped/);
+    assert.match(details.page!.text, /retained message beside unsafe name/);
+    assert.match(details.page!.text, /retained message beside inherited name/);
+    assert.doesNotMatch(details.page!.text, /diagnostic inspection failed/);
+    rejectTrace = true;
+    await assert.rejects(server.resumeQueue(thread.id), {
+      code: "queue_admission_failed",
+    });
+    assert.equal(failures.length, 2); // explicit retry only; Trace failure never retries admission
+    assert.equal(calls, 1);
+    assert.equal(
+      pendingQueuedMessages((await server.readThread(thread.id)).items).length,
+      1,
+    );
+  } finally {
+    release.resolve();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

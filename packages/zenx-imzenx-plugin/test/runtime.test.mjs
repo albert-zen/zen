@@ -310,6 +310,7 @@ for (const code of ["state_migration_blocked", "unknown_failure"]) {
       );
       t.after(() => rm(root, { recursive: true, force: true }));
       const executable = path.join(root, "python-fixture");
+      const diagnostics = [];
       const failure = JSON.stringify({
         type: "failed",
         code,
@@ -317,11 +318,14 @@ for (const code of ["state_migration_blocked", "unknown_failure"]) {
       });
       await writeFile(
         executable,
-        `#!${process.execPath}\nimport readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});lines.once('line',()=>process.stdout.write(${JSON.stringify(failure + "\n")}));lines.once('close',()=>process.exit(0));`,
+        `#!${process.execPath}\nimport readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});lines.once('line',()=>{process.stderr.write('Synthetic traceback: migration column mismatch\\n');process.stdout.write(${JSON.stringify(failure + "\n")});});lines.once('close',()=>process.exit(0));`,
         { mode: 0o700 },
       );
       const runtime = new ImZenXRuntime({
         dataDirectory: root,
+        recordGatewayDiagnostic: async (event) => {
+          diagnostics.push(event);
+        },
         isServerReady: () => true,
         onServerStatus: () => () => {},
         readConnection: async () => ({
@@ -345,6 +349,16 @@ for (const code of ["state_migration_blocked", "unknown_failure"]) {
           : /Check Python and channel configuration/,
       );
       assert.equal(runtime.status().state, "failed");
+      assert.equal(diagnostics.length, 1);
+      assert.equal(diagnostics[0].stage, "startup");
+      assert.match(
+        diagnostics[0].stderr,
+        /Synthetic traceback: migration column mismatch/,
+      );
+      assert.equal(
+        diagnostics[0].error.cause.error,
+        "/private/workspace secret-token",
+      );
       assert.doesNotMatch(
         JSON.stringify(runtime.status()),
         /secret-token|private\/workspace/,
@@ -403,5 +417,67 @@ test(
     assert.equal(runtime.status().state, "connected");
     assert.equal(delays.filter((delay) => delay === 15000).length, 1);
     assert.equal(delays.filter((delay) => delay === 120000).length, 1);
+  },
+);
+
+test(
+  "gateway exit retains bounded stderr, awaits local sink on close, and never exposes it in model status",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "imzenx-exit-diagnostic-"),
+    );
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const executable = path.join(root, "python-fixture");
+    await writeFile(
+      executable,
+      `#!${process.execPath}\nimport readline from 'node:readline';const lines=readline.createInterface({input:process.stdin});lines.once('line',()=>{process.stdout.write('{"type":"ready"}\\n');setTimeout(()=>{process.stderr.write('X'.repeat(70000)+'synthetic-secret-tail\\n',()=>process.exit(3));},30);});`,
+      { mode: 0o700 },
+    );
+    let release;
+    const barrier = new Promise((resolve) => {
+      release = resolve;
+    });
+    const diagnostics = [];
+    const runtime = new ImZenXRuntime({
+      dataDirectory: root,
+      recordGatewayDiagnostic: async (event) => {
+        diagnostics.push(event);
+        await barrier;
+      },
+      isServerReady: () => true,
+      onServerStatus: () => () => {},
+      readConnection: async () => ({
+        url: "ws://127.0.0.1:4500",
+        authentication: { tokenFile: path.join(root, "token") },
+      }),
+    });
+    const { sdk } = createFixturePluginHost({ pluginId: "imzenx" });
+    await runtime.start(sdk);
+    runtime.activate(Promise.resolve());
+    await waitFor(() => runtime.status().state === "unconfigured");
+    await invoke(runtime, "imzenx_configure", {
+      pythonExecutable: executable,
+      channelsConfigFile: path.join(root, "channels.json"),
+      cwd: root,
+    });
+    await waitFor(() => diagnostics.length === 1);
+    assert.equal(diagnostics[0].stage, "exit");
+    assert.match(diagnostics[0].stderr, /^\[Earlier stderr truncated/);
+    assert.match(diagnostics[0].stderr, /synthetic-secret-tail/);
+    assert.ok(diagnostics[0].stderr.length < 66_000);
+    assert.doesNotMatch(
+      JSON.stringify(runtime.status()),
+      /synthetic-secret-tail/,
+    );
+    let closed = false;
+    const closing = runtime.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(closed, false);
+    release();
+    await closing;
+    assert.equal(closed, true);
   },
 );

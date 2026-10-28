@@ -11,7 +11,10 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ZenXProjectlessWorkspaceAllocator } from "../src/main/projectless-workspace.js";
+import {
+  projectlessWorkspaceRoot,
+  ZenXProjectlessWorkspaceAllocator,
+} from "../src/main/projectless-workspace.js";
 
 const now = () => new Date(2026, 9, 27, 12);
 
@@ -156,5 +159,45 @@ test("failed persistent registration never returns a cwd for dispatch and leaves
     assert.equal(path.basename(await retry.allocate("task")), "task-2");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projectless default root separates workspaces from internal data and respects isolated data roots", () => {
+  assert.equal(
+    projectlessWorkspaceRoot("/synthetic/home"),
+    path.resolve("/synthetic/home/.zenx/workspaces"),
+  );
+  assert.equal(
+    projectlessWorkspaceRoot("/synthetic/home", "/isolated/core"),
+    path.resolve("/isolated/core/workspaces"),
+  );
+});
+
+test("new default allocation preserves older Documents workspaces and uses local date plus request name", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "zenx-workspace-layout-"));
+  try {
+    const old = path.join(home, "Documents", "ZenX", "2026-10-27", "报告");
+    await mkdir(old, { recursive: true });
+    await writeFile(path.join(old, "keep.txt"), "old artifact");
+    const registered = [old];
+    const allocator = new ZenXProjectlessWorkspaceAllocator({
+      rootDirectory: projectlessWorkspaceRoot(home),
+      now,
+      registerWorkspace: async (cwd) => {
+        registered.push(cwd);
+      },
+    });
+    const first = await allocator.allocate("整理今日报告");
+    const second = await allocator.allocate("整理今日报告");
+    assert.equal(
+      first,
+      path.join(home, ".zenx", "workspaces", "2026-10-27", "整理今日报告"),
+    );
+    assert.equal(second, `${first}-2`);
+    assert.deepEqual(registered, [old, first, second]);
+    assert.deepEqual(await readdir(old), ["keep.txt"]);
+    assert.deepEqual(await readdir(first), []);
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });

@@ -38,7 +38,7 @@ test("Pin and Unpin move one Thread through the independent Pinned section", asy
     await act(async () => exactMenuButton("Pin").click());
 
     assert.match(document.body.textContent ?? "", /Pinned/u);
-    assert.equal(document.querySelectorAll(".thread-row-shell").length, 1);
+    assert.equal(document.querySelectorAll(".thread-row-shell").length, 2);
     assert.equal(
       document.activeElement,
       document.getElementById("sidebar-pinned-heading"),
@@ -46,7 +46,7 @@ test("Pin and Unpin move one Thread through the independent Pinned section", asy
 
     const projectsToggle = requiredButton(".projects-section-toggle");
     await act(async () => projectsToggle.click());
-    assert.equal(document.querySelectorAll(".thread-row-shell").length, 1);
+    assert.equal(document.querySelectorAll(".thread-row-shell").length, 2);
     assert.ok(document.getElementById("sidebar-pinned-heading"));
     await act(async () => projectsToggle.click());
 
@@ -54,7 +54,7 @@ test("Pin and Unpin move one Thread through the independent Pinned section", asy
     await act(async () => exactMenuButton("Unpin").click());
 
     assert.equal(document.getElementById("sidebar-pinned-heading"), null);
-    assert.equal(document.querySelectorAll(".thread-row-shell").length, 1);
+    assert.equal(document.querySelectorAll(".thread-row-shell").length, 2);
     assert.equal(
       document.activeElement,
       document.getElementById("sidebar-thread-list-heading"),

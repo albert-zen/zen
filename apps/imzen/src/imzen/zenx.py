@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import sys
+import traceback
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -157,12 +158,15 @@ if __name__ == "__main__":
         with isolate_child_stdin():
             asyncio.run(run())
     except GatewayStateMigrationError:
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({"type": "failed", "code": "state_migration_blocked"}), flush=True)
         sys.exit(1)
     except PawRoutingError as error:
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({"type": "failed", "message": str(error)}), flush=True)
         sys.exit(1)
     except Exception:
+        traceback.print_exc(file=sys.stderr)
         # Do not promote transport errors containing credentials into tool output.
         print(
             json.dumps(

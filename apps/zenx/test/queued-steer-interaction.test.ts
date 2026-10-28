@@ -52,7 +52,9 @@ test("failed steering stays attached to the same row and does not disable readin
     const thread = queueScenario(2);
     await h.render(thread, {
       onSteerQueued: async () => {
-        throw new Error("Connection lost; refresh to check delivery.");
+        throw new Error("Connection lost; refresh to check delivery.", {
+          cause: new Error("Synthetic steer diagnostic"),
+        });
       },
     });
     await h.click('[data-queue-id="queue-1"] .queue-row-steer');
@@ -61,6 +63,12 @@ test("failed steering stays attached to the same row and does not disable readin
       document.querySelector('[data-queue-id="queue-1"] .queue-row-error')!
         .textContent!,
       /Connection lost/,
+    );
+    assert.match(
+      document.querySelector(
+        '[data-queue-id="queue-1"] .queue-row-error details pre',
+      )?.textContent ?? "",
+      /Synthetic steer diagnostic/u,
     );
     assert.equal(
       document.querySelector('[data-queue-id="queue-0"] .queue-row-error'),

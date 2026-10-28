@@ -318,3 +318,69 @@ test("remote watch UI displays source identity/error and keeps remote history se
     dom.window.close();
   }
 });
+
+test("local trigger failure exposes available raw diagnostics in closed text-only details", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+  });
+  const entry = {
+    id: "synthetic-history",
+    status: "failed",
+    triggerId: "synthetic-trigger",
+    startedAt: 1,
+    completedAt: 2,
+    reason: "Synthetic local program",
+    threadId: null,
+    sourceThreadId: null,
+    sourceDevice: null,
+    sourceTurnId: null,
+    error: "ENOENT: synthetic executable path",
+    programOutcome: {
+      stage: "action",
+      status: "nonzero_exit",
+      exitCode: 12,
+      error: "<script>diagnostic only</script>",
+      output: "synthetic stderr detail",
+    },
+    programOutcomes: [],
+  } as unknown as TriggerHistoryEntry;
+  const sdk = {
+    context: {},
+    commands: {
+      execute: async (name: string) => {
+        if (name === "list") return { triggers: [], history: [entry] };
+        if (name === "threads") return { threads: [] };
+        if (name === "workspaces") return { workspaces: [] };
+        throw new Error(name);
+      },
+    },
+    navigation: { navigate() {} },
+  } as unknown as PluginUiSdkV1;
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(React.createElement(TriggersPage, { sdk })),
+    );
+    const details = document.querySelector<HTMLDetailsElement>(
+      '[aria-label="Trigger history"] details.context-compaction-error-detail',
+    )!;
+    assert.ok(details);
+    assert.equal(details.open, false);
+    assert.match(
+      details.querySelector("pre")?.textContent ?? "",
+      /ENOENT.*synthetic executable path/su,
+    );
+    assert.match(
+      details.querySelector("pre")?.textContent ?? "",
+      /<script>diagnostic only<\/script>/u,
+    );
+    assert.equal(details.querySelector("script"), null);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

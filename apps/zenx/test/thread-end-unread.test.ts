@@ -233,14 +233,26 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
         terminal.id,
       );
       assert.equal(seen(), undefined, "opening while unfocused does not read");
-      assert.equal(
-        document.querySelectorAll(".thread-unread-failed").length,
-        outcome === "failed" ? 1 : 0,
-      );
-      assert.equal(
-        document.querySelectorAll(".thread-unread-dot").length,
-        outcome === "failed" ? 0 : 1,
-      );
+      for (const scope of [".pinned-thread-group", ".recent-thread-group"]) {
+        const rows = document.querySelectorAll(
+          `${scope} [data-thread-id="${started.id}"]`,
+        );
+        assert.equal(
+          rows.length,
+          1,
+          `${scope} projects the same completed Thread once`,
+        );
+        assert.equal(
+          rows[0]!.querySelectorAll(".thread-unread-failed").length,
+          outcome === "failed" ? 1 : 0,
+          `${scope} has the correct failure marker`,
+        );
+        assert.equal(
+          rows[0]!.querySelectorAll(".thread-unread-dot").length,
+          outcome === "failed" ? 0 : 1,
+          `${scope} has the correct unread marker`,
+        );
+      }
       focused = true;
       hidden = true;
       window.dispatchEvent(new dom.window.Event("focus"));
@@ -272,6 +284,18 @@ for (const outcome of ["normal", "empty", "failed", "aborted"] as const) {
           null,
         "reading the real terminal Turn clears the production Sidebar marker after recovery",
       );
+      for (const scope of [".pinned-thread-group", ".recent-thread-group"]) {
+        const row = document.querySelector(
+          `${scope} [data-thread-id="${started.id}"]`,
+        );
+        assert.ok(row, `${scope} retains the conversation after reading`);
+        assert.equal(
+          row.querySelectorAll(".thread-unread-failed, .thread-unread-dot")
+            .length,
+          0,
+          `${scope} clears its marker using the same terminal read watermark`,
+        );
+      }
       assert.equal(
         seen()?.id,
         terminal.id,

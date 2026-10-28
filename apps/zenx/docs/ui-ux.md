@@ -31,6 +31,7 @@ New thread 打开临时本地编辑页；选择或添加 Project 不创建 Threa
 - 持久日志是事实与恢复真相源，当前权限、队列等只是日志投影/缓存；关键 queue/config/control 变更未持久成功不得 ACK。ItemList 仅承载模型语义上下文；Trace 记录真实输入、输出、工具及运行观察，流式显示不能成为第二份可编辑历史。
 - Thread 列表产品数据来自 ZAS native `ThreadSummary` / `CurrentMetadata` read model，经 Electron main/preload typed IPC 投影。
 - Thread 的名称与归档由 ZAS 产品元数据负责；当前前台 Thread 选择、disclosure、草稿和打开的菜单属于 renderer-local UI 状态。Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个 main-process revision/CAS presentation store 从已提交 Trace 事实恢复，JSON 仅作缓存；它不是会话历史。后台更新只改变所属工作区，不抢占当前前台、焦点或读取文件/打开网页。Room 使用相同工作区界面，资源标签保留原 member Thread 归属，成员移除后不可借用其他成员执行。PAW 默认 Room 来自 trusted runtime 专属绑定，不与私有 Thread 侧栏双向同步。
+- 人类开合/全屏侧栏立即反映本地操作，不等待 Trace fsync 或 JSON 缓存写入。此临时视觉状态不是持久成功回执，不增加 revision，不授予资源/权限；后台 Host 继续原有 CAS 和 durable Trace 提交，失败清除预览并显示实际错误。连续操作保留最新视觉意图，其他工作区的状态变化不能抢占当前视图。
 - Archive 是当前已定义的可逆生命周期操作。本阶段 ZenX 不直接删除 journal，也不伪造 App Server 尚未定义的 Delete；永久 Delete 的 ownership、恢复、附件与历史语义仍为 **TBD**，这里不是永久产品禁令。
 - Pin 是 profile-local ZenX 产品状态。Pinned Thread IDs 不进入 canonical Items、不跨设备同步，也不改变 runtime priority、scheduling priority 或 Inbox ordering；Pin 只允许改变本地 Sidebar prominence。Pin 不改变 Thread 的 owning Project，也不清除其 Project 内排序偏好。Projects Sidebar 使用独立 Pinned section，其展示顺序就是 profile-local `pinnedThreadIds` 列表顺序：新 Pin 前置，用户可以在 Pinned section 内用拖拽或 Alt+方向键交换相邻行来调整顺序；排序只置换 `pinnedThreadIds`，不写入 Thread 的 Project 内排序偏好，也不是 canonical fact。
 - Project 与 Thread 的 Sidebar 顺序是 Settings-owned host-profile local preference，不是 canonical Item/journal fact，也不跨设备同步。Project 使用 canonical Project key 排序；Thread 顺序按 owning Project 分区保存，排序操作不能改变 cwd、Project identity 或把 Thread 移到另一 Project。
@@ -90,6 +91,14 @@ Thread
 
 ## 3. Product shell 与导航
 
+### Sidebar navigation sections
+
+全局新建会话入口保留在固定顶部。主滚动区按独立置顶、既有插件/Room 导航、项目、最近排列；置顶不再嵌在项目标题之下。置顶、项目、最近分别可折叠并保留本地展开偏好。项目内既有展开与排序保持不变，不引入自定义分区对象。无项目会话只在最近与可选置顶中导航，不在项目区增加“无项目”伪文件夹；其工作目录与会话详情不变。
+
+最近按现有 ThreadSummary 的 updatedAt 降序展示所有当前可见未归档会话（包含项目会话与无项目会话，子 Agent 仍遵循显式可见偏好）；它是同一会话的导航投影，不复制 Thread。首批显示 30 条，用户可连续展开更多。重复出现在置顶/项目/最近的行使用独立无障碍 ID；平台数字快捷键按可见顺序对同一 Thread 去重。
+
+最近标题旁的新建动作明确打开无项目草稿，不继承最近项目、不要求选目录；第一条有效 Send 才分配工作目录并创建真实 Thread。全局与项目内新建入口保持已有选择语义。折叠或打开导航不创建会话、不发模型请求。
+
 ### 3.1 品牌与 Logo
 
 - 产品壳必须保留正式 **ZenX logo / wordmark** 的位置。Provider logo 只用于 Thread 的 Provider / model identity，不能替代 ZenX 产品标识；原型中的合成品牌标记不是正式资产。
@@ -118,7 +127,7 @@ New thread 可保留独立 row；它相对 插件入口 / Projects 的精确视�
 
 - Projects 标题旁提供 icon-only **Add project**，具备 tooltip、accessible name、focus state 和完整 hit target。
 - Add project 使用 ZenX 只读 directory picker；Thread 创建最终必须解析为明确的 cwd，并消费同一个 canonical Project projection。
-- Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则显示“无项目”选择。用户也可在同一个选择器显式选择“无项目”；首条有效 Send 时由目标 Host 在其 Documents/ZenX/YYYY-MM-DD/安全名称 分配独立持久目录，碰撞时创建唯一目录，不复用旧目录、不自动初始化 Git。目录创建或 profile 记录失败时明确失败，不派发 Thread 创建。归档不删除目录。不以 process.cwd() 或默认 Project 隐式替代。
+- Project 内入口把被点击 Project 作为唯一作用域；全局入口使用仍有效的 last-used Project，否则显示“无项目”选择。用户也可在同一个选择器显式选择“无项目”；首条有效 Send 时由目标 Host 在其 ~/.zenx/workspaces/YYYY-MM-DD/首条请求安全短名称（独立于 Core 的 ~/.zen；显式 ZENX_DATA_DIR 隔离环境将其限定在该隔离根的 workspaces 下） 分配独立持久目录，碰撞时创建唯一目录，不复用旧目录、不自动初始化 Git。目录创建或 profile 记录失败时明确失败，不派发 Thread 创建。既有 Documents/ZenX 目录及登记保持原处，不自动搬迁；改标题不改目录名，归档不删除目录。不以 process.cwd() 或默认 Project 隐式替代。
 - 点击入口、切换 Project 或目录确认只更新非持久本地 draft；第一条有效 Send 才配置 Project、创建 Thread，并立即启动 Turn，不等待 summaries / Project projection。失败必须不遮盖当前页面，并提供恢复 draft 的直接重试路径。
 - Agent 入口直接打开同一个 welcome draft，不显示单独的未选择 Thread 页面。welcome 中央 Project 控件可以在首发前切换和搜索 Project；候选列表有视口内最大高度并只在列表内部滚动。Composer 旁的 Project chip 与机器切换使用同一交互体验：可点击打开同一个带搜索、键盘导航与 Add project 的 Project popover，不是只读展示。
 - welcome draft 的未发送输入按 Project（含独立的“无项目”选项）分别保留在 renderer-local 状态（与 Thread Composer 草稿同一层级，不持久化、不进入 journal/profile）：切到 Thread 或其它页面再回到某个 Project 的 New thread 时恢复该 Project 的未发送文本与图片；不同 Project 各自保留互不覆盖；首发成功创建 Thread 后该 Project 的保留内容即被消费。首发前的 Project 切换因此是在两个 Project 的 draft 之间交换，而不是把文本跟随过去。welcome 保持紧凑并相对主内容列视觉居中，不使用通用 compose 装饰图标。
@@ -832,3 +841,11 @@ legacy import，导入时间不是历史点击时间。UI/tool 来源由可信�
 真人操作；这些产品事实不进入模型 ItemList。缓存写失败不撤销已经持久的事实。
 
 App-current-focus keyboard permission explains that the selected app’s own windows may reorder behind the current foreground app while foreign windows, global foreground and hardware pointer stay stable; it grants no exact-window guarantee and does not relax the separate exact-window click contract.
+
+### 本机错误透明度
+
+本机操作错误必须说明已知阶段与结果：明确未提交的失败不得伪装成“结果不确定”；只有缺乏提交证据的传输等异常才显示未知，禁止自动重放。用户可展开查看本机原始可用错误详情，按纯文本换行/滚动展示，不执行其中的 HTML；不能以保护隐私为由隐藏用户自己的错误证据。认证请求头中的 API Key 省略与对外导出清洗仍在各自边界处理。压缩已提交后仅界面刷新失败时，保留“已压缩”事实并展示刷新错误，不引导重复压缩。
+
+Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失败与关闭编辑器后的已提交警告，都须保留默认收起的纯文本详情；IPC 未知结果不推断成失败或自动重试。Host 的 settings.jsonl 仅增加异常详情投影，不记录表单/API Key 输入，单条详情最多 32 Ki 字符并明确标记截断；现有滚动日志是有限诊断，不冒充完整 Trace。
+
+图片加载失败保持简短摘要，但队列缩略图及预览必须提供默认折叠的本机错误详情；详情为纯文本，不写回模型内容。预览里的详情摘要与正文可由 Tab 到达，Escape 与关闭后焦点恢复不变。重试仍是明确用户动作，不因展开详情重发模型/工具请求。

@@ -165,7 +165,7 @@ async function withSidebar(
   run: (harness: {
     scroller: HTMLElement;
     flushRemoval(): void;
-    clickArchive(threadId: string): Promise<void>;
+    clickArchive(threadId: string, section?: string): Promise<void>;
     focusCalls: { target: HTMLElement; options?: FocusOptions }[];
   }) => Promise<void>,
   operation: () => Promise<void> = async () => undefined,
@@ -284,11 +284,11 @@ async function withSidebar(
       scroller,
       flushRemoval: () => flushRemoval(),
       focusCalls,
-      clickArchive: async (threadId) => {
+      clickArchive: async (threadId, section = "") => {
         await act(async () =>
           document
             .querySelector<HTMLButtonElement>(
-              `[data-thread-id="${threadId}"] .thread-menu-trigger`,
+              `${section} [data-thread-id="${threadId}"] .thread-menu-trigger`,
             )!
             .click(),
         );
@@ -326,3 +326,29 @@ function summary(threadId: string): NativeThreadSummary {
     status: "idle",
   };
 }
+
+test("archive from Recent restores a Recent neighbor rather than the duplicate Project row", async () => {
+  await withSidebar("projects", async ({ clickArchive }) => {
+    await clickArchive("thread-7", ".recent-thread-group");
+    assert.ok(
+      document.activeElement?.closest(".recent-thread-group"),
+      "focus remains with the initiating navigation section",
+    );
+    assert.equal(
+      document.activeElement
+        ?.closest("[data-thread-id]")
+        ?.getAttribute("data-thread-id"),
+      "thread-8",
+    );
+  });
+});
+
+test("Recent archive keeps focus when the same Project occurrence is collapsed", async () => {
+  await withSidebar("projects", async ({ clickArchive }) => {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".project-toggle")!.click(),
+    );
+    await clickArchive("thread-7", ".recent-thread-group");
+    assert.ok(document.activeElement?.closest(".recent-thread-group"));
+  });
+});

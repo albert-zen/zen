@@ -27,7 +27,7 @@ export async function requestQueuedEdit(
         ? data.zenCode
         : undefined;
     const key = rejectedEditMessage(code);
-    if (key !== null) throw new Error(i18n.t(key));
+    if (key !== null) throw new Error(i18n.t(key), { cause: error });
     let message = i18n.t("shell:queueEditUnconfirmed");
     try {
       const recovered = await window.zenx.protocol.request("zen/thread/read", {
@@ -65,7 +65,7 @@ export async function requestQueuedEdit(
     } catch {
       /* A failed read cannot establish the edit outcome. */
     }
-    throw new Error(message);
+    throw new Error(message, { cause: error });
   }
 }
 

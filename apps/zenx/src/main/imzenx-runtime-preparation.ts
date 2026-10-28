@@ -5,8 +5,12 @@ import {
 } from "./trigger-program-runner.js";
 
 export class ImRuntimeSetupOwnershipError extends Error {
-  constructor() {
-    super("IM runtime setup process termination could not be confirmed");
+  constructor(detail?: string) {
+    super(
+      ["IM runtime setup process termination could not be confirmed", detail]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 }
 
@@ -26,7 +30,7 @@ export async function runTrustedImRuntimeSetup(
     GIT_TERMINAL_PROMPT: "0",
   };
   // Existing local Git/SSH authentication may satisfy the private dependency.
-  // Never pass bot credentials or promote installer diagnostics into a result.
+  // Never pass bot credentials. Installer diagnostics belong to the local owner.
   for (const key of [
     "SSH_AUTH_SOCK",
     "SystemRoot",
@@ -58,13 +62,21 @@ export async function runTrustedImRuntimeSetup(
     signal,
   );
   if (result.error?.includes("process-tree containment was not proven"))
-    throw new ImRuntimeSetupOwnershipError();
+    throw new ImRuntimeSetupOwnershipError(result.error);
   // uv's success is its exit status, not the runner's optional JSON action
-  // protocol. All bounded stdout/stderr diagnostics are discarded here.
+  // protocol. Preserve available bounded diagnostics on failure for local inspection.
   if (
     result.exitCode === 0 &&
     ["completed", "malformed_output"].includes(result.status)
   )
     return;
-  throw new Error("IM runtime preparation failed or was cancelled");
+  throw new Error(
+    [
+      `IM runtime preparation ${result.status} (exit code: ${String(result.exitCode)})`,
+      result.error,
+      result.output,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }

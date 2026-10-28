@@ -1084,7 +1084,7 @@ test("compaction error is a keyboard-reachable context notice with plain details
       ".context-compaction-error-detail",
     );
     assert.equal(details.open, false);
-    assert.equal(details.querySelector("p")?.tabIndex, 0);
+    assert.equal(details.querySelector("pre")?.tabIndex, 0);
     const summary = requiredElement<HTMLElement>(
       ".context-compaction-error-detail summary",
     );
@@ -1163,7 +1163,15 @@ test("real compaction request rejection stays with its Thread, ignores stale com
         "",
       /Could not confirm/u,
     );
-    assert.doesNotMatch(document.body.textContent ?? "", /private=secret/u);
+    assert.match(
+      requiredElement(".context-compaction-error-detail pre").textContent ?? "",
+      /private=secret/u,
+    );
+    assert.equal(
+      requiredElement<HTMLDetailsElement>(".context-compaction-error-detail")
+        .open,
+      false,
+    );
   });
 });
 
@@ -4625,4 +4633,94 @@ test("pending wait sweeps while returned waits stay settled across groups", () =
       dom.window.close();
     }
   }
+});
+
+test("committed compaction refresh failure is visible, settled, readable and dismissible", async () => {
+  await withDom(async (root) => {
+    let composer = {
+      ...emptyComposerState(),
+      compaction: {
+        status: "succeeded" as const,
+        message: "Context compacted; refresh failed",
+        detail: "Snapshot connection closed",
+      },
+    };
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          approvals: [],
+          composer,
+          thread: thread([]),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+          onDismissCompaction: () => {
+            composer = { ...composer, compaction: undefined as never };
+            renderView();
+          },
+        }),
+      );
+    await act(async () => renderView());
+    const notice = requiredElement(".context-compaction-progress");
+    assert.match(
+      notice.textContent ?? "",
+      /Context compacted; refresh failed/u,
+    );
+    assert.equal(notice.querySelector(".mini-spinner"), null);
+    assert.match(
+      requiredElement(".context-compaction-error-detail pre").textContent ?? "",
+      /Snapshot connection closed/u,
+    );
+    await act(async () =>
+      requiredButton('[aria-label="Dismiss compaction error"]').click(),
+    );
+    assert.equal(document.querySelector(".context-compaction-progress"), null);
+  });
+});
+
+test("image failure details are closed, plain text and keyboard reachable in the preview", async () => {
+  const { ImageUrlPreview } =
+    await import("../src/renderer/src/ImagePresentation.js");
+  await withDom(async (root) => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    let closed = 0;
+    await act(async () =>
+      root.render(
+        createElement(ImageUrlPreview, {
+          url: null,
+          error: "Image unavailable",
+          errorDetail: "Synthetic <script>no()</script> attachment failure",
+          name: "Fixture",
+          trigger,
+          onClose: () => {
+            closed++;
+          },
+        }),
+      ),
+    );
+    const detail = document.querySelector<HTMLDetailsElement>(
+      ".image-preview-layer details",
+    )!;
+    assert.equal(detail.open, false);
+    assert.equal(detail.querySelector("script"), null);
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+    );
+    assert.equal(document.activeElement, detail.querySelector("summary"));
+    await act(async () => detail.querySelector("summary")!.click());
+    assert.equal(detail.open, true);
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
+    );
+    assert.equal(document.activeElement, detail.querySelector("pre"));
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    assert.equal(closed, 1);
+    await act(async () => root.render(null));
+    assert.equal(document.activeElement, trigger);
+    trigger.remove();
+  });
 });

@@ -1,3 +1,4 @@
+import type { ProviderProcessDiagnosticReporter } from "./provider-process-diagnostics.js";
 import { spawn } from "node:child_process";
 import { COMPUTER_PLUGIN_VERSION } from "../../../../../packages/zenx-computer-plugin/src/version.js";
 import { randomUUID } from "node:crypto";
@@ -140,6 +141,7 @@ export interface WinAppCliDiagnostic {
 }
 
 export interface WinAppCliRunOptions {
+  onFailureDiagnostic?: ProviderProcessDiagnosticReporter;
   timeoutMs: number;
   stdin?: string;
   signal?: AbortSignal;
@@ -235,12 +237,18 @@ type WinAppScreenshotImageLoader = (
 ) => WinAppScreenshotImage | Promise<WinAppScreenshotImage>;
 
 export class SpawnWinAppCliRunner implements WinAppCliRunner {
+  constructor(
+    private readonly reportFailure?: ProviderProcessDiagnosticReporter,
+  ) {}
   async run(
     executable: string,
     args: readonly string[],
     options: WinAppCliRunOptions,
   ): Promise<WinAppCliRunResult> {
-    return await runBoundedProcess(executable, args, options);
+    return await runBoundedProcess(executable, args, {
+      ...options,
+      onFailureDiagnostic: this.reportFailure ?? options.onFailureDiagnostic,
+    });
   }
 }
 
@@ -1064,26 +1072,43 @@ export async function runBoundedProcess(
     child.once("error", failAndKill);
     child.once("close", (code, exitSignal) => {
       finish(() => {
-        if (failure !== undefined) {
-          reject(failure);
-          return;
-        }
-        if (code === 0) {
-          resolve({
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-          });
-          return;
-        }
-        const detail = redactDiagnostic(
-          `${Buffer.concat(stderr).toString("utf8")} ${Buffer.concat(stdout).toString("utf8")}`,
-          options.redactions,
-        );
-        reject(
-          new Error(
-            `${path.basename(executable)} failed (${exitSignal ?? String(code)}): ${detail}`,
-          ),
-        );
+        const report =
+          failure !== undefined || code !== 0
+            ? Promise.resolve()
+                .then(() =>
+                  options.onFailureDiagnostic?.({
+                    executable,
+                    code,
+                    signal: exitSignal,
+                    stdout: Buffer.concat(stdout).toString("utf8"),
+                    stderr: Buffer.concat(stderr).toString("utf8"),
+                    failure,
+                  }),
+                )
+                .catch(() => undefined)
+            : Promise.resolve();
+        void report.then(() => {
+          if (failure !== undefined) {
+            reject(failure);
+            return;
+          }
+          if (code === 0) {
+            resolve({
+              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: Buffer.concat(stderr).toString("utf8"),
+            });
+            return;
+          }
+          const detail = redactDiagnostic(
+            `${Buffer.concat(stderr).toString("utf8")} ${Buffer.concat(stdout).toString("utf8")}`,
+            options.redactions,
+          );
+          reject(
+            new Error(
+              `${path.basename(executable)} failed (${exitSignal ?? String(code)}): ${detail}`,
+            ),
+          );
+        });
       });
     });
     if (options.signal?.aborted === true) abort();

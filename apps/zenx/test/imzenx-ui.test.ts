@@ -1182,7 +1182,7 @@ test("native runtime preparation is explicit and preserves a channel form being 
   }
 });
 
-test("native secret-save failure clears inputs and never echoes credential-bearing errors", async () => {
+test("native save failure clears inputs and preserves owner-readable diagnostics in closed details", async () => {
   const view = nativeView();
   const harness = await mountImPage(unconfiguredStatus, {
     inspect: async () => view,
@@ -1200,9 +1200,17 @@ test("native secret-save failure clears inputs and never echoes credential-beari
         "",
       /Channel settings were not saved/,
     );
-    assert.equal(
-      document.body.textContent?.includes("synthetic-rejected-secret"),
-      false,
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".imzenx-own-setup details.context-compaction-error-detail",
+    )!;
+    assert.equal(details.open, false);
+    assert.match(
+      details.querySelector("pre")?.textContent ?? "",
+      /server diagnostic synthetic-rejected-secret/u,
+    );
+    assert.doesNotMatch(
+      details.querySelector("summary")?.textContent ?? "",
+      /synthetic-rejected-secret/u,
     );
     assert.equal(
       document.querySelector<HTMLInputElement>('input[type="password"]')?.value,
@@ -1605,6 +1613,36 @@ test("IM continuation keyboard edits preserve a newer draft across late Save and
       configuration: preparedConfig,
       activeConfiguration: preparedConfig,
     });
+    await harness.close();
+  }
+});
+
+test("initial IM readiness failure remains inspectable without attempting setup", async () => {
+  const view = nativeView();
+  view.runtime.error = "IM runtime readiness could not be checked.";
+  view.runtime.errorDetail = "ENOENT: synthetic uv.lock path";
+  let preparations = 0;
+  const harness = await mountImPage(unconfiguredStatus, {
+    inspect: async () => view,
+    prepareRuntime: async () => {
+      preparations++;
+      return view;
+    },
+    saveChannel: async () => view,
+  });
+  try {
+    const alert = document.querySelector('.imzenx-own-setup [role="alert"]')!;
+    assert.match(alert.textContent ?? "", /readiness could not be checked/u);
+    assert.equal(
+      alert.querySelector<HTMLDetailsElement>("details")!.open,
+      false,
+    );
+    assert.match(
+      alert.querySelector("pre")?.textContent ?? "",
+      /synthetic uv.lock/u,
+    );
+    assert.equal(preparations, 0);
+  } finally {
     await harness.close();
   }
 });

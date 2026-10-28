@@ -33,7 +33,7 @@ async function records(root: string): Promise<Array<Record<string, unknown>>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-test("operational diagnostics retain fixed codes and discard arbitrary messages", async () => {
+test("operational diagnostics retain explicit local failure details without unrelated fields", async () => {
   const root = await temporaryDirectory();
   try {
     const log = new OperationalDiagnosticLog(root);
@@ -78,15 +78,15 @@ test("operational diagnostics retain fixed codes and discard arbitrary messages"
     );
     assert.ok(result.every((entry) => typeof entry.timestamp === "string"));
     const raw = JSON.stringify(result);
-    for (const secret of [
+    for (const detail of [
       "secret stderr",
       "/Users/private",
       "token=abc",
-      "private window title",
-      "private-provider-id",
-    ]) {
-      assert.equal(raw.includes(secret), false);
-    }
+      "plugin secret failed",
+    ])
+      assert.ok(raw.includes(detail));
+    for (const unrelated of ["private window title", "private-provider-id"])
+      assert.equal(raw.includes(unrelated), false);
     if (process.platform !== "win32") {
       assert.equal(
         (await stat(path.join(root, "diagnostics"))).mode & 0o777,
@@ -303,7 +303,7 @@ test("bootstrap failures before App Server creation keep their own fixed code", 
   }
 });
 
-test("bundled installation failures retain UI detail but log a startup code", async () => {
+test("bundled installation failures retain local diagnostic snapshot and startup code", async () => {
   const root = await temporaryDirectory();
   try {
     const catalog = new ZenXPluginCatalog(
@@ -331,10 +331,7 @@ test("bundled installation failures retain UI detail but log a startup code", as
       (await records(root)).map((entry) => entry.reason),
       ["discovery-error", "plugin-startup-failed", "plugin-startup-failed"],
     );
-    assert.equal(
-      JSON.stringify(await records(root)).includes("private"),
-      false,
-    );
+    assert.equal(JSON.stringify(await records(root)).includes("private"), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -380,6 +377,109 @@ test("main window records share existing bounded private log and storage errors 
         event: "main-window",
         status: "unresponsive",
       }),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap and plugin startup errors retain causal details, not just lifecycle codes", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    const error = new Error("synthetic startup failed", {
+      cause: new Error("synthetic disk read EIO"),
+    });
+    await log.recordBootstrapFailure(error);
+    await log.recordPluginStartupFailure(error);
+    for (const record of await records(root)) {
+      assert.match(record.detail as string, /synthetic disk read EIO/);
+      assert.match(record.detail as string, /operational-diagnostic-log.test/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("same operational status with a different cause writes a new observation", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await log.observeAppServer({
+      type: "error",
+      message: "synthetic connection refused",
+    });
+    await log.observeAppServer({
+      type: "error",
+      message: "synthetic connection refused",
+    });
+    await log.observeAppServer({
+      type: "error",
+      message: "synthetic protocol mismatch",
+    });
+    const failed = {
+      capabilityId: "computer",
+      providerId: "synthetic-provider",
+      status: "unavailable" as const,
+      interactionModes: [],
+      capabilities: [],
+      reason: "synthetic first",
+    };
+    await log.observePlugins({
+      discoveryErrors: [],
+      bundledStartupFailureCount: 0,
+      providerDiagnostics: [failed],
+    });
+    await log.observePlugins({
+      discoveryErrors: [],
+      bundledStartupFailureCount: 0,
+      providerDiagnostics: [{ ...failed, reason: "synthetic second" }],
+    });
+    const entries = await records(root);
+    assert.equal(entries.length, 4);
+    assert.deepEqual(
+      entries.map((entry) => entry.detail),
+      [
+        "synthetic connection refused",
+        "synthetic protocol mismatch",
+        "synthetic first",
+        "synthetic second",
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("oversized local failure detail has an explicit truncation marker and still fits default rotation budget", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await log.recordBootstrapFailure(new Error("\u0000".repeat(100_000)));
+    const entries = await records(root);
+    assert.equal(entries.length, 1);
+    assert.match(entries[0]!.detail as string, /truncated/);
+    assert.ok(
+      (await stat(path.join(root, "diagnostics", "operations.jsonl"))).size <
+        256 * 1024,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("App Server owner-local detail takes precedence over the short summary", async () => {
+  const root = await temporaryDirectory();
+  try {
+    const log = new OperationalDiagnosticLog(root);
+    await log.observeAppServer({
+      type: "error",
+      message: "short summary",
+      detail: "synthetic stack and nested cause",
+    });
+    assert.equal(
+      (await records(root))[0]!.detail,
+      "synthetic stack and nested cause",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

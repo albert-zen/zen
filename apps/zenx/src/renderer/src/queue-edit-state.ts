@@ -12,6 +12,7 @@ export interface QueueEditSession {
   trigger: HTMLButtonElement;
   pending: boolean;
   error: string | null;
+  errorDetail?: string;
   attempt?: { editId: string; fingerprint: string };
   confirmed?: { editItemId: string; revision: number };
 }

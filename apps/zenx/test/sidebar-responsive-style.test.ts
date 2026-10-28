@@ -460,3 +460,31 @@ test("Subagents row and per-thread visibility switch retain coarse-pointer targe
     dom.window.close();
   }
 });
+
+test("fullscreen macOS titlebar follows the real Sidebar column rather than delayed panel observation", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const desktop = styles.slice(
+    styles.indexOf("/* macOS keeps the integrated title-row workspace."),
+  );
+  const rule = desktop.match(
+    /:root\[data-platform="darwin"\]\s*\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\)\s*> \.window-titlebar\s*\{([^}]+)\}/u,
+  )?.[1];
+  assert.ok(
+    rule,
+    "fullscreen-specific titlebar layout exists in desktop Darwin rules",
+  );
+  assert.match(rule, /grid-column: 1;/u);
+  assert.match(rule, /width: auto;/u);
+  assert.match(rule, /min-width: var\(--native-leading-safe-area\);/u);
+  assert.doesNotMatch(rule, /--workspace-panel-width|--sidebar-track/u);
+  assert.ok(
+    desktop.indexOf("@media (min-width: 721px)") < desktop.indexOf(rule),
+  );
+  assert.ok(
+    desktop.indexOf(rule) <
+      desktop.indexOf("@media (min-width: 721px) and (max-width: 1099px)"),
+  );
+});

@@ -4,7 +4,7 @@
 
 Native Computer diagnostics capture a bounded, allowlisted per-request observation context before transport enqueue and write into the invoking harness ToolTraceCapture; this context has no authority, result or replay semantics.
 
-- **Projectless workspaces** — The local Host exclusively allocates a persistent dated directory and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
+- **Projectless workspaces** — The local Host exclusively allocates a persistent request-named directory under ZenX’s `~/.zenx/workspaces/YYYY-MM-DD/` (independent of Core journals and Trace; an explicit `ZENX_DATA_DIR` isolates workspaces under that test/custom data root) and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
 - **Automation environment** — A Host-local OS observation port separates session locking, system suspend/resume and unknown display power; macOS starts unknown and samples its native console-session state through the existing AX helper before admission, never inferring unlocked from Electron idle, it retires native observations and aborts admitted calls on session changes, while only the explicitly declared native macOS AX backend admits fresh scoped accessibility calls in a locked session, with mandatory post-action observation; captures and foreground input remain active-only, live pixels retire per target until a fresh active observation, readiness checks publish verification only within the exact environment generation actually sampled, and an operation-lifetime application-suspension blocker never unlocks a device, prevents explicit sleep or creates durable task state.
@@ -381,6 +381,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   解析结果投影为同一套组件消费的根级语义色彩 token；它不进入 Core、Thread、Project、host
   restart 或 canonical ItemList。不启用原生窗口材质；标题栏、品牌区、侧栏与窄屏抽屉共享实色侧栏背景，
   旧透明偏好被忽略，其余配色选择保持有效。
+- **Sidebar immediate presentation** — The renderer overlays pending open/fullscreen intent on the committed sidebar projection without advancing its revision; Host CAS and durable Trace receipts remain authoritative, and failed persistence removes the preview and exposes the error. Resource edits are not optimistically admitted.
 - **ZenXChildSidebarVisibility** — ZenXHostProfile 的 `visibleSubagentThreadIds` 按精确 threadId 保存子线程的本机侧栏显隐，默认隐藏；renderer 只从 canonical `parentThreadId` 识别子线程，显隐独立于 Pin、排序及运行状态，隐藏也保留 Subagents 树和已打开会话，不写入 ItemList 或改变 Project/祖先关系。
 - **ZenXThreadPinProjection** — ZenXHostProfile 按本机 threadId 顺序持久化 Sidebar Pin，
   renderer 只把仍存在的 active Thread 投影到独立 Pinned section；Pin 不同步、不进入
@@ -1585,3 +1586,17 @@ Trace clock wire declarations stay runtime-neutral; the Host clock reader and fi
   Its separate ten-second read budget never extends an AX inspection deadline.
 
 Native App-current-focus keyboard input may reorder only target-application windows behind every current foreground-application window, while preserving known console state, global foreground/pointer/display and all foreign window identities, owners and order; App authorization also requires complete positive unique window-ID/owner metadata for every original layer-zero CG row, without changing legacy readability; exact-window click and foreground input retain their original strict desktop equality.
+
+### Local operation diagnostics
+
+ZenX compaction IPC carries a plain-data diagnostic rejection across Electron main/preload/contextBridge, then decodes it in the renderer; typed service codes preserve known pre-commit failures, while transport ambiguity remains unknown. This ephemeral reply is not a new persistent domain. Local error details are available to their owner as plain text; export cleaning is a separate boundary, not a reason to suppress local evidence. A successful commit followed by a failed view refresh remains a successful commit with a refresh diagnostic.
+
+本机错误详情投影 `localErrorDetail` 在 Electron 边界保留可用 stack/cause/聚合错误，遍历限制为 8 层、256 字段/对象与 64 Ki 字符并显式标记截断；它仅服务本机展开详情，不替代原始 Trace、不参与恢复判定或对外导出。
+
+Chrome native-host 启动错误复用已有本机 diagnostics 目录保存有界原因详情（1 MiB 当前文件与一份轮转），stderr 仅显示摘要和文件入口；它是有限支持诊断，不是完整 Trace、导出或模型上下文。
+
+外部与 Windows provider 的进程失败在生成模型侧清洗摘要之前，将已有有界 stdout/stderr 和退出状态投影写入现有本机 diagnostics/provider-process.jsonl；不采集 argv、env、stdin，详情预算与轮转显式有界，不另建 Trace 域。
+
+队列准入失败在既有 thread Trace 中记录 `queue_admission_failed`（实际 attempt/queued Item 关联及有限异常字段），本机 Durable Trace 的 Events/Timeline 原文可读；模型与远端通知继续使用安全摘要。该被动观察不参与 ACK、恢复或重发，异常投影上限为 8 层、128 对象、64 Ki 字符及每层 32 个聚合错误，超限显式标记；不捕获 request、headers、config 对象。
+
+IM Gateway 异常沿私有子进程 stderr 保留不含 locals 的 Python traceback，由可信内置 IMZenX Host 回调写入既有本机 `diagnostics/im-gateway.jsonl`（1 MiB × 2 滚动）；进程内仅保留末尾 64 Ki 字符并明确标记截断，关闭时等待已排队日志写入。该有限诊断不是完整 Trace；模型工具/IM status 只保留稳定错误与本机查看提示，不取得原始诊断权限，迁移失败仍禁止重置原库或自动重试。

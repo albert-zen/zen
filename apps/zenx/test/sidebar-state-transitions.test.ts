@@ -38,14 +38,25 @@ test("collapsed Projects remain recoverable without an Archived scope", async ()
     await act(async () => root.render(createElement(ActiveSidebar, {})));
     const projectsToggle = requiredButton(".projects-section-toggle");
     await act(async () => projectsToggle.click());
-    assert.equal(document.querySelector(".thread-row"), null);
+    assert.equal(
+      document.querySelector("[data-project-key] .thread-row"),
+      null,
+    );
+    assert.ok(
+      document.querySelector(".recent-thread-group .thread-row"),
+      "collapsing Projects must not collapse Recent",
+    );
     assert.equal(projectsToggle.getAttribute("aria-expanded"), "false");
     assert.equal(document.querySelector('[aria-label="Thread views"]'), null);
     assert.ok(document.querySelector(".settings-nav-row"));
 
     await act(async () => projectsToggle.click());
     assert.equal(projectsToggle.getAttribute("aria-expanded"), "true");
-    assert.match(document.body.textContent ?? "", /Active Thread/u);
+    assert.match(
+      document.querySelector("[data-project-key]")?.textContent ?? "",
+      /Active Thread/u,
+    );
+    assert.ok(document.querySelector(".recent-thread-group .thread-row"));
     const projectToggle = requiredButton(".project-toggle");
     await act(async () => projectToggle.click());
     await act(async () => projectsToggle.click());

@@ -3,7 +3,7 @@ export const en = {
     "Start a chat without a project, or add a folder.",
   noProject: "No project",
   projectlessDirectoryHint:
-    "Creates an independent folder in Documents/ZenX when you first send.",
+    "Creates a dated, request-named folder in ~/.zenx/workspaces when you first send.",
   referenceDetails: "Reference details",
   referenceDetailsNamed: "Reference details: {{name}}",
   closeReferenceDetails: "Close reference details",
@@ -735,6 +735,9 @@ export const en = {
   loadingActiveThreads: "Loading active Threads…",
   conversationsAppearHere: "Your conversations will appear here.",
   pinned: "Pinned",
+  recentThreads: "Recent",
+  showMoreThreads: "Show more conversations",
+  newProjectlessThread: "New conversation without a project",
   describeOutcome:
     "Describe the outcome you want. ZenX will use this Thread’s workspace, model, and permission policy.",
   backToLive: "Back to live",
@@ -883,7 +886,7 @@ export const zhCN = {
   startWithoutProjectOrAddFolder: "直接创建无项目会话，或添加一个项目文件夹。",
   noProject: "无项目",
   projectlessDirectoryHint:
-    "首次发送后，在 Documents/ZenX 自动创建独立文件夹。",
+    "首次发送时，在 ~/.zenx/workspaces 下按日期和请求创建独立文件夹。",
   referenceDetails: "引用详情",
   referenceDetailsNamed: "引用详情：{{name}}",
   closeReferenceDetails: "关闭引用详情",
@@ -1575,6 +1578,9 @@ export const zhCN = {
   loadingActiveThreads: "正在加载活跃会话…",
   conversationsAppearHere: "你的会话会显示在这里。",
   pinned: "已置顶",
+  recentThreads: "最近",
+  showMoreThreads: "显示更多会话",
+  newProjectlessThread: "新建无项目会话",
   describeOutcome:
     "描述你想要的结果。ZenX 将使用此会话的工作区、模型和权限策略。",
   backToLive: "返回实时内容",
