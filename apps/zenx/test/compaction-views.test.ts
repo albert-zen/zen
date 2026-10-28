@@ -117,7 +117,10 @@ test("compaction view tabs support scoped arrow navigation and independent rows"
         }),
       ),
     );
-    assert.equal(document.activeElement, tabs[1]);
+    assert.ok(
+      document.activeElement === tabs[1],
+      "ArrowRight focuses the next tab in the same compaction row",
+    );
     assert.equal(tabs[1]!.getAttribute("aria-selected"), "true");
     assert.match(rows[1]!.textContent!, /No original-history reference/);
     assert.equal(
@@ -129,7 +132,10 @@ test("compaction view tabs support scoped arrow navigation and independent rows"
         new window.KeyboardEvent("keydown", { key: "End", bubbles: true }),
       ),
     );
-    assert.equal(document.activeElement, tabs[2]);
+    assert.ok(
+      document.activeElement === tabs[2],
+      "End focuses the last tab in the same compaction row",
+    );
     const panel = rows[1]!.querySelector('[role="tabpanel"]')!;
     assert.equal(panel.getAttribute("aria-labelledby"), tabs[2]!.id);
     assert.equal(panel.id, tabs[2]!.getAttribute("aria-controls"));

@@ -83,11 +83,16 @@ final bundle and records its hash alongside browser screenshots.
 - Full 498-file ZenX sweep: 4,641 tests, 4,577 passed, 15 failed, 49 skipped.
   Five packaging failures were the runner's missing default npm cache and all
   passed when rerun with an allowed temporary cache. The two duration fixtures
-  above were corrected and their entire 99-test file passed. Eight unrelated
-  environment blockers remain: three tests require sandbox-denied temporary
-  Unix sockets, four require the absent native `node-pty` binary, and one smoke
-  file imports an absent Electron binary. This is **not** a clean aggregate
-  check or native-device acceptance. No unrelated production code was changed.
+  above were corrected and their entire 99-test file passed. The missing Electron
+  import prerequisite was resolved using the already-installed, exact-version
+  43.2.0 distribution through the package's supported
+  `ELECTRON_OVERRIDE_DIST_PATH`; all four tests in that smoke file passed without
+  launching a browser. Seven unrelated environment blockers remain: three tests
+  require sandbox-denied temporary Unix sockets, and four require the absent
+  Linux `node-pty` binary. The installed 1.1.0 package has only macOS/Windows
+  prebuilds; no local Node headers or Linux binary were available for a normal
+  offline build. This is **not** a clean aggregate check or native-device
+  acceptance. No unrelated production code or shared dependency was changed.
 - The single review correction uses a bounded boolean DOM assertion rather
   than serializing a DOM element on failure; its focused test passed.
 

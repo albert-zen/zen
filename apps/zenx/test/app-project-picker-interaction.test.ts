@@ -7453,9 +7453,8 @@ test("tool destination opens and focuses the exact delivered message, not just i
       document.querySelector<HTMLButtonElement>(".tool-action-target button"),
     );
     assert.equal(link.textContent, "View sent message");
-    assert.equal(
-      link.closest(".trace-reveal"),
-      null,
+    assert.ok(
+      link.closest(".trace-reveal") === null,
       "Action is available independently of tool details",
     );
     assert.equal(
@@ -7606,7 +7605,10 @@ test("tool trigger destination opens actual other-thread definition in the exist
       ),
     );
     assert.equal(editor.value, "exact-trigger");
-    assert.equal(document.querySelector("#thread-composer"), composer);
+    assert.ok(
+      document.querySelector("#thread-composer") === composer,
+      "Opening the exact trigger preserves the existing composer",
+    );
     assert.ok(
       commands.every((command) =>
         ["list", "threads", "workspaces", "sidebar_facts"].includes(command),

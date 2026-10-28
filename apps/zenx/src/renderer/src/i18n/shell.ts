@@ -701,8 +701,7 @@ export const en = {
   watching: "Watching",
   worked: "Worked",
   working: "Working",
-  ongoingTurnActivity:
-    "Agent is still working; tool statuses remain unchanged.",
+  ongoingTurnActivity: "Agent is still working",
   recoveringTask: "Retrying",
   recoveryAttempt: "Attempt {{count}}",
   workspaceFiles: "Workspace files",
@@ -1570,7 +1569,7 @@ export const zhCN = {
   watching: "观察中",
   worked: "已工作",
   working: "正在工作",
-  ongoingTurnActivity: "Agent 仍在工作；工具状态保持其实际结果。",
+  ongoingTurnActivity: "Agent 仍在工作",
   recoveringTask: "正在重试",
   recoveryAttempt: "第 {{count}} 次重试",
   workspaceFiles: "工作区文件",

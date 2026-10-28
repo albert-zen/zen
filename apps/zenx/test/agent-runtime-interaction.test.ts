@@ -87,8 +87,10 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(document.querySelector(".turn-running-label"), metadata);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(title.textContent, "Inspected page and ran a command");
-    assert.match(title.getAttribute("title")!, /Agent is still working/u);
-    assert.ok(title.getAttribute("title")!.endsWith(title.textContent!));
+    assert.equal(
+      title.getAttribute("title"),
+      `Agent is still working · ${title.textContent!}`,
+    );
     assert.equal(
       title.querySelector(".activity-text")?.getAttribute("data-active"),
       "true",

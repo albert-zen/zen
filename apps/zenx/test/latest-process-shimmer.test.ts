@@ -10,6 +10,7 @@ import {
 } from "./fixtures/agent-runtime-data.js";
 import { emptyComposerState } from "../src/renderer/src/composer-state.js";
 import type { ThreadItem } from "../src/protocol-client/index.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 
 function sequences() {
   return [
@@ -81,11 +82,17 @@ for (const grouped of [false, true]) {
           "true",
           "Earlier task remains honestly unsettled",
         );
-        assert.match(sequences()[1]!.textContent!, /Agent is still working/u);
         const header = sequences()[1]!.querySelector(
           ".trace-activity-title, .trace-item-label",
         )!;
-        assert.match(header.getAttribute("title")!, /Agent is still working/u);
+        assert.equal(
+          header.getAttribute("title")?.split(" · ")[0],
+          "Agent is still working",
+        );
+        assert.equal(
+          header.parentElement?.querySelector(":scope > .sr-only")?.textContent,
+          "Agent is still working",
+        );
         const toggle = sequences()[1]!.querySelector("button")!;
         await h.click(
           grouped
@@ -151,3 +158,14 @@ for (const status of ["completed", "interrupted", "failed"] as const) {
     });
   });
 }
+
+test("ongoing activity copy is concise in both interface languages", () => {
+  assert.equal(
+    i18n.t("shell:ongoingTurnActivity", { lng: "en" }),
+    "Agent is still working",
+  );
+  assert.equal(
+    i18n.t("shell:ongoingTurnActivity", { lng: "zh-CN" }),
+    "Agent 仍在工作",
+  );
+});
