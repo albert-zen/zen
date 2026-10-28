@@ -190,6 +190,13 @@ export interface ZenXPluginContributions {
     surfaceId: string;
     order?: number;
   }>;
+  /** Independent information popup/rail, never a resource tab. */
+  information?: Array<{
+    id: string;
+    title: string;
+    surfaceId: string;
+    order?: number;
+  }>;
   panels?: Array<{
     id: string;
     title: string;

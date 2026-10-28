@@ -817,6 +817,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
           (manifest.contributions?.subroutes?.length ?? 0) +
           (manifest.contributions?.settings?.length ?? 0) +
           (manifest.contributions?.panels?.length ?? 0) +
+          (manifest.contributions?.information?.length ?? 0) +
           (manifest.contributions?.threadHeaders?.length ?? 0) +
           (manifest.contributions?.commands?.length ?? 0) +
           (manifest.contributions?.menus?.length ?? 0) +
@@ -893,6 +894,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       subroutes: project((manifest) => manifest.contributions?.subroutes),
       settings: project((manifest) => manifest.contributions?.settings),
       panels: project((manifest) => manifest.contributions?.panels),
+      information: project((manifest) => manifest.contributions?.information),
       threadHeaders: project(
         (manifest) => manifest.contributions?.threadHeaders,
       ),
@@ -1400,6 +1402,10 @@ function validateManifest(
     manifest.contributions?.settings ?? [],
   );
   validateSurfaceContributions("panel", manifest.contributions?.panels ?? []);
+  validateSurfaceContributions(
+    "information",
+    manifest.contributions?.information ?? [],
+  );
   validateSurfaceContributions(
     "thread header",
     manifest.contributions?.threadHeaders ?? [],

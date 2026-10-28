@@ -850,3 +850,7 @@ App-current-focus keyboard permission explains that the selected app’s own win
 Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失败与关闭编辑器后的已提交警告，都须保留默认收起的纯文本详情；IPC 未知结果不推断成失败或自动重试。Host 的 settings.jsonl 仅增加异常详情投影，不记录表单/API Key 输入，单条详情最多 32 Ki 字符并明确标记截断；现有滚动日志是有限诊断，不冒充完整 Trace。
 
 图片加载失败保持简短摘要，但队列缩略图及预览必须提供默认折叠的本机错误详情；详情为纯文本，不写回模型内容。预览里的详情摘要与正文可由 Tab 到达，Escape 与关闭后焦点恢复不变。重试仍是明确用户动作，不因展开详情重发模型/工具请求。
+
+### Interactive information board
+
+Information contributions use a top-right popup and an optional independently pinned narrow rail; they are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger; pin/unpin is an explicit user choice, with a usable narrow-screen popup fallback.
