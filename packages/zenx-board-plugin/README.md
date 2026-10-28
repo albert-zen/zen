@@ -70,9 +70,32 @@ Only `{{valuesBase64}}` is interpolated into shell commands: it contains UTF-8 J
 
 ```js
 await zenxPluginUi.commands.execute("draft", { choice: "custom" });
-// Requests a Host-owned confirmation before any declared side effects.
-await zenxPluginUi.commands.execute("event", { eventId: "send" });
+// Must be called from a user click/key in this focused frame.
+await zenxPluginUi.commands.execute("event", {
+  eventId: "send",
+  values: { answer: assembledText },
+});
 zenxPluginUi.navigation.navigate("/plugins/zenx-rooms/rooms");
 ```
 
-Custom JS may freely compose text into a field referenced by a declared submit action, manage local interactions, and conditionally invoke declared events. It cannot replace the Host-owned target, command, permissions or event definition. Host commands remain bounded and stale document/draft identities fail explicitly. This is not a claim that arbitrary scripts can bypass the Host security boundary.
+Custom JS may freely compose arbitrary component state into per-event values (no template field declarations required) referenced by a declared submit action, manage local interactions, and conditionally invoke declared events. It cannot replace the Host-owned target, command, permissions or event definition. Host commands remain bounded and stale document/draft identities fail explicitly. This is not a claim that arbitrary scripts can bypass the Host security boundary.
+
+A custom asynchronous action chain validates browser intent once, then retains only a nonpersistent scope for that exact iframe, owner and document:
+
+```js
+button.onclick = () =>
+  zenxPluginUi.interaction.run(async ({ commands }) => {
+    const check = await commands.execute("event", { eventId: "check" });
+    // May take longer than browser transient activation. Local JavaScript chooses
+    // what to assemble, and whether to request the separate model-delivery event.
+    if (!check.error) {
+      const answer = JSON.stringify({
+        chosen: localState,
+        result: check.outcomes,
+      });
+      await commands.execute("event", { eventId: "send", values: { answer } });
+    }
+  });
+```
+
+The scope ends with the callback and is revoked on frame close or document replacement, with a Host-enforced five-minute maximum. After expiry, a new explicit click is required; an in-flight action is not replayed or reported as canceled. Every effect still checks existing Host permissions and live ownership. On-load code has no interaction authority; no additional confirmation is imposed on a correctly scoped user interaction.

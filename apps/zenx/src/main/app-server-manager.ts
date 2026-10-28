@@ -3,6 +3,7 @@ import {
   type BoardToolRequest,
 } from "../board-host.js";
 import type { ToolExecutionResult } from "../../../../src/tool.js";
+import { DEFAULT_TOOL_TIMEOUT_MS } from "../../../../src/tool-task.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import {
   attachBrowserModelRoute,
@@ -190,6 +191,8 @@ export class AppServerManager {
         | "model-debug/result";
       resolve(event: HostEvent): void;
       reject(error: Error): void;
+      /** One-use callback bound by the initiating Board owner, not child arguments. */
+      assertBoardOwner?: () => void;
     }
   >();
   readonly #pendingMaintenanceRequests = new Map<
@@ -739,18 +742,37 @@ export class AppServerManager {
   async boardToolRequest(
     input: BoardToolRequest,
     signal: AbortSignal,
+    assertOwner?: () => void,
   ): Promise<ToolExecutionResult> {
     input = validateBoardToolRequest(input);
+    if (input.owner?.kind === "room" && !assertOwner)
+      throw new Error("Room execution ownership cannot be revalidated");
     signal.throwIfAborted();
     let requestId: string | undefined;
     let received = false;
+    let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
     const child = this.#child;
     const cancel = () => {
+      if (requestId !== undefined) {
+        const pending = this.#pendingConfigurationRequests.get(requestId);
+        if (pending) delete pending.assertBoardOwner;
+      }
       if (requestId !== undefined && child === this.#child && child?.connected)
         child.send({
           type: "board-tool/cancel",
           requestId,
         } satisfies HostCommand);
+      if (requestId !== undefined)
+        cancellationTimer ??= setTimeout(() => {
+          const pending = this.#pendingConfigurationRequests.get(requestId!);
+          if (!pending) return;
+          this.#pendingConfigurationRequests.delete(requestId!);
+          pending.reject(
+            new Error(
+              "Board cancellation outcome is unconfirmed; do not retry automatically",
+            ),
+          );
+        }, this.#configurationControlTimeout());
     };
     signal.addEventListener("abort", cancel, { once: true });
     try {
@@ -759,6 +781,12 @@ export class AppServerManager {
         (id) => {
           signal.throwIfAborted();
           requestId = id;
+          const pending = this.#pendingConfigurationRequests.get(id)!;
+          if (input.owner?.kind === "room")
+            pending.assertBoardOwner = () => {
+              signal.throwIfAborted();
+              assertOwner!();
+            };
           return { type: "board-tool/request", requestId: id, input };
         },
         (event) => {
@@ -773,6 +801,10 @@ export class AppServerManager {
           return event.result;
         },
         cancel,
+        // Board scripts use the task runtime's execution deadline. The unrelated
+        // five-second configuration RPC budget must not truncate a valid script.
+        Number(input.arguments.timeout_ms ?? DEFAULT_TOOL_TIMEOUT_MS) +
+          this.#configurationControlTimeout(),
       );
     } catch (error) {
       if (requestId !== undefined && !received)
@@ -783,6 +815,7 @@ export class AppServerManager {
       throw error;
     } finally {
       signal.removeEventListener("abort", cancel);
+      clearTimeout(cancellationTimer);
     }
   }
   async shellPanelRequest(input: ShellPanelRequest): Promise<ShellPanelResult> {
@@ -934,6 +967,7 @@ export class AppServerManager {
     command: (requestId: string) => HostCommand,
     read: (event: HostEvent) => T,
     onTimeout?: (requestId: string) => void,
+    requestTimeoutMs?: number,
   ): Promise<T> {
     const child = this.#child;
     if (
@@ -947,7 +981,7 @@ export class AppServerManager {
       throw new Error(`Zen App Server is not ready${detail}`);
     }
     const requestId = `configuration-${String(this.#nextConfigurationRequest++)}`;
-    const timeoutMs = this.#configurationControlTimeout();
+    const timeoutMs = requestTimeoutMs ?? this.#configurationControlTimeout();
     return await new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.#pendingConfigurationRequests.delete(requestId)) return;
@@ -974,11 +1008,16 @@ export class AppServerManager {
         },
       };
       this.#pendingConfigurationRequests.set(requestId, pending);
-      child.send(command(requestId), (error) => {
-        if (error === null) return;
-        if (!this.#pendingConfigurationRequests.delete(requestId)) return;
-        pending.reject(error);
-      });
+      try {
+        child.send(command(requestId), (error) => {
+          if (error === null) return;
+          if (!this.#pendingConfigurationRequests.delete(requestId)) return;
+          pending.reject(error);
+        });
+      } catch (error) {
+        this.#pendingConfigurationRequests.delete(requestId);
+        pending.reject(asError(error));
+      }
     });
   }
 
@@ -1530,6 +1569,32 @@ export class AppServerManager {
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "board-tool/check-owner") {
+        const pending = this.#pendingConfigurationRequests.get(
+          hostEvent.requestId,
+        );
+        const check = pending?.assertBoardOwner;
+        if (pending) delete pending.assertBoardOwner;
+        let error: string | undefined;
+        try {
+          if (!check)
+            throw new Error(
+              "Board owner authorization expired or is unavailable",
+            );
+          check();
+        } catch (failure) {
+          error =
+            asError(failure).message ||
+            "Board owner authorization is unavailable";
+        }
+        if (child.connected)
+          child.send({
+            type: "board-tool/owner-result",
+            requestId: hostEvent.requestId,
+            ...(error === undefined ? {} : { error }),
+          } satisfies HostCommand);
+        return;
+      }
       if (hostEvent?.type === "fleet/room-request") {
         void (async () => {
           try {

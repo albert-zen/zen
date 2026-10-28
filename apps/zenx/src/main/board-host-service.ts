@@ -34,6 +34,8 @@ export interface BoardHostServiceOptions {
   rooms: {
     roomsAvailable(): boolean;
     snapshot(): { rooms: ZenXRoom[] };
+    /** Required for Room execution; Thread-only adapters need not subscribe. */
+    onChange?(listener: () => void): () => void;
     postAddressedRoomMessage(
       roomId: string,
       threadId: string,
@@ -44,6 +46,7 @@ export interface BoardHostServiceOptions {
   executeTool(
     input: BoardToolRequest,
     signal: AbortSignal,
+    assertOwner: () => void,
   ): Promise<ToolExecutionResult>;
 }
 export type BoardDeliveryReceipt =
@@ -146,14 +149,38 @@ export class BoardHostService {
     // Validate supported mechanism before any Host or model activity.
     const request = validateBoardToolRequest({
       threadId: validateBoardOwner(input).threadId,
+      owner: validateBoardOwner(input),
       tool: action.tool,
       arguments: action.arguments,
     });
+    const owner = validateBoardOwner(input);
     signal.throwIfAborted();
-    const owner = await this.readOwner(input);
-    signal.throwIfAborted();
-    this.#assertRoom(owner);
-    return await this.options.executeTool(request, signal);
+    if (owner.kind === "room" && !this.options.rooms.onChange)
+      throw new Error("Room execution membership observation is unavailable");
+    const revoked = new AbortController();
+    const liveSignal = AbortSignal.any([signal, revoked.signal]);
+    const assertOwner = () => {
+      liveSignal.throwIfAborted();
+      this.#assertRoom(owner);
+    };
+    const unsubscribe =
+      owner.kind === "room"
+        ? this.options.rooms.onChange?.(() => {
+            try {
+              assertOwner();
+            } catch (error) {
+              revoked.abort(error);
+            }
+          })
+        : undefined;
+    try {
+      assertOwner();
+      await this.readOwner(owner);
+      assertOwner();
+      return await this.options.executeTool(request, liveSignal, assertOwner);
+    } finally {
+      unsubscribe?.();
+    }
   }
 
   #assertRoom(owner: BoardOwner): void {

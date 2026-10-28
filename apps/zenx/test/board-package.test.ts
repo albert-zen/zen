@@ -287,3 +287,47 @@ test("ownership and document updates fence stale actions; text never becomes she
   );
   assert.equal(f.calls.length, 0);
 });
+
+test("custom event payload is not limited to template fields and never overwrites saved drafts", async () => {
+  const f = await fixture();
+  await f.invoke("zenx_board_put", {
+    document: {
+      ...document,
+      events: [
+        {
+          id: "custom",
+          label: "Custom",
+          actions: [
+            {
+              kind: "if",
+              field: "scope",
+              equals: "never",
+              then: [{ kind: "set", values: { answer: "unused" } }],
+            },
+            { kind: "submit", text: "Custom composition: {{answer}}" },
+          ],
+        },
+      ],
+    },
+  });
+  await f.invoke(
+    "zenx_board_ui",
+    {
+      operation: "event",
+      owner: document.owner,
+      eventId: "custom",
+      revision: 1,
+      draftRevision: 0,
+      values: { answer: "assembled by arbitrary custom JavaScript" },
+    },
+    true,
+  );
+  assert.equal(
+    (f.calls[0] as unknown[])[1],
+    "Custom composition: assembled by arbitrary custom JavaScript",
+  );
+  const read = (await f.invoke("zenx_board_read", {})) as {
+    values: Record<string, unknown>;
+  };
+  assert.equal(read.values.answer, undefined);
+});

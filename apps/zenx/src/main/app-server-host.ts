@@ -27,7 +27,13 @@ import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
-const boardActions = new Map<string, AbortController>();
+const boardActions = new Map<
+  string,
+  {
+    controller: AbortController;
+    ownerCheck?: (error?: Error) => void;
+  }
+>();
 const roomListeners = new Set<
   (event: { roomId: string; threadId: string }) => void
 >();
@@ -76,10 +82,18 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "board-tool/owner-result") {
+    boardActions
+      .get(command.requestId)
+      ?.ownerCheck?.(
+        command.error === undefined ? undefined : new Error(command.error),
+      );
+    return;
+  }
   if (command.type === "board-tool/cancel") {
     boardActions
       .get(command.requestId)
-      ?.abort(new Error("Board action cancellation requested"));
+      ?.controller.abort(new Error("Board action cancellation requested"));
     return;
   }
   if (command.type === "board-tool/request") {
@@ -93,13 +107,43 @@ async function handleCommand(command: HostCommand): Promise<void> {
       });
       return;
     }
-    boardActions.set(command.requestId, controller);
+    const action: {
+      controller: AbortController;
+      ownerCheck?: (error?: Error) => void;
+    } = { controller };
+    boardActions.set(command.requestId, action);
     try {
       if (!appServer || !targetToolEnvironment)
         throw new Error("Board tool Host is unavailable");
       const result = await new BoardToolService(
         appServer,
         targetToolEnvironment,
+        () =>
+          new Promise<void>((resolve, reject) => {
+            controller.signal.throwIfAborted();
+            const timer = setTimeout(
+              () =>
+                done(
+                  new Error("Board owner validation timed out before dispatch"),
+                ),
+              5000,
+            );
+            const abort = () =>
+              done(new Error("Board action cancelled before owner validation"));
+            const done = (error?: Error) => {
+              clearTimeout(timer);
+              controller.signal.removeEventListener("abort", abort);
+              delete action.ownerCheck;
+              if (error) reject(error);
+              else resolve();
+            };
+            action.ownerCheck = done;
+            controller.signal.addEventListener("abort", abort, { once: true });
+            send({
+              type: "board-tool/check-owner",
+              requestId: command.requestId,
+            });
+          }),
       ).execute(command.input, controller.signal);
       send({ type: "board-tool/result", requestId: command.requestId, result });
     } catch (error) {
@@ -556,8 +600,8 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const controller of boardActions.values())
-    controller.abort(new Error("Board Host is closing"));
+  for (const action of boardActions.values())
+    action.controller.abort(new Error("Board Host is closing"));
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {

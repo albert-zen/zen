@@ -169,16 +169,21 @@ function immutableClone<T>(value: T): T {
   return clone;
 }
 
-function IsolatedPluginSurface({
+export function IsolatedPluginSurface({
   bundleHtml,
   exportName,
   sdk,
   className,
+  requireUserActivationFor,
+  interactionScope,
 }: {
   bundleHtml: string;
   exportName: string;
   sdk: PluginUiSdkV1;
   className?: string;
+  /** Board effects need a click/key in the focused frame; not a second permission prompt. */
+  requireUserActivationFor?: readonly string[];
+  interactionScope?: string;
 }) {
   useTranslation("panels");
   const frame = useRef<HTMLIFrameElement>(null);
@@ -186,6 +191,47 @@ function IsolatedPluginSurface({
     () => `zenx-ui-${crypto.getRandomValues(new Uint32Array(4)).join("-")}`,
     [],
   );
+  const gesture = useRef<{
+    nonce: string;
+    sequence: number;
+    expiresAt: number;
+  } | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    gesture.current = null;
+  }, [bundleHtml]);
+  useEffect(() => {
+    if (!requireUserActivationFor) return;
+    let pending: number | undefined;
+    const remember = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement && event.target !== frame.current)
+        previousFocus.current = event.target;
+    };
+    const restore = () => {
+      pending = requestAnimationFrame(() => {
+        if (
+          document.hasFocus() &&
+          document.activeElement === frame.current &&
+          (gesture.current?.expiresAt ?? 0) <= performance.now() &&
+          previousFocus.current?.isConnected
+        )
+          previousFocus.current.focus({ preventScroll: true });
+      });
+    };
+    document.addEventListener("focusin", remember);
+    window.addEventListener("blur", restore);
+    return () => {
+      document.removeEventListener("focusin", remember);
+      window.removeEventListener("blur", restore);
+      if (pending !== undefined) cancelAnimationFrame(pending);
+    };
+  }, [requireUserActivationFor]);
+  const interactions = useRef(
+    new Map<string, { scope: string | undefined; expiresAt: number }>(),
+  );
+  useEffect(() => {
+    interactions.current.clear();
+  }, [bundleHtml, interactionScope]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       const requestWindow = frame.current?.contentWindow;
@@ -195,6 +241,33 @@ function IsolatedPluginSurface({
         event.data?.channel !== channel
       )
         return;
+      // The bootstrap runs before custom scripts and keeps this witness in a closure.
+      // Browser-created pointer/key input can emit it; focus(), .click() and page messages cannot mint it.
+      if (event.data.type === "zenx-plugin-ui:gesture-register") {
+        if (
+          gesture.current === null &&
+          typeof event.data.nonce === "string" &&
+          event.data.nonce.length <= 128
+        )
+          gesture.current = {
+            nonce: event.data.nonce,
+            sequence: 0,
+            expiresAt: 0,
+          };
+        return;
+      }
+      if (event.data.type === "zenx-plugin-ui:gesture") {
+        if (
+          gesture.current &&
+          event.data.nonce === gesture.current.nonce &&
+          Number.isSafeInteger(event.data.sequence) &&
+          event.data.sequence > gesture.current.sequence
+        ) {
+          gesture.current.sequence = event.data.sequence;
+          gesture.current.expiresAt = performance.now() + 5_000;
+        }
+        return;
+      }
       if (event.data.type === "zenx-plugin-ui:ready") {
         requestWindow.postMessage(
           {
@@ -209,14 +282,68 @@ function IsolatedPluginSurface({
         return;
       }
       if (!isUiRequest(event.data, channel)) return;
-      const operation =
-        event.data.operation === "commands.execute"
-          ? sdk.commands.execute(event.data.id, event.data.input)
-          : event.data.operation === "handles.read"
-            ? sdk.handles.read(event.data.id)
-            : Promise.resolve(
-                sdk.navigation.navigate(String(event.data.input)),
-              );
+      const activated =
+        document.activeElement === frame.current &&
+        (gesture.current?.expiresAt ?? 0) > performance.now();
+      const validInteraction =
+        typeof event.data.interactionId === "string" &&
+        interactions.current.has(event.data.interactionId) &&
+        interactions.current.get(event.data.interactionId)?.scope ===
+          interactionScope &&
+        performance.now() <
+          interactions.current.get(event.data.interactionId)!.expiresAt;
+      let operation: Promise<unknown>;
+      if (event.data.operation === "interaction.begin") {
+        for (const [id, entry] of interactions.current)
+          if (performance.now() >= entry.expiresAt)
+            interactions.current.delete(id);
+        if (!requireUserActivationFor || !activated)
+          operation = Promise.reject(
+            new Error(
+              "This Board interaction requires a user click or key press in its custom content",
+            ),
+          );
+        else if (interactions.current.size >= 4)
+          operation = Promise.reject(
+            new Error("Too many active Board interactions"),
+          );
+        else {
+          const token = crypto.randomUUID();
+          for (const [id, entry] of interactions.current)
+            if (performance.now() >= entry.expiresAt)
+              interactions.current.delete(id);
+          interactions.current.set(token, {
+            scope: interactionScope,
+            expiresAt: performance.now() + 5 * 60_000,
+          });
+          operation = Promise.resolve(token);
+        }
+      } else if (event.data.operation === "interaction.end") {
+        interactions.current.delete(event.data.id);
+        operation = Promise.resolve(null);
+      } else if (
+        requireUserActivationFor &&
+        ((event.data.operation === "commands.execute" &&
+          requireUserActivationFor.includes(event.data.id)) ||
+          event.data.operation === "navigation.navigate") &&
+        (event.data.interactionId !== undefined
+          ? !validInteraction
+          : !activated)
+      ) {
+        operation = Promise.reject(
+          new Error(
+            "This Board action requires a user click or key press in its custom content",
+          ),
+        );
+      } else
+        operation =
+          event.data.operation === "commands.execute"
+            ? sdk.commands.execute(event.data.id, event.data.input)
+            : event.data.operation === "handles.read"
+              ? sdk.handles.read(event.data.id)
+              : Promise.resolve(
+                  sdk.navigation.navigate(String(event.data.input)),
+                );
       void operation.then(
         (value) => {
           if (frame.current?.contentWindow !== requestWindow) return;
@@ -246,7 +373,7 @@ function IsolatedPluginSurface({
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [channel, sdk]);
+  }, [channel, sdk, requireUserActivationFor, interactionScope]);
   const initialized = useRef(new WeakSet<HTMLIFrameElement>());
   const initialSdk = useRef(sdk);
   initialSdk.current = sdk;
@@ -287,7 +414,21 @@ function IsolatedPluginSurface({
       src="./plugin-frame.html"
       onLoad={(event) => {
         const element = event.currentTarget;
-        if (initialized.current.has(element)) return;
+        if (initialized.current.has(element)) {
+          if (
+            requireUserActivationFor &&
+            document.activeElement === element &&
+            (gesture.current?.expiresAt ?? 0) <= performance.now() &&
+            previousFocus.current?.isConnected
+          )
+            previousFocus.current.focus({ preventScroll: true });
+          return;
+        }
+        if (
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement !== element
+        )
+          previousFocus.current = document.activeElement;
         initialized.current.add(element);
         element.contentWindow?.postMessage(
           { type: "zenx-plugin-ui:document", html },
@@ -298,12 +439,27 @@ function IsolatedPluginSurface({
   );
 }
 
-function isolatedDocument(
+export function isolatedDocument(
   html: string,
   init: Readonly<Record<string, unknown>>,
 ): string {
   const payload = JSON.stringify(init).replaceAll("<", "\\u003c");
-  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>${pluginBaseStyles}</style></head><body>${html}<script>(()=>{const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='object'||Object.isFrozen(value))return value;Object.values(value).forEach(deepFreeze);return Object.freeze(value)};function applyTheme(){document.documentElement.dataset.theme=init.theme;document.documentElement.style.colorScheme=init.theme;Object.entries(init.appearance?.variables||{}).forEach(([key,value])=>document.documentElement.style.setProperty(key,value));}applyTheme();window.zenxPluginUi=Object.freeze({version:1,pluginId:init.pluginId,get theme(){return init.theme},get appearance(){return deepFreeze(init.appearance)},get context(){return deepFreeze(init.context)},commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)}});let sequence=0;const pending=new Map();function request(operation,id,input){const requestId=String(++sequence);parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input},'*');return new Promise((resolve,reject)=>pending.set(requestId,{resolve,reject}));}addEventListener('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel)return;if(message.type==='zenx-plugin-ui:update'&&event.source===parent){init.theme=message.theme;init.appearance=message.appearance;init.context=message.context;applyTheme();dispatchEvent(new CustomEvent('zenx-plugin-ui:change',{detail:{sdk:window.zenxPluginUi}}));return;}const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});parent.postMessage({channel:init.channel,type:'zenx-plugin-ui:ready'},'*');dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:init.exportName,sdk:window.zenxPluginUi}}));})();</script></body></html>`;
+  // Bootstrap precedes all custom HTML. The random input witness is not placed in
+  // document markup, SDK properties or messages delivered back to this frame.
+  return `<!doctype html><html data-theme="${String(init.theme)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>${pluginBaseStyles}</style></head><body><script>(()=>{
+const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='object'||Object.isFrozen(value))return value;Object.values(value).forEach(deepFreeze);return Object.freeze(value)};
+const post=parent.postMessage.bind(parent), listen=addEventListener.bind(window);
+const nonce=crypto.getRandomValues(new Uint32Array(8)).join('-');let gestureSequence=0;
+post({channel:init.channel,type:'zenx-plugin-ui:gesture-register',nonce},'*');
+const witness=(event)=>{if(event.isTrusted)post({channel:init.channel,type:'zenx-plugin-ui:gesture',nonce,sequence:++gestureSequence},'*')};
+listen('pointerdown',witness,true);listen('keydown',witness,true);
+function applyTheme(){document.documentElement.dataset.theme=init.theme;document.documentElement.style.colorScheme=init.theme;Object.entries(init.appearance?.variables||{}).forEach(([key,value])=>document.documentElement.style.setProperty(key,value));}applyTheme();
+let sequence=0;const pending=new Map();
+function request(operation,id,input,interactionId){const requestId=String(++sequence);return new Promise((resolve,reject)=>{pending.set(requestId,{resolve,reject});post({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input,interactionId},'*')});}
+Object.defineProperty(window,'zenxPluginUi',{value:Object.freeze({version:1,pluginId:init.pluginId,get theme(){return init.theme},get appearance(){return deepFreeze(init.appearance)},get context(){return deepFreeze(init.context)},commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)},interaction:{run:async(callback)=>{const token=await request('interaction.begin','interaction');try{return await callback({commands:{execute:(id,input)=>request('commands.execute',id,input,token)},navigation:{navigate:(route)=>request('navigation.navigate','route',route,token)}})}finally{await request('interaction.end',token)}}}})});
+listen('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel||event.source!==parent)return;if(message.type==='zenx-plugin-ui:update'){init.theme=message.theme;init.appearance=message.appearance;init.context=message.context;applyTheme();dispatchEvent(new CustomEvent('zenx-plugin-ui:change',{detail:{sdk:window.zenxPluginUi}}));return;}if(message.type!=='zenx-plugin-ui:result'&&message.type!=='zenx-plugin-ui:error')return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});
+post({channel:init.channel,type:'zenx-plugin-ui:ready'},'*');
+})();</script>${html}<script>dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:${JSON.stringify(init.exportName)},sdk:window.zenxPluginUi}}));</script></body></html>`;
 }
 
 function isUiRequest(
@@ -313,7 +469,13 @@ function isUiRequest(
   channel: string;
   type: "zenx-plugin-ui:request";
   requestId: string;
-  operation: "commands.execute" | "handles.read" | "navigation.navigate";
+  operation:
+    | "commands.execute"
+    | "handles.read"
+    | "navigation.navigate"
+    | "interaction.begin"
+    | "interaction.end";
+  interactionId?: string;
   id: string;
   input?: unknown;
 } {
@@ -325,7 +487,9 @@ function isUiRequest(
     typeof message.requestId === "string" &&
     (message.operation === "commands.execute" ||
       message.operation === "handles.read" ||
-      message.operation === "navigation.navigate") &&
+      message.operation === "navigation.navigate" ||
+      message.operation === "interaction.begin" ||
+      message.operation === "interaction.end") &&
     typeof message.id === "string" &&
     message.id.length > 0
   );

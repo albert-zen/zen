@@ -79,6 +79,7 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
 export type HostCommand =
   | { type: "board-tool/request"; requestId: string; input: BoardToolRequest }
   | { type: "board-tool/cancel"; requestId: string }
+  | { type: "board-tool/owner-result"; requestId: string; error?: string }
   | {
       type: "model-debug/request";
       requestId: string;
@@ -166,6 +167,7 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | { type: "board-tool/check-owner"; requestId: string }
   | {
       type: "board-tool/result";
       requestId: string;
@@ -344,6 +346,11 @@ export function isHostCommand(value: unknown): value is HostCommand {
   const fleet = value as Record<string, unknown>;
   if (fleet.type === "board-tool/cancel")
     return typeof fleet.requestId === "string";
+  if (fleet.type === "board-tool/owner-result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
   if (fleet.type === "board-tool/request") {
     try {
       validateBoardToolRequest(fleet.input);
@@ -473,6 +480,8 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "board-tool/check-owner")
+    return typeof fleet.requestId === "string";
   if (fleet.type === "board-tool/result")
     return (
       typeof fleet.requestId === "string" &&

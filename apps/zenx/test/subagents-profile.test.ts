@@ -270,6 +270,7 @@ test("startup digest-replaces cached Subagents 1.0.0 header with current panel-o
             "zenx-self-control",
             "zenx-triggers",
             "zenx-fleet",
+            "zenx-board",
           ].map((id) => ({
             id,
             lifecycle: "uninstalled",

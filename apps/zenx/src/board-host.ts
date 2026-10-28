@@ -6,6 +6,8 @@ export type { BoardOwner } from "../../../packages/zenx-board-plugin/src/board.j
  */
 export interface BoardToolRequest {
   threadId: string;
+  /** Host-owned exact conversation scope; never inferred from tool arguments. */
+  owner?: BoardOwner;
   tool: "shell";
   arguments: Record<string, unknown>;
 }
@@ -36,7 +38,7 @@ export function validateBoardToolRequest(value: unknown): BoardToolRequest {
     value.tool !== "shell" ||
     !record(value.arguments) ||
     !Object.keys(value).every((key) =>
-      ["threadId", "tool", "arguments"].includes(key),
+      ["threadId", "owner", "tool", "arguments"].includes(key),
     )
   )
     throw new Error(
@@ -49,8 +51,20 @@ export function validateBoardToolRequest(value: unknown): BoardToolRequest {
     JSON.stringify(value.arguments).length > 100_000
   )
     throw new Error("Board shell arguments must be bounded local JSON");
+  if (
+    value.arguments.timeout_ms !== undefined &&
+    (!Number.isSafeInteger(value.arguments.timeout_ms) ||
+      Number(value.arguments.timeout_ms) < 1 ||
+      Number(value.arguments.timeout_ms) > 86400000)
+  )
+    throw new Error("Board shell timeout_ms must be from 1 to 86400000");
+  const owner =
+    value.owner === undefined ? undefined : validateBoardOwner(value.owner);
+  if (owner && owner.threadId !== value.threadId)
+    throw new Error("Board execution owner must match its exact Thread");
   return {
     threadId: value.threadId,
+    ...(owner ? { owner } : {}),
     tool: "shell",
     arguments: structuredClone(value.arguments),
   };

@@ -69,6 +69,7 @@ function hostFixture() {
     rooms: {
       roomsAvailable: () => true,
       snapshot: () => ({ rooms }),
+      onChange: () => () => {},
       postAddressedRoomMessage: async () => assert.fail("Unexpected Room send"),
     },
     executeTool: async (request) => {
@@ -181,6 +182,7 @@ test("no-model action has no native send or owner override and unsupported mecha
   assert.deepEqual(f.executions, [
     {
       threadId: owner.threadId,
+      owner,
       tool: "shell",
       arguments: { command: "echo synthetic" },
     },
@@ -211,6 +213,14 @@ test("no-model action has no native send or owner override and unsupported mecha
       tool: "shell",
       arguments: { x: undefined },
     }),
+  );
+  assert.throws(
+    () =>
+      validateBoardToolRequest({
+        ...shellRequest,
+        owner: { kind: "room", roomId: "room", threadId: "other" },
+      }),
+    /exact Thread/,
   );
 });
 
@@ -262,31 +272,28 @@ function toolFixture(
       },
     ],
   });
-  const service = new BoardToolService(
-    {
-      readThread: async (id) => {
-        assert.equal(id, snapshot.id);
-        return structuredClone(snapshot);
-      },
-      beginHostOperation: () => {
-        held++;
-        return {
-          release: () => {
-            held--;
-          },
-        };
-      },
-      dispatchHostTool: async (_expected, launch) => {
-        if (rejectDispatch)
-          throw new Error(
-            "Target execution permissions changed before dispatch",
-          );
-        return { result: launch() };
-      },
+  const app: ConstructorParameters<typeof BoardToolService>[0] = {
+    readThread: async (id) => {
+      assert.equal(id, snapshot.id);
+      return structuredClone(snapshot);
     },
-    tools,
-  );
+    beginHostOperation: () => {
+      held++;
+      return {
+        release: () => {
+          held--;
+        },
+      };
+    },
+    dispatchHostTool: async (_expected, launch) => {
+      if (rejectDispatch)
+        throw new Error("Target execution permissions changed before dispatch");
+      return { result: launch() };
+    },
+  };
+  const service = new BoardToolService(app, tools);
   return {
+    app,
     service,
     tools,
     trace,
@@ -306,6 +313,151 @@ const shellRequest = {
   tool: "shell" as const,
   arguments: { command: "synthetic script" },
 };
+
+for (const stage of ["readThread", "admit"] as const)
+  test(`Room ownership is rechecked after a paused child ${stage}, before Shell dispatch`, async () => {
+    const main = hostFixture();
+    const child = toolFixture();
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const gate = async () => {
+      entered();
+      await paused;
+    };
+    let checks = 0;
+    let requestOwner: unknown;
+    if (stage === "admit") {
+      const admit = child.tools.admit.bind(child.tools);
+      child.tools.admit = async (...args) => {
+        await gate();
+        return await admit(...args);
+      };
+    }
+    const bridge = new BoardHostService({
+      ...main.host.options,
+      executeTool: async (request, signal, assertOwner) => {
+        requestOwner = request.owner;
+        return await new BoardToolService(
+          {
+            ...child.app,
+            readThread: async (id) => {
+              if (stage === "readThread") await gate();
+              return await child.app.readThread(id);
+            },
+          },
+          child.tools,
+          async () => {
+            checks++;
+            assertOwner();
+          },
+        ).execute(request, signal);
+      },
+    });
+    const roomOwner = {
+      kind: "room" as const,
+      roomId: "room",
+      threadId: owner.threadId,
+    };
+    try {
+      const action = bridge.execute(
+        roomOwner,
+        { tool: "shell", arguments: shellRequest.arguments },
+        signal(),
+      );
+      await waiting;
+      main.rooms[0]!.members = [];
+      resume();
+      await assert.rejects(action, /exact Room member/);
+      assert.deepEqual(
+        requestOwner,
+        roomOwner,
+        "transport retains exact Room identity",
+      );
+      assert.equal(
+        checks,
+        1,
+        "late check is independent of publication/cancellation delivery",
+      );
+      assert.equal(child.calls.length, 0);
+      assert.equal(child.held(), 0);
+    } finally {
+      resume();
+      await child.tools.close();
+    }
+  });
+
+test("Room publication revokes the same pending request before the native dispatch callback", async () => {
+  const main = hostFixture();
+  const child = toolFixture();
+  const listeners = new Set<() => void>();
+  let entered!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let resume!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  let liveSignal: AbortSignal | undefined;
+  const bridge = new BoardHostService({
+    ...main.host.options,
+    rooms: {
+      ...main.host.options.rooms,
+      onChange: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    },
+    executeTool: async (request, signal, assertOwner) => {
+      liveSignal = signal;
+      return await new BoardToolService(
+        {
+          ...child.app,
+          dispatchHostTool: async (thread, launch) => {
+            entered();
+            await paused;
+            return await child.app.dispatchHostTool(thread, launch);
+          },
+        },
+        child.tools,
+        async () => {
+          assertOwner();
+        },
+      ).execute(request, signal);
+    },
+  });
+  try {
+    const action = bridge.execute(
+      { kind: "room", roomId: "room", threadId: owner.threadId },
+      { tool: "shell", arguments: shellRequest.arguments },
+      signal(),
+    );
+    await waiting;
+    assert.equal(listeners.size, 1);
+    main.rooms[0]!.members = [];
+    for (const listener of listeners) listener();
+    assert.equal(liveSignal?.aborted, true);
+    resume();
+    await assert.rejects(action, /exact Room member/);
+    assert.equal(child.calls.length, 0);
+    assert.equal(
+      listeners.size,
+      0,
+      "ephemeral publication subscription released",
+    );
+  } finally {
+    resume();
+    await child.tools.close();
+  }
+});
 
 test("Board Shell uses normal ToolEnvironment capture, owner policy and no semantic Items", async () => {
   const f = toolFixture();
@@ -596,7 +748,7 @@ test("Room removed or unconfigured members cannot receive Board messages", async
 });
 
 test(
-  "real child Host runs one synthetic Board script with Trace and zero model turns",
+  "real child Host keeps script execution separate and awaits a slow conditional submit",
   { timeout: 20_000 },
   async () => {
     const { mkdtemp, readFile, rm } = await import("node:fs/promises");
@@ -624,6 +776,7 @@ test(
       },
       execArgv: ["--import", "tsx"],
       startupTimeoutMs: 10_000,
+      configurationControlTimeoutMs: 1_000,
     });
     try {
       await manager.start();
@@ -661,6 +814,147 @@ test(
         observed.records.some(
           (record) => record.type === "tool_result_observed",
         ),
+      );
+
+      const roomRequest = {
+        threadId: thread.id,
+        owner: {
+          kind: "room" as const,
+          roomId: "synthetic-room",
+          threadId: thread.id,
+        },
+        tool: "shell" as const,
+        arguments: {
+          command: `${JSON.stringify(process.execPath)} -e "console.log('ROOM_CHECKED')"`,
+        },
+      };
+      await assert.rejects(
+        manager.boardToolRequest(roomRequest, signal()),
+        /cannot be revalidated/,
+      );
+      let ownerChecks = 0;
+      await assert.rejects(
+        manager.boardToolRequest(roomRequest, signal(), () => {
+          ownerChecks++;
+          throw new Error(
+            "Synthetic Room member removed during child preparation",
+          );
+        }),
+        /member removed/,
+      );
+      assert.equal(
+        ownerChecks,
+        1,
+        "real child invokes the exact bound late validator once",
+      );
+      const checked = await manager.boardToolRequest(
+        roomRequest,
+        signal(),
+        () => {
+          ownerChecks++;
+        },
+      );
+      assert.equal(ownerChecks, 2);
+      assert.match(checked.output, /ROOM_CHECKED/);
+
+      const { ZenXBoardCapabilityPackage } =
+        await import("../src/main/capabilities/board-package.js");
+      const { createFixturePluginHost } = await import("@zenx/plugin-sdk");
+      const boardOwner = { kind: "thread" as const, threadId: thread.id };
+      const board = new ZenXBoardCapabilityPackage(
+        new BoardHostService({
+          appServer: manager,
+          rooms: {
+            roomsAvailable: () => false,
+            snapshot: () => ({ rooms: [] }),
+            postAddressedRoomMessage: async () => assert.fail("No Room send"),
+          },
+          executeTool: (input, signal) =>
+            manager.boardToolRequest(input, signal),
+        }),
+      );
+      board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+      const slow = "setTimeout(() => console.log('SLOW_CONFIRMED'), 2200)";
+      const invoke = (
+        name: string,
+        args: Record<string, unknown>,
+        ui = false,
+      ) =>
+        board.invoke(name, {
+          name,
+          callId: randomUUID(),
+          cwd: directory,
+          threadId: thread.id,
+          arguments: ui ? { input: args } : args,
+          signal: signal(),
+          ...(ui ? { trustedPluginUi: true as const } : {}),
+        });
+      await invoke("zenx_board_put", {
+        document: {
+          id: "slow-check",
+          owner: boardOwner,
+          title: "Synthetic slow script",
+          summary: "Submit only after confirmed script completion",
+          blocks: [],
+          events: [
+            {
+              id: "check",
+              label: "Check and share",
+              actions: [
+                {
+                  kind: "script",
+                  command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(slow)}`,
+                  timeoutMs: 6000,
+                },
+                {
+                  kind: "if",
+                  field: "result.exitCode",
+                  equals: 0,
+                  then: [
+                    { kind: "submit", text: "Checked: {{result.output}}" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const started = Date.now();
+      const combined = (await invoke(
+        "zenx_board_ui",
+        {
+          operation: "event",
+          owner: boardOwner,
+          eventId: "check",
+          revision: 1,
+          draftRevision: 0,
+        },
+        true,
+      )) as import("../../../packages/zenx-board-plugin/src/board.js").BoardEventResult;
+      assert.ok(
+        Date.now() - started >= 2000,
+        "waits through the actual script, not 1s yield",
+      );
+      assert.equal(combined.error, undefined);
+      assert.deepEqual(
+        combined.outcomes.map((outcome) => outcome.kind),
+        ["script", "submit"],
+      );
+      assert.match(
+        (combined.outcomes[0]!.result as { output: string }).output,
+        /SLOW_CONFIRMED/,
+      );
+      assert.equal(
+        (combined.outcomes[1]!.result as { admission: string }).admission,
+        "accepted",
+      );
+      const delivered = await manager.request("zen/thread/read", {
+        threadId: thread.id,
+      });
+      assert.equal(
+        delivered.thread.turns.length,
+        1,
+        "only explicit submit admits a model Turn",
       );
     } finally {
       await manager.stop();

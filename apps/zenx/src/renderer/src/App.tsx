@@ -1,3 +1,4 @@
+import { PluginInformationHost } from "./plugin-information-host.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
@@ -3950,6 +3951,35 @@ function AppContent() {
                 threadLoading={threadLoading}
               />
             )}
+            {pluginSnapshot &&
+            ((page === "agent" &&
+              newThreadDraft === null &&
+              selectedThreadId) ||
+              selectedRoomId) ? (
+              <PluginInformationHost
+                key={
+                  selectedRoomId
+                    ? `room:${selectedRoomId}`
+                    : `thread:${selectedThreadId}`
+                }
+                snapshot={pluginSnapshot}
+                registry={pluginUiRegistry}
+                resourcePanelWidth={workspacePanelWidth}
+                owner={
+                  selectedRoomId
+                    ? { kind: "room", roomId: selectedRoomId }
+                    : { kind: "thread", threadId: selectedThreadId! }
+                }
+                theme={
+                  document.documentElement.dataset.theme === "dark"
+                    ? "dark"
+                    : "light"
+                }
+                navigate={openPage}
+                executeCommand={window.zenx.plugins.executeCommand}
+                readHandle={window.zenx.plugins.readHandle}
+              />
+            ) : null}
             {selectedRoom &&
             (roomSidebarState?.open ?? Boolean(roomPanel)) &&
             pluginSnapshot ? (

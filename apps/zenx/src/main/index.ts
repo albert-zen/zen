@@ -1,3 +1,5 @@
+import { BoardHostService } from "./board-host-service.js";
+import { ZenXBoardCapabilityPackage } from "./capabilities/board-package.js";
 import { createImGatewayDiagnosticSink } from "./im-gateway-diagnostics.js";
 import { recordChromeNativeHostFailure } from "./chrome-native-host-diagnostics.js";
 import { LifecycleWaitUnconfirmedError } from "./lifecycle-wait.js";
@@ -684,6 +686,24 @@ async function bootstrapZenX(): Promise<void> {
       threads: selfControlPackage,
       fleet: fleetSettingsService,
     });
+    const boardPackage = new ZenXBoardCapabilityPackage(
+      new BoardHostService({
+        appServer: selfControlPort,
+        get rooms() {
+          if (!automationService)
+            throw new Error("Rooms service is unavailable");
+          return automationService;
+        },
+        executeTool: async (input, signal, assertOwner) => {
+          if (!appServerManager) throw new Error("App Server is not attached");
+          return await appServerManager.boardToolRequest(
+            input,
+            signal,
+            assertOwner,
+          );
+        },
+      }),
+    );
     const subagentsPackage = new ZenXSubagentsCapabilityPackage({
       appServer: selfControlPort,
       threads: selfControlPackage,
@@ -829,6 +849,9 @@ async function bootstrapZenX(): Promise<void> {
         ),
         "zenx-fleet": createDelegatingFirstPartyProfileLoader(
           () => fleetPackage,
+        ),
+        "zenx-board": createDelegatingFirstPartyProfileLoader(
+          () => boardPackage,
         ),
         "zenx-subagents": createDelegatingFirstPartyProfileLoader(
           () => subagentsPackage,

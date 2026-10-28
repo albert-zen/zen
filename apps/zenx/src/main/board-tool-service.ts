@@ -15,6 +15,7 @@ export class BoardToolService {
       "readThread" | "beginHostOperation" | "dispatchHostTool"
     >,
     readonly tools: ToolEnvironment,
+    readonly assertOwner?: () => Promise<void>,
   ) {}
 
   async execute(
@@ -44,7 +45,9 @@ export class BoardToolService {
           sandbox: thread.sandbox,
           signal,
           outputAudience: "program",
-          task: { yieldTimeMs: 1_000 },
+          // Existing task ownership waits for this script's real terminal result,
+          // bounded by its configured deadline/cancellation, not an arbitrary UI yield.
+          task: { waitForCompletion: true },
         },
         { targetRouting: false },
       );
@@ -77,6 +80,12 @@ export class BoardToolService {
         throw new Error(
           "Shell permission changed before Board action dispatch",
         );
+      if (request.owner?.kind === "room") {
+        if (!this.assertOwner)
+          throw new Error("Room execution ownership cannot be revalidated");
+        await this.assertOwner();
+      }
+      signal.throwIfAborted();
       const admitted = prepared;
       const launched = await this.app.dispatchHostTool(thread, () => {
         signal.throwIfAborted();

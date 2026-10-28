@@ -156,7 +156,11 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         outcomes: [],
         navigation: [],
       };
-      const working = { ...snapshot.values };
+      const working = {
+        ...snapshot.values,
+        ...(args.values === undefined ? {} : values(args.values)),
+      };
+      const executedSets = new Set<string>();
       const run = async (actions: BoardAction[]): Promise<void> => {
         for (const action of actions) {
           signal.throwIfAborted();
@@ -171,6 +175,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           }
           if (action.kind === "set") {
             Object.assign(working, action.values);
+            for (const key of Object.keys(action.values)) executedSets.add(key);
             result.outcomes.push({ kind: "set" });
             continue;
           }
@@ -287,7 +292,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       const changed = Object.fromEntries(
         Object.entries(working).filter(
           ([key, value]) =>
-            !key.startsWith("result.") && snapshot.values[key] !== value,
+            executedSets.has(key) &&
+            !key.startsWith("result.") &&
+            snapshot.values[key] !== value,
         ),
       );
       if (Object.keys(changed).length) {
