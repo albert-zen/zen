@@ -475,7 +475,10 @@ test("failure outcome remains visible when retained partial output is expanded",
         }),
       ),
     );
-    assert.equal(document.querySelector(".turn-history"), null);
+    assert.ok(
+      document.querySelector(".turn-history") === null,
+      "Failed turn history starts collapsed",
+    );
     await act(async () => requiredButton(".turn-toggle").click());
     assert.match(
       requiredElement(".turn-history").textContent ?? "",
@@ -3072,7 +3075,10 @@ test("failed turn folds received trace and preserves the error without a final a
     document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
     "false",
   );
-  assert.equal(document.querySelector(".turn-history"), null);
+  assert.ok(
+    document.querySelector(".turn-history") === null,
+    "Failed turn history starts collapsed",
+  );
   assert.doesNotMatch(
     document.body.textContent ?? "",
     /Partial answer|Observed trace/u,
@@ -4298,7 +4304,7 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
   assert.match(remoteHtml, /peer-reported/);
 });
 
-test("singleton activity highlight follows actual receipt and turn lifetime", () => {
+test("latest singleton sweep follows turn lifetime without changing actual receipt status", () => {
   const base = commandItem("activity-call", "sleep 2");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4332,7 +4338,7 @@ test("singleton activity highlight follows actual receipt and turn lifetime", ()
         dom.window.document
           .querySelector(".trace-singleton .activity-text")
           ?.getAttribute("data-active") === "true",
-        turnStatus === "inProgress" && phase === "running",
+        turnStatus === "inProgress",
         `${turnStatus}/${phase}`,
       );
       dom.window.close();
@@ -4612,7 +4618,7 @@ test("pending wait sweeps while returned waits stay settled across groups", () =
         sequences[0]!
           .querySelector(".activity-text")
           ?.getAttribute("data-active"),
-        "true",
+        "false",
       );
       assert.equal(
         sequences[1]!

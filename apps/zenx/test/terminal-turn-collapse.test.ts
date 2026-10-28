@@ -26,8 +26,14 @@ for (const status of ["interrupted", "failed"] as const) {
           document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
           "false",
         );
-        assert.equal(document.querySelector(".turn-history"), null);
-        assert.equal(document.querySelector(".turn-final"), null);
+        assert.ok(
+          document.querySelector(".turn-history") === null,
+          "Collapsed turn history is absent",
+        );
+        assert.ok(
+          document.querySelector(".turn-final") === null,
+          "Interrupted or failed turn has no invented final response",
+        );
         assert.equal(document.querySelectorAll(".agent-message").length, 0);
         assert.doesNotMatch(
           document.body.textContent!,
@@ -46,7 +52,10 @@ for (const status of ["interrupted", "failed"] as const) {
         document.querySelector(".turn-history")!.textContent!,
         /Incomplete D/u,
       );
-      assert.equal(document.querySelector(".turn-final"), null);
+      assert.ok(
+        document.querySelector(".turn-final") === null,
+        "Interrupted or failed turn has no invented final response",
+      );
       await h.render({ ...thread });
       assert.equal(
         document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
@@ -77,8 +86,14 @@ for (const status of ["interrupted", "failed"] as const) {
         /Visible while running/u,
       );
       await h.render(runtimeThread(items, status));
-      assert.equal(document.querySelector(".turn-history"), null);
-      assert.equal(document.querySelector(".turn-final"), null);
+      assert.ok(
+        document.querySelector(".turn-history") === null,
+        "Collapsed turn history is absent",
+      );
+      assert.ok(
+        document.querySelector(".turn-final") === null,
+        "Interrupted or failed turn has no invented final response",
+      );
       assert.ok(document.querySelector(".turn-outcome"));
     });
   });
@@ -95,7 +110,10 @@ test("completed collapse keeps the actual final response exactly once", async ()
       "completed",
     );
     await h.render(thread);
-    assert.equal(document.querySelector(".turn-history"), null);
+    assert.ok(
+      document.querySelector(".turn-history") === null,
+      "Collapsed turn history is absent",
+    );
     assert.equal(document.querySelectorAll(".turn-final").length, 1);
     assert.match(
       document.querySelector(".turn-final")!.textContent!,

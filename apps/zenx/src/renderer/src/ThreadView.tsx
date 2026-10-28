@@ -2632,6 +2632,11 @@ function TurnBlock({
   // Only preserve an already-visible selection at the running → terminal edge.
   const expanded = protectedOpen || (expandedOverride ?? false);
   const complete = turn.status !== "inProgress";
+  // The sweep represents this Turn's ongoing work, not a tool's lifetime.
+  // Never move it back to an earlier background task after newer activity.
+  const latestProcess = projection.history.findLast(
+    (node) => node.kind === "traceItem" || node.kind === "traceGroup",
+  );
   const compactRunningStatus =
     !turn.liveRecovery &&
     !stopping &&
@@ -2735,6 +2740,12 @@ function TurnBlock({
               <DisplayNode
                 key={node.kind === "agent" ? node.item.id : node.id}
                 node={node}
+                activeProcess={
+                  !complete &&
+                  !stopping &&
+                  approvals.length === 0 &&
+                  node === latestProcess
+                }
                 turn={turn}
                 observations={observations}
                 approvals={approvals}
@@ -3259,6 +3270,7 @@ function formatTokenCount(value: number): string {
 
 function DisplayNode({
   node,
+  activeProcess,
   observations,
   approvals,
   turn,
@@ -3267,6 +3279,7 @@ function DisplayNode({
   pluginUiRegistry,
 }: {
   node: Exclude<TurnDisplayNode, { kind: "input" }>;
+  activeProcess: boolean;
   observations: TraceObservationIndex;
   approvals: readonly ApprovalCardState[];
   turn: Turn;
@@ -3291,6 +3304,7 @@ function DisplayNode({
   ) : (
     <TraceSequence
       node={node}
+      activeProcess={activeProcess}
       turn={turn}
       observations={observations}
       approvals={approvals}
@@ -3325,6 +3339,7 @@ function TraceReveal({
 
 function TraceSequence({
   node,
+  activeProcess,
   turn,
   observations,
   approvals,
@@ -3332,6 +3347,7 @@ function TraceSequence({
   pluginUiRegistry,
 }: {
   node: Extract<TurnDisplayNode, { kind: "traceItem" | "traceGroup" }>;
+  activeProcess: boolean;
   turn: Turn;
   observations: TraceObservationIndex;
   approvals: readonly ApprovalCardState[];
@@ -3354,7 +3370,8 @@ function TraceSequence({
   );
   const busy =
     turn.status === "inProgress" &&
-    (activity.phase === "running" ||
+    (activity.phase === "requested" ||
+      activity.phase === "running" ||
       activity.phase === "waiting" ||
       activity.phase === "thinking");
   const previewItem = busy
@@ -3396,14 +3413,17 @@ function TraceSequence({
         >
           <span
             className="trace-activity-title"
-            title={
+            title={[
+              activeProcess ? i18n.t("shell:ongoingTurnActivity") : null,
               preview
                 ? `${preview.prefix} ${preview.text}`.trim()
-                : traceSummary(node.items, observations)
-            }
+                : traceSummary(node.items, observations),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           >
             <ActivityText
-              active={busy}
+              active={activeProcess}
               preview={preview !== undefined}
               prefix={preview?.prefix}
               leading={
@@ -3417,6 +3437,11 @@ function TraceSequence({
               {preview?.text ?? traceSummary(node.items, observations)}
             </ActivityText>
           </span>
+          {activeProcess ? (
+            <span className="sr-only">
+              {i18n.t("shell:ongoingTurnActivity")}
+            </span>
+          ) : null}
           <TraceCounts activity={activity} />
           <small className="sr-only">
             <span>{i18n.t("shell:toolCalls", { count: activity.total })}</span>
@@ -3438,6 +3463,7 @@ function TraceSequence({
         >
           <TraceItemHeader
             turnRunning={turn.status === "inProgress"}
+            activeProcess={activeProcess}
             item={singleton}
             expandable
             observations={observations}
@@ -3450,6 +3476,7 @@ function TraceSequence({
         <div className="trace-item-static">
           <TraceItemHeader
             turnRunning={turn.status === "inProgress"}
+            activeProcess={activeProcess}
             item={singleton!}
             expandable={false}
             observations={observations}
@@ -3549,6 +3576,7 @@ function TraceSequence({
                         >
                           <TraceItemHeader
                             turnRunning={turn.status === "inProgress"}
+                            activeProcess={false}
                             item={item}
                             expandable
                             observations={observations}
@@ -3561,6 +3589,7 @@ function TraceSequence({
                         <div className="trace-item-static">
                           <TraceItemHeader
                             turnRunning={turn.status === "inProgress"}
+                            activeProcess={false}
                             item={item}
                             expandable={false}
                             observations={observations}
@@ -3594,6 +3623,7 @@ function TraceSequence({
 
 function TraceItemHeader({
   turnRunning,
+  activeProcess,
   item,
   observations,
   expandable,
@@ -3604,13 +3634,14 @@ function TraceItemHeader({
   observations: TraceObservationIndex;
   approvalPending: boolean;
   turnRunning: boolean;
+  activeProcess: boolean;
 }) {
   const active =
     turnRunning &&
     !approvalPending &&
     (item.type === "reasoning"
       ? item.status === "inProgress"
-      : ["running", "waiting"].includes(
+      : ["requested", "running", "waiting"].includes(
           observedCommandPhase(item, observations),
         ));
   const preview = active ? traceActivityPreview(item) : undefined;
@@ -3618,14 +3649,17 @@ function TraceItemHeader({
     <>
       <span
         className="trace-item-label"
-        title={
+        title={[
+          activeProcess ? i18n.t("shell:ongoingTurnActivity") : null,
           preview
             ? `${preview.prefix} ${preview.text}`.trim()
-            : traceItemLabel(item)
-        }
+            : traceItemLabel(item),
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       >
         <ActivityText
-          active={active}
+          active={activeProcess}
           preview={preview !== undefined}
           leading={
             <Icon
@@ -3647,6 +3681,9 @@ function TraceItemHeader({
           {preview?.text ?? traceItemLabel(item)}
         </ActivityText>
       </span>
+      {activeProcess ? (
+        <span className="sr-only">{i18n.t("shell:ongoingTurnActivity")}</span>
+      ) : null}
       <span className="trace-item-status">
         {approvalPending ? (
           <small className="tool-status">

@@ -87,10 +87,11 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(document.querySelector(".turn-running-label"), metadata);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(title.textContent, "Run command ×1 · Inspect page ×1");
-    assert.equal(title.getAttribute("title"), title.textContent);
+    assert.match(title.getAttribute("title")!, /Agent is still working/u);
+    assert.ok(title.getAttribute("title")!.endsWith(title.textContent!));
     assert.equal(
       title.querySelector(".activity-text")?.getAttribute("data-active"),
-      "false",
+      "true",
     );
     assert.equal(
       metadata.getAttribute("data-compact"),
@@ -117,7 +118,7 @@ test("returned wait and approval retain static metadata rather than duplicate ac
       document
         .querySelector(".trace-toggle .activity-text")
         ?.getAttribute("data-active"),
-      "false",
+      "true",
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
@@ -140,7 +141,7 @@ test("returned wait and approval retain static metadata rather than duplicate ac
   });
 });
 
-test("submitted generic call is requested and static until an authoritative running receipt", async () => {
+test("submitted generic call retains requested status while latest process signals ongoing turn work", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread([runtimeCommand("raw", "npm test", "inProgress")]),
