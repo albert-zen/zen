@@ -171,16 +171,16 @@ New thread 保留独立 row，插件入口紧随其后且位于置顶等展示�
 
 ### 4.2 Turn 状态与 disclosure
 
-| Turn 状态             | 默认展示                   | Turn 级交互    | Agent Message                         |
-| --------------------- | -------------------------- | -------------- | ------------------------------------- |
-| Running / incomplete  | 完整展开历史               | 不允许整体收起 | 显示全部中间消息                      |
-| Completed，默认       | 只显示 Final Message       | 可主动展开     | 隐藏中间消息，只保留 Final            |
-| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起     | 中间消息恢复，Final 仍只出现一次      |
-| Interrupted / failed  | 按完成态投影并显示终止结果 | 可展开历史     | 保留明确的 interrupted/error fallback |
+| Turn 状态             | 默认展示                   | Turn 级交互      | Agent Message                                           |
+| --------------------- | -------------------------- | ---------------- | ------------------------------------------------------- |
+| Running / incomplete  | 完整展开历史               | 不允许整体收起   | 显示全部中间消息                                        |
+| Completed，默认       | 只显示 Final Message       | 可主动展开       | 隐藏中间消息，只保留 Final                              |
+| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起       | 中间消息恢复，Final 仍只出现一次                        |
+| Interrupted / failed  | 默认收起历史并显示终止结果 | 可展开或再次收起 | 隐藏所有中间消息，保留明确的 interrupted/error fallback |
 
 - Running Turn 不渲染可操作的 Turn collapse；运行状态文案只表达当前工作。
 - Turn 完成后进入默认收起，但后续刷新不得反复覆盖用户已做出的 disclosure 选择。
-- 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。
+- 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。Interrupted / failed 没有实际 Final 时不得把最后一条中间 Agent Message 提升为 Final；显式收起后仅保留用户输入与终止状态，展开可恢复完整历史。运行转终态时仍保护已存在的文本选择或历史控件焦点，不覆盖用户的 disclosure 选择。
 - Final Message 是完成结果，不能与中间 Agent Message 重复渲染。
 - Thread 顶部与每个 Turn metadata 使用一行弱化、紧凑的 usage 摘要展示 input/output tokens
   与 cache hit rate；Thread 顶部还展示当前模型上下文占比。它只消费 Host 从 canonical ItemList

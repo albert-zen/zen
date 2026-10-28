@@ -2630,10 +2630,7 @@ function TurnBlock({
   }
   // Selecting/copying the visible answer is not a request to reveal history.
   // Only preserve an already-visible selection at the running → terminal edge.
-  const expanded =
-    protectedOpen ||
-    (expandedOverride ??
-      (turn.status === "failed" || turn.status === "interrupted"));
+  const expanded = protectedOpen || (expandedOverride ?? false);
   const complete = turn.status !== "inProgress";
   const compactRunningStatus =
     !turn.liveRecovery &&

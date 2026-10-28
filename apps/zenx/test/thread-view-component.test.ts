@@ -451,7 +451,7 @@ test("a 241-character failure remains fully accessible through Details", async (
   });
 });
 
-test("failure outcome remains visible alongside retained partial output", async () => {
+test("failure outcome remains visible when retained partial output is expanded", async () => {
   await withDom(async (root) => {
     const partial = agent("Retained result");
     const failed = {
@@ -475,6 +475,8 @@ test("failure outcome remains visible alongside retained partial output", async 
         }),
       ),
     );
+    assert.equal(document.querySelector(".turn-history"), null);
+    await act(async () => requiredButton(".turn-toggle").click());
     assert.match(
       requiredElement(".turn-history").textContent ?? "",
       /Retained result/u,
@@ -2060,7 +2062,7 @@ test("terminal Turn timestamps show time only today and add a date across local 
 
     assert.equal(
       (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-      2,
+      status === "completed" ? 2 : 1,
     );
     assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
   }
@@ -3054,7 +3056,7 @@ function commandItem(id: string, value: string): ThreadItem {
   };
 }
 
-test("failed turn opens received trace and preserves the error without a final answer", () => {
+test("failed turn folds received trace and preserves the error without a final answer", () => {
   const failed = turnWithItems("failed", [
     user("request"),
     reasoning("Observed trace"),
@@ -3068,15 +3070,12 @@ test("failed turn opens received trace and preserves the error without a final a
   const document = new JSDOM(renderTurns([failed])).window.document;
   assert.equal(
     document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
-    "true",
+    "false",
   );
-  assert.match(
-    document.querySelector(".turn-history")?.textContent ?? "",
-    /Partial answer/u,
-  );
-  assert.match(
-    document.querySelector(".turn-history")?.textContent ?? "",
-    /Observed trace/u,
+  assert.equal(document.querySelector(".turn-history"), null);
+  assert.doesNotMatch(
+    document.body.textContent ?? "",
+    /Partial answer|Observed trace/u,
   );
   assert.equal(document.querySelector(".turn-final"), null);
   assert.match(

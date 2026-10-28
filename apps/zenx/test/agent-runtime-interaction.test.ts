@@ -322,7 +322,7 @@ for (const release of [false, true])
     });
   });
 
-test("interrupted partial answer and unconfirmed task remain readable; review opens pending activity", async () => {
+test("interrupted partial answer stays folded while unconfirmed warning remains; review opens pending activity", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread(
@@ -337,19 +337,23 @@ test("interrupted partial answer and unconfirmed task remain readable; review op
         "interrupted",
       ),
     );
-    assert.match(document.body.textContent!, /Validated the first two files/u);
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /Validated the first two files/u,
+    );
     assert.match(
       document.querySelector(".turn-outcome")!.textContent!,
       /not confirm/u,
     );
     assert.equal(
-      document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
       "false",
     );
     await h.click(".turn-outcome button");
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
+    assert.match(document.body.textContent!, /Validated the first two files/u);
     assert.equal(
       document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
       "true",
