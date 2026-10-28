@@ -6185,16 +6185,41 @@ function queueFailureDiagnostic(error: unknown): unknown {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) {
-        // V8's lazy native stack accessor is diagnostic evidence, not user code.
-        result[key] =
+        // V8's lazy stack getter itself reads name/message. Never let that
+        // invoke custom accessors or coercions while collecting local evidence.
+        if (
           key === "stack" &&
           value instanceof Error &&
           descriptor.get &&
           Function.prototype.toString
             .call(descriptor.get)
             .includes("[native code]")
-            ? visit(descriptor.get.call(value), depth + 1)
-            : "[accessor not evaluated]";
+        ) {
+          try {
+            const safeNameAndMessage = ["name", "message"].every((field) => {
+              let owner: object | null = value;
+              while (owner !== null) {
+                const fieldDescriptor = Object.getOwnPropertyDescriptor(
+                  owner,
+                  field,
+                );
+                if (fieldDescriptor)
+                  return (
+                    "value" in fieldDescriptor &&
+                    (typeof fieldDescriptor.value === "string" ||
+                      fieldDescriptor.value === undefined)
+                  );
+                owner = Object.getPrototypeOf(owner);
+              }
+              return true;
+            });
+            result[key] = safeNameAndMessage
+              ? visit(descriptor.get.call(value), depth + 1)
+              : "[lazy stack skipped: unsafe name/message accessor]";
+          } catch {
+            result[key] = "[stack unavailable]";
+          }
+        } else result[key] = "[accessor not evaluated]";
       } else if (key === "errors" && Array.isArray(descriptor.value)) {
         result[key] = descriptor.value
           .slice(0, 32)

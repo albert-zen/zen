@@ -5472,8 +5472,32 @@ test("queue admission preserves causal diagnostics in owner Trace without changi
     cause,
     headers: { Authorization: "must-not-record-header" },
   });
+  let accessorCalls = 0;
+  const unsafeName = new Error("retained message beside unsafe name");
+  Object.defineProperty(unsafeName, "name", {
+    get() {
+      accessorCalls++;
+      throw new Error("must not invoke name");
+    },
+  });
+  const unsafeMessage = new Error("original");
+  Object.defineProperty(unsafeMessage, "message", {
+    get() {
+      accessorCalls++;
+      return "must not invoke message";
+    },
+  });
+  const inheritedName = new Error("retained message beside inherited name");
+  const prototype = Object.create(Error.prototype);
+  Object.defineProperty(prototype, "name", {
+    get() {
+      accessorCalls++;
+      throw new Error("must not invoke inherited name");
+    },
+  });
+  Object.setPrototypeOf(inheritedName, prototype);
   const failure = new AggregateError(
-    [cause],
+    [cause, unsafeName, unsafeMessage, inheritedName],
     "synthetic attachment reader failed",
   );
   Object.assign(failure, {
@@ -5567,6 +5591,11 @@ test("queue admission preserves causal diagnostics in owner Trace without changi
     assert.match(details.page!.text, /runtime.test/);
     assert.match(details.page!.text, new RegExp(failures[0]!.attemptId));
     assert.doesNotMatch(details.page!.text, /must-not-record/);
+    assert.equal(accessorCalls, 0);
+    assert.match(details.page!.text, /lazy stack skipped/);
+    assert.match(details.page!.text, /retained message beside unsafe name/);
+    assert.match(details.page!.text, /retained message beside inherited name/);
+    assert.doesNotMatch(details.page!.text, /diagnostic inspection failed/);
     rejectTrace = true;
     await assert.rejects(server.resumeQueue(thread.id), {
       code: "queue_admission_failed",

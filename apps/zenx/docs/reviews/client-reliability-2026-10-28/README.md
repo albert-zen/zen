@@ -62,6 +62,28 @@ or provider-save additions.
 ![Successful commit, failed refresh](compaction-refresh-warning.jpg)
 ![Unknown receipt, narrow layout](compaction-unknown-narrow.jpg)
 
+## Expanded local diagnostics
+
+The ordinary production application was separately rebuilt at `c106d7a8`, with
+all first-party plugins, in another isolated HOME/profile. A synthetic Provider
+with a localhost endpoint and a non-credential dummy string exercised the actual
+Save path. OS-protected credential storage was unavailable in the cloud desktop.
+The UI correctly said the Provider was not saved, retained the editor, and kept
+Technical details initially collapsed. Expanding it exposed the available
+message and stack. No provider probe, paid model request or plaintext-key
+fallback was used. This does not simulate a successful encrypted credential save.
+
+![Ordinary app local save diagnostic](native-provider-save-details.jpg)
+
+The image fixture at `589be682` uses the actual AttachmentImage/ImagePreview
+with synthetic read failures. In the cloud browser, thumbnail details expanded;
+the preview initially hid details behind a disclosure. Tab reached the disclosure,
+Enter expanded it, another Tab entered the scrollable text, and Escape closed
+the preview and restored focus to its trigger. It rendered the message, stack and
+nested cause as text. This fixture is not a complete native attachment pipeline.
+
+![Image preview local details](image-error-details.jpg)
+
 ## Remaining gates
 
 These are source-bound checkpoints, not a blanket final acceptance statement.

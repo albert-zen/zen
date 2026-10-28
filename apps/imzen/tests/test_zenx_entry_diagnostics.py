@@ -1,13 +1,14 @@
 """Exercise the real entry-point failure handlers without loading channel SDKs."""
+
 import ast
 import asyncio
 import contextlib
 import io
 import json
-from pathlib import Path
 import sys
 import traceback
 import unittest
+from pathlib import Path
 
 
 class GatewayStateMigrationError(Exception):
@@ -24,7 +25,8 @@ class EntryDiagnosticsTest(unittest.TestCase):
         entry = ast.parse(source.read_text()).body[-1]
         for error_type in (GatewayStateMigrationError, RuntimeError):
             with self.subTest(error=error_type.__name__):
-                async def run():
+
+                async def run(error_type=error_type):
                     _local_secret_not_logged = "synthetic-local-variable-secret"
                     try:
                         raise ValueError("synthetic migration column mismatch")
