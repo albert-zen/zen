@@ -1,4 +1,5 @@
 import { i18n } from "./i18n.js";
+import { settledTraceSummary, traceAction } from "./trace-action-summary.js";
 import type { IconName } from "./icons.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import {
@@ -454,76 +455,9 @@ export function traceSummary(
   }
   if (activity.current) return observedCommandSummary(activity.current, index);
   if (activity.total === 0) return i18n.t("shell:thoughts");
-  // These are operation counts, never inferred file counts or success claims.
-  // Keep first-seen action order within named-source/known-action summaries;
-  // the underlying chronological rows stay intact.
-  const groups = new Map<
-    string,
-    { label: string; category: string; count: number; known: boolean }
-  >();
-  for (const item of commands) {
-    const action = traceAction(item);
-    const group = groups.get(action.key);
-    if (group) group.count += 1;
-    else
-      groups.set(action.key, {
-        label: action.label,
-        category: action.category,
-        count: 1,
-        known: action.known,
-      });
-  }
-  // Unknown capabilities retain their actual names, like integration sources in
-  // T3 Code; they must not disappear behind a generic Tool/other label.
-  const all = [...groups.values()];
-  const selected = [
-    ...all.filter((group) => !group.known),
-    ...all.filter((group) => group.known).slice(0, 2),
-  ];
-  const labels = selected.map(({ label, category, count, known }) => {
-    const action =
-      known &&
-      selected.some(
-        (other) =>
-          other.known && other.label === label && other.category !== category,
-      )
-        ? i18n.t("shell:traceQualifiedAction", { category, action: label })
-        : label;
-    return i18n.t("shell:traceActionCount", { action, count });
-  });
-  const remaining =
-    commands.length - selected.reduce((sum, group) => sum + group.count, 0);
-  if (remaining > 0)
-    labels.push(i18n.t("shell:traceOtherActions", { count: remaining }));
-  return labels.join(" · ");
-}
-
-/** Existing tool identities/actions only: do not classify arbitrary shell/code text. */
-function traceAction(item: CommandItem): {
-  key: string;
-  label: string;
-  category: string;
-  icon: IconName;
-  known: boolean;
-} {
-  const name = item.toolName ?? item.command;
-  const presentation = toolPresentation(name);
-  const key = name
-    .replace(/^zenx_/u, "")
-    .replace(/^browser_(?:workspace|connected)_/u, "browser_");
-  const action =
-    presentation.action ??
-    (key === "run_code" ? i18n.t("shell:traceRunCode") : undefined);
-  return {
-    key: action === undefined ? name : key,
-    label: action ?? name,
-    category:
-      action === undefined
-        ? presentation.category
-        : toolPresentation(key).category,
-    icon: presentation.icon,
-    known: action !== undefined,
-  };
+  return settledTraceSummary(commands, (item) =>
+    observedCommandPhase(item, index),
+  );
 }
 
 export function traceGroupIcons(items: readonly ThreadItem[]): IconName[] {

@@ -62,6 +62,18 @@ function button(text: string) {
   assert(result, `Missing button ${text}`);
   return result;
 }
+async function openOriginal(h: { click(selector: string): Promise<unknown> }) {
+  if (
+    document
+      .querySelector(".context-compaction-toggle")
+      ?.getAttribute("aria-expanded") === "false"
+  )
+    await h.click(".context-compaction-toggle");
+  await h.click('.compaction-views [role="tab"]:nth-child(2)');
+}
+async function closeOriginal(h: { click(selector: string): Promise<unknown> }) {
+  await h.click('.compaction-views [role="tab"]:first-child');
+}
 function installReader(
   read: (
     options: OriginalHistoryOptions & { threadId: string },
@@ -82,7 +94,7 @@ function installReader(
   });
 }
 
-test("compaction's visible original-history entry pages exact Items and reads full original chunks", async () => {
+test("compaction's original-history view pages exact Items and reads full original chunks", async () => {
   await withRuntimeDom(async (h) => {
     const calls: Array<OriginalHistoryOptions & { threadId: string }> = [];
     installReader(async (request) => {
@@ -95,9 +107,9 @@ test("compaction's visible original-history entry pages exact Items and reads fu
     assert.equal(calls.length, 0);
     assert(
       !document.querySelector(".context-compaction-detail"),
-      "link is visible even while summary is collapsed",
+      "one collapsed entry contains all compaction views",
     );
-    await h.click(".original-history-open");
+    await openOriginal(h);
     assert.equal(calls.length, 1);
     assert(
       !document.querySelector(".original-history-items code"),
@@ -109,10 +121,6 @@ test("compaction's visible original-history entry pages exact Items and reads fu
     );
     assert.equal(calls[0]?.throughItemId, "item-60");
     assert.equal(calls[0]?.limit, 50);
-    assert.match(
-      document.querySelector(".original-history-locator")!.textContent!,
-      /zen-thread:\/\/thread\/items\?through=item-60/,
-    );
     assert.equal(
       document.querySelectorAll(".original-history-items > li").length,
       50,
@@ -156,7 +164,11 @@ test("compaction's visible original-history entry pages exact Items and reads fu
       document.querySelectorAll(".original-history-items > li").length,
       50,
     );
-    await h.click(".original-history-open");
+    await h.click('.compaction-views [role="tab"]:nth-child(3)');
+    assert.match(
+      document.querySelector(".original-history-locator")!.textContent!,
+      /zen-thread:\/\/thread\/items\?through=item-60/,
+    );
     assert(!document.querySelector(".original-history-reader"));
     assert(
       calls.every(
@@ -210,7 +222,7 @@ test("AppServer user-message content is readable before opening original Item JS
         return readOriginalThreadHistory(stored, options);
       });
       await h.render(thread(compacted));
-      await h.click(".original-history-open");
+      await openOriginal(h);
       const userRow = [
         ...document.querySelectorAll(".original-history-items > li"),
       ].find((row) => row.querySelector("strong")?.textContent === "User");
@@ -249,25 +261,28 @@ test("disabled and legacy references cannot fetch, failure is retryable, and lat
       throw new Error("Reference unavailable on this Host");
     });
     for (const includeOriginalReference of [false, undefined]) {
+      await h.hide();
       await h.render(
         thread({
           ...compaction,
           includeOriginalReference,
         } as ContextCompactionItem),
       );
-      assert(!document.querySelector(".original-history-open"));
+      await openOriginal(h);
+      assert(!document.querySelector(".original-history-reader"));
       assert.match(document.body.textContent!, /No original-history reference/);
     }
     assert.equal(calls, 0);
+    await h.hide();
     await h.render(thread());
-    await h.click(".original-history-open");
+    await openOriginal(h);
     assert.match(
       document.querySelector('[role="alert"]')!.textContent!,
       /Reference unavailable/,
     );
     await act(async () => button("Retry").click());
     assert.equal(calls, 2);
-    await h.click(".original-history-open");
+    await closeOriginal(h);
     let finish!: (page: OriginalHistoryPage) => void;
     installReader(
       async () =>
@@ -275,14 +290,14 @@ test("disabled and legacy references cannot fetch, failure is retryable, and lat
           finish = resolve;
         }),
     );
-    await h.click(".original-history-open");
+    await openOriginal(h);
     assert.match(document.body.textContent!, /Reading original history/);
-    await h.click(".original-history-open");
+    await closeOriginal(h);
     await act(async () =>
       finish(readOriginalThreadHistory(snapshot, { throughItemId: "item-60" })),
     );
     assert(!document.querySelector(".original-history-reader"));
-    await h.click(".original-history-open");
+    await openOriginal(h);
     const oldFinish = finish;
     await h.render(
       thread({

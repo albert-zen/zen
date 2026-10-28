@@ -18,7 +18,7 @@ export type MessageSourceTarget =
       itemId?: string;
       returnBound?: boolean;
     }
-  | { kind: "trigger"; id: string };
+  | { kind: "trigger"; id: string; threadId?: string };
 export type MessageSourceNavigator = (
   target: MessageSourceTarget,
   owner: { threadId: string; isCurrent(): boolean },

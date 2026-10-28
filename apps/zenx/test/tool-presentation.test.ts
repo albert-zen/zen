@@ -14,6 +14,7 @@ test("known browser and computer operations have readable labels without inventi
     category: "Browser",
     icon: "browser",
     action: "Inspect page",
+    completedAction: "Inspected page",
   });
   assert.equal(toolPresentation("zenx_computer_press").action, "Press element");
   assert.equal(toolPresentation("my_browser_click").action, undefined);
@@ -26,6 +27,7 @@ test("shell and other built-in tools do not fall back to a generic Tool label", 
     category: "Shell",
     icon: "terminal",
     action: "Run command",
+    completedAction: "Ran command",
   });
   assert.equal(toolPresentation("zenx_shell").category, "Shell");
   assert.equal(toolPresentation("wait").category, "Wait");
@@ -165,11 +167,13 @@ test("concurrent browser tools use readable backend labels without execution ali
     category: "ZenX browser",
     icon: "browser",
     action: "Inspect page",
+    completedAction: "Inspected page",
   });
   assert.deepEqual(toolPresentation("browser_connected_inspect"), {
     category: "External browser",
     icon: "browser",
     action: "Inspect page",
+    completedAction: "Inspected page",
   });
   assert.equal(
     commandTitle(command("browser_connected_inspect")),

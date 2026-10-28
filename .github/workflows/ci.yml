@@ -159,6 +159,9 @@ jobs:
         run: |
           node apps/zenx/scripts/build-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
           node apps/zenx/scripts/capture-process-style-preview.mjs "${{ runner.temp }}/zenx-process-style-preview"
+          mkdir -p "${{ runner.temp }}/zenx-process-style-preview/transcript"
+          cp "${{ runner.temp }}/zenx-process-style-preview/process-style-frame.html" "${{ runner.temp }}/zenx-process-style-preview/transcript/"
+          node apps/zenx/scripts/capture-transcript-process-preview.mjs "${{ runner.temp }}/zenx-process-style-preview/transcript"
       - name: Retain synthetic process-style visual evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

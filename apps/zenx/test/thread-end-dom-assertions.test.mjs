@@ -67,6 +67,9 @@ function inspect(source) {
 for (const [name, count] of [
   ["sidebar-information-interaction", 25],
   ["thread-end-unread", 2],
+  ["execution-process-style", 13],
+  ["message-fork", 5],
+  ["tool-group-icons", 4],
 ]) {
   const source = readFileSync(
     new URL(`./${name}.test.ts`, import.meta.url),

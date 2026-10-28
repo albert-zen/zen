@@ -33,6 +33,10 @@ export const scenes = [
   "command-short",
   "waiting",
   "wait-lifecycle",
+  "latest-group",
+  "latest-settled",
+  "latest-requested",
+  "interrupted-comments",
   "running",
   "parallel",
   "approval",
@@ -82,7 +86,39 @@ function scenario(scene: Scene): Thread {
   const base = [...intro, prior];
   let thread: Thread;
   if (scene === "recovery") return recoveryScenario("recovering");
-  if (scene === "wait-lifecycle") {
+  if (scene === "interrupted-comments") {
+    thread = confirmedStopped([
+      ...base,
+      runtimeMessage(
+        "partial-b",
+        "Intermediate B: only two synthetic checks finished.",
+      ),
+      runtimeCommand("unsettled", "sleep 10", "unknown"),
+      runtimeMessage(
+        "partial-d",
+        "Partial D: there is no final assistant answer.",
+      ),
+    ]);
+  } else if (
+    ["latest-group", "latest-settled", "latest-requested"].includes(scene)
+  ) {
+    thread = runtimeThread([
+      ...intro,
+      runtimeTask("older-a", "background-a", "running"),
+      runtimeMessage(
+        "boundary-b",
+        "B: the earlier background task is still running. Continue with the latest group below.",
+      ),
+      ...(scene === "latest-group"
+        ? [runtimeCommand("latest-prior", "echo previous in latest group")]
+        : []),
+      runtimeCommand(
+        "latest-c",
+        "echo latest process C",
+        scene === "latest-settled" ? "completed" : "inProgress",
+      ),
+    ]);
+  } else if (scene === "wait-lifecycle") {
     const shell = {
       ...runtimeTask("shell-origin", "background", "running"),
       command: "sleep 60",
@@ -343,6 +379,18 @@ function Fixture() {
         },
         finish() {
           setThread((value) => complete(value));
+        },
+        interrupt() {
+          setThread((value) => ({
+            ...value,
+            status: { type: "idle" },
+            turns: value.turns.map((turn) => ({
+              ...turn,
+              status: "interrupted",
+              completedAt: startedAt + 164,
+              durationMs: 164000,
+            })),
+          }));
         },
         reset() {
           streamIndex.current = 0;
