@@ -50,6 +50,30 @@ const provenance = {
     .digest("hex"),
 };
 
+test("public Responses retains developer instructions independently of Chat compatibility", async () => {
+  let body: any;
+  const adapter = new OpenAiResponsesModel({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey,
+    fetch: async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return sse();
+    },
+  });
+  await collect(
+    adapter.stream(
+      request({
+        messages: [
+          { role: "developer", text: "Keep this instruction role" },
+          { role: "user", text: "Synthetic request" },
+        ],
+      }),
+    ),
+  );
+  assert.equal(body.input[0].role, "developer");
+  assert.equal(body.input[0].content[0].text, "Keep this instruction role");
+});
+
 test("public Responses encodes multiple tool images natively without supplemental user messages", async () => {
   const attachments = new InMemoryAttachmentStore();
   const attachment = await attachments.importBytes(png1x1());
