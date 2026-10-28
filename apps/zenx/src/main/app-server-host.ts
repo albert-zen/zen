@@ -1,3 +1,4 @@
+import { BoardToolService } from "./board-tool-service.js";
 import { ShellPanelService } from "./shell-panel-service.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
@@ -26,6 +27,7 @@ import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
+const boardActions = new Map<string, AbortController>();
 const roomListeners = new Set<
   (event: { roomId: string; threadId: string }) => void
 >();
@@ -74,6 +76,47 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "board-tool/cancel") {
+    boardActions
+      .get(command.requestId)
+      ?.abort(new Error("Board action cancellation requested"));
+    return;
+  }
+  if (command.type === "board-tool/request") {
+    const controller = new AbortController();
+    if (boardActions.has(command.requestId)) {
+      send({
+        type: "board-tool/result",
+        requestId: command.requestId,
+        error:
+          "Board action identity is already in use; do not repeat the request",
+      });
+      return;
+    }
+    boardActions.set(command.requestId, controller);
+    try {
+      if (!appServer || !targetToolEnvironment)
+        throw new Error("Board tool Host is unavailable");
+      const result = await new BoardToolService(
+        appServer,
+        targetToolEnvironment,
+      ).execute(command.input, controller.signal);
+      send({ type: "board-tool/result", requestId: command.requestId, result });
+    } catch (error) {
+      send({
+        type: "board-tool/result",
+        requestId: command.requestId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Board tool outcome is unconfirmed; do not retry automatically",
+      });
+    } finally {
+      boardActions.delete(command.requestId);
+    }
+    return;
+  }
+
   if (command.type === "model-debug/request") {
     try {
       if (!appServer) throw new Error("Local Host unavailable");
@@ -513,6 +556,8 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  for (const controller of boardActions.values())
+    controller.abort(new Error("Board Host is closing"));
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {

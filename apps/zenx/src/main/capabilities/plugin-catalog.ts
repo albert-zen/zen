@@ -1373,7 +1373,7 @@ function validateManifest(
     sidebarIds.add(contribution.id);
   }
   const validateSurfaceContributions = (
-    kind: "settings" | "panel" | "thread header",
+    kind: "settings" | "panel" | "information" | "thread header",
     values: readonly {
       id: string;
       title?: string;

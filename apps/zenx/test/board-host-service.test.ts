@@ -1,0 +1,738 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { randomUUID } from "node:crypto";
+import {
+  BoardHostService,
+  type BoardHostServiceOptions,
+} from "../src/main/board-host-service.js";
+import { BoardToolService } from "../src/main/board-tool-service.js";
+import {
+  validateBoardOwner,
+  validateBoardToolRequest,
+} from "../src/board-host.js";
+import {
+  ToolEnvironment,
+  InMemoryToolPolicyStore,
+  type ToolInvocation,
+} from "../../../src/tool.js";
+import { InMemoryTraceStore } from "../../../src/trace.js";
+import type { ThreadSnapshot } from "../../../src/app-server.js";
+import {
+  ZenXTriggerService,
+  type ZenXTriggerAppServerPort,
+} from "../src/main/trigger-service.js";
+import { canonicalTriggerSnapshot } from "../src/main/trigger-store.js";
+import type { TriggerSnapshot, ZenXRoom } from "../src/main/trigger-types.js";
+import { isHostCommand, isHostEvent } from "../src/main/host-messages.js";
+
+const signal = () => new AbortController().signal;
+const owner = { kind: "thread" as const, threadId: "board-thread" };
+
+function hostFixture() {
+  let active = false;
+  let archived = false;
+  let sendError: Error | undefined;
+  let onRead = () => {};
+  const requests: Array<{ method: string; params: any }> = [];
+  const executions: unknown[] = [];
+  const rooms: ZenXRoom[] = [
+    {
+      id: "room",
+      name: "Room",
+      members: [{ name: "One", threadId: owner.threadId }],
+      messages: [],
+      createdAt: 1,
+    },
+  ];
+  const host = new BoardHostService({
+    appServer: {
+      async request(method: string, params: any): Promise<any> {
+        requests.push({ method, params });
+        if (method === "zen/thread/read") {
+          onRead();
+          return { thread: { id: params.threadId, archived } };
+        }
+        if (method === "thread/read")
+          return {
+            thread: {
+              id: params.threadId,
+              turns: active ? [{ id: "active", status: "inProgress" }] : [],
+            },
+          };
+        if (method === "zen/turn/send-unarchived") {
+          if (sendError) throw sendError;
+          return { turnId: active ? "active" : "new-turn" };
+        }
+        assert.fail(`Unexpected model operation ${method}`);
+      },
+    } as BoardHostServiceOptions["appServer"],
+    rooms: {
+      roomsAvailable: () => true,
+      snapshot: () => ({ rooms }),
+      postAddressedRoomMessage: async () => assert.fail("Unexpected Room send"),
+    },
+    executeTool: async (request) => {
+      executions.push(request);
+      return { output: "ok", exitCode: 0 };
+    },
+  });
+  return {
+    host,
+    requests,
+    executions,
+    rooms,
+    setActive: () => {
+      active = true;
+    },
+    setArchived: () => {
+      archived = true;
+    },
+    failSend: () => {
+      sendError = new Error("transport disconnected");
+    },
+    onRead: (callback: () => void) => {
+      onRead = callback;
+    },
+  };
+}
+
+test("Board Thread send reports native start/steer admission without awaiting completion", async () => {
+  const f = hostFixture();
+  assert.deepEqual(
+    await f.host.deliver(owner, "assembled text", "client-1", signal()),
+    {
+      kind: "thread",
+      threadId: owner.threadId,
+      turnId: "new-turn",
+      mode: "start",
+      admission: "accepted",
+    },
+  );
+  f.setActive();
+  const result = await f.host.deliver(owner, "guidance", "client-2", signal());
+  assert.equal(result.kind === "thread" && result.mode, "steer");
+  const sends = f.requests.filter(
+    (request) => request.method === "zen/turn/send-unarchived",
+  );
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends[1]!.params, {
+    threadId: owner.threadId,
+    clientUserMessageId: "client-2",
+    input: [{ type: "text", text: "guidance" }],
+    mode: "steer",
+    expectedTurnId: "active",
+  });
+  assert.deepEqual(f.executions, []);
+});
+
+test("unknown Board send is never retried or interpreted as completion", async () => {
+  const f = hostFixture();
+  f.failSend();
+  await assert.rejects(
+    f.host.deliver(owner, "message", "client", signal()),
+    /disconnected/,
+  );
+  assert.equal(
+    f.requests.filter((entry) => entry.method === "zen/turn/send-unarchived")
+      .length,
+    1,
+  );
+});
+
+test("Board owner admission is exact and rechecks removed Room membership after reads", async () => {
+  const f = hostFixture();
+  const roomOwner = {
+    kind: "room" as const,
+    roomId: "room",
+    threadId: owner.threadId,
+  };
+  assert.match(f.host.makeClientId(roomOwner), /^legacy:[0-9a-f-]{36}$/);
+  await assert.rejects(
+    f.host.readOwner({ ...roomOwner, threadId: "other" }),
+    /exact Room member/,
+  );
+  f.onRead(() => {
+    f.rooms[0]!.members = [];
+  });
+  await assert.rejects(
+    f.host.execute(
+      roomOwner,
+      { tool: "shell", arguments: { command: "true" } },
+      signal(),
+    ),
+    /exact Room member/,
+  );
+  assert.equal(f.executions.length, 0);
+  f.setArchived();
+  await assert.rejects(f.host.deliver(owner, "x", "id", signal()), /archived/);
+});
+
+test("no-model action has no native send or owner override and unsupported mechanisms fail", async () => {
+  const f = hostFixture();
+  await f.host.execute(
+    owner,
+    {
+      tool: "shell",
+      arguments: { command: "echo synthetic" },
+      threadId: "other",
+    } as any,
+    signal(),
+  );
+  assert.deepEqual(f.executions, [
+    {
+      threadId: owner.threadId,
+      tool: "shell",
+      arguments: { command: "echo synthetic" },
+    },
+  ]);
+  assert.deepEqual(
+    f.requests.map((entry) => entry.method),
+    ["zen/thread/read"],
+  );
+  await assert.rejects(
+    f.host.execute(
+      owner,
+      { tool: "zenx_threads_send", arguments: {} },
+      signal(),
+    ),
+    /local shell/,
+  );
+  assert.throws(() => validateBoardOwner({ ...owner, cwd: "/" }));
+  assert.throws(() =>
+    validateBoardToolRequest({
+      threadId: owner.threadId,
+      tool: "shell",
+      arguments: { device: "remote" },
+    }),
+  );
+  assert.throws(() =>
+    validateBoardToolRequest({
+      threadId: owner.threadId,
+      tool: "shell",
+      arguments: { x: undefined },
+    }),
+  );
+});
+
+function toolFixture(
+  policy: "never" | "always" = "never",
+  remembered?: "approved" | "denied",
+) {
+  const trace = new InMemoryTraceStore();
+  const store = new InMemoryToolPolicyStore(
+    remembered ? { shell: remembered } : {},
+  );
+  const calls: ToolInvocation[] = [];
+  let fail = false;
+  let rejectDispatch = false;
+  let held = 0;
+  const snapshot: ThreadSnapshot = {
+    id: owner.threadId,
+    cwd: "/tmp",
+    sandbox: "danger-full-access",
+    approvalPolicy: policy,
+    archived: false,
+    items: [],
+    turns: [],
+    provider: "fake",
+    model: "fake",
+    providerProfileId: "fake",
+    modelId: "fake",
+    reasoningEffort: null,
+  };
+  const tools = new ToolEnvironment({
+    trace,
+    policyStore: store,
+    runtimes: [
+      {
+        name: "shell",
+        specification: {
+          name: "shell",
+          description: "Synthetic local script",
+          inputSchema: {
+            type: "object",
+            properties: { command: { type: "string" } },
+          },
+        },
+        async execute(invocation) {
+          calls.push(invocation);
+          if (fail) throw new Error("Lost actual result");
+          return { output: "synthetic output", exitCode: 0 };
+        },
+      },
+    ],
+  });
+  const service = new BoardToolService(
+    {
+      readThread: async (id) => {
+        assert.equal(id, snapshot.id);
+        return structuredClone(snapshot);
+      },
+      beginHostOperation: () => {
+        held++;
+        return {
+          release: () => {
+            held--;
+          },
+        };
+      },
+      dispatchHostTool: async (_expected, launch) => {
+        if (rejectDispatch)
+          throw new Error(
+            "Target execution permissions changed before dispatch",
+          );
+        return { result: launch() };
+      },
+    },
+    tools,
+  );
+  return {
+    service,
+    tools,
+    trace,
+    calls,
+    snapshot,
+    held: () => held,
+    fail: () => {
+      fail = true;
+    },
+    rejectDispatch: () => {
+      rejectDispatch = true;
+    },
+  };
+}
+const shellRequest = {
+  threadId: owner.threadId,
+  tool: "shell" as const,
+  arguments: { command: "synthetic script" },
+};
+
+test("Board Shell uses normal ToolEnvironment capture, owner policy and no semantic Items", async () => {
+  const f = toolFixture();
+  try {
+    const result = await f.service.execute(shellRequest, signal());
+    assert.equal(result.exitCode, 0);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0]!.threadId, owner.threadId);
+    assert.equal(f.calls[0]!.sandbox, "danger-full-access");
+    assert.equal(f.calls[0]!.outputAudience, "program");
+    assert.deepEqual(f.snapshot.items, []);
+    assert.deepEqual(f.snapshot.turns, []);
+    const observation = await f.trace.read(owner.threadId);
+    assert.ok(
+      observation.records.some(
+        (record) => record.type === "tool_invocation_observed",
+      ),
+    );
+    assert.ok(
+      observation.records.some(
+        (record) => record.type === "tool_result_observed",
+      ),
+    );
+    assert.equal(f.held(), 0);
+  } finally {
+    await f.tools.close();
+  }
+});
+
+for (const [label, configure] of [
+  ["remembered denial", () => toolFixture("never", "denied")],
+  ["approval required", () => toolFixture("always")],
+  [
+    "sandbox escalation required",
+    () => {
+      const f = toolFixture();
+      f.snapshot.sandbox = "read-only";
+      return f;
+    },
+  ],
+  [
+    "archived owner",
+    () => {
+      const f = toolFixture();
+      f.snapshot.archived = true;
+      return f;
+    },
+  ],
+  [
+    "native permission fence",
+    () => {
+      const f = toolFixture();
+      f.rejectDispatch();
+      return f;
+    },
+  ],
+] as const)
+  test(`Board Shell fails closed for ${label}`, async () => {
+    const f = configure();
+    try {
+      await assert.rejects(f.service.execute(shellRequest, signal()));
+      assert.equal(f.calls.length, 0);
+      assert.equal(f.held(), 0);
+    } finally {
+      await f.tools.close();
+    }
+  });
+
+test("Board abort before admission cannot execute; malformed IPC cannot dispatch", async () => {
+  const f = toolFixture();
+  try {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(f.service.execute(shellRequest, controller.signal));
+    assert.equal(f.calls.length, 0);
+    for (const event of [
+      { type: "board-tool/result", requestId: "a" },
+      {
+        type: "board-tool/result",
+        requestId: "a",
+        result: { output: "ok", exitCode: 0 },
+        error: "contradictory failure",
+      },
+      {
+        type: "board-tool/result",
+        requestId: "a",
+        result: { output: "ok", exitCode: NaN },
+      },
+    ])
+      assert.equal(isHostEvent(event), false);
+    assert.equal(
+      isHostCommand({
+        type: "board-tool/request",
+        requestId: "a",
+        input: shellRequest,
+      }),
+      true,
+    );
+    assert.equal(
+      isHostCommand({
+        type: "board-tool/request",
+        requestId: "a",
+        input: { ...shellRequest, tool: "zenx_threads_send" },
+      }),
+      false,
+    );
+    assert.equal(
+      isHostEvent({
+        type: "board-tool/result",
+        requestId: "a",
+        result: { output: "ok", exitCode: 0 },
+      }),
+      true,
+    );
+    assert.equal(
+      isHostEvent({
+        type: "board-tool/result",
+        requestId: "a",
+        result: { output: "ok", exitCode: "yes" },
+      }),
+      false,
+    );
+  } finally {
+    await f.tools.close();
+  }
+});
+
+async function roomFixture(observe?: () => Promise<void>) {
+  let saved: TriggerSnapshot = { triggers: [], rooms: [], history: [] };
+  const requests: any[] = [];
+  let error: Error | undefined;
+  const manager: ZenXTriggerAppServerPort = {
+    async request(method: any, params: any): Promise<any> {
+      if (method === "zen/thread/resume")
+        throw new Error("No recovery fixture");
+      requests.push(params);
+      if (error) throw error;
+      return { mode: "start", turnId: `turn-${requests.length}` };
+    },
+    onNotification: () => () => {},
+  };
+  const service = new ZenXTriggerService(
+    manager,
+    {
+      read: async () => saved,
+      write: async (snapshot) => {
+        saved = canonicalTriggerSnapshot(snapshot);
+      },
+    },
+    observe ? { titles: { observe } } : {},
+  );
+  await service.start();
+  const room = await service.createRoom({
+    name: "Synthetic Room",
+    members: [
+      { name: "One", threadId: "one" },
+      { name: "Two", threadId: "two" },
+    ],
+  });
+  for (const [threadId, name] of [
+    ["one", "One"],
+    ["two", "Two"],
+  ])
+    await service.create({
+      kind: "roomMention",
+      threadId: threadId!,
+      mention: name!,
+      roomId: room.id,
+      label: name!,
+      prompt: "Synthetic",
+      deliveryMode: "queue",
+    });
+  return {
+    service,
+    room,
+    requests,
+    saved: () => saved,
+    fail: () => {
+      error = new Error("Disconnected after native admission");
+    },
+  };
+}
+
+test("addressed Board Room message keeps literal mentions but admits only exact selected member", async () => {
+  const f = await roomFixture();
+  try {
+    const id = `${f.room.operationEpoch}:${randomUUID()}`;
+    const receipt = await f.service.postAddressedRoomMessage(
+      f.room.id,
+      "one",
+      id,
+      "literal @Two should not select another recipient",
+    );
+    assert.equal(receipt.state, "saved");
+    assert.equal(receipt.mentions.length, 1);
+    assert.equal(receipt.mentions[0]!.threadId, "one");
+    assert.equal(receipt.mentions[0]!.deliveries[0]!.status, "running");
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests[0]!.threadId, "one");
+    assert.equal(
+      f.requests[0]!.mode,
+      undefined,
+      "native default start/steer, never Room queue preference",
+    );
+    assert.equal(f.saved().rooms[0]!.operations![0]!.recipientThreadId, "one");
+    assert.equal(
+      f.saved().rooms[0]!.messages[0]!.text,
+      "literal @Two should not select another recipient",
+    );
+    await f.service.postAddressedRoomMessage(
+      f.room.id,
+      "one",
+      id,
+      "literal @Two should not select another recipient",
+    );
+    assert.equal(
+      f.requests.length,
+      1,
+      "existing Room receipt is observed, not replayed",
+    );
+    await assert.rejects(
+      f.service.postAddressedRoomMessage(
+        f.room.id,
+        "two",
+        id,
+        "literal @Two should not select another recipient",
+      ),
+      /different message/,
+    );
+  } finally {
+    await f.service.stop();
+  }
+});
+
+test("Room saved receipt does not claim accepted/completed on unknown native outcome", async () => {
+  const f = await roomFixture();
+  try {
+    f.fail();
+    const id = `${f.room.operationEpoch}:${randomUUID()}`;
+    const receipt = await f.service.postAddressedRoomMessage(
+      f.room.id,
+      "one",
+      id,
+      "test",
+    );
+    assert.equal(receipt.state, "saved");
+    assert.ok(
+      ["unknown", "failed"].includes(
+        receipt.mentions[0]!.deliveries[0]!.status,
+      ),
+    );
+    assert.equal(f.requests.length, 1);
+    await f.service.postAddressedRoomMessage(f.room.id, "one", id, "test");
+    assert.equal(f.requests.length, 1);
+  } finally {
+    await f.service.stop();
+  }
+});
+
+test("Room removed or unconfigured members cannot receive Board messages", async () => {
+  const f = await roomFixture();
+  try {
+    await f.service.removeRoomMember(f.room.id, "one");
+    await assert.rejects(
+      f.service.postAddressedRoomMessage(
+        f.room.id,
+        "one",
+        `${f.room.operationEpoch}:${randomUUID()}`,
+        "test",
+      ),
+      /exact live member/,
+    );
+    f.service.suspendWakeups();
+    await assert.rejects(
+      f.service.postAddressedRoomMessage(
+        f.room.id,
+        "two",
+        `${f.room.operationEpoch}:${randomUUID()}`,
+        "test",
+      ),
+      /exact live member/,
+    );
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.saved().rooms[0]!.messages.length, 0);
+  } finally {
+    await f.service.stop();
+  }
+});
+
+test(
+  "real child Host runs one synthetic Board script with Trace and zero model turns",
+  { timeout: 20_000 },
+  async () => {
+    const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const { AppServerManager } =
+      await import("../src/main/app-server-manager.js");
+    const { FileTraceStore } = await import("../../../src/trace.js");
+    const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-board-host-"));
+    const marker = path.join(directory, "synthetic.txt");
+    const manager = new AppServerManager({
+      entryPath: fileURLToPath(
+        new URL("../src/main/app-server-host.ts", import.meta.url),
+      ),
+      tokenFile: path.join(directory, "runtime", "token"),
+      hostConfig: {
+        cwd: directory,
+        dataDirectory: path.join(directory, "data"),
+        model: "fake",
+        models: ["fake"],
+        approvalPolicy: "never",
+        provider: { type: "fake" },
+        toolPresentation: "direct",
+      },
+      execArgv: ["--import", "tsx"],
+      startupTimeoutMs: 10_000,
+    });
+    try {
+      await manager.start();
+      const { thread } = await manager.request("thread/start", {});
+      const before = await manager.request("zen/thread/read", {
+        threadId: thread.id,
+      });
+      const script = `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'SYNTHETIC_BOARD_OK')`;
+      const result = await manager.boardToolRequest(
+        {
+          threadId: thread.id,
+          tool: "shell",
+          arguments: {
+            command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+          },
+        },
+        signal(),
+      );
+      assert.equal(result.exitCode, 0);
+      assert.equal(await readFile(marker, "utf8"), "SYNTHETIC_BOARD_OK");
+      const after = await manager.request("zen/thread/read", {
+        threadId: thread.id,
+      });
+      assert.deepEqual(after.thread.items, before.thread.items);
+      assert.deepEqual(after.thread.turns, []);
+      const observed = await new FileTraceStore(
+        path.join(directory, "data", "trace"),
+      ).read(thread.id);
+      assert.ok(
+        observed.records.some(
+          (record) => record.type === "tool_invocation_observed",
+        ),
+      );
+      assert.ok(
+        observed.records.some(
+          (record) => record.type === "tool_result_observed",
+        ),
+      );
+    } finally {
+      await manager.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("addressed Room delivery revalidates live membership after asynchronous preparation", async () => {
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = await roomFixture(async () => {
+    entered();
+    await waiting;
+  });
+  try {
+    const sending = f.service.postAddressedRoomMessage(
+      f.room.id,
+      "one",
+      `${f.room.operationEpoch}:${randomUUID()}`,
+      "assembled text",
+    );
+    await started;
+    await f.service.removeRoomMember(f.room.id, "one");
+    release();
+    const result = await sending;
+    assert.equal(
+      f.requests.length,
+      0,
+      "removed member never reaches native admission",
+    );
+    assert.equal(
+      result.state,
+      "saved",
+      "saved product message does not disappear",
+    );
+    assert.notEqual(result.mentions[0]!.deliveries[0]!.status, "running");
+  } finally {
+    release();
+    await f.service.stop();
+  }
+});
+
+test("ambiguous Room configuration cannot silently substitute a Board recipient", async () => {
+  const f = await roomFixture();
+  try {
+    await f.service.create({
+      kind: "roomMention",
+      threadId: "one",
+      mention: "One",
+      roomId: f.room.id,
+      label: "Duplicate",
+      prompt: "Different trigger",
+    });
+    await assert.rejects(
+      f.service.postAddressedRoomMessage(
+        f.room.id,
+        "one",
+        `${f.room.operationEpoch}:${randomUUID()}`,
+        "test",
+      ),
+      /one enabled direct message recipient/,
+    );
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.saved().rooms[0]!.messages.length, 0);
+  } finally {
+    await f.service.stop();
+  }
+});

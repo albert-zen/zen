@@ -1,3 +1,8 @@
+import {
+  validateBoardToolRequest,
+  type BoardToolRequest,
+} from "../board-host.js";
+import type { ToolExecutionResult } from "../../../../src/tool.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import {
   attachBrowserModelRoute,
@@ -180,6 +185,7 @@ export class AppServerManager {
         | "configuration/discarded"
         | "configuration/current"
         | "fleet/result"
+        | "board-tool/result"
         | "shell-panel/result"
         | "model-debug/result";
       resolve(event: HostEvent): void;
@@ -730,6 +736,55 @@ export class AppServerManager {
         threadId,
       } satisfies HostCommand);
   }
+  async boardToolRequest(
+    input: BoardToolRequest,
+    signal: AbortSignal,
+  ): Promise<ToolExecutionResult> {
+    input = validateBoardToolRequest(input);
+    signal.throwIfAborted();
+    let requestId: string | undefined;
+    let received = false;
+    const child = this.#child;
+    const cancel = () => {
+      if (requestId !== undefined && child === this.#child && child?.connected)
+        child.send({
+          type: "board-tool/cancel",
+          requestId,
+        } satisfies HostCommand);
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      return await this.#sendConfigurationRequest(
+        "board-tool/result",
+        (id) => {
+          signal.throwIfAborted();
+          requestId = id;
+          return { type: "board-tool/request", requestId: id, input };
+        },
+        (event) => {
+          if (event.type !== "board-tool/result")
+            throw new Error("Invalid Board tool response");
+          received = true;
+          if (event.error) throw new Error(event.error);
+          if (!event.result)
+            throw new Error(
+              "Board action outcome is unconfirmed; do not retry automatically",
+            );
+          return event.result;
+        },
+        cancel,
+      );
+    } catch (error) {
+      if (requestId !== undefined && !received)
+        throw new Error(
+          `Board action outcome may be unknown; do not retry automatically. ${asError(error).message}`,
+          { cause: error },
+        );
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
+  }
   async shellPanelRequest(input: ShellPanelRequest): Promise<ShellPanelResult> {
     return await this.#sendConfigurationRequest(
       "shell-panel/result",
@@ -873,6 +928,7 @@ export class AppServerManager {
       | "configuration/discarded"
       | "configuration/current"
       | "fleet/result"
+      | "board-tool/result"
       | "shell-panel/result"
       | "model-debug/result",
     command: (requestId: string) => HostCommand,
@@ -1500,6 +1556,7 @@ export class AppServerManager {
         return;
       }
       if (
+        hostEvent?.type === "board-tool/result" ||
         hostEvent?.type === "shell-panel/result" ||
         hostEvent?.type === "model-debug/result" ||
         hostEvent?.type === "fleet/result" ||

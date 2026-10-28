@@ -1,4 +1,9 @@
 import {
+  validateBoardToolRequest,
+  type BoardToolRequest,
+} from "../board-host.js";
+import type { ToolExecutionResult } from "../../../../src/tool.js";
+import {
   isBrowserModelRoute,
   isBrowserModelTargets,
   isBrowserSidebarTargets,
@@ -72,6 +77,8 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | { type: "board-tool/request"; requestId: string; input: BoardToolRequest }
+  | { type: "board-tool/cancel"; requestId: string }
   | {
       type: "model-debug/request";
       requestId: string;
@@ -159,6 +166,12 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "board-tool/result";
+      requestId: string;
+      result?: ToolExecutionResult;
+      error?: string;
+    }
   | {
       type: "model-debug/result";
       requestId: string;
@@ -329,6 +342,16 @@ export function isHostCommand(value: unknown): value is HostCommand {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "board-tool/cancel")
+    return typeof fleet.requestId === "string";
+  if (fleet.type === "board-tool/request") {
+    try {
+      validateBoardToolRequest(fleet.input);
+      return typeof fleet.requestId === "string";
+    } catch {
+      return false;
+    }
+  }
   if (fleet.type === "model-debug/request") {
     try {
       validateModelRequestDebugCommand(fleet.input);
@@ -450,6 +473,21 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "board-tool/result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error !== undefined
+        ? typeof fleet.error === "string" &&
+          fleet.error.length > 0 &&
+          fleet.result === undefined
+        : typeof fleet.result === "object" &&
+          fleet.result !== null &&
+          typeof (fleet.result as Record<string, unknown>).output ===
+            "string" &&
+          Number.isSafeInteger(
+            (fleet.result as Record<string, unknown>).exitCode,
+          ))
+    );
   if (fleet.type === "model-debug/result")
     return (
       typeof fleet.requestId === "string" &&

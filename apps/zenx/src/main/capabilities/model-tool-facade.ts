@@ -102,7 +102,7 @@ const UI_ONLY_ROOMS = new Set([
   "zenx_rooms_assistant_replies",
 ]);
 export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
-  !UI_ONLY_ROOMS.has(tool.name);
+  !UI_ONLY_ROOMS.has(tool.name) && tool.name !== "zenx_board_ui";
 export function modelPluginDocument(id: string, original: string): string {
   if (id === "zenx-fleet") return fleetModelDocument;
   if (id === "browser") return browserModelDocument;
