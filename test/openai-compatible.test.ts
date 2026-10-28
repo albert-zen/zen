@@ -97,6 +97,85 @@ test("run_code keeps the ordinary JSON-function request, stream, and replay cont
   assert.equal(messages[1]?.tool_call_id, "prior-code");
 });
 
+test("projects developer instructions only on documented compatible endpoints without changing semantic input", async (t) => {
+  const compatibleTargets = [
+    ["https://dashscope.aliyuncs.com/compatible-mode/v1", "kimi-k3"],
+    ["https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-plus"],
+    ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "glm-5.3"],
+    [
+      "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "kimi-k3",
+    ],
+    [
+      "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      "qwen3.8-plus",
+    ],
+    ["https://api.deepseek.com/v1", "deepseek-chat"],
+    ["https://api.deepseek.com", "deepseek-reasoner"],
+    ["https://api.siliconflow.cn/v1", "moonshotai/Kimi-K2.7-Code"],
+    ["https://api.siliconflow.com/v1", "deepseek-ai/DeepSeek-V4-Flash"],
+    ["https://api.moonshot.cn/v1", "kimi-k3"],
+    ["https://api.moonshot.ai/v1", "kimi-k3.1-pro"],
+    ["https://open.bigmodel.cn/api/paas/v4", "glm-5.3"],
+    ["https://open.bigmodel.cn/api/coding/paas/v4", "glm-5.2"],
+  ];
+  const unchangedTargets = [
+    ["https://api.openai.com/v1", "gpt-5"],
+    ["https://api.openai.com/v1", "o3"],
+    ["https://custom-gateway.test/v1", "kimi-k3"],
+    ["https://dashscope.aliyuncs.com.example.test/v1", "kimi-k3"],
+    ["https://open.bigmodel.cn.example.test/v1", "glm-5.3"],
+  ];
+  for (const [baseUrl, model, role] of [
+    ...compatibleTargets.map(
+      ([url, model]) => [url!, model!, "system"] as const,
+    ),
+    ...unchangedTargets.map(
+      ([url, model]) => [url!, model!, "developer"] as const,
+    ),
+  ]) {
+    await t.test(`${baseUrl} ${model}`, async () => {
+      let body: Record<string, unknown> = {};
+      const adapter = new OpenAiCompatibleModel({
+        baseUrl,
+        // A display label must not override the actual endpoint contract.
+        provider: "custom-dashscope-label",
+        apiKey: fakeKey,
+        fetch: async (_url, init) => {
+          body = JSON.parse(String(init?.body));
+          return streamResponse([
+            chunk({
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            }),
+            "[DONE]",
+          ]);
+        },
+      });
+      const input = request({
+        model,
+        reasoningEffort: null,
+        messages: [
+          { role: "system", text: "Base instruction" },
+          { role: "developer", text: "Workspace instruction" },
+          { role: "user", text: "Treat this as user data" },
+          { role: "assistant", text: "A prior answer" },
+          { role: "developer", text: "Summarize the history exactly" },
+        ],
+      });
+      const before = structuredClone(input.messages);
+      await collect(adapter.stream(input));
+      assert.deepEqual(body.messages, [
+        { role: "system", content: "Base instruction" },
+        { role, content: "Workspace instruction" },
+        { role: "user", content: "Treat this as user data" },
+        { role: "assistant", content: "A prior answer" },
+        { role, content: "Summarize the history exactly" },
+      ]);
+      assert.deepEqual(input.messages, before);
+    });
+  }
+});
+
 test("maps Zen context and protects model execution fields", async () => {
   let capturedUrl = "";
   let capturedAuthorization = "";
