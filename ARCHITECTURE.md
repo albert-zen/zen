@@ -1600,3 +1600,5 @@ Chrome native-host 启动错误复用已有本机 diagnostics 目录保存有界
 队列准入失败在既有 thread Trace 中记录 `queue_admission_failed`（实际 attempt/queued Item 关联及有限异常字段），本机 Durable Trace 的 Events/Timeline 原文可读；模型与远端通知继续使用安全摘要。该被动观察不参与 ACK、恢复或重发，异常投影上限为 8 层、128 对象、64 Ki 字符及每层 32 个聚合错误，超限显式标记；不捕获 request、headers、config 对象。
 
 IM Gateway 异常沿私有子进程 stderr 保留不含 locals 的 Python traceback，由可信内置 IMZenX Host 回调写入既有本机 `diagnostics/im-gateway.jsonl`（1 MiB × 2 滚动）；进程内仅保留末尾 64 Ki 字符并明确标记截断，关闭时等待已排队日志写入。该有限诊断不是完整 Trace；模型工具/IM status 只保留稳定错误与本机查看提示，不取得原始诊断权限，迁移失败仍禁止重置原库或自动重试。
+
+- **ZenX Tool action targets** — Renderer derives read-only destination links from exact canonical tool receipts and their existing trusted compact-reference bindings; message receipts resolve an exact delivered Item (including canonical queue promotion), while Trigger receipts open the existing plugin detail surface, with no title matching, new durable state, or action replay.

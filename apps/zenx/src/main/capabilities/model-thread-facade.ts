@@ -351,7 +351,6 @@ export function projectThreadResult(
         "source",
         "clientUserMessageId",
         "clientId",
-        "messageId",
         "sourceCallId",
         "sourceToolCallId",
         "sourceThreadId",
@@ -365,6 +364,7 @@ export function projectThreadResult(
     else if (key === "turnId" || key === "activeTurnId")
       output[key === "turnId" ? "turn" : "activeTurn"] = scoped("turn", value);
     else if (key === "itemId") output.item = scoped("item", value);
+    else if (key === "messageId") output.message = scoped("item", value);
     else if (key === "lastTurn" && record(value))
       output.lastTurn = {
         ...pick(object(value), ["status", "createdAt", "error"]),
