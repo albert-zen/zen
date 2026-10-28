@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
+import { JSDOM } from "jsdom";
+import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 
 const baseProps = {
@@ -158,9 +160,83 @@ test("projectless-only sidebar renders its durable chat after reload without any
   );
   assert.match(html, /My independent chat/u);
   assert.match(html, /No project/u);
-  assert.doesNotMatch(html, /projects-zero-state/u);
-  assert.match(
-    html,
-    /Working directory: \/synthetic\/Documents\/ZenX\/date\/report/u,
-  );
+  const dom = new JSDOM(html);
+  try {
+    const document = dom.window.document;
+    assert.ok(
+      document.querySelector(".projects-zero-state"),
+      "real Projects remain empty",
+    );
+    assert.equal(
+      document.querySelectorAll("[data-project-key]").length,
+      0,
+      "no synthetic No project folder is introduced",
+    );
+    const recent = document.querySelectorAll(
+      '.recent-thread-group [data-thread-id="owned"]',
+    );
+    assert.equal(
+      recent.length,
+      1,
+      "the durable independent chat is reachable once in Recent",
+    );
+    assert.match(recent[0]!.textContent ?? "", /My independent chat/u);
+    assert.ok(
+      recent[0]!.querySelector(".thread-row"),
+      "the existing conversation has a navigation control",
+    );
+  } finally {
+    dom.window.close();
+  }
+  // Recent keeps the directory in the existing details menu, rather than
+  // duplicating a projectless folder row solely to carry a directory label.
+  const interactive = new JSDOM('<!doctype html><div id="root"></div>', {
+    url: "http://localhost",
+  });
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+  };
+  Object.assign(globalThis, {
+    window: interactive.window,
+    document: interactive.window.document,
+    HTMLElement: interactive.window.HTMLElement,
+    Node: interactive.window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await React.act(async () =>
+      root.render(
+        React.createElement(Sidebar, {
+          ...baseProps,
+          threads: [thread],
+          projects: {
+            projects: [],
+            projectlessThreadIds: ["owned"],
+            unavailableThreadIds: [],
+            lastUsedWorkspace: null,
+          },
+        }),
+      ),
+    );
+    const menu = document.querySelector<HTMLButtonElement>(
+      '.recent-thread-group [data-thread-id="owned"] .thread-menu-trigger',
+    );
+    assert.ok(menu, "Recent retains the actual Thread menu");
+    await React.act(async () => menu.click());
+    assert.match(
+      document.querySelector(".thread-menu-information")?.textContent ?? "",
+      /\/synthetic\/Documents\/ZenX\/date\/report/u,
+      "the original durable working directory is available through Recent details",
+    );
+  } finally {
+    await React.act(async () => root.unmount());
+    Object.assign(globalThis, previous, {
+      IS_REACT_ACT_ENVIRONMENT: undefined,
+    });
+    interactive.window.close();
+  }
 });

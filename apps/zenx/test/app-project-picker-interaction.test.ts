@@ -5175,7 +5175,9 @@ test("Settings and thread navigation are mutually exclusive, including return to
   );
   try {
     await selectedComposer();
-    for (const id of ["thread-1", "thread-2", "thread-1"]) {
+    for (const [index, id] of ["thread-1", "thread-2", "thread-1"].entries()) {
+      const navigationScope =
+        index % 2 === 0 ? "[data-project-key]" : ".recent-thread-group";
       await act(async () =>
         document.querySelector<HTMLButtonElement>(".settings-nav-row")!.click(),
       );
@@ -5202,7 +5204,7 @@ test("Settings and thread navigation are mutually exclusive, including return to
       await act(async () =>
         document
           .querySelector<HTMLButtonElement>(
-            `[data-thread-id="${id}"] .thread-row`,
+            `${navigationScope} [data-thread-id="${id}"] .thread-row`,
           )!
           .click(),
       );
@@ -5218,16 +5220,26 @@ test("Settings and thread navigation are mutually exclusive, including return to
           ?.closest("[hidden]") !== null,
         true,
       );
+      for (const scope of ["[data-project-key]", ".recent-thread-group"]) {
+        const current = document.querySelectorAll(
+          `${scope} .thread-row[aria-current="page"]`,
+        );
+        assert.equal(
+          current.length,
+          1,
+          `${scope} has exactly one selected conversation`,
+        );
+        assert.equal(
+          current[0]
+            ?.closest("[data-thread-id]")
+            ?.getAttribute("data-thread-id"),
+          id,
+          `${scope} reflects the same selected Thread after navigating from ${navigationScope}`,
+        );
+      }
       assert.equal(
         document.querySelectorAll('.thread-row[aria-current="page"]').length,
-        1,
-      );
-      assert.equal(
-        document
-          .querySelector('.thread-row[aria-current="page"]')
-          ?.closest("[data-thread-id]")
-          ?.getAttribute("data-thread-id"),
-        id,
+        2,
       );
       assert.equal(
         document
