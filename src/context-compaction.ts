@@ -11,47 +11,53 @@ export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v3";
 export const AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION =
   "zen.context-compaction.agentic.v2";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL_NAME = "compact_context";
+export const AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE =
+  "Save detailed memory to files and put the paths and next steps in text. Omit retention for summary-only context, or choose recentItemCount and/or recentUserMessageCount/recentFinalMessageCount/recentAgentMessageCount; counts are combined without duplicates. Alternatively use tokenBudget alone to keep the newest complete context that fits that estimated retained-history token allowance. Do not combine tokenBudget with counts. Complete tool call/result groups may add Items; explicit counts must fit the remaining model capacity or the call fails without reset.";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
   name: AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-  description:
-    "Compact this active Turn. Supply your own continuation text; optionally retain canonical Items by recent count, Turn count, listed cN references or user-message category. A bounded, Host-owned original Thread reference is included by default. Call alone as a top-level tool; retention exceeding context capacity fails without reset.",
+  description: `Replace this active Turn's working context with your exact continuation text and optional coarse retention. ${AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE} A bounded original Thread reference is included by default. Call alone as a top-level tool.`,
   inputSchema: Object.freeze({
     type: "object",
     properties: Object.freeze({
       text: Object.freeze({
         type: "string",
         description:
-          "Exact continuation text retained for subsequent reasoning. Before calling, save details that must remain available to durable files when useful, then include their ordinary paths and the next steps here so they can be read on demand.",
+          "Exact continuation text. Save detailed memory to files first; include their paths, the goal and next steps here so details can be read on demand.",
       }),
       retention: Object.freeze({
         type: "object",
         description:
-          "Programmatic, bounded retention of existing context Items. Explicit itemIds/fromItemId/toItemId accept only the cN references listed in this sample, never native IDs.",
+          "Choose recent counts (combined without duplicates) OR tokenBudget alone. Omitted retention keeps only the continuation text. Counts refer to currently eligible context, not individual Item IDs. Tool-response groups remain complete.",
         properties: Object.freeze({
-          recentItemCount: { type: "integer", minimum: 1 },
-          recentTurnCount: { type: "integer", minimum: 0 },
-          itemIds: {
-            type: "array",
-            items: { type: "string", pattern: "^c[1-9][0-9]*$" },
+          recentItemCount: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Newest model-context Items, including top-level tool calls/results; complete tool groups may add Items.",
           },
-          itemRanges: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                fromItemId: { type: "string", pattern: "^c[1-9][0-9]*$" },
-                toItemId: { type: "string", pattern: "^c[1-9][0-9]*$" },
-              },
-              required: ["fromItemId", "toItemId"],
-              additionalProperties: false,
-            },
+          recentUserMessageCount: {
+            type: "integer",
+            minimum: 0,
+            description: "Newest user messages.",
           },
-          preserveUserMessages: { type: "boolean" },
-          finalMessages: {
-            type: "string",
-            enum: ["none", "all", "recent"],
+          recentFinalMessageCount: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Newest final assistant messages from successfully completed Turns.",
           },
-          finalMessageCount: { type: "integer", minimum: 1 },
+          recentAgentMessageCount: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Newest complete assistant messages, including final messages and messages accompanying tool calls.",
+          },
+          tokenBudget: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Use alone: estimated tokens for the newest complete retained history, excluding continuation text, tools and instructions. Capped by remaining model capacity; may retain less than requested.",
+          },
         }),
         additionalProperties: false,
       }),
@@ -65,6 +71,42 @@ export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
     additionalProperties: false,
   }),
 });
+
+export interface AgenticCompactionRetention {
+  recentItemCount?: number;
+  recentUserMessageCount?: number;
+  recentFinalMessageCount?: number;
+  recentAgentMessageCount?: number;
+  tokenBudget?: number;
+}
+
+/** Current tool arguments only; old committed selections replay their exact retained IDs. */
+export function normalizeAgenticCompactionRetention(
+  value: unknown,
+): AgenticCompactionRetention {
+  if (value === undefined) return {};
+  requirePlainObject(value, "retention");
+  const supplied = value as Record<string, unknown>;
+  const keys = [
+    "recentItemCount",
+    "recentUserMessageCount",
+    "recentFinalMessageCount",
+    "recentAgentMessageCount",
+    "tokenBudget",
+  ];
+  if (Object.keys(supplied).some((key) => !keys.includes(key)))
+    throw new Error(
+      "Use recent Item/message counts or tokenBudget; individual Item references, ranges and legacy retention options are no longer accepted by compact_context",
+    );
+  for (const [key, count] of Object.entries(supplied))
+    requireNonNegativeInteger(count as number, `retention.${key}`);
+  if (supplied.tokenBudget !== undefined && Object.keys(supplied).length !== 1)
+    throw new Error(
+      "Choose tokenBudget alone OR recent Item/message counts, not both",
+    );
+  return { ...supplied } as AgenticCompactionRetention;
+}
+
 export const CONTEXT_COMPACTION_SUMMARY_MARKER = "ZEN_CONTEXT_COMPACTION_V1";
 export const CONTEXT_COMPACTION_SUMMARY_PREFIX = "[Zen compacted context]\n";
 
@@ -322,6 +364,23 @@ export function itemsAfterLatestAgenticCompaction(
   });
 }
 
+/** Current retention eligibility, unlike the compiler's post-reset suffix. */
+function agenticRetentionCandidates(
+  items: readonly CanonicalItem[],
+): readonly CanonicalItem[] {
+  const suffix = itemsAfterLatestAgenticCompaction(items);
+  const reset = items.findLast(
+    (item) =>
+      item.type === "context_compaction" && isAgenticContextCompaction(item),
+  );
+  if (reset?.type !== "context_compaction") return suffix;
+  const eligible = new Set([
+    ...suffix.map((item) => item.id),
+    ...reset.retainedItemIds,
+  ]);
+  return items.filter((item) => eligible.has(item.id));
+}
+
 export function latestEligibleCompactionBoundary(
   items: readonly CanonicalItem[],
 ): CompactionBoundary | undefined {
@@ -471,6 +530,76 @@ export function planCompactionRetention(
   }
 
   throw new Error("Context compaction could not produce a bounded projection");
+}
+
+/** Agent-authored retention selects coarse current-history groups, never model-facing IDs. */
+export function planAgenticCompactionRetention(
+  items: readonly CanonicalItem[],
+  boundary: CompactionBoundary,
+  options: {
+    retainedTokenBudget: number;
+    estimateRetainedTokens: (items: readonly CanonicalItem[]) => number;
+    retention: AgenticCompactionRetention;
+  },
+): CompactionBoundary {
+  const covered = items.slice(0, boundary.index + 1);
+  const eligible = agenticRetentionCandidates(covered);
+  const retention = options.retention;
+  const candidates = recentItemCandidates(eligible);
+  const budget = Math.min(
+    options.retainedTokenBudget,
+    retention.tokenBudget ?? options.retainedTokenBudget,
+  );
+  const plan = (ids: ReadonlySet<string>) => {
+    const closed = expandRetainedToolClosure(eligible, ids);
+    validateRetainedToolClosure(eligible, closed);
+    const retained = itemsInCanonicalOrder(eligible, closed);
+    return options.estimateRetainedTokens(retained) <= budget
+      ? { ...boundary, retainedItemIds: retained.map((item) => item.id) }
+      : undefined;
+  };
+  if (retention.tokenBudget !== undefined) {
+    for (let start = 0; start <= candidates.length; start++) {
+      const result = plan(
+        new Set(candidates.slice(start).map((item) => item.id)),
+      );
+      if (result !== undefined) return result;
+    }
+  } else {
+    const selected = new Set<string>();
+    const take = (
+      items: readonly CanonicalItem[],
+      count: number | undefined,
+    ) => {
+      if (count !== undefined && count > 0)
+        for (const item of items.slice(-count)) selected.add(item.id);
+    };
+    take(candidates, retention.recentItemCount);
+    take(
+      eligible.filter((item) => item.type === "user_message"),
+      retention.recentUserMessageCount,
+    );
+    // Completion records may have been omitted by a prior reset; classify using
+    // the original covered facts, then intersect the currently eligible messages.
+    const eligibleIds = new Set(eligible.map((item) => item.id));
+    take(
+      successfulFinalMessages(covered).filter((item) =>
+        eligibleIds.has(item.id),
+      ),
+      retention.recentFinalMessageCount,
+    );
+    take(
+      eligible.filter(
+        (item) => item.type === "agent_message" && item.incomplete !== true,
+      ),
+      retention.recentAgentMessageCount,
+    );
+    const result = plan(selected);
+    if (result !== undefined) return result;
+  }
+  throw new Error(
+    "Requested retained context and complete tool groups exceed the remaining model capacity; choose smaller counts or tokenBudget alone",
+  );
 }
 
 export function contextCompactionTokenBudget(
@@ -897,7 +1026,7 @@ function validateAgenticContextCompactionItem(
   ) {
     throw new Error("Agentic context compaction requires an active Turn");
   }
-  const retainable = itemsAfterLatestAgenticCompaction(
+  const retainable = agenticRetentionCandidates(
     items.slice(0, boundaryIndex + 1),
   );
   const available = new Set(retainable.map((candidate) => candidate.id));

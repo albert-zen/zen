@@ -40,7 +40,7 @@ import {
   type ModelRequest,
 } from "../src/model.js";
 import { ProviderRegistry } from "../src/provider-registry.js";
-import { compileItemList } from "../src/item-list.js";
+import { compileItemList, type ContextItem } from "../src/item-list.js";
 import { validateModelReferenceBindings } from "../src/model-references.js";
 import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
@@ -497,6 +497,67 @@ test("agentic compaction replaces the active context and replays identically", a
   );
 });
 
+test("repeated coarse resets can retain already-visible user context without duplicate replay", async () => {
+  const requests: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      requests.push(cloneRequest(request));
+      if (requests.length <= 2)
+        yield {
+          type: "tool_call",
+          callId: `retain-again-${requests.length}`,
+          name: "compact_context",
+          arguments: {
+            text: `exact continuation ${requests.length}`,
+            retention: { recentUserMessageCount: 1 },
+            includeOriginalReference: false,
+          },
+        };
+      else yield { type: "text_delta", delta: "done" };
+    },
+  };
+  const journal = new InMemoryThreadJournal();
+  const server = createServer({
+    journal,
+    model,
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "retain this original input")
+  ).done;
+  const snapshot = await server.readThread(thread.id);
+  const user = snapshot.items.find((item) => item.type === "user_message")!;
+  const resets = snapshot.items.filter(
+    (item) => item.type === "context_compaction",
+  );
+  assert.equal(resets.length, 2);
+  for (const reset of resets)
+    assert.deepEqual(reset.retainedItemIds, [user.id]);
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[2]!.messages, [
+    { role: "user", text: "[Zen compacted context]\nexact continuation 2" },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `[Message received at ${user.createdAt}]` },
+        { type: "text", text: "retain this original input" },
+      ],
+    },
+  ]);
+  const legacyReplay = compileModelMessages(snapshot.items);
+  assert.equal(
+    JSON.stringify(legacyReplay).split("retain this original input").length - 1,
+    1,
+  );
+  assert.deepEqual(
+    compileModelMessages(
+      (await createServer({ journal, model }).readThread(thread.id)).items,
+    ),
+    legacyReplay,
+  );
+});
 test("agentic tool shares canonical retention planning and defaults to bounded original reference", async () => {
   const requests: ModelRequest[] = [];
   let samples = 0;
@@ -507,19 +568,6 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
       requests.push(cloneRequest(request));
       samples += 1;
       if (samples === 2) {
-        const stored = await server.readThread(request.debugContext!.threadId);
-        const declaration = assertCompactionReferenceDeclaration(
-          request,
-          stored.itemList,
-        );
-        const firstUserRef = declaration.bindings.find(
-          (binding) =>
-            JSON.stringify(binding.value) ===
-            JSON.stringify({ itemId: firstUserId }),
-        )?.ref;
-        assert(firstUserRef !== undefined);
-        assert.match(firstUserRef, /^c[1-9][0-9]*$/u);
-        assert.notEqual(firstUserRef, firstUserId);
         yield {
           type: "tool_call",
           callId: "structured-reset",
@@ -527,12 +575,8 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
           arguments: {
             text: "handwritten summary",
             retention: {
-              itemIds: [firstUserRef, firstUserRef],
-              itemRanges: [
-                { fromItemId: firstUserRef, toItemId: firstUserRef },
-              ],
-              preserveUserMessages: true,
-              recentTurnCount: 1,
+              recentUserMessageCount: 2,
+              recentAgentMessageCount: 1,
             },
           },
         };
@@ -659,15 +703,8 @@ test("agentic retention rejects native IDs, unknown handles and stale sample han
               firstUserId = stored.items.find(
                 (item) => item.type === "user_message",
               )!.id;
-              const declaration = assertCompactionReferenceDeclaration(
-                request,
-                stored.itemList,
-              );
-              assert.equal(declaration.bindings.length, 1);
-              firstRef = declaration.bindings[0]!.ref;
-              assert.deepEqual(declaration.bindings[0]!.value, {
-                itemId: firstUserId,
-              });
+              assertNoCompactionReferenceDeclaration(request, stored.itemList);
+              firstRef = "c1"; // old transcripts may contain this obsolete spelling
               if (scenario === "stale") {
                 yield {
                   type: "tool_call",
@@ -753,7 +790,7 @@ test("agentic retention rejects native IDs, unknown handles and stale sample han
         assert.notEqual(rejected.exitCode, 0);
         assert.match(
           rejected.output,
-          /invalid retention:.*reference unavailable/iu,
+          /invalid retention:.*no longer accepted/iu,
         );
         assert.equal(
           snapshot.items.filter(
@@ -811,7 +848,7 @@ test("agentic compaction preserves user steering unseen by its model sample", as
     async *stream(request): AsyncIterable<ModelEvent> {
       requests.push(cloneRequest(request));
       const stored = await server.readThread(request.debugContext!.threadId);
-      assertCompactionReferenceDeclaration(request, stored.itemList);
+      assertNoCompactionReferenceDeclaration(request, stored.itemList);
       samples += 1;
       if (samples === 1) {
         firstSampleStarted.resolve();
@@ -845,23 +882,10 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   const users = snapshot.items.filter((item) => item.type === "user_message");
   const userTimestamps = users.map((item) => item.createdAt);
   assert(requests[1] !== undefined);
-  const declaration = assertCompactionReferenceDeclaration(
-    requests[1],
-    snapshot.itemList,
-  );
-  assert.deepEqual(declaration.bindings, [
-    {
-      ref: "c2",
-      ownerThreadId: thread.id,
-      namespace: "builtin-compaction",
-      kind: "item",
-      value: { itemId: users[1]!.id },
-    },
-  ]);
+  assertNoCompactionReferenceDeclaration(requests[1], snapshot.itemList);
   assert.equal(samples, 2);
   assert.equal(snapshot.turns[0]?.status, "completed");
   assert.deepEqual(requests[1].messages, [
-    declaration.message,
     { role: "user", text: "[Zen compacted context]\ncontinuation" },
     {
       role: "user",
@@ -904,7 +928,7 @@ test("R1 Runtime/Host: second reset retains pre-sample steer, not after-sample i
           arguments: {
             text: "second summary",
             includeOriginalReference: false,
-            retention: { recentTurnCount: 1 },
+            retention: { recentUserMessageCount: 1 },
           },
         };
       } else {
@@ -1014,7 +1038,7 @@ test("R1 Runtime/Host: oversized late steering is rejected before sampling witho
           arguments: {
             text: "second reset",
             includeOriginalReference: false,
-            retention: { recentTurnCount: 1 },
+            retention: { recentUserMessageCount: 1 },
           },
         };
       } else {
@@ -1578,7 +1602,7 @@ test("oversized agentic text fails without changing the effective projection", a
     estimateModelInput(dispatched.messages, dispatched.tools).total <
       contextWindow * 0.8,
   );
-  assertCompactionReferenceDeclaration(dispatched, snapshot.itemList);
+  assertNoCompactionReferenceDeclaration(dispatched, snapshot.itemList);
   const rejected = snapshot.items.find(
     (item) =>
       item.type === "tool_result" && item.callId === "oversized-compact",
@@ -3723,6 +3747,113 @@ test("freezes the admitted Provider selection while a settings update waits", as
   assert.equal(compacted.reasoningEffort, "medium");
 });
 
+test("agentic reminders are scoped to threshold crossings and reset, never every sample", async () => {
+  const requests: ModelRequest[] = [];
+  const usage = [100, 7_000, 8_000, 8_100, 100, 8_000, 8_000, 8_000, 100];
+  let samples = 0;
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "summary" };
+        return;
+      }
+      requests.push(cloneRequest(request));
+      const index = samples++;
+      const stored = await server.readThread(request.debugContext!.threadId);
+      assertSampleMatchesStoredContext(request, stored.itemList);
+      assertNoCompactionReferenceDeclaration(request, stored.itemList);
+      if (index === 8) yield { type: "text_delta", delta: "done" };
+      else
+        yield {
+          type: "tool_call",
+          callId: `coarse-${index}`,
+          name: index === 6 ? "compact_context" : "shell",
+          arguments:
+            index === 6
+              ? {
+                  text: "reset; details in /tmp/memory.md",
+                  includeOriginalReference: false,
+                }
+              : { command: "printf ok" },
+        };
+      yield { type: "usage", inputTokens: usage[index]!, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 10_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "synthetic input")
+  ).done;
+  const reminded = requests.flatMap((request, index) =>
+    JSON.stringify(request.messages).includes("[Host context notice]")
+      ? [index]
+      : [],
+  );
+  assert.deepEqual(reminded, [3, 6, 8]);
+  for (const index of reminded) {
+    const text = JSON.stringify(requests[index]!.messages);
+    assert.match(text, /recentUserMessageCount/u);
+    assert.match(text, /tokenBudget/u);
+    assert.match(text, /Save detailed memory to files/u);
+  }
+  assert.equal(samples, 9);
+});
+
+test("a first crossing above fallback without completed history still gives one coarse reminder", async () => {
+  const requests: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "summary" };
+        return;
+      }
+      requests.push(cloneRequest(request));
+      if (requests.length === 1)
+        yield {
+          type: "tool_call",
+          callId: "first-hard-crossing",
+          name: "shell",
+          arguments: { command: "printf ok" },
+        };
+      else yield { type: "text_delta", delta: "done" };
+      yield {
+        type: "usage",
+        inputTokens: requests.length === 1 ? 9_600 : 100,
+        outputTokens: 1,
+      };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 10_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "synthetic input")
+  ).done;
+  assert.equal(requests.length, 2);
+  assert.doesNotMatch(
+    JSON.stringify(requests[0]!.messages),
+    /Host context notice/u,
+  );
+  assert.match(
+    JSON.stringify(requests[1]!.messages),
+    /Host context notice.*recentItemCount.*tokenBudget/u,
+  );
+});
 test("agentic threshold gives one host notice before the same Turn continues", async () => {
   const requests: ModelRequest[] = [];
   let samples = 0;
@@ -3748,7 +3879,7 @@ test("agentic threshold gives one host notice before the same Turn continues", a
           name: "shell",
           arguments: { command: "printf ok" },
         };
-        yield { type: "usage", inputTokens: 850, outputTokens: 1 };
+        yield { type: "usage", inputTokens: 8_500, outputTokens: 1 };
         return;
       }
       assert(
@@ -3774,7 +3905,7 @@ test("agentic threshold gives one host notice before the same Turn continues", a
     journal,
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+      { id: "recording-model", isDefault: true, contextWindow: 10_000 },
     ]),
     contextCompaction: { agenticEnabled: true },
   });
@@ -4327,49 +4458,26 @@ function malformedCompactionShape(): Record<string, unknown> {
   };
 }
 
-function assertCompactionReferenceDeclaration(
+function assertNoCompactionReferenceDeclaration(
   request: ModelRequest,
-  items: Awaited<ReturnType<ZenAppServer["readThread"]>>["itemList"],
-) {
-  assertSampleMatchesStoredContext(request, items);
-  assert(items !== undefined);
-  const declarations = items.filter(
+  itemList: readonly ContextItem[] | undefined,
+): void {
+  assert.doesNotMatch(
+    JSON.stringify(request.messages),
+    /compact_context (?:optional )?retention references|Explicit compaction item references/u,
+  );
+  const current = (itemList ?? []).filter(
     (item) =>
-      item.source.kind === "context_notice" &&
-      item.source.metadata?.onlySampleId === request.debugContext?.sampleId &&
-      item.source.metadata?.referenceBindings !== undefined,
+      item.source.metadata?.onlySampleId === request.debugContext?.sampleId,
   );
-  assert.equal(declarations.length, 1);
-  const declaration = declarations[0]!;
-  assert.equal(declaration.role, "developer");
-  assert(declaration.kind === "message");
-  const bindings = validateModelReferenceBindings(
-    declaration.source.metadata?.referenceBindings,
-  );
-  assert(bindings.length > 0);
-  for (const binding of bindings) {
-    assert.equal(binding.ownerThreadId, request.debugContext?.threadId);
-    assert.equal(binding.namespace, "builtin-compaction");
-    assert.equal(binding.kind, "item");
-    assert.match(binding.ref, /^c[1-9][0-9]*$/u);
-    assert(declaration.content.text.includes(binding.ref));
-    const source = items.find(
-      (item) =>
-        JSON.stringify(binding.value) === JSON.stringify({ itemId: item.id }),
-    );
-    assert(source !== undefined);
-    assert(request.debugContext?.selectedItemIds?.includes(source.id));
-  }
-  const message: ModelMessage = {
-    role: "developer",
-    text: declaration.content.text,
-  };
-  assert(
-    request.messages.some(
-      (entry) => JSON.stringify(entry) === JSON.stringify(message),
+  assert.equal(
+    current.some((item) =>
+      (JSON.stringify(item.source.metadata?.referenceBindings) ?? "").includes(
+        '"builtin-compaction"',
+      ),
     ),
+    false,
   );
-  return { message, bindings };
 }
 
 function assertSampleMatchesStoredContext(
