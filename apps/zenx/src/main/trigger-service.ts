@@ -140,6 +140,8 @@ const MAX_PROGRAM_OUTCOMES = 4;
 interface WakeupEvent {
   /** Room-owned choice captured when its message and wakeup commit together. */
   roomDeliveryMode?: WakeupDeliveryMode;
+  /** Exact addressed UI message fence, not inferred from mentions. */
+  roomRecipientThreadId?: string;
   bootstrapText?: string;
   reason: string;
   occurrenceKey: string;
@@ -1594,6 +1596,25 @@ export class ZenXTriggerService {
     );
   }
 
+  /** Explicit UI send through the existing Room receipt/wakeup admission path. */
+  async postAddressedRoomMessage(
+    roomId: string,
+    threadId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomDeliveryView> {
+    await this.#prepareRoomOperation(
+      roomId,
+      operationId,
+      text,
+      undefined,
+      undefined,
+      threadId,
+    );
+    await this.postPreparedRoomMessage(roomId, operationId, text);
+    return this.roomOperation(roomId, operationId);
+  }
+
   async prepareAssistantIntroduction(
     roomId: string,
     operationId: string,
@@ -1624,6 +1645,7 @@ export class ZenXTriggerService {
     text: string,
     replyToMessageId?: string,
     kind?: "assistantIntroduction",
+    recipientThreadId?: string,
   ): Promise<RoomSendOperation> {
     const generation = this.#runningGeneration();
     const id = required(operationId, "operation ID", MAX_ID_BYTES);
@@ -1639,6 +1661,7 @@ export class ZenXTriggerService {
         if (existing.cancelled === true)
           throw new Error("Room operation was cancelled; no message was sent");
         if (
+          existing.recipientThreadId !== recipientThreadId ||
           existing.kind !== kind ||
           (kind === undefined && existing.text !== normalizedText) ||
           existing.replyTo?.messageId !== replyToMessageId
@@ -1646,6 +1669,13 @@ export class ZenXTriggerService {
           throw new Error("Operation is bound to a different message");
         return structuredClone(existing);
       }
+      if (recipientThreadId !== undefined)
+        this.#assertAddressedRoomRecipient(
+          snapshot,
+          room,
+          recipientThreadId,
+          generation,
+        );
       const epoch = room.operationEpoch ?? "legacy";
       const suffix = id.startsWith(`${epoch}:`)
         ? id.slice(epoch.length + 1)
@@ -1676,6 +1706,7 @@ export class ZenXTriggerService {
           ? undefined
           : roomQuote(room, replyToMessageId);
       const value: RoomSendOperation = {
+        ...(recipientThreadId === undefined ? {} : { recipientThreadId }),
         ...(kind === undefined ? {} : { kind }),
         ...(replyTo === undefined ? {} : { replyTo }),
         id,
@@ -2103,6 +2134,13 @@ export class ZenXTriggerService {
         );
       if (operation !== undefined && operation.messageId !== null)
         return { wakeups: [], operation: structuredClone(operation) };
+      if (operation?.recipientThreadId !== undefined)
+        this.#assertAddressedRoomRecipient(
+          snapshot,
+          room,
+          operation.recipientThreadId,
+          generation,
+        );
       const value = message(
         room.id,
         kind === "agent" && originThreadId !== null
@@ -2122,9 +2160,11 @@ export class ZenXTriggerService {
       room.messages.push(value);
       const wakeups: CommittedWakeup[] = [];
       const mentions = room.members.filter((member) =>
-        room.assistant
-          ? kind === "human" && member.threadId === room.assistant.threadId
-          : mentionMatches(normalizedText, member.name),
+        operation?.recipientThreadId !== undefined
+          ? member.threadId === operation.recipientThreadId
+          : room.assistant
+            ? kind === "human" && member.threadId === room.assistant.threadId
+            : mentionMatches(normalizedText, member.name),
       );
       for (const member of mentions) {
         const triggerIds = (generation.wakeupAdmission ? snapshot.triggers : [])
@@ -2150,9 +2190,14 @@ export class ZenXTriggerService {
             reason: `Room #${room.name} mention from ${value.author}: ${value.text}`,
             occurrenceKey: `room:${room.id}:${value.id}`,
             sourceRoomId: room.id,
-            ...(room.assistant
-              ? { roomDeliveryMode: room.assistant.deliveryMode ?? "steer" }
-              : {}),
+            ...(operation?.recipientThreadId !== undefined
+              ? {
+                  roomDeliveryMode: "steer" as const,
+                  roomRecipientThreadId: operation.recipientThreadId,
+                }
+              : room.assistant
+                ? { roomDeliveryMode: room.assistant.deliveryMode ?? "steer" }
+                : {}),
             sourceRoomMessageId: value.id,
             sourceRoomMessageText: [
               value.replyTo
@@ -2179,6 +2224,36 @@ export class ZenXTriggerService {
     for (const wakeup of committed.wakeups)
       await this.#runCommittedWakeup(generation, wakeup);
     return committed.operation;
+  }
+
+  #assertAddressedRoomRecipient(
+    snapshot: TriggerSnapshot,
+    room: ZenXRoom,
+    threadId: string,
+    generation: TriggerGeneration,
+    expectedTriggerId?: string,
+  ): void {
+    const member = room.members.find((entry) => entry.threadId === threadId);
+    const triggers = snapshot.triggers.filter(
+      (trigger) =>
+        trigger.active &&
+        trigger.threadId === threadId &&
+        trigger.kind === "roomMention" &&
+        trigger.room?.roomId === room.id &&
+        trigger.room.mention.toLocaleLowerCase() ===
+          member?.name.toLocaleLowerCase() &&
+        (!room.assistant || room.assistant.triggerId === trigger.id),
+    );
+    if (
+      !member ||
+      !generation.wakeupAdmission ||
+      triggers.length !== 1 ||
+      triggers[0]!.program !== undefined ||
+      (expectedTriggerId !== undefined && triggers[0]!.id !== expectedTriggerId)
+    )
+      throw new Error(
+        "Board Room delivery requires its exact live member and one enabled direct message recipient",
+      );
   }
 
   async #handleTurnCompleted(
@@ -2683,6 +2758,20 @@ export class ZenXTriggerService {
         });
       }
       if (!this.#isOperational(generation)) return;
+      if (wakeup.roomRecipientThreadId !== undefined) {
+        const currentSourceRoom = this.#snapshot.rooms.find(
+          (room) => room.id === wakeup.sourceRoomId,
+        );
+        if (!currentSourceRoom)
+          throw new Error("Board's Room is no longer available");
+        this.#assertAddressedRoomRecipient(
+          this.#snapshot,
+          currentSourceRoom,
+          wakeup.roomRecipientThreadId,
+          generation,
+          trigger.id,
+        );
+      }
       const result = await this.#manager.request("zen/turn/wake", {
         threadId: trigger.threadId,
         clientId: active.clientUserMessageId,

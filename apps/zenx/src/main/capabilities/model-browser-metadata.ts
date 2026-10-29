@@ -86,7 +86,9 @@ export function copyBrowserModelTargets<T extends object>(
   target: T,
 ): T {
   const value = readBrowserModelTargets(source);
-  return value ? attachBrowserModelTargets(target, value) : target;
+  if (value) attachBrowserModelTargets(target, value);
+  const sidebar = readBrowserSidebarTargets(source);
+  return sidebar ? attachBrowserSidebarTargets(target, sidebar) : target;
 }
 const string = (v: unknown) =>
   typeof v === "string" && v.length > 0 && v.length <= 4096;

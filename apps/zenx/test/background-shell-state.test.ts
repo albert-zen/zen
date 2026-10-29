@@ -327,3 +327,99 @@ test("a completed real Turn and its actual fork keep live Shell ownership only o
     await app.closeRuntimeConfiguration();
   }
 });
+
+test("late Terminal reads respect newer file, Close and ephemeral sidechat choices", async () => {
+  for (const choice of ["file", "close", "sidechat"] as const) {
+    const sidebar = new ThreadSidebarController();
+    await sidebar.edit("source", () => ({
+      open: true,
+      selectedTab: "terminal",
+      tabs: [{ kind: "terminal" }],
+    }));
+    let resolve!: (value: any) => void;
+    const pending = openShellTarget({
+      target: { threadId: "source", taskId: session.taskId },
+      owner: { kind: "thread", id: "source" },
+      sidebar,
+      isCurrent: () => true,
+      api: {
+        request: () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      },
+    });
+    if (choice === "file") await sidebar.select("source", "file:notes.txt");
+    else if (choice === "close")
+      await sidebar.edit("source", () => ({ open: false }));
+    else sidebar.beginPresentationIntent("source");
+    const before = structuredClone(sidebar.get("source"));
+    resolve({ session, output: "", cursor: 0, truncated: false });
+    assert.equal(await pending, false, choice);
+    assert.deepEqual(sidebar.get("source"), before, choice);
+  }
+});
+
+test("the Terminal jump's own receipt and tab reconciliation do not invalidate its intent", async () => {
+  const sidebar = new ThreadSidebarController();
+  const owner = { kind: "thread" as const, id: "source" };
+  const intent = sidebar.beginPresentationIntent(owner);
+  assert.equal(
+    await openShellTarget({
+      target: { threadId: "source", taskId: session.taskId },
+      owner,
+      sidebar,
+      presentationIntent: intent,
+      isCurrent: () => true,
+      api: {
+        request: async () => ({
+          session,
+          output: "",
+          cursor: 0,
+          truncated: false,
+        }),
+      },
+    }),
+    true,
+  );
+  const current = sidebar.get(owner)!;
+  sidebar.accept({ ...current });
+  await sidebar.edit(owner, (state) => ({ tabs: [...state.tabs] }));
+  assert.equal(sidebar.isPresentationIntentCurrent(owner, intent), true);
+});
+
+test("retired Terminal read errors stay retired while current read failures remain explicit", async () => {
+  const sidebar = new ThreadSidebarController();
+  const owner = { kind: "thread" as const, id: "source" };
+  const target = { threadId: "source", taskId: session.taskId };
+  let reject!: (error: Error) => void;
+  const pending = openShellTarget({
+    target,
+    owner,
+    sidebar,
+    isCurrent: () => true,
+    api: {
+      request: () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    },
+  });
+  await sidebar.edit(owner, () => ({ open: false }));
+  reject(new Error("synthetic obsolete read failure"));
+  assert.equal(await pending, false);
+  await assert.rejects(
+    openShellTarget({
+      target,
+      owner,
+      sidebar,
+      isCurrent: () => true,
+      api: {
+        request: async () => {
+          throw new Error("synthetic current read failure");
+        },
+      },
+    }),
+    /synthetic current read failure/,
+  );
+});

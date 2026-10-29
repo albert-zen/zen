@@ -19,6 +19,20 @@ export class ThreadSidebarController {
   >();
   #listeners = new Set<() => void>();
   #queues = new Map<string, Promise<number>>();
+  // Disposable UI intent only; Host receipts never advance this local fence.
+  #presentationIntents = new Map<string, number>();
+  beginPresentationIntent(owner: SidebarOwner | string): number {
+    const key = sidebarOwnerKey(owner);
+    const intent = (this.#presentationIntents.get(key) ?? 0) + 1;
+    this.#presentationIntents.set(key, intent);
+    return intent;
+  }
+  isPresentationIntentCurrent(
+    owner: SidebarOwner | string,
+    intent: number,
+  ): boolean {
+    return this.#presentationIntents.get(sidebarOwnerKey(owner)) === intent;
+  }
   #error: string | null = null;
   constructor(readonly api?: ThreadSidebarApi) {}
   snapshot = () => this.#presentation;
@@ -60,9 +74,14 @@ export class ThreadSidebarController {
     input: SidebarOwner | string,
     makePatch: (state: ThreadSidebarState) => ThreadSidebarPatch,
     renderedRevision?: number,
+    presentationIntent?: number,
   ): Promise<void> {
     const owner = sidebarOwner(input);
     const key = sidebarOwnerKey(owner);
+    const isCurrent = () =>
+      presentationIntent === undefined ||
+      this.isPresentationIntentCurrent(owner, presentationIntent);
+    if (!isCurrent()) return Promise.resolve();
     if (
       renderedRevision !== undefined &&
       this.#states[key] &&
@@ -79,6 +98,13 @@ export class ThreadSidebarController {
     const visible = this.#presentation[key] ?? emptySidebarState(owner);
     try {
       const preview = makePatch(visible);
+      if (
+        presentationIntent === undefined &&
+        ["open", "fullscreen", "selectedTab", "resourceThreadId"].some(
+          (field) => Object.hasOwn(preview, field),
+        )
+      )
+        this.beginPresentationIntent(owner);
       if (
         Object.keys(preview).length > 0 &&
         Object.entries(preview).every(
@@ -106,6 +132,7 @@ export class ThreadSidebarController {
         const current =
           this.#states[key] ??
           (this.api ? await this.api.read(owner) : emptySidebarState(owner));
+        if (!isCurrent()) return current.revision;
         if (expected !== undefined && current.revision !== expected)
           throw Error(
             "Sidebar changed elsewhere. Your edit was not applied; try again.",

@@ -145,6 +145,8 @@ export interface RoomMessage {
   originTurnId: string | null;
 }
 export interface RoomSendOperation {
+  /** Explicit product message addressee; literal mentions cannot widen it. */
+  recipientThreadId?: string;
   /** Host bootstrap receipt; never a human Room message. */
   kind?: "assistantIntroduction";
   wakeupId?: string;

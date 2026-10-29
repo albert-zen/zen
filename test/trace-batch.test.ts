@@ -311,3 +311,46 @@ test("failure in a later flush group never reports a partially successful batch"
   assert.equal(fileSyncs, 2);
   assert.equal(store.status().failedRecords, 300);
 });
+
+test("batch failure accounting retains enqueue-time Thread identity after caller mutation", async (t) => {
+  const { store, prototype } = await fixture(t);
+  const entered = deferred(),
+    release = deferred();
+  const sync = prototype.sync;
+  let fail = true;
+  t.mock.method(prototype, "sync", async function (this: FileHandle) {
+    if (fail && (await this.stat()).isFile()) {
+      entered.resolve();
+      await release.promise;
+      throw new Error("synthetic mutation-window fsync failure");
+    }
+    await sync.call(this);
+  });
+  const inputs = [event(0), event(1)];
+  const pending = store.recordBatch(inputs);
+  await entered.promise;
+  for (const input of inputs) input.threadId = "unrelated";
+  release.resolve();
+  const receipts = await pending;
+  assert(receipts.every((receipt) => receipt.durability === "degraded"));
+  fail = false;
+  await store.record({ threadId: "thread", type: "after-failure" });
+  await store.record({ threadId: "unrelated", type: "independent" });
+  const cold = new FileTraceStore(store.directory);
+  const original = await cold.read("thread");
+  const gap = original.records.find(
+    (record) => record.type === "trace_capture_gap",
+  );
+  assert.ok(
+    gap,
+    "the original Thread must retain its failed publication evidence",
+  );
+  assert.equal((gap.data as { failedRecords: number }).failedRecords, 2);
+  assert.equal(original.completeness, "incomplete");
+  const unrelated = await cold.read("unrelated");
+  assert.deepEqual(
+    unrelated.records.map((record) => record.type),
+    ["independent"],
+  );
+  assert.equal(unrelated.completeness, "complete");
+});

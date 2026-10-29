@@ -94,6 +94,14 @@ export interface PluginUiSdkV1 {
   readonly commands: {
     execute(commandId: string, input?: unknown): Promise<unknown>;
   };
+  /** Optional isolated Board interaction scope; requires a user gesture once. */
+  readonly interaction?: {
+    run<T>(
+      callback: (
+        scope: Pick<PluginUiSdkV1, "commands" | "navigation">,
+      ) => Promise<T>,
+    ): Promise<T>;
+  };
 }
 
 export type PluginHostSdkRequest =
@@ -185,6 +193,13 @@ export interface ZenXPluginContributions {
     pageId: string;
   }>;
   settings?: Array<{
+    id: string;
+    title: string;
+    surfaceId: string;
+    order?: number;
+  }>;
+  /** Independent information popup/rail, never a resource tab. */
+  information?: Array<{
     id: string;
     title: string;
     surfaceId: string;

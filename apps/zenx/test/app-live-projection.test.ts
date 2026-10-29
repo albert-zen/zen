@@ -1460,6 +1460,7 @@ test("App observes a terminal event transferred in a valid resume response", asy
 });
 
 interface MountOptions {
+  shellPanel?: import("../src/shell-panel.js").ShellPanelBridge;
   sidebarApi?: ThreadSidebarApi;
   titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
@@ -1509,6 +1510,7 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    shellPanel: options.shellPanel,
     workspaceFiles: {
       applications: async () => ({ platform: "linux", applications: {} }),
       read: options.readFile,
@@ -3237,3 +3239,79 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
     dispose();
   }
 }
+
+for (const closeAfterClick of [true, false])
+  test(`a pending background Terminal jump ${closeAfterClick ? "does not reopen a newer closed sidebar" : "accepts its own sidebar receipt"}`, async () => {
+    const read = deferred<any>();
+    const session = {
+      taskId: "exact",
+      threadId: "thread-1",
+      origin: "agent",
+      kind: "command",
+      command: "synthetic exact",
+      cwd: "/work/zen",
+      createdAt: "2026-10-29T00:00:00Z",
+      status: "running",
+      exitCode: null,
+      lifecycle: { foreground: "running", stdio: "open" },
+      inputAvailable: false,
+      retained: false,
+    } as const;
+    const harness = await mountApp({
+      shellPanel: {
+        request: async (input) =>
+          input.operation === "list"
+            ? {
+                host: "local",
+                sessions: [session],
+                cwd: "/work/zen",
+                canCreate: false,
+              }
+            : read.promise,
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume") return resumed(thread());
+        throw Error(method);
+      },
+    });
+    const click = async (selector: string) =>
+      act(async () =>
+        document.querySelector<HTMLButtonElement>(selector)!.click(),
+      );
+    try {
+      await click(".thread-row");
+      await waitFor(() => document.querySelector(".background-shell-status"));
+      await click('[aria-label="Open side panel"]');
+      await waitFor(() => document.querySelector(".auxiliary-close-button"));
+      await click(".background-shell-disclosure");
+      await click(".background-shell-list button");
+      if (closeAfterClick) {
+        await click(".auxiliary-close-button");
+        assert.equal(
+          document
+            .querySelector("#thread-workspace-panel")
+            ?.getAttribute("data-open"),
+          "false",
+        );
+      }
+      await act(async () =>
+        read.resolve({ session, output: "", cursor: 0, truncated: false }),
+      );
+      if (closeAfterClick)
+        assert.equal(
+          document
+            .querySelector("#thread-workspace-panel")
+            ?.getAttribute("data-open"),
+          "false",
+          "Late command jump must not reopen an explicitly closed sidebar",
+        );
+      else
+        await waitFor(
+          () =>
+            document.querySelector(".shell-heading-context strong")
+              ?.textContent === "synthetic exact",
+        );
+    } finally {
+      await harness.unmount();
+    }
+  });

@@ -10,12 +10,25 @@ export async function openShellTarget(input: {
   api: ShellPanelBridge;
   sidebar: ThreadSidebarController;
   isCurrent(): boolean;
+  presentationIntent?: number;
 }): Promise<boolean> {
-  const read = (await input.api.request({
-    operation: "read",
-    ...input.target,
-  })) as ShellSessionRead;
-  if (!input.isCurrent()) return false;
+  const intent =
+    input.presentationIntent ??
+    input.sidebar.beginPresentationIntent(input.owner);
+  const isCurrent = () =>
+    input.isCurrent() &&
+    input.sidebar.isPresentationIntentCurrent(input.owner, intent);
+  let read: ShellSessionRead;
+  try {
+    read = (await input.api.request({
+      operation: "read",
+      ...input.target,
+    })) as ShellSessionRead;
+  } catch (error) {
+    if (!isCurrent()) return false;
+    throw error;
+  }
+  if (!isCurrent()) return false;
   if (
     read?.session?.threadId !== input.target.threadId ||
     read.session.taskId !== input.target.taskId
@@ -28,18 +41,23 @@ export async function openShellTarget(input: {
       : {}),
   };
   const id = sidebarTabId(tab);
-  await input.sidebar.edit(input.owner, (state) => {
-    if (!input.isCurrent())
-      throw new Error("Terminal navigation changed before opening");
-    return {
-      open: true,
-      selectedTab: id,
-      tabs: state.tabs.some((entry) => sidebarTabId(entry) === id)
-        ? state.tabs
-        : [...state.tabs, tab],
-    };
-  });
-  if (!input.isCurrent()) return false;
+  await input.sidebar.edit(
+    input.owner,
+    (state) => {
+      if (!isCurrent())
+        throw new Error("Terminal navigation changed before opening");
+      return {
+        open: true,
+        selectedTab: id,
+        tabs: state.tabs.some((entry) => sidebarTabId(entry) === id)
+          ? state.tabs
+          : [...state.tabs, tab],
+      };
+    },
+    undefined,
+    intent,
+  );
+  if (!isCurrent()) return false;
   const state = input.sidebar.get(input.owner);
   if (!state?.open || state.selectedTab !== id)
     throw new Error(

@@ -34,22 +34,69 @@ const measure = `(() => {
     processRollup: !!document.querySelector('.trace-counts, .turn-outcome-review, .turn-outcome-primary-action'),
     spinners: history?.querySelectorAll('.mini-spinner').length ?? 0,
     overflow: document.documentElement.scrollWidth > innerWidth,
+    statuses: [...document.querySelectorAll('.trace-item-status')].filter(cell => !cell.closest('[aria-hidden="true"], [inert]')).map(cell => {
+      const row = cell.closest('.trace-item-toggle, .trace-item-static');
+      const badge = cell.querySelector('.tool-status');
+      const textRange = document.createRange();
+      if (badge) textRange.selectNodeContents(badge);
+      const text = badge ? textRange.getBoundingClientRect() : null;
+      const rect = cell.getBoundingClientRect();
+      const chevron = row.querySelector('.trace-item-chevron').getBoundingClientRect();
+      return { text: badge?.textContent ?? '', spinner: !!cell.querySelector('.mini-spinner'), width: rect.width, left: rect.left, right: rect.right, textWidth: text?.width ?? 0, textLeft: text?.left ?? rect.left, textRight: text?.right ?? rect.left, chevronWidth: chevron.width, chevronLeft: chevron.left, rowRight: row.getBoundingClientRect().right };
+    }),
     rows: rows.map(row => ({ unsettled: row.dataset.unsettled, text: row.textContent, active: row.querySelector('.activity-text')?.dataset.active, expanded: row.querySelector('button')?.getAttribute('aria-expanded') })),
     sweeps: [...document.querySelectorAll('.turn-history .activity-sweep')].map(sweep => ({ display: getComputedStyle(sweep).display, animation: getComputedStyle(sweep).animationName, title: sweep.closest('.trace-activity-title, .trace-item-label')?.title }))
   };
 })()`;
+function assertStatusGeometry(measurement, name) {
+  for (const status of measurement.statuses) {
+    assert.ok(
+      status.width >= 14,
+      `${name}: spinner/status slot retains its minimum width`,
+    );
+    assert.ok(
+      status.chevronWidth >= 14,
+      `${name}: chevron retains its own column`,
+    );
+    assert.ok(
+      status.right <= status.chevronLeft + 0.5,
+      `${name}: status never overlaps chevron`,
+    );
+    assert.ok(
+      status.right <= status.rowRight + 0.5,
+      `${name}: status stays in row bounds`,
+    );
+    if (status.text) {
+      assert.ok(
+        status.textWidth > 0,
+        `${name}: actual status glyphs are measured`,
+      );
+      assert.ok(
+        status.width + 0.5 >= status.textWidth,
+        `${name}: full ${JSON.stringify(status.text)} width fits`,
+      );
+      assert.ok(
+        status.textLeft >= status.left - 0.5 &&
+          status.textRight <= status.right + 0.5,
+        `${name}: no status glyph is clipped`,
+      );
+    }
+  }
+}
 await withPreviewBrowser(
   directory,
   async ({ send, evaluate, screenshot, url }) => {
     for (const theme of ["light", "dark"]) {
-      for (const width of [1280, 420]) {
+      for (const { width, lang } of [1280, 420].flatMap((width) =>
+        ["en", "zh-CN"].map((lang) => ({ width, lang })),
+      )) {
         for (const scene of [
           "latest-group",
           "latest-requested",
           "latest-settled",
           "interrupted-comments",
         ]) {
-          const name = `transcript-${scene}-${theme}-${width}`;
+          const name = `transcript-${scene}-${theme}-${width}-${lang}`;
           await send("Emulation.setDeviceMetricsOverride", {
             width,
             height: 900,
@@ -57,7 +104,7 @@ await withPreviewBrowser(
             mobile: false,
           });
           await send("Page.navigate", {
-            url: `${url}/process-style-frame.html?scene=${scene}&theme=${theme}&lang=en`,
+            url: `${url}/process-style-frame.html?scene=${scene}&theme=${theme}&lang=${lang}`,
           });
           for (let attempt = 0; ; attempt++) {
             if (
@@ -73,6 +120,7 @@ await withPreviewBrowser(
           await delay(200);
           const before = await evaluate(measure);
           assert.equal(before.overflow, false, name);
+          assertStatusGeometry(before, name);
           assert.equal(before.processRollup, false, name);
           if (scene === "interrupted-comments") {
             assert.equal(before.collapsed, true);
@@ -87,6 +135,7 @@ await withPreviewBrowser(
             );
             await delay(200);
             const expanded = await evaluate(measure);
+            assertStatusGeometry(expanded, `${name} expanded`);
             assert.equal(expanded.intermediate, true);
             assert.equal(expanded.final, false);
             assert.equal(expanded.sweeps.length, 0);
@@ -106,6 +155,7 @@ await withPreviewBrowser(
               scene,
               theme,
               width,
+              lang,
               before,
               expanded,
               collapsed,
@@ -123,13 +173,18 @@ await withPreviewBrowser(
             const active = scene === "latest-settled" ? 0 : 1;
             assert.equal(before.sweeps.length, active);
             if (active)
-              assert.match(before.sweeps[0].title, /Agent is still working/u);
+              assert.ok(
+                before.sweeps[0].title.includes(
+                  lang === "en" ? "Agent is still working" : "Agent 仍在工作",
+                ),
+              );
             await screenshot(`${name}.png`);
             await evaluate(
               "document.querySelector('.turn-history > section:last-of-type > button').focus(); document.querySelector('.turn-history > section:last-of-type > button').click()",
             );
             await delay(250);
             const expanded = await evaluate(measure);
+            assertStatusGeometry(expanded, `${name} expanded`);
             assert.equal(
               expanded.sweeps.length,
               active,
@@ -150,6 +205,14 @@ await withPreviewBrowser(
             await evaluate("window.__processStylePreview.returnLatest()");
             await delay(100);
             const returned = await evaluate(measure);
+            assertStatusGeometry(returned, `${name} returned`);
+            assert.ok(
+              returned.statuses.some(
+                (status) =>
+                  status.text === (lang === "en" ? "Completed" : "已完成"),
+              ),
+              `${name}: returned completion is actually rendered`,
+            );
             assert.equal(returned.sweeps.length, 0);
             assert.equal(returned.spinners, 0);
             assert.equal(returned.rows.at(-1).unsettled, "false");
@@ -174,6 +237,7 @@ await withPreviewBrowser(
             await evaluate("document.querySelector('.turn-toggle').click()");
             await delay(100);
             const late = await evaluate(measure);
+            assertStatusGeometry(late, `${name} late receipt`);
             assert.equal(late.sweeps.length, 0);
             assert.equal(late.spinners, 0);
             assert.equal(late.processRollup, false);
@@ -182,6 +246,7 @@ await withPreviewBrowser(
               scene,
               theme,
               width,
+              lang,
               before,
               expanded,
               reduced,

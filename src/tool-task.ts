@@ -63,6 +63,7 @@ export interface ToolTaskOptions {
   toolOutputSpool?: ToolOutputSpool;
 }
 export const MAX_TOOL_YIELD_TIME_MS = 180000;
+export const DEFAULT_TOOL_TIMEOUT_MS = 600000;
 type Status =
   | "queued"
   | "running"
@@ -249,7 +250,11 @@ export class ToolTaskManager {
         "yieldTimeMs",
         MAX_TOOL_YIELD_TIME_MS,
       ),
-      timeoutMs: integer(options.timeoutMs ?? 600000, "timeoutMs", 86400000),
+      timeoutMs: integer(
+        options.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+        "timeoutMs",
+        86400000,
+      ),
       maxRunningTasks: integer(
         options.maxRunningTasks ?? 8,
         "maxRunningTasks",

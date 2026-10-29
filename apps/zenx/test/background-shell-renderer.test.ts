@@ -319,3 +319,63 @@ test("an existing sidebar opens the exact resource Thread terminal rather than i
     await view.close();
   }
 });
+
+test("older list replies cannot regress a newer exact terminal observation", async () => {
+  let resolveList!: (value: unknown) => void;
+  const running = session("exact");
+  const completed = {
+    ...running,
+    status: "completed" as const,
+    exitCode: 0,
+    lifecycle: {
+      foreground: "exited" as const,
+      stdio: "eof" as const,
+      foreground_exit_code: 0,
+      foreground_signal: null,
+    },
+  };
+  const view = await mount(async (input) =>
+    input.operation === "list"
+      ? await new Promise((resolve) => {
+          resolveList = resolve;
+        })
+      : { session: completed, output: "done", cursor: 4, truncated: false },
+  );
+  try {
+    await act(async () =>
+      view.root.render(
+        React.createElement(ShellThreadPanel, {
+          threadId: "source",
+          active: true,
+          targetRequest: {
+            ownerKey: "thread:source",
+            threadId: "source",
+            taskId: "exact",
+            requestId: 1,
+          },
+          onTargetConsumed() {},
+        }),
+      ),
+    );
+    assert.equal(
+      view.dom.window.document.querySelector(".shell-status")?.textContent,
+      i18n.t("panels:shellStatus_completed"),
+    );
+    assert.match(
+      view.dom.window.document.querySelector(".shell-exit")?.textContent ?? "",
+      /Exit code: 0/,
+    );
+    await act(async () => resolveList(list([running])));
+    assert.equal(
+      view.dom.window.document.querySelector(".shell-status")?.textContent,
+      i18n.t("panels:shellStatus_completed"),
+    );
+    assert.match(
+      view.dom.window.document.querySelector(".shell-exit")?.textContent ?? "",
+      /Exit code: 0/,
+    );
+    assert.equal(view.dom.window.document.querySelector(".shell-stop"), null);
+  } finally {
+    await view.close();
+  }
+});

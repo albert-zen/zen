@@ -105,6 +105,7 @@ export interface ZenXPluginContributions {
   subroutes?: ZenXPluginSubrouteContribution[];
   settings?: ZenXPluginSurfaceContribution[];
   panels?: ZenXPluginSurfaceContribution[];
+  information?: ZenXPluginSurfaceContribution[];
   commands?: ZenXPluginCommandContribution[];
   menus?: ZenXPluginMenuContribution[];
   resultRenderers?: ZenXPluginResultRendererContribution[];
@@ -286,6 +287,7 @@ export interface ZenXPluginSnapshot {
   subroutes: ZenXPluginSubrouteProjection[];
   settings: ZenXPluginSurfaceProjection[];
   panels: ZenXPluginSurfaceProjection[];
+  information?: ZenXPluginSurfaceProjection[];
   threadHeaders?: Array<
     ZenXPluginThreadHeaderContribution & ZenXPluginContributionProjection
   >;

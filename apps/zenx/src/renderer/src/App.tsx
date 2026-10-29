@@ -3,6 +3,7 @@ import {
   openShellTarget,
   type ShellTargetRequest,
 } from "./shell-target-navigation.js";
+import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
@@ -156,7 +157,11 @@ import {
   loadedPluginContributions,
   pluginRoutePath,
 } from "./plugin-contributions.js";
-import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
+import {
+  PluginProductPage,
+  pluginUiRegistry,
+  useAppearance,
+} from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
@@ -496,6 +501,7 @@ export function App() {
 }
 
 function AppContent() {
+  const appearance = useAppearance();
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
@@ -2799,10 +2805,16 @@ function AppContent() {
           ))
       )
         throw new Error(i18n.t("panels:backgroundShellOpenFailed"));
+      const presentationIntent =
+        sidebarState.controller.beginPresentationIntent(owner);
       const current = () =>
         source.isCurrent() &&
         shellTargetIntent.current === intent &&
-        shellNavigationScope.current === scope;
+        shellNavigationScope.current === scope &&
+        sidebarState.controller.isPresentationIntentCurrent(
+          owner,
+          presentationIntent,
+        );
       if (
         !(await openShellTarget({
           target,
@@ -2810,7 +2822,9 @@ function AppContent() {
           api,
           sidebar: sidebarState.controller,
           isCurrent: current,
-        }))
+          presentationIntent,
+        })) ||
+        !current()
       )
         return;
       setSideChatSelections((previous) => ({
@@ -3227,6 +3241,9 @@ function AppContent() {
     const parent = input.parentThreadId;
     const roomId = selectedRoom?.id;
     const presentationOwner = roomId ? `room:${roomId}` : parent;
+    sidebarState.controller.beginPresentationIntent(
+      roomId ? { kind: "room", id: roomId } : parent,
+    );
     // Capture the authoritative prefix and retain its read-only display projection.
     // Only the prefix IDs go back to the Host when the first Send forks it.
     const { thread } = await window.zenx.protocol.request("zen/thread/read", {
@@ -4084,6 +4101,31 @@ function AppContent() {
                 threadLoading={threadLoading}
               />
             )}
+            {pluginSnapshot &&
+            ((page === "agent" &&
+              newThreadDraft === null &&
+              selectedThreadId) ||
+              selectedRoomId) ? (
+              <PluginInformationHost
+                key={
+                  selectedRoomId
+                    ? `room:${selectedRoomId}`
+                    : `thread:${selectedThreadId}`
+                }
+                snapshot={pluginSnapshot}
+                registry={pluginUiRegistry}
+                resourcePanelWidth={workspacePanelWidth}
+                owner={
+                  selectedRoomId
+                    ? { kind: "room", roomId: selectedRoomId }
+                    : { kind: "thread", threadId: selectedThreadId! }
+                }
+                theme={appearance}
+                navigate={openPage}
+                executeCommand={window.zenx.plugins.executeCommand}
+                readHandle={window.zenx.plugins.readHandle}
+              />
+            ) : null}
             {selectedRoom &&
             (roomSidebarState?.open ?? Boolean(roomPanel)) &&
             pluginSnapshot ? (
@@ -4106,7 +4148,11 @@ function AppContent() {
                   }))}
                 localSelectedTab={sideChatSelections[`room:${selectedRoom.id}`]}
                 localTabOrder={sideChatTabOrders[`room:${selectedRoom.id}`]}
-                onLocalSelectTab={(tab) =>
+                onLocalSelectTab={(tab) => {
+                  sidebarState.controller.beginPresentationIntent({
+                    kind: "room",
+                    id: selectedRoom.id,
+                  });
                   setSideChatSelections((current) => ({
                     ...current,
                     [`room:${selectedRoom.id}`]: tab.startsWith(
@@ -4114,8 +4160,8 @@ function AppContent() {
                     )
                       ? tab
                       : "",
-                  }))
-                }
+                  }));
+                }}
                 onLocalTabsChange={(tabs) =>
                   setSideChatTabOrders((current) => ({
                     ...current,
@@ -4130,6 +4176,10 @@ function AppContent() {
                   );
                 }}
                 onRemoveTab={(id) => {
+                  sidebarState.controller.beginPresentationIntent({
+                    kind: "room",
+                    id: selectedRoom.id,
+                  });
                   if (id.startsWith("custom:side-chat-draft-")) {
                     sideChatDrafts.close(
                       id.slice("custom:side-chat-draft-".length),
@@ -4262,6 +4312,9 @@ function AppContent() {
                   }));
                 }}
                 onRemoveTab={(id) => {
+                  sidebarState.controller.beginPresentationIntent(
+                    threadDetail.id,
+                  );
                   if (id.startsWith("custom:side-chat-draft-")) {
                     sideChatDrafts.close(
                       id.slice("custom:side-chat-draft-".length),
@@ -4314,6 +4367,9 @@ function AppContent() {
                   panelTabs[threadDetail.id]
                 }
                 onSelectTab={(tab) => {
+                  sidebarState.controller.beginPresentationIntent(
+                    threadDetail.id,
+                  );
                   setSideChatSelections((current) => ({
                     ...current,
                     [threadDetail.id]: tab.startsWith("custom:side-chat-draft-")

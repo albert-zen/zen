@@ -15,6 +15,13 @@ import {
 } from "./model-browser-facade.js";
 import { copyBrowserModelContext } from "./model-browser-metadata.js";
 import {
+  isBoardModelTool,
+  boardModelDefinition,
+  boardModelDocument,
+  decodeBoardArguments,
+  projectBoardResult,
+} from "./model-board-facade.js";
+import {
   isTriggerModelTool,
   triggerModelDefinition,
   decodeTriggerArguments,
@@ -68,6 +75,7 @@ export function hasModelToolFacade(name: string): boolean {
     isSidebarModelTool(name) ||
     isComputerModelTool(name) ||
     isThreadModelTool(name) ||
+    isBoardModelTool(name) ||
     isRoomModelTool(name)
   );
 }
@@ -75,6 +83,7 @@ export function modelToolDefinition<T extends ModelTool>(tool: T): T {
   if (isFleetModelTool(tool.name)) return fleetModelDefinition(tool);
   tool = fleetDeviceModelDefinition(tool);
   if (isBrowserModelTool(tool.name)) return browserModelDefinition(tool);
+  if (isBoardModelTool(tool.name)) return boardModelDefinition(tool);
   if (isTriggerModelTool(tool.name)) return triggerModelDefinition(tool);
   if (isSidebarModelTool(tool.name)) return sidebarModelDefinition(tool);
   return isComputerModelTool(tool.name)
@@ -102,10 +111,11 @@ const UI_ONLY_ROOMS = new Set([
   "zenx_rooms_assistant_replies",
 ]);
 export const isModelCallableTool = (tool: Pick<ModelTool, "name">) =>
-  !UI_ONLY_ROOMS.has(tool.name);
+  !UI_ONLY_ROOMS.has(tool.name) && tool.name !== "zenx_board_ui";
 export function modelPluginDocument(id: string, original: string): string {
   if (id === "zenx-fleet") return fleetModelDocument;
   if (id === "browser") return browserModelDocument;
+  if (id === "zenx-board") return boardModelDocument;
   if (id === "computer") return computerModelDocument;
   if (id === "zenx-subagents")
     return "Create/list native child Threads with exact parent refs. fresh/fork may receive an explicit task; side-chat snapshots parent context and waits for user input, so task is not allowed. Read/send use exact ref or semantic name. Creation remains true even if title/message follow-up fails; inspect status and preserve unknown outcomes rather than replaying mutations.";
@@ -133,6 +143,8 @@ function decode(
   refs: ModelReferenceScope,
   epoch: string,
 ): Record<string, unknown> {
+  if (isBoardModelTool(name))
+    return decodeBoardArguments(name, args, refs, epoch);
   if (isTriggerModelTool(name))
     return decodeTriggerArguments(name, args, refs, epoch);
   if (isSidebarModelTool(name))
@@ -149,7 +161,10 @@ function project(
   args: Record<string, unknown>,
   refs: ModelReferenceScope,
   epoch: string,
+  raw: ToolExecutionResult,
 ): Record<string, unknown> {
+  if (isBoardModelTool(name))
+    return projectBoardResult(result, refs, epoch, raw);
   if (isTriggerModelTool(name))
     return projectTriggerResult(name, result, args, refs, epoch);
   if (isSidebarModelTool(name))
@@ -279,7 +294,7 @@ export async function invokeModelToolFacade(options: {
   if (!result) return attach(raw);
   let projected: Record<string, unknown>;
   try {
-    projected = project(invocation.name, result, args, refs, epoch);
+    projected = project(invocation.name, result, args, refs, epoch, raw);
   } catch (error) {
     if (!(error instanceof ModelReferenceBudgetError)) throw error;
     const fallback = {

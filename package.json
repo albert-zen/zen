@@ -13,7 +13,8 @@
     "packages/zenx-fleet-plugin",
     "packages/zenx-triggers-plugin",
     "packages/zenx-imzenx-plugin",
-    "packages/zenx-subagents-plugin"
+    "packages/zenx-subagents-plugin",
+    "packages/zenx-board-plugin"
   ],
   "bin": {
     "zen": "./dist/apps/cli/src/cli.js"

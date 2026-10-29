@@ -199,16 +199,16 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     if (events.length === 0) return [];
     const prepared = events.map((event) => ({
       event,
+      // Failure evidence belongs to the enqueue-time identity too. The caller
+      // may mutate its original object while a later filesystem await fails.
+      failureThreadId:
+        typeof event?.threadId === "string" ? event.threadId : "invalid",
       id: randomUUID(),
       clock: traceClock(),
     }));
     const fail = (error: unknown) =>
-      prepared.map(({ event, id }) =>
-        this.#failed(
-          typeof event?.threadId === "string" ? event.threadId : "invalid",
-          id,
-          error,
-        ),
+      prepared.map(({ failureThreadId, id }) =>
+        this.#failed(failureThreadId, id, error),
       );
     let snapshots: Array<{ event: TraceEvent; id: string; clock: TraceClock }>;
     const threadId = events[0]?.threadId;

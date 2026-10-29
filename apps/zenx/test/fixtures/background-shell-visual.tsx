@@ -102,6 +102,7 @@ function Preview() {
   const state = states["thread:synthetic-source"];
   const [target, setTarget] = useState<ShellTargetRequest | null>(null);
   const [threadId, setThreadId] = useState(owner.id);
+  const [panelWidth, setPanelWidth] = useState(0);
   selectThread = setThreadId;
   return (
     <ShellTargetNavigationContext.Provider
@@ -145,6 +146,7 @@ function Preview() {
             borderBottom: "1px solid var(--border)",
             background: "var(--color-surface-control)",
             fontSize: 12,
+            flexShrink: 0,
           }}
         >
           <strong>Synthetic controls</strong>
@@ -202,19 +204,19 @@ function Preview() {
           <button onClick={() => location.reload()}>Reset fixture</button>
         </aside>
         <div
-          style={{
-            display: "flex",
-            flex: 1,
-            minHeight: 0,
-            minWidth: 0,
-            background: "var(--color-bg)",
-          }}
+          className="workspace"
+          style={
+            {
+              flex: 1,
+              "--workspace-panel-width": `${panelWidth}px`,
+            } as React.CSSProperties
+          }
         >
           <main
+            className="agent-surface"
             style={{
               display: "flex",
               flexDirection: "column",
-              flex: 1,
               minWidth: 0,
               padding: "28px 24px 20px",
               gap: 20,
@@ -227,6 +229,10 @@ function Preview() {
               }}
             >
               <strong>后台命令 · Background commands</strong>
+              <p data-testid="synthetic-current-thread">
+                Current synthetic thread:{" "}
+                {threadId === owner.id ? "Source" : "Fork"}
+              </p>
               <p style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
                 Synthetic data · production components · no model / Host
                 execution
@@ -235,8 +241,8 @@ function Preview() {
             <div style={{ flex: 1 }}>
               <p>对话已结束。命令的实际运行状态独立更新。</p>
               <p style={{ color: "var(--color-text-muted)" }}>
-                The conversation has ended. The two observed commands continue
-                independently.
+                The conversation has ended. Command state is observed
+                independently below.
               </p>
             </div>
             <div>
@@ -260,6 +266,7 @@ function Preview() {
               threadId={owner.id}
               title="Synthetic source"
               open={state?.open ?? false}
+              onWidthChange={setPanelWidth}
               onOpenChange={(open) =>
                 void sidebar.edit(owner, () => ({ open }))
               }

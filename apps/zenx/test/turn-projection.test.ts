@@ -443,12 +443,13 @@ test("later process receipts cannot change earlier call status or reactivate ret
       exit_code: 1,
     },
   };
-  for (const patch of [
+  const patches: ReadonlyArray<Record<string, string>> = [
     { status: "timed_out" },
     { status: "cancelled" },
     { foreground_signal: "SIGTERM" },
     { tool_name: "other_tool" },
-  ] as const) {
+  ];
+  for (const patch of patches) {
     const receipt = {
       ...final,
       structuredContent: { ...final.structuredContent, ...patch },

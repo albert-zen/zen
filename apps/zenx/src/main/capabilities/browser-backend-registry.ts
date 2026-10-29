@@ -440,6 +440,49 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     );
   }
 
+  async readModelTarget(
+    threadId: string,
+    targetId: string,
+  ): Promise<BrowserModelRoute | undefined> {
+    const backendId = targetId.split(":")[0]!;
+    const capability = this.#packages.get(backendId);
+    if (this.#closed || !capability) return;
+    const instance = this.#source
+      ?.connections()
+      .find(
+        (connection) =>
+          connection.state === "connected" &&
+          backendId ===
+            `connected/${connection.connectionId}/${connection.generation}`,
+      );
+    if (backendId.startsWith("connected/") && !instance) return;
+    const route = await capability.readModelTarget(
+      threadId,
+      unqualify(backendId, targetId, "targetId"),
+    );
+    if (
+      !route?.tabId ||
+      !route.targetId ||
+      this.#closed ||
+      this.#packages.get(backendId) !== capability
+    )
+      return;
+    const qualified: BrowserModelRoute = {
+      ...route,
+      backend: backendId,
+      ...(instance
+        ? {
+            connectionId: instance.connectionId,
+            generation: instance.generation,
+          }
+        : {}),
+      tabId: qualify(backendId, route.tabId),
+      targetId: qualify(backendId, route.targetId),
+    };
+    this.assertModelTarget(qualified, threadId);
+    return qualified;
+  }
+
   async readTargetUrl(threadId: string, targetId: string): Promise<string> {
     const backendId = targetId.split(":")[0]!;
     const capability = this.#packages.get(backendId);
