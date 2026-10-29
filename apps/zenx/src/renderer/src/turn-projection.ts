@@ -5,11 +5,9 @@ import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import {
   commandSummary,
   commandStatus,
-  commandPhaseLabel,
   commandPhase,
   commandTask,
   isTerminalCommandPhase,
-  commandTitle,
   toolPresentation,
   type CommandPhase,
   type CommandItem,
@@ -126,7 +124,10 @@ export function traceDisplayRows(
 
 export function projectTurn(
   turn: Turn,
-  observations: TraceObservationIndex = createTraceObservationIndex(turn.items),
+  observations: TraceObservationIndex = createTraceObservationIndex(
+    turn.items,
+    turn.status,
+  ),
 ): TurnDisplayProjection {
   const inputItems = turn.items.filter(
     (
@@ -286,11 +287,13 @@ export function projectTurn(
 }
 
 export interface TraceObservationIndex {
+  turnStatus: Turn["status"];
   tasks: ReadonlyMap<string, { itemId: string; phase: CommandPhase }>;
 }
 /** Disposable observation facts, never a second runtime state. A task cannot restart. */
 export function createTraceObservationIndex(
   items: readonly ThreadItem[],
+  turnStatus: Turn["status"] = "inProgress",
 ): TraceObservationIndex {
   const tasks = new Map<string, { itemId: string; phase: CommandPhase }>();
   for (const item of items) {
@@ -310,38 +313,25 @@ export function createTraceObservationIndex(
       phase: task.phase,
     });
   }
-  return { tasks };
+  return { tasks, turnStatus };
 }
 export function observedCommandPhase(
   item: CommandItem,
   observations: TraceObservationIndex,
 ): CommandPhase {
-  const phase = commandPhase(item);
-  const task = commandTask(item);
-  if (
-    item.toolName === "wait" ||
-    task === null ||
-    isTerminalCommandPhase(phase)
-  )
-    return phase;
-  return observations.tasks.get(task.id)?.phase ?? phase;
+  return commandPhase(item, observations.turnStatus);
 }
 export function observedCommandStatus(
   item: CommandItem,
   observations: TraceObservationIndex,
 ): string {
-  const phase = observedCommandPhase(item, observations);
-  return phase === commandPhase(item)
-    ? commandStatus(item)
-    : commandPhaseLabel(phase);
+  return commandStatus(item, observations.turnStatus);
 }
 function observedCommandSummary(
   item: CommandItem,
   observations: TraceObservationIndex,
 ): string {
-  return observedCommandPhase(item, observations) === commandPhase(item)
-    ? commandSummary(item)
-    : `${commandTitle(item)} · ${observedCommandStatus(item, observations).toLowerCase()}`;
+  return commandSummary(item, observations.turnStatus);
 }
 
 export interface TraceActivity {
@@ -385,31 +375,10 @@ export function summarizeTraceActivity(
     const category = toolPresentation(item.toolName ?? item.command).category;
     categories.set(category, (categories.get(category) ?? 0) + 1);
     const phase = observedCommandPhase(item, observations);
-    if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
-    const task = commandTask(item);
-    const observed =
-      task === null || item.toolName === "wait"
-        ? null
-        : observations.tasks.get(task.id);
-    if (
-      isTerminalCommandPhase(phase) ||
-      (observed &&
-        (isTerminalCommandPhase(observed.phase) || observed.itemId !== item.id))
-    )
-      continue;
+    if (isTerminalCommandPhase(phase)) continue;
     active.push({ item, phase });
     result.active += 1;
-    if (task !== null && item.toolName !== "wait") result.outstanding += 1;
-    if (phase === "running") result.running += 1;
-    if (phase === "waiting") result.waiting += 1;
-    if (phase === "cancellation_unconfirmed") result.unconfirmed += 1;
-    if (
-      phase === "cancel_requested" ||
-      phase === "queued" ||
-      phase === "admitting" ||
-      phase === "requested"
-    )
-      result.pending += 1;
+    result.pending += 1;
   }
   const priority: CommandPhase[] = [
     "cancellation_unconfirmed",
@@ -456,7 +425,7 @@ export function traceSummary(
   if (activity.current) return observedCommandSummary(activity.current, index);
   if (activity.total === 0) return i18n.t("shell:thoughts");
   return settledTraceSummary(commands, (item) =>
-    observedCommandPhase(item, index),
+    item.status === "completed" ? observedCommandPhase(item, index) : "unknown",
   );
 }
 

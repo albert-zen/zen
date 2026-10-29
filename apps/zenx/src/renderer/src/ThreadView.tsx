@@ -275,6 +275,8 @@ interface ThreadViewProps {
   composerContextPosition?: "before" | "after";
   composerDisabled?: boolean;
   emptyContent?: ReactNode;
+  /** Display-only opening context; never supplies Thread identity or actions. */
+  contextPreview?: Thread;
   modelDisabled?: boolean;
   modelError?: string | null;
   imageCapabilityError?: string | null;
@@ -324,8 +326,10 @@ export function ThreadView(props: ThreadViewProps) {
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
   debuggingRef.current = debugging;
-  const readingState = useThreadReadingState(props.thread?.id);
-  const items = props.thread?.canonicalItems;
+  const readingState = useThreadReadingState(
+    props.thread?.id ?? props.composerId,
+  );
+  const items = (props.thread ?? props.contextPreview)?.canonicalItems;
   const canonicalAttachments = useMemo(
     () =>
       items === undefined ? undefined : projectThreadAttachmentItems(items),
@@ -444,6 +448,7 @@ function ThreadViewContent({
   composerContextPosition = "before",
   composerDisabled = false,
   emptyContent = null,
+  contextPreview,
   modelDisabled = false,
   modelError = null,
   imageCapabilityError = null,
@@ -480,7 +485,6 @@ function ThreadViewContent({
   onReasoningChange,
   onRespondToApproval,
   onSubmit,
-  onRetryTurn,
   onOpenMessageLink,
 }: ThreadViewProps) {
   useTranslation("shell");
@@ -754,15 +758,20 @@ function ThreadViewContent({
     setStoppingRun(null);
     setInterruptError(null);
   }, [runKey]);
-  const turns = thread?.turns ?? [];
+  const displayedThread = thread ?? contextPreview;
+  const turns = displayedThread?.turns ?? [];
   const contextCompactions = useMemo(
-    () => projectContextCompactions(thread?.canonicalItems),
-    [thread?.canonicalItems],
+    () => projectContextCompactions(displayedThread?.canonicalItems),
+    [displayedThread?.canonicalItems],
   );
   const transcriptRows = useMemo(
     () =>
-      buildTranscriptRows(turns, thread?.canonicalItems, contextCompactions),
-    [contextCompactions, thread?.canonicalItems, turns],
+      buildTranscriptRows(
+        turns,
+        displayedThread?.canonicalItems,
+        contextCompactions,
+      ),
+    [contextCompactions, displayedThread?.canonicalItems, turns],
   );
   const pendingApprovals = approvals.filter(
     (approval) => approval.params.threadId === thread?.id,
@@ -1373,7 +1382,7 @@ function ThreadViewContent({
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
           <ThreadImagesContext.Provider
             value={{
-              cwd: thread?.cwd,
+              cwd: displayedThread?.cwd,
               attachments: threadAttachments,
               read: onReadAttachment,
               open: (attachment, name, trigger) =>
@@ -1381,7 +1390,9 @@ function ThreadViewContent({
             }}
           >
             <div className="messages-inner">
-              <ImportedThreadNotice items={thread?.canonicalItems ?? []} />
+              <ImportedThreadNotice
+                items={displayedThread?.canonicalItems ?? []}
+              />
               {transcriptRows.length === 0
                 ? (emptyContent ?? (
                     <div className="thread-empty">
@@ -1395,6 +1406,9 @@ function ThreadViewContent({
                         index={row.index}
                         key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
+                        contextPreview={
+                          thread === null && contextPreview !== undefined
+                        }
                         endItemId={
                           lastCanonicalTurnEnd?.turnId === row.turn.id
                             ? lastCanonicalTurnEnd.id
@@ -1421,13 +1435,6 @@ function ThreadViewContent({
                               item.turnId === row.turn.id,
                           ) ?? null
                         }
-                        canRetry={
-                          !composerDisabled &&
-                          !submitting &&
-                          runningTurn === null &&
-                          thread?.turns.at(-1)?.id === row.turn.id
-                        }
-                        onRetry={onRetryTurn}
                         usage={threadUsage?.turns[row.turn.id]}
                         wakeups={wakeups}
                         attachments={threadAttachments}
@@ -2303,28 +2310,6 @@ function ContextCompactionProgress({
   );
 }
 
-function TraceCounts({
-  activity,
-  terminal = false,
-}: {
-  activity: TraceActivity;
-  terminal?: boolean;
-}) {
-  return (
-    <span className="trace-counts">
-      {activity.cancelled > 0 ? (
-        <small>
-          {i18n.t("shell:toolCancelled", { count: activity.cancelled })}
-        </small>
-      ) : null}
-      {terminal && activity.outstanding > 0 ? (
-        <small className="trace-pending">
-          {i18n.t("shell:lastKnownPending", { count: activity.outstanding })}
-        </small>
-      ) : null}
-    </span>
-  );
-}
 function RunningTurnLabel({
   startedAt,
   activity,
@@ -2439,8 +2424,7 @@ function TurnBlock({
   stopping,
   approvals,
   confirmedStopped,
-  onRetry,
-  canRetry,
+  contextPreview = false,
   index,
   wakeups,
   attachments,
@@ -2456,8 +2440,7 @@ function TurnBlock({
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
   confirmedStopped: boolean;
-  onRetry?: ((turnId: string) => Promise<void>) | undefined;
-  canRetry: boolean;
+  contextPreview?: boolean;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
   attachments: ZenXThreadAttachmentProjection;
@@ -2474,8 +2457,12 @@ function TurnBlock({
 }) {
   const { i18n: activeI18n } = useTranslation("shell");
   const observations = useMemo(
-    () => createTraceObservationIndex(turn.items),
-    [turn.items],
+    () =>
+      createTraceObservationIndex(
+        turn.items,
+        contextPreview ? "interrupted" : turn.status,
+      ),
+    [turn.items, turn.status, contextPreview],
   );
   const projection = useMemo(
     () => projectTurn(turn, observations),
@@ -2486,23 +2473,6 @@ function TurnBlock({
     [turn.items, observations, activeI18n.resolvedLanguage],
   );
   const sectionRef = useRef<HTMLElement>(null);
-  const retryInFlight = useRef(false);
-  const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState<string | null>(null);
-  const retry = async () => {
-    if (!onRetry || !canRetry || retryInFlight.current) return;
-    retryInFlight.current = true;
-    setRetrying(true);
-    setRetryError(null);
-    try {
-      await onRetry(turn.id);
-    } catch (error) {
-      setRetryError(describeError(error));
-    } finally {
-      retryInFlight.current = false;
-      setRetrying(false);
-    }
-  };
   const historyId = useId();
   const [expandedOverride, setExpanded] = useReadingDisclosure(
     disclosureKey("turn", turn.id),
@@ -2528,8 +2498,10 @@ function TurnBlock({
   }
   // Selecting/copying the visible answer is not a request to reveal history.
   // Only preserve an already-visible selection at the running → terminal edge.
-  const expanded = protectedOpen || (expandedOverride ?? false);
-  const complete = turn.status !== "inProgress";
+  const expanded =
+    protectedOpen ||
+    (expandedOverride ?? (contextPreview && turn.status === "inProgress"));
+  const complete = contextPreview || turn.status !== "inProgress";
   // The sweep represents this Turn's ongoing work, not a tool's lifetime.
   // Never move it back to an earlier background task after newer activity.
   const latestProcess = projection.history.findLast(
@@ -2541,19 +2513,6 @@ function TurnBlock({
     approvals.length === 0 &&
     ((activity.phase === "running" && activity.active > 0) ||
       activity.phase === "thinking");
-  const reviewActivity = () => {
-    setExpanded(true);
-    requestAnimationFrame(() => {
-      const section = sectionRef.current;
-      const trace =
-        section?.querySelector<HTMLElement>('[data-unsettled="true"]') ??
-        section?.querySelector<HTMLElement>(".trace-group, .trace-singleton");
-      const toggle = trace?.querySelector<HTMLButtonElement>(":scope > button");
-      if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-      toggle?.focus({ preventScroll: true });
-      toggle?.scrollIntoView?.({ block: "nearest" });
-    });
-  };
   const renderInputItem = (
     item: Extract<
       ThreadItem,
@@ -2612,11 +2571,12 @@ function TurnBlock({
           }}
         >
           <span className="turn-work-label">
-            {turn.status === "failed" || confirmedStopped
+            {(contextPreview && turn.status === "inProgress") ||
+            turn.status === "failed" ||
+            confirmedStopped
               ? i18n.t("shell:turnActivityHistory")
               : completedTurnLabel(turn)}
           </span>
-          <TraceCounts activity={activity} terminal />
           <Icon name="chevron-down" size={14} />
         </button>
       ) : (
@@ -2688,35 +2648,27 @@ function TurnBlock({
       ) : null}
       {projection.terminalFallback === null ? null : (
         <div
-          className={`turn-outcome workflow-status${activity.outstanding > 0 ? " uncertain" : turn.status === "failed" ? " failed" : ""}`}
+          className={`turn-outcome workflow-status${turn.status === "failed" ? " failed" : ""}`}
           role="status"
         >
           <div className="turn-outcome-heading">
             <Icon
-              name={
-                activity.outstanding > 0 || turn.status === "failed"
-                  ? "warning"
-                  : "stop"
-              }
+              name={turn.status === "failed" ? "warning" : "stop"}
               size={14}
             />
             <strong>
-              {activity.outstanding > 0
-                ? i18n.t("shell:stopUnconfirmed")
-                : confirmedStopped
-                  ? i18n.t("shell:stopped")
-                  : turn.status === "failed"
-                    ? i18n.t(
-                        failureDetail?.retried
-                          ? "shell:automaticRetryStopped"
-                          : "shell:executionStopped",
-                      )
-                    : i18n.t("shell:interrupted")}
+              {confirmedStopped
+                ? i18n.t("shell:stopped")
+                : turn.status === "failed"
+                  ? i18n.t(
+                      failureDetail?.retried
+                        ? "shell:automaticRetryStopped"
+                        : "shell:executionStopped",
+                    )
+                  : i18n.t("shell:interrupted")}
             </strong>
           </div>
-          {activity.outstanding > 0 ? (
-            <p>{i18n.t("shell:stopUnconfirmedNote")}</p>
-          ) : confirmedStopped ? (
+          {confirmedStopped ? (
             <p>{i18n.t("shell:stoppedNote")}</p>
           ) : turn.status === "failed" ? (
             <TurnFailureOutcome
@@ -2732,37 +2684,6 @@ function TurnBlock({
           ) : (
             <p>{i18n.t("shell:interruptedNote")}</p>
           )}
-          {activity.outstanding > 0 && turn.error?.message ? (
-            <p className="turn-outcome-error" role="alert">
-              {turn.error.message}
-            </p>
-          ) : null}
-          {activity.outstanding > 0 ? (
-            <button
-              type="button"
-              className="quiet-button turn-outcome-review"
-              onClick={reviewActivity}
-            >
-              {i18n.t("shell:reviewActivity")}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="quiet-button turn-outcome-primary-action"
-            disabled={!canRetry || !onRetry || retrying}
-            aria-busy={retrying}
-            onClick={() => void retry()}
-          >
-            {retrying ? (
-              <span className="mini-spinner" aria-hidden="true" />
-            ) : null}
-            {i18n.t("shell:retryTask")}
-          </button>
-          {retryError ? (
-            <p className="turn-retry-error" role="alert">
-              {retryError}
-            </p>
-          ) : null}
         </div>
       )}
     </section>
@@ -3277,6 +3198,7 @@ function TraceSequence({
       activity.phase === "running" ||
       activity.phase === "waiting" ||
       activity.phase === "thinking");
+  activeProcess = activeProcess && busy;
   const previewItem = busy
     ? (activity.current ??
       (node.kind === "traceGroup" ? node.items : [node.item]).findLast(
@@ -3345,7 +3267,6 @@ function TraceSequence({
               {i18n.t("shell:ongoingTurnActivity")}
             </span>
           ) : null}
-          <TraceCounts activity={activity} />
           <small className="sr-only">
             <span>{i18n.t("shell:toolCalls", { count: activity.total })}</span>
             {" · "}
@@ -3549,6 +3470,7 @@ function TraceItemHeader({
       : ["requested", "running", "waiting"].includes(
           observedCommandPhase(item, observations),
         ));
+  activeProcess = activeProcess && active;
   const preview = active ? traceActivityPreview(item) : undefined;
   return (
     <>
@@ -3621,7 +3543,10 @@ function StatusMark({
   observations: TraceObservationIndex;
 }) {
   if (item.type === "reasoning") {
-    if (item.status === "inProgress")
+    if (
+      item.status === "inProgress" &&
+      observations.turnStatus === "inProgress"
+    )
       return (
         <span className="mini-spinner" aria-label={i18n.t("shell:thinking")} />
       );
@@ -3636,7 +3561,13 @@ function StatusMark({
   if (item.type !== "commandExecution") return null;
   const phase = observedCommandPhase(item, observations);
   const status = observedCommandStatus(item, observations);
-  if (status === i18n.t("shell:completed")) return null;
+  if (phase === "requested")
+    return (
+      <span
+        className="mini-spinner"
+        aria-label={i18n.t("shell:awaitingToolResult")}
+      />
+    );
   return (
     <small className={`tool-status ${phase === "failed" ? "ended" : phase}`}>
       {status}
@@ -4073,7 +4004,11 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
         aria-describedby={error === null ? undefined : errorId}
         onClick={() => void run()}
       >
-        <Icon name="fork" size={14} />
+        {pending ? (
+          <span className="mini-spinner" aria-hidden="true" />
+        ) : (
+          <Icon name="fork" size={14} />
+        )}
       </button>
       {error === null ? null : (
         <span className="message-fork-error" role="alert" id={errorId}>

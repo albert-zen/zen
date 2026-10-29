@@ -75,12 +75,14 @@ Thread return `fork_boundary_unavailable`; malformed requests and non-Agent
 Items return `invalid_request`, via `error.data.zenCode`. Renaming a Thread or
 appending later history does not change an existing canonical Item's identity.
 
-The exact prefix includes the selected message and excludes every later source
-Item, including the rest of its Turn. The new Thread atomically stores remapped
-history, `thread_forked` provenance with the exact source boundary, and canonical
-snapshot-only closures for copied unfinished tools, Turns and queued inputs.
-These closures report no transferred execution; they do not claim that the
-source Turn finished successfully. Pending replacement intents remain historical
+The exact semantic prefix includes the selected message and excludes later source
+content, including the rest of its Turn. When only usage observations separate
+that message from its already-observed successful Turn completion, the copy also
+retains that original completion receipt and timestamp, not a new local execution.
+Otherwise the new Thread atomically stores remapped history, `thread_forked`
+provenance with the exact source boundary, and canonical snapshot-only closures
+for copied unfinished tools, Turns and queued inputs. These snapshot closures
+report no transferred execution; they do not claim source success. Pending replacement intents remain historical
 behind the fork provenance. A copy neither invokes a model nor replays tools nor
 starts a new Turn. It is idle and ready for explicit new input, including after
 journal reload, while the source remains untouched and may continue running.

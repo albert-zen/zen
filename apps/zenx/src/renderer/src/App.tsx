@@ -174,6 +174,7 @@ import {
   applyThreadViewNotification,
   markThreadViewAwaitingRecovery,
   projectNativeRecovery,
+  projectNativeThread,
 } from "./thread-view-state.js";
 import {
   ThreadView,
@@ -3150,7 +3151,8 @@ function AppContent() {
     const parent = input.parentThreadId;
     const roomId = selectedRoom?.id;
     const presentationOwner = roomId ? `room:${roomId}` : parent;
-    // Capture only authoritative prefix IDs, never a second copy of transcript semantics.
+    // Capture the authoritative prefix and retain its read-only display projection.
+    // Only the prefix IDs go back to the Host when the first Send forks it.
     const { thread } = await window.zenx.protocol.request("zen/thread/read", {
       threadId: parent,
     });
@@ -3166,6 +3168,7 @@ function AppContent() {
       {
         ...input,
         ...(roomId ? { roomId } : {}),
+        contextPreview: projectNativeThread(thread),
         inheritedModel: encodeModelKey(thread),
         inheritedEffort: thread.reasoningEffort,
       },
@@ -3215,6 +3218,31 @@ function AppContent() {
         key={id}
         composerId={`side-chat-draft-${id}`}
         thread={null}
+        contextPreview={draft.contextPreview}
+        emptyContent={
+          <div className="thread-empty">
+            <h2>{i18n.t("panels:sideChat")}</h2>
+            <p>{i18n.t("panels:sideChatContextPreview")}</p>
+          </div>
+        }
+        composerContext={
+          <p
+            className="composer-note side-chat-context-note"
+            role="status"
+            aria-busy={draft.sending}
+          >
+            {draft.sending ? (
+              <span className="mini-spinner" aria-hidden="true" />
+            ) : null}
+            {i18n.t(
+              draft.sending
+                ? draft.threadId
+                  ? "panels:sideChatSending"
+                  : "panels:sideChatCreating"
+                : "panels:sideChatContextPreview",
+            )}
+          </p>
+        }
         approvals={[]}
         composer={draft.composer}
         models={models}

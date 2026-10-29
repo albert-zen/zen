@@ -1,7 +1,7 @@
 import { IMPORTED_TOOL_RESULT_CONTENT_TYPE } from "../../../../../src/thread-import.js";
 import { i18n } from "./i18n.js";
 import type { IconName } from "./icons.js";
-import type { ThreadItem } from "../../protocol-client/index.js";
+import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 
 export type CommandPhase =
   | "unknown"
@@ -66,23 +66,18 @@ export function isTerminalCommandPhase(phase: CommandPhase): boolean {
     "declined",
   ].includes(phase);
 }
-/** Task lifetime is independent of an enclosing call being aborted/declined. */
-export function commandPhase(item: CommandItem): CommandPhase {
+/** Invocation lifetime follows its return, never the process described by that return. */
+export function commandPhase(
+  item: CommandItem,
+  turnStatus: Turn["status"] = "inProgress",
+): CommandPhase {
   if (item.contentType === IMPORTED_TOOL_RESULT_CONTENT_TYPE) return "imported";
-  // A wait receipt describes the observed task, not the lifetime of this call.
-  if (item.toolName === "wait")
-    return item.status === "inProgress" ? "waiting" : item.status;
-  const receipt = commandTask(item);
-  if (receipt !== null && receipt.phase !== "completed") return receipt.phase;
-  if (
-    item.status === "unknown" ||
-    item.status === "failed" ||
-    item.status === "declined"
-  )
-    return item.status;
-  return (
-    receipt?.phase ?? (item.status === "inProgress" ? "requested" : "completed")
-  );
+  if (item.status === "unknown") return "unknown";
+  if (item.status === "inProgress")
+    return turnStatus === "inProgress" ? "requested" : "unknown";
+  // Failed/declined are returned results too. Preserve their details without
+  // confusing invocation completion with a successful underlying operation.
+  return "completed";
 }
 export function commandPhaseLabel(phase: CommandPhase): string {
   const keys = {
@@ -103,15 +98,11 @@ export function commandPhaseLabel(phase: CommandPhase): string {
   } as const;
   return i18n.t(`shell:${keys[phase]}`);
 }
-export function commandStatus(item: CommandItem): string {
-  const phase = commandPhase(item);
-  if (phase === "completed")
-    return item.toolName === "wait"
-      ? i18n.t("shell:waited")
-      : item.toolName === "shell"
-        ? i18n.t("shell:ranCommand")
-        : i18n.t("shell:completed");
-  return commandPhaseLabel(phase);
+export function commandStatus(
+  item: CommandItem,
+  turnStatus: Turn["status"] = "inProgress",
+): string {
+  return commandPhaseLabel(commandPhase(item, turnStatus));
 }
 
 // These are presentation labels for known capabilities, never execution routing.
@@ -297,7 +288,8 @@ export function commandTitle(
 ): string {
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
-  const completed = commandPhase(item) === "completed";
+  const completed =
+    item.status === "completed" && commandPhase(item) === "completed";
   const key = name
     .replace(/^zenx_/u, "")
     .replace(/^browser_(?:workspace|connected)_/u, "browser_");
@@ -325,44 +317,24 @@ export function commandTitle(
             : (completedAction ??
               (item.toolName === undefined
                 ? item.command
-                : (toolPresentation(name).action ??
+                : ((completed
+                    ? toolPresentation(name).completedAction
+                    : undefined) ??
+                  toolPresentation(name).action ??
                   name.replace(/^zenx_/u, "").replaceAll("_", " "))));
   const line = text.replace(/\s+/gu, " ").trim();
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 
 export function commandSummary(
-  item: Extract<ThreadItem, { type: "commandExecution" }>,
+  item: CommandItem,
+  turnStatus: Turn["status"] = "inProgress",
 ): string {
-  const status = commandStatus(item);
+  const phase = commandPhase(item, turnStatus);
   const title = commandTitle(item);
-  if (item.toolName === "wait" || item.command.trim() === "wait") {
-    if (
-      status === i18n.t("shell:waiting") ||
-      status === i18n.t("shell:requested")
-    )
-      return i18n.t("shell:waitingForTask");
-    if (
-      status === i18n.t("shell:waited") ||
-      status === i18n.t("shell:completed")
-    )
-      return i18n.t("shell:waitedForTask");
-    return i18n.t("shell:waitStatus", { status: status.toLowerCase() });
-  }
-  if (item.toolName === "shell") {
-    if (status === i18n.t("shell:requested"))
-      return i18n.t("shell:titleStatus", {
-        title,
-        status: i18n.t("shell:requested").toLowerCase(),
-      });
-    if (status === i18n.t("shell:running"))
-      return i18n.t("shell:runningTitle", { title });
-    if (
-      status === i18n.t("shell:ranCommand") ||
-      status === i18n.t("shell:completed")
-    )
-      return i18n.t("shell:ranTitle", { title });
-  }
-  if (status === i18n.t("shell:completed")) return title;
-  return i18n.t("shell:titleStatus", { title, status: status.toLowerCase() });
+  if (phase === "completed" && item.status === "completed") return title;
+  return i18n.t("shell:titleStatus", {
+    title,
+    status: commandPhaseLabel(phase).toLowerCase(),
+  });
 }

@@ -7023,10 +7023,34 @@ test("Side chat opening and closing mount a normal local Composer without native
   }
 });
 
-test("Side chat first Send uses opening snapshot once and promotes to a real child tab", async () => {
+test("Side chat first Send displays inherited context and staged progress before promoting exactly once", async () => {
   const creates: unknown[] = [];
   const sends: Array<{ threadId: string }> = [];
-  const parent = resumed(liveThread()).thread;
+  const parentView = runningThread();
+  parentView.turns[0]!.status = "completed";
+  parentView.turns[0]!.items = [
+    {
+      id: "parent-request",
+      type: "userMessage",
+      content: [
+        {
+          type: "text",
+          text: "Parent request before opening",
+          text_elements: [],
+        },
+      ],
+      clientId: null,
+    },
+    {
+      id: "parent-answer",
+      type: "agentMessage",
+      text: "Inherited parent answer",
+      phase: "final_answer",
+      memoryCitation: null,
+    },
+  ];
+  const parent = resumed(parentView).thread;
+  const admission = deferred<unknown>();
   const childView = {
     ...liveThread(),
     id: "child",
@@ -7058,7 +7082,7 @@ test("Side chat first Send uses opening snapshot once and promotes to a real chi
       }
       if (method === "zen/turn/send") {
         sends.push(params as { threadId: string });
-        return {};
+        return admission.promise;
       }
       throw new Error(`Unexpected request ${method}`);
     },
@@ -7077,6 +7101,14 @@ test("Side chat first Send uses opening snapshot once and promotes to a real chi
     const composer = await waitFor(() =>
       document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
     );
+    const sideSurface = composer.closest(".thread-view")!;
+    assert.match(
+      sideSurface.textContent ?? "",
+      /Parent request before opening/,
+    );
+    assert.match(sideSurface.textContent ?? "", /Inherited parent answer/);
+    assert.doesNotMatch(sideSurface.textContent ?? "", /Start a new thread/);
+    assert.equal(sideSurface.querySelector(".message-fork"), null);
     await setTextareaValue(composer, "First real message");
     const send = composer
       .closest("form")!
@@ -7086,12 +7118,28 @@ test("Side chat first Send uses opening snapshot once and promotes to a real chi
       {
         parentThreadId: "thread-1",
         mode: "side-chat",
-        snapshot: { itemId: "thread-1-metadata", contextItemId: null },
+        snapshot: { itemId: parent.items.at(-1)!.id, contextItemId: null },
       },
     ]);
+    assert.match(
+      sideSurface.querySelector('[role="status"]')?.textContent ?? "",
+      /Creating side chat/,
+    );
+    assert.ok(
+      sideSurface.querySelector(".side-chat-context-note .mini-spinner"),
+    );
+    assert.equal(send.disabled, true);
+    assert.equal(sends.length, 0);
     await act(async () =>
       create.resolve({ thread: resumed(childView).thread }),
     );
+    await waitFor(() => sends.length === 1);
+    assert.match(
+      sideSurface.querySelector(".side-chat-context-note")?.textContent ?? "",
+      /Sending your message/,
+    );
+    assert.equal(composer.value, "First real message");
+    await act(async () => admission.resolve({}));
     await waitFor(() =>
       document.querySelector('[role="tab"][id*="thread:child"]'),
     );

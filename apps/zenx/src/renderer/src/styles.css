@@ -1647,6 +1647,19 @@ button:disabled {
   width: 13px;
   height: 13px;
 }
+.side-chat-context-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0 14px 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.side-chat-context-note .mini-spinner {
+  flex: 0 0 13px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);

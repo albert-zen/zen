@@ -356,6 +356,11 @@ export const en = {
   messageZenx: "Message ZenX",
   newConversationUnidentified: "The new conversation could not be identified.",
   sideChat: "Side chat",
+  sideChatContextPreview:
+    "Opening snapshot of the parent conversation. Send a message to create a separate side chat; the parent keeps working independently.",
+  sideChatLoadingContext: "Loading parent context…",
+  sideChatCreating: "Creating side chat from the opening context…",
+  sideChatSending: "Side chat created. Sending your message…",
   parentConversation: "Parent conversation",
   browserPageInstructions:
     "Open a thread and use its Browser panel to view that thread's pages.",
@@ -1322,6 +1327,11 @@ export const zhCN = {
   messageZenx: "向 ZenX 发送消息",
   newConversationUnidentified: "无法识别新会话。",
   sideChat: "旁聊",
+  sideChatContextPreview:
+    "这里显示打开旁聊时的父会话记录。发送消息后创建独立旁聊，父会话的工作不受影响。",
+  sideChatLoadingContext: "正在读取父会话记录…",
+  sideChatCreating: "正在根据打开时的上下文创建旁聊…",
+  sideChatSending: "旁聊已创建，正在发送消息…",
   parentConversation: "上级会话",
   browserPageInstructions: "打开会话并使用其 Browser 面板查看该会话的页面。",
 

@@ -31,6 +31,7 @@ function createServer(
     journal?: ThreadJournal;
     attachments?: InMemoryAttachmentStore;
     tools?: ToolRuntime[];
+    idPrefix?: string;
   } = {},
 ) {
   let sequence = 0;
@@ -68,7 +69,7 @@ function createServer(
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     },
-    idFactory: () => `id-${String(++sequence)}`,
+    idFactory: () => `${options.idPrefix ?? "id"}-${String(++sequence)}`,
     now: () => new Date(1_000 + sequence).toISOString(),
   });
 }
@@ -896,4 +897,120 @@ test("exact-item snapshot closures make copied tools, all queue kinds and replac
   );
   assert.deepEqual(await server.readThread(base.threadId), before);
   assert.deepEqual(await coldJournal.read(base.threadId), before.items);
+});
+
+test("forking a completed final message retains the observed completion without later semantic history", async (t) => {
+  const requests: ModelMessage[][] = [];
+  const model: ModelAdapter = {
+    provider: "completed-final",
+    async *stream(request) {
+      requests.push(structuredClone(request.messages));
+      yield {
+        type: "text_delta",
+        delta: `Exact final answer ${requests.length}.\n  Preserve whitespace.`,
+      };
+      yield { type: "usage", inputTokens: 100, outputTokens: 10 };
+    },
+  };
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-fork-final-"));
+  const directory = path.join(root, "threads");
+  const metadata = new InMemoryThreadMetadataStore();
+  const journal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  let coldJournal: DomainThreadJournal | undefined;
+  t.after(async () => {
+    await coldJournal?.close();
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const server = createServer(model, { journal });
+  const source = await server.startThread();
+  await (
+    await server.startTurn(source.id, "First input")
+  ).done;
+  const completed = await server.readThread(source.id);
+  const selected = completed.items.findLast(
+    (item) => item.type === "agent_message",
+  )!;
+  const completion = completed.items.findLast(
+    (item) => item.type === "turn_completed",
+  )!;
+  await (
+    await server.startTurn(source.id, "Later input must not be copied")
+  ).done;
+  const before = await server.readThread(source.id);
+  const fork = await server.forkThread({
+    sourceThreadId: source.id,
+    through: { type: "item", itemId: selected.id },
+    workspace: { type: "same-directory" },
+  });
+  assert.equal(fork.turns[0]?.status, "completed");
+  assert.equal(fork.turns.length, 1);
+  assert.equal(
+    fork.items.some((item) => item.type === "turn_aborted"),
+    false,
+  );
+  const copiedFinal = fork.items.findLast(
+    (item) => item.type === "agent_message",
+  );
+  assert.equal(
+    copiedFinal?.text,
+    selected.type === "agent_message" ? selected.text : null,
+  );
+  const copiedCompletion = fork.items.findLast(
+    (item) => item.type === "turn_completed",
+  );
+  assert.deepEqual(
+    copiedCompletion && {
+      ...copiedCompletion,
+      id: completion.id,
+      threadId: completion.threadId,
+    },
+    completion,
+  );
+  assert.equal(
+    fork.itemList.some((item) => JSON.stringify(item).includes("Later input")),
+    false,
+  );
+  const summary = (await server.listThreadSummaries()).find(
+    (item) => item.threadId === fork.id,
+  );
+  assert.equal(summary?.status, "idle");
+  assert.equal(
+    summary?.lastTurnEnd,
+    undefined,
+    "inherited completion is not new local execution",
+  );
+  assert.equal(requests.length, 2);
+  assert.deepEqual(await server.readThread(source.id), before);
+  await journal.close();
+  coldJournal = new DomainThreadJournal({
+    directory,
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata,
+  });
+  const restored = createServer(model, {
+    journal: coldJournal,
+    idPrefix: "restored",
+  });
+  const cold = await restored.readThread(fork.id);
+  assert.equal(cold.turns[0]?.status, "completed");
+  assert.deepEqual(cold.itemList, fork.itemList);
+  const again = await restored.forkThread({
+    sourceThreadId: fork.id,
+    through: { type: "item", itemId: copiedFinal!.id },
+    workspace: { type: "same-directory" },
+  });
+  assert.equal(again.turns[0]?.status, "completed");
+  await (
+    await restored.startTurn(fork.id, "Explicit continuation")
+  ).done;
+  assert.equal(requests.length, 3);
+  assert.doesNotMatch(
+    JSON.stringify(requests.at(-1)),
+    /Later input|Exact final answer 2/,
+  );
 });

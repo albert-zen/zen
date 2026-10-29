@@ -1207,6 +1207,14 @@ export class ZenAppServer {
       // Keep configuration in the copied boundary's contiguous tail so a
       // nested fork inherits it before the new provenance/instruction Items.
       thread.append(forked);
+      if (!fullContext && itemId !== undefined) {
+        const completion = observedFinalMessageCompletion(
+          sourceItems,
+          terminalIndex,
+        );
+        if (completion !== undefined)
+          thread.append({ ...completion, id: this.#id(), threadId });
+      }
       if (fullContext || itemId !== undefined) {
         appendForkSnapshotClosures(
           thread,
@@ -5934,6 +5942,27 @@ function forkablePrefix(
     end += 1;
   }
   return items.slice(0, end);
+}
+
+/** An exact final-message cut may precede its already-observed lifecycle receipt.
+ * Retain that receipt, not later semantic content or an invented local execution.
+ * Any intervening same-Turn content makes this an intermediate snapshot instead.
+ */
+function observedFinalMessageCompletion(
+  items: readonly CanonicalItem[],
+  boundaryIndex: number,
+): Extract<CanonicalItem, { type: "turn_completed" }> | undefined {
+  const boundary = items[boundaryIndex];
+  if (boundary?.type !== "agent_message" || boundary.incomplete === true)
+    return undefined;
+  for (let index = boundaryIndex + 1; index < items.length; index++) {
+    const item = items[index]!;
+    if (item.turnId !== boundary.turnId) continue;
+    if (item.type === "turn_completed")
+      return item.status === "completed" ? item : undefined;
+    if (item.type !== "model_usage") return undefined;
+  }
+  return undefined;
 }
 
 /** Close only copied execution projections; never operate on the source Thread. */

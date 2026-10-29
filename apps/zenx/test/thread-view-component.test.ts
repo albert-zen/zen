@@ -4752,3 +4752,48 @@ test("image failure details are closed, plain text and keyboard reachable in the
     trigger.remove();
   });
 });
+
+test("a side chat opening context is readable but cannot steer or control its running parent", async () => {
+  await withDom(async (root) => {
+    const parent = thread([
+      turnWithItems("inProgress", [
+        user("Frozen parent question"),
+        agent("Parent partial answer"),
+      ]),
+    ]);
+    const submitted: unknown[] = [];
+    const composer = editComposer(emptyComposerState(), "My separate question");
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: null,
+          contextPreview: parent,
+          composerId: "side-chat-draft-test",
+          composer,
+          approvals: [],
+          onDraftChange: () => {},
+          onInterrupt: async () => {
+            throw new Error("Must not interrupt parent");
+          },
+          onRespondToApproval: noop,
+          onSubmit: async (...args) => {
+            submitted.push(args.slice(0, 2));
+          },
+        }),
+      ),
+    );
+    assert.match(document.body.textContent ?? "", /Frozen parent question/);
+    assert.match(document.body.textContent ?? "", /Parent partial answer/);
+    assert.equal(document.querySelector(".thread-empty"), null);
+    assert.equal(document.querySelector(".turn-running-label"), null);
+    assert.equal(document.querySelector('[aria-label="Stop"]'), null);
+    assert.equal(document.querySelector(".message-fork"), null);
+    await act(async () => requiredButton('[aria-label="Send"]').click());
+    assert.deepEqual(submitted, [["start", null]]);
+    assert.equal(
+      parent.turns[0]?.status,
+      "inProgress",
+      "preview does not rewrite parent status",
+    );
+  });
+});
