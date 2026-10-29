@@ -9,10 +9,21 @@ before that compiler. Actual reset admission belongs to `ZenAppServer` or the
 agentic tool path in `AgentRuntime`.
 
 A model's prose saying “the Host automatically ran compact_context” is not an
-execution receipt. In particular, the `cN` list from
-`src/builtin-model-handles.ts:builtinCompactionReferences` is published whenever
-that sample exposes the optional tool. It describes retention choices; its
-presence alone neither executes nor proves compaction. The wording now says so.
+execution receipt. Before the design correction, `prepareSampleContext` published
+a per-sample `cN` retention inventory whenever that sample exposed the tool, even
+below threshold, and also published a reference-budget fallback notice. The
+initial wording-only fix was insufficient: **both admission paths and the live
+index publisher/resolver are now removed**, not merely relabeled.
+
+The current tool describes coarse recent Item/user/final-assistant/assistant
+counts, or a retained-history token budget. These stable tool definitions remain
+ordinary capability context; they are not extra messages appended each sample.
+Only threshold admission issues a sample-scoped reminder, once in a contiguous
+pressure episode; dropping below the threshold or committing a reset rearms it.
+The reminder repeats the coarse choices and directs detailed memory to files.
+A committed continuation summary is a different semantic fact: it remains
+selected context in subsequent requests until superseded, without another reset
+or another reminder being executed.
 
 No real private Thread/Trace/configuration was inspected for this audit. The
 reported individual incident's actual trigger and configured window therefore
@@ -37,7 +48,7 @@ context. An immediately preceding successful agentic reset invalidates old usage
 so it does not cause an immediate duplicate Host reset.
 
 Turning the Agentic switch off **does not disable Host automatic compaction**.
-This patch does not change that policy, default thresholds, or retention rules.
+The design correction does not change Host automatic policy or default thresholds; it changes the live agentic retention surface described below.
 Whether to add an automatic-compaction opt-out/approval mode is a separate product
 decision, not an undocumented change in this fix.
 
@@ -61,8 +72,10 @@ window, trigger/target percentages and Agentic mode.
 
 ## Confirmed visibility gaps and fixes
 
-- Before: `cN` capability text could be mistaken for a reset receipt. Now it
-  explicitly says optional references are not a compaction event.
+- Before: `cN` inventories were unconditionally injected in tool-enabled samples.
+  Changing their label did not satisfy the design. Current samples create no
+  inventory, reference-budget fallback notice, or new `builtin-compaction`
+  bindings, and the current tool schema exposes no exact Item IDs/ranges.
 - Before: reset model text had only `[Zen compacted context]`. New generated v4 /
   agentic v3 selections identify the committed initiator, distinguish continuation
   from a new user request, and explain omitted-history access. The summary is
@@ -83,8 +96,9 @@ window, trigger/target percentages and Agentic mode.
   identity is independent of feedback and preserves exact draft/revision guards.
 - Generated compaction now rejects non-advancing boundaries before summary
   generation. A newer agentic reset cannot make Host fallback summarize an
-  already-superseded completed prefix; the model receives an explicit no-new-
-  completed-history notice while still within the configured window.
+  already-superseded completed prefix. Without an advancing boundary it skips
+  generation; Agentic mode still gives its single threshold-episode guidance
+  while continuation remains within the configured window.
 - Settings previously claimed compaction never ran within an unfinished Turn;
   this contradicted the active-tool-round path. Settings now show all three Host
   timings and the current configured trigger/fallback formula, without adding or
@@ -101,6 +115,41 @@ selection; Trace for observed causes/timing/results; existing transient UI produ
 state for feedback. No execution ledger, adapter-side trimming, new hidden
 summary, policy retry, or permission change is introduced. CAS does not receive
 fabricated mappings for the new native observation.
+
+## Current agentic retention and compatibility
+
+`retention` may contain any combination of `recentItemCount`,
+`recentUserMessageCount`, `recentFinalMessageCount` and
+`recentAgentMessageCount`; selections are combined without duplicates. Agent
+messages include complete final and pre-tool assistant messages; finals are
+classified from successfully completed Turns. Selecting one part of a tool
+response retains its complete sibling call/result group. Explicit counts that
+cannot fit the remaining context capacity fail without changing selection.
+
+Alternatively, `tokenBudget` **alone** chooses the newest complete history suffix
+whose estimated token cost fits both that allowance and the remaining model
+capacity. The allowance excludes continuation text, tools and instructions, whose
+cost is reserved separately; the final complete projection is checked again.
+Zero counts, a zero token allowance, or omitted retention can keep just the continuation. Detailed memory belongs
+in files, with ordinary paths and next steps in the continuation text.
+
+Host/manual stored retention settings are a separate existing policy and remain
+compatible. Current `compact_context` calls reject obsolete exact-reference or
+legacy option arguments with migration guidance. Historical tool calls/results,
+old `onlySampleId` inventories, bindings and committed selections remain
+immutable and readable. Historical sample replay preserves their bytes; current
+samples neither reconstruct the old inventory nor execute old calls. Current
+tool definitions are newly committed facts, not mutations of old definitions.
+
+Synthetic regression evidence is in
+[`agentic-retention-surface.test.ts`](../test/agentic-retention-surface.test.ts),
+[`builtin-compaction-context.test.ts`](../test/builtin-compaction-context.test.ts),
+[`builtin-model-handles-runtime.test.ts`](../test/builtin-model-handles-runtime.test.ts)
+and [`context-compaction.test.ts`](../test/context-compaction.test.ts): below-
+threshold multi-sample goldens, actual dispatched request/schema, threshold
+crossing/rearm/reset (including a first crossing above fallback), tool-unit
+closure, retained token bounds, original summary provenance, late steering and
+cold historical replay. Task `tN` capabilities are unchanged.
 
 ## Verification / review fixture
 

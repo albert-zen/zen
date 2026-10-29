@@ -9,11 +9,9 @@ import {
   compileItemList,
   type ContextItem,
 } from "../src/item-list.js";
-import { validateModelReferenceBindings } from "../src/model-references.js";
-import { FileTraceStore } from "../src/trace.js";
 
-for (const input of ["published-ref", "native-id"] as const)
-  test(`actual Host compaction retention accepts only ${input === "published-ref" ? "persisted sample references" : "published references, not a native ID"}`, async () => {
+for (const input of ["coarse-count", "obsolete-ref"] as const)
+  test(`actual Host emits no retention inventory and handles ${input}`, async () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "zen-builtin-compaction-"),
     );
@@ -42,42 +40,26 @@ for (const input of ["published-ref", "native-id"] as const)
             { headers: { "content-type": "text/event-stream" } },
           );
         const context = await items();
-        const notice = context.findLast(
-          (item) =>
-            item.source.kind === "context_notice" &&
-            item.source.metadata?.referenceBindings !== undefined,
+        assert.equal(
+          context.some((item) => item.source.kind === "context_notice"),
+          false,
         );
-        assert(notice?.kind === "message");
-        assert.equal(notice.role, "developer");
-        const binding = validateModelReferenceBindings(
-          notice.source.metadata!.referenceBindings,
-        )[0]!;
-        assert.equal(binding.ref, "c1");
-        assert.equal(binding.ownerThreadId, threadId);
-        userId = (binding.value as { itemId: string }).itemId;
-        assert.match(notice.content.text, /c1 user message/);
-        assert(!notice.content.text.includes(userId));
-        const compiled = compileItemList(context, {
-          sampleId: String(notice.source.metadata!.onlySampleId),
-        });
-        assert(
-          request.messages.some(
-            (message: { role: string; content: unknown }) =>
-              message.role === "developer" &&
-              message.content === notice.content.text,
-          ),
+        const user = context.find(
+          (item) => item.source.kind === "user_message",
         );
-        assert(compiled.selectedItemIds.includes(notice.id));
-        const log = await new FileTraceStore(
-          path.join(directory, "trace"),
-        ).read(threadId);
-        assert(
-          log.records.some(
-            (record) =>
-              record.type === "context_source" &&
-              JSON.stringify(record.data).includes(notice.id),
-          ),
+        assert(user?.kind === "message");
+        userId = user.id;
+        const compiled = compileItemList(context);
+        assert.equal(compiled.messages.length, 1);
+        assert.equal(request.messages.length, 1);
+        assert.equal(request.messages[0].role, "user");
+        assert.doesNotMatch(
+          JSON.stringify(request.messages),
+          /compact_context retention|optional retention references/u,
         );
+        const schema = JSON.stringify(request.tools);
+        assert(schema.includes("recentUserMessageCount"));
+        assert.doesNotMatch(schema, /itemIds|itemRanges|cN/u);
       } catch (error) {
         validationError = error;
       }
@@ -97,11 +79,10 @@ for (const input of ["published-ref", "native-id"] as const)
                           name: "compact_context",
                           arguments: JSON.stringify({
                             text: "Keep the exact source",
-                            retention: {
-                              itemIds: [
-                                input === "published-ref" ? "c1" : userId,
-                              ],
-                            },
+                            retention:
+                              input === "coarse-count"
+                                ? { recentUserMessageCount: 1 }
+                                : { itemIds: ["c1"] },
                             includeOriginalReference: false,
                           }),
                         },
@@ -158,7 +139,7 @@ for (const input of ["published-ref", "native-id"] as const)
       const reset = snapshot.items.find(
         (item) => item.type === "context_compaction",
       );
-      if (input === "published-ref") {
+      if (input === "coarse-count") {
         assert(reset?.type === "context_compaction");
         assert(reset.retainedItemIds.includes(userId));
       } else {
@@ -168,7 +149,7 @@ for (const input of ["published-ref", "native-id"] as const)
         );
         assert(failure?.type === "tool_result");
         assert.equal(failure.exitCode, 1);
-        assert.match(failure.output, /reference unavailable/);
+        assert.match(failure.output, /no longer accepted/);
       }
       const completed = snapshot.items.findLast(
         (item) => item.type === "turn_completed",

@@ -1,4 +1,3 @@
-import type { ContextItem } from "./item-list.js";
 import {
   CAPABILITY_REFERENCE_BUDGET,
   ModelReferenceBudgetError,
@@ -7,7 +6,6 @@ import {
   type ModelReferenceBudget,
 } from "./model-references.js";
 
-const COMPACTION = "builtin-compaction";
 const TASK = "builtin-task";
 const unavailable = () =>
   new Error(
@@ -45,118 +43,15 @@ function budget(
     throw new ModelReferenceBudgetError();
 }
 
-const retainable = new Set([
-  "user_message",
-  "host_message",
-  "thread_message",
-  "thread_instruction",
-  "agent_message",
-  "tool_call",
-  "tool_result",
-  "failure",
-]);
-
-function compactionSource(ownerThreadId: string, source: ContextItem): boolean {
-  return (
-    source.threadId === ownerThreadId &&
-    retainable.has(source.source.kind) &&
-    source.source.metadata?.imported === undefined &&
-    source.source.metadata?.parentCallId === undefined
-  );
-}
-
 function highwater(
   history: readonly ModelReferenceBinding[],
-  family: "c" | "t",
+  family: "t",
 ): number {
   let next = 1;
   for (const entry of history)
     if (entry.ref.startsWith(family))
       next = Math.max(next, Number(entry.ref.slice(1)) + 1);
   return next;
-}
-
-function itemIdentity(binding: ModelReferenceBinding): string | undefined {
-  const value = binding.value;
-  if (
-    binding.namespace !== COMPACTION ||
-    binding.kind !== "item" ||
-    binding.epoch !== undefined ||
-    !/^c[1-9][0-9]*$/u.test(binding.ref) ||
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.keys(value).length !== 1 ||
-    !("itemId" in value) ||
-    typeof value.itemId !== "string" ||
-    !value.itemId
-  )
-    return undefined;
-  return value.itemId;
-}
-
-/** Caller supplies only exact compiled, currently retention-eligible sources at the sample boundary. */
-export function builtinCompactionReferences(options: {
-  ownerThreadId: string;
-  sources: readonly ContextItem[];
-  history: readonly ModelReferenceBinding[];
-  budget?: Readonly<ModelReferenceBudget>;
-}): { text: string; referenceBindings: ModelReferenceBinding[] } {
-  const history = bindings(options.history);
-  let next = highwater(history, "c");
-  const owned = new Map(
-    history
-      .filter((entry) => entry.ownerThreadId === options.ownerThreadId)
-      .map((entry) => [itemIdentity(entry), entry]),
-  );
-  const referenceBindings: ModelReferenceBinding[] = [];
-  const labels: string[] = [];
-  for (const source of options.sources) {
-    if (!compactionSource(options.ownerThreadId, source)) continue;
-    const binding =
-      owned.get(source.id) ??
-      freeze({
-        ref: `c${next++}`,
-        ownerThreadId: options.ownerThreadId,
-        namespace: COMPACTION,
-        kind: "item",
-        value: { itemId: source.id },
-      });
-    owned.set(source.id, binding);
-    if (referenceBindings.some((entry) => entry.ref === binding.ref)) continue;
-    referenceBindings.push(freeze(binding));
-    labels.push(`${binding.ref} ${source.source.kind.replaceAll("_", " ")}`);
-  }
-  budget(referenceBindings, options.budget ?? CAPABILITY_REFERENCE_BUDGET);
-  return {
-    text:
-      labels.length === 0
-        ? ""
-        : `[compact_context optional retention references (not a compaction event; no context was changed by this list): ${labels.join("; ")}]`,
-    referenceBindings,
-  };
-}
-
-export function resolveBuiltinCompactionReference(options: {
-  ownerThreadId: string;
-  ref: string;
-  history: readonly ModelReferenceBinding[];
-  sources: readonly ContextItem[];
-}): string {
-  const binding = bindings(options.history).find(
-    (entry) =>
-      entry.ownerThreadId === options.ownerThreadId &&
-      entry.ref === options.ref,
-  );
-  const id = binding === undefined ? undefined : itemIdentity(binding);
-  const source = options.sources.find(
-    (entry) =>
-      id !== undefined &&
-      entry.id === id &&
-      compactionSource(options.ownerThreadId, entry),
-  );
-  if (!source) throw unavailable();
-  return source.id;
 }
 
 /** Synchronous allocation inside the existing TaskManager; occupied includes its live/retained tasks. */
