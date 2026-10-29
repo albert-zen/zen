@@ -23,6 +23,7 @@ LESSONS.md（非目标与教训）、PRODUCTS.md（接入端与里程碑）。
    写入 Trace；旧混合 CanonicalItem 仅用于 legacy 解码与兼容读投影。
 6. LESSONS.md 的非目标清单在 review 时对照执行；需要其中某项时先改 LESSONS.md。
 7. 失败明确告知用户，不建自我修复的 durable 状态机。
+8. 压缩工具曝光不得为每次采样枚举或追加历史索引；live retention 只用粗粒度数量/类型或 token 预算。工具描述是稳定能力定义，不是每采样提示；压缩提醒必须由阈值事件门控并限定到本次 episode，实际提交的模型请求与语义输入保持可检查。
 
 ## 验证
 

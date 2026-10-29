@@ -83,7 +83,7 @@ const taskRefs = (request: ModelRequest) => [
   ),
 ];
 
-test("actual ModelRequest selects disclosed c refs, preserves exact retention, and cold ItemList/log readback", async () => {
+test("actual ModelRequest uses coarse retention without an index and preserves cold ItemList/log readback", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "zen-builtin-retention-"));
   const trace = new FileTraceStore(path.join(root, "trace"));
   const metadata = new InMemoryThreadMetadataStore();
@@ -98,8 +98,7 @@ test("actual ModelRequest selects disclosed c refs, preserves exact retention, a
     messages: ModelRequest["messages"];
     tools: ModelRequest["tools"];
   }> = [];
-  let samples = 0,
-    selected = "";
+  let samples = 0;
   const model: ModelAdapter = {
     provider: "builtin-retention",
     async *stream(request): AsyncIterable<ModelEvent> {
@@ -107,23 +106,25 @@ test("actual ModelRequest selects disclosed c refs, preserves exact retention, a
         messages: structuredClone(request.messages),
         tools: structuredClone(request.tools),
       });
+      assert.doesNotMatch(
+        JSON.stringify(request.messages),
+        /compact_context (?:optional )?retention references|c[1-9][0-9]* user message/u,
+      );
+      const accepted = await journal.readItemList(request.sessionId!);
+      assert.equal(
+        references(accepted).some(
+          (entry) => entry.namespace === "builtin-compaction",
+        ),
+        false,
+      );
       if (++samples === 2) {
-        selected =
-          [
-            ...wire(request).matchAll(/(c[1-9][0-9]*) user message/gu),
-          ][0]?.[1] ?? "";
-        const accepted = await journal.readItemList(request.sessionId!);
-        assert.ok(
-          references(accepted).some((entry) => entry.ref === selected),
-          "the exact c declaration must already be durable at model dispatch",
-        );
         yield {
           type: "tool_call",
           callId: "provider-required-reset-id",
           name: "compact_context",
           arguments: {
             text: "Continue the exact task.",
-            retention: { itemIds: [selected, selected] },
+            retention: { recentUserMessageCount: 2 },
           },
         };
       } else yield { type: "text_delta", delta: "done" };
@@ -142,17 +143,17 @@ test("actual ModelRequest selects disclosed c refs, preserves exact retention, a
     await (
       await app.startTurn(thread.id, "Compact but keep the first exact input.")
     ).done;
-    assert.match(
-      selected,
-      /^c[1-9][0-9]*$/u,
-      "model must receive an actionable handle before selecting it",
-    );
     const snapshot = await app.readThread(thread.id);
     const compaction = snapshot.items.find(
       (item) => item.type === "context_compaction",
     );
     assert.ok(compaction?.type === "context_compaction");
-    assert.deepEqual(compaction.retainedItemIds, [first.id]);
+    assert.deepEqual(
+      compaction.retainedItemIds,
+      snapshot.items
+        .filter((item) => item.type === "user_message")
+        .map((item) => item.id),
+    );
     assert.equal(
       compaction.coveredThroughItemId,
       snapshot.items.findLast((item) => item.type === "user_message")!.id,
@@ -174,17 +175,16 @@ test("actual ModelRequest selects disclosed c refs, preserves exact retention, a
     );
     assert.deepEqual(
       resetCall.arguments.retention,
-      { itemIds: [selected, selected] },
+      { recentUserMessageCount: 2 },
       "accepted model arguments are never rewritten",
     );
     const stored = await journal.readItemList(thread.id);
     assert.deepEqual(stored, snapshot.itemList);
-    assert.ok(
+    assert.equal(
       references(stored).some(
-        (entry) =>
-          entry.ref === selected &&
-          JSON.stringify(entry.value).includes(first.id),
+        (entry) => entry.namespace === "builtin-compaction",
       ),
+      false,
     );
     const log = await trace.read(thread.id);
     assert.ok(
