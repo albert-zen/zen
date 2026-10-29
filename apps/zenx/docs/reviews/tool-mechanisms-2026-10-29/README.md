@@ -45,4 +45,15 @@ parsing a bounded receipt instead of its complete file (corrected), and two smal
 output receipts with unavailable spool storage. The latter motivated the tested
 in-memory-output fix; the original filesystem failure was not conclusively identified.
 
-Final full ZenX rerun and exact-head hosted CI must finish before merge.
+The next full ZenX run finished with 4,838 passed, 49 skipped and 9 failures:
+eight unchanged native-environment limitations and one obsolete Fleet small-output
+truncation expectation. That expectation was corrected, preserving exact text and
+adding an oversized unavailable-spool boundary test (12 Fleet tests passed).
+Sequential ZenX typechecks and root build passed. Hosted CI exposed absent bwrap
+in the artifact-read fixtures: those now use an explicit test-only full-access
+shell invocation, still reading actual files. They validate accessibility, not OS
+containment; production sandbox defaults are unchanged. The 57 affected focused
+tests passed. Earlier local read-only sandbox reads also passed.
+
+Exact final-head hosted CI remains the merge gate; its results are recorded on
+PR #589. No failed or unrun stage above is represented as a pass.

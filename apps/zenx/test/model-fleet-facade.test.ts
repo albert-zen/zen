@@ -1046,7 +1046,9 @@ test("publication failure with no typed outcome is unclassified and ordinary she
       command: `cat ${JSON.stringify(receipt.raw_result_file.path)}`,
     }),
     outputAudience: "program",
-    sandbox: "read-only",
+    // Synthetic owned artifact read: exercise the real shell, not OS containment.
+    // CI need not install bwrap; production sandbox policy is unchanged.
+    sandbox: "danger-full-access",
     cwd: directory,
     task: { previewBytes: 2 * 1024 * 1024 },
   });

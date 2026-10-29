@@ -265,7 +265,9 @@ test("no Trace retains synchronous executor launch; durable result files use ord
   const shell = new ShellToolRuntime();
   const read = await shell.execute({
     ...invocation("shell"),
-    sandbox: "read-only",
+    // Synthetic owned artifact read: exercise the real shell, not OS containment.
+    // CI need not install bwrap; production sandbox policy is unchanged.
+    sandbox: "danger-full-access",
     arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
   });
   assert.equal(JSON.parse(read.output).output, "password token literal");
@@ -460,7 +462,9 @@ test("local readable result files distinguish upstream truncation, capture loss 
   assert.equal(receipt.resultFile.captureComplete, false);
   const read = await new ShellToolRuntime().execute({
     ...invocation("shell"),
-    sandbox: "read-only",
+    // Synthetic owned artifact read: exercise the real shell, not OS containment.
+    // CI need not install bwrap; production sandbox policy is unchanged.
+    sandbox: "danger-full-access",
     arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
   });
   assert.deepEqual(JSON.parse(read.output), raw);
@@ -496,7 +500,9 @@ test("non-JSON returned values have a shell-readable inspection view without cla
   assert.equal(receipt.resultFile.mediaType, "text/plain");
   const read = await new ShellToolRuntime().execute({
     ...invocation("shell"),
-    sandbox: "read-only",
+    // Synthetic owned artifact read: exercise the real shell, not OS containment.
+    // CI need not install bwrap; production sandbox policy is unchanged.
+    sandbox: "danger-full-access",
     arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
   });
   assert.match(read.output, /123n/);

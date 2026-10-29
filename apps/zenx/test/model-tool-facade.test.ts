@@ -1316,7 +1316,9 @@ test("successful plugin and browser projections expose actual pre-projection fil
         command: `cat ${JSON.stringify(projected.raw_result_file.path)}`,
       },
       signal: signal(),
-      sandbox: "read-only",
+      // Synthetic owned artifact read: exercise the real shell, not OS containment.
+      // CI need not install bwrap; production sandbox policy is unchanged.
+      sandbox: "danger-full-access",
     });
     assert.deepEqual(JSON.parse(read.output), raw);
     assert.ok(read.output.includes("original evidence"));
