@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
+import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
 import type { BrowserThreadEvent as BrowserLiveObservationEvent } from "../src/main/capabilities/browser-thread-observation.js";
 import type { BrowserObservationEnvelope } from "../src/main/browser-live-observation-ipc.js";
@@ -293,4 +295,263 @@ test("catalog and frame bridges coexist without weakening frame authority or sta
   callbacks[1]!({ type: "status", status: "live", message: "late" });
   callbacks[2]!({ type: "targets", targets: [] });
   assert.equal(renderer.sent.length, 4);
+});
+
+test("actual registry connected addresses cross catalog and fixed live IPC without weakening ownership", async () => {
+  const connection = {
+    connectionId: "11111111-1111-4111-8111-111111111111",
+    generation: "22222222-2222-4222-8222-222222222222",
+    browser: "chrome" as const,
+    label: "Synthetic Chrome",
+    state: "connected" as const,
+  };
+  let connectionChanged = () => {};
+  const observed: string[] = [];
+  const backend = (label: string) =>
+    ({
+      async listTabs(sessionId: string) {
+        return [
+          {
+            sessionId,
+            tabId: "native-tab",
+            title: label,
+            url: "https://example.test/",
+            loading: false,
+          },
+        ];
+      },
+      observeTab(
+        _sessionId: string,
+        _tabId: string,
+        send: (value: BrowserLiveObservationEvent) => void,
+      ) {
+        observed.push(label);
+        send({ type: "status", status: "live", message: "live" });
+        return () => {};
+      },
+      async readCurrentUrl() {
+        return "https://example.test/";
+      },
+      async closeSession() {
+        return 1;
+      },
+      async close() {},
+    }) as unknown as ZenXBrowserBackend;
+  const registry = new BrowserBackendRegistry(
+    backend("Workspace"),
+    undefined,
+    undefined,
+    {
+      connections: () => [connection],
+      connectInstance: async () => ({
+        backend: backend("Connected"),
+        product: "synthetic",
+      }),
+      onConnectionsChanged(listener) {
+        connectionChanged = listener;
+        return () => {};
+      },
+    },
+  );
+  const renderer = new FakeRenderer();
+  const source = {
+    observeBrowserLive: registry.observeThread.bind(registry),
+    readBrowserTargetUrl: registry.readTargetUrl.bind(registry),
+  };
+  const catalog = new BrowserLiveObservationIpcBridge(source, "catalog", true);
+  const live = new BrowserLiveObservationIpcBridge(source, "live");
+  try {
+    const invocation = {
+      callId: "synthetic",
+      name: "unused",
+      threadId: "owner",
+      cwd: "/tmp",
+      signal: new AbortController().signal,
+    };
+    await registry.invoke("browser_workspace_list_tabs", {
+      ...invocation,
+      arguments: { sessionId: "work" },
+    });
+    await registry.invoke("browser_connected_list_tabs", {
+      ...invocation,
+      arguments: { sessionId: "work", connectionId: connection.connectionId },
+      approvalScope: {
+        key: `browser-instance:${connection.connectionId}`,
+        label: connection.label,
+        generation: connection.generation,
+      },
+    });
+    catalog.subscribe(renderer, "catalog", {
+      threadId: "owner",
+      frames: false,
+      catalog: true,
+    });
+    const catalogEvent = renderer.sent.findLast(
+      (value) =>
+        value.channel === "catalog" && value.event.event.type === "targets",
+    )!.event.event;
+    assert.equal(catalogEvent.type, "targets");
+    if (catalogEvent.type !== "targets") throw Error("missing targets");
+    const externalId = catalogEvent.targets.find(
+      (target) => target.backendId === "connected",
+    )!.id;
+    const workspaceId = catalogEvent.targets.find(
+      (target) => target.backendId === "workspace",
+    )!.id;
+    assert.equal(
+      externalId.length,
+      120,
+      "production UUID identity components, not shortened test tokens",
+    );
+    for (const [targetId, label] of [
+      [externalId, "Connected"],
+      [workspaceId, "Workspace"],
+    ]) {
+      live.subscribe(renderer, "fixed", {
+        threadId: "owner",
+        frames: true,
+        targetId,
+      });
+      assert.equal(observed.at(-1), label);
+      assert.ok(
+        renderer.sent.some(
+          (value) =>
+            value.channel === "live" &&
+            value.event.subscriptionId === "fixed" &&
+            value.event.event.type === "status" &&
+            value.event.event.status === "live",
+        ),
+      );
+    }
+    const before = observed.length;
+    live.subscribe(renderer, "foreign", {
+      threadId: "foreign",
+      frames: true,
+      targetId: externalId,
+    });
+    assert.equal(
+      observed.length,
+      before,
+      "foreign Thread cannot acquire the target",
+    );
+    await assert.rejects(
+      live.openExternal(renderer, "foreign", externalId, async () => {
+        throw Error("must not open");
+      }),
+      /not current/,
+    );
+    const forged = externalId.replace(
+      connection.generation,
+      "33333333-3333-4333-8333-333333333333",
+    );
+    live.subscribe(renderer, "forged", {
+      threadId: "owner",
+      frames: true,
+      targetId: forged,
+    });
+    assert.equal(
+      observed.length,
+      before,
+      "a different generation is not an alias",
+    );
+    live.subscribe(renderer, "current", {
+      threadId: "owner",
+      frames: true,
+      targetId: externalId,
+    });
+    assert.equal(observed.length, before + 1);
+    connection.generation = "44444444-4444-4444-8444-444444444444";
+    connectionChanged();
+    live.subscribe(renderer, "stale", {
+      threadId: "owner",
+      frames: true,
+      targetId: externalId,
+    });
+    assert.equal(
+      observed.length,
+      before + 1,
+      "retired generation cannot restart frames",
+    );
+    await assert.rejects(
+      live.openExternal(renderer, "owner", externalId, async () => {
+        throw Error("must not open");
+      }),
+      /not current/,
+    );
+  } finally {
+    catalog.close();
+    live.close();
+    await registry.close();
+  }
+});
+
+test("observation transport keeps bounded opaque IDs unchanged and rejects invalid sizes/types", () => {
+  let calls = 0;
+  const received: unknown[] = [];
+  const bridge = new BrowserLiveObservationIpcBridge(
+    {
+      observeBrowserLive(request) {
+        calls++;
+        received.push(request.targetId);
+        return () => {};
+      },
+    },
+    "events",
+  );
+  const renderer = new FakeRenderer();
+  const uuid = "11111111-1111-4111-8111-111111111111";
+  for (const targetId of [
+    uuid,
+    "target-a",
+    "a".repeat(80),
+    "a".repeat(256),
+    "connection-a:1",
+    "页面:α / ? ! # % . 🖥",
+    "  opaque target  ",
+    " ",
+    "a\n",
+    "a\0",
+    "unknown:target",
+    "workspace:",
+    "connected/other/generation:target",
+    `workspace:${uuid}`,
+    `connected:${uuid}`,
+    `connected/${uuid}/${uuid}:${uuid}`,
+    `connected/${uuid}/${uuid}:${"a".repeat(80)}`,
+  ]) {
+    const before = calls;
+    bridge.subscribe(renderer, "valid", {
+      threadId: "owner",
+      frames: true,
+      targetId,
+    });
+    assert.equal(calls, before + 1);
+    assert.equal(
+      received.at(-1),
+      targetId,
+      "opaque identities are never parsed, trimmed or normalized",
+    );
+  }
+  for (const targetId of [
+    "",
+    "a".repeat(257),
+    "🖥".repeat(129),
+    123,
+    null,
+    false,
+    {},
+  ]) {
+    const before = calls;
+    assert.throws(
+      () =>
+        bridge.subscribe(renderer, "invalid", {
+          threadId: "owner",
+          frames: true,
+          targetId: targetId as string,
+        }),
+      /Invalid Browser observation request/,
+    );
+    assert.equal(calls, before, "invalid requests never reach the source");
+  }
+  bridge.close();
 });

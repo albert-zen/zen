@@ -1429,6 +1429,8 @@ Native Fleet 对端通过 `thread-message-v1` capability 协商支持此消息�
 
 The process-local Browser backend registry owns independent capability sessions for the app-owned Workspace port and each explicitly connected external browser instance. `BrowserConnectionSource` projects only opaque installation identity, human label, connection state and Host generation; lazy instance CDP views never enumerate another instance's tabs. Native sockets, pending commands, observation references, preview selection and approvals retain that instance/generation, while the Supervisor remains the sole runtime retirement authority. This resource catalog is not a new Thread history or permission graph.
 
+Browser observation IPC accepts bounded opaque target addresses without parsing or normalizing their provider-specific identity, while exact Thread/instance/generation lookup remains authoritative. Caught preview errors cross the existing local subscription channel as bounded plain-text error fields (including nested causes), captured before Electron Error serialization; they are not persisted, replayed, added to model/tool results, or sent through native/Fleet protocols. The existing bounded local error projection preserves available caught-error evidence (with its existing authentication-header handling), does not collect additional configuration, and is displayed only as owner-local diagnostic text.
+
 Extension-created tab groups are ephemeral visual organization scoped to the current native connection and browser window; group membership is not target authorization, and ZenX never repairs a user's tab moves or overwrites a renamed existing group.
 
 ### Browser targeted input

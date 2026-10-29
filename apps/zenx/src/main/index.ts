@@ -1,3 +1,4 @@
+import { browserObservationSubscribeReply } from "../preload/browser-observation-ipc.js";
 import { BoardHostService } from "./board-host-service.js";
 import { ZenXBoardCapabilityPackage } from "./capabilities/board-package.js";
 import { createImGatewayDiagnosticSink } from "./im-gateway-diagnostics.js";
@@ -2554,7 +2555,9 @@ function installCapabilityIpc(
   ipcMain.handle(
     ipcChannels.browserCatalogSubscribe,
     (event, subscriptionId, request) => {
-      browserCatalog.subscribe(event.sender, subscriptionId, request);
+      return browserObservationSubscribeReply(() =>
+        browserCatalog.subscribe(event.sender, subscriptionId, request),
+      );
     },
   );
   ipcMain.handle(
@@ -2597,7 +2600,9 @@ function installCapabilityIpc(
   ipcMain.handle(
     ipcChannels.browserLiveSubscribe,
     (event, subscriptionId, request) => {
-      browserLive.subscribe(event.sender, subscriptionId, request);
+      return browserObservationSubscribeReply(() =>
+        browserLive.subscribe(event.sender, subscriptionId, request),
+      );
     },
   );
   ipcMain.handle(

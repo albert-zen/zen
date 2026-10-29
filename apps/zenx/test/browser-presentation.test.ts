@@ -241,10 +241,19 @@ test("external read-only pages share the strip without merging same-URL identiti
     mode: "live",
     canOpenExternally: true,
   });
+  // Match the registry/native bridge identity contract, including both UUID
+  // routing components; distinct instances may expose the same native page.
+  const connectionA = "11111111-1111-4111-8111-111111111111";
+  const connectionB = "22222222-2222-4222-8222-222222222222";
+  const generationA = "33333333-3333-4333-8333-333333333333";
+  const generationB = "44444444-4444-4444-8444-444444444444";
+  const leaf = "55555555-5555-4555-8555-555555555555";
+  const targetA = `connected/${connectionA}/${generationA}:${leaf}`;
+  const targetB = `connected/${connectionB}/${generationB}:${leaf}`;
   let targets = [
     target("workspace:1", "workspace", "workspace"),
-    target("connection-a:1", "connected", "a"),
-    target("connection-b:1", "connected", "b"),
+    target(targetA, "connected", connectionA),
+    target(targetB, "connected", connectionB),
   ];
   const listeners = new Set<(event: any) => void>();
   const requests: any[] = [];
@@ -334,7 +343,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     );
     assert.equal(external.length, 2);
     await act(async () => external[0]!.click());
-    assert.equal(requests.at(-1).targetId, "connection-a:1");
+    assert.equal(requests.at(-1).targetId, targetA);
     assert.equal(requests.at(-1).frames, true);
     assert.equal(
       listeners.size,
@@ -351,8 +360,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     );
     assert.ok(
       [...listeners].some(
-        (listener) =>
-          sourceRequests.get(listener).targetId === "connection-a:1",
+        (listener) => sourceRequests.get(listener).targetId === targetA,
       ),
       "catalog refresh leaves a live exact-target frame lane " +
         JSON.stringify(
@@ -365,13 +373,13 @@ test("external read-only pages share the strip without merging same-URL identiti
       "fixed external target has no second target picker",
     );
     const oldFrameCallback = [...listeners].find(
-      (listener) => sourceRequests.get(listener).targetId === "connection-a:1",
+      (listener) => sourceRequests.get(listener).targetId === targetA,
     )!;
     const oldFrameId = [...deliveries.keys()].find(
-      (id) => subscriptionRequests.get(id).targetId === "connection-a:1",
+      (id) => subscriptionRequests.get(id).targetId === targetA,
     )!;
     await act(async () => external[1]!.click());
-    assert.equal(requests.at(-1).targetId, "connection-b:1");
+    assert.equal(requests.at(-1).targetId, targetB);
     await act(async () =>
       oldFrameCallback({
         type: "status",
@@ -384,7 +392,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     await frameBridge.openExternal(
       renderer,
       "presentation-ui-external",
-      "connection-b:1",
+      targetB,
       async (url) => {
         opened.push(url);
       },
@@ -394,7 +402,7 @@ test("external read-only pages share the strip without merging same-URL identiti
       frameBridge.openExternal(
         renderer,
         "presentation-ui-external",
-        "connection-a:1",
+        targetA,
         async () => {},
       ),
       /not current/,
@@ -403,7 +411,7 @@ test("external read-only pages share the strip without merging same-URL identiti
       catalogBridge.openExternal(
         renderer,
         "presentation-ui-external",
-        "connection-b:1",
+        targetB,
         async () => {},
       ),
       /not current/,
@@ -424,7 +432,7 @@ test("external read-only pages share the strip without merging same-URL identiti
       frameBridge.openExternal(
         renderer,
         "presentation-ui-external",
-        "connection-b:1",
+        targetB,
         async () => {},
       ),
       /not current/,
@@ -437,7 +445,7 @@ test("external read-only pages share the strip without merging same-URL identiti
       document.dispatchEvent(new dom.window.Event("visibilitychange"));
     });
     assert.equal(listeners.size, 2);
-    assert.equal(requests.at(-1).targetId, "connection-b:1");
+    assert.equal(requests.at(-1).targetId, targetB);
     assert.equal(requests.at(-1).frames, true);
     await act(async () => {
       targets = [];
@@ -475,7 +483,7 @@ test("external read-only pages share the strip without merging same-URL identiti
       frameBridge.openExternal(
         renderer,
         "presentation-ui-external",
-        "connection-b:1",
+        targetB,
         async () => {},
       ),
       /not current/,

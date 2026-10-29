@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import {
   type CdpDiagnosticConnection,
   type UserBrowserCdpDiagnosticObserver,
@@ -507,12 +508,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
         if (!active) await dispose();
         else stop = dispose;
-      } catch {
+      } catch (error) {
         if (active)
           listener({
             type: "status",
             status: "failed",
             message: "The live browser view could not be connected.",
+            details: localErrorDetail(error),
           });
       }
     });
@@ -2987,7 +2989,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             return;
           subscription.restartQueued = false;
           await this.#startScreencast(subscription);
-        } catch {
+        } catch (error) {
           subscription.restartQueued = false;
           if (
             subscription.active &&
@@ -2998,6 +3000,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
               status: "failed",
               message:
                 "The live browser view could not resume after the page changed.",
+              details: localErrorDetail(error),
             });
           }
         }
@@ -3193,7 +3196,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     }
   }
 
-  #failScreencast(state: UserBrowserScreencastState, _error: unknown): void {
+  #failScreencast(state: UserBrowserScreencastState, error: unknown): void {
     if (this.#screencast !== state) return;
     this.#clearScreencast(state);
     if (this.#canSendObservation(state.sessionId)) {
@@ -3206,6 +3209,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       status: "failed",
       message:
         "The live browser view stopped because a frame or connection was invalid.",
+      details: localErrorDetail(error),
     });
   }
 

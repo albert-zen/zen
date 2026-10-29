@@ -33,6 +33,7 @@ export function BrowserThreadPanel({
 }) {
   useTranslation("panels");
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
+  const [catalogReceived, setCatalogReceived] = useState(false);
   const [targetId, setTargetId] = useState<string | undefined>(() =>
     selections.get(threadId),
   );
@@ -41,6 +42,7 @@ export function BrowserThreadPanel({
     status: string;
     message: string;
     capturedAt?: string;
+    details?: string;
   }>({
     status: "idle",
     message: "",
@@ -92,6 +94,7 @@ export function BrowserThreadPanel({
     clear();
     // A new subscription must publish its own target before external opening.
     setTargets([]);
+    setCatalogReceived(false);
     setSelectedId(undefined);
     setStatus({ status: "idle", message: "" });
     // Fixed peer panes share one frame IPC lane. Hidden peers must not replace
@@ -103,6 +106,7 @@ export function BrowserThreadPanel({
         if (currentTarget !== event.selectedId) resetExternal();
         currentTarget = event.selectedId;
         setTargets(event.targets);
+        setCatalogReceived(true);
         setSelectedId(event.selectedId);
         if (
           event.targets.length > 0 &&
@@ -113,7 +117,11 @@ export function BrowserThreadPanel({
       } else if (event.type === "status") {
         live = event.status === "live";
         if (!live) clear();
-        setStatus({ status: event.status, message: event.message });
+        setStatus({
+          status: event.status,
+          message: event.message,
+          details: event.details,
+        });
       } else if (event.type === "snapshot") {
         if (!open || !visible) return;
         const image = imageRef.current;
@@ -184,6 +192,54 @@ export function BrowserThreadPanel({
   }, [open, expanded]);
   if (!open) return null;
   const selected = targets.find((target) => target.id === selectedId);
+  const failed = status.status === "failed";
+  const unresolvedTarget =
+    catalogReceived && (fixedTargetId ?? targetId) !== undefined && !selected;
+  const emptyCatalog =
+    catalogReceived && targets.length === 0 && !unresolvedTarget;
+  const statusTitle = failed
+    ? i18n.t("panels:browserObservationFailed")
+    : unresolvedTarget
+      ? i18n.t("panels:selectedPageUnavailable")
+      : status.status === "unavailable"
+        ? i18n.t("panels:browserObservationUnavailable")
+        : status.status === "connecting"
+          ? i18n.t("panels:connecting")
+          : hasFrame
+            ? status.status === "snapshot"
+              ? i18n.t("panels:snapshot")
+              : i18n.t("panels:live")
+            : !catalogReceived
+              ? i18n.t("panels:browserObservationPending")
+              : emptyCatalog
+                ? i18n.t("panels:noPageForThisThread")
+                : selected
+                  ? i18n.t("panels:waitingForABrowserImage")
+                  : i18n.t("panels:browserPageNotSelected");
+  const explanation =
+    failed || status.details
+      ? browserFailureReason(status.message, status.details)
+      : statusMessage ||
+        (emptyCatalog ? i18n.t("panels:askTheAgentToOpenOrInspect") : "");
+  // The Host's original local error is evidence, not markup or a second summary.
+  const errorDetails = status.details || (failed ? status.message : undefined);
+  const observationStatus = (
+    <div className="browser-observation-feedback" data-status={status.status}>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        <strong>{statusTitle}</strong>
+        {explanation ? <small>{explanation}</small> : null}
+      </div>
+      {errorDetails ? (
+        <details
+          className="browser-observation-error-details"
+          key={errorDetails}
+        >
+          <summary>{i18n.t("panels:browserObservationErrorDetails")}</summary>
+          <pre tabIndex={0}>{errorDetails}</pre>
+        </details>
+      ) : null}
+    </div>
+  );
   const openExternal = async () => {
     if (
       !selected ||
@@ -296,14 +352,18 @@ export function BrowserThreadPanel({
           </button>
         </div>
       </header>
-      {fixedTargetId && !selected ? (
-        <p role="status">{i18n.t("panels:selectedPageUnavailable")}</p>
-      ) : null}
       <div className="browser-panel-target">
         {fixedTargetId ? (
-          <span className="browser-read-only-label">
-            {i18n.t("panels:externalReadOnly")}
-          </span>
+          <>
+            {selected ? (
+              <strong className="browser-selected-title" title={selected.title}>
+                {selected.title || selected.url}
+              </strong>
+            ) : null}
+            <span className="browser-read-only-label">
+              {i18n.t("panels:externalReadOnly")}
+            </span>
+          </>
         ) : (
           <>
             <label htmlFor="thread-browser-target">
@@ -321,7 +381,9 @@ export function BrowserThreadPanel({
               {targetId !== undefined &&
               !targets.some((target) => target.id === targetId) ? (
                 <option value={targetId}>
-                  {i18n.t("panels:selectedPageUnavailable")}
+                  {catalogReceived
+                    ? i18n.t("panels:selectedPageUnavailable")
+                    : i18n.t("panels:browserObservationPending")}
                 </option>
               ) : null}
               {targets.map((target) => (
@@ -363,12 +425,12 @@ export function BrowserThreadPanel({
             }
           />
         </div>
+        {externalError ? (
+          <p role="alert" className="browser-ui-error">
+            {externalError}
+          </p>
+        ) : null}
       </div>
-      {externalError ? (
-        <p role="alert" className="browser-ui-error">
-          {externalError}
-        </p>
-      ) : null}
       <div className="browser-live-page">
         <header
           className="browser-live-toolbar"
@@ -378,51 +440,35 @@ export function BrowserThreadPanel({
             <Icon name="layers" />
             <span>
               <strong>{i18n.t("panels:observerOnly")}</strong>
-              <small>
-                {selected?.mode === "live"
-                  ? i18n.t("panels:livePage")
-                  : i18n.t("panels:agentSnapshots")}
-              </small>
-            </span>
-          </div>
-          <div className="browser-live-privacy-note">
-            <span>
-              {i18n.t("panels:privatePageContentMayBeVisible")}{" "}
-              {selected?.mode === "live"
-                ? i18n.t("panels:liveFramesStayOnThisDeviceAnd")
-                : i18n.t("panels:agentScreenshotsAreTemporaryLocalArtifacts")}
-            </span>
-          </div>
-          <div
-            className="browser-live-status"
-            data-status={status.status}
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            <span>
-              <strong>
-                {status.status === "live"
-                  ? i18n.t("panels:live")
-                  : status.status === "snapshot"
-                    ? i18n.t("panels:snapshot")
-                    : status.status === "connecting"
-                      ? i18n.t("panels:connecting")
-                      : status.status === "failed"
-                        ? i18n.t("panels:connectionFailed")
-                        : i18n.t("panels:browserObservation")}
-              </strong>
-              <small>{statusMessage}</small>
-              {activityCount > 0 ? (
-                <small>{i18n.t("panels:browserAgentWorking")}</small>
-              ) : null}
-              {activityFailed ? (
-                <small className="browser-ui-error">
-                  {i18n.t("panels:browserOperationFailed")}
+              {selected ? (
+                <small>
+                  {selected.mode === "live"
+                    ? i18n.t("panels:livePage")
+                    : i18n.t("panels:agentSnapshots")}
                 </small>
               ) : null}
             </span>
           </div>
+          {selected?.mode === "snapshot" ? (
+            <div className="browser-observation-note">
+              {i18n.t("panels:agentScreenshotsAreTemporaryLocalArtifacts")}
+            </div>
+          ) : null}
+          {hasFrame ? observationStatus : null}
+          {activityCount > 0 || activityFailed ? (
+            <div className="browser-live-status">
+              <span>
+                {activityCount > 0 ? (
+                  <small>{i18n.t("panels:browserAgentWorking")}</small>
+                ) : null}
+                {activityFailed ? (
+                  <small className="browser-ui-error">
+                    {i18n.t("panels:browserOperationFailed")}
+                  </small>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
         </header>
         <div className="browser-live-stage" data-has-frame={String(hasFrame)}>
           <img
@@ -439,14 +485,7 @@ export function BrowserThreadPanel({
           {hasFrame ? null : (
             <div className="browser-live-placeholder">
               <Icon name="layers" />
-              <span>
-                <strong>
-                  {selected
-                    ? i18n.t("panels:waitingForABrowserImage")
-                    : i18n.t("panels:noPageForThisThread")}
-                </strong>
-                <small>{browserStatusMessage(status.message)}</small>
-              </span>
+              {observationStatus}
             </div>
           )}
         </div>
@@ -455,11 +494,33 @@ export function BrowserThreadPanel({
   );
 }
 
+function browserFailureReason(message: string, details?: string): string {
+  if (!details) return browserStatusMessage(message);
+  let reason = details;
+  try {
+    const diagnostic: unknown = JSON.parse(details);
+    if (typeof diagnostic === "string") reason = diagnostic;
+    else if (
+      diagnostic &&
+      typeof diagnostic === "object" &&
+      "message" in diagnostic &&
+      typeof diagnostic.message === "string"
+    )
+      reason = diagnostic.message;
+    else return browserStatusMessage(message);
+  } catch {
+    // A string rejection is already plain text, not a JSON diagnostic object.
+  }
+  // Show the original reason, with its complete unchanged evidence in Details.
+  return (
+    reason.split(/\r?\n/).find((line) => line.trim()) ||
+    browserStatusMessage(message)
+  );
+}
+
 function browserStatusMessage(message: string): string {
-  if (
-    !message ||
-    message === "Ask the Agent to open or inspect a browser page."
-  )
+  if (!message) return "";
+  if (message === "Ask the Agent to open or inspect a browser page.")
     return i18n.t("panels:askTheAgentToOpenOrInspect");
   if (
     message ===

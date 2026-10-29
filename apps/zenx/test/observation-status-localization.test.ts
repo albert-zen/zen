@@ -74,7 +74,7 @@ test("localized observation statuses preserve unsupported and snapshot reasons p
     );
     assert.match(
       document.body.textContent ?? "",
-      /Ask the Agent to open or inspect/,
+      /Reading browser observation/,
     );
     await act(async () => {
       computer?.({

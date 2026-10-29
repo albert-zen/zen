@@ -147,6 +147,8 @@ export type BrowserLiveObservationEvent =
       type: "status";
       status: BrowserLiveObservationStatus;
       message: string;
+      /** Bounded owner-local error fields; not a model/tool result or remote export. */
+      details?: string;
     }
   | { type: "frame"; frame: BrowserLiveObservationFrame }
   | { type: "metadata"; title: string; url: string; loading?: boolean };
