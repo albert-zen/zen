@@ -1,0 +1,180 @@
+{
+  "reviewDateUtc": "2026-10-29",
+  "documentationBaseCommit": "fca0efffd4359de54a717b7f625a024a3244a9cb",
+  "captureProvenance": "Root agent cloud-browser CUA interactions and screenshots, supplied for this review; images visually inspected and copied byte-for-byte. Only synthetic data and bridge responses. No user conversation, private image, native Host execution or model call is depicted.",
+  "captureMethod": "Visible UI interactions, including fixture control buttons; no hidden state mutation for these acceptance flows.",
+  "imageFormatNote": "Input filenames ended in .png but contained JPEG/JFIF bytes. Review copies use .jpg without conversion, cropping or pixel edits.",
+  "limitations": [
+    "Screenshots establish browser presentation and synthetic interaction, not native macOS/Electron acceptance.",
+    "Source versions differ across fixtures; none is silently relabeled as documentation HEAD.",
+    "Artifact hashes identify files handed off with these captures; fork/process source lineage relies on recorded build commands, not a generated manifest.",
+    "Focused poll-path backend tests are not a full-application performance benchmark."
+  ],
+  "sourceGroups": {
+    "background": {
+      "sourceCommit": "6b657ece281538efc00b03182d85c51afddff92a",
+      "provenance": "builder-generated manifest; recorded source blobs and hosted artifact hashes verified",
+      "sourceManifest": "background-source-manifest.json",
+      "sourceManifestSha256": "4b428cd7f99ea62ee34d8d1a879c20ca91a6d03d143249931fa8e11dad36ad1e",
+      "artifacts": {
+        "background-shell-preview.html": "6674ebe02e93d55f75229d95de4956c1c9002b059a1162a1bb9fe0aa50dbb085",
+        "terminal-frame.html": "ef0db89e211b38b63a93eb9bfe3c2ace12cc066978a6fc9fdc00c2dbd478c5f3"
+      }
+    },
+    "sidechat": {
+      "sourceCommit": "cb3bd13c17e4029587faa4d5a861126215ed1418",
+      "provenance": "builder-generated manifest; recorded source blobs and hosted artifact hashes verified",
+      "sourceManifest": "sidechat-source-manifest.json",
+      "sourceManifestSha256": "1ebd82368bf6228fffb6c833279595c5342a6dea356bcd661ac03341daf5e187",
+      "artifacts": {
+        "ui-polish-visual.html": "bb1fca0f0d48a549b2689c15c53aaba474cf5b5de448b62b86b3c919da5655b2"
+      }
+    },
+    "fork": {
+      "sourceCommit": "b2f06194c8f752c63c51cd83af01db45681ed838",
+      "provenance": "root-recorded build command and commit, 2026-10-29 05:20 UTC; builder emits no source manifest",
+      "buildCommand": "node apps/zenx/scripts/build-fork-feedback-preview.mjs <output-directory>",
+      "sourceHashesScope": "review-relevant tracked inputs only; not a complete transitive dependency manifest or reproducible-build assertion",
+      "sources": {
+        "apps/zenx/src/renderer/src/ThreadView.tsx": "0de23fa666f459588bb1236f5be6996b0ad01849aa137d70fee59912de30e12e",
+        "apps/zenx/src/renderer/src/turn-projection.ts": "e560ec4a48fcc6e18af2a68ea0a21f3e10402c3d5bfc8ae97a07c2ff32640461",
+        "apps/zenx/src/renderer/src/tool-presentation.ts": "b1b988b6ab377f1fe143a1942ba081719bd13d2d173d3377fceab83daa530cc3",
+        "apps/zenx/src/renderer/src/thread-reading-state.tsx": "e54804fc759303b2201d8b9f615e0f6186df69c4680b1412302f4b18af67d462",
+        "apps/zenx/src/renderer/src/composer-state.ts": "41ceb91d30afaafc1e0a92a9b14cdbfce4380320164f20102213f65a351cdc83",
+        "apps/zenx/src/renderer/src/i18n/panels.ts": "1a6875f0a90fe0862247fbf064f83517342b6aee19f4d99e39a8c5a97848406b",
+        "apps/zenx/src/renderer/src/styles.css": "bde972bbfeda9b40a8469c765d53f5f8932144a60a4b44545e103bf4219563b6",
+        "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+        "apps/zenx/test/fixtures/agent-runtime-data.ts": "c9ea4b0beb4a0c4e3fd45b884a6657e55f619f86a4b1e082aaa8ab2f99b90658",
+        "package-lock.json": "c4209a701ff049b8420dfed3c113924abf405fb4210e088d51f605381094d539",
+        "apps/zenx/scripts/build-fork-feedback-preview.mjs": "524c283bcf004f547ba6e7792f685ac22cece41db66e31f6953235d3e4cd531a",
+        "apps/zenx/test/fixtures/fork-feedback-visual.tsx": "a9f7c09fe55fb85ce79ded974f0e4e4571fee6693409166bf148647c16a1218f"
+      },
+      "artifacts": {
+        "fork-feedback-preview.html": "ac81dc98c4868ec9b94b6bf293f26c590d8a542b7ebc5d3062f72bd003d7cbab"
+      }
+    },
+    "process": {
+      "sourceCommit": "377f641e811fe60aeb464e20ed830422e20078a4",
+      "provenance": "root-recorded build command and commit, 2026-10-29 05:15 UTC; builder emits no source manifest",
+      "buildCommand": "node apps/zenx/scripts/build-process-style-preview.mjs <output-directory>",
+      "sourceHashesScope": "review-relevant tracked inputs only; not a complete transitive dependency manifest or reproducible-build assertion",
+      "sources": {
+        "apps/zenx/src/renderer/src/ThreadView.tsx": "0de23fa666f459588bb1236f5be6996b0ad01849aa137d70fee59912de30e12e",
+        "apps/zenx/src/renderer/src/turn-projection.ts": "e560ec4a48fcc6e18af2a68ea0a21f3e10402c3d5bfc8ae97a07c2ff32640461",
+        "apps/zenx/src/renderer/src/tool-presentation.ts": "b1b988b6ab377f1fe143a1942ba081719bd13d2d173d3377fceab83daa530cc3",
+        "apps/zenx/src/renderer/src/thread-reading-state.tsx": "e54804fc759303b2201d8b9f615e0f6186df69c4680b1412302f4b18af67d462",
+        "apps/zenx/src/renderer/src/composer-state.ts": "41ceb91d30afaafc1e0a92a9b14cdbfce4380320164f20102213f65a351cdc83",
+        "apps/zenx/src/renderer/src/i18n/panels.ts": "1a6875f0a90fe0862247fbf064f83517342b6aee19f4d99e39a8c5a97848406b",
+        "apps/zenx/src/renderer/src/styles.css": "bde972bbfeda9b40a8469c765d53f5f8932144a60a4b44545e103bf4219563b6",
+        "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+        "apps/zenx/test/fixtures/agent-runtime-data.ts": "c9ea4b0beb4a0c4e3fd45b884a6657e55f619f86a4b1e082aaa8ab2f99b90658",
+        "package-lock.json": "c4209a701ff049b8420dfed3c113924abf405fb4210e088d51f605381094d539",
+        "apps/zenx/scripts/build-process-style-preview.mjs": "493a4139864cb4ebf9871ae558b6d03405a4af5af7ac197af7fdd874d3973d38",
+        "apps/zenx/test/fixtures/process-style-visual.tsx": "9baa094edcbe958452723376ed76b9c8d45cece64c4c39ad962a7bc7c228c92b"
+      },
+      "artifacts": {
+        "process-style-preview.html": "d4da9d9ebbfafb609d53c88c179043b83dbadb23a87cb52fd3b2df553539abfe",
+        "process-style-frame.html": "ab2429c87e72834c67ee4ed8db8bd9b31f0c15be39f4b867a513b6e582fd7e91",
+        "README.txt": "6b28393b01ea29e48859d730d59b32af52c3329f74bc9beee33ea05c25ce4980"
+      }
+    }
+  },
+  "screenshots": [
+    {
+      "file": "fork-completed.jpg",
+      "providedInputFilename": "fork-completed.png",
+      "format": "JPEG",
+      "sha256": "e85c85494436edc387eb9eca72dfbf853f9edc70fa1b7357229b92db73778c4e",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "fork",
+      "visibleObservation": "Copied thread retains final answer and composer draft."
+    },
+    {
+      "file": "tool-completed-narrow.jpg",
+      "providedInputFilename": "tool-completed-narrow.png",
+      "format": "JPEG",
+      "sha256": "dc21a5ad0616dc3d5e33352414cbf0d3d76b8c9c16fdbad6c73c90653e446a81",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "process",
+      "visibleObservation": "Returned tool calls show complete labels in the 420px embedded view; authored synthetic text describes independent process lifetime."
+    },
+    {
+      "file": "background-exact-terminal.jpg",
+      "providedInputFilename": "background-exact-terminal.png",
+      "format": "JPEG",
+      "sha256": "faa08723f5a33a2b6f2cc7d2ab72e8404259157c2879616e641d359aa255bd07",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "background",
+      "visibleObservation": "Two current synthetic commands; exact synthetic-build Terminal selected."
+    },
+    {
+      "file": "background-exited.jpg",
+      "providedInputFilename": "background-exited.png",
+      "format": "JPEG",
+      "sha256": "f7b38569fbe55dc4393b5c746ae372e596d519c134e6e61a3b8665f8f2e77302",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "background",
+      "visibleObservation": "No current running command; selected synthetic-build is exited with code 0."
+    },
+    {
+      "file": "sidechat-creating.jpg",
+      "providedInputFilename": "sidechat-creating.png",
+      "format": "JPEG",
+      "sha256": "8dda614259b0d83a76aab28b2cba40900a42e39206b5bb107b91dca34c437592",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "sidechat",
+      "visibleObservation": "Inherited parent context remains visible while child creation is held."
+    },
+    {
+      "file": "sidechat-sending.jpg",
+      "providedInputFilename": "sidechat-sending.png",
+      "format": "JPEG",
+      "sha256": "6251663d229f74fef77983ae996ea2b94511e815314fa5bc8d5dd499d714e7aa",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "sidechat",
+      "visibleObservation": "Created child is waiting for message admission; input remains visible."
+    },
+    {
+      "file": "sidechat-send-error.jpg",
+      "providedInputFilename": "sidechat-send-error.png",
+      "format": "JPEG",
+      "sha256": "aa931def06585d4c58564d9761fad0723d0c4b5820d2c5d0f3ec95b5ac9be535",
+      "width": 1180,
+      "height": 757,
+      "sourceGroup": "sidechat",
+      "visibleObservation": "Explicit synthetic send failure with original input retained."
+    }
+  ],
+  "separateBackendVerification": {
+    "sourceCommit": "fca0efffd4359de54a717b7f625a024a3244a9cb",
+    "command": "node --import tsx --test apps/zenx/test/background-shell-state.test.ts apps/zenx/test/shell-panel-poll-cost.test.ts test/thread-fork.test.ts",
+    "passed": 25,
+    "failed": 0,
+    "boundary": "Real local native Shell/fork paths using deterministic synthetic providers; no paid or remote model calls. Not the screenshot bridge.",
+    "pollCost": {
+      "historicalMessages": 12000,
+      "cycles": 40,
+      "operations": 80,
+      "elapsedMs": 3.014,
+      "counters": {
+        "journalRead": 0,
+        "journalList": 0,
+        "journalWrite": 0,
+        "metadataRead": 0,
+        "projectionLoad": 0,
+        "projectionWrite": 0,
+        "items": 0,
+        "itemList": 0,
+        "deriveTurns": 0,
+        "configuration": 0,
+        "fullSnapshot": 0
+      }
+    }
+  }
+}
