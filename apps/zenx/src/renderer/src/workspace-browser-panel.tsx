@@ -180,6 +180,13 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
         ? "panels:browserPermissionEnabled"
         : "panels:browserPermissionDisabled",
     ),
+    !agentAllowed
+      ? i18n.t(
+          active.agentActionsInFlight > 0
+            ? "panels:browserActionFinishing"
+            : "panels:browserHumanControl",
+        )
+      : undefined,
     i18n.t("panels:browserPermissionDetail"),
     active.agentActionsInFlight > 0
       ? i18n.t("panels:browserActionsInFlight", {
@@ -306,15 +313,6 @@ function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
             {permissionDetail}
           </span>
         </form>
-        {!agentAllowed ? (
-          <span className="workspace-browser-control-status" role="status">
-            {i18n.t(
-              active.agentActionsInFlight > 0
-                ? "panels:browserActionFinishing"
-                : "panels:browserHumanControl",
-            )}
-          </span>
-        ) : null}
         {active.error ? (
           <p role="alert" className="browser-ui-error">
             {active.error}

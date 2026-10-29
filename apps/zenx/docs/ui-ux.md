@@ -455,7 +455,7 @@ ThreadView
 
 - Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。外部 provider 的每个目标在同一 tab strip 中以“外部 · 只读”页面展示，固定其 backend/connection/session/observer 身份；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。不再单设 Agent Browser / Attached browser 入口。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
-- 内置 Browser 仅在对应 Tab 图标上标记精确页面的 Agent 检查或已派发操作，不增加顶部活动文字行或动态边缘；可访问名称与 tooltip 区分检查和操作。权限开关只表示后续 Agent 操作是否获准，不把它当作正在执行的证据。人类已接管与已派发操作仍未结束的安全提示保留静态文字，操作真实结算后才撤除图标活动标记。外部 Browser 与 Computer 只读观察不自动选择、打开或切换目标；Computer 面板的活动只来自人类已选的当前 Host 精确目标与未结算调用，未选择目标不能声称该窗口闲置。后台指定窗口、前台操作、等待人类和未知模式分别说明，截图流失败不等于调用结束，旧工具历史不能推断当前活动。
+- 内置 Browser 仅在对应 Tab 图标上标记精确页面的 Agent 检查或已派发操作，不增加顶部活动文字行或动态边缘；可访问名称与 tooltip 区分检查和操作。权限开关只表示后续 Agent 操作是否获准，不把它当作正在执行的证据。人类已接管与已派发操作仍未结束的安全提示保留在现有权限开关的 tooltip 与可访问描述中，不新增文字行或改变原生页面几何；操作真实结算后才撤除图标活动标记。外部 Browser 与 Computer 只读观察不自动选择、打开或切换目标；Computer 面板的活动只来自人类已选的当前 Host 精确目标与未结算调用，未选择目标不能声称该窗口闲置。后台指定窗口、前台操作、等待人类和未知模式分别说明，截图流失败不等于调用结束，旧工具历史不能推断当前活动。
 - 内置浏览器的空白页（精确 `about:blank`）跟随 App 明确的浅/深外观，而不是系统外观；仅空白文档设置背景与 color-scheme，实际网站保留自身样式与系统媒体查询，不通过全局 nativeTheme 或覆盖层伪装。导航到外站前后的异步外观更新不得污染外站。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - macOS 同行标题栏的 traffic lights 与左侧栏开关拥有独立、共享的 leading 安全区；右栏展开、左侧栏收起或布局动画不能让工作区 Tab、滚动轨道和拖动命中区侵入。安全区约束整个 Tab 容器，不依赖首个 Tab 的名称或顺序；窄屏仍沿用独立标题行。

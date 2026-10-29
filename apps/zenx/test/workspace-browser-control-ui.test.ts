@@ -290,6 +290,11 @@ test("native smoke layout probe resolves the current permission UI in every stat
       for (const state of [
         {},
         { control: "human", requiresFreshObservation: true },
+        {
+          control: "human",
+          agentActionsInFlight: 1,
+          requiresFreshObservation: true,
+        },
         { requiresFreshObservation: true },
         { agentActionsInFlight: 1, requiresFreshObservation: true },
         { agentActionOutcomeUnknown: true, requiresFreshObservation: true },
@@ -318,6 +323,7 @@ test("native smoke layout probe resolves the current permission UI in every stat
         assert.equal(measured.permissionFocusable, true);
         assert.equal(measured.permissionDetailsAccessible, true);
         assert.equal(measured.legacyControlCount, 0);
+        assert.equal(measured.controlStatusRows, 0);
       }
     }
   } finally {
@@ -344,7 +350,7 @@ test("unknown outcome keeps a reserved toolbar status slot when cleared", async 
   });
 });
 
-test("tab glyph owns Agent activity; page chrome retains only actual human-control feedback", async () => {
+test("tab glyph owns Agent activity; human-control safety stays in the stable permission control", async () => {
   await withPanel(async ({ render }) => {
     for (const activity of [
       { agentInspectionsInFlight: 1 },
@@ -358,7 +364,7 @@ test("tab glyph owns Agent activity; page chrome retains only actual human-contr
       );
       assert.ok(
         document.querySelector(".workspace-browser-control-status") === null,
-        "Human-control feedback is absent when the Agent is allowed",
+        "Agent activity does not reserve a decorative status row",
       );
       assert.equal(
         document
@@ -369,8 +375,7 @@ test("tab glyph owns Agent activity; page chrome retains only actual human-contr
     }
     await render({ agentActionsInFlight: 1, control: "human" });
     assert.match(
-      document.querySelector(".workspace-browser-control-status")
-        ?.textContent ?? "",
+      document.querySelector('[role="switch"]')?.getAttribute("title") ?? "",
       /action.*finishing/u,
     );
     assert.match(
@@ -379,9 +384,27 @@ test("tab glyph owns Agent activity; page chrome retains only actual human-contr
     );
     await render({ agentActionsInFlight: 0, control: "human" });
     assert.match(
-      document.querySelector(".workspace-browser-control-status")
-        ?.textContent ?? "",
+      document.querySelector('[role="switch"]')?.getAttribute("title") ?? "",
       /You have control/u,
+    );
+    const permission = document.querySelector('[role="switch"]')!;
+    assert.equal(
+      document.getElementById(permission.getAttribute("aria-describedby")!)
+        ?.textContent,
+      permission.getAttribute("title"),
+    );
+    assert.ok(
+      document.querySelector(".workspace-browser-control-status") === null,
+      "Human takeover cannot add a row or resize the native viewport",
+    );
+    const css = readFileSync(
+      new URL("../src/renderer/src/styles.css", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      css,
+      /\.workspace-browser-control-status/u,
+      "No hidden placeholder row is reserved for Agent mode",
     );
   });
 });

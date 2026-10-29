@@ -1487,6 +1487,11 @@ async function assertStableControlLayout(): Promise<void> {
         for (const state of [
           {},
           { control: "human", requiresFreshObservation: true },
+          {
+            control: "human",
+            agentActionsInFlight: 1,
+            requiresFreshObservation: true,
+          },
           { requiresFreshObservation: true },
           { agentActionsInFlight: 1, requiresFreshObservation: true },
           { agentInspectionsInFlight: 1 },
@@ -1550,7 +1555,8 @@ async function assertStableControlLayout(): Promise<void> {
               permissionChecked:permission.getAttribute('aria-checked'), permissionLabel:permission.getAttribute('aria-label'),
               permissionFocusable:!permission.disabled&&permission.tabIndex===0&&document.activeElement===permission,
               permissionDetailsAccessible:!!permission.title&&description?.textContent===permission.title,
-              legacyControlCount:document.querySelectorAll('.workspace-browser-control').length};
+              legacyControlCount:document.querySelectorAll('.workspace-browser-control').length,
+              controlStatusRows:document.querySelectorAll('.workspace-browser-control-status').length};
           })()`);
           assert.equal(
             measured.viewport[2],
@@ -1600,6 +1606,11 @@ async function assertStableControlLayout(): Promise<void> {
             measured.permissionDetailsAccessible,
             true,
             "Complete permission details must be available on hover and through the accessible description",
+          );
+          assert.equal(
+            measured.controlStatusRows,
+            0,
+            "Human-control safety details use the existing permission control, not another row",
           );
           assert.equal(
             measured.legacyControlCount,
