@@ -366,6 +366,7 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
       "Reenter restores retained resource, not primary",
     );
     await click(tab(primary));
+    composer.focus();
     await act(async () =>
       composer.dispatchEvent(
         new dom.window.KeyboardEvent("keydown", {
@@ -380,6 +381,43 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
       "false",
       "Escape works from sibling main composer",
     );
+    assert.ok(
+      document.activeElement === composer,
+      "Desktop Escape retains the visible main composer focus",
+    );
+    // Reproduce the narrow layout's actual computed display rule without
+    // claiming JSDOM performs browser viewport/media-query layout.
+    const narrowStyle = document.createElement("style");
+    narrowStyle.textContent =
+      '.workspace:has(> .auxiliary-panel[data-open="true"][data-expanded="false"]) > .agent-surface { display: none; }';
+    document.head.append(narrowStyle);
+    await expand();
+    await click(tab(primary));
+    composer.focus();
+    await act(async () =>
+      composer.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(
+      getComputedStyle(main).display,
+      "none",
+      "Restored narrow layout hides primary",
+    );
+    assert.ok(
+      document.activeElement === tab("browser:web"),
+      "Narrow Escape returns focus to visible retained resource tab",
+    );
+    assert.equal(
+      controller.get(threadOwner)!.selectedTab,
+      "browser:web",
+      "Focus restoration never changes resource selection",
+    );
+    narrowStyle.remove();
     await expand();
     await click(tab("thread:child"));
     assert.match(

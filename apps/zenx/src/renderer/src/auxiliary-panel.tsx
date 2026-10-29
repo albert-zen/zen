@@ -298,6 +298,31 @@ export function AuxiliaryPanel({
       return next;
     });
   };
+  const primaryRestoreFocus = useRef<{
+    owner: string;
+    content: HTMLElement;
+    origin: Element | null;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const pending = primaryRestoreFocus.current;
+    if (!pending || expanded) return;
+    primaryRestoreFocus.current = null;
+    if (
+      !open ||
+      pending.owner !== expandedKey ||
+      !pending.content.isConnected ||
+      document.activeElement !== pending.origin
+    )
+      return;
+    // Narrow restored workspaces still cover the primary chat. Preserve desktop
+    // composer focus, but never leave keyboard focus in the now-hidden sibling.
+    const style = getComputedStyle(pending.content);
+    if (style.display !== "none" && style.visibility !== "hidden") return;
+    const target = panel.current?.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-selected="true"], .workspace-add-tab',
+    );
+    target?.focus({ preventScroll: true });
+  }, [expanded, open, expandedKey]);
   useEffect(() => {
     if (!primaryActive || !primaryConversation) return;
     const content = document.getElementById(primaryConversation.contentId);
@@ -311,6 +336,11 @@ export function AuxiliaryPanel({
         content?.contains(event.target as Node)
       ) {
         event.preventDefault();
+        primaryRestoreFocus.current = {
+          owner: expandedKey,
+          content,
+          origin: document.activeElement,
+        };
         setExpanded(false);
       }
     };
