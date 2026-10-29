@@ -1,0 +1,80 @@
+/* Fixture-only labels and synthetic Browser pixels, not product styles. */
+.fixture-navigation {
+  padding: 22px 14px;
+  gap: 16px;
+}
+.fixture-navigation nav {
+  display: grid;
+  gap: 6px;
+}
+.fixture-navigation button {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+}
+.fixture-navigation button:hover,
+.fixture-navigation button[aria-pressed="true"] {
+  background: var(--color-surface-hover);
+  color: var(--text-1);
+}
+.fixture-navigation p {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+.fixture-navigation .fixture-boundary {
+  margin-bottom: 8px;
+}
+.synthetic-native-page {
+  position: fixed;
+  z-index: 5;
+  overflow: auto;
+  background: var(--color-surface-main);
+  color: var(--text-1);
+  padding: 42px 40px;
+  font-size: 16px;
+  line-height: 1.75;
+}
+.synthetic-native-page[hidden] {
+  display: none;
+}
+.synthetic-native-page small {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+}
+.synthetic-native-page h1 {
+  font-size: 30px;
+  font-weight: 600;
+  margin: 16px 0 22px;
+}
+.synthetic-native-page h2 {
+  font-size: 20px;
+  margin: 48px 0 18px;
+}
+.synthetic-native-page p {
+  max-width: 640px;
+  color: var(--text-2);
+}
+.fixture-overview {
+  padding: 32px;
+}
+
+.fixture-receipts {
+  display: grid;
+  gap: 5px;
+  padding-block: 10px;
+  border-block: 1px solid var(--border-soft);
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.fixture-receipts strong {
+  font-weight: 500;
+  color: var(--text-1);
+}

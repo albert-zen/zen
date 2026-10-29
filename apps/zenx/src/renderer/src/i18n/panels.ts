@@ -1,4 +1,5 @@
 export const en = {
+  mainConversation: "Main chat · {{title}}",
   boardLoading: "Loading information…",
   boardEmptyTitle: "Nothing here yet",
   boardEmptyDescription:
@@ -1047,6 +1048,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  mainConversation: "主聊天 · {{title}}",
   boardLoading: "正在加载信息…",
   boardEmptyTitle: "还没有信息板",
   boardEmptyDescription: "Agent 可以在这里放问题、计划、指标或自定义交互内容。",

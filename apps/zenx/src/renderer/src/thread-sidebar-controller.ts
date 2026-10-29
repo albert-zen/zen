@@ -25,6 +25,9 @@ export class ThreadSidebarController {
     const key = sidebarOwnerKey(owner);
     const intent = (this.#presentationIntents.get(key) ?? 0) + 1;
     this.#presentationIntents.set(key, intent);
+    // Local selection projections must observe same-ID explicit navigation too.
+    // This publishes no new Host revision, descriptor, or durable fact.
+    this.#emit();
     return intent;
   }
   isPresentationIntentCurrent(
@@ -74,12 +77,13 @@ export class ThreadSidebarController {
     input: SidebarOwner | string,
     makePatch: (state: ThreadSidebarState) => ThreadSidebarPatch,
     renderedRevision?: number,
-    presentationIntent?: number,
+    // Structural materialization preserves the current local view choice.
+    presentationIntent?: number | "preserve",
   ): Promise<void> {
     const owner = sidebarOwner(input);
     const key = sidebarOwnerKey(owner);
     const isCurrent = () =>
-      presentationIntent === undefined ||
+      typeof presentationIntent !== "number" ||
       this.isPresentationIntentCurrent(owner, presentationIntent);
     if (!isCurrent()) return Promise.resolve();
     if (

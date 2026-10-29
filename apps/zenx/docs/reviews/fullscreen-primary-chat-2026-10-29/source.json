@@ -1,0 +1,31 @@
+{
+  "commit": "15bc3821550f194d70ca57d61d23be192883cd07",
+  "scope": "Actual production AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory conversations and browser mount ports. Browser page pixels are an explicitly synthetic DOM stand-in. No Host, Agent, native input, network or Host/profile persistence; production components may write browser-local synthetic read markers. Not native Electron acceptance.",
+  "sources": {
+    "src/renderer/src/auxiliary-panel.tsx": "2ea58b76b5d702e7332e00e47b81186d1ffc51a93ed92fcb76a2b87c5a289f91",
+    "src/renderer/src/App.tsx": "5135c8faf64a79f9d9d69d0c54c51bf1469678f9cc7a725971da688d33b8cc35",
+    "src/renderer/src/companion-workspace.tsx": "424c21486d3259b9c0c5a9ef9772d1172890d29f1e300f3450ec26ab6bf1d771",
+    "src/renderer/src/ThreadView.tsx": "0de23fa666f459588bb1236f5be6996b0ad01849aa137d70fee59912de30e12e",
+    "src/renderer/src/bundled-automation-ui.tsx": "37a89e6e1511e3939dc1857a4c52b6a4faff4ab0b10530de848d8acb0499e56a",
+    "src/renderer/src/room-header.tsx": "62d6ba2d71feb275f2ad793f8d910d4ffdb1a80a96dffe365aa6b939d4e02540",
+    "src/renderer/src/workspace-browser-panel.tsx": "6caed8f1f79392386d4b35a71d3247959c7b7ea2ecb89b3ec8929d1c5214a17a",
+    "src/renderer/src/InlineComposerEditor.tsx": "6a449fd6837fecaaa7275cbbf8d67f31ff9e51d052a04cf29abad3c52acf4103",
+    "src/renderer/src/main.tsx": "e82e5421a5128c45efc79b45ed8af75654601deda1ce2761137832f35c543056",
+    "src/renderer/src/PluginProductPage.tsx": "5faa72f93d5c7dd7a0713832dafba5d557e107742ffd19274081d45b5d3a81d3",
+    "src/renderer/src/thread-sidebar-controller.ts": "730c1647ac0d1f27e664f95690b59fbcf5b557846051792da43d5d239434915f",
+    "src/renderer/src/shell-thread-panel.css": "8379fad2aa59d8b26307bdc2449a13fad51799811eef60db2ed6eb456b193da8",
+    "src/renderer/src/agent-readiness-notice.css": "4a7beb2c30cce4fc9b51a5a19239098ec707f96458e7546de22aa9bbb50466ad",
+    "src/renderer/src/trigger-ui.css": "1a1bfa4fff1d800dfd79027db76533acdd65754a716d86432d5315fad5bd13e4",
+    "src/renderer/src/skills.css": "067fb70de2a01b016e3685e0ffdc2d813cf696a219b8469628684dd2697a2bc6",
+    "src/renderer/src/rooms-layout.css": "1d6b03161519bf89fa96c116d73529ad0d63af892829655b141d244e4eeef153",
+    "src/renderer/src/room-message-actions.css": "1945bd58afe0236d915885ef4520bf4321c98bcaf419e3ca3fa0320d6dfda09d",
+    "src/renderer/src/room-conversations.css": "c064beb5f240f2ba973a0fd9ca7676382813e8c13b1dcf1e55f8b6063ad0c9c4",
+    "src/renderer/src/companion-workspace.css": "0f60666137e742f7e21e2e51295fbf6dbbd509ce3c15dc029d029a9cbdbc3395",
+    "src/renderer/src/styles.css": "9da315fe14f9109eadf43040188b8dec1fb7461b487d4f100dbd6281fe7488b2",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "src/renderer/src/i18n/panels.ts": "03eac12de327995e562805fbb5fb4d53aedc654ffddc42295918472d2f0d5f19",
+    "scripts/fullscreen-primary-chat-preview.tsx": "d2f598cbe415655e3fce73cb97686b186e03d7edbac623e8ec1281c7427e7f7c",
+    "scripts/fullscreen-primary-chat-preview.css": "9d6138ff67c7aaa7802d56d8dc148698ec8973cbd608a9ea7554b81d67fe642f",
+    "scripts/build-fullscreen-primary-chat-preview.mjs": "cc565854d27d6b875d804ca3df367161a3af1f2077862d6a12466bfd42be72af"
+  }
+}

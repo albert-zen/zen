@@ -54,6 +54,16 @@ interface ContentTab {
   render?: () => React.ReactNode;
 }
 
+const PRIMARY_CONVERSATION_TAB = "primary-conversation";
+
+export interface AuxiliaryPrimaryConversation {
+  title: string;
+  /** ID of the existing sibling conversation surface, never a second render. */
+  contentId: string;
+  /** Retire pending navigation and return its existing renderer intent fence. */
+  onSelect?(): (() => boolean) | void;
+}
+
 const expandedByConversation = new Map<string, boolean>();
 
 export type AuxiliaryConversationContext =
@@ -82,6 +92,7 @@ export interface AuxiliaryCustomTab {
 }
 
 type AuxiliaryPanelProps = {
+  primaryConversation?: AuxiliaryPrimaryConversation;
   presentationState?: ThreadSidebarState;
   onFullscreenChange?(value: boolean): void;
   onRemoveTab?(id: string): void;
@@ -122,6 +133,7 @@ type AuxiliaryPanelProps = {
 );
 
 export function AuxiliaryPanel({
+  primaryConversation,
   presentationState,
   onFullscreenChange,
   onRemoveTab,
@@ -245,6 +257,30 @@ export function AuxiliaryPanel({
     setExpandedState(expandedByConversation.get(expandedKey) ?? false);
   }, [expandedKey]);
   const expanded = presentationState?.fullscreen ?? localExpanded;
+  const [primarySelection, setPrimarySelection] = useState<{
+    owner: string;
+    resourceTab: string | undefined;
+    isCurrent?: () => boolean;
+  } | null>(null);
+  const primaryActive = Boolean(
+    primaryConversation &&
+    open &&
+    expanded &&
+    primarySelection?.owner === expandedKey &&
+    (primarySelection.isCurrent?.() ??
+      primarySelection.resourceTab === selectedTab),
+  );
+  useLayoutEffect(() => {
+    if (
+      !open ||
+      !expanded ||
+      primarySelection?.owner !== expandedKey ||
+      (!primarySelection.isCurrent &&
+        primarySelection.resourceTab !== selectedTab) ||
+      primarySelection.isCurrent?.() === false
+    )
+      setPrimarySelection(null);
+  }, [open, expanded, expandedKey, selectedTab, primarySelection]);
   const setExpanded = (update: React.SetStateAction<boolean>) => {
     if (onFullscreenChange) {
       onFullscreenChange(
@@ -262,6 +298,55 @@ export function AuxiliaryPanel({
       return next;
     });
   };
+  const primaryRestoreFocus = useRef<{
+    owner: string;
+    content: HTMLElement;
+    origin: Element | null;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const pending = primaryRestoreFocus.current;
+    if (!pending || expanded) return;
+    primaryRestoreFocus.current = null;
+    if (
+      !open ||
+      pending.owner !== expandedKey ||
+      !pending.content.isConnected ||
+      document.activeElement !== pending.origin
+    )
+      return;
+    // Narrow restored workspaces still cover the primary chat. Preserve desktop
+    // composer focus, but never leave keyboard focus in the now-hidden sibling.
+    const style = getComputedStyle(pending.content);
+    if (style.display !== "none" && style.visibility !== "hidden") return;
+    const target = panel.current?.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-selected="true"], .workspace-add-tab',
+    );
+    target?.focus({ preventScroll: true });
+  }, [expanded, open, expandedKey]);
+  useEffect(() => {
+    if (!primaryActive || !primaryConversation) return;
+    const content = document.getElementById(primaryConversation.contentId);
+    const restore = (event: KeyboardEvent) => {
+      // The existing main view remains a sibling, outside the aside's handler.
+      // Run after React's editor/dialog handlers and respect their Escape use.
+      if (
+        event.key === "Escape" &&
+        !event.defaultPrevented &&
+        !event.isComposing &&
+        content?.contains(event.target as Node)
+      ) {
+        event.preventDefault();
+        primaryRestoreFocus.current = {
+          owner: expandedKey,
+          content,
+          origin: document.activeElement,
+        };
+        setExpanded(false);
+      }
+    };
+    window.addEventListener("keydown", restore);
+    return () => window.removeEventListener("keydown", restore);
+  }, [primaryActive, primaryConversation?.contentId, onFullscreenChange]);
   const restoreToggleFocus = useRef(false);
   useLayoutEffect(() => {
     if (open) {
@@ -473,10 +558,26 @@ export function AuxiliaryPanel({
     snapshot,
   ]);
   const tabs = ids.map((id) => available.get(id)!);
+  // This leading tab is a projection of the already-mounted main conversation.
+  // It never enters resource order, descriptors, close, or persistence paths.
+  const displayTabs: ContentTab[] =
+    primaryConversation && expanded
+      ? [
+          {
+            id: PRIMARY_CONVERSATION_TAB,
+            title: primaryConversation.title,
+            icon: "conversation",
+          },
+          ...tabs,
+        ]
+      : tabs;
   const canReorder =
     tabs.length > 1 && (!presentationState || Boolean(onTabsChange));
-  const active =
-    selectedTab && ids.includes(selectedTab) ? selectedTab : undefined;
+  const active = primaryActive
+    ? PRIMARY_CONVERSATION_TAB
+    : selectedTab && ids.includes(selectedTab)
+      ? selectedTab
+      : undefined;
   const idsRef = useRef(ids);
   const selectedTabRef = useRef(selectedTab);
   const orderRef = useRef(order);
@@ -550,7 +651,9 @@ export function AuxiliaryPanel({
         drag.y <= edge.bottom
       ) {
         const items = [
-          ...rail.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+          ...rail.querySelectorAll<HTMLElement>(
+            '.workspace-content-tab[data-reorderable="true"]',
+          ),
         ];
         const target =
           items.find((item) => drag.x < item.getBoundingClientRect().right) ??
@@ -655,6 +758,7 @@ export function AuxiliaryPanel({
     if (
       !open ||
       choosing ||
+      primaryActive ||
       !threadId ||
       descriptor?.kind !== "webpage" ||
       !presentationState ||
@@ -702,6 +806,7 @@ export function AuxiliaryPanel({
     threadId,
     selectedTab,
     selectedDescriptor,
+    primaryActive,
     presentationState,
     onReplaceTab,
   ]);
@@ -758,7 +863,17 @@ export function AuxiliaryPanel({
     setChoosing(false);
     setPickingFile(false);
     setError("");
-    onSelectTab(available.has(id) ? id : scopedId(id));
+    if (id === PRIMARY_CONVERSATION_TAB && primaryConversation && expanded) {
+      const isCurrent = primaryConversation.onSelect?.();
+      setPrimarySelection({
+        owner: expandedKey,
+        resourceTab: selectedTab,
+        ...(isCurrent ? { isCurrent } : {}),
+      });
+    } else {
+      setPrimarySelection(null);
+      onSelectTab(available.has(id) ? id : scopedId(id));
+    }
   };
   useLayoutEffect(() => {
     // Host SDK panel requests can change selection without calling select().
@@ -1113,6 +1228,7 @@ export function AuxiliaryPanel({
       data-open={open === true}
       inert={!open}
       data-expanded={expanded}
+      data-primary-active={primaryActive && !showChooser}
       aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
       onKeyDown={(event) => {
@@ -1193,7 +1309,7 @@ export function AuxiliaryPanel({
             role="tablist"
             aria-label={i18n.t("panels:workspaceTabs")}
           >
-            {tabs.map((tab, index) => (
+            {displayTabs.map((tab, index) => (
               <span
                 className="workspace-content-tab"
                 data-active={!showChooser && active === tab.id}
@@ -1204,7 +1320,10 @@ export function AuxiliaryPanel({
                 )}
                 key={tab.id}
                 data-tab-id={tab.id}
-                data-reorderable={canReorder || undefined}
+                data-reorderable={
+                  (canReorder && tab.id !== PRIMARY_CONVERSATION_TAB) ||
+                  undefined
+                }
                 data-dragging={tabDrag?.source === tab.id || undefined}
                 data-drop-placement={
                   tabDrag?.target === tab.id ? tabDrag.placement : undefined
@@ -1214,6 +1333,7 @@ export function AuxiliaryPanel({
                   suppressDragClick.current = false;
                   if (
                     !canReorder ||
+                    tab.id === PRIMARY_CONVERSATION_TAB ||
                     event.button !== 0 ||
                     event.pointerType === "touch" ||
                     pointerDrag.current ||
@@ -1257,13 +1377,19 @@ export function AuxiliaryPanel({
                   role="tab"
                   id={`aux-tab-${tab.id}`}
                   aria-selected={!showChooser && active === tab.id}
-                  aria-controls={`aux-content-${tab.id}`}
-                  tabIndex={(active ?? tabs[0]?.id) === tab.id ? 0 : -1}
+                  aria-controls={
+                    tab.id === PRIMARY_CONVERSATION_TAB
+                      ? primaryConversation?.contentId
+                      : `aux-content-${tab.id}`
+                  }
+                  tabIndex={(active ?? displayTabs[0]?.id) === tab.id ? 0 : -1}
                   aria-keyshortcuts={
-                    canReorder ? "Alt+ArrowLeft Alt+ArrowRight" : undefined
+                    canReorder && tab.id !== PRIMARY_CONVERSATION_TAB
+                      ? "Alt+ArrowLeft Alt+ArrowRight"
+                      : undefined
                   }
                   aria-description={
-                    canReorder
+                    canReorder && tab.id !== PRIMARY_CONVERSATION_TAB
                       ? i18n.t("panels:reorderWorkspaceTabHint")
                       : undefined
                   }
@@ -1295,15 +1421,16 @@ export function AuxiliaryPanel({
                       event.key === "Home"
                         ? 0
                         : event.key === "End"
-                          ? tabs.length - 1
+                          ? displayTabs.length - 1
                           : event.key === "ArrowRight"
-                            ? (index + 1) % tabs.length
+                            ? (index + 1) % displayTabs.length
                             : event.key === "ArrowLeft"
-                              ? (index + tabs.length - 1) % tabs.length
+                              ? (index + displayTabs.length - 1) %
+                                displayTabs.length
                               : -1;
                     if (next >= 0) {
                       event.preventDefault();
-                      select(tabs[next]!.id, true);
+                      select(displayTabs[next]!.id, true);
                     }
                   }}
                 >
@@ -1336,27 +1463,29 @@ export function AuxiliaryPanel({
                     </span>
                   ) : null}
                 </button>
-                <button
-                  type="button"
-                  className="workspace-tab-close"
-                  aria-label={i18n.t("panels:closeTabNamed", {
-                    title: tab.title,
-                  })}
-                  title={i18n.t("panels:closeTabNamed", { title: tab.title })}
-                  disabled={
-                    tab.path && threadId !== undefined
-                      ? entries.get(
-                          fileDraftKey(
-                            tab.resourceThreadId ?? threadId,
-                            tab.path,
-                          ),
-                        )?.closing === true
-                      : false
-                  }
-                  onClick={() => void closeTab(tab)}
-                >
-                  <Icon name="x" />
-                </button>
+                {tab.id !== PRIMARY_CONVERSATION_TAB ? (
+                  <button
+                    type="button"
+                    className="workspace-tab-close"
+                    aria-label={i18n.t("panels:closeTabNamed", {
+                      title: tab.title,
+                    })}
+                    title={i18n.t("panels:closeTabNamed", { title: tab.title })}
+                    disabled={
+                      tab.path && threadId !== undefined
+                        ? entries.get(
+                            fileDraftKey(
+                              tab.resourceThreadId ?? threadId,
+                              tab.path,
+                            ),
+                          )?.closing === true
+                        : false
+                    }
+                    onClick={() => void closeTab(tab)}
+                  >
+                    <Icon name="x" />
+                  </button>
+                ) : null}
               </span>
             ))}
           </div>
@@ -1368,6 +1497,7 @@ export function AuxiliaryPanel({
             aria-pressed={showChooser}
             onClick={() => {
               selectionEpoch.current += 1;
+              setPrimarySelection(null);
               setChoosing(true);
               setPickingFile(false);
               setError("");
