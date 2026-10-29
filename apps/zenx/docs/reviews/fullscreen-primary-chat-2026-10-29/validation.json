@@ -1,0 +1,123 @@
+{
+  "sourceCommit": "15bc3821550f194d70ca57d61d23be192883cd07",
+  "sourceTree": "ec0337fc844fbf8d7c1256f9b6fca553c080da58",
+  "productionValidatedCommit": "04b4a48f80be52aaf7540f35d5bc37ad38b21859",
+  "preview": {
+    "htmlSha256": "9b885e147fc09ceb69c4070d04b0d63f943a99470d064eecc34544f50a40d9b8",
+    "sourceReceiptSha256": "c76ef0d0c9d9b5060cff232e8e82ee761ed5782db7c09815a2ec91c7ceaed27c",
+    "verifiedSourceHashes": 25,
+    "productionStylesheetsInExactMainOrder": 10,
+    "network": "CSP connect-src none",
+    "scope": "Actual AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory data and simulated browser pixels/mount leases. App title/header excluded using matching RoomHeaderContext with null slot. No Agent calls, Host/profile persistence or native Electron acceptance; synthetic local read markers may be stored."
+  },
+  "localChecks": {
+    "sourceFocusedRuns": [
+      {
+        "label": "Auxiliary/sidebar/browser/Room UI",
+        "files": 20,
+        "pass": 146,
+        "fail": 0
+      },
+      {
+        "label": "App/Room/composer/style/source contracts",
+        "files": 23,
+        "pass": 272,
+        "fail": 0
+      },
+      {
+        "label": "Plugin discovery/capability/profile/packaging after preparation",
+        "files": 4,
+        "pass": 62,
+        "fail": 0
+      }
+    ],
+    "totalSourceFocusedCases": 480,
+    "nodeAndWebTypes": "pass",
+    "ownPluginSdkBuild": "pass",
+    "firstPartyPreparation": "pass",
+    "brandCheck": "pass",
+    "productionBuild": "pass",
+    "changedPathFormatting": "pass",
+    "diffCheck": "pass",
+    "finalFixtureBuild": "pass",
+    "finalFixtureScopedTypes": "pass",
+    "finalFixtureRegression": {
+      "pass": 15,
+      "fail": 0
+    },
+    "fixtureOnlyDeltaAfterProductionValidation": [
+      "scripts/build-fullscreen-primary-chat-preview.mjs",
+      "scripts/fullscreen-primary-chat-preview.css",
+      "scripts/fullscreen-primary-chat-preview.tsx"
+    ],
+    "productionAndTestFilesUnchanged": true
+  },
+  "retainedFailure": {
+    "run": "Initial plugin four-file invocation",
+    "pass": 61,
+    "fail": 1,
+    "cause": "Started before first-party preparation completed; packaging copied artifacts without zenx-triggers-plugin-1.0.1.tgz and failed ENOENT.",
+    "resolution": "No product/test modification for this failure. Packaging-only run after preparation passed5/5; full identical invocation passed62/62."
+  },
+  "browserAcceptance": {
+    "operator": "Root CUA",
+    "capturedDateUtc": "2026-10-29",
+    "finalFixtureSource": "15bc3821550f194d70ca57d61d23be192883cd07",
+    "passed": [
+      "Entering fullscreen retains the selected webpage and reveals main chat as the first tab.",
+      "Explicit main-chat selection shows the existing Thread surface; appended draft persists across main→webpage→main.",
+      "Explicit same-ID resource navigation returns to that webpage.",
+      "Room main tab displays the original Room conversation and retained draft with full-width production styling.",
+      "Actual narrow viewport987×757 has document.scrollWidth987; Escape from primary Composer focuses the visible retained Reference tab.",
+      "Removed synthetic title no longer overlaps the narrow tab rail."
+    ],
+    "earlierProductionIdenticalObservation": {
+      "sourceCommit": "04b4a48f80be52aaf7540f35d5bc37ad38b21859",
+      "result": "Wide desktop Escape preserves visible main Composer focus."
+    },
+    "interactionEvidence": "Operator-reported real clicks/keys and layout measurements; screenshots independently inspected by integrator and reviewer.",
+    "screenshots": [
+      {
+        "file": "expanded-retains-webpage-light.jpg",
+        "width": 1181,
+        "height": 757,
+        "exifEntries": 0,
+        "sha256": "a97510021114a0442901503e514d802198a7c598f16a0d60c959ccbd261bce74"
+      },
+      {
+        "file": "primary-chat-retains-draft-light.jpg",
+        "width": 1181,
+        "height": 757,
+        "exifEntries": 0,
+        "sha256": "ab7a794003769b68408761b2591b08b2390104fcab41be19686f456457acc4b4"
+      },
+      {
+        "file": "room-primary-dark.jpg",
+        "width": 1181,
+        "height": 757,
+        "exifEntries": 0,
+        "sha256": "28f2467fcb4583cb2c1dad22d2f67580303ceda27e9967ee3c9c4f8c896ed64f"
+      },
+      {
+        "file": "narrow-escape-resource-focus.jpg",
+        "width": 987,
+        "height": 757,
+        "exifEntries": 0,
+        "sha256": "31b9e6374c581f706971004c95fdc240ae597f62f1c8125e37f970d9b1b9373b"
+      }
+    ]
+  },
+  "independentReview": {
+    "source": "Approved exact integration; renderer matches reviewedUI1292b97c and plugin matches89670e26.",
+    "uiRegressionCasesPassed": 38,
+    "pluginRegressionCasesPassed": 34,
+    "all25SourceHashesVerified": true,
+    "all4FinalScreenshotsInspected": true
+  },
+  "limits": [
+    "Not the full ZenX/Core/platform test aggregate.",
+    "No local native Electron run, real native browser/input/lease acceptance, full App/header integration or full accessibility certification.",
+    "Hosted CI and public-tree publication/merge verification remain separate root-owned gates.",
+    "Diagnostic04b screenshots are deliberately excluded."
+  ]
+}
