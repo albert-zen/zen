@@ -75,8 +75,13 @@ test("Fork menu uses localized labels, progress and boundary help", async () => 
   const { i18n } = await import("../src/renderer/src/i18n.js");
   try {
     for (const [language, label, progress, boundary] of [
-      ["en", "Fork thread", "Forking thread…", "latest complete Turn"],
-      ["zh-CN", "分叉线程", "正在分叉线程…", "最近完成的轮次"],
+      [
+        "en",
+        "Fork thread",
+        "Forking / copying this thread…",
+        "latest complete Turn",
+      ],
+      ["zh-CN", "分叉线程", "正在 Fork，为你复制这个线程…", "最近完成的轮次"],
     ]) {
       await i18n.changeLanguage(language);
       for (const busyAction of [null, "fork"] as const) {

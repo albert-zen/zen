@@ -83,6 +83,7 @@ const sources = [
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",
   "test/fixtures/ui-polish-visual.tsx",
+  "test/fixtures/ui-polish-title-bridge.ts",
   "test/fixtures/ui-polish-visual.html",
 ];
 const sourceHashes = Object.fromEntries(

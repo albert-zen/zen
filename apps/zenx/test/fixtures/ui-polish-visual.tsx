@@ -11,12 +11,12 @@ import { workspaceLauncherSnapshot } from "../workspace-launcher-snapshot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeThreadSummary } from "../../../../src/thread-summary.js";
-import type { ThreadTitleSnapshot } from "../../src/main/thread-title-types.js";
 import type { Thread } from "../../src/protocol-client/index.js";
 import { App, WindowTitleBar } from "../../src/renderer/src/App.js";
 import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { nativeRecoveryForThread } from "../native-recovery-fixture.js";
 import { encodeModelKey } from "../../../../src/protocol/model-key.js";
+import { createUiPolishTitleBridge } from "./ui-polish-title-bridge.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 Object.assign(globalThis, { React });
@@ -36,8 +36,6 @@ const sideConversations = [
   { ...summary("design-child", "Design review"), parentThreadId: "thread-1" },
   { ...summary("test-child", "Test coverage"), parentThreadId: "thread-1" },
 ];
-const fixtureTitles: ThreadTitleSnapshot = {};
-let titleVersion = 0;
 const uiPolishTelemetry = {
   protocolCalls: [] as string[],
   workspaceUsedCalls: 0,
@@ -306,22 +304,7 @@ const zenx = {
       };
     },
   },
-  titles: {
-    get: async () => ({ ...fixtureTitles }),
-    rename: async (threadId: string, title: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      const projection = {
-        threadId,
-        title,
-        status: "manual" as const,
-        source: "user" as const,
-        version: ++titleVersion,
-      };
-      fixtureTitles[threadId] = projection;
-      return projection;
-    },
-    onChange: () => () => undefined,
-  },
+  titles: createUiPolishTitleBridge(),
   triggers: {
     get: async () => ({ triggers: [], history: [], rooms: [] }),
     onChange: () => () => undefined,
@@ -543,6 +526,58 @@ Object.assign(window, {
 });
 localStorage.setItem("zenx-sidebar-mode", "projects");
 const scene = params.get("scene") ?? "welcome";
+
+function SideChatFixture() {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr)",
+        height: "100%",
+        minWidth: 0,
+        minHeight: 0,
+      }}
+    >
+      <aside
+        aria-label="Synthetic side-chat controls"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 8,
+          padding: 10,
+          borderBottom: "1px solid var(--color-border-subtle)",
+          background: "var(--color-surface-control)",
+          fontSize: 12,
+        }}
+      >
+        <strong>Synthetic controls · no Host or model</strong>
+        <button
+          data-testid="sidechat-release-creation"
+          onClick={() => sideChatFixture.releaseCreation()}
+        >
+          Release creation
+        </button>
+        <button
+          data-testid="sidechat-fail-send"
+          onClick={() => sideChatFixture.failAdmission()}
+        >
+          Fail send
+        </button>
+        <button
+          data-testid="sidechat-resolve-send"
+          onClick={() => sideChatFixture.releaseAdmission()}
+        >
+          Resolve send
+        </button>
+        <button onClick={() => location.reload()}>Reset fixture</button>
+      </aside>
+      <div style={{ minWidth: 0, minHeight: 0 }}>
+        <App />
+      </div>
+    </div>
+  );
+}
 
 function AuxiliaryFixture() {
   const [collapsed, setCollapsed] = React.useState(window.innerWidth <= 720);
@@ -770,5 +805,7 @@ void i18n.changeLanguage(params.get("lang") ?? "en").then(() => {
   });
   if (scene === "auxiliary")
     createRoot(document.getElementById("root")!).render(<AuxiliaryFixture />);
+  else if (scene === "sidechat")
+    createRoot(document.getElementById("root")!).render(<SideChatFixture />);
   else createRoot(document.getElementById("root")!).render(<App />);
 });

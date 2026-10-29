@@ -119,12 +119,12 @@ await withPreviewBrowser(
         true,
       );
       await screenshot(`sidechat-creating-${theme}-${width}.png`);
-      await evaluate("window.__sideChatFixture.releaseCreation()");
+      await click('[data-testid="sidechat-release-creation"]');
       await waitFor(
         "document.querySelector('.side-chat-context-note')?.textContent.includes('Sending your message')",
       );
       await screenshot(`sidechat-sending-${theme}-${width}.png`);
-      await evaluate("window.__sideChatFixture.failAdmission()");
+      await click('[data-testid="sidechat-fail-send"]');
       await waitFor(
         "document.querySelector('.composer-error')?.textContent.includes('Synthetic send failure')",
       );
@@ -142,7 +142,7 @@ await withPreviewBrowser(
         1,
         "Retry reuses confirmed child",
       );
-      await evaluate("window.__sideChatFixture.releaseAdmission()");
+      await click('[data-testid="sidechat-resolve-send"]');
       await waitFor(
         "!document.querySelector('[id^=\"side-chat-draft-\"]') && document.querySelector('[role=tab][id*=\"thread:sidechat-created\"]')",
       );

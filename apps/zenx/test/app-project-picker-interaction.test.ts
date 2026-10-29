@@ -5323,7 +5323,7 @@ test("/compact preserves later edits and refreshes the canonical compaction item
     await waitFor(() =>
       document.body.textContent?.includes("Context compacted"),
     );
-    assert.match(document.body.textContent ?? "", /Human initiated/u);
+    assert.match(document.body.textContent ?? "", /Explicit request/u);
     assert.equal(textarea.value, "Keep this later draft");
     assert.equal(
       methods.some((m) => /^turn\//u.test(m)),
