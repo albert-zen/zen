@@ -30,7 +30,7 @@ export interface ModelInputEstimate {
   conversation: number;
 }
 
-/** Includes every disclosed tool (also generated run_code SDK), not the undisclosed registry.
+/** Estimates eager tool declarations, not programmatically selected catalog details.
  * Four-character text heuristic and media reserve, NOT provider tokenizer/billing.
  * Provider-specific framing/resize/reasoning behavior remains approximate.
  */
@@ -53,7 +53,16 @@ export function estimateModelInput(
   for (const tool of tools)
     estimate.toolDefinitions = add(
       estimate.toolDefinitions,
-      estimateText(JSON.stringify(tool)),
+      estimateText(
+        JSON.stringify({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          ...(tool.rawSource === undefined
+            ? {}
+            : { rawSource: tool.rawSource }),
+        }),
+      ),
     );
   estimate.total = [
     estimate.instructions,
@@ -302,6 +311,8 @@ function estimateModelMessage(message: ModelMessage): number {
       return estimateText(message.text);
     case "assistant":
       return estimateText((message.text ?? "") + toolCallsText(message));
+    case "tool_discovery":
+      return estimateText(JSON.stringify(message.items));
     case "reasoning":
       return estimateText(
         `${message.reasoningContent}\n${message.summary ?? ""}`,

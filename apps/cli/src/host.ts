@@ -5,7 +5,6 @@ import {
   observeModelWithTrace,
   closeModelTrace,
 } from "../../../src/trace-model.js";
-import { TraceReadToolRuntime } from "../../../src/trace-tool.js";
 import { DomainThreadJournal } from "../../../src/domain-journal.js";
 import { ModelRequestDebugStore } from "./model-request-debug.js";
 import { SkillsService } from "./skills.js";
@@ -304,7 +303,6 @@ export function createHostedAppServer(
       attachments,
       runtime: new AgentRuntime({
         trace,
-        traceInspection: true,
         resolveCodeMedia: createMediaOutputConverter(attachments),
         toolEnvironment,
         toolPresentation: codeRuntime.presentation,
@@ -384,10 +382,6 @@ export function createHostedAppServer(
       await closeTransportPromise;
     };
     toolEnvironment.bindTrace(trace, attachments);
-    toolEnvironment.registerRuntime(new TraceReadToolRuntime(trace), {
-      kind: "builtin",
-      id: "trace-reader",
-    });
     return Object.assign(appServer, {
       modelRequestDebug,
       processEpoch: configuration.processEpoch,

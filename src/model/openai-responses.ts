@@ -1,3 +1,7 @@
+import {
+  responsesToolPresentation,
+  supportsHostedToolSearch,
+} from "./deferred-tools.js";
 import { contextUserContent } from "./context-content.js";
 import { createHash } from "node:crypto";
 import type { AttachmentStore } from "../attachment.js";
@@ -93,9 +97,28 @@ export class OpenAiResponsesModel implements ModelAdapter {
     request.signal.throwIfAborted();
     if (!request.model.trim())
       throw new Error("Public Responses model is required");
+    const nativeDiscovery = supportsHostedToolSearch(
+      this.#endpoint,
+      request.model,
+    );
+    const presentation = responsesToolPresentation(
+      request.tools,
+      nativeDiscovery,
+    );
     const input: Record<string, unknown>[] = [];
     const mediaPaths = new Map<string, object>();
     for (const message of request.messages) {
+      if (message.role === "tool_discovery") {
+        // Discovery semantics are endpoint-bound and never sent to compatibility routes.
+        if (
+          nativeDiscovery &&
+          message.protocol === "openai-responses" &&
+          message.endpointSha256 === this.#provenance.endpointSha256
+        ) {
+          input.push(...structuredClone(message.items));
+        }
+        continue;
+      }
       if (message.role === "reasoning") {
         if (message.contentVisibility === "opaque") {
           const provenance = message.opaqueReplayProvenance;
@@ -155,6 +178,11 @@ export class OpenAiResponsesModel implements ModelAdapter {
               ? historicalCallId(call.callId)
               : providerCallId(call.callId),
             name: call.imported ? historicalToolName(call) : call.name,
+            ...(nativeDiscovery &&
+            call.providerNamespace !== undefined &&
+            !call.imported
+              ? { namespace: call.providerNamespace }
+              : {}),
             arguments: serializeArguments(call.arguments),
           });
       } else if (message.role === "user") {
@@ -171,13 +199,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
       else input.push(assistantText(message.text));
     }
     for (const tool of request.tools) assertProviderToolName(tool.name);
-    const tools = request.tools.map((tool) => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-      strict: false,
-    }));
+    const tools = presentation.tools;
     const body = JSON.stringify({
       ...this.#params,
       model: request.model.trim(),
@@ -248,10 +270,18 @@ export class OpenAiResponsesModel implements ModelAdapter {
       for await (const event of parseResponsesStream(
         response.body,
         request.signal,
-        new Set(tools.map((t) => t.name)),
+        new Set(request.tools.map((t) => t.name)),
         new Set(),
         this.#apiKey,
-        { requireEncryptedReasoning: true },
+        {
+          requireEncryptedReasoning: true,
+          ...(nativeDiscovery
+            ? {
+                discoveryEndpointSha256: this.#provenance.endpointSha256,
+                toolNamespaces: presentation.namespaces,
+              }
+            : {}),
+        },
       )) {
         yield event.type === "reasoning" && event.contentVisibility === "opaque"
           ? { ...event, opaqueReplayProvenance: { ...this.#provenance } }

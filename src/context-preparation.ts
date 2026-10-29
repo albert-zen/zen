@@ -107,6 +107,10 @@ export function prepareSampleContext(options: {
   const tools = options.tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
+    ...(tool.pluginId === undefined ? {} : { pluginId: tool.pluginId }),
+    ...(tool.fullDescription === undefined
+      ? {}
+      : { fullDescription: tool.fullDescription }),
     inputSchema: structuredClone(tool.inputSchema),
     ...(tool.rawSource === undefined
       ? {}

@@ -13,6 +13,7 @@ import {
   COMPACT_CONTEXT_NAME,
   createRunCodeModelTool,
   generateToolSdk,
+  generateToolCatalog,
 } from "../src/tool-presentation.js";
 
 const ordinaryTools: ModelTool[] = [
@@ -86,9 +87,9 @@ test("runtime concurrency declarations reach both SDK and discovery descriptions
     snapshot.codeTools.find((tool) => tool.name === "edit_rows")!.description,
     "Edit rows.",
   );
-  assert.match(
+  assert.doesNotMatch(
     snapshot.modelTools.find((tool) => tool.name === "run_code")!.description,
-    /\[parallel_safe\] Read rows\./,
+    /Read rows/,
   );
   assert.equal(parallel.specification.description, "Read rows.");
 });
@@ -134,20 +135,11 @@ test("presentation modes project one frozen ordinary-tool snapshot", () => {
 
   const codeDescription = code.modelTools[0]?.description ?? "";
   assert.equal(codeDescription, both.modelTools.at(-1)?.description);
-  assert.match(codeDescription, /\n  shell\(args:/u);
-  assert.match(codeDescription, /\n  "plugin\.tool-name"\(args:/u);
-  assert.match(
-    codeDescription,
-    /Invoke as tools\["plugin\.tool-name"\]\(\.\.\.\)/u,
-  );
-  assert.match(codeDescription, /\n  default\(args:/u);
-  assert.match(codeDescription, /\n  malformed\(args: unknown\)/u);
-  assert.doesNotMatch(codeDescription, /\n  run_code\(|\n  "run_code"\(/u);
+  assert.equal(codeDescription, createRunCodeModelTool([]).description);
+  assert.match(codeDescription, /Filter\/map it in JavaScript/u);
+  assert.doesNotMatch(codeDescription, /shell\(args:|plugin\.tool-name/u);
 
-  assert.deepEqual(
-    code.codeTools,
-    ordinaryTools.map(({ name, description }) => ({ name, description })),
-  );
+  assert.deepEqual(code.codeTools, generateToolCatalog(ordinaryTools));
   assert.deepEqual(code.codeTools, both.codeTools);
   assert.deepEqual(code.codeTools, direct.codeTools);
   assert.ok(Object.isFrozen(code.codeTools));

@@ -580,6 +580,12 @@ export async function invokeFleetModelToolFacade(options: {
       "fleet-result-before-model-projection",
     ),
   );
+  // The successful compact projection is the preview; raw IDs stay in the file.
+  const {
+    preview: _preview,
+    previewTruncated: _previewTruncated,
+    ...resultFile
+  } = record(capture?.resultFile) ?? {};
   let data: Record<string, unknown> = {};
   try {
     data = record(JSON.parse(raw.output)) ?? {};
@@ -591,44 +597,15 @@ export async function invokeFleetModelToolFacade(options: {
   try {
     output = project(invocation.name, raw, data, args, refs, epoch);
     bindings = refs.newBindings;
+    if (capture?.resultFile) output.raw_result_file = resultFile;
   } catch {
-    let trace: Record<string, unknown> = { status: "unavailable" };
-    if (
-      invocation.modelTraceInspectionTool === "trace_read" &&
-      capture?.durability === "durable" &&
-      record(capture.locator)
-    ) {
-      try {
-        const essential = references.scope(
-          string(invocation.threadId),
-          invocation.modelReferences,
-          { maxBindings: 1, maxBytes: 4096 },
-        );
-        trace = {
-          ref: essential.bind(
-            "trace",
-            "tool-result",
-            asJson({ locator: capture.locator, tool: "trace_read" }),
-          ),
-          tool: "trace_read",
-        };
-        bindings = [
-          ...inputs,
-          ...essential.newBindings.filter(
-            (b) => !inputs.some((input) => input.ref === b.ref),
-          ),
-        ];
-      } catch {
-        /* Unavailable evidence is not proof of non-dispatch. */
-      }
-    }
     output = {
+      ...(capture?.resultFile ? { raw_result_file: capture.resultFile } : {}),
       projection: "projection_unavailable",
       toolReturn: { exitCode: raw.exitCode },
       outcome: facts(record(raw.structuredContent) ?? data),
-      trace,
       safeNextStep:
-        "Inspect this exact evidence or read current state with a smaller scope. Do not replay a mutation because its compact projection is unavailable.",
+        "Read raw_result_file with shell/file tools if available, or read current state with a smaller scope. Do not replay a mutation because its compact projection is unavailable.",
     };
   }
   const result: ToolExecutionResult = {

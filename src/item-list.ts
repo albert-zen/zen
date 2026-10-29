@@ -1,6 +1,8 @@
 import { bindModelMediaOrigin } from "./model-media-origin.js";
 import {
   validateUserInput,
+  validateToolDiscoveryContent,
+  type ToolDiscoveryContent,
   validateOpaqueReplayProvenance,
   type OpaqueReasoningReplayProvenance,
   textFromUserInput,
@@ -18,6 +20,7 @@ export type ContextSourceKind =
   | "thread_instruction"
   | "tool_call"
   | "tool_result"
+  | "tool_discovery"
   | "reasoning"
   | "context_compaction"
   | "failure"
@@ -55,6 +58,7 @@ export type ContextItem = ContextBase &
           callId: string;
           name: string;
           arguments: Record<string, unknown>;
+          providerNamespace?: string;
         };
       }
     | {
@@ -66,6 +70,11 @@ export type ContextItem = ContextBase &
           exitCode: number | null;
           parts?: UserInput;
         };
+      }
+    | {
+        kind: "tool_discovery";
+        role: "assistant";
+        content: ToolDiscoveryContent;
       }
     | {
         kind: "reasoning";
@@ -107,6 +116,7 @@ const sourceKinds: readonly ContextSourceKind[] = [
   "thread_instruction",
   "tool_call",
   "tool_result",
+  "tool_discovery",
   "reasoning",
   "context_compaction",
   "failure",
@@ -270,9 +280,15 @@ export function decodeContextItem(value: unknown): ContextItem {
       break;
     }
     case "tool_call":
-      keys(content, ["callId", "name", "arguments"], "tool_call.content");
+      keys(
+        content,
+        ["callId", "name", "arguments", "providerNamespace"],
+        "tool_call.content",
+      );
       if (item.role !== "assistant" || source.kind !== "tool_call")
         throw new Error("Invalid tool-call role/source");
+      if (content.providerNamespace !== undefined)
+        string(content.providerNamespace, "providerNamespace", false);
       string(content.callId, "callId", false);
       string(content.name, "name", false);
       json(record(content.arguments, "arguments"), "arguments");
@@ -291,6 +307,17 @@ export function decodeContextItem(value: unknown): ContextItem {
         throw new Error("Invalid tool outcome");
       if (content.parts !== undefined)
         parts(content.parts, "tool_result.parts");
+      break;
+    case "tool_discovery":
+      keys(
+        content,
+        ["protocol", "endpointSha256", "items"],
+        "tool_discovery.content",
+      );
+      if (item.role !== "assistant" || source.kind !== "tool_discovery")
+        throw new Error("Invalid discovery role/source");
+      validateToolDiscoveryContent(content);
+      json(content.items, "tool_discovery.items");
       break;
     case "reasoning":
       keys(
@@ -372,10 +399,24 @@ export function decodeContextItem(value: unknown): ContextItem {
         throw new Error("Invalid tools declaration");
       for (const value of content.tools) {
         const tool = record(value, "tool");
-        keys(tool, ["name", "description", "inputSchema", "rawSource"], "tool");
+        keys(
+          tool,
+          [
+            "name",
+            "description",
+            "inputSchema",
+            "rawSource",
+            "pluginId",
+            "fullDescription",
+          ],
+          "tool",
+        );
         string(tool.name, "tool.name", false);
         string(tool.description, "tool.description");
         json(record(tool.inputSchema, "tool.inputSchema"), "tool.inputSchema");
+        if (tool.pluginId !== undefined) string(tool.pluginId, "tool.pluginId");
+        if (tool.fullDescription !== undefined)
+          string(tool.fullDescription, "tool.fullDescription");
         if (tool.rawSource !== undefined) {
           const raw = record(tool.rawSource, "rawSource");
           keys(raw, ["language", "argument"], "rawSource");
@@ -586,6 +627,12 @@ export function compileItemList(
             : {
                 modelContent: projectParts(item, item.content.parts),
               }),
+        });
+        break;
+      case "tool_discovery":
+        messages.push({
+          role: "tool_discovery",
+          ...structuredClone(item.content),
         });
         break;
       case "reasoning": {

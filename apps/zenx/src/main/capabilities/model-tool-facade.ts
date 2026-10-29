@@ -135,7 +135,6 @@ export interface ModelFacadeTraceCapture {
 export type ModelFacadeInvocation = ToolInvocation & {
   modelReferences?: readonly ModelReferenceBinding[];
   traceOutput?: ModelFacadeTraceCapture;
-  modelTraceInspectionTool?: string;
 };
 function decode(
   name: string,
@@ -257,27 +256,12 @@ export async function invokeModelToolFacade(options: {
       "capability-result-before-model-projection",
     ),
   );
-  // Only durable capture plus an actually registered reader permits a trace ref.
-  let inspection: { ref: string; tool: string } | undefined;
-  if (
-    invocation.modelTraceInspectionTool === "trace_read" &&
-    capture?.durability === "durable" &&
-    record(capture.locator)
-  ) {
-    try {
-      inspection = {
-        ref: refs.bind(
-          "trace",
-          "tool-result",
-          asJson({ locator: capture.locator, tool: "trace_read" }),
-        ),
-        tool: "trace_read",
-      };
-    } catch (error) {
-      // Even an oversized evidence locator cannot erase a known backend result.
-      if (!(error instanceof ModelReferenceBudgetError)) throw error;
-    }
-  }
+  // The successful compact projection is the preview; raw IDs stay in the file.
+  const {
+    preview: _preview,
+    previewTruncated: _previewTruncated,
+    ...resultFile
+  } = record(capture?.resultFile) ?? {};
   const retained = refs.newBindings;
   const attach = (result: ToolExecutionResult, bindings = refs.newBindings) =>
     bindings.length
@@ -304,10 +288,9 @@ export async function invokeModelToolFacade(options: {
         reason: "Compact reference publication budget exceeded",
         toolReturn: { exitCode: raw.exitCode },
         outcome: outcome(result),
-        ...(inspection ? { trace: inspection } : {}),
-        safeNextStep: inspection
-          ? "Inspect the retained result through the exact Trace ref, or read current state with a smaller scope. Do not retry a mutation merely because compact projection is unavailable."
-          : "Read current state with a smaller scope. This receipt has no usable durable Trace inspection reference; do not retry a mutation merely because compact projection is unavailable.",
+        ...(capture?.resultFile ? { raw_result_file: capture.resultFile } : {}),
+        safeNextStep:
+          "Read raw_result_file with shell/file tools if available, or read current state with a smaller scope. Do not retry a mutation merely because compact projection is unavailable.",
       }),
     };
     delete fallback.contentType;
@@ -319,11 +302,17 @@ export async function invokeModelToolFacade(options: {
   await invocation.traceOutput?.recordReferenceBindings?.(refs.newBindings);
   const projectedResult: ToolExecutionResult = {
     ...raw,
-    output: JSON.stringify(projected),
+    output: JSON.stringify({
+      ...projected,
+      ...(capture?.resultFile ? { raw_result_file: resultFile } : {}),
+    }),
   };
   if (raw.structuredContent !== undefined) {
     projectedResult.contentType = "application/json";
-    projectedResult.structuredContent = asJson(projected);
+    projectedResult.structuredContent = asJson({
+      ...projected,
+      ...(capture?.resultFile ? { raw_result_file: resultFile } : {}),
+    });
   }
   delete projectedResult.modelContent;
   return attach(projectedResult);

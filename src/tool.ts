@@ -1,10 +1,6 @@
 import type { AttachmentStore } from "./attachment.js";
 import type { RuntimeTrace } from "./trace.js";
-import {
-  createToolTraceCapture,
-  TraceReadToolRuntime,
-  type ToolTraceCapture,
-} from "./trace-tool.js";
+import { createToolTraceCapture, type ToolTraceCapture } from "./trace-tool.js";
 import {
   attachModelReferenceBindings,
   trustedModelReferenceBindings,
@@ -84,7 +80,6 @@ export type ShellLifecycleFacts = {
 export interface ToolInvocation {
   /** Trusted host provenance; never accepted from tool argument JSON. */
   modelReferences?: readonly ModelReferenceBinding[];
-  modelTraceInspectionTool?: "trace_read";
   traceOutput?: ToolTraceCapture;
   /** Host-minted human terminal request. Never accepted from tool arguments. */
   userTerminal?: { cols: number; rows: number };
@@ -714,13 +709,8 @@ export class ToolEnvironment {
             this.#attachments ? { attachments: this.#attachments } : {},
           )
         : undefined);
-    const { modelTraceInspectionTool: _claimedReader, ...trustedInvocation } =
-      invocation;
     const frozenInvocation: ToolInvocation = Object.freeze({
-      ...trustedInvocation,
-      ...(this.#tools.get("trace_read")?.runtime instanceof TraceReadToolRuntime
-        ? { modelTraceInspectionTool: "trace_read" as const }
-        : {}),
+      ...invocation,
       ...(traceOutput === undefined ? {} : { traceOutput }),
       arguments: Object.freeze(structuredClone(invocation.arguments)),
     });

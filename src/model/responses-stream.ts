@@ -37,6 +37,7 @@ type OutputSlot =
       itemId?: string;
       name: string;
       arguments: string;
+      namespace?: string;
     }
   | {
       type: "custom_tool_call";
@@ -46,13 +47,20 @@ type OutputSlot =
       input: string;
     };
 
+export interface ResponsesStreamOptions {
+  requireEncryptedReasoning?: boolean;
+  /** Only a transport with verified hosted-search capability may admit these items. */
+  discoveryEndpointSha256?: string;
+  toolNamespaces?: ReadonlyMap<string, string>;
+}
+
 export async function* parseResponsesStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   allowedToolNames: ReadonlySet<string>,
   rawToolNames: ReadonlySet<string>,
   accessToken: string,
-  options: { requireEncryptedReasoning?: boolean } = {},
+  options: ResponsesStreamOptions = {},
 ): AsyncIterable<ModelEvent> {
   const state: StreamState = {
     slots: new Map(),
@@ -200,7 +208,7 @@ export async function* parseResponsesStream(
           item,
           allowedToolNames,
           rawToolNames,
-          options.requireEncryptedReasoning === true,
+          options,
         );
       }
       continue;
@@ -258,7 +266,7 @@ export async function* parseResponsesStream(
               item,
               allowedToolNames,
               rawToolNames,
-              options.requireEncryptedReasoning === true,
+              options,
             );
           }
         }
@@ -307,9 +315,56 @@ async function* finishOutputItem(
   item: Record<string, unknown>,
   allowedToolNames: ReadonlySet<string>,
   rawToolNames: ReadonlySet<string>,
-  requireEncryptedReasoning: boolean,
+  options: ResponsesStreamOptions,
 ): AsyncIterable<ModelEvent> {
   if (state.finishedOutputIndexes.has(outputIndex)) {
+    return;
+  }
+  if (item.type === "tool_search_call" || item.type === "tool_search_output") {
+    if (
+      !options.discoveryEndpointSha256 ||
+      item.execution !== "server" ||
+      item.call_id !== null ||
+      item.status !== "completed" ||
+      (item.type === "tool_search_call" && !isRecord(item.arguments)) ||
+      (item.type === "tool_search_output" && !Array.isArray(item.tools))
+    ) {
+      throw Object.assign(
+        new Error("Unsupported or malformed hosted tool discovery response"),
+        { retryable: false, modelRecoveryBlocked: true },
+      );
+    }
+    if (item.type === "tool_search_output") {
+      for (const loaded of item.tools as unknown[]) {
+        if (!isRecord(loaded))
+          throw retryableModelSampleError("Invalid discovered tool");
+        const members =
+          loaded.type === "namespace" && Array.isArray(loaded.tools)
+            ? loaded.tools
+            : [loaded];
+        for (const member of members) {
+          if (
+            !isRecord(member) ||
+            member.type !== "function" ||
+            typeof member.name !== "string" ||
+            !allowedToolNames.has(member.name) ||
+            options.toolNamespaces?.get(member.name) !==
+              (loaded.type === "namespace" ? loaded.name : undefined)
+          ) {
+            throw retryableModelSampleError(
+              "Responses discovered an unavailable tool or namespace",
+            );
+          }
+        }
+      }
+    }
+    state.finishedOutputIndexes.add(outputIndex);
+    yield {
+      type: "tool_discovery",
+      protocol: "openai-responses",
+      endpointSha256: options.discoveryEndpointSha256,
+      items: [structuredClone(item)],
+    };
     return;
   }
   const existing = state.slots.get(outputIndex);
@@ -324,7 +379,7 @@ async function* finishOutputItem(
       stringField(item, "encrypted_content") ?? slot.encryptedContent;
     const summary = reasoningSummary(item);
     const replaySummary = summary.length > 0 ? summary : slot.summary;
-    if (requireEncryptedReasoning && (!itemId || !encryptedContent)) {
+    if (options.requireEncryptedReasoning && (!itemId || !encryptedContent)) {
       throw Object.assign(
         new Error(
           "Public Responses returned reasoning without encrypted continuation; stateless continuation is unsupported and this sample's tools were not executed",
@@ -408,11 +463,20 @@ async function* finishOutputItem(
         "Responses model returned mismatched tool input format",
       );
     }
+    const namespace =
+      stringField(item, "namespace") ??
+      (slot.type === "function_call" ? slot.namespace : undefined);
+    if (namespace !== options.toolNamespaces?.get(toolName)) {
+      throw retryableModelSampleError(
+        "Responses model returned mismatched tool namespace",
+      );
+    }
     state.emittedToolCalls.add(callId);
     yield {
       type: "tool_call",
       callId,
       name: toolName,
+      ...(namespace === undefined ? {} : { providerNamespace: namespace }),
       arguments:
         slot.type === "custom_tool_call"
           ? { code: customInputField(item, "input") ?? slot.input }
@@ -498,7 +562,13 @@ function outputSlot(item: Record<string, unknown>): OutputSlot | undefined {
       name,
       ...(type === "custom_tool_call"
         ? { type, input: customInputField(item, "input") ?? "" }
-        : { type, arguments: functionArgumentsField(item, "arguments") ?? "" }),
+        : {
+            type,
+            arguments: functionArgumentsField(item, "arguments") ?? "",
+            ...(stringField(item, "namespace") === undefined
+              ? {}
+              : { namespace: stringField(item, "namespace")! }),
+          }),
     };
   }
   return undefined;

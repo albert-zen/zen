@@ -411,6 +411,7 @@ async function toResponsesInput(
   rawToolNames: ReadonlySet<string>,
   rawCallIds: ReadonlySet<string>,
 ): Promise<Array<Record<string, unknown>>> {
+  if (message.role === "tool_discovery") return [];
   if (message.role === "system" || message.role === "developer")
     return [
       {

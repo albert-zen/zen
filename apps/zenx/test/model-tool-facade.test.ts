@@ -737,7 +737,7 @@ test("real Rooms exact message refs preserve literal user UUIDs, replies and imm
     ),
   );
 });
-test("postdispatch projection budget preserves known and unclassified outcomes, reserves inspectable durable Trace ref only", async () => {
+test("postdispatch projection budget preserves known and unclassified outcomes, publishes only available local result files", async () => {
   for (const inspectable of [false, true]) {
     const registry = new ModelReferenceRegistry();
     const seed = registry.scope("caller"),
@@ -766,13 +766,25 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
         cwd: "/synthetic",
         arguments: { parent, mode: "fresh" },
         modelReferences: seed.newBindings,
-        ...(inspectable ? { modelTraceInspectionTool: "trace_read" } : {}),
         signal: signal(),
         traceOutput: syntheticTrace({
           recordResult: async (value) => {
             trace.push(value);
             return {
               durability: "durable",
+              ...(inspectable
+                ? {
+                    resultFile: {
+                      path: "/synthetic/result.json",
+                      mediaType: "application/json",
+                      byteLength: 999,
+                      preview: "{}",
+                      previewTruncated: true,
+                      sourceTruncated: false,
+                      captureComplete: true,
+                    },
+                  }
+                : {}),
               locator: {
                 threadId: "caller",
                 recordId: "record-" + UUID,
@@ -800,22 +812,12 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
     assert.equal(result.contentType, undefined);
     assert.deepEqual(trace, [raw]);
     const bindings = trustedModelReferenceBindings(result)!;
-    assert.equal(bindings.length, inspectable ? 2 : 1);
-    if (inspectable) {
-      assert.equal(output.trace.tool, "trace_read");
-      const restored = new ModelReferenceRegistry().scope("caller", bindings);
-      assert.deepEqual(
-        restored.resolve(output.trace.ref, "trace", "tool-result"),
-        {
-          locator: {
-            threadId: "caller",
-            recordId: "record-" + UUID,
-            callId: "budget",
-          },
-          tool: "trace_read",
-        },
-      );
-    } else assert.equal(output.trace, undefined);
+    assert.equal(bindings.length, 1);
+    assert.equal(
+      output.raw_result_file?.path,
+      inspectable ? "/synthetic/result.json" : undefined,
+    );
+    assert.equal(output.trace, undefined);
   }
   const result = await invokeModelToolFacade({
     invocation: {
@@ -1197,7 +1199,6 @@ test("degraded Trace capture never invents an inspection ref or loses known back
       cwd: "/synthetic",
       arguments: { cwd: "/synthetic" },
       signal: signal(),
-      modelTraceInspectionTool: "trace_read",
       traceOutput: syntheticTrace({
         recordResult: async () => ({
           durability: "degraded",

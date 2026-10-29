@@ -12,7 +12,6 @@ import {
 import {
   createToolTraceCapture,
   readKnownToolResult,
-  TraceReadToolRuntime,
 } from "../src/trace-tool.js";
 import {
   ShellToolRuntime,
@@ -233,7 +232,7 @@ test("reference brand survives Task normalization and rejects forged or modified
     /Untrusted/,
   );
 });
-test("no Trace retains synchronous executor launch; durable trace_read only resolves own immutable evidence", async (t) => {
+test("no Trace retains synchronous executor launch; durable result files use ordinary shell reads", async (t) => {
   let launched = false;
   const env = new ToolEnvironment({
     runtimes: [
@@ -262,31 +261,16 @@ test("no Trace retains synchronous executor launch; durable trace_read only reso
   );
   assert.equal(receipt.durability, "durable");
   if (receipt.durability !== "durable") return;
-  const reader = new TraceReadToolRuntime(new FileTraceStore(directory));
-  const request = {
-    ...invocation("trace_read"),
-    arguments: { ref: "r1", offset: 0, limit: 5 },
-    modelReferences: [
-      {
-        ref: "r1",
-        ownerThreadId: "thread",
-        namespace: "trace",
-        kind: "tool-result",
-        value: { locator: receipt.locator, tool: "trace_read" },
-      },
-    ],
-  };
-  const page = JSON.parse((await reader.execute(request)).output);
-  assert.equal(Buffer.from(page.data, "base64").toString(), '{"out');
-  assert.equal(page.eof, false);
-  await assert.rejects(
-    reader.execute({ ...request, threadId: "other" }),
-    /Unknown/,
-  );
-  await assert.rejects(
-    reader.execute({ ...request, arguments: { ref: "r1", limit: 100000 } }),
-    /range/,
-  );
+  assert(receipt.resultFile);
+  const shell = new ShellToolRuntime();
+  const read = await shell.execute({
+    ...invocation("shell"),
+    sandbox: "read-only",
+    arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
+  });
+  assert.equal(JSON.parse(read.output).output, "password token literal");
+  assert.equal(receipt.resultFile.previewTruncated, false);
+  assert.equal(receipt.resultFile.sourceTruncated, false);
 });
 
 test("retained media and exact source pages outlive original attachment store; incomplete capture makes no durable locator claim", async (t) => {
@@ -315,35 +299,21 @@ test("retained media and exact source pages outlive original attachment store; i
   assert.equal(receipt.durability, "durable");
   if (receipt.durability !== "durable") return;
   attachments = undefined;
-  const cold = new FileTraceStore(directory),
-    reader = new TraceReadToolRuntime(cold);
-  const request: ToolInvocation = {
-    ...invocation("trace_read"),
-    modelReferences: [
-      {
-        ref: "r1",
-        ownerThreadId: "thread",
-        namespace: "trace",
-        kind: "tool-result",
-        value: { locator: receipt.locator, tool: "trace_read" },
-      },
-    ],
-    arguments: { ref: "r1", source: "stdout", offset: 1, limit: 3 },
-  };
-  const page = JSON.parse((await reader.execute(request)).output);
+  const cold = new FileTraceStore(directory);
+  const observed = (await cold.read("thread")).records.find(
+    (r) => r.type === "tool_result_observed",
+  )!;
   assert.deepEqual(
-    Buffer.from(page.pages[0].data, "base64"),
-    Buffer.from([255, 1, 2]),
+    Buffer.from(await bytes(cold, observed, "media_0")),
+    Buffer.from(media),
   );
-  const read = JSON.parse(
-    (
-      await reader.execute({
-        ...request,
-        arguments: { ref: "r1", artifact: "media_0", limit: 65536 },
-      })
-    ).output,
+  const chunk = (await cold.read("thread")).records.find(
+    (r) => r.type === "tool_output_chunk",
+  )!;
+  assert.deepEqual(
+    Buffer.from(await bytes(cold, chunk, "tool_output")),
+    Buffer.from([0, 255, 1, 2, 3]),
   );
-  assert.deepEqual(Buffer.from(read.data, "base64"), Buffer.from(media));
   const missing = createToolTraceCapture(trace, {
     threadId: "thread",
     callId: "missing",
@@ -402,7 +372,7 @@ test("disk failure during stream is explicit and accepted-result recovery refuse
   );
 });
 
-test("Environment binds one Trace owner and advertises only its real registered reader", async (t) => {
+test("Environment binds one Trace owner without special reader plumbing", async (t) => {
   const { trace } = await fixture(t);
   const env = new ToolEnvironment({
     runtimes: [
@@ -419,16 +389,9 @@ test("Environment binds one Trace owner and advertises only its real registered 
     () => env.bindTrace({ record: (event) => trace.record(event) }),
     /different Trace owner/,
   );
-  const before = env.prepare({
-    ...invocation(),
-    modelTraceInspectionTool: "trace_read",
-  });
-  assert.equal(before.invocation.modelTraceInspectionTool, undefined);
-  env.discard(before);
-  env.registerRuntime(new TraceReadToolRuntime(trace));
-  const after = env.prepare(invocation());
-  assert.equal(after.invocation.modelTraceInspectionTool, "trace_read");
-  env.discard(after);
+  const prepared = env.prepare(invocation());
+  assert.equal("modelTraceInspectionTool" in prepared.invocation, false);
+  env.discard(prepared);
 });
 
 test("raw returned value is snapshotted before awaiting pending output persistence", async (t) => {

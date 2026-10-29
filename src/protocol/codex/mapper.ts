@@ -292,6 +292,8 @@ export function projectCompletedItem(
   item: CanonicalItem,
 ): CodexThreadItem | null {
   switch (item.type) {
+    case "tool_discovery":
+      return null;
     case "user_message":
       return {
         type: "userMessage",
