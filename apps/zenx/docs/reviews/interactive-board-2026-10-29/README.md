@@ -139,3 +139,19 @@ or completion of all Host/schema review. Those checks are separate from the
 captured renderer. Host review fixes and schema/discovery follow-ups were still
 in progress at capture. Before merge, compare the final renderer/fixture hashes
 with `source.json` and rerun affected validation if they differ.
+
+## Error-label namespace follow-up
+
+Source `b630f93acaac8b4edb524de86ed58f1f40dd87b9` makes the existing
+error label explicitly use `shell:technicalDetails`, instead of an unqualified
+key within a shell-scoped hook. This resolves the file-wide catalog checker
+which otherwise assumes this file's first `panels` namespace. The runtime label,
+layout and interaction are unchanged; the existing English/Chinese shell catalog
+entries remain authoritative. No catalog check was weakened.
+
+The focused i18n/Board tests passed (21 tests), and manual cloud-browser inspection
+of the rebuilt source again confirmed the error summary and expanded technical
+stack. The eight published images above retain their original source provenance;
+the follow-up differs in one renderer source hash only (`board-ui.tsx`), with the
+other 13 recorded renderer/fixture sources unchanged. No additional image is
+included in this follow-up.

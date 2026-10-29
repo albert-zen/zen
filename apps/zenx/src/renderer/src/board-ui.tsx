@@ -313,7 +313,7 @@ function BoardErrorDetail({ detail }: { detail?: string | null }) {
   const { t } = useTranslation("shell");
   return detail ? (
     <details key={detail} className="context-compaction-error-detail">
-      <summary>{t("technicalDetails")}</summary>
+      <summary>{t("shell:technicalDetails")}</summary>
       <pre tabIndex={0}>{detail}</pre>
     </details>
   ) : null;
