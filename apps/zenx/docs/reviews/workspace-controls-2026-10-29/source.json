@@ -1,0 +1,51 @@
+{
+  "review_date_utc": "2026-10-29",
+  "capture_interval_utc": {
+    "from": "2026-10-29T06:46:00Z",
+    "to": "2026-10-29T06:49:00Z"
+  },
+  "commits": {
+    "captured_source": "a568db7d13791af5c0dc74fed22a75f2481fe5ca",
+    "published_pr_head": "645ef0881681fffa0856badf63023a877942d731",
+    "accepted_main": "df003fc5d02173aa9150e53ad883efbf7b1ee3bb"
+  },
+  "equivalence": {
+    "method": "git rev-parse <commit>^{tree}, plus SHA-256 validation of every file in both original source manifests",
+    "git_tree": "d1285b0f8b6685d3d787f9cb0f2bfa7896ed8bc6",
+    "result": "All three commits have identical complete repository trees. Screenshots were captured from captured_source, not recaptured after merge."
+  },
+  "source_manifests": {
+    "board-source.json": 14,
+    "files-source.json": 33
+  },
+  "source_path_base": "apps/zenx",
+  "browser_viewport": {
+    "width": 1180,
+    "height": 757
+  },
+  "screenshots": {
+    "board-light-open.jpg": {
+      "format": "JPEG",
+      "sha256": "843f6ac976f58041764edcb9c69477f81273ff1430b77aa4bd119ca6727521c8",
+      "byte_length": 70534
+    },
+    "board-dark-open.jpg": {
+      "format": "JPEG",
+      "sha256": "6308977897356d61dc29c0b1ec84471b8d821f1dc3c65fccbef37ff496a0eb5f",
+      "byte_length": 68103
+    },
+    "files-dark-140-reordered.jpg": {
+      "format": "JPEG",
+      "sha256": "8ec2e4bc98a2caf44e92406257165bc6f4c176018fb36d4972eaed67f30ae441",
+      "byte_length": 103596
+    },
+    "files-light-140.jpg": {
+      "format": "JPEG",
+      "sha256": "791b6c8aa58b5e764b0dfa3392a1a7afdc6ea14e90bd6984026710506c5b6f47",
+      "byte_length": 103648
+    }
+  },
+  "scope": "Bounded cloud-browser interaction review of production components with synthetic data and fake ports. No native Electron, Host, private profile, model calls, real external applications or cross-owner resources.",
+  "refresh_behavior": "Explicit manual file-discovery refresh. No automatic filesystem watcher was added or claimed.",
+  "publication_purpose": "Documentation-only archive of completed PR #577 synthetic UI evidence. No product, main-branch or CI changes."
+}

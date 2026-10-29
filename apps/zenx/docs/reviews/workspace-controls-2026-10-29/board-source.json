@@ -1,0 +1,20 @@
+{
+  "commit": "a568db7d13791af5c0dc74fed22a75f2481fe5ca",
+  "scope": "Actual production Board/information/isolated-frame, AuxiliaryPanel and WorkspaceBrowserPanel components with synthetic state/effect ports and outer chat scaffold. Browser viewport alone is a fixture placeholder, not native Electron. QA controls and branding remain in the left fixture sidebar. No private data, model calls or API calls. Source hashes bind screenshots to code.",
+  "sources": {
+    "src/renderer/src/board-ui.tsx": "e784858b260519ba47a553d8a05868d5287b0240ba23bafb008028b2d2ef730e",
+    "src/renderer/src/board-ui-state.ts": "d76ef535d1e8749f7aecb658bae4fe8cea994e367ea04550a8bf7b3b2cb15797",
+    "src/renderer/src/plugin-information-host.tsx": "b75940e4e8b5dd4238e5f849b8415c0444bf25730bce9a3d75c96f9da435455c",
+    "src/renderer/src/plugin-ui-host.tsx": "23e73a7e37330fff47332d96e1cf6c16e80aea31205f43139ae77670b1d43608",
+    "src/renderer/src/styles.css": "9dd553e9542f83026aac5a01dcbc5c7b38703662689bff7eba07f555a4742e95",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "src/renderer/src/ui/plugin-theme.ts": "48a88ccde298b45b16d03cf4dfde86988f7952745e51d37d7ad28f85c4f57b63",
+    "src/renderer/src/auxiliary-panel.tsx": "bf866a293bbbc80a0702a5084aefd14d9401ef4bc46367812d776828c7a66b2d",
+    "src/renderer/src/workspace-browser-panel.tsx": "8bab1b184fe88fe2d9f83d0e449185608381f0141fc8652455c6b8c82368a101",
+    "src/renderer/src/PluginProductPage.tsx": "aaf2de25bb5fb0d6ba13749003874ed0755661ab8e2e4ec534f2d26d1062bcd1",
+    "src/renderer/public/plugin-frame.html": "384d294a16fcfb191b7c972e5e2393407214364da8f3f3acf8bf7a87739e319a",
+    "scripts/board-preview.tsx": "508502b33e72f24eb657bfcedea0ffafa617f8a29d5217a2ec055aa4397a9468",
+    "scripts/build-board-preview.mjs": "29e436b1bd744f0be099a6885a380c916c3e04ea23fdb6b49392740e59c3b04a",
+    "scripts/capture-board-preview.mjs": "5c91b6ab1733049fe593d2ae9f5b90804b967915163d4c203e9c15dd1ac0c6c7"
+  }
+}
