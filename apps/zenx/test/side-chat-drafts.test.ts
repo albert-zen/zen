@@ -109,3 +109,40 @@ test("an explicit native rejection permits a safe same-draft creation retry", as
   assert.equal(creates, 2);
   assert.equal(drafts.get("draft")?.composer.draft.text, "");
 });
+
+test("creation and admission publish distinct pending stages without losing later edits", async () => {
+  const stages: string[] = [];
+  let sequence = 0;
+  const drafts = new SideChatDrafts(
+    () => {
+      const draft = drafts.get("id-1");
+      if (draft?.sending) stages.push(draft.threadId ? "sending" : "creating");
+    },
+    () => `id-${++sequence}`,
+  );
+  const draft = drafts.open("parent", { itemId: "opening-item" });
+  drafts.updateComposer(draft.id, (state) => editComposer(state, "send this"));
+  let created!: (id: string) => void;
+  let rejectAdmission!: (error: Error) => void;
+  const creation = new Promise<string>((resolve) => {
+    created = resolve;
+  });
+  const admission = new Promise<void>((_resolve, reject) => {
+    rejectAdmission = reject;
+  });
+  const request = drafts.submit(
+    draft.id,
+    () => creation,
+    () => admission,
+  );
+  assert.equal(stages.at(-1), "creating");
+  drafts.updateComposer(draft.id, (state) => editComposer(state, "later edit"));
+  created("confirmed-child");
+  await Promise.resolve();
+  assert.equal(stages.at(-1), "sending");
+  rejectAdmission(new Error("offline"));
+  await request;
+  assert.equal(drafts.get(draft.id)?.composer.draft.text, "later edit");
+  assert.equal(drafts.get(draft.id)?.threadId, "confirmed-child");
+  assert.equal(drafts.get(draft.id)?.sending, false);
+});

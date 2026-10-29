@@ -1,3 +1,8 @@
+import {
+  ShellTargetNavigationContext,
+  openShellTarget,
+  type ShellTargetRequest,
+} from "./shell-target-navigation.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -179,6 +184,7 @@ import {
   applyThreadViewNotification,
   markThreadViewAwaitingRecovery,
   projectNativeRecovery,
+  projectNativeThread,
 } from "./thread-view-state.js";
 import {
   ThreadView,
@@ -461,22 +467,28 @@ function AppConversationProviders({
   models,
   modelCatalogError,
   openSideChatDraft,
+  shellNavigation,
   ...actions
 }: React.ComponentProps<typeof ThreadViewActionsProvider> & {
   models: readonly ModelSummary[];
   modelCatalogError: string | null;
+  shellNavigation: NonNullable<
+    React.ContextType<typeof ShellTargetNavigationContext>
+  >;
   openSideChatDraft: NonNullable<
     React.ContextType<typeof SideChatDraftContext>
   >;
 }) {
   return (
-    <SubagentCreationModelsContext.Provider
-      value={{ models, error: modelCatalogError }}
-    >
-      <SideChatDraftContext.Provider value={openSideChatDraft}>
-        <ThreadViewActionsProvider {...actions} />
-      </SideChatDraftContext.Provider>
-    </SubagentCreationModelsContext.Provider>
+    <ShellTargetNavigationContext.Provider value={shellNavigation}>
+      <SubagentCreationModelsContext.Provider
+        value={{ models, error: modelCatalogError }}
+      >
+        <SideChatDraftContext.Provider value={openSideChatDraft}>
+          <ThreadViewActionsProvider {...actions} />
+        </SideChatDraftContext.Provider>
+      </SubagentCreationModelsContext.Provider>
+    </ShellTargetNavigationContext.Provider>
   );
 }
 
@@ -2758,6 +2770,75 @@ function AppContent() {
     );
   }, [page, pluginSnapshot]);
 
+  const [shellTargetRequest, setShellTargetRequest] =
+    useState<ShellTargetRequest | null>(null);
+  const shellTargetIntent = useRef(0);
+  const shellNavigationScope = useRef("");
+  shellNavigationScope.current = `${page}:${selectedRoom?.id ?? selectedThreadId ?? ""}`;
+  useEffect(() => {
+    setShellTargetRequest(null);
+    shellTargetIntent.current++;
+  }, [page, selectedThreadId, selectedRoom?.id]);
+  const shellNavigation: NonNullable<
+    React.ContextType<typeof ShellTargetNavigationContext>
+  > = {
+    request: shellTargetRequest,
+    consumed: (requestId) =>
+      setShellTargetRequest((current) =>
+        current?.requestId === requestId ? null : current,
+      ),
+    open: async (target, source) => {
+      const api = window.zenx.shellPanel;
+      if (!api) throw new Error(i18n.t("panels:shellUnavailable"));
+      const intent = ++shellTargetIntent.current;
+      const scope = shellNavigationScope.current;
+      const owner = selectedRoom
+        ? { kind: "room" as const, id: selectedRoom.id }
+        : selectedThreadId
+          ? { kind: "thread" as const, id: selectedThreadId }
+          : null;
+      if (
+        !owner ||
+        (selectedRoom &&
+          !selectedRoom.members.some(
+            (member) => member.threadId === target.threadId,
+          ))
+      )
+        throw new Error(i18n.t("panels:backgroundShellOpenFailed"));
+      const presentationIntent =
+        sidebarState.controller.beginPresentationIntent(owner);
+      const current = () =>
+        source.isCurrent() &&
+        shellTargetIntent.current === intent &&
+        shellNavigationScope.current === scope &&
+        sidebarState.controller.isPresentationIntentCurrent(
+          owner,
+          presentationIntent,
+        );
+      if (
+        !(await openShellTarget({
+          target,
+          owner,
+          api,
+          sidebar: sidebarState.controller,
+          isCurrent: current,
+          presentationIntent,
+        })) ||
+        !current()
+      )
+        return;
+      setSideChatSelections((previous) => ({
+        ...previous,
+        [owner.kind === "room" ? `room:${owner.id}` : owner.id]: "",
+      }));
+      setShellTargetRequest({
+        ...target,
+        ownerKey: `${owner.kind}:${owner.id}`,
+        requestId: intent,
+      });
+    },
+  };
+
   const [remoteMessageSource, setRemoteMessageSource] =
     useState<FleetMessageSourceView | null>(null);
   useEffect(() => setRemoteMessageSource(null), [page, selectedThreadId]);
@@ -3045,6 +3126,10 @@ function AppContent() {
         )
           await resumeThread(result.thread.id);
       } catch (error) {
+        // A lost reply can leave an already-created copy. Refresh only the
+        // read projections so it can be found; never repeat creation or guess
+        // which Thread should replace the source viewport.
+        void Promise.all([loadThreadSummaries(), loadProjects()]);
         if (!owner.isVisible())
           setRequestError(
             i18n.t("shell:messageForkFailed", { error: describeError(error) }),
@@ -3156,7 +3241,11 @@ function AppContent() {
     const parent = input.parentThreadId;
     const roomId = selectedRoom?.id;
     const presentationOwner = roomId ? `room:${roomId}` : parent;
-    // Capture only authoritative prefix IDs, never a second copy of transcript semantics.
+    sidebarState.controller.beginPresentationIntent(
+      roomId ? { kind: "room", id: roomId } : parent,
+    );
+    // Capture the authoritative prefix and retain its read-only display projection.
+    // Only the prefix IDs go back to the Host when the first Send forks it.
     const { thread } = await window.zenx.protocol.request("zen/thread/read", {
       threadId: parent,
     });
@@ -3172,6 +3261,7 @@ function AppContent() {
       {
         ...input,
         ...(roomId ? { roomId } : {}),
+        contextPreview: projectNativeThread(thread),
         inheritedModel: encodeModelKey(thread),
         inheritedEffort: thread.reasoningEffort,
       },
@@ -3221,6 +3311,31 @@ function AppContent() {
         key={id}
         composerId={`side-chat-draft-${id}`}
         thread={null}
+        contextPreview={draft.contextPreview}
+        emptyContent={
+          <div className="thread-empty">
+            <h2>{i18n.t("panels:sideChat")}</h2>
+            <p>{i18n.t("panels:sideChatContextPreview")}</p>
+          </div>
+        }
+        composerContext={
+          <p
+            className="composer-note side-chat-context-note"
+            role="status"
+            aria-busy={draft.sending}
+          >
+            {draft.sending ? (
+              <span className="mini-spinner" aria-hidden="true" />
+            ) : null}
+            {i18n.t(
+              draft.sending
+                ? draft.threadId
+                  ? "panels:sideChatSending"
+                  : "panels:sideChatCreating"
+                : "panels:sideChatContextPreview",
+            )}
+          </p>
+        }
         approvals={[]}
         composer={draft.composer}
         models={models}
@@ -3417,6 +3532,7 @@ function AppContent() {
 
   const shell = (
     <AppConversationProviders
+      shellNavigation={shellNavigation}
       openSideChatDraft={openSideChatDraft}
       fork={forkMessage}
       source={openMessageSource}
@@ -4032,7 +4148,11 @@ function AppContent() {
                   }))}
                 localSelectedTab={sideChatSelections[`room:${selectedRoom.id}`]}
                 localTabOrder={sideChatTabOrders[`room:${selectedRoom.id}`]}
-                onLocalSelectTab={(tab) =>
+                onLocalSelectTab={(tab) => {
+                  sidebarState.controller.beginPresentationIntent({
+                    kind: "room",
+                    id: selectedRoom.id,
+                  });
                   setSideChatSelections((current) => ({
                     ...current,
                     [`room:${selectedRoom.id}`]: tab.startsWith(
@@ -4040,8 +4160,8 @@ function AppContent() {
                     )
                       ? tab
                       : "",
-                  }))
-                }
+                  }));
+                }}
                 onLocalTabsChange={(tabs) =>
                   setSideChatTabOrders((current) => ({
                     ...current,
@@ -4056,6 +4176,10 @@ function AppContent() {
                   );
                 }}
                 onRemoveTab={(id) => {
+                  sidebarState.controller.beginPresentationIntent({
+                    kind: "room",
+                    id: selectedRoom.id,
+                  });
                   if (id.startsWith("custom:side-chat-draft-")) {
                     sideChatDrafts.close(
                       id.slice("custom:side-chat-draft-".length),
@@ -4188,6 +4312,9 @@ function AppContent() {
                   }));
                 }}
                 onRemoveTab={(id) => {
+                  sidebarState.controller.beginPresentationIntent(
+                    threadDetail.id,
+                  );
                   if (id.startsWith("custom:side-chat-draft-")) {
                     sideChatDrafts.close(
                       id.slice("custom:side-chat-draft-".length),
@@ -4240,6 +4367,9 @@ function AppContent() {
                   panelTabs[threadDetail.id]
                 }
                 onSelectTab={(tab) => {
+                  sidebarState.controller.beginPresentationIntent(
+                    threadDetail.id,
+                  );
                   setSideChatSelections((current) => ({
                     ...current,
                     [threadDetail.id]: tab.startsWith("custom:side-chat-draft-")

@@ -186,7 +186,7 @@ function scenario(scene: Scene): Thread {
     thread = runtimeThread([
       ...base,
       {
-        ...runtimeTask("operation", "task-one", "running"),
+        ...runtimeCommand("operation", "run_code", "inProgress"),
         command: scene === "command-long" ? commands.long : commands.short,
         toolName: "run_code",
         toolArguments: {
@@ -379,6 +379,61 @@ function Fixture() {
         },
         finish() {
           setThread((value) => complete(value));
+        },
+        returnLatest(error = false) {
+          setThread((current) => ({
+            ...current,
+            turns: current.turns.map((turn) => ({
+              ...turn,
+              items: turn.items.map((item) =>
+                item.type === "commandExecution" &&
+                item.id ===
+                  turn.items.findLast(
+                    (entry) => entry.type === "commandExecution",
+                  )?.id
+                  ? {
+                      ...item,
+                      status: error ? "failed" : "completed",
+                      aggregatedOutput: error
+                        ? "Synthetic tool error; original detail remains available."
+                        : "Synthetic background process still running.",
+                      exitCode: error ? 2 : 0,
+                      contentType: "application/vnd.zen.tool-task+json",
+                      structuredContent: {
+                        task_id: "latest-process",
+                        status: error ? "failed" : "running",
+                      },
+                    }
+                  : item,
+              ),
+            })),
+          }));
+        },
+        waitAgain() {
+          setThread((current) => ({
+            ...current,
+            turns: current.turns.map((turn) => ({
+              ...turn,
+              items: [
+                ...turn.items,
+                runtimeMessage(
+                  `wait-note-${turn.items.length}`,
+                  "The preceding invocation returned. Waiting again is a new invocation (synthetic).",
+                ),
+                {
+                  ...runtimeWait(
+                    `wait-next-${turn.items.length}`,
+                    "latest-process",
+                  ),
+                  status: "inProgress",
+                  aggregatedOutput: null,
+                  contentType: undefined,
+                  structuredContent: undefined,
+                  exitCode: null,
+                },
+              ],
+            })),
+          }));
         },
         interrupt() {
           setThread((value) => ({

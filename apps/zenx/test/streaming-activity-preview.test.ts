@@ -41,7 +41,7 @@ for (const grouped of [false, true]) {
           ),
         ]),
       );
-      assert.equal(title(), before);
+      assert.ok(title() === before, "Streaming preserves the title element");
       assert.equal(row.getAttribute("aria-expanded"), "true");
       assert.match(title().textContent!, /latest streaming update/u);
       assert.doesNotMatch(title().textContent!, /Provider summary/u);
@@ -54,7 +54,7 @@ for (const grouped of [false, true]) {
       assert.doesNotMatch(excerpt, /\n/u);
     });
   });
-  test(`${grouped ? "group" : "singleton"}: command preview is the complete actual command, not its friendly title`, async () => {
+  test(`${grouped ? "group" : "singleton"}: pending call previews the complete actual command, not its friendly title`, async () => {
     await withRuntimeDom(async (h) => {
       const prior = grouped ? [runtimeCommand("prior")] : [];
       for (const command of [
@@ -62,8 +62,7 @@ for (const grouped of [false, true]) {
         "cd /synthetic/workspace && node scripts/verify.mjs --component ActivityText --include-streaming-reasoning --include-long-commands --theme light --theme dark --width 420 --width 1280",
       ]) {
         const task = {
-          ...runtimeTask("operation", "task-one", "running"),
-          command,
+          ...runtimeCommand("operation", command, "inProgress"),
           toolName: "run_code",
           toolArguments: { code: command, description: "Friendly short title" },
         };
@@ -77,7 +76,31 @@ for (const grouped of [false, true]) {
           title().closest(".activity-text")?.getAttribute("data-preview"),
           "true",
         );
+        assert.equal(
+          Boolean(title().parentElement!.querySelector(".activity-sweep svg")),
+          true,
+        );
       }
+    });
+  });
+  test(`${grouped ? "group" : "singleton"}: returned calls stop previewing and animating even while their task runs`, async () => {
+    await withRuntimeDom(async (h) => {
+      const prior = grouped ? [runtimeCommand("prior")] : [];
+      const task = runtimeTask("operation", "task-one", "running");
+      await h.render(runtimeThread([...prior, task]));
+      assert.equal(
+        title().closest(".activity-text")?.getAttribute("data-preview"),
+        null,
+      );
+      assert.equal(Boolean(document.querySelector(".activity-sweep")), false);
+      if (grouped) await h.click(".trace-toggle");
+      assert.equal(Boolean(document.querySelector(".mini-spinner")), false);
+      assert.deepEqual(
+        Array.from(document.querySelectorAll(".trace-item-status")).map(
+          (status) => status.textContent,
+        ),
+        grouped ? ["Completed", "Completed"] : ["Completed"],
+      );
     });
   });
 }
@@ -109,7 +132,7 @@ test("content-only reasoning advances while its empty summary stays unchanged", 
   });
 });
 
-test("group preview uses the existing observed current task, not a later reasoning item", async () => {
+test("group preview follows live reasoning rather than already-returned task receipts", async () => {
   await withRuntimeDom(async (h) => {
     const first = {
       ...runtimeTask("first", "task-one", "running"),
@@ -124,7 +147,20 @@ test("group preview uses the existing observed current task, not a later reasoni
     );
     assert.equal(
       title().querySelector(".activity-label")?.textContent,
-      "selected actual command",
+      "A later reasoning item",
+    );
+    assert.equal(title().querySelector("strong")?.textContent, "Thinking");
+    assert.equal(
+      title().closest(".activity-text")?.getAttribute("data-preview"),
+      "true",
+    );
+    assert.equal(Boolean(document.querySelector(".activity-sweep svg")), true);
+    await h.click(".trace-toggle");
+    assert.equal(document.querySelectorAll(".tool-status.completed").length, 2);
+    assert.equal(document.querySelectorAll(".mini-spinner").length, 1);
+    assert.equal(
+      document.querySelector(".mini-spinner")?.getAttribute("aria-label"),
+      "Thinking",
     );
   });
 });

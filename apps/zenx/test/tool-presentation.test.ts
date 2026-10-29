@@ -67,11 +67,11 @@ test("generic successful tools retain their factual title without a redundant co
   );
   assert.equal(
     commandSummary({ ...command("shell"), toolArguments: { command: "pwd" } }),
-    "Ran · pwd",
+    "pwd",
   );
 });
 
-test("thread failures and active phases remain visible without past-tense success labels", () => {
+test("returned errors complete the invocation without past-tense action-success labels", () => {
   const send = command("zenx_threads_send");
   const requested = { ...send, status: "inProgress" as const };
   assert.equal(commandPhase(requested), "requested");
@@ -87,13 +87,13 @@ test("thread failures and active phases remain visible without past-tense succes
   assert.equal(commandSummary(requested), "Send message · requested");
   assert.equal(
     commandSummary({ ...send, status: "failed" }),
-    "Send message · ended",
+    "Send message · completed",
   );
   assert.equal(
     commandSummary({ ...send, status: "declined" }),
-    "Send message · declined",
+    "Send message · completed",
   );
-  for (const [status, label] of [
+  for (const [status] of [
     ["admitting", "preparing"],
     ["running", "running"],
     ["queued", "queued"],
@@ -109,7 +109,7 @@ test("thread failures and active phases remain visible without past-tense succes
         contentType: "application/vnd.zen.tool-task+json",
         structuredContent: { task_id: "thread-action-task", status },
       }),
-      `Send message · ${label}`,
+      "Send message",
     );
   }
 });
@@ -137,7 +137,7 @@ test("thread presentation uses the actual tool name rather than command text or 
       command: "zenx_threads_send",
       toolArguments: { command: "zenx_threads_send" },
     }),
-    "Ran · zenx_threads_send",
+    "zenx_threads_send",
   );
 });
 
@@ -182,7 +182,7 @@ test("concurrent browser tools use readable backend labels without execution ali
   assert.equal(toolPresentation("browser_connected_unknown").category, "Tool");
 });
 
-test("ended tool labels preserve raw phases and never infer success from output or exit code", () => {
+test("completed invocation labels preserve raw result status and never infer success from output or exit code", () => {
   for (const toolName of ["shell", "wait", "unknown_tool", "run_code"]) {
     for (const exitCode of [null, 0, 1, 2, 127, 130]) {
       for (const output of ["", "warning on stderr", "spawn /bin/sh ENOENT"]) {
@@ -193,16 +193,16 @@ test("ended tool labels preserve raw phases and never infer success from output 
           aggregatedOutput: output,
         };
         const before = structuredClone(item);
-        assert.equal(commandStatus(item), "Ended");
-        assert.equal(commandPhase(item), "failed");
+        assert.equal(commandStatus(item), "Completed");
+        assert.equal(commandPhase(item), "completed");
         assert.deepEqual(item, before);
       }
     }
   }
 });
 
-test("specific lifecycle facts remain distinct from a generic ended label", () => {
-  for (const [status, label] of [
+test("process lifecycle facts stay in the receipt and do not change invocation completion", () => {
+  for (const [status] of [
     ["timed_out", "Timed out"],
     ["cancelled", "Cancelled"],
     ["cancellation_unconfirmed", "Cancellation unconfirmed"],
@@ -221,11 +221,11 @@ test("specific lifecycle facts remain distinct from a generic ended label", () =
         exit_code: 1,
       },
     };
-    assert.equal(commandStatus(item), label);
+    assert.equal(commandStatus(item), "Completed");
   }
   assert.equal(
     commandStatus({ ...command("shell"), status: "declined" }),
-    "Declined",
+    "Completed",
   );
 });
 
@@ -244,13 +244,13 @@ test("wait presentation follows the invocation, not the observed target task", (
       structuredContent: { task_id: "target", status: taskStatus },
     };
     assert.equal(commandPhase(item), "completed");
-    assert.equal(commandStatus(item), "Waited");
-    assert.equal(commandPhase({ ...item, status: "failed" }), "failed");
-    assert.equal(commandPhase({ ...item, status: "declined" }), "declined");
-    assert.equal(commandPhase({ ...item, status: "inProgress" }), "waiting");
+    assert.equal(commandStatus(item), "Completed");
+    assert.equal(commandPhase({ ...item, status: "failed" }), "completed");
+    assert.equal(commandPhase({ ...item, status: "declined" }), "completed");
+    assert.equal(commandPhase({ ...item, status: "inProgress" }), "requested");
   }
   assert.equal(
     commandPhase({ ...command("wait"), status: "inProgress" }),
-    "waiting",
+    "requested",
   );
 });

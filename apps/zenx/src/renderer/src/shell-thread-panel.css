@@ -281,3 +281,82 @@
     min-width: 44px;
   }
 }
+
+.background-shell-status {
+  margin-bottom: 8px;
+  color: var(--color-text-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  overflow: hidden;
+}
+.background-shell-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+}
+.background-shell-disclosure {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 7px;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+}
+.background-shell-disclosure > svg {
+  flex: none;
+}
+.background-shell-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+.background-shell-list button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px;
+  color: inherit;
+  background: none;
+  text-align: left;
+}
+.background-shell-list button:hover {
+  background: var(--color-surface-control);
+}
+.background-shell-list code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+.background-shell-list button > span {
+  flex: none;
+  max-width: 45%;
+}
+.background-shell-list button > svg {
+  flex: none;
+}
+.background-shell-error {
+  margin: 0 10px 8px;
+}
+.background-shell-error pre {
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .background-shell-status button {
+    min-height: 44px;
+  }
+}

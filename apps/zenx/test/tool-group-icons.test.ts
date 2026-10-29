@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 import { traceGroupIcons } from "../src/renderer/src/turn-projection.js";
 import { toolPresentation } from "../src/renderer/src/tool-presentation.js";
 import { withRuntimeDom } from "./agent-runtime-dom.js";
@@ -62,7 +63,7 @@ test("group glyphs use a bounded first-seen set of existing tool presentations",
 
 test("adding tool types preserves the mounted decorative slot, activity and disclosure", async () => {
   await withRuntimeDom(async (h) => {
-    const first = runtimeTask("first", "task-one", "running");
+    const first = runtimeCommand("first", "npm test", "inProgress");
     const second = runtimeCommand("second");
     await h.render(runtimeThread([first, second]));
     const toggle = document.querySelector<HTMLButtonElement>(".trace-toggle")!;
@@ -127,7 +128,7 @@ test("wide and narrow group rows fit the visible glyphs without a phantom second
   );
   assert.match(
     css,
-    /\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 14px;/su,
+    /\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 14px;/su,
   );
   assert.match(
     css,
@@ -148,4 +149,60 @@ test("wide and narrow group rows fit the visible glyphs without a phantom second
     assert.ok(slot.includes(declaration), declaration);
   }
   assert.match(css, /\.trace-tool-icons > svg\s*\{\s*flex: none;/su);
+});
+
+test("tool rows reserve an intrinsic text-status column independently of the 14px chevron", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.trace-item-toggle,\s*\.trace-item-static\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 14px;/su,
+  );
+  assert.match(
+    css,
+    /\.trace-item-status\s*\{[^}]*min-width: 14px;[^}]*grid-column: 2;/su,
+  );
+  assert.match(
+    css,
+    /\.trace-item-chevron\s*\{[^}]*width: 14px;[^}]*grid-column: 3;/su,
+  );
+});
+
+test("tool status slots retain their computed minimum through the full row CSS cascade", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const dom = new JSDOM("<style></style><main></main>");
+  try {
+    // Read the actual stylesheet, not a copied rule: the generic span rule once
+    // silently overrode status min-width while source-presence tests stayed green.
+    dom.window.document.querySelector("style")!.textContent = css.replace(
+      /^@import [^;]+;$/gmu,
+      "",
+    );
+    for (const rowClass of ["trace-item-toggle", "trace-item-static"]) {
+      for (const status of [
+        '<span class="mini-spinner"></span>',
+        '<small class="tool-status completed">Completed</small>',
+        '<small class="tool-status completed">已完成</small>',
+        "",
+      ]) {
+        const main = dom.window.document.querySelector("main")!;
+        main.innerHTML = `<div class="${rowClass}"><span class="trace-item-label">Long synthetic command title</span><span class="trace-item-status">${status}</span><span class="trace-item-chevron"></span></div>`;
+        const computed = (selector: string) =>
+          dom.window.getComputedStyle(main.querySelector(selector)!);
+        assert.equal(computed(".trace-item-status").minWidth, "14px");
+        assert.equal(computed(".trace-item-status").gridColumn, "2");
+        assert.equal(computed(".trace-item-chevron").width, "14px");
+        assert.equal(computed(".trace-item-chevron").gridColumn, "3");
+        assert.equal(computed(".trace-item-label").minWidth, "0px");
+        assert.equal(computed(".trace-item-label").overflow, "hidden");
+      }
+    }
+  } finally {
+    dom.window.close();
+  }
 });

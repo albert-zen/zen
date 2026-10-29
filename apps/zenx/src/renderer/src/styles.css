@@ -1647,6 +1647,19 @@ button:disabled {
   width: 13px;
   height: 13px;
 }
+.side-chat-context-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0 14px 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.side-chat-context-note .mini-spinner {
+  flex: 0 0 13px;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -2051,9 +2064,11 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
 }
+.trace-item-label {
+  min-width: 0;
+}
 .trace-item-toggle > span,
 .trace-item-static > span {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2064,10 +2079,7 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 .tool-status.completed {
-  color: var(--good);
-}
-.tool-status.declined {
-  color: var(--danger);
+  color: var(--text-3);
 }
 .trace-detail {
   min-width: 0;
@@ -9951,7 +9963,7 @@ button:disabled {
 }
 .trace-toggle {
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto 14px;
+  grid-template-columns: minmax(0, 1fr) 14px;
   padding: 5px 6px;
 }
 .trace-tool-icons {
@@ -9971,28 +9983,6 @@ button:disabled {
 }
 .trace-toggle > .trace-activity-title {
   color: var(--text-2);
-}
-.trace-toggle > .trace-counts {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  overflow: visible;
-  white-space: normal;
-}
-.trace-counts {
-  display: inline-flex;
-  gap: 8px;
-  align-items: baseline;
-  flex-wrap: wrap;
-  font-weight: 400;
-  color: var(--text-3);
-}
-.trace-counts small {
-  font-size: 11px;
-}
-.trace-counts .trace-pending {
-  color: var(--warn);
 }
 .trace-toggle:focus-visible,
 .trace-item-toggle:focus-visible {
@@ -10064,19 +10054,6 @@ button:disabled {
   font-size: 12px;
   border-radius: 6px;
 }
-.turn-outcome > .turn-outcome-primary-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  order: 4;
-  flex-shrink: 0;
-  margin-left: auto;
-  padding-inline: 12px;
-  border-radius: 999px;
-  color: var(--text-1);
-  border: 1px solid var(--border);
-  background: var(--surface-control);
-}
 @media (max-width: 480px) {
   .turn-outcome {
     gap: 4px;
@@ -10085,13 +10062,6 @@ button:disabled {
   .turn-outcome .quiet-button {
     padding-inline: 5px;
   }
-  .turn-outcome > .turn-outcome-primary-action {
-    padding-inline: 10px;
-  }
-}
-.turn-outcome > .turn-outcome-primary-action:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 .turn-outcome-actions {
   display: inline-flex;
@@ -10118,14 +10088,6 @@ button:disabled {
 }
 .turn-outcome.failed .turn-outcome-heading > svg {
   color: var(--warn);
-}
-.turn-outcome.uncertain .turn-outcome-heading {
-  color: var(--warn);
-}
-.turn-outcome > .turn-retry-error {
-  order: 6;
-  flex-basis: 100%;
-  color: var(--danger);
 }
 .queued-cancel-confirmation {
   width: min(480px, calc(100vw - 48px));
@@ -10254,11 +10216,6 @@ button:disabled {
   .trace-toggle {
     grid-template-columns: minmax(0, 1fr) 14px;
     gap: 5px 8px;
-  }
-  .trace-toggle > .trace-counts {
-    grid-column: 1;
-    grid-row: 2;
-    justify-content: flex-start;
   }
   .trace-toggle > svg:last-child {
     grid-column: 2;
@@ -11664,10 +11621,6 @@ button:disabled {
   .turn-outcome .quiet-button {
     min-height: 44px;
   }
-}
-
-.turn-outcome-review {
-  justify-self: start;
 }
 
 .trace-reasoning-without-details .trace-item-static {

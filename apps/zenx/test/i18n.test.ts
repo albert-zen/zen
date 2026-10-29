@@ -52,6 +52,22 @@ test("bundled translations switch synchronously and React text interpolation doe
   i18n.removeResourceBundle("zh-CN", "test");
 });
 
+test("background command counts preserve English plural forms and exact Chinese counts", () => {
+  for (const [language, count, expected] of [
+    ["en", 0, "0 background commands running"],
+    ["en", 1, "1 background command running"],
+    ["en", 2, "2 background commands running"],
+    ["zh-CN", 0, "0 条后台命令正在运行"],
+    ["zh-CN", 1, "1 条后台命令正在运行"],
+    ["zh-CN", 2, "2 条后台命令正在运行"],
+  ] as const) {
+    assert.equal(
+      i18n.t("panels:backgroundShellRunning", { lng: language, count }),
+      expected,
+    );
+  }
+});
+
 test("native menu and unsaved-edit dialog follow the selected interface language", () => {
   setNativeLanguage("zh-CN");
   assert.equal(nativeText("edit"), "编辑");

@@ -12,7 +12,7 @@ import {
   confirmedStopped,
 } from "./fixtures/agent-runtime-data.js";
 
-test("returned native wait stays settled; parallel running task remains active", async () => {
+test("returned wait and parallel yielded invocation both remain settled", async () => {
   await withRuntimeDom(async (h) => {
     const wait = runtimeWait("wait", "task-a");
     await h.render(runtimeThread([wait]));
@@ -20,32 +20,32 @@ test("returned native wait stays settled; parallel running task remains active",
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),
       "idle",
     );
-    assert.equal(
-      document.querySelector(".turn-running-label .activity-text"),
-      null,
+    assert.ok(
+      document.querySelector(".turn-running-label .activity-text") === null,
+      "Expected no matching element",
     );
     await h.render(
       runtimeThread([wait, runtimeTask("other", "task-b", "running")]),
     );
     assert.equal(
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),
-      "running",
+      "idle",
     );
-    assert.equal(
-      document.querySelector(".turn-running-label .activity-text"),
-      null,
+    assert.ok(
+      document.querySelector(".turn-running-label .activity-text") === null,
+      "Expected no matching element",
     );
     assert.equal(
       document
         .querySelector(".turn-running-label")
         ?.getAttribute("data-compact"),
-      "true",
+      "false",
     );
     assert.equal(
       document
         .querySelector(".trace-toggle .activity-text")
         ?.getAttribute("data-active"),
-      "true",
+      "false",
     );
   });
 });
@@ -64,7 +64,7 @@ test("empty recovered turn without start evidence does not advertise running ani
 
 test("action-set headers keep one mounted disclosure and metadata while current work changes", async () => {
   await withRuntimeDom(async (h) => {
-    const first = runtimeTask("first", "task-one", "running");
+    const first = runtimeCommand("first", "npm test", "inProgress");
     const second = {
       ...runtimeCommand("second", "browser_inspect"),
       toolName: "browser_inspect",
@@ -77,7 +77,7 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(metadata.getAttribute("data-compact"), "true");
     assert.ok(metadata.querySelector('[role="status"].sr-only'));
     assert.ok(metadata.querySelector(".turn-duration"));
-    assert.equal(toggle.querySelector(".trace-counts")?.textContent, "");
+    assert.equal(toggle.querySelector(".trace-counts"), null);
     await h.click(".trace-toggle");
     await h.render(
       runtimeThread([runtimeTask("first", "task-one", "completed"), second]),
@@ -87,13 +87,10 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(document.querySelector(".turn-running-label"), metadata);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(title.textContent, "Inspected page and ran a command");
-    assert.equal(
-      title.getAttribute("title"),
-      `Agent is still working · ${title.textContent!}`,
-    );
+    assert.equal(title.getAttribute("title"), title.textContent!);
     assert.equal(
       title.querySelector(".activity-text")?.getAttribute("data-active"),
-      "true",
+      "false",
     );
     assert.equal(
       metadata.getAttribute("data-compact"),
@@ -115,16 +112,19 @@ test("returned wait and approval retain static metadata rather than duplicate ac
       label.querySelector(".turn-work-label")!.textContent!,
       /^Working for /u,
     );
-    assert.equal(label.querySelector("svg"), null);
+    assert.ok(
+      label.querySelector("svg") === null,
+      "Expected no matching element",
+    );
     assert.equal(
       document
         .querySelector(".trace-toggle .activity-text")
         ?.getAttribute("data-active"),
-      "true",
+      "false",
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
-      "Ran a command and waited for task",
+      "Ran a command and checked task status",
     );
     await h.render(
       runtimeThread([
@@ -139,7 +139,10 @@ test("returned wait and approval retain static metadata rather than duplicate ac
       /^Working for /u,
     );
     assert.equal(label.getAttribute("data-compact"), "false");
-    assert.equal(label.querySelector(".activity-text"), null);
+    assert.ok(
+      label.querySelector(".activity-text") === null,
+      "Expected no matching element",
+    );
   });
 });
 
@@ -152,9 +155,9 @@ test("submitted generic call retains requested status while latest process signa
       document.querySelector(".turn-running-label")?.getAttribute("data-phase"),
       "requested",
     );
-    assert.equal(
-      document.querySelector(".turn-running-label .activity-text"),
-      null,
+    assert.ok(
+      document.querySelector(".turn-running-label .activity-text") === null,
+      "Expected no matching element",
     );
   });
 });
@@ -219,7 +222,7 @@ test("only exact item-correlated request replaces a row phase with Approval requ
     assert.equal(rows.length, 2);
     assert.match(rows[0]!.textContent!, /Approval required/u);
     assert.doesNotMatch(rows[1]!.textContent!, /Approval required/u);
-    assert.match(rows[1]!.textContent!, /Running/u);
+    assert.match(rows[1]!.textContent!, /Completed/u);
   });
 });
 
@@ -325,7 +328,7 @@ for (const release of [false, true])
     });
   });
 
-test("interrupted partial answer stays folded while unconfirmed warning remains; review opens pending activity", async () => {
+test("interrupted partial answer stays folded without process warning, retry or process counts", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread(
@@ -344,15 +347,22 @@ test("interrupted partial answer stays folded while unconfirmed warning remains;
       document.body.textContent!,
       /Validated the first two files/u,
     );
-    assert.match(
+    assert.doesNotMatch(
       document.querySelector(".turn-outcome")!.textContent!,
-      /not confirm/u,
+      /background|not confirm/iu,
+    );
+    assert.ok(
+      document.querySelector(
+        ".trace-counts, .turn-outcome-primary-action, .turn-outcome-review",
+      ) === null,
+      "Expected no matching element",
     );
     assert.equal(
       document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
       "false",
     );
-    await h.click(".turn-outcome button");
+    await h.click(".turn-toggle");
+    await h.click(".trace-toggle");
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
@@ -364,7 +374,7 @@ test("interrupted partial answer stays folded while unconfirmed warning remains;
   });
 });
 
-test("failed turn preserves provider error alongside an unconfirmed external action warning", async () => {
+test("failed turn preserves provider error without an unrelated process warning", async () => {
   await withRuntimeDom(async (h) => {
     const thread = runtimeThread(
       [
@@ -383,13 +393,20 @@ test("failed turn preserves provider error alongside an unconfirmed external act
       additionalDetails: null,
     };
     await h.render(thread);
+    await h.click(".turn-outcome-actions button");
     assert.match(
       document.body.textContent!,
       /Provider disconnected during response/u,
     );
-    assert.match(
+    assert.doesNotMatch(
       document.querySelector(".turn-outcome")!.textContent!,
-      /not confirm/u,
+      /background|not confirm/iu,
+    );
+    assert.ok(
+      document.querySelector(
+        ".trace-counts, .turn-outcome-primary-action, .turn-outcome-review",
+      ) === null,
+      "Expected no matching element",
     );
   });
 });

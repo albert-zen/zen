@@ -1,3 +1,7 @@
+import {
+  commandPhase,
+  commandStatus,
+} from "../src/renderer/src/tool-presentation.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -8,9 +12,6 @@ import {
   traceDisplayRows,
   traceSummary,
   summarizeTraceActivity,
-  createTraceObservationIndex,
-  observedCommandStatus,
-  observedCommandPhase,
 } from "../src/renderer/src/turn-projection.js";
 
 test("adjacent reasoning without public details has one honest row, not one per item", () => {
@@ -66,7 +67,7 @@ test("group summary does not claim unfinished tools have been used", () => {
     contentType: "application/vnd.zen.tool-task+json",
     structuredContent: { task_id: "test-task", status: "running" },
   };
-  assert.equal(traceSummary([pending, yielded]), "Inspect page · running");
+  assert.equal(traceSummary([pending, yielded]), "Run command · requested");
 });
 
 test("thread send and rename summaries report successful actions without redundant completion or target-work claims", () => {
@@ -98,13 +99,13 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
     structuredContent: { task_id: "test-task", status: "running" },
   };
   const cases = [
-    [wait, "Waited for task"],
+    [wait, "Checked task status"],
     [
       {
         ...wait,
         structuredContent: { task_id: "test-task", status: "timed_out" },
       },
-      "Waited for task",
+      "Checked task status",
     ],
     [
       {
@@ -113,7 +114,7 @@ test("grouped task receipts preserve the same wait and terminal phases as their 
         contentType: undefined,
         structuredContent: undefined,
       },
-      "Wait · declined",
+      "Wait for task · completed",
     ],
   ] as const;
   for (const [item, label] of cases) {
@@ -380,14 +381,14 @@ test("ended results remain ordinary calls while lifecycle phases stay intact", (
   };
   const activity = summarizeTraceActivity([shell, task, other, cancelled]);
   assert.equal(activity.total, 4);
-  assert.equal(activity.cancelled, 1);
+  assert.equal("cancelled" in activity, false);
   assert.equal(activity.active, 0);
   assert.equal("failed" in activity, false);
   assert.equal("shellNonzero" in activity, false);
-  assert.match(traceSummary([shell]), /ended/);
+  assert.match(traceSummary([shell]), /completed/);
 });
 
-test("later settlement updates earlier shell summaries without changing canonical items", () => {
+test("later process settlement cannot change earlier invocation summaries or canonical items", () => {
   const early = {
     ...command("early", "grep absent file"),
     toolName: "shell",
@@ -413,12 +414,12 @@ test("later settlement updates earlier shell summaries without changing canonica
   };
   const items = [early, final];
   const before = structuredClone(items);
-  assert.match(traceSummary([early], items), /ended/);
+  assert.equal(traceSummary([early]), "Run command");
   assert.doesNotMatch(traceSummary(items), /failed/i);
   assert.deepEqual(items, before);
 });
 
-test("observed settlement preserves cancellation and timeout facts and cannot regress to running", () => {
+test("later process receipts cannot change earlier call status or reactivate returned calls", () => {
   const early = {
     ...command("early", "grep absent file"),
     toolName: "shell",
@@ -442,25 +443,29 @@ test("observed settlement preserves cancellation and timeout facts and cannot re
       exit_code: 1,
     },
   };
-  for (const [patch, label] of [
-    [{ status: "timed_out" }, "Timed out"],
-    [{ status: "cancelled" }, "Cancelled"],
-    [{ foreground_signal: "SIGTERM" }, "Ended"],
-    [{ tool_name: "other_tool" }, "Ended"],
-  ] as const) {
-    const index = createTraceObservationIndex([
-      early,
-      { ...final, structuredContent: { ...final.structuredContent, ...patch } },
-    ]);
-    assert.equal(observedCommandStatus(early, index), label);
+  const patches: ReadonlyArray<Record<string, string>> = [
+    { status: "timed_out" },
+    { status: "cancelled" },
+    { foreground_signal: "SIGTERM" },
+    { tool_name: "other_tool" },
+  ];
+  for (const patch of patches) {
+    const receipt = {
+      ...final,
+      structuredContent: { ...final.structuredContent, ...patch },
+    };
+    const before = structuredClone([early, receipt]);
+    assert.equal(summarizeTraceActivity([early, receipt]).active, 0);
+    assert.equal(commandStatus(early), "Completed");
+    assert.equal(commandStatus(receipt), "Completed");
+    assert.deepEqual([early, receipt], before);
   }
   const lateRunning = { ...early, id: "late-running" };
-  const index = createTraceObservationIndex([early, final, lateRunning]);
-  assert.equal(observedCommandStatus(early, index), "Ended");
-  assert.equal(observedCommandStatus(lateRunning, index), "Ended");
+  assert.equal(summarizeTraceActivity([early, final, lateRunning]).active, 0);
+  assert.equal(commandStatus(lateRunning), "Completed");
 });
 
-test("returned waits keep their own lifecycle while observations update the background task", () => {
+test("returned waits and shells remain complete while a newer invocation awaits its own result", () => {
   const shell = {
     ...command("shell", "sleep 60"),
     toolName: "shell",
@@ -487,30 +492,30 @@ test("returned waits keep their own lifecycle while observations update the back
     other,
     nextWait,
   ];
-  const index = createTraceObservationIndex(items);
-  assert.equal(observedCommandPhase(wait, index), "completed");
-  assert.equal(observedCommandStatus(wait, index), "Waited");
-  assert.equal(summarizeTraceActivity([wait], index).active, 0);
-  assert.equal(observedCommandPhase(nextWait, index), "waiting");
-  assert.equal(summarizeTraceActivity([nextWait], index).waiting, 1);
-  assert.equal(observedCommandPhase(shell, index), "running");
-  assert.equal(summarizeTraceActivity([shell], index).running, 1);
-  assert.equal(summarizeTraceActivity([shell, wait], index).active, 1);
-  assert.equal(summarizeTraceActivity([other], index).running, 1);
+  assert.equal(summarizeTraceActivity(items).current?.id, nextWait.id);
+  assert.equal(commandPhase(wait), "completed");
+  assert.equal(commandStatus(wait), "Completed");
+  assert.equal(summarizeTraceActivity([wait]).active, 0);
+  assert.equal(commandPhase(nextWait), "requested");
+  assert.equal(summarizeTraceActivity([nextWait]).active, 1);
+  assert.equal(commandPhase(shell), "completed");
+  assert.equal(summarizeTraceActivity([shell]).active, 0);
+  assert.equal(summarizeTraceActivity([shell, wait]).active, 0);
+  assert.equal(summarizeTraceActivity([other]).active, 0);
   for (const status of ["completed", "failed", "timed_out", "cancelled"]) {
     const settled = {
       ...wait,
       id: "wait-final",
       structuredContent: { task_id: "background", status },
     };
-    const updated = createTraceObservationIndex([...items, settled]);
-    assert.equal(observedCommandPhase(wait, updated), "completed");
-    assert.equal(observedCommandPhase(nextWait, updated), "waiting");
-    assert.equal(observedCommandPhase(shell, updated), status);
     assert.equal(
-      summarizeTraceActivity([shell, wait, settled], updated).active,
-      0,
+      summarizeTraceActivity([...items, settled]).current?.id,
+      nextWait.id,
     );
-    assert.equal(summarizeTraceActivity([other], updated).running, 1);
+    assert.equal(commandPhase(wait), "completed");
+    assert.equal(commandPhase(nextWait), "requested");
+    assert.equal(commandPhase(shell), "completed");
+    assert.equal(summarizeTraceActivity([shell, wait, settled]).active, 0);
+    assert.equal(summarizeTraceActivity([other]).active, 0);
   }
 });
