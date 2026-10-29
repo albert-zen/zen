@@ -782,3 +782,50 @@
     padding-inline-start: 56px;
   }
 }
+
+/* At the supported 140px minimum, a query and its clear control need their own
+   row. The body-owned toggle never moves; only its neighboring actions reflow. */
+.workspace-file-navigation {
+  container-type: inline-size;
+  container-name: file-navigation;
+}
+@container file-navigation (max-width: 191px) {
+  .auxiliary-body:has(> .workspace-navigation-toggle) .workspace-file-actions {
+    display: grid;
+    grid-template-columns: minmax(32px, 1fr) 26px 26px;
+    grid-template-rows: 32px auto;
+    padding-inline: 6px;
+    row-gap: 6px;
+  }
+  .workspace-file-actions > .workspace-file-search {
+    grid-area: 2 / 1 / 3 / -1;
+  }
+  .workspace-file-actions > .icon-button:nth-child(2) {
+    grid-area: 1 / 2;
+  }
+  .workspace-file-actions > .icon-button:last-child {
+    grid-area: 1 / 3;
+  }
+  @media (pointer: coarse) {
+    .auxiliary-body:has(> .workspace-navigation-toggle)
+      .workspace-file-actions {
+      grid-template-columns: minmax(44px, 1fr) 44px 44px;
+      grid-template-rows: 44px auto;
+    }
+  }
+}
+@container file-navigation (max-width: 153px) {
+  @media (pointer: coarse) {
+    .auxiliary-body:has(> .workspace-navigation-toggle)
+      .workspace-file-actions {
+      grid-template-columns: minmax(44px, 1fr) 44px;
+      grid-template-rows: 44px auto 44px;
+    }
+    .workspace-file-actions > .icon-button:nth-child(2) {
+      grid-area: 3 / 1;
+    }
+    .workspace-file-actions > .icon-button:last-child {
+      grid-area: 1 / 2;
+    }
+  }
+}
