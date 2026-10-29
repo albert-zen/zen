@@ -10,7 +10,7 @@ import {
   type ThreadSidebarState,
 } from "../src/thread-sidebar-state.js";
 
-test("workspace tab moves preserve selection, mounted drafts and resource descriptors; keyboard and click alternatives persist the same order", async () => {
+test("workspace tab keyboard moves preserve selection, mounted drafts and resource descriptors without a reorder menu", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -92,29 +92,50 @@ test("workspace tab moves preserve selection, mounted drafts and resource descri
       ["custom:b", "custom:a", "file:@member-original:notes.md"],
     ]);
     assert.equal(tab("custom:a").getAttribute("aria-selected"), "true");
-    assert.equal(document.activeElement, tab("custom:a"));
-    assert.equal(document.querySelector('[aria-label="Draft a"]'), draft);
+    assert.ok(
+      document.activeElement === tab("custom:a"),
+      "reordered tab keeps keyboard focus",
+    );
+    assert.ok(
+      document.querySelector('[aria-label="Draft a"]') === draft,
+      "draft input stays mounted",
+    );
     assert.equal(draft.value, "unsaved local text");
     assert.equal(
       state.tabs[2],
       resource,
       "reorder keeps the original resource descriptor",
     );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="Reorder A"]')!
-        .click(),
+    assert.ok(
+      document.querySelector(".workspace-tab-reorder-menu") === null,
+      "reorder-only menu is absent",
     );
-    const left = [
-      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-    ].find((item) => item.textContent?.includes("Move left"))!;
-    await act(async () => left.click());
+    assert.ok(
+      document.querySelector('[aria-label="Reorder A"]') === null,
+      "reorder-only trigger is absent",
+    );
+    assert.equal(
+      tab("custom:a").getAttribute("aria-description"),
+      "Drag to reorder, or use Alt+Left/Right.",
+    );
+    await act(async () =>
+      tab("custom:a").dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowLeft",
+          altKey: true,
+          bubbles: true,
+        }),
+      ),
+    );
     assert.deepEqual(state.tabs.map(sidebarTabId), [
       "custom:a",
       "custom:b",
       "file:@member-original:notes.md",
     ]);
-    assert.equal(document.activeElement, tab("custom:a"));
+    assert.ok(
+      document.activeElement === tab("custom:a"),
+      "reordered tab keeps keyboard focus",
+    );
     await act(async () =>
       tab("custom:a").dispatchEvent(
         new window.KeyboardEvent("keydown", {
@@ -144,7 +165,7 @@ test("workspace tab moves preserve selection, mounted drafts and resource descri
   }
 });
 
-test("drag insertion is bounded to this workspace and cancellation clears its feedback", async () => {
+test("direct pointer drag scrolls narrow overflow, preserves selected content, and safely repeats after cancellation", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -157,83 +178,303 @@ test("drag insertion is bounded to this workspace and cancellation clears its fe
   });
   (window as any).zenx = {};
   const writes: string[][] = [];
+  const selections: string[] = [];
+  const closed: string[] = [];
+  let changeOwner!: (id: string) => void;
+  let changeRevision!: (revision: number) => void;
+  const writeRevisions: number[] = [];
   function Harness() {
-    const [ids, update] = useState(["custom:a", "custom:b", "custom:c"]);
+    const [ids, update] = useState([
+      "custom:a",
+      "custom:b",
+      "custom:c",
+      "custom:d",
+    ]);
+    const [owner, setOwner] = useState("thread-a");
+    const [revision, setRevision] = useState(1);
+    changeOwner = setOwner;
+    changeRevision = setRevision;
     return React.createElement(AuxiliaryPanel, {
-      threadId: "thread-a",
+      threadId: owner,
       title: "Synthetic",
       open: true,
       onOpenChange() {},
       snapshot: null,
       selectedTab: "custom:b",
-      onSelectTab() {},
+      onSelectTab(id) {
+        selections.push(id);
+      },
+      onRemoveTab(id) {
+        closed.push(id);
+      },
       openedTabs: ids,
       onTabsChange: (next: string[]) => {
         writes.push(next);
+        writeRevisions.push(revision);
         update(next);
       },
-      customTabs: ["a", "b", "c"].map((id) => ({
+      customTabs: ["a", "b", "c", "d"].map((id) => ({
         id,
         title: id,
         icon: "file" as const,
-        render: () => null,
+        render: () =>
+          React.createElement("input", {
+            "aria-label": `Draft ${id}`,
+            defaultValue: `draft-${id}`,
+          }),
       })),
     });
   }
   const root = createRoot(document.getElementById("root")!);
+  const tab = (id: string) => document.getElementById(`aux-tab-custom:${id}`)!;
   const row = (id: string) =>
-    document
-      .getElementById(`aux-tab-custom:${id}`)!
-      .closest<HTMLElement>(".workspace-content-tab")!;
-  const transfer = {
-    effectAllowed: "",
-    dropEffect: "",
-    setData() {},
-    getData() {
-      return "";
-    },
+    tab(id).closest<HTMLElement>(".workspace-content-tab")!;
+  const rows = () => [
+    ...document.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+  ];
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  window.requestAnimationFrame = (callback) => {
+    frames.set(++frameId, callback);
+    return frameId;
   };
-  async function drag(id: string, type: string, x = 80) {
-    const event = new window.Event(type, { bubbles: true, cancelable: true });
-    Object.assign(event, { dataTransfer: transfer, clientX: x });
-    await act(async () => row(id).dispatchEvent(event));
+  window.cancelAnimationFrame = (id) => {
+    frames.delete(id);
+  };
+  async function tick() {
+    await act(async () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    });
   }
+  let scroll = 0;
+  const proto = dom.window.HTMLElement.prototype;
+  const originalRect = proto.getBoundingClientRect;
+  Object.defineProperties(proto, {
+    clientWidth: {
+      configurable: true,
+      get() {
+        return this.getAttribute("role") === "tablist" ? 200 : 0;
+      },
+    },
+    scrollWidth: {
+      configurable: true,
+      get() {
+        return this.getAttribute("role") === "tablist"
+          ? 376 +
+              parseFloat(
+                this.style.getPropertyValue("--workspace-tab-end-gap") || "0",
+              )
+          : 0;
+      },
+    },
+    scrollLeft: {
+      configurable: true,
+      get() {
+        return this.getAttribute("role") === "tablist" ? scroll : 0;
+      },
+      set(value) {
+        if (this.getAttribute("role") === "tablist")
+          scroll = Math.max(0, Math.min(value, this.scrollWidth - 200));
+      },
+    },
+  });
+  proto.getBoundingClientRect = function () {
+    if (this.getAttribute("role") === "tablist")
+      return {
+        left: 100,
+        right: 300,
+        top: 0,
+        bottom: 34,
+        width: 200,
+        height: 34,
+      } as DOMRect;
+    if (this.classList.contains("workspace-content-tab")) {
+      const left = 102 + rows().indexOf(this) * 94 - scroll;
+      return {
+        left,
+        right: left + 90,
+        top: 2,
+        bottom: 32,
+        width: 90,
+        height: 30,
+      } as DOMRect;
+    }
+    return originalRect.call(this);
+  };
+  async function pointer(
+    target: EventTarget,
+    type: string,
+    x = 130,
+    y = 15,
+    pointerId = 1,
+  ) {
+    const event = new window.MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+    Object.assign(event, { pointerId, pointerType: "mouse" });
+    await act(async () => target.dispatchEvent(event));
+  }
+  const clean = () => {
+    assert.ok(
+      document.querySelector("[data-drop-placement]") === null,
+      "drop feedback is cleared",
+    );
+    assert.ok(
+      document.querySelector("[data-dragging]") === null,
+      "drag feedback is cleared",
+    );
+    assert.equal(
+      frames.size,
+      0,
+      "no edge-scroll animation survives completion/cancellation",
+    );
+  };
   try {
     await act(async () => root.render(React.createElement(Harness)));
-    for (const id of ["a", "b", "c"])
-      row(id).getBoundingClientRect = () =>
-        ({ left: 0, width: 100 }) as DOMRect;
-    await drag("c", "dragover");
-    await drag("c", "drop");
-    assert.equal(writes.length, 0, "external drags never reorder tabs");
-    await drag("a", "dragstart");
-    await drag("c", "dragover");
-    assert.equal(row("c").dataset.dropPlacement, "after");
+    const draft = document.querySelector<HTMLInputElement>(
+      '[aria-label="Draft b"]',
+    )!;
+    draft.value = "keep my unsent input";
+    await pointer(window, "pointermove", 280);
+    await pointer(window, "pointerup", 280);
+    assert.equal(
+      writes.length,
+      0,
+      "external pointer operations never reorder tabs",
+    );
+
+    await pointer(tab("a"), "pointerdown");
+    await pointer(window, "pointermove", 133);
+    assert.ok(
+      document.querySelector("[data-dragging]") === null,
+      "small clicks are not drags",
+    );
+    await pointer(window, "pointercancel");
+    clean();
+
+    for (const cancellation of [
+      "pointercancel",
+      "lostpointercapture",
+      "Escape",
+      "blur",
+      "outside",
+      "owner",
+    ]) {
+      await pointer(tab("a"), "pointerdown");
+      await pointer(window, "pointermove", 280);
+      assert.equal(row("b").dataset.dropPlacement, "after");
+      assert.equal(writes.length, 0, "order stays fixed until release");
+      if (cancellation === "Escape") {
+        await act(async () =>
+          window.dispatchEvent(
+            new window.KeyboardEvent("keydown", {
+              key: "Escape",
+              bubbles: true,
+            }),
+          ),
+        );
+      } else if (cancellation === "blur") {
+        await act(async () => window.dispatchEvent(new window.Event("blur")));
+      } else if (cancellation === "outside") {
+        await pointer(window, "pointerup", 280, 90);
+      } else if (cancellation === "owner") {
+        await act(async () => changeOwner("thread-other"));
+      } else {
+        await pointer(
+          cancellation === "lostpointercapture" ? tab("a") : window,
+          cancellation,
+        );
+      }
+      await pointer(window, "pointerup", 280);
+      clean();
+      assert.equal(writes.length, 0, `${cancellation} never commits a reorder`);
+    }
+
+    await pointer(
+      row("a").querySelector(".workspace-tab-close")!,
+      "pointerdown",
+    );
+    await pointer(window, "pointermove", 280);
+    await pointer(window, "pointerup", 280);
+    clean();
+    assert.equal(writes.length, 0, "close controls do not start a drag");
+
+    await pointer(tab("a"), "pointerdown");
+    await pointer(window, "pointermove", 299);
+    for (let i = 0; i < 30; i += 1) await tick();
+    assert.ok(
+      scroll >= 176,
+      "holding at the narrow rail edge reveals previously hidden tabs",
+    );
+    assert.equal(row("d").dataset.dropPlacement, "after");
+    await act(async () => changeRevision(2));
+    await pointer(window, "pointerup", 299);
+    assert.deepEqual(
+      writeRevisions,
+      [2],
+      "drop uses the latest owner callback, not a stale presentation revision",
+    );
+    assert.deepEqual(writes, [
+      ["custom:b", "custom:c", "custom:d", "custom:a"],
+    ]);
+    clean();
     await act(async () =>
-      window.dispatchEvent(
-        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      tab("a").dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, detail: 1 }),
       ),
     );
-    assert.equal(document.querySelector("[data-drop-placement]"), null);
-    await drag("c", "drop");
-    assert.equal(writes.length, 0);
-    await drag("a", "dragstart");
-    await drag("c", "dragover");
-    await drag("c", "drop");
-    assert.deepEqual(writes, [["custom:b", "custom:c", "custom:a"]]);
-    assert.equal(document.querySelector("[data-drop-placement]"), null);
-    assert.equal(document.querySelector("[data-dragging]"), null);
-    assert.equal(
-      document
-        .getElementById("aux-tab-custom:b")!
-        .getAttribute("aria-selected"),
-      "true",
+    assert.deepEqual(
+      selections,
+      [],
+      "release click never activates the dragged inactive tab",
     );
-    await drag("a", "dragstart");
-    await drag("b", "dragover", 10);
-    await drag("a", "dragend");
-    assert.equal(document.querySelector("[data-drop-placement]"), null);
-    assert.equal(writes.length, 1);
+    assert.deepEqual(closed, []);
+    assert.equal(tab("b").getAttribute("aria-selected"), "true");
+    assert.ok(
+      document.querySelector('[aria-label="Draft b"]') === draft,
+      "selected draft input stays mounted",
+    );
+    assert.equal(draft.value, "keep my unsent input");
+
+    // A second direct move uses the newly committed order, including the active tab.
+    await pointer(tab("b"), "pointerdown");
+    await pointer(window, "pointermove", 280);
+    await pointer(window, "pointerup", 280);
+    assert.deepEqual(writes[1], [
+      "custom:c",
+      "custom:b",
+      "custom:d",
+      "custom:a",
+    ]);
+    clean();
+    assert.equal(tab("b").getAttribute("aria-selected"), "true");
+    assert.ok(
+      document.querySelector('[aria-label="Draft b"]') === draft,
+      "selected draft input stays mounted",
+    );
+    assert.equal(draft.value, "keep my unsent input");
+
+    // Normal clicks after a drag remain ordinary selection rather than stale suppression.
+    await pointer(tab("c"), "pointerdown");
+    await pointer(window, "pointerup");
+    await act(async () =>
+      tab("c").dispatchEvent(
+        new window.MouseEvent("click", { bubbles: true, detail: 1 }),
+      ),
+    );
+    assert.deepEqual(selections, ["custom:c"]);
+    assert.equal(writes.length, 2);
+
+    await pointer(tab("b"), "pointerdown", 225);
+    await pointer(window, "pointermove", 299);
+    await act(async () => root.unmount());
+    assert.equal(frames.size, 0, "unmount cancels edge scrolling");
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

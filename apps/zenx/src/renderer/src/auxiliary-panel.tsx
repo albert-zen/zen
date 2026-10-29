@@ -33,7 +33,6 @@ import { WorkspaceFilesPanel } from "./workspace-files-panel.js";
 import { WorkspaceFilePicker } from "./workspace-file-picker.js";
 import { Icon, type IconName } from "./icons.js";
 import { messageFilePath } from "./message-file-path.js";
-import { ActionMenu } from "./ui/controls.js";
 
 function panelIcon(pluginId: string): IconName {
   if (pluginId === "zenx-subagents") return "users";
@@ -220,7 +219,20 @@ export function AuxiliaryPanel({
   const [width, setWidth] = useState(520);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
-  const dragSource = useRef<string | null>(null);
+  const pointerDrag = useRef<{
+    source: string;
+    pointerId: number;
+    originX: number;
+    originY: number;
+    x: number;
+    y: number;
+    dragging: boolean;
+    capture: HTMLElement;
+    target?: string;
+    after?: boolean;
+  } | null>(null);
+  const dragFrame = useRef<number | null>(null);
+  const suppressDragClick = useRef(false);
   const [tabDrag, setTabDrag] = useState<{
     source: string;
     target?: string;
@@ -516,7 +528,14 @@ export function AuxiliaryPanel({
   orderRef.current = order;
   threadIdRef.current = threadId;
   const clearTabDrag = () => {
-    dragSource.current = null;
+    const drag = pointerDrag.current;
+    pointerDrag.current = null;
+    if (dragFrame.current !== null) {
+      window.cancelAnimationFrame(dragFrame.current);
+      dragFrame.current = null;
+    }
+    if (drag?.capture.hasPointerCapture?.(drag.pointerId))
+      drag.capture.releasePointerCapture(drag.pointerId);
     setTabDrag(null);
   };
   const reorderTab = (
@@ -539,6 +558,8 @@ export function AuxiliaryPanel({
     if (focus) reorderedFocus.current = source;
     setOrder(next);
   };
+  const reorderTabRef = useRef(reorderTab);
+  reorderTabRef.current = reorderTab;
   const moveTab = (id: string, direction: -1 | 1) => {
     const current = idsRef.current;
     const index = current.indexOf(id);
@@ -556,17 +577,114 @@ export function AuxiliaryPanel({
     : `thread:${threadId}`;
   useEffect(() => {
     clearTabDrag();
-    const cancel = (event: KeyboardEvent) => {
-      if (event.key === "Escape") clearTabDrag();
+    const updateTarget = () => {
+      const drag = pointerDrag.current;
+      const rail = tabRail.current;
+      if (!drag?.dragging || !rail) return;
+      const edge = rail.getBoundingClientRect();
+      drag.target = undefined;
+      if (
+        drag.x >= edge.left &&
+        drag.x <= edge.right &&
+        drag.y >= edge.top &&
+        drag.y <= edge.bottom
+      ) {
+        const items = [
+          ...rail.querySelectorAll<HTMLElement>(".workspace-content-tab"),
+        ];
+        const target =
+          items.find((item) => drag.x < item.getBoundingClientRect().right) ??
+          items.at(-1);
+        if (target) {
+          const bounds = target.getBoundingClientRect();
+          drag.target = target.dataset.tabId;
+          drag.after = drag.x >= bounds.left + bounds.width / 2;
+        }
+      }
+      setTabDrag({
+        source: drag.source,
+        target: drag.target,
+        placement: drag.after ? "after" : "before",
+      });
     };
-    window.addEventListener("keydown", cancel);
-    window.addEventListener("blur", clearTabDrag);
+    const scrollAtEdge = () => {
+      dragFrame.current = null;
+      const drag = pointerDrag.current;
+      const rail = tabRail.current;
+      if (!drag?.dragging || !rail) return;
+      const edge = rail.getBoundingClientRect();
+      if (
+        drag.x < edge.left ||
+        drag.x > edge.right ||
+        drag.y < edge.top ||
+        drag.y > edge.bottom
+      )
+        return;
+      const inset = Math.min(28, edge.width / 3);
+      const delta =
+        drag.x < edge.left + inset
+          ? -Math.ceil((edge.left + inset - drag.x) / 3)
+          : drag.x > edge.right - inset
+            ? Math.ceil((drag.x - edge.right + inset) / 3)
+            : 0;
+      const previous = rail.scrollLeft;
+      rail.scrollLeft += delta;
+      updateTarget();
+      if (delta && rail.scrollLeft !== previous)
+        dragFrame.current = window.requestAnimationFrame(scrollAtEdge);
+    };
+    const move = (event: PointerEvent) => {
+      const drag = pointerDrag.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      if (!drag.dragging) {
+        if (Math.hypot(drag.x - drag.originX, drag.y - drag.originY) < 6)
+          return;
+        drag.dragging = true;
+      }
+      event.preventDefault();
+      updateTarget();
+      if (dragFrame.current === null)
+        dragFrame.current = window.requestAnimationFrame(scrollAtEdge);
+    };
+    const finish = (event: PointerEvent) => {
+      const drag = pointerDrag.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      if (drag.dragging) {
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        updateTarget();
+        suppressDragClick.current = true;
+        if (drag.target)
+          reorderTabRef.current(drag.source, drag.target, Boolean(drag.after));
+      }
+      clearTabDrag();
+    };
+    const cancel = () => {
+      if (pointerDrag.current?.dragging) suppressDragClick.current = true;
+      clearTabDrag();
+    };
+    const cancelPointer = (event: PointerEvent) => {
+      if (pointerDrag.current?.pointerId === event.pointerId) cancel();
+    };
+    const cancelKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") cancel();
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancelPointer);
+    window.addEventListener("keydown", cancelKey);
+    window.addEventListener("blur", cancel);
     return () => {
-      dragSource.current = null;
-      window.removeEventListener("keydown", cancel);
-      window.removeEventListener("blur", clearTabDrag);
+      cancel();
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancelPointer);
+      window.removeEventListener("keydown", cancelKey);
+      window.removeEventListener("blur", cancel);
     };
-  }, [workspaceIdentity, open, signature]);
+  }, [workspaceIdentity, open, signature, canReorder]);
   const resourceCurrent = (epoch: number, owner: string) =>
     mounted.current &&
     threadIdRef.current === owner &&
@@ -1258,70 +1376,54 @@ export function AuxiliaryPanel({
                   (tab.externalBrowser?.activityCount ?? 0) > 0,
                 )}
                 key={tab.id}
-                draggable={canReorder}
+                data-tab-id={tab.id}
+                data-reorderable={canReorder || undefined}
                 data-dragging={tabDrag?.source === tab.id || undefined}
                 data-drop-placement={
                   tabDrag?.target === tab.id ? tabDrag.placement : undefined
                 }
-                onDragStart={(event) => {
+                onDragStart={(event) => event.preventDefault()}
+                onPointerDown={(event) => {
+                  suppressDragClick.current = false;
                   if (
                     !canReorder ||
+                    event.button !== 0 ||
+                    event.pointerType === "touch" ||
+                    pointerDrag.current ||
                     (event.target as HTMLElement).closest(
                       ".workspace-tab-close",
                     )
-                  ) {
-                    event.preventDefault();
-                    return;
-                  }
-                  dragSource.current = tab.id;
-                  setTabDrag({ source: tab.id });
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData(
-                    "application/x-zenx-workspace-tab",
-                    tab.id,
-                  );
-                }}
-                onDragOver={(event) => {
-                  const source = dragSource.current;
-                  if (!source || !canReorder) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  const bounds = event.currentTarget.getBoundingClientRect();
-                  const placement =
-                    event.clientX < bounds.left + bounds.width / 2
-                      ? "before"
-                      : "after";
-                  setTabDrag({ source, target: tab.id, placement });
-                  const rail = tabRail.current;
-                  if (rail) {
-                    const edge = rail.getBoundingClientRect();
-                    if (event.clientX < edge.left + 28) rail.scrollLeft -= 20;
-                    else if (event.clientX > edge.right - 28)
-                      rail.scrollLeft += 20;
-                  }
-                }}
-                onDragLeave={(event) => {
-                  if (
-                    event.relatedTarget instanceof Node &&
-                    event.currentTarget.contains(event.relatedTarget)
                   )
                     return;
-                  const source = dragSource.current;
-                  setTabDrag(source ? { source } : null);
+                  const capture =
+                    event.currentTarget.querySelector<HTMLElement>(
+                      '[role="tab"]',
+                    )!;
+                  pointerDrag.current = {
+                    source: tab.id,
+                    pointerId: event.pointerId,
+                    originX: event.clientX,
+                    originY: event.clientY,
+                    x: event.clientX,
+                    y: event.clientY,
+                    dragging: false,
+                    capture,
+                  };
+                  capture.setPointerCapture?.(event.pointerId);
                 }}
-                onDrop={(event) => {
-                  const source = dragSource.current;
-                  if (!source) return;
-                  event.preventDefault();
-                  const bounds = event.currentTarget.getBoundingClientRect();
-                  reorderTab(
-                    source,
-                    tab.id,
-                    event.clientX >= bounds.left + bounds.width / 2,
-                  );
-                  clearTabDrag();
+                onLostPointerCapture={(event) => {
+                  if (pointerDrag.current?.pointerId === event.pointerId) {
+                    suppressDragClick.current = pointerDrag.current.dragging;
+                    clearTabDrag();
+                  }
                 }}
-                onDragEnd={clearTabDrag}
+                onClickCapture={(event) => {
+                  if (suppressDragClick.current && event.detail !== 0) {
+                    suppressDragClick.current = false;
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }
+                }}
               >
                 <button
                   type="button"
@@ -1332,6 +1434,11 @@ export function AuxiliaryPanel({
                   tabIndex={active === tab.id ? 0 : -1}
                   aria-keyshortcuts={
                     canReorder ? "Alt+ArrowLeft Alt+ArrowRight" : undefined
+                  }
+                  aria-description={
+                    canReorder
+                      ? i18n.t("panels:reorderWorkspaceTabHint")
+                      : undefined
                   }
                   title={tab.path ?? tab.browser?.url ?? tab.title}
                   onClick={() => select(tab.id)}
@@ -1407,35 +1514,6 @@ export function AuxiliaryPanel({
               </span>
             ))}
           </div>
-          {canReorder && active && !showChooser ? (
-            <span className="workspace-tab-reorder-menu">
-              <ActionMenu
-                compact
-                label={i18n.t("panels:reorderWorkspaceTab", {
-                  defaultValue: "Reorder {{title}}",
-                  title: available.get(active)?.title,
-                })}
-                items={[
-                  {
-                    label: i18n.t("panels:moveWorkspaceTabLeft", {
-                      defaultValue: "Move left",
-                    }),
-                    description: "Alt+←",
-                    disabled: ids.indexOf(active) === 0,
-                    onSelect: () => moveTab(active, -1),
-                  },
-                  {
-                    label: i18n.t("panels:moveWorkspaceTabRight", {
-                      defaultValue: "Move right",
-                    }),
-                    description: "Alt+→",
-                    disabled: ids.indexOf(active) === ids.length - 1,
-                    onSelect: () => moveTab(active, 1),
-                  },
-                ]}
-              />
-            </span>
-          ) : null}
           <button
             type="button"
             className="icon-button workspace-add-tab"
@@ -1512,8 +1590,31 @@ export function AuxiliaryPanel({
           } as React.CSSProperties
         }
         data-files={Boolean(fileSurface)}
+        data-navigation-open={Boolean(fileNavigationVisible)}
         data-picking={showChooser && pickingFile}
       >
+        {fileSurface && !pickingFile ? (
+          <button
+            type="button"
+            className="icon-button workspace-navigation-toggle"
+            aria-label={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            title={i18n.t(
+              fileNavigationVisible
+                ? "panels:hideFileNavigation"
+                : "panels:showFileNavigation",
+            )}
+            aria-pressed={Boolean(fileNavigationVisible)}
+            aria-expanded={Boolean(fileNavigationVisible)}
+            aria-controls="workspace-file-navigation"
+            onClick={() => setFileNavigationOpen((value) => !value)}
+          >
+            <Icon name="folder" />
+          </button>
+        ) : null}
         {threadId !== undefined && (files.length > 0 || pickingFile) ? (
           <nav
             id="workspace-file-navigation"
@@ -1797,31 +1898,6 @@ export function AuxiliaryPanel({
                     workspacePath={workspacePath}
                     initialPath={tab.path}
                     standalone
-                    navigationToggle={
-                      visible ? (
-                        <button
-                          type="button"
-                          className="icon-button workspace-navigation-toggle"
-                          aria-label={i18n.t(
-                            fileNavigationVisible
-                              ? "panels:hideFileNavigation"
-                              : "panels:showFileNavigation",
-                          )}
-                          title={i18n.t(
-                            fileNavigationVisible
-                              ? "panels:hideFileNavigation"
-                              : "panels:showFileNavigation",
-                          )}
-                          aria-pressed={Boolean(fileNavigationVisible)}
-                          aria-controls="workspace-file-navigation"
-                          onClick={() =>
-                            setFileNavigationOpen((value) => !value)
-                          }
-                        >
-                          <Icon name="folder" />
-                        </button>
-                      ) : null
-                    }
                   />
                 ) : null}
                 {tab.browser && threadId !== undefined && visible ? (

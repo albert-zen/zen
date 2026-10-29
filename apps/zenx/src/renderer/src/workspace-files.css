@@ -719,3 +719,66 @@
     min-height: 44px;
   }
 }
+
+/* One body-owned toggle stays at the leading edge in both split layouts. */
+.auxiliary-body[data-files="true"] {
+  position: relative;
+}
+.auxiliary-body > .workspace-navigation-toggle {
+  position: absolute;
+  z-index: 2;
+  inset-inline-start: 6px;
+  top: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+}
+.auxiliary-body > .workspace-navigation-toggle > svg {
+  width: 18px;
+  height: 18px;
+}
+.auxiliary-body > .workspace-navigation-toggle[aria-pressed="true"] {
+  background: var(--color-surface-active);
+  color: var(--color-text-muted);
+}
+.auxiliary-body:has(> .workspace-navigation-toggle) .workspace-file-actions {
+  padding-inline-start: 42px;
+}
+.auxiliary-body:has(> .workspace-navigation-toggle)
+  .workspace-file-navigation
+  .workspace-file-picker {
+  padding-top: 6px;
+}
+.auxiliary-body:has(> .workspace-navigation-toggle) .workspace-file-search {
+  min-height: 32px;
+}
+.auxiliary-body:has(> .workspace-navigation-toggle) .file-location {
+  min-height: 44px;
+}
+.auxiliary-body[data-navigation-open="false"]:has(
+    > .workspace-navigation-toggle
+  )
+  .file-location {
+  padding-inline-start: 44px;
+}
+@media (pointer: coarse) {
+  .auxiliary-body > .workspace-navigation-toggle {
+    width: 44px;
+    height: 44px;
+  }
+  .auxiliary-body:has(> .workspace-navigation-toggle) .workspace-file-actions {
+    padding-inline-start: 54px;
+  }
+  .auxiliary-body:has(> .workspace-navigation-toggle) .workspace-file-search {
+    min-height: 44px;
+  }
+  .auxiliary-body:has(> .workspace-navigation-toggle) .file-location {
+    min-height: 56px;
+  }
+  .auxiliary-body[data-navigation-open="false"]:has(
+      > .workspace-navigation-toggle
+    )
+    .file-location {
+    padding-inline-start: 56px;
+  }
+}

@@ -46,9 +46,57 @@ await withPreviewBrowser(
       await evaluate("document.getElementById('composer-draft').value"),
       "My unsent chat draft stays here.",
     );
-    await click('[aria-label="Pin information"]');
-    await waitFor("!!document.querySelector('.information-rail')");
-    await screenshot("02-pinned-light.png");
+    assert.equal(
+      await evaluate(
+        "!!document.querySelector('.information-header,.information-rail,[data-information-pin]')",
+      ),
+      false,
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.information-toolbar button').getAttribute('aria-pressed')",
+      ),
+      "true",
+    );
+    await evaluate(
+      "document.querySelector('.board-field textarea').scrollIntoView({block:'center'})",
+    );
+    await click(".board-field textarea");
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: 2,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: 2,
+    });
+    await send("Input.insertText", {
+      text: "My edited Board draft stays here.",
+    });
+    // Repeated use of the one toggle preserves the Board and Composer drafts.
+    for (let repeat = 0; repeat < 3; repeat++) {
+      await click('[aria-label="Information board"]');
+      await waitFor("!document.querySelector('.information-popover')");
+      assert.equal(
+        await evaluate(
+          "document.querySelector('.information-toolbar button').getAttribute('aria-pressed')",
+        ),
+        "false",
+      );
+      await click('[aria-label="Information board"]');
+      await waitFor("!!document.querySelector('.board-surface')");
+      assert.equal(
+        await evaluate("document.querySelector('.board-field textarea').value"),
+        "My edited Board draft stays here.",
+      );
+    }
+    await screenshot("02-reopened-light.png");
     // Custom iframe executes real JS but the fixture's script port is deliberately synthetic.
     await evaluate(
       "document.querySelector('.board-custom').scrollIntoView({block:'center'})",
@@ -110,6 +158,10 @@ await withPreviewBrowser(
       ),
       0,
     );
+    await evaluate(
+      "document.querySelector('.board-action:not(.primary)').scrollIntoView({block:'center'})",
+    );
+    await delay(80);
     await click(".board-action:not(.primary)");
     assert.equal(
       await evaluate("window.__boardFixture.resourceState().selectedTab"),
@@ -148,7 +200,7 @@ await withPreviewBrowser(
     );
     assert.equal(
       await evaluate("document.querySelector('.board-field textarea').value"),
-      "Keep this draft while I explore.",
+      "My edited Board draft stays here.",
     );
     await evaluate(
       "document.querySelector('.information-content').scrollTop=0",
@@ -162,7 +214,7 @@ await withPreviewBrowser(
         theme,
       );
     }
-    await screenshot("04-pinned-dark.png");
+    await screenshot("04-popup-dark.png");
     // Late contribution admission must reattach measurement; the real Browser is 480px.
     await evaluate(
       "window.__boardFixture.setInformation(false); window.__boardFixture.toggleResource(true)",
@@ -194,9 +246,14 @@ await withPreviewBrowser(
       mobile: false,
     });
     await evaluate("window.__boardFixture.setInformation(true)");
-    await waitFor(
-      "document.querySelector('.information-rail')?.dataset.floating==='true'",
+    await waitFor("!!document.querySelector('.information-toolbar')");
+    assert.equal(
+      await evaluate("!!document.querySelector('.information-popover')"),
+      false,
+      "re-admission must not reopen the Board",
     );
+    await click('[aria-label="Information board"]');
+    await waitFor("!!document.querySelector('.information-popover')");
     await delay(350);
     assert.equal(
       await evaluate(
@@ -206,7 +263,7 @@ await withPreviewBrowser(
     );
     assert.equal(
       await evaluate(
-        "Math.round(document.querySelector('.information-rail').getBoundingClientRect().width)",
+        "Math.round(document.querySelector('.information-popover').getBoundingClientRect().width)",
       ),
       360,
     );
@@ -219,7 +276,7 @@ await withPreviewBrowser(
     );
     assert.ok(
       await evaluate(
-        "document.querySelector('.information-rail').getBoundingClientRect().top >= document.querySelector('.auxiliary-heading').getBoundingClientRect().bottom",
+        "document.querySelector('.information-popover').getBoundingClientRect().top >= document.querySelector('.auxiliary-heading').getBoundingClientRect().bottom",
       ),
     );
     await screenshot("06-browser-480-board-360.png");
@@ -227,7 +284,15 @@ await withPreviewBrowser(
     await waitFor(
       "document.querySelector('.auxiliary-panel')?.dataset.expanded==='true'",
     );
+    await waitFor("!document.querySelector('.information-popover')");
+    await click('[aria-label="Information board"]');
+    await waitFor("!!document.querySelector('.information-popover')");
     await delay(350);
+    assert.ok(
+      await evaluate(
+        "document.querySelector('.information-popover').getBoundingClientRect().top >= document.querySelector('.auxiliary-heading').getBoundingClientRect().bottom",
+      ),
+    );
     await screenshot("07-resource-fullscreen-information.png");
     await click('[aria-label="Restore side panel"]');
     await waitFor(
@@ -241,9 +306,9 @@ await withPreviewBrowser(
       deviceScaleFactor: 1,
       mobile: false,
     });
-    await screenshot("05-narrow-dark.png");
-    await click('[aria-label="Unpin information"]');
+    await click('[aria-label="Information board"]');
     await waitFor("!!document.querySelector('.information-popover')");
+    await screenshot("05-narrow-dark.png");
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
       key: "Escape",
@@ -270,7 +335,7 @@ await withPreviewBrowser(
           scope:
             "Actual production components; synthetic effect ports and chat scaffold. No private data or real shell/API/model call.",
           passed: [
-            "popup/pin/unpin",
+            "headerless popup with sole neutral open/close toggle; repeated hide/show preserves drafts",
             "light/dark/narrow",
             "onload privileged event denied",
             "custom local-only interaction makes zero calls",
@@ -278,7 +343,7 @@ await withPreviewBrowser(
             "agent revision preserves draft",
             "chat draft never touched",
             "real AuxiliaryPanel and WorkspaceBrowserPanel; synthetic native viewport",
-            "late contribution with Browser 480px and floating Board 360px",
+            "late contribution stays closed until requested; Browser 480px and popup Board 360px coexist",
             "header entry, Restore and Close are individually reachable",
             "typed local navigation selects exact Browser and opens exact docs URL with zero model calls",
             "SDK dark/light/dark appearance updates",

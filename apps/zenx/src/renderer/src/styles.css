@@ -11800,6 +11800,11 @@ button:disabled {
   width: 36px;
   height: 36px;
 }
+/* Open is a quiet neutral pressed surface, never an accent/highlight. */
+.information-toolbar > .icon-button[aria-pressed="true"] {
+  color: var(--color-text-muted);
+  background: var(--color-surface-active);
+}
 :root[data-platform="linux"] .information-toolbar,
 :root[data-platform="win32"] .information-toolbar {
   top: calc(var(--native-titlebar-height) + 4px);
@@ -11820,28 +11825,6 @@ button:disabled {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-.information-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-.information-title,
-.information-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.information-title {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-.information-header-actions .icon-button {
-  width: 28px;
-  height: 28px;
 }
 .information-content {
   min-height: 0;
@@ -11865,23 +11848,6 @@ button:disabled {
 .information-tabs button[aria-pressed="true"] {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
-}
-.information-rail {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: var(--workspace-panel-width, 0px);
-  width: 320px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--color-surface-main);
-  border-left: 1px solid var(--color-border-subtle);
-  z-index: 3;
-}
-.workspace:has(> .information-rail[data-floating="false"])
-  > :is(.agent-surface, .plugin-product-page) {
-  width: calc(100% - var(--workspace-panel-width, 0px) - 320px);
 }
 .board-surface {
   display: flex;
@@ -12080,19 +12046,8 @@ button:disabled {
   color: var(--color-text-primary);
   font-weight: 500;
 }
-.information-rail[data-floating="true"] {
-  width: min(360px, calc(100% - 16px));
-  top: 8px;
-  bottom: 8px;
-  right: 8px;
-  z-index: 85;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px var(--color-shadow);
-}
 @media (pointer: coarse) {
-  .information-toolbar > button,
-  .information-header-actions .icon-button {
+  .information-toolbar > button {
     min-width: 44px;
     min-height: 44px;
   }

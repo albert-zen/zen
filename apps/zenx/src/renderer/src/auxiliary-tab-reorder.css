@@ -1,6 +1,14 @@
-.workspace-content-tab[draggable="true"] {
+.workspace-content-tab[data-reorderable="true"] {
   position: relative;
+  user-select: none;
+}
+
+.workspace-content-tab[data-reorderable="true"] [role="tab"] {
   cursor: grab;
+}
+
+.workspace-content-tab[data-dragging="true"] [role="tab"] {
+  cursor: grabbing;
 }
 
 .workspace-content-tab[data-dragging="true"] {
@@ -25,27 +33,6 @@
 
 .workspace-content-tab[data-drop-placement="after"]::after {
   right: 0;
-}
-
-.workspace-tab-reorder-menu {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-}
-
-.workspace-tab-reorder-menu > .quiet-button {
-  width: 28px;
-  min-width: 28px;
-  min-height: 28px;
-  padding: 4px;
-}
-
-@media (pointer: coarse) {
-  .workspace-tab-reorder-menu > .quiet-button {
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
 }
 
 @media (forced-colors: active) {
