@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import type {
   BoardEventResult,
   BoardOwner,
@@ -11,6 +12,8 @@ export class BoardUiSession {
   snapshot: BoardSnapshot | null = null;
   values: BoardValues = {};
   error: string | null = null;
+  /** Transient owner-readable diagnostics; never part of a saved draft. */
+  errorDetail: string | null = null;
   result: BoardEventResult | null = null;
   dirty = false;
   busy = false;
@@ -34,6 +37,15 @@ export class BoardUiSession {
   #emit() {
     for (const listener of this.#listeners) listener();
   }
+  #clearError() {
+    this.error = null;
+    this.errorDetail = null;
+    this.#readError = false;
+  }
+  #fail(error: unknown) {
+    this.error = message(error);
+    this.errorDetail = localErrorDetail(error);
+  }
   async refresh() {
     const read = ++this.#read;
     try {
@@ -42,10 +54,7 @@ export class BoardUiSession {
         owner: this.owner,
       })) as BoardSnapshot | null;
       if (read !== this.#read) return;
-      if (this.#readError) {
-        this.error = null;
-        this.#readError = false;
-      }
+      if (this.#readError) this.#clearError();
       if (
         next &&
         (!this.snapshot ||
@@ -60,13 +69,15 @@ export class BoardUiSession {
           next.draftRevision === this.snapshot.draftRevision
         ) {
           this.snapshot = next;
-        } else
+        } else {
           this.error =
             "The saved draft changed in another view. Your local fields are kept; reload or copy them before continuing.";
+          this.errorDetail = null;
+        }
       } else if (!next && !this.dirty) this.snapshot = null;
     } catch (error) {
       if (read === this.#read) {
-        this.error = message(error);
+        this.#fail(error);
         this.#readError = true;
       }
     } finally {
@@ -81,8 +92,7 @@ export class BoardUiSession {
     this.#edit++;
     this.#read++;
     this.dirty = true;
-    this.error = null;
-    this.#readError = false;
+    this.#clearError();
     clearTimeout(this.#timer);
     this.#timer = setTimeout(() => {
       void this.flush().catch(() => {});
@@ -121,10 +131,10 @@ export class BoardUiSession {
           this.values = { ...next.values };
           this.dirty = false;
         }
-        this.error = null;
+        this.#clearError();
       } catch (error) {
         this.#readError = false;
-        this.error = message(error);
+        this.#fail(error);
         throw error;
       } finally {
         this.#saving = null;
@@ -139,8 +149,7 @@ export class BoardUiSession {
     if (!clicked) throw new Error("No Board exists");
     this.busy = true;
     this.result = null;
-    this.error = null;
-    this.#readError = false;
+    this.#clearError();
     this.#emit();
     try {
       await this.flush();
@@ -155,6 +164,7 @@ export class BoardUiSession {
           "Board changed while saving your fields; review the action and click again",
         );
       const current = this.snapshot;
+      const edit = this.#edit;
       const result = (await this.command({
         operation: "event",
         owner: current.document.owner,
@@ -163,9 +173,14 @@ export class BoardUiSession {
         revision: current.revision,
         draftRevision: current.draftRevision,
       })) as BoardEventResult;
+      // A poll begun before this receipt cannot subsequently roll its state back.
+      this.#read++;
       this.result = result;
       this.error = result.error ?? null;
+      this.errorDetail = result.error ? (result.errorDetail ?? null) : null;
+      this.#readError = false;
       if (
+        this.#edit === edit &&
         !this.dirty &&
         result.snapshot.revision >= (this.snapshot?.revision ?? 0) &&
         result.snapshot.draftRevision >= (this.snapshot?.draftRevision ?? 0)
@@ -175,7 +190,8 @@ export class BoardUiSession {
       }
       return result;
     } catch (error) {
-      this.error = message(error);
+      this.#readError = false;
+      this.#fail(error);
       throw error;
     } finally {
       this.busy = false;
@@ -195,7 +211,7 @@ export class BoardUiSession {
         "Newer local typing was preserved; discard again if intended",
       );
     this.dirty = false;
-    this.error = null;
+    this.#clearError();
     await this.refresh();
   }
   async pin(pinned: boolean) {

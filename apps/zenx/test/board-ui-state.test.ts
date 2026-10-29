@@ -1,3 +1,9 @@
+import "./dom-primitives.js";
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { JSDOM } from "jsdom";
+import { BoardSurface } from "../src/renderer/src/board-ui.js";
+import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BoardUiSession } from "../src/renderer/src/board-ui-state.js";
@@ -215,4 +221,207 @@ test("a successful refresh clears a recovered read error; successful retry clear
   await session.run("send");
   assert.equal(session.error, null);
   assert.equal(session.result?.outcomes.length, 1);
+});
+
+test("an event receipt retires earlier polls, including their late failures", async () => {
+  const current = state();
+  let reads = 0;
+  const pendingRead = deferred<BoardSnapshot>();
+  const session = new BoardUiSession(current.document.owner, async (input) => {
+    if (input.operation === "read")
+      return ++reads === 1 ? current : pendingRead.promise;
+    return { snapshot: current, outcomes: [], navigation: [] };
+  });
+  await session.refresh();
+  const read = session.refresh();
+  await session.run("action");
+  pendingRead.reject(new Error("Obsolete read failed"));
+  await read;
+  assert.equal(session.error, null);
+  assert.equal(session.errorDetail, null);
+  assert.ok(session.result);
+});
+
+test("an event never replaces a newer local edit even if its receipt has an equal draft revision", async () => {
+  const current = state();
+  const pending = deferred<unknown>();
+  const session = new BoardUiSession(current.document.owner, async (input) => {
+    if (input.operation === "read") return current;
+    if (input.operation === "draft")
+      return { ...current, draftRevision: 1, values: input.values };
+    return pending.promise;
+  });
+  await session.refresh();
+  const action = session.run("action");
+  await Promise.resolve();
+  session.edit({ answer: "new typing" });
+  await session.flush();
+  pending.resolve({
+    snapshot: {
+      ...current,
+      draftRevision: 1,
+      values: { answer: "older action values" },
+    },
+    outcomes: [],
+    navigation: [],
+  });
+  await action;
+  assert.equal(session.values.answer, "new typing");
+});
+
+test("owner-readable diagnostics are transient and clear on read, save and action recovery", async () => {
+  const current = state();
+  const calls: Array<Record<string, unknown>> = [];
+  let failure: "read" | "draft" | "event" | null = "read";
+  const raw = new Error("Stable summary", {
+    cause: new Error("Private local cause"),
+  });
+  const session = new BoardUiSession(current.document.owner, async (input) => {
+    calls.push(input);
+    if (input.operation === failure) {
+      if (failure === "event")
+        return {
+          snapshot: current,
+          outcomes: [],
+          navigation: [],
+          error: "Action stopped",
+          errorDetail: "Host's exact bounded local diagnostic",
+        };
+      throw raw;
+    }
+    if (input.operation === "read") return current;
+    if (input.operation === "draft")
+      return { ...current, values: input.values };
+    return { snapshot: current, outcomes: [], navigation: [] };
+  });
+  await session.refresh();
+  assert.equal(session.error, "Stable summary");
+  assert.match(session.errorDetail ?? "", /Private local cause/);
+  failure = null;
+  await session.refresh();
+  assert.equal(session.errorDetail, null);
+  failure = "draft";
+  session.edit({ answer: "keep me" });
+  await assert.rejects(session.flush());
+  assert.match(session.errorDetail ?? "", /Private local cause/);
+  failure = null;
+  await session.flush();
+  assert.equal(session.errorDetail, null);
+  failure = "event";
+  await session.run("action");
+  assert.equal(session.errorDetail, "Host's exact bounded local diagnostic");
+  failure = null;
+  await session.run("action");
+  assert.equal(session.error, null);
+  assert.equal(session.errorDetail, null);
+  assert.ok(calls.every((call) => !("errorDetail" in call)));
+  assert.ok(
+    calls.every(
+      (call) => !JSON.stringify(call).includes("Private local cause"),
+    ),
+  );
+});
+
+test("Board error details are collapsed plain text, clear after recovery, and never cross owners", async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const snapshots = new Map<string, BoardSnapshot>();
+  for (const threadId of ["details-a", "details-b"]) {
+    const snapshot = state();
+    snapshot.document.owner = { kind: "thread", threadId };
+    snapshot.document.blocks = [
+      { id: "action", kind: "action", label: "Run fixture", event: "action" },
+    ];
+    snapshots.set(threadId, snapshot);
+  }
+  let failed = true;
+  let pending: ReturnType<typeof deferred<unknown>> | null = null;
+  const rawDetail = '<img src=x onerror="throw 1"> exact local failure';
+  let navigations = 0;
+  const sdk = (threadId: string): PluginUiSdkV1 => ({
+    version: 1,
+    pluginId: "zenx-board",
+    theme: "light",
+    context: {
+      owner: { kind: "thread", threadId },
+      admissionId: "error-render-regression",
+    },
+    navigation: {
+      navigate: () => {
+        navigations++;
+      },
+    },
+    handles: { read: async () => null },
+    commands: {
+      execute: async (_command, input) => {
+        const request = input as {
+          operation: string;
+          owner: { threadId: string };
+        };
+        const snapshot = snapshots.get(request.owner.threadId)!;
+        if (request.operation === "read") return snapshot;
+        if (pending) return pending.promise;
+        return {
+          snapshot,
+          outcomes: [],
+          navigation: ["receipt-not-an-app-route"],
+          ...(failed
+            ? { error: "Fixture stopped", errorDetail: rawDetail }
+            : {}),
+        };
+      },
+    },
+  });
+  try {
+    await act(async () =>
+      root.render(React.createElement(BoardSurface, { sdk: sdk("details-a") })),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".board-action")!.click(),
+    );
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".board-error details",
+    )!;
+    assert.ok(details);
+    assert.equal(details.open, false);
+    assert.equal(details.querySelector("pre")?.textContent, rawDetail);
+    assert.equal(details.querySelector("pre")?.getAttribute("tabindex"), "0");
+    assert.equal(details.querySelector("img"), null);
+    failed = false;
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".board-action")!.click(),
+    );
+    assert.equal(document.querySelector(".board-error"), null);
+    assert.equal(
+      navigations,
+      0,
+      "Host navigation receipts never become app routes",
+    );
+    pending = deferred<unknown>();
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".board-action")!.click(),
+    );
+    await act(async () =>
+      root.render(React.createElement(BoardSurface, { sdk: sdk("details-b") })),
+    );
+    await act(async () =>
+      pending!.resolve({
+        snapshot: snapshots.get("details-a"),
+        outcomes: [],
+        navigation: [],
+        error: "Only owner A sees this",
+        errorDetail: rawDetail,
+      }),
+    );
+    assert.equal(document.querySelector(".board-error"), null);
+    assert.ok(!document.body.textContent?.includes(rawDetail));
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
 });

@@ -155,6 +155,7 @@ export type HostCommand =
 
 export interface CapabilityResultCommand {
   browserModelTargets?: BrowserModelTargets;
+  browserSidebarTargets?: BrowserModelRoute[];
   type: "capability/result";
   invocationId: string;
   generationToken: string;
@@ -173,6 +174,8 @@ export type HostEvent =
       requestId: string;
       result?: ToolExecutionResult;
       error?: string;
+      /** Local UI diagnostic only, never model or authority data. */
+      errorDetail?: string;
     }
   | {
       type: "model-debug/result";
@@ -390,6 +393,7 @@ export function isHostCommand(value: unknown): value is HostCommand {
     );
   const command = value as {
     browserModelTargets?: unknown;
+    browserSidebarTargets?: unknown;
     type?: unknown;
     requestId?: unknown;
     options?: unknown;
@@ -429,6 +433,8 @@ export function isHostCommand(value: unknown): value is HostCommand {
     (type === "capability/result" &&
       (command.browserModelTargets === undefined ||
         isBrowserModelTargets(command.browserModelTargets)) &&
+      (command.browserSidebarTargets === undefined ||
+        isBrowserSidebarTargets(command.browserSidebarTargets)) &&
       typeof command.invocationId === "string" &&
       typeof command.generationToken === "string") ||
     (type === "capabilities/replace" &&
@@ -488,8 +494,11 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
       (fleet.error !== undefined
         ? typeof fleet.error === "string" &&
           fleet.error.length > 0 &&
+          (fleet.errorDetail === undefined ||
+            typeof fleet.errorDetail === "string") &&
           fleet.result === undefined
-        : typeof fleet.result === "object" &&
+        : fleet.errorDetail === undefined &&
+          typeof fleet.result === "object" &&
           fleet.result !== null &&
           typeof (fleet.result as Record<string, unknown>).output ===
             "string" &&

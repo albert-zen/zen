@@ -9,6 +9,7 @@ import {
   attachBrowserModelRoute,
   attachBrowserSidebarTargets,
   readBrowserModelTargets,
+  readBrowserSidebarTargets,
 } from "./capabilities/model-browser-metadata.js";
 import type {
   ModelRequestDebugCommand,
@@ -793,7 +794,12 @@ export class AppServerManager {
           if (event.type !== "board-tool/result")
             throw new Error("Invalid Board tool response");
           received = true;
-          if (event.error) throw new Error(event.error);
+          if (event.error)
+            throw Object.assign(new Error(event.error), {
+              ...(event.errorDetail === undefined
+                ? {}
+                : { localDiagnosticDetail: event.errorDetail }),
+            });
           if (!event.result)
             throw new Error(
               "Board action outcome is unconfirmed; do not retry automatically",
@@ -1891,6 +1897,7 @@ export class AppServerManager {
               invocationId: hostEvent.invocationId,
               generationToken: hostEvent.generationToken,
               browserModelTargets: readBrowserModelTargets(result),
+              browserSidebarTargets: readBrowserSidebarTargets(result),
               output: result.output,
               exitCode: result.exitCode,
               ...(result.contentType === undefined

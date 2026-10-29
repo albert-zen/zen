@@ -519,6 +519,25 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     return entry.stop;
   }
 
+  async hasTab(sessionId: string, tabId: string): Promise<boolean> {
+    const { session, tab } = this.#sessionTab(sessionId, tabId);
+    const assertCurrent = () => {
+      if (this.#backendCloseQueued || session.closeQueued)
+        throw new Error("User browser session is closing");
+      this.#assertTabCurrent(session, tabId, tab);
+    };
+    assertCurrent();
+    return await this.#startSessionOperation(session, async () => {
+      assertCurrent();
+      // Do not call listTabs: it is bounded discovery and may adopt new targets.
+      const targets = await this.#client.listTargets();
+      assertCurrent();
+      return targets.some(
+        (target) => target.targetId === tabId && target.type === "page",
+      );
+    });
+  }
+
   async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
     const { session, tab } = this.#sessionTab(sessionId, tabId);
     const assertCurrent = () => {

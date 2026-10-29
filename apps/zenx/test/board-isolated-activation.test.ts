@@ -80,7 +80,9 @@ async function fixture() {
     },
   };
   const root = createRoot(document.getElementById("root")!);
+  let currentScope = "thread:a:document:1";
   const render = async (scope: string) => {
+    currentScope = scope;
     await act(async () => {
       root.render(
         React.createElement(IsolatedPluginSurface, {
@@ -120,6 +122,7 @@ async function fixture() {
     id: string,
     input?: unknown,
     interactionId?: unknown,
+    requestScope = currentScope,
   ) => {
     const requestId = String(++sequence);
     await act(async () => {
@@ -134,6 +137,7 @@ async function fixture() {
             id,
             input,
             interactionId,
+            interactionScope: requestScope,
           },
         }),
       );
@@ -147,7 +151,7 @@ async function fixture() {
     frame,
     render,
     request,
-    activate(value: boolean, focused = true) {
+    activate(value: boolean, focused = true, scope = currentScope) {
       activated = value;
       if (value)
         window.dispatchEvent(
@@ -158,6 +162,7 @@ async function fixture() {
               type: "zenx-plugin-ui:gesture",
               nonce,
               sequence: ++gestureSequence,
+              interactionScope: scope,
             },
           }),
         );
@@ -175,9 +180,20 @@ async function fixture() {
           source: frame.contentWindow,
           data: {
             channel,
+            type: "zenx-plugin-ui:gesture-register",
+            nonce: "page-script-forgery",
+          },
+        }),
+      );
+      window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            channel,
             type: "zenx-plugin-ui:gesture",
             nonce: "page-script-forgery",
             sequence: 9999,
+            interactionScope: currentScope,
           },
         }),
       );
@@ -191,6 +207,24 @@ async function fixture() {
       assert.equal(reply.type, "zenx-plugin-ui:result");
       assert.equal(typeof reply.value, "string");
       return reply.value as string;
+    },
+    async unmountAndPost(token: string) {
+      await act(async () => root.unmount());
+      window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            channel,
+            type: "zenx-plugin-ui:request",
+            requestId: "after-unmount",
+            operation: "commands.execute",
+            id: "event",
+            input: { eventId: "send" },
+            interactionId: token,
+            interactionScope: currentScope,
+          },
+        }),
+      );
     },
     async close() {
       await act(async () => root.unmount());
@@ -229,15 +263,27 @@ test("isolated Board on-load code cannot run events, replace drafts or navigate"
   }
 });
 
-test("isolated Board scope requires both current browser activation and frame focus", async () => {
+test("a witnessed click remains valid if outer typing focus moves before message processing", async () => {
   const ui = await fixture();
   try {
+    ui.focusWithoutGesture();
+    rejected(await ui.request("interaction.begin", "interaction"));
     ui.activate(true, false);
+    assert.equal(
+      (await ui.request("interaction.begin", "interaction")).type,
+      "zenx-plugin-ui:result",
+    );
+    assert.equal(
+      (await ui.request("commands.execute", "event", { eventId: "send" })).type,
+      "zenx-plugin-ui:result",
+    );
+    assert.equal(document.activeElement?.id, "composer");
+    ui.advance(5000);
     rejected(await ui.request("interaction.begin", "interaction"));
-    ui.activate(false, true);
-    rejected(await ui.request("interaction.begin", "interaction"));
-    await ui.begin();
-    assert.deepEqual(ui.calls, []);
+    rejected(
+      await ui.request("commands.execute", "event", { eventId: "send" }),
+    );
+    assert.equal(ui.calls.length, 1);
   } finally {
     await ui.close();
   }
@@ -397,6 +443,56 @@ test("document replacement revokes scoped authority without remounting unchanged
     rejected(
       await ui.request("navigation.navigate", "route", "/threads/other", token),
     );
+    assert.deepEqual(ui.calls, []);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("document revision revokes the five-second direct witness and rejects queued old-scope input", async () => {
+  const ui = await fixture();
+  try {
+    ui.activate(true);
+    await ui.render("thread:a:document:2");
+    assert.equal(document.querySelector("iframe"), ui.frame);
+    ui.forgeGesture();
+    for (const [operation, id, input] of [
+      ["commands.execute", "draft", { answer: "old" }],
+      ["commands.execute", "event", { eventId: "send" }],
+      ["navigation.navigate", "route", "/threads/a"],
+    ] as const)
+      rejected(await ui.request(operation, id, input));
+    rejected(await ui.request("interaction.begin", "interaction"));
+    // The old document's real input can arrive late; it cannot mint authority for
+    // the replacement document, whose HTML deliberately remains mounted.
+    ui.activate(true, false, "thread:a:document:1");
+    rejected(await ui.request("interaction.begin", "interaction"));
+    ui.activate(true, false);
+    rejected(
+      await ui.request(
+        "commands.execute",
+        "event",
+        { eventId: "send" },
+        undefined,
+        "thread:a:document:1",
+      ),
+    );
+    assert.deepEqual(ui.calls, []);
+    assert.equal(
+      (await ui.request("commands.execute", "event", { eventId: "send" })).type,
+      "zenx-plugin-ui:result",
+    );
+    assert.equal(ui.calls.length, 1);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("unmount retires the frame and its scoped command authority", async () => {
+  const ui = await fixture();
+  try {
+    const token = await ui.begin();
+    await ui.unmountAndPost(token);
     assert.deepEqual(ui.calls, []);
   } finally {
     await ui.close();

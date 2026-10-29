@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../local-error-detail.js";
 import { BoardToolService } from "./board-tool-service.js";
 import { ShellPanelService } from "./shell-panel-service.js";
 import { randomUUID } from "node:crypto";
@@ -154,6 +155,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
           error instanceof Error
             ? error.message
             : "Board tool outcome is unconfirmed; do not retry automatically",
+        errorDetail: localErrorDetail(error),
       });
     } finally {
       boardActions.delete(command.requestId);

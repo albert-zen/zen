@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -39,7 +40,11 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
     return current;
   }, [key]);
   const [, render] = useState(0);
-  const [localError, setLocalError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<{
+    scope: object;
+    message: string;
+    detail: string;
+  } | null>(null);
   useEffect(
     () => session.subscribe(() => render((value) => value + 1)),
     [session],
@@ -51,32 +56,33 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
     }, 3000);
     return () => clearInterval(timer);
   }, [session]);
-  const active = useRef({ key, mounted: true });
-  active.current.key = key;
+  // Retire callbacks on owner changes, even if this component later returns to that owner.
+  const active = useMemo(() => ({ mounted: true }), [key]);
   useEffect(() => {
-    active.current.mounted = true;
+    active.mounted = true;
     return () => {
-      active.current.mounted = false;
+      active.mounted = false;
     };
-  }, [key]);
-  const run = async (id: string, values?: BoardValues) => {
-    const revision = session.snapshot?.revision;
-    setLocalError(null);
-    try {
-      const result = await session.run(id, values);
-      if (
-        active.current.mounted &&
-        active.current.key === key &&
-        session.snapshot?.revision === revision
-      )
-        for (const route of result.navigation) sdk.navigation.navigate(route);
-      return result;
-    } catch (error) {
-      if (active.current.mounted && active.current.key === key)
-        setLocalError(message(error));
-      throw error;
-    }
+  }, [active]);
+  const showLocalError = (error: unknown) => {
+    if (active.mounted)
+      setLocalError({
+        scope: active,
+        message: message(error),
+        detail: localErrorDetail(error),
+      });
   };
+  const run = async (id: string, values?: BoardValues) => {
+    setLocalError(null);
+    // Session failures already belong to this owner. Navigation is performed by
+    // the Host against its exact sidebar resource; receipts are not app routes.
+    return await session.run(id, values);
+  };
+  const visibleLocalError = localError?.scope === active ? localError : null;
+  const error = session.error ?? visibleLocalError?.message;
+  const errorDetail = session.error
+    ? session.errorDetail
+    : visibleLocalError?.detail;
   const customSdk = useMemo(
     () => ({
       ...sdk,
@@ -125,7 +131,12 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
         <Icon name="list-detail" size={24} />
         <h3>{t("boardEmptyTitle")}</h3>
         <p>{t("boardEmptyDescription")}</p>
-        {session.error ? <p role="alert">{session.error}</p> : null}
+        {error ? (
+          <div role="alert" className="board-error">
+            <p>{error}</p>
+            <BoardErrorDetail detail={errorDetail} />
+          </div>
+        ) : null}
         <button type="button" onClick={() => void session.refresh()}>
           {t("boardRefreshContent")}
         </button>
@@ -165,17 +176,17 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
           interactionScope={`${key}:${session.snapshot.revision}`}
         />
       ) : null}
-      {session.error || localError ? (
+      {error ? (
         <div role="alert" className="board-error">
-          <p>{session.error ?? localError}</p>
+          <p>{error}</p>
+          <BoardErrorDetail detail={errorDetail} />
           {session.dirty ? (
             <button
               type="button"
-              onClick={() =>
-                void session
-                  .discardLocalDraft()
-                  .catch((error) => setLocalError(message(error)))
-              }
+              onClick={() => {
+                setLocalError(null);
+                void session.discardLocalDraft().catch(showLocalError);
+              }}
             >
               {t("boardDiscardLocal")}
             </button>
@@ -225,13 +236,25 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
           type="button"
           aria-label={t("boardRefreshLabel")}
           title={t("boardRefreshLabel")}
-          onClick={() => void session.refresh()}
+          onClick={() => {
+            setLocalError(null);
+            void session.refresh();
+          }}
         >
           <Icon name="reload" size={14} />
         </button>
       </footer>
     </div>
   );
+}
+function BoardErrorDetail({ detail }: { detail?: string | null }) {
+  const { t } = useTranslation("shell");
+  return detail ? (
+    <details key={detail} className="context-compaction-error-detail">
+      <summary>{t("technicalDetails")}</summary>
+      <pre tabIndex={0}>{detail}</pre>
+    </details>
+  ) : null;
 }
 function BoardBlockView({
   block,

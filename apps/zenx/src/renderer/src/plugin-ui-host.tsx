@@ -5,7 +5,7 @@ import {
   pluginBaseStyles,
   type PluginThemeV1,
 } from "./ui/plugin-theme.js";
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 
@@ -181,7 +181,7 @@ export function IsolatedPluginSurface({
   exportName: string;
   sdk: PluginUiSdkV1;
   className?: string;
-  /** Board effects need a click/key in the focused frame; not a second permission prompt. */
+  /** Board effects need a trusted click/key witnessed inside this frame; not another permission prompt. */
   requireUserActivationFor?: readonly string[];
   interactionScope?: string;
 }) {
@@ -197,7 +197,7 @@ export function IsolatedPluginSurface({
     expiresAt: number;
   } | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     gesture.current = null;
   }, [bundleHtml]);
   useEffect(() => {
@@ -229,8 +229,16 @@ export function IsolatedPluginSurface({
   const interactions = useRef(
     new Map<string, { scope: string | undefined; expiresAt: number }>(),
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // A document revision retires direct gestures too, even when unchanged HTML
+    // keeps the iframe mounted. Keep its private nonce: custom HTML cannot register
+    // a replacement witness merely because its document data changed.
+    if (gesture.current) gesture.current.expiresAt = 0;
     interactions.current.clear();
+    return () => {
+      if (gesture.current) gesture.current.expiresAt = 0;
+      interactions.current.clear();
+    };
   }, [bundleHtml, interactionScope]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
@@ -260,6 +268,7 @@ export function IsolatedPluginSurface({
         if (
           gesture.current &&
           event.data.nonce === gesture.current.nonce &&
+          event.data.interactionScope === interactionScope &&
           Number.isSafeInteger(event.data.sequence) &&
           event.data.sequence > gesture.current.sequence
         ) {
@@ -276,16 +285,21 @@ export function IsolatedPluginSurface({
             theme: sdk.theme,
             appearance: sdk.appearance,
             context: sdk.context,
+            interactionScope,
           },
           "*",
         );
         return;
       }
       if (!isUiRequest(event.data, channel)) return;
+      // This was witnessed in the frame at input time. Parent focus may have
+      // legitimately moved before this posted message is processed.
+      const currentDocument = event.data.interactionScope === interactionScope;
       const activated =
-        document.activeElement === frame.current &&
+        currentDocument &&
         (gesture.current?.expiresAt ?? 0) > performance.now();
       const validInteraction =
+        currentDocument &&
         typeof event.data.interactionId === "string" &&
         interactions.current.has(event.data.interactionId) &&
         interactions.current.get(event.data.interactionId)?.scope ===
@@ -386,6 +400,7 @@ export function IsolatedPluginSurface({
         theme: initialSdk.current.theme,
         appearance: initialSdk.current.appearance,
         context: initialSdk.current.context,
+        interactionScope,
       }),
     [bundleHtml, channel, exportName, sdk.pluginId],
   );
@@ -397,12 +412,13 @@ export function IsolatedPluginSurface({
         theme: sdk.theme,
         appearance: sdk.appearance,
         context: sdk.context,
+        interactionScope,
       },
       "*",
     );
   useEffect(() => {
     update();
-  }, [sdk, channel]);
+  }, [sdk, channel, interactionScope]);
 
   return (
     <iframe
@@ -451,13 +467,13 @@ const init=${payload};const deepFreeze=(value)=>{if(!value||typeof value!=='obje
 const post=parent.postMessage.bind(parent), listen=addEventListener.bind(window);
 const nonce=crypto.getRandomValues(new Uint32Array(8)).join('-');let gestureSequence=0;
 post({channel:init.channel,type:'zenx-plugin-ui:gesture-register',nonce},'*');
-const witness=(event)=>{if(event.isTrusted)post({channel:init.channel,type:'zenx-plugin-ui:gesture',nonce,sequence:++gestureSequence},'*')};
+const witness=(event)=>{if(event.isTrusted)post({channel:init.channel,type:'zenx-plugin-ui:gesture',nonce,sequence:++gestureSequence,interactionScope:init.interactionScope},'*')};
 listen('pointerdown',witness,true);listen('keydown',witness,true);
 function applyTheme(){document.documentElement.dataset.theme=init.theme;document.documentElement.style.colorScheme=init.theme;Object.entries(init.appearance?.variables||{}).forEach(([key,value])=>document.documentElement.style.setProperty(key,value));}applyTheme();
 let sequence=0;const pending=new Map();
-function request(operation,id,input,interactionId){const requestId=String(++sequence);return new Promise((resolve,reject)=>{pending.set(requestId,{resolve,reject});post({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input,interactionId},'*')});}
+function request(operation,id,input,interactionId){const requestId=String(++sequence);return new Promise((resolve,reject)=>{pending.set(requestId,{resolve,reject});post({channel:init.channel,type:'zenx-plugin-ui:request',requestId,operation,id,input,interactionId,interactionScope:init.interactionScope},'*')});}
 Object.defineProperty(window,'zenxPluginUi',{value:Object.freeze({version:1,pluginId:init.pluginId,get theme(){return init.theme},get appearance(){return deepFreeze(init.appearance)},get context(){return deepFreeze(init.context)},commands:{execute:(id,input)=>request('commands.execute',id,input)},handles:{read:(id)=>request('handles.read',id)},navigation:{navigate:(route)=>request('navigation.navigate','route',route)},interaction:{run:async(callback)=>{const token=await request('interaction.begin','interaction');try{return await callback({commands:{execute:(id,input)=>request('commands.execute',id,input,token)},navigation:{navigate:(route)=>request('navigation.navigate','route',route,token)}})}finally{await request('interaction.end',token)}}}})});
-listen('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel||event.source!==parent)return;if(message.type==='zenx-plugin-ui:update'){init.theme=message.theme;init.appearance=message.appearance;init.context=message.context;applyTheme();dispatchEvent(new CustomEvent('zenx-plugin-ui:change',{detail:{sdk:window.zenxPluginUi}}));return;}if(message.type!=='zenx-plugin-ui:result'&&message.type!=='zenx-plugin-ui:error')return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});
+listen('message',(event)=>{const message=event.data;if(!message||message.channel!==init.channel||event.source!==parent)return;if(message.type==='zenx-plugin-ui:update'){init.theme=message.theme;init.appearance=message.appearance;init.context=message.context;init.interactionScope=message.interactionScope;applyTheme();dispatchEvent(new CustomEvent('zenx-plugin-ui:change',{detail:{sdk:window.zenxPluginUi}}));return;}if(message.type!=='zenx-plugin-ui:result'&&message.type!=='zenx-plugin-ui:error')return;const waiter=pending.get(message.requestId);if(!waiter)return;pending.delete(message.requestId);message.type==='zenx-plugin-ui:result'?waiter.resolve(message.value):waiter.reject(new Error(message.message));});
 post({channel:init.channel,type:'zenx-plugin-ui:ready'},'*');
 })();</script>${html}<script>dispatchEvent(new CustomEvent('zenx-plugin-ui:init',{detail:{exportName:${JSON.stringify(init.exportName)},sdk:window.zenxPluginUi}}));</script></body></html>`;
 }
@@ -476,6 +492,7 @@ function isUiRequest(
     | "interaction.begin"
     | "interaction.end";
   interactionId?: string;
+  interactionScope?: string;
   id: string;
   input?: unknown;
 } {

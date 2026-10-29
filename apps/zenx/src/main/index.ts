@@ -689,6 +689,11 @@ async function bootstrapZenX(): Promise<void> {
     const boardPackage = new ZenXBoardCapabilityPackage(
       new BoardHostService({
         appServer: selfControlPort,
+        sidebar: threadSidebar,
+        isSidebarIntentClosed: (threadId, intentId) =>
+          workspaceBrowser.isSidebarIntentClosed(threadId, intentId),
+        readBrowserModelTarget: async (threadId, targetId) =>
+          capabilityService?.readBrowserModelTarget(threadId, targetId),
         readThreadSummary: async (threadId) => {
           if (!appServerManager) throw new Error("App Server is not attached");
           return (await appServerManager.listThreadSummaries()).find(

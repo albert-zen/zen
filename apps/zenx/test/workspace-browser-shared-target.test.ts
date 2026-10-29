@@ -2310,3 +2310,26 @@ test("native materialization is idempotent without reloading, owner isolated, an
     await f.close();
   }
 });
+
+test("Board liveness is a pure exact Thread lookup independent of loading or human control", async () => {
+  const fixture = await sharedFixture();
+  try {
+    fixture.browser.bindThreadSession("board-session", "thread-a");
+    const tab = await fixture.browser.open(
+      "board-session",
+      "https://example.test/board",
+    );
+    const view = fixture.views[0]!.webContents;
+    const loading = view.isLoading.bind(view);
+    view.isLoading = () => true;
+    assert.equal(fixture.browser.hasThreadTab("thread-a", tab.tabId), true);
+    assert.equal(fixture.browser.hasTab("board-session", tab.tabId), true);
+    assert.equal(fixture.browser.hasThreadTab("other", tab.tabId), false);
+    assert.equal(fixture.browser.hasTab("unknown", tab.tabId), false);
+    view.isLoading = loading;
+    await fixture.browser.closeTab("board-session", tab.tabId);
+    assert.equal(fixture.browser.hasThreadTab("thread-a", tab.tabId), false);
+  } finally {
+    await fixture.close();
+  }
+});

@@ -11802,7 +11802,8 @@ button:disabled {
 }
 :root[data-platform="linux"] .information-toolbar,
 :root[data-platform="win32"] .information-toolbar {
-  right: calc(var(--windows-control-region) + 44px);
+  top: calc(var(--native-titlebar-height) + 4px);
+  right: 48px;
 }
 /* The information entry sits immediately before Close, without covering Restore,
    tab hit targets or the existing platform-specific leading safe area. */

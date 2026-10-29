@@ -14,9 +14,13 @@ import {
   ToolEnvironment,
   InMemoryToolPolicyStore,
   type ToolInvocation,
+  type ToolRuntime,
 } from "../../../src/tool.js";
 import { InMemoryTraceStore } from "../../../src/trace.js";
-import type { ThreadSnapshot } from "../../../src/app-server.js";
+import type {
+  AppServerEvent,
+  ThreadSnapshot,
+} from "../../../src/app-server.js";
 import {
   ZenXTriggerService,
   type ZenXTriggerAppServerPort,
@@ -45,13 +49,14 @@ function hostFixture() {
     },
   ];
   const host = new BoardHostService({
+    readThreadSummary: async (threadId) => {
+      requests.push({ method: "thread-summary/list", params: { threadId } });
+      onRead();
+      return { threadId, archived };
+    },
     appServer: {
       async request(method: string, params: any): Promise<any> {
         requests.push({ method, params });
-        if (method === "zen/thread/read") {
-          onRead();
-          return { thread: { id: params.threadId, archived } };
-        }
         if (method === "thread/read")
           return {
             thread: {
@@ -189,7 +194,7 @@ test("no-model action has no native send or owner override and unsupported mecha
   ]);
   assert.deepEqual(
     f.requests.map((entry) => entry.method),
-    ["zen/thread/read"],
+    ["thread-summary/list"],
   );
   await assert.rejects(
     f.host.execute(
@@ -227,6 +232,8 @@ test("no-model action has no native send or owner override and unsupported mecha
 function toolFixture(
   policy: "never" | "always" = "never",
   remembered?: "approved" | "denied",
+  execution?: ToolRuntime["execute"],
+  cancellation: "confirmed-on-settle" | "unconfirmed" = "confirmed-on-settle",
 ) {
   const trace = new InMemoryTraceStore();
   const store = new InMemoryToolPolicyStore(
@@ -253,9 +260,14 @@ function toolFixture(
   const tools = new ToolEnvironment({
     trace,
     policyStore: store,
+    taskOptions: { yieldTimeMs: 1, shutdownWaitMs: 10 },
     runtimes: [
       {
         name: "shell",
+        taskPolicy: {
+          cancellation,
+          timingArguments: { timeoutMs: "timeout_ms" },
+        },
         specification: {
           name: "shell",
           description: "Synthetic local script",
@@ -267,12 +279,20 @@ function toolFixture(
         async execute(invocation) {
           calls.push(invocation);
           if (fail) throw new Error("Lost actual result");
+          if (execution) return await execution(invocation);
           return { output: "synthetic output", exitCode: 0 };
         },
       },
     ],
   });
+  const listeners = new Set<(event: AppServerEvent) => void>();
   const app: ConstructorParameters<typeof BoardToolService>[0] = {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     readThread: async (id) => {
       assert.equal(id, snapshot.id);
       return structuredClone(snapshot);
@@ -299,6 +319,10 @@ function toolFixture(
     trace,
     calls,
     snapshot,
+    listeners,
+    emit: (event: AppServerEvent) => {
+      for (const listener of listeners) listener(event);
+    },
     held: () => held,
     fail: () => {
       fail = true;
@@ -857,6 +881,75 @@ test(
       assert.equal(ownerChecks, 2);
       assert.match(checked.output, /ROOM_CHECKED/);
 
+      for (const change of ["permission", "archive"] as const) {
+        const startedPath = path.join(directory, `synthetic-${change}-started`);
+        const runningScript = `require('node:fs').writeFileSync(${JSON.stringify(startedPath)}, 'started'); setInterval(() => {}, 1000)`;
+        const running = manager.boardToolRequest(
+          {
+            threadId: thread.id,
+            tool: "shell",
+            arguments: {
+              command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(runningScript)}`,
+              timeout_ms: 5000,
+            },
+          },
+          signal(),
+        );
+        // Observe this synthetic process actually starting before revoking it.
+        const deadline = Date.now() + 4000;
+        while (true) {
+          try {
+            if ((await readFile(startedPath, "utf8")) === "started") break;
+          } catch (error) {
+            if (!(
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ENOENT"
+            ))
+              throw error;
+          }
+          if (Date.now() >= deadline)
+            throw new Error("Synthetic Board script did not start");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (change === "permission")
+          await manager.request("thread/permissions/update", {
+            threadId: thread.id,
+            sandbox: "read-only",
+          });
+        else await manager.request("thread/archive", { threadId: thread.id });
+        const cancelled = await running;
+        assert.equal(
+          (cancelled.structuredContent as any).status,
+          "cancelled",
+          `native ${change} cancellation settles`,
+        );
+        assert.equal(cancelled.exitCode, 130);
+        if (change === "permission") {
+          const { localErrorDetail } =
+            await import("../src/local-error-detail.js");
+          await assert.rejects(
+            manager.boardToolRequest(
+              {
+                threadId: thread.id,
+                tool: "shell",
+                arguments: { command: 42 },
+              },
+              signal(),
+            ),
+            (error: unknown) => {
+              assert.match(localErrorDetail(error), /BoardToolService/);
+              return true;
+            },
+          );
+          await manager.request("thread/permissions/update", {
+            threadId: thread.id,
+            sandbox: "danger-full-access",
+          });
+        } else
+          await manager.request("thread/unarchive", { threadId: thread.id });
+      }
+
       const { ZenXBoardCapabilityPackage } =
         await import("../src/main/capabilities/board-package.js");
       const { createFixturePluginHost } = await import("@zenx/plugin-sdk");
@@ -864,6 +957,10 @@ test(
       const board = new ZenXBoardCapabilityPackage(
         new BoardHostService({
           appServer: manager,
+          readThreadSummary: async (threadId) =>
+            (await manager.listThreadSummaries()).find(
+              (entry) => entry.threadId === threadId,
+            ),
           rooms: {
             roomsAvailable: () => false,
             snapshot: () => ({ rooms: [] }),
@@ -1029,4 +1126,286 @@ test("ambiguous Room configuration cannot silently substitute a Board recipient"
   } finally {
     await f.service.stop();
   }
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+test("Board waits through ordinary task yields and dispatches a script exactly once", async () => {
+  const started = deferred<void>();
+  const finish = deferred<void>();
+  const f = toolFixture("never", undefined, async (invocation) => {
+    invocation.taskContext?.onOutput("before\n");
+    invocation.taskContext?.requestYield?.();
+    started.resolve();
+    await finish.promise;
+    return { output: "actual terminal output", exitCode: 7 };
+  });
+  let resolved = false;
+  try {
+    const work = f.service.execute(shellRequest, signal()).then((result) => {
+      resolved = true;
+      return result;
+    });
+    await started.promise;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(resolved, false, "a task yield is not script completion");
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.held(), 1);
+    finish.resolve();
+    const result = await work;
+    assert.equal(result.exitCode, 7);
+    assert.equal(result.contentType, undefined);
+    assert.match(result.output, /actual terminal output/);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.tools.taskManager.activeTaskCount, 0);
+    assert.equal(f.listeners.size, 0);
+  } finally {
+    finish.resolve();
+    await f.tools.close();
+  }
+});
+
+for (const change of ["permission", "archive", "delete"] as const)
+  test(`committed Thread ${change} cancels the same running Board task`, async () => {
+    const started = deferred<ToolInvocation>();
+    const f = toolFixture("never", undefined, async (invocation) => {
+      started.resolve(invocation);
+      await new Promise<void>((resolve) => {
+        invocation.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+      return { output: "native cancellation settled", exitCode: 130 };
+    });
+    try {
+      const work = f.service.execute(shellRequest, signal());
+      const invocation = await started.promise;
+      f.emit({
+        type: "thread_archived_updated",
+        threadId: "other",
+        archived: true,
+      });
+      f.emit({
+        type: "thread_settings_updated",
+        threadId: owner.threadId,
+        settings: { ...f.snapshot, model: "a different model" } as any,
+      });
+      assert.equal(
+        invocation.signal.aborted,
+        false,
+        "unrelated changes do not cancel",
+      );
+      if (change === "permission")
+        f.emit({
+          type: "thread_settings_updated",
+          threadId: owner.threadId,
+          settings: {
+            ...f.snapshot,
+            sandbox: "read-only",
+            approvalPolicy: "always",
+          } as any,
+        });
+      else if (change === "archive")
+        f.emit({
+          type: "thread_archived_updated",
+          threadId: owner.threadId,
+          archived: true,
+        });
+      else
+        f.emit({
+          type: "thread_deleted_updated",
+          threadId: owner.threadId,
+          deleted: true,
+        });
+      assert.equal(invocation.signal.aborted, true);
+      const result = await work;
+      assert.equal((result.structuredContent as any).status, "cancelled");
+      assert.equal(result.exitCode, 130);
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.listeners.size, 0);
+      assert.equal(f.held(), 0);
+      assert.deepEqual(f.snapshot.items, []);
+    } finally {
+      await f.tools.close();
+    }
+  });
+
+test("a committed archive during Board admission cancels before native dispatch", async () => {
+  const f = toolFixture();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  const admit = f.tools.admit.bind(f.tools);
+  f.tools.admit = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return await admit(...args);
+  };
+  try {
+    const work = f.service.execute(shellRequest, signal());
+    await entered.promise;
+    f.emit({
+      type: "thread_archived_updated",
+      threadId: owner.threadId,
+      archived: true,
+    });
+    release.resolve();
+    await assert.rejects(work, /ownership or execution permissions changed/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.held(), 0);
+  } finally {
+    release.resolve();
+    await f.tools.close();
+  }
+});
+
+test("Board deadline reports confirmed timeout without replaying the script", async () => {
+  const f = toolFixture("never", undefined, async (invocation) => {
+    await new Promise<void>((resolve) => {
+      invocation.signal.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
+    return { output: "native timeout settled", exitCode: 124 };
+  });
+  try {
+    // The task timeout timer is intentionally unref'ed in production.
+    const keeper = setTimeout(() => {}, 500);
+    try {
+      const result = await f.service.execute(
+        {
+          ...shellRequest,
+          arguments: { command: "synthetic timeout", timeout_ms: 10 },
+        },
+        signal(),
+      );
+      assert.equal((result.structuredContent as any).status, "timed_out");
+      assert.equal(result.exitCode, 124);
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.tools.taskManager.activeTaskCount, 0);
+      assert.equal(f.listeners.size, 0);
+    } finally {
+      clearTimeout(keeper);
+    }
+  } finally {
+    await f.tools.close();
+  }
+});
+
+test("unconfirmed Board cancellation retains the existing task and never claims success", async () => {
+  const started = deferred<void>();
+  const finish = deferred<void>();
+  const controller = new AbortController();
+  const f = toolFixture(
+    "never",
+    undefined,
+    async () => {
+      started.resolve();
+      await finish.promise;
+      return { output: "late native completion", exitCode: 0 };
+    },
+    "unconfirmed",
+  );
+  try {
+    const work = f.service.execute(shellRequest, controller.signal);
+    await started.promise;
+    controller.abort();
+    const result = await work;
+    assert.equal(
+      (result.structuredContent as any).status,
+      "cancellation_unconfirmed",
+    );
+    assert.equal((result.structuredContent as any).exit_code, null);
+    assert.equal(f.tools.taskManager.activeTaskCount, 1);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.listeners.size, 0);
+    finish.resolve();
+    const terminal = await f.tools.taskManager.wait({
+      callId: "synthetic-wait",
+      name: "wait",
+      threadId: owner.threadId,
+      cwd: "/tmp",
+      signal: signal(),
+      arguments: {
+        task_id: (result.structuredContent as any).task_id,
+        yield_time_ms: 100,
+      },
+    });
+    assert.equal((terminal.structuredContent as any).status, "completed");
+    assert.equal(
+      f.calls.length,
+      1,
+      "observing the retained task never dispatches again",
+    );
+  } finally {
+    finish.resolve();
+    await f.tools.close();
+  }
+});
+
+test("Board Host error details are optional local failure data, not result authority", () => {
+  const failure = {
+    type: "board-tool/result",
+    requestId: "synthetic",
+    error: "failed",
+  };
+  assert.equal(isHostEvent(failure), true);
+  assert.equal(
+    isHostEvent({ ...failure, errorDetail: "synthetic stack and cause" }),
+    true,
+  );
+  assert.equal(
+    isHostEvent({ ...failure, errorDetail: { invalid: true } }),
+    false,
+  );
+  assert.equal(
+    isHostEvent({
+      type: "board-tool/result",
+      requestId: "synthetic",
+      result: { output: "ok", exitCode: 0 },
+      errorDetail: "contradictory failure detail",
+    }),
+    false,
+  );
+});
+
+test("capability result carries only validated existing Browser sidebar metadata", () => {
+  const result = {
+    type: "capability/result",
+    invocationId: "synthetic-invocation",
+    generationToken: "synthetic-generation",
+    output: "authored document",
+    exitCode: 0,
+  };
+  const route = {
+    ownerThreadId: "synthetic-owner",
+    sessionId: "synthetic-session",
+    sessionEpoch: "synthetic-epoch",
+    tabId: "synthetic-tab",
+    targetId: "synthetic-target",
+  };
+  assert.equal(
+    isHostCommand({ ...result, browserSidebarTargets: [route] }),
+    true,
+  );
+  assert.equal(
+    isHostCommand({
+      ...result,
+      browserSidebarTargets: [{ ...route, targetId: undefined }],
+    }),
+    false,
+  );
+  assert.equal(
+    isHostCommand({
+      ...result,
+      browserSidebarTargets: Array.from({ length: 65 }, () => route),
+    }),
+    false,
+  );
 });

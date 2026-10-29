@@ -12,7 +12,7 @@ export class BoardToolService {
   constructor(
     readonly app: Pick<
       ZenAppServer,
-      "readThread" | "beginHostOperation" | "dispatchHostTool"
+      "readThread" | "beginHostOperation" | "dispatchHostTool" | "subscribe"
     >,
     readonly tools: ToolEnvironment,
     readonly assertOwner?: () => Promise<void>,
@@ -23,16 +23,37 @@ export class BoardToolService {
     signal: AbortSignal,
   ): Promise<ToolExecutionResult> {
     const request = validateBoardToolRequest(input);
+    const revoked = new AbortController();
+    signal = AbortSignal.any([signal, revoked.signal]);
     signal.throwIfAborted();
     const lease = this.app.beginHostOperation("other", "board/shell");
     let prepared: PreparedToolInvocation | undefined;
     let dispatched = false;
+    let unsubscribe: (() => void) | undefined;
     try {
       const thread = await this.app.readThread(request.threadId);
       if (thread.archived)
         throw new Error(
           "Restore the Board's Thread before executing an action",
         );
+      // Existing committed product events cancel this same admitted operation.
+      // They never grant a lease over the OS or undo effects already performed.
+      unsubscribe = this.app.subscribe((event) => {
+        if (!("threadId" in event) || event.threadId !== thread.id) return;
+        if (
+          (event.type === "thread_archived_updated" && event.archived) ||
+          (event.type === "thread_deleted_updated" && event.deleted) ||
+          (event.type === "thread_settings_updated" &&
+            (event.settings.cwd !== thread.cwd ||
+              event.settings.sandbox !== thread.sandbox ||
+              event.settings.approvalPolicy !== thread.approvalPolicy))
+        )
+          revoked.abort(
+            new Error(
+              "Board action ownership or execution permissions changed",
+            ),
+          );
+      });
       signal.throwIfAborted();
       const callId = `board-shell:${randomUUID()}`;
       prepared = this.tools.prepare(
@@ -101,6 +122,7 @@ export class BoardToolService {
         );
       throw error;
     } finally {
+      unsubscribe?.();
       // Once dispatched, the ordinary task manager retains any yielded work.
       if (prepared && !dispatched) this.tools.discard(prepared);
       lease.release();

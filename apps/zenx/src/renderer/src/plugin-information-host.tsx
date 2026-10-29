@@ -225,7 +225,7 @@ export function PluginInformationHost({
         <aside
           ref={rail}
           data-floating={floating}
-          style={floating ? { top: railTop } : undefined}
+          style={{ top: floating ? railTop : Math.max(0, railTop - 8) }}
           className="information-rail"
           aria-label={t("boardPanelLabel", { title: active.title })}
         >

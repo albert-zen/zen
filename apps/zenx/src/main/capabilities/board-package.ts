@@ -1,3 +1,8 @@
+import {
+  attachBrowserSidebarTargets,
+  readBrowserSidebarTargets,
+  type BrowserModelRoute,
+} from "./model-browser-metadata.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import { randomUUID } from "node:crypto";
 import type { ToolInvocation } from "../../../../../src/tool.js";
@@ -7,6 +12,7 @@ import { boardManifest } from "../../../../../packages/zenx-board-plugin/src/man
 import {
   boardOwnerKey,
   type BoardAction,
+  type BoardNavigationTarget,
   type BoardDocument,
   type BoardEventResult,
   type BoardOwner,
@@ -18,6 +24,15 @@ import {
 export interface BoardHostPort {
   readOwner(owner: BoardOwner): Promise<BoardOwner>;
   makeClientId?(owner: BoardOwner): string;
+  readNavigationTarget?(
+    owner: BoardOwner,
+    target: BoardNavigationTarget,
+  ): Promise<BrowserModelRoute | undefined>;
+  navigate?(
+    owner: BoardOwner,
+    target: BoardNavigationTarget,
+    signal: AbortSignal,
+  ): Promise<void>;
   deliver(
     owner: BoardOwner,
     text: string,
@@ -83,6 +98,23 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     if (!ui && owner.threadId !== invocation.threadId)
       throw new Error("Board owner must be the calling Thread");
     await this.host.readOwner(owner);
+    if (document) {
+      const targets = navigationTargets(
+        document.events.flatMap((event) => event.actions),
+      );
+      const supplied = readBrowserSidebarTargets(invocation);
+      for (const target of targets) {
+        if (target.kind === "url") continue;
+        const route = await this.host.readNavigationTarget?.(owner, target);
+        if (
+          !route ||
+          (supplied && !supplied.some((entry) => sameRoute(entry, route)))
+        )
+          throw new Error(
+            "Board navigation requires the exact live Browser target owned by this Thread",
+          );
+      }
+    }
     if (name === "zenx_board_ui" && args.operation === "event")
       return await this.#event(owner, args, invocation.signal);
     return await this.#serial(async () => {
@@ -113,11 +145,26 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           args.view !== "document"
         )
           throw new Error("Board read view must be semantic or document");
-        return current
-          ? args.view === "document"
-            ? current
-            : semantic(current)
-          : null;
+        if (!current) return null;
+        if (args.view !== "document") return semantic(current);
+        const routes: BrowserModelRoute[] = [];
+        for (const target of navigationTargets(
+          current.document.events.flatMap((event) => event.actions),
+        )) {
+          if (target.kind === "url") continue;
+          try {
+            const route = await this.host.readNavigationTarget?.(owner, target);
+            if (
+              route &&
+              routes.length < 64 &&
+              !routes.some((entry) => sameRoute(entry, route))
+            )
+              routes.push(route);
+          } catch {
+            /* One closed/unavailable target never erases authored content. */
+          }
+        }
+        return attachBrowserSidebarTargets(current, routes);
       }
       if (args.operation === "read") return current ?? null;
       if (!current) throw new Error("No board exists for this conversation");
@@ -193,7 +240,17 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             continue;
           }
           if (action.kind === "navigate") {
-            result.navigation.push(interpolate(action.route, working));
+            const target =
+              action.target.kind === "url"
+                ? validateNavigationTarget({
+                    kind: "url",
+                    url: interpolate(action.target.url, working),
+                  })
+                : action.target;
+            if (!this.host.navigate)
+              throw new Error("Board resource navigation is unavailable");
+            await this.host.navigate(owner, target, signal);
+            result.navigation.push(target);
             result.outcomes.push({ kind: "navigate" });
             continue;
           }
@@ -287,6 +344,17 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             typeof response.output === "string"
               ? response.output.slice(0, 8192)
               : "";
+          if (response.contentType === "application/vnd.zen.tool-task+json") {
+            const task =
+              typeof response.structuredContent === "object" &&
+              response.structuredContent !== null
+                ? (response.structuredContent as Record<string, unknown>)
+                : {};
+            if (task.status === "cancelled" || task.status === "timed_out")
+              throw new Error(
+                `Execution ${task.status === "cancelled" ? "was cancelled" : "timed out"}; later actions were stopped. Do not retry automatically.`,
+              );
+          }
           if (
             response.contentType === "application/vnd.zen.tool-task+json" ||
             typeof response.exitCode !== "number"
@@ -482,7 +550,10 @@ export function validateDocument(
         case "set":
           return { kind: "set", values: values(action.values) };
         case "navigate":
-          return { kind: "navigate", route: text(action.route, "route", 2048) };
+          return {
+            kind: "navigate",
+            target: validateNavigationTarget(action.target),
+          };
         case "submit":
           return { kind: "submit", text: text(action.text, "message", 100000) };
         case "script": {
@@ -638,4 +709,55 @@ export function validateDocument(
       : { initialValues: values(doc.initialValues) }),
     ...(doc.html === undefined ? {} : { html: text(doc.html, "html", 200000) }),
   };
+}
+
+function navigationTargets(actions: BoardAction[]): BoardNavigationTarget[] {
+  return actions.flatMap((action) =>
+    action.kind === "navigate"
+      ? [action.target]
+      : action.kind === "if"
+        ? [
+            ...navigationTargets(action.then),
+            ...navigationTargets(action.otherwise ?? []),
+          ]
+        : [],
+  );
+}
+export function validateNavigationTarget(
+  value: unknown,
+): BoardNavigationTarget {
+  const target = record(value);
+  if (
+    target.kind === "url" &&
+    Object.keys(target).every((key) => ["kind", "url"].includes(key))
+  ) {
+    const url = text(target.url, "URL", 8192);
+    const parsed = new URL(url);
+    if (
+      !["https:", "http:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password
+    )
+      throw new Error(
+        "Board URLs must be HTTP(S) without embedded credentials",
+      );
+    return { kind: "url", url };
+  }
+  if (
+    (target.kind === "browser" || target.kind === "external-browser") &&
+    Object.keys(target).every((key) => ["kind", "id"].includes(key))
+  )
+    return { kind: target.kind, id: text(target.id, "Browser target", 4096) };
+  throw new Error(
+    "Board navigation requires a typed URL or exact existing Browser target",
+  );
+}
+
+function sameRoute(left: BrowserModelRoute, right: BrowserModelRoute): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...keys].every(
+    (key) =>
+      left[key as keyof BrowserModelRoute] ===
+      right[key as keyof BrowserModelRoute],
+  );
 }

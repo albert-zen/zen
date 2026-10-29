@@ -30,9 +30,12 @@ export type BoardBlock =
       event: string;
       emphasis?: boolean;
     };
+export type BoardNavigationTarget =
+  | { kind: "url"; url: string }
+  | { kind: "browser" | "external-browser"; id: string };
 export type BoardAction =
   | { kind: "set"; values: BoardValues }
-  | { kind: "navigate"; route: string }
+  | { kind: "navigate"; target: BoardNavigationTarget }
   | { kind: "submit"; text: string }
   | { kind: "script"; command: string; timeoutMs?: number }
   | {
@@ -69,7 +72,7 @@ export interface BoardSnapshot {
 export interface BoardEventResult {
   snapshot: BoardSnapshot;
   outcomes: Array<{ kind: string; result?: unknown }>;
-  navigation: string[];
+  navigation: BoardNavigationTarget[];
   /** Explicit partial failure; completed actions are never automatically replayed. */
   error?: string;
   /** Owner-readable transient local diagnostic; never stored or model-projected. */

@@ -1,3 +1,10 @@
+import type { BoardNavigationTarget } from "../../../../packages/zenx-board-plugin/src/board.js";
+import type { BrowserModelRoute } from "./capabilities/model-browser-metadata.js";
+import {
+  sidebarTabId,
+  type ThreadSidebarPort,
+  type ThreadSidebarTab,
+} from "../thread-sidebar-state.js";
 import { randomUUID } from "node:crypto";
 import {
   validateBoardOwner,
@@ -47,6 +54,12 @@ export interface BoardHostServiceOptions {
       text: string,
     ): Promise<RoomDeliveryView>;
   };
+  sidebar?: ThreadSidebarPort;
+  readBrowserModelTarget?(
+    threadId: string,
+    targetId: string,
+  ): Promise<BrowserModelRoute | undefined>;
+  isSidebarIntentClosed?(threadId: string, intentId: string): boolean;
   executeTool(
     input: BoardToolRequest,
     signal: AbortSignal,
@@ -141,6 +154,95 @@ export class BoardHostService {
       mode: receipt.mode,
       admission: "accepted",
     };
+  }
+
+  async readNavigationTarget(
+    owner: BoardOwner,
+    target: BoardNavigationTarget,
+  ): Promise<BrowserModelRoute | undefined> {
+    if (target.kind === "url") return;
+    await this.readOwner(owner);
+    const route = await this.options.readBrowserModelTarget?.(
+      owner.threadId,
+      target.id,
+    );
+    if (
+      !route ||
+      route.ownerThreadId !== owner.threadId ||
+      route.targetId !== target.id ||
+      (target.kind === "external-browser") !==
+        !!route.backend?.startsWith("connected")
+    )
+      return;
+    await this.readOwner(owner);
+    return route;
+  }
+
+  async navigate(
+    input: BoardOwner,
+    target: BoardNavigationTarget,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    const owner = await this.readOwner(input);
+    const sidebar = this.options.sidebar;
+    if (!sidebar) throw new Error("Board resource navigation is unavailable");
+    const scope = {
+      kind: owner.kind,
+      id: owner.kind === "room" ? owner.roomId : owner.threadId,
+    };
+    const admit = () => {
+      signal.throwIfAborted();
+      this.#assertRoom(owner);
+    };
+    const current = await sidebar.read(scope, admit);
+    let tab: ThreadSidebarTab;
+    if (target.kind === "url") {
+      const existing = current.tabs.find(
+        (entry) =>
+          entry.kind === "webpage" &&
+          entry.url === target.url &&
+          (entry.resourceThreadId ??
+            (scope.kind === "thread" ? scope.id : undefined)) ===
+            owner.threadId &&
+          !this.options.isSidebarIntentClosed?.(owner.threadId, entry.id),
+      );
+      tab = existing ?? {
+        kind: "webpage",
+        id: randomUUID(),
+        url: target.url,
+        resourceThreadId: owner.threadId,
+      };
+    } else {
+      if (!(await this.readNavigationTarget(owner, target)))
+        throw new Error(
+          "This exact browser target is unavailable or closed; inspect it again. It was not reopened.",
+        );
+      tab = {
+        kind: target.kind,
+        id: target.id,
+        resourceThreadId: owner.threadId,
+      };
+    }
+    await this.readOwner(owner);
+    admit();
+    const id = sidebarTabId(tab);
+    const tabs = current.tabs.some((entry) => sidebarTabId(entry) === id)
+      ? current.tabs
+      : [...current.tabs, tab];
+    const result = await sidebar.update(
+      {
+        owner: scope,
+        expectedRevision: current.revision,
+        patch: { tabs, selectedTab: id, open: true },
+      },
+      admit,
+      { kind: "ui" },
+    );
+    if (!result.applied)
+      throw new Error(
+        "Sidebar changed; navigation was not applied. Review before trying again.",
+      );
   }
 
   async execute(
