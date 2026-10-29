@@ -9,7 +9,12 @@ import {
   type JsonValue,
   type UserInput,
 } from "./item.js";
-import { classifyContext, type ModelMessage, type ModelTool } from "./model.js";
+import {
+  classifyContext,
+  type ModelMessage,
+  type ModelTool,
+  type ProviderToolPresentation,
+} from "./model.js";
 
 /** The writable conversation format. Runtime events are deliberately not a variant. */
 export type ContextSourceKind =
@@ -99,9 +104,17 @@ export type ContextItem = ContextBase &
           excludedCallIds?: string[];
         };
       }
-    | { kind: "tools"; role: "developer"; content: { tools: ModelTool[] } }
+    | {
+        kind: "tools";
+        role: "developer";
+        content: {
+          tools: ModelTool[];
+          providerToolPresentation?: ProviderToolPresentation;
+        };
+      }
   );
 export interface CompiledItemList {
+  providerToolPresentation?: ProviderToolPresentation;
   messages: ModelMessage[];
   tools: ModelTool[];
   /** Exact immutable input membership evidence; not inserted into the prompt. */
@@ -390,7 +403,21 @@ export function decodeContextItem(value: unknown): ContextItem {
       }
       break;
     case "tools":
-      keys(content, ["tools"], "tools.content");
+      keys(content, ["tools", "providerToolPresentation"], "tools.content");
+      if (content.providerToolPresentation !== undefined) {
+        const presentation = record(
+          content.providerToolPresentation,
+          "providerToolPresentation",
+        );
+        keys(presentation, ["protocol", "tools"], "providerToolPresentation");
+        if (
+          presentation.protocol !== "openai-responses" ||
+          !Array.isArray(presentation.tools)
+        )
+          throw new Error("Invalid provider tool presentation");
+        for (const tool of presentation.tools)
+          json(record(tool, "provider tool"), "provider tool");
+      }
       if (
         item.role !== "developer" ||
         source.kind !== "tool_definitions" ||
@@ -594,6 +621,7 @@ export function compileItemList(
     });
   const messages: ModelMessage[] = [];
   let tools: ModelTool[] = [];
+  let providerToolPresentation: ProviderToolPresentation | undefined;
   for (const item of selected) {
     switch (item.kind) {
       case "message":
@@ -671,6 +699,9 @@ export function compileItemList(
         break;
       case "tools":
         tools = structuredClone(item.content.tools);
+        providerToolPresentation = structuredClone(
+          item.content.providerToolPresentation,
+        );
         break;
     }
     if (item.kind === "message") {
@@ -692,7 +723,14 @@ export function compileItemList(
     }
     selectedItemIds.push(item.id);
   }
-  return { messages, tools, selectedItemIds };
+  return {
+    messages,
+    tools,
+    selectedItemIds,
+    ...(providerToolPresentation === undefined
+      ? {}
+      : { providerToolPresentation }),
+  };
 }
 function record(value: unknown, label: string): Record<string, unknown> {
   if (

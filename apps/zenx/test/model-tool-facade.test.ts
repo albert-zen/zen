@@ -1254,3 +1254,71 @@ test("native Thread creation runtime settings project their generated model key 
     ).output.includes(raw.runtime.model),
   );
 });
+
+test("successful plugin and browser projections expose actual pre-projection files without duplicating native IDs", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { FileTraceStore } = await import("../../../src/trace.js");
+  const { createToolTraceCapture } = await import("../../../src/trace-tool.js");
+  const { ShellToolRuntime } = await import("../../../src/tool.js");
+  const directory = await mkdtemp(join(tmpdir(), "model-raw-files-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const trace = new FileTraceStore(directory);
+  for (const [name, value] of [
+    [
+      "zenx_threads_list",
+      {
+        threads: [{ id: "RAW-private-thread", title: "Synthetic" }],
+        backendOnly: "original evidence",
+      },
+    ],
+    [
+      "browser_connections",
+      [
+        {
+          connectionId: "RAW-private-connection",
+          label: "Synthetic",
+          state: "disconnected",
+          backendOnly: "original evidence",
+        },
+      ],
+    ],
+  ] as const) {
+    const raw = { output: JSON.stringify(value), exitCode: 0 };
+    const result = await invokeModelToolFacade({
+      invocation: {
+        name,
+        callId: name,
+        threadId: "owner",
+        cwd: directory,
+        arguments: {},
+        signal: signal(),
+        traceOutput: createToolTraceCapture(trace, {
+          threadId: "owner",
+          callId: name,
+        }),
+      },
+      epoch: "synthetic",
+      references: new ModelReferenceRegistry(),
+      dispatch: async () => raw,
+    });
+    const projected = JSON.parse(result.output);
+    assert.equal(projected.projection, undefined);
+    assert.ok(projected.raw_result_file.path.startsWith(directory));
+    assert.equal(projected.raw_result_file.preview, undefined);
+    assert.ok(!result.output.includes("RAW-private"));
+    const read = await new ShellToolRuntime().execute({
+      name: "shell",
+      callId: "read",
+      cwd: directory,
+      arguments: {
+        command: `cat ${JSON.stringify(projected.raw_result_file.path)}`,
+      },
+      signal: signal(),
+      sandbox: "read-only",
+    });
+    assert.deepEqual(JSON.parse(read.output), raw);
+    assert.ok(read.output.includes("original evidence"));
+  }
+});

@@ -320,14 +320,19 @@ test("Responses handles terminal-only mixed custom/function calls and rejects a 
   );
 });
 
-test("tool catalog shares disclosed ordinary definitions without exposing orchestration entries", () => {
+test("tool catalog shares eligible ordinary details without exposing orchestration entries", () => {
   const definitions = [
     { name: "shown", description: "Visible", inputSchema: {} },
     tool,
     { name: "compact_context", description: "Compact", inputSchema: {} },
   ];
   assert.deepEqual(generateToolCatalog(definitions), [
-    { name: "shown", description: "Visible" },
+    {
+      name: "shown",
+      description: "Visible",
+      fullDescription: "Visible",
+      inputSchema: {},
+    },
   ]);
   const catalog = generateToolCatalog(definitions);
   definitions[0]!.description = "changed";

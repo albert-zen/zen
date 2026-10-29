@@ -5878,3 +5878,81 @@ test("long-history send admission measures exact append-receipt reuse without ch
   );
   assert.equal(measurements[0]!.traceReads - measurements[1]!.traceReads, 2);
 });
+
+test("hosted discovery remains ordered semantic history and never dispatches locally", async () => {
+  const seen: ModelRequest[] = [];
+  let executed = 0;
+  const model: ModelAdapter = {
+    provider: "hosted-fixture",
+    prepareToolPresentation: () => ({
+      protocol: "openai-responses",
+      tools: [{ type: "tool_search" }],
+    }),
+    async *stream(request): AsyncIterable<ModelEvent> {
+      seen.push(request);
+      if (seen.length > 1) {
+        yield { type: "text_delta", delta: "done" };
+        return;
+      }
+      yield {
+        type: "tool_discovery",
+        protocol: "openai-responses",
+        endpointSha256: "a".repeat(64),
+        items: [{ type: "tool_search_call", id: "hosted" }],
+      };
+      yield {
+        type: "tool_discovery",
+        protocol: "openai-responses",
+        endpointSha256: "a".repeat(64),
+        items: [{ type: "tool_search_output", id: "result" }],
+      };
+      yield {
+        type: "tool_call",
+        callId: "call",
+        name: "lookup",
+        providerNamespace: "plugin_fixture",
+        arguments: {},
+      };
+    },
+  };
+  const server = createServer({
+    model,
+    tools: testToolRuntime({
+      name: "lookup",
+      description: "fixture",
+      execute: async () => {
+        executed++;
+        return { output: "ok", exitCode: 0 };
+      },
+    }),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "discover")
+  ).done;
+  assert.equal(
+    executed,
+    1,
+    JSON.stringify((await server.readThread(thread.id)).items),
+  );
+  assert.equal(seen[0]?.providerToolPresentation?.protocol, "openai-responses");
+  assert.deepEqual(
+    seen[1]?.messages
+      .filter(
+        (m) =>
+          m.role === "tool_discovery" ||
+          (m.role === "assistant" && "toolCalls" in m) ||
+          m.role === "tool",
+      )
+      .map((m) => m.role),
+    ["tool_discovery", "tool_discovery", "assistant", "tool"],
+  );
+  const messages = seen[1]!.messages;
+  const call = messages.find((m) => m.role === "assistant" && "toolCalls" in m);
+  assert.equal(
+    call?.role === "assistant" && "toolCalls" in call
+      ? call.toolCalls[0]?.providerNamespace
+      : undefined,
+    "plugin_fixture",
+  );
+});

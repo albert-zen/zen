@@ -290,7 +290,10 @@ export async function invokeModelToolFacade(options: {
         outcome: outcome(result),
         ...(capture?.resultFile ? { raw_result_file: capture.resultFile } : {}),
         safeNextStep:
-          "Read raw_result_file with shell/file tools if available, or read current state with a smaller scope. Do not retry a mutation merely because compact projection is unavailable.",
+          (capture?.resultFile
+            ? "Read raw_result_file with shell/file tools, or read current state with a smaller scope. "
+            : "Raw result file unavailable; read current state with a smaller scope. ") +
+          "Do not retry a mutation merely because compact projection is unavailable.",
       }),
     };
     delete fallback.contentType;

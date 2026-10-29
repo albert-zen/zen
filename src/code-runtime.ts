@@ -57,7 +57,13 @@ export interface CodeExecutionOptions {
   code: string;
   signal: AbortSignal;
   nested: NestedToolInvocationPort;
-  tools?: readonly { name: string; description: string }[];
+  tools?: readonly {
+    name: string;
+    description: string;
+    pluginId?: string;
+    fullDescription?: string;
+    inputSchema?: Record<string, unknown>;
+  }[];
   storedValues?: Record<string, JsonValue>;
   onOutput?: (text: string) => void;
   onMedia?: (media: CodeMediaDescriptor) => Promise<void>;

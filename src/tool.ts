@@ -178,7 +178,13 @@ export interface ToolBundle {
 export interface NestedToolInvocationPort {
   drain?(): Promise<void>;
   codeContext?: {
-    tools: readonly { name: string; description: string }[];
+    tools: readonly {
+      name: string;
+      description: string;
+      pluginId?: string;
+      fullDescription?: string;
+      inputSchema?: Record<string, unknown>;
+    }[];
     storedValues: Record<string, JsonValue>;
     store(key: string, value: JsonValue): Promise<void>;
     resolveMedia(

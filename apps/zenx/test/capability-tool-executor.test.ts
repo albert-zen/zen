@@ -309,7 +309,7 @@ test("real ZenX host composition preserves builtin and capability bundle identit
   });
 });
 
-test("real ZenX child-host projection hides v2 schemas until canonical read history", (t) => {
+test("real ZenX child-host projection keeps v2 schemas stable across documentation reads", (t) => {
   const toolOutputSpool = new ToolOutputSpool();
   t.after(async () => await toolOutputSpool.close());
   const pluginTool = {
@@ -343,12 +343,11 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
   const initial = toolDefinitionProjection([]);
   assert.deepEqual(
     initial.map((tool) => tool.name),
-    ["wait", "shell", "shell_sessions", "zenx_plugin"],
+    ["wait", "shell", "shell_sessions", "zenx_plugin", "fixture_echo"],
   );
-  const discovery = initial.at(-1)!;
-  assert.match(discovery.description, /successful read.*next model request/u);
-  assert.match(discovery.description, /direct tool definitions.*run_code SDK/u);
-  assert.match(discovery.description, /not necessarily read-only/u);
+  const discovery = initial.find(({ name }) => name === "zenx_plugin")!;
+  assert.match(discovery.description, /eligible tools are already available/u);
+
   assert.deepEqual(
     { name: discovery.name, inputSchema: discovery.inputSchema },
     {
@@ -400,7 +399,11 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
       tools: [{ name: "fixture_echo", description: "Echo exact bytes" }],
     },
   });
-  assert.deepEqual(toolDefinitionProjection(items), [...initial, pluginTool]);
+  assert.deepEqual(toolDefinitionProjection(items), initial);
+  assert.deepEqual(
+    initial.find(({ name }) => name === pluginTool.name)?.inputSchema,
+    pluginTool.inputSchema,
+  );
 });
 
 test("exposes capability definitions and resolves main-process execution", async () => {
@@ -1005,4 +1008,44 @@ test("targeted browser input claims the same exact page resource as inspect", ()
       bundle.close();
     }
   }
+});
+
+test("complete eligible catalog still excludes UI-only capabilities", async (t) => {
+  const toolOutputSpool = new ToolOutputSpool();
+  t.after(() => toolOutputSpool.close());
+  const tools = ["fixture_query", "zenx_board_ui"].map((name) => ({
+    name,
+    description: "Query a fixture. Full details remain selectable.",
+    inputSchema: {
+      type: "object",
+      properties: { mode: { type: "string", enum: ["summary", "full"] } },
+      required: ["mode"],
+      additionalProperties: false,
+    },
+  }));
+  const composition = createZenXHostToolEnvironment({
+    capabilities: {
+      definitions: tools,
+      plugins: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          description: "Fixture",
+          status: "enabled",
+          mainDocument: "Fixture usage",
+          tools,
+        },
+      ],
+    },
+    send: () => undefined,
+    toolOutputSpool,
+  });
+  t.after(() => composition.close());
+  const catalog = composition.toolDefinitionProjection([]);
+  assert(!catalog.some(({ name }) => name === "zenx_board_ui"));
+  const selected = catalog.find(({ name }) => name === "fixture_query")!;
+  assert.equal(selected.pluginId, "fixture");
+  assert.equal(selected.description, "Query a fixture.");
+  assert.equal(selected.fullDescription, tools[0]!.description);
+  assert.deepEqual(selected.inputSchema, tools[0]!.inputSchema);
 });

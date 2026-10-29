@@ -148,7 +148,14 @@ export interface ModelRequestObservation {
   model: string;
 }
 
+export interface ProviderToolPresentation {
+  protocol: "openai-responses";
+  tools: Record<string, unknown>[];
+}
+
 export interface ModelRequest {
+  /** Compiler-committed native discovery capability for this frozen sample. */
+  providerToolPresentation?: ProviderToolPresentation;
   model: string;
   maxOutputTokens?: number;
   /** null leaves Provider-specific reasoning controls out of the request. */
@@ -226,6 +233,10 @@ export type ModelEvent =
     };
 
 export interface ModelAdapter {
+  prepareToolPresentation?(
+    model: string,
+    tools: readonly ModelTool[],
+  ): ProviderToolPresentation | undefined;
   readonly provider: string;
   /** Adapter-owned static instructions included in every request, for pressure estimates. */
   readonly contextInstructions?: string;

@@ -605,7 +605,10 @@ export async function invokeFleetModelToolFacade(options: {
       toolReturn: { exitCode: raw.exitCode },
       outcome: facts(record(raw.structuredContent) ?? data),
       safeNextStep:
-        "Read raw_result_file with shell/file tools if available, or read current state with a smaller scope. Do not replay a mutation because its compact projection is unavailable.",
+        (capture?.resultFile
+          ? "Read raw_result_file with shell/file tools, or read current state with a smaller scope. "
+          : "Raw result file unavailable; read current state with a smaller scope. ") +
+        "Do not replay a mutation because its compact projection is unavailable.",
     };
   }
   const result: ToolExecutionResult = {

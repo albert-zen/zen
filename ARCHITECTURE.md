@@ -2,7 +2,7 @@
 
 ## ItemList / Trace / current product state contract
 
-- **Hosted tool discovery semantics** — Completed provider-hosted discovery items are immutable model-semantic content in ItemList, compiled in observed call/output order with endpoint-scoped native replay payloads; they never grant local execution authority, and compaction selects them like other historical content.
+- **Hosted tool discovery semantics** — Completed provider-hosted discovery items are immutable model-semantic content in ItemList, compiled in observed call/output order with endpoint-scoped native replay payloads; they never grant local execution authority, and compaction selects them like other historical content. The frozen adapter’s pure tool presentation is committed with the semantic catalog before compilation, including native search presence and namespace descriptions; transport serializes that exact descriptor, while context estimates count eager declarations rather than deferred documentation.
 - **Raw tool file receipts** — Model projections expose the existing same-Host Trace JSON/text artifact path and bounded preview for shell/file inspection, not a dedicated model Trace reader; capture and source truncation facts stay explicit, and remote bytes not received by this Host are never claimed as retained.
 
 Native Computer diagnostics capture a bounded, allowlisted per-request observation context before transport enqueue and write into the invoking harness ToolTraceCapture; this context has no authority, result or replay semantics.
@@ -217,7 +217,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **Plugin Package Trust** — 安装即信任 package 代码，但 dependency build scripts 只由 bundled pnpm 按 profile 显式 `allowBuilds` 执行，不引入风险引擎或参数级权限矩阵。
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
 - **Plugin Marketplace Inventory** — ZenX 唯一的插件浏览与管理读模型，把 Host-owned 内置库存、只读外部 package metadata 和 Catalog 中已安装 package 合并去重，所有动作仍委托同一个 profile lifecycle authority。
-- **Plugin Discovery Projection** — 常驻 `zenx_plugin` 的成功 `read` 从普通 tool call/result 推导后续模型采样的能力披露；它只改变模型可见性，不注册 Runtime、启用插件或授予权限，`discover` / `readiness` 本身不披露工具，不新增 catalog/disclosure Item。
+- **Plugin Discovery Projection** — 当前 Host catalog 与注册的 model-callable runtime 共同决定完整 eligible 工具集合；常驻 `zenx_plugin` 的 `read` 只把详细文档与精确 schema 放到普通结果中，不改变工具声明或权限。
 - **Room Header Presentation Slot** — App 提供仅匹配当前 Room 路由的 renderer-local 标题栏位置；Rooms 可经 React portal 展示既有操作，但不取得新的导航、执行或持久状态 authority。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
@@ -744,11 +744,9 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   当前 enabled/model-callable、Host 权限、审批与资源 generation 始终决定实际可调用性。
 - `discover`、`read` 与后续插件调用全部使用既有普通 `tool_call` / `tool_result`。
   不新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem` 或任何其他 canonical Item；
-  重放时从 ItemList 中已有调用与结果派生后续投影。
-- 只有参数合法、`exitCode = 0`、结果 envelope 与请求 plugin id 一致的普通 `read`
-  call/result 对才形成披露事实；`discover`、失败、malformed 或不匹配结果不披露。披露事实对
-  Thread 持续存在，但 disabled、uninstalled 或当前 provider 缺失的插件不进入后续 schema 投影，
-  重新可用时可由同一历史事实再次投影，历史 Item 不变。
+  文档读取仍保留在 ItemList 中，但不再决定本地工具 eligibility。
+- 既有成功 read receipt 仍可从普通 call/result 验证、重放，但不作为调用门槛；disabled、
+  uninstalled 或当前 provider 缺失的插件不进入 schema 投影，重新可用时无需再读文档。
 - Plugin Package v2 为发现提供的最小 metadata 是稳定 `id`、非空 `name` / short
   `description` / `mainDocument`，以及普通 namespaced tool 的 `name` / `description` /
   `inputSchema`；这是所有非 builtin 工具的唯一 manifest 与 discovery 合同。

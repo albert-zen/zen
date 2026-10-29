@@ -347,7 +347,7 @@ export function itemsAfterLatestAgenticCompaction(
       return false;
     }
     if (
-      item.type === "tool_call" &&
+      (item.type === "tool_call" || item.type === "tool_discovery") &&
       item.turnId === compaction.turnId &&
       item.modelResponseId === compaction.sourceModelResponseId
     ) {

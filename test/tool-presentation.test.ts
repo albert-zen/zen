@@ -322,3 +322,47 @@ test("shipped image and first-party schemas retain code-mode argument contracts"
     }
   }
 });
+
+test("selected discovery metadata survives semantic declaration serialization without changing schemas", async () => {
+  const { prepareSampleContext } =
+    await import("../src/context-preparation.js");
+  const { compileItemList, decodeContextItem } =
+    await import("../src/item-list.js");
+  const tools = [
+    {
+      ...ordinaryTools[0]!,
+      pluginId: "fixture",
+      fullDescription: "Long usage stays in the catalog.",
+    },
+  ];
+  let id = 0;
+  const items = prepareSampleContext({
+    threadId: "thread",
+    sampleId: "sample",
+    items: [],
+    itemList: [],
+    sandbox: "danger-full-access",
+    tools,
+    inputModalities: null,
+    id: () => `context-${++id}`,
+    now: () => "2026-10-29T00:00:00Z",
+  });
+  const reloaded = items.map((item) =>
+    decodeContextItem(JSON.parse(JSON.stringify(item))),
+  );
+  assert.deepEqual(compileItemList(reloaded).tools, tools);
+  assert.deepEqual(
+    prepareSampleContext({
+      threadId: "thread",
+      sampleId: "next-sample",
+      items: [],
+      itemList: reloaded,
+      sandbox: "danger-full-access",
+      tools,
+      inputModalities: null,
+      id: () => `context-${++id}`,
+      now: () => "2026-10-29T00:00:01Z",
+    }),
+    [],
+  );
+});

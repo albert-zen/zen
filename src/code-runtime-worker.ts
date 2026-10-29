@@ -15,7 +15,13 @@ interface WorkerInput {
   maxStateKeys: number;
   maxStateWrites: number;
   maxMediaBytes: number;
-  tools: readonly { name: string; description: string }[];
+  tools: readonly {
+    name: string;
+    description: string;
+    pluginId?: string;
+    fullDescription?: string;
+    inputSchema?: Record<string, unknown>;
+  }[];
   storedValues: Record<string, unknown>;
   port: MessagePort;
 }
@@ -355,11 +361,18 @@ const bootstrap = new Script(String.raw`
     send({ type: 'failed', code: 'EXECUTION_FAILED', message, unawaitedRequestIds: [...requests].filter(([, r]) => !r.observed).map(([id]) => id) });
     finished = true;
   };
+  const freezeCatalog = value => {
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) freezeCatalog(child);
+      Object.freeze(value);
+    }
+    return value;
+  };
   Object.assign(globalThis, {
     tools, text, store, load, atob, btoa, TextEncoder, TextDecoder,
     image: value => media('image', value),
     audio: value => media('audio', value),
-    ALL_TOOLS: Object.freeze(config.tools.map(tool => Object.freeze(tool))),
+    ALL_TOOLS: freezeCatalog(config.tools),
     exit: () => { finish(); throw exitSignal; },
     yield_control: async () => { send({ type: 'yield' }); },
     setTimeout: (callback, delay = 0, ...args) => {

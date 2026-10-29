@@ -41,11 +41,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly name = ZENX_PLUGIN_TOOL;
   readonly specification: ModelTool = {
     name: this.name,
-    description: [
-      "Discover enabled ZenX plugins; use readiness with pluginIds for lifecycle status. Call read with an exact pluginId to get usage instructions and a tool index.",
-      "Read returns full usage details and exact schemas without changing eligibility or the upfront declarations. ALL_TOOLS in run_code already includes every eligible tool; native deferred providers may require provider discovery before a direct call.",
-      "Metadata reads do not execute plugin actions or grant permissions; reading does not install or enable plugins. Plugin tools are not necessarily read-only: they may inspect or change state under current permissions/approvals.",
-    ].join(" "),
+    description:
+      "Discover enabled plugins and read their detailed usage; their eligible tools are already available, with full documentation loaded only when needed.",
     inputSchema: {
       oneOf: [
         {
@@ -105,7 +102,7 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
           operation: "readiness",
           plugins: pluginReadiness(summaries, pluginIds),
           nextStep:
-            'Open Settings, then Plugins, for missing or disabled plugins. Call zenx_plugin with operation: "read" and the enabled plugin\'s exact pluginId to get setup guidance and expose its tools on the next model request.',
+            'Open Settings, then Plugins, for missing or disabled plugins. Call zenx_plugin with operation: "read" and the enabled plugin\'s exact pluginId to get setup guidance and exact tool schemas.',
           permissionChecks:
             "Tool permissions are checked on use. Ready does not mean approved, configured, or end-to-end verified.",
         }),

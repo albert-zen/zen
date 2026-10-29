@@ -203,7 +203,8 @@ export function ContextCompactionEvent({
 }
 
 function modelMessageRole(message: ModelMessage): string {
-  if (message.role === "tool") return i18n.t("shell:tool");
+  if (message.role === "tool" || message.role === "tool_discovery")
+    return i18n.t("shell:tool");
   if (message.role === "reasoning") return i18n.t("shell:reasoning");
   return message.role === "assistant"
     ? i18n.t("shell:assistant")
@@ -211,6 +212,8 @@ function modelMessageRole(message: ModelMessage): string {
 }
 
 function formatModelMessage(message: ModelMessage): string {
+  if (message.role === "tool_discovery")
+    return JSON.stringify(message, null, 2);
   if (message.role === "reasoning") {
     return [message.summary, message.reasoningContent]
       .filter((part): part is string => part !== undefined && part.length > 0)

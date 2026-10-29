@@ -1015,6 +1015,7 @@ test("publication failure with no typed outcome is unclassified and ordinary she
   const nativeOutput = JSON.stringify({
     threadId: "x".repeat(1024 * 1024 + 1),
     literal,
+    targetOnlySpool: "/remote-only/not-transmitted",
   });
   const result = await invokeModelToolFacade({
     invocation: {
@@ -1031,7 +1032,7 @@ test("publication failure with no typed outcome is unclassified and ordinary she
     epoch: "fixture",
     dispatch: async () => {
       effects++;
-      return { output: nativeOutput, exitCode: 0 };
+      return { output: nativeOutput, exitCode: 0, sourceTruncated: true };
     },
   });
   const receipt = JSON.parse(result.output);
@@ -1051,7 +1052,10 @@ test("publication failure with no typed outcome is unclassified and ordinary she
   });
   assert.equal(JSON.parse(read.output).output, nativeOutput);
   assert.equal(receipt.raw_result_file.previewTruncated, true);
-  assert.equal(receipt.raw_result_file.sourceTruncated, false);
+  assert.equal(receipt.raw_result_file.sourceTruncated, true);
+  assert.equal(receipt.raw_result_file.captureComplete, true);
+  assert.ok(receipt.raw_result_file.path.startsWith(directory));
+  assert.notEqual(receipt.raw_result_file.path, "/remote-only/not-transmitted");
   assert.ok(receipt.raw_result_file.byteLength > 1024 * 1024);
   const raw = await traceStore.read("owner");
   const observed = raw.records.find((r) => r.type === "tool_result_observed")!;

@@ -3,6 +3,7 @@ import {
   compileWorkspaceInstructionMessages,
   filePermissionContext,
   type ModelTool,
+  type ProviderToolPresentation,
 } from "./model.js";
 import type {
   CanonicalItem,
@@ -20,6 +21,7 @@ export function prepareSampleContext(options: {
   sandbox: SandboxMode;
   instructions?: string;
   tools: readonly ModelTool[];
+  providerToolPresentation?: ProviderToolPresentation | undefined;
   workspaceInstructions?: readonly WorkspaceInstructionFile[];
   inputModalities: readonly string[] | null;
   notice?: string;
@@ -121,14 +123,21 @@ export function prepareSampleContext(options: {
   );
   if (
     previousTools?.kind !== "tools" ||
-    JSON.stringify(previousTools.content.tools) !== JSON.stringify(tools)
+    JSON.stringify(previousTools.content.tools) !== JSON.stringify(tools) ||
+    JSON.stringify(previousTools.content.providerToolPresentation) !==
+      JSON.stringify(options.providerToolPresentation)
   )
     result.push({
       ...base(),
       source: { kind: "tool_definitions", sequence },
       kind: "tools",
       role: "developer",
-      content: { tools },
+      content: {
+        tools,
+        ...(options.providerToolPresentation === undefined
+          ? {}
+          : { providerToolPresentation: options.providerToolPresentation }),
+      },
     });
   if (options.notice !== undefined)
     addText("context_notice", "user", options.notice, true);

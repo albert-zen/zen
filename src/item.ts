@@ -439,6 +439,7 @@ export interface ToolDiscoveryContent {
 }
 
 export interface ToolDiscoveryItem extends ItemBase, ToolDiscoveryContent {
+  modelResponseId?: string;
   type: "tool_discovery";
   turnId: string;
 }
@@ -1196,6 +1197,10 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
       break;
     case "tool_discovery":
       requireTurnId(item, type);
+      requireOptionalNonEmptyString(
+        item.modelResponseId,
+        `${type}.modelResponseId`,
+      );
       validateToolDiscoveryContent(item);
       break;
     case "reasoning":

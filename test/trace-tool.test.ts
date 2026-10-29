@@ -439,3 +439,66 @@ test("raw returned value is snapshotted before awaiting pending output persisten
     "original",
   );
 });
+
+test("local readable result files distinguish upstream truncation, capture loss and unavailable storage", async (t) => {
+  const { trace } = await fixture(t);
+  const sink = createToolTraceCapture(
+    trace,
+    { threadId: "thread", callId: "received" },
+    { maxPendingBytes: 1 },
+  );
+  await sink.write("stdout", "not retained");
+  const raw = {
+    output: "received bytes only",
+    exitCode: 0,
+    sourceTruncated: true,
+  };
+  const receipt = await sink.recordResult(raw, "remote-received");
+  assert.equal(receipt.durability, "degraded");
+  assert(receipt.resultFile);
+  assert.equal(receipt.resultFile.sourceTruncated, true);
+  assert.equal(receipt.resultFile.captureComplete, false);
+  const read = await new ShellToolRuntime().execute({
+    ...invocation("shell"),
+    sandbox: "read-only",
+    arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
+  });
+  assert.deepEqual(JSON.parse(read.output), raw);
+  const failed = createToolTraceCapture(
+    {
+      record: async () => ({
+        durability: "degraded",
+        error: "synthetic disk full",
+      }),
+    },
+    { threadId: "thread", callId: "failed" },
+  );
+  assert.equal(
+    (await failed.recordResult(raw, "received")).resultFile,
+    undefined,
+  );
+});
+
+test("non-JSON returned values have a shell-readable inspection view without claiming lossless JSON", async (t) => {
+  const { trace } = await fixture(t);
+  const sink = createToolTraceCapture(trace, {
+    threadId: "thread",
+    callId: "circular",
+  });
+  const raw: Record<string, unknown> = {
+    output: "original",
+    exitCode: 0,
+    count: 123n,
+  };
+  raw.self = raw;
+  const receipt = await sink.recordResult(raw, "returned");
+  assert(receipt.resultFile);
+  assert.equal(receipt.resultFile.mediaType, "text/plain");
+  const read = await new ShellToolRuntime().execute({
+    ...invocation("shell"),
+    sandbox: "read-only",
+    arguments: { command: `cat ${JSON.stringify(receipt.resultFile.path)}` },
+  });
+  assert.match(read.output, /123n/);
+  assert.match(read.output, /Circular/);
+});

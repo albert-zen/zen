@@ -10,6 +10,7 @@ import {
   type ModelAdapter,
   type ModelEvent,
   type ModelRequest,
+  type ModelTool,
 } from "../model.js";
 import {
   mediaRequestRejected,
@@ -93,18 +94,56 @@ export class OpenAiResponsesModel implements ModelAdapter {
         );
   }
 
+  prepareToolPresentation(
+    model: string,
+    tools: readonly ModelTool[],
+  ):
+    | { protocol: "openai-responses"; tools: Record<string, unknown>[] }
+    | undefined {
+    if (!supportsHostedToolSearch(this.#endpoint, model)) return undefined;
+    const presentation = responsesToolPresentation(tools, true);
+    return presentation.namespaces.size === 0
+      ? undefined
+      : {
+          protocol: "openai-responses",
+          tools: presentation.tools,
+        };
+  }
+
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
     if (!request.model.trim())
       throw new Error("Public Responses model is required");
-    const nativeDiscovery = supportsHostedToolSearch(
-      this.#endpoint,
-      request.model,
-    );
-    const presentation = responsesToolPresentation(
-      request.tools,
-      nativeDiscovery,
-    );
+    const nativeDiscovery =
+      request.providerToolPresentation?.protocol === "openai-responses" &&
+      supportsHostedToolSearch(this.#endpoint, request.model);
+    const presentation = responsesToolPresentation(request.tools, false);
+    if (nativeDiscovery) {
+      // The compiler already committed this exact model-visible presentation.
+      presentation.tools = structuredClone(
+        request.providerToolPresentation!.tools,
+      );
+      for (const group of presentation.tools) {
+        if (
+          group.type !== "namespace" ||
+          typeof group.name !== "string" ||
+          !Array.isArray(group.tools)
+        )
+          continue;
+        for (const member of group.tools) {
+          if (
+            !member ||
+            typeof member.name !== "string" ||
+            !request.tools.some((tool) => tool.name === member.name)
+          ) {
+            throw new Error(
+              "Compiled discovery presentation contains an unavailable tool",
+            );
+          }
+          presentation.namespaces.set(member.name, group.name);
+        }
+      }
+    }
     const input: Record<string, unknown>[] = [];
     const mediaPaths = new Map<string, object>();
     for (const message of request.messages) {

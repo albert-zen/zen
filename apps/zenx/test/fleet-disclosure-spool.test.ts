@@ -357,7 +357,26 @@ test("actual compact Fleet discovery and native gateway catalog survive durable 
     JSON.parse(readText).plugin.mainDocument,
     modelPluginDocument(fleetManifest.id, fleetManifest.mainDocument!),
   );
-  assert(samples[1]!.tools.some((tool) => tool.name === "zenx_fleet_tools"));
+  const initialFleetTool = samples[0]!.tools.find(
+    (tool) => tool.name === "zenx_fleet_tools",
+  );
+  assert(
+    initialFleetTool,
+    "eligible local Fleet tools exist before documentation is read",
+  );
+  assert.deepEqual(
+    samples[1]!.tools.find((tool) => tool.name === "zenx_fleet_tools"),
+    initialFleetTool,
+    "reading documentation must not change direct definitions",
+  );
+  assert(
+    samples
+      .slice(0, 5)
+      .every((sample) =>
+        sample.tools.every((tool) => !tool.name.startsWith("fleet_")),
+      ),
+    "remote proxies still require the exact target catalog, not a plugin read",
+  );
   const catalog = results[4]!;
   assert.equal(catalog.contentType, FLEET_CATALOG_CONTENT_TYPE);
   const catalogText = catalog.output.startsWith("[tool output receipt]")
@@ -421,7 +440,7 @@ test("actual compact Fleet discovery and native gateway catalog survive durable 
 });
 
 for (const kind of ["fleet", "plugin"] as const) {
-  test(`late nested ${kind} disclosure survives coordinator yield and the next model response`, async (t) => {
+  test(`late nested ${kind} documentation preserves local eligibility and exact-target discovery across yield`, async (t) => {
     const started = deferred();
     const release = deferred();
     const directory = await mkdtemp(
@@ -725,9 +744,30 @@ for (const kind of ["fleet", "plugin"] as const) {
       );
     assert.deepEqual(
       samples.slice(0, 2).map((sample) => disclosed(sample).length),
-      [0, 0],
+      kind === "fleet" ? [0, 0] : [1, 1],
+      "only exact-target remote tools wait for a catalog; local plugin tools are already eligible",
     );
     assert.equal(disclosed(samples[2]!).length, 1);
+    if (kind === "plugin") {
+      for (const sample of samples) {
+        assert.deepEqual(disclosed(sample), disclosed(samples[0]!));
+        assert.deepEqual(
+          disclosed(sample)[0]!.inputSchema,
+          ordinary.inputSchema,
+        );
+      }
+    }
+    const initialCode = samples[0]!.tools.find(
+      (tool) => tool.name === "run_code",
+    );
+    assert(initialCode);
+    for (const sample of samples) {
+      assert.deepEqual(
+        sample.tools.find((tool) => tool.name === "run_code"),
+        initialCode,
+        "documentation and remote discovery must not regenerate the run_code prefix",
+      );
+    }
     const rebuilt = new FleetToolTargetRouter(async () => {
       throw new Error("unexpected execute");
     }).definitions(

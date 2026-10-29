@@ -618,3 +618,50 @@ test("an exact frozen ItemList does not bypass original canonical relational val
     await journal.close();
   }
 });
+
+test("hosted tool discovery survives cold semantic storage and compatibility projection", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  const discovery: CanonicalItem = {
+    ...user,
+    id: "discovery",
+    type: "tool_discovery",
+    protocol: "openai-responses",
+    endpointSha256: "b".repeat(64),
+    items: [
+      {
+        type: "tool_search_call",
+        id: "search",
+        arguments: { query: "synthetic docs" },
+      },
+      {
+        type: "tool_search_output",
+        id: "output",
+        tools: [
+          {
+            type: "function",
+            name: "lookup",
+            description: "literal complete definition",
+          },
+        ],
+      },
+    ],
+  };
+  // No shadow text body: raw hosted semantic payload belongs to ItemList.
+  delete (discovery as unknown as Record<string, unknown>).text;
+  await journal.append(metadata);
+  await journal.append(discovery);
+  assert.equal((await journal.readItemList("t"))[0]?.kind, "tool_discovery");
+  await journal.close();
+  const cold = new DomainThreadJournal(options);
+  assert.deepEqual(
+    (await cold.read("t")).find((item) => item.id === "discovery"),
+    discovery,
+  );
+  assert.deepEqual((await cold.readItemList("t"))[0]?.content, {
+    protocol: "openai-responses",
+    endpointSha256: "b".repeat(64),
+    items: discovery.items,
+  });
+  await cold.close();
+});

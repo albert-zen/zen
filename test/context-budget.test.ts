@@ -183,7 +183,7 @@ test("canonical provenance separates instructions and injected plugin text, not 
   );
 });
 
-test("generated run_code SDK is budgeted once as actually disclosed, including nested plugin signatures", async () => {
+test("stable run_code declaration is budgeted without unprinted catalog details", async () => {
   const { buildToolPresentation } = await import("../src/tool-presentation.js");
   const definitions = [
     {
@@ -199,16 +199,38 @@ test("generated run_code SDK is budgeted once as actually disclosed, including n
   ];
   const code = buildToolPresentation(definitions, "code");
   assert.equal(code.modelTools.length, 1);
-  assert(code.modelTools[0]!.description.includes("plugin_read"));
+  assert(!code.modelTools[0]!.description.includes("plugin_read"));
+  assert(code.codeTools.some(({ name }) => name === "plugin_read"));
   const estimate = estimateModelInput([], code.modelTools);
   assert.equal(estimate.total, estimate.toolDefinitions);
   assert.equal(
     estimate.toolDefinitions,
     Math.ceil(JSON.stringify(code.modelTools[0]).length / 4) + 4,
   );
-  assert(
-    estimate.toolDefinitions >
-      estimateModelInput([], definitions).toolDefinitions,
+  assert.equal(
+    estimate.toolDefinitions,
+    estimateModelInput(
+      [],
+      buildToolPresentation([definitions[0]!], "code").modelTools,
+    ).toolDefinitions,
+  );
+  const tool = {
+    name: "plugin_read",
+    description: "Read plugin data.",
+    inputSchema: { type: "object" },
+  };
+  assert.deepEqual(
+    estimateModelInput([], [tool]),
+    estimateModelInput(
+      [],
+      [
+        {
+          ...tool,
+          pluginId: "fixture",
+          fullDescription: "long usage ".repeat(5000),
+        },
+      ],
+    ),
   );
 });
 
@@ -243,7 +265,7 @@ test("a current estimate is never replaced by stale provider usage and category 
   assert.equal(usage.context.inputTokenSource, "estimated");
 });
 
-test("post-discovery expansion blocks the next sample in direct/code/both modes without replaying effects", async (t) => {
+test("new eager schemas affect budgeting but code-only catalog details do not", async (t) => {
   for (const mode of ["direct", "code", "both"] as const) {
     for (const reportUsage of [false, true]) {
       await t.test(
@@ -258,7 +280,7 @@ test("post-discovery expansion blocks the next sample in direct/code/both modes 
           const environment = new ToolEnvironment({
             runtimes: [
               testToolRuntime({ name: "disclose", execute }),
-              // Synthetic execution receipt; code mode still uses the production generated SDK.
+              // Synthetic execution receipt; code mode uses the production stable descriptor.
               testToolRuntime({ name: "run_code", execute }),
             ],
           });
@@ -282,6 +304,10 @@ test("post-discovery expansion blocks the next sample in direct/code/both modes 
             provider: "fixture",
             async *stream() {
               samples++;
+              if (samples > 1) {
+                yield { type: "text_delta", delta: "done" };
+                return;
+              }
               yield {
                 type: "tool_call",
                 callId: "disclose",
@@ -319,10 +345,13 @@ test("post-discovery expansion blocks the next sample in direct/code/both modes 
           await (
             await server.startTurn(thread.id, "discover")
           ).done;
-          assert.equal(samples, 1);
+          assert.equal(samples, mode === "code" ? 2 : 1);
           assert.equal(executions, 1);
           const snapshot = await server.readThread(thread.id);
-          assert.equal(snapshot.turns[0]?.status, "failed");
+          assert.equal(
+            snapshot.turns[0]?.status,
+            mode === "code" ? "completed" : "failed",
+          );
           assert(
             snapshot.items.some(
               (item) =>
@@ -336,7 +365,7 @@ test("post-discovery expansion blocks the next sample in direct/code/both modes 
           );
           assert.equal(
             snapshot.items.filter((item) => item.type === "failure").length,
-            1,
+            mode === "code" ? 0 : 1,
           );
           await environment.close();
         },

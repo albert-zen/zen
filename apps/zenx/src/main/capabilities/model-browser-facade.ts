@@ -279,7 +279,7 @@ function projectBrowserResult(
     ownerThreadId: string;
     epoch?: string;
   }[] = [],
-): unknown {
+): Record<string, unknown> {
   const op = operation(name),
     bind = (kind: string, value: unknown) =>
       refs.bind("browser", kind, asJson(value), epoch);
@@ -616,7 +616,10 @@ export async function invokeBrowserModelToolFacade(options: {
         },
         ...(capture?.resultFile ? { raw_result_file: capture.resultFile } : {}),
         safeNextStep:
-          "Read raw_result_file with shell/file tools if available, or current state; never repeat a mutation merely because projection is unavailable.",
+          (capture?.resultFile
+            ? "Read raw_result_file with shell/file tools, or current state. "
+            : "Raw result file unavailable; read current state. ") +
+          "Never repeat a mutation merely because projection is unavailable.",
       }),
       retained,
     );

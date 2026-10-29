@@ -1,3 +1,4 @@
+import type { ProviderToolPresentation } from "./model.js";
 import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
 import {
   modelUserContent,
@@ -38,6 +39,7 @@ export function estimateModelInput(
   messages: readonly ModelMessage[],
   tools: readonly ModelTool[],
   instructions = "",
+  providerToolPresentation?: ProviderToolPresentation,
 ): ModelInputEstimate {
   const estimate: ModelInputEstimate = {
     total: 0,
@@ -50,7 +52,7 @@ export function estimateModelInput(
     const category = modelMessageContextCategory(message);
     estimate[category] = add(estimate[category], estimateModelMessage(message));
   }
-  for (const tool of tools)
+  for (const tool of providerToolPresentation === undefined ? tools : [])
     estimate.toolDefinitions = add(
       estimate.toolDefinitions,
       estimateText(
@@ -64,6 +66,21 @@ export function estimateModelInput(
         }),
       ),
     );
+  if (providerToolPresentation !== undefined) {
+    const visible = providerToolPresentation.tools
+      .map((tool) =>
+        tool.type === "namespace" && Array.isArray(tool.tools)
+          ? {
+              ...tool,
+              tools: tool.tools.filter(
+                (entry) => entry?.defer_loading !== true,
+              ),
+            }
+          : tool,
+      )
+      .filter((tool) => tool.defer_loading !== true);
+    estimate.toolDefinitions = estimateText(JSON.stringify(visible));
+  }
   estimate.total = [
     estimate.instructions,
     estimate.toolDefinitions,

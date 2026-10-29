@@ -1,4 +1,4 @@
-import type { ModelEvent } from "./model.js";
+import type { ModelEvent, ProviderToolPresentation } from "./model.js";
 import { compileItemList } from "./item-list.js";
 import {
   contextForFacts,
@@ -126,6 +126,7 @@ export interface RuntimeConfiguration {
 }
 
 export interface PreparedModelSample {
+  providerToolPresentation?: ProviderToolPresentation;
   compiled?: true;
   presentation?: ToolPresentationSnapshot;
   configuration?: RuntimeConfiguration;
@@ -593,6 +594,7 @@ export class AgentRuntime {
                   turnId,
                   createdAt: this.#now(),
                   ...output,
+                  modelResponseId: result.itemId,
                 },
                 options,
               );
@@ -647,6 +649,7 @@ export class AgentRuntime {
                 turnId,
                 createdAt: this.#now(),
                 ...toolCall,
+                modelResponseId: result.itemId,
               },
               options,
             );
@@ -801,7 +804,7 @@ export class AgentRuntime {
     }
   }
 
-  /** Same disclosed snapshot used for admission, UI estimates, and the actual sample. */
+  /** Same eligible snapshot used for admission, UI estimates, and the actual sample. */
   projectToolPresentation(
     items: readonly CanonicalItem[],
     agenticCompaction: boolean,
@@ -1071,6 +1074,7 @@ export class AgentRuntime {
         items: options.thread.items,
         messages: projectedMessages,
         tools: presentation.modelTools,
+        providerToolPresentation: prepared?.providerToolPresentation,
         adapter: sampleAdapter,
         instructionsMaterialized: prepared?.compiled === true,
         selection: {
@@ -1093,6 +1097,9 @@ export class AgentRuntime {
           model: sampleConfiguration.model,
           reasoningEffort: sampleConfiguration.reasoningEffort,
           messages: projectedMessages,
+          ...(prepared?.providerToolPresentation === undefined
+            ? {}
+            : { providerToolPresentation: prepared.providerToolPresentation }),
           tools: presentation.modelTools.map((definition) =>
             structuredClone(definition),
           ),
@@ -1595,6 +1602,7 @@ export class AgentRuntime {
           const projected = (facts: readonly CanonicalItem[]) => {
             const itemList = contextForFacts(facts, options.thread.itemList);
             const sampleId = `${refreshed.id}-estimate`;
+            const tools = this.projectToolPresentation(facts, true).modelTools;
             const additions = prepareSampleContext({
               threadId: options.thread.id,
               turnId: toolCall.turnId,
@@ -1605,7 +1613,12 @@ export class AgentRuntime {
               ...(options.modelAdapter.contextInstructions === undefined
                 ? {}
                 : { instructions: options.modelAdapter.contextInstructions }),
-              tools: this.projectToolPresentation(facts, true).modelTools,
+              tools,
+              providerToolPresentation:
+                options.modelAdapter.prepareToolPresentation?.(
+                  options.configuration.model,
+                  tools,
+                ),
               ...(workspaceInstructions === undefined
                 ? {}
                 : { workspaceInstructions }),
@@ -1629,6 +1642,8 @@ export class AgentRuntime {
           const baseTokens = estimateModelInput(
             baseProjection.messages,
             baseProjection.tools,
+            "",
+            baseProjection.providerToolPresentation,
           ).total;
           if (baseTokens > configuration.contextWindow) {
             throw new Error(
@@ -1675,6 +1690,8 @@ export class AgentRuntime {
           const fullProjectionTokens = estimateModelInput(
             fullProjection.messages,
             fullProjection.tools,
+            "",
+            fullProjection.providerToolPresentation,
           ).total;
           if (fullProjectionTokens > configuration.contextWindow) {
             throw new Error(
@@ -1934,7 +1951,13 @@ export class AgentRuntime {
     inheritedSignal: AbortSignal,
     scheduler: TurnToolScheduler,
     allowedToolNames: ReadonlySet<string>,
-    codeTools: readonly { name: string; description: string }[],
+    codeTools: readonly {
+      name: string;
+      description: string;
+      pluginId?: string;
+      fullDescription?: string;
+      inputSchema?: Record<string, unknown>;
+    }[],
   ) {
     return {
       drain: () => scheduler.drain(parent.callId),
@@ -2136,7 +2159,13 @@ interface ScheduledToolCapability {
   signal: AbortSignal;
   allowedToolNames: ReadonlySet<string>;
   nestedToolNames: ReadonlySet<string>;
-  codeTools: readonly { name: string; description: string }[];
+  codeTools: readonly {
+    name: string;
+    description: string;
+    pluginId?: string;
+    fullDescription?: string;
+    inputSchema?: Record<string, unknown>;
+  }[];
 }
 
 interface ScheduledToolOutcome {
