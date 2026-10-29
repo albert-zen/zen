@@ -13,7 +13,11 @@ import type {
   ZenXTrigger,
 } from "../../main/trigger-types.js";
 import type { RoomConversation } from "./room-conversations.js";
-import { AuxiliaryPanel, type AuxiliaryCustomTab } from "./auxiliary-panel.js";
+import {
+  AuxiliaryPanel,
+  type AuxiliaryCustomTab,
+  type AuxiliaryPrimaryConversation,
+} from "./auxiliary-panel.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { threadEditTitle, threadTitle } from "./thread-list.js";
 
@@ -25,6 +29,7 @@ export interface CompanionViewState {
 }
 
 export function CompanionWorkspace({
+  primaryConversation,
   presentationState,
   onFullscreenChange,
   onRemoveTab,
@@ -49,6 +54,7 @@ export function CompanionWorkspace({
   onLocalSelectTab,
   onLocalTabsChange,
 }: {
+  primaryConversation?: AuxiliaryPrimaryConversation;
   presentationState?: ThreadSidebarState;
   ephemeralTabs?: readonly AuxiliaryCustomTab[];
   localSelectedTab?: string;
@@ -122,7 +128,10 @@ export function CompanionWorkspace({
     (p) => p.id === "zenx-triggers" && p.enabled && p.available,
   );
   useEffect(() => {
-    if (section) setSelected(`custom:${section}`);
+    if (section) {
+      onLocalSelectTab?.(`custom:${section}`);
+      setSelected(`custom:${section}`);
+    }
     if (section === "instructions") setInstructionsRequest((id) => id + 1);
   }, [section, sectionRequest]);
   useEffect(() => {
@@ -566,6 +575,7 @@ export function CompanionWorkspace({
   ];
   return (
     <AuxiliaryPanel
+      primaryConversation={primaryConversation}
       presentationState={presentationState}
       onFullscreenChange={onFullscreenChange}
       onRemoveTab={onRemoveTab}

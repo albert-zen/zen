@@ -12120,3 +12120,30 @@ button:disabled {
 .user-row[data-sent-message-id]:focus {
   outline: none;
 }
+
+/* Fullscreen's leading conversation tab reveals the existing main surface in
+   place. Its React/DOM identity, composer and reading state never move. */
+.workspace:has(
+    > .auxiliary-panel[data-open="true"][data-expanded="true"][data-primary-active="true"]
+  )
+  > :is(.agent-surface, .plugin-product-page) {
+  display: grid;
+  visibility: visible;
+  width: 100%;
+  padding-top: var(--native-titlebar-height, 44px);
+}
+.auxiliary-panel[data-primary-active="true"] {
+  background: transparent;
+  pointer-events: none;
+  border-left-color: transparent;
+}
+.auxiliary-panel[data-primary-active="true"] > .auxiliary-heading {
+  background: var(--color-surface-main);
+  pointer-events: auto;
+}
+.auxiliary-panel[data-primary-active="true"] > :not(.auxiliary-heading) {
+  visibility: hidden;
+}
+.workspace-content-tab[data-tab-id="primary-conversation"] [role="tab"] {
+  padding-inline-end: 9px;
+}

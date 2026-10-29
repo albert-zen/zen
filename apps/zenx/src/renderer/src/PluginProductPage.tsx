@@ -58,6 +58,7 @@ export function PluginProductPage({
     );
   return (
     <section
+      id="primary-conversation-content"
       className="product-page plugin-product-page"
       aria-label={
         target.pluginId === "zenx-triggers"

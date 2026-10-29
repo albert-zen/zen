@@ -676,21 +676,26 @@ function AppContent() {
     oldId: string,
     tab: import("../../thread-sidebar-state.js").ThreadSidebarTab,
   ) {
-    await sidebarState.controller.edit(owner, (state) => {
-      const tabs = state.tabs
-        .map((entry) => (sidebarTabId(entry) === oldId ? tab : entry))
-        .filter(
-          (entry, index, all) =>
-            all.findIndex(
-              (other) => sidebarTabId(other) === sidebarTabId(entry),
-            ) === index,
-        );
-      return {
-        tabs,
-        selectedTab:
-          state.selectedTab === oldId ? sidebarTabId(tab) : state.selectedTab,
-      };
-    });
+    await sidebarState.controller.edit(
+      owner,
+      (state) => {
+        const tabs = state.tabs
+          .map((entry) => (sidebarTabId(entry) === oldId ? tab : entry))
+          .filter(
+            (entry, index, all) =>
+              all.findIndex(
+                (other) => sidebarTabId(other) === sidebarTabId(entry),
+              ) === index,
+          );
+        return {
+          tabs,
+          selectedTab:
+            state.selectedTab === oldId ? sidebarTabId(tab) : state.selectedTab,
+        };
+      },
+      undefined,
+      "preserve",
+    );
     return (
       sidebarState.controller
         .get(owner)
@@ -715,6 +720,7 @@ function AppContent() {
   useEffect(
     () =>
       window.zenx.panels.onOpen((request) => {
+        sidebarState.controller.beginPresentationIntent(request.threadId);
         setPanelTabs((current) => ({
           ...current,
           [request.threadId]: `plugin:${request.pluginId}:${request.panelId}`,
@@ -2706,6 +2712,10 @@ function AppContent() {
           requestedPanel &&
           pluginSnapshot?.panels.some((p) => p.key === requestedPanel);
         if (target.searchParams.get("view") === "panel" || validPanel) {
+          sidebarState.controller.beginPresentationIntent({
+            kind: "room",
+            id: selectedRoom.id,
+          });
           setRoomWorkspaceStates((current) => ({
             ...current,
             [selectedRoom.id]: {
@@ -2738,6 +2748,7 @@ function AppContent() {
         owner !== null &&
         threadId !== owner
       ) {
+        sidebarState.controller.beginPresentationIntent(owner);
         setConversationPanels((current) => ({
           ...current,
           [owner]: [...new Set([...(current[owner] ?? []), threadId])],
@@ -2754,6 +2765,7 @@ function AppContent() {
           (entry) => entry.key === target.searchParams.get("panel"),
         );
         if (panel !== undefined) {
+          sidebarState.controller.beginPresentationIntent(owner);
           setBrowserPanels((current) => ({ ...current, [owner]: true }));
           setPanelTabs((current) => ({
             ...current,
@@ -4154,6 +4166,25 @@ function AppContent() {
             (roomSidebarState?.open ?? Boolean(roomPanel)) &&
             pluginSnapshot ? (
               <CompanionWorkspace
+                primaryConversation={{
+                  title: i18n.t("panels:mainConversation", {
+                    title: selectedRoom.name,
+                  }),
+                  contentId: "primary-conversation-content",
+                  onSelect: () => {
+                    const owner = {
+                      kind: "room" as const,
+                      id: selectedRoom.id,
+                    };
+                    const intent =
+                      sidebarState.controller.beginPresentationIntent(owner);
+                    return () =>
+                      sidebarState.controller.isPresentationIntentCurrent(
+                        owner,
+                        intent,
+                      );
+                  },
+                }}
                 key={selectedRoom.id}
                 room={selectedRoom}
                 presentationState={roomSidebarState}
@@ -4275,6 +4306,24 @@ function AppContent() {
             threadDetail !== null &&
             selectedThreadId === threadDetail.id ? (
               <AuxiliaryPanel
+                primaryConversation={{
+                  title: i18n.t("panels:mainConversation", {
+                    title: selectedSummary
+                      ? threadTitle(selectedSummary)
+                      : i18n.t("shell:currentThread"),
+                  }),
+                  contentId: "primary-conversation-content",
+                  onSelect: () => {
+                    const owner = threadDetail.id;
+                    const intent =
+                      sidebarState.controller.beginPresentationIntent(owner);
+                    return () =>
+                      sidebarState.controller.isPresentationIntentCurrent(
+                        owner,
+                        intent,
+                      );
+                  },
+                }}
                 threadContext={{
                   triggerSourceRequest:
                     triggerSourceRequest?.viewportId === threadDetail.id
@@ -4849,6 +4898,7 @@ function AgentSurface({
       : null;
   return (
     <section
+      id="primary-conversation-content"
       className={`agent-surface${newThreadDraft === null ? "" : " new-thread-draft-surface"}${threadHeader ? " has-thread-header" : ""}`}
     >
       {threadHeader}
