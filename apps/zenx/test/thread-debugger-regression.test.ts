@@ -52,6 +52,13 @@ function fixture(text = "hello") {
     ),
   };
 }
+async function expandInterruptedHistory() {
+  const toggle = document.querySelector<HTMLButtonElement>(".turn-toggle");
+  assert.ok(toggle, "Interrupted conversation exposes its history disclosure");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  await act(async () => toggle.click());
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+}
 const props = (thread: ReturnType<typeof fixture>) => ({
   thread,
   approvals: [],
@@ -80,6 +87,12 @@ test("debugger keeps thread cwd for a relative Markdown image", async () =>
         createElement(ThreadView, props(fixture("![image](./plot.png)"))),
       ),
     );
+    assert.deepEqual(
+      reads,
+      [],
+      "Collapsed partial content is not read eagerly",
+    );
+    await expandInterruptedHistory();
     assert.deepEqual(reads, [["./plot.png", "/project/actual-thread"]]);
     await act(async () =>
       root.render(
@@ -107,6 +120,11 @@ test("debugger preserves main conversation message-link routing", async () =>
         }),
       ),
     );
+    assert.ok(
+      document.querySelector(".markdown-body a") === null,
+      "Interrupted partial message starts in collapsed history",
+    );
+    await expandInterruptedHistory();
     assert.ok(
       document.querySelector(".markdown-body a"),
       "conversation link exists",

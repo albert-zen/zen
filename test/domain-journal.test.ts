@@ -255,3 +255,91 @@ test("accepted semantic source failure does not publish a fabricated ItemList in
   assert.deepEqual(await journal.readItemList("t"), []);
   await journal.close();
 });
+
+test("append receipt is the exact durable semantic snapshot, including separately appended sources", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    assert.deepEqual(await journal.append(metadata), []);
+    const first = await journal.append(user);
+    assert.deepEqual(first, await journal.readItemList("t"));
+    const initialMessage = first[0]!;
+    assert.ok(initialMessage.kind === "message");
+    const source = {
+      ...initialMessage,
+      id: "host-source",
+      content: {
+        text: "Synthetic separately persisted model input",
+        parts: [
+          {
+            type: "text" as const,
+            text: "Synthetic separately persisted model input",
+          },
+        ],
+      },
+    };
+    await journal.appendContext(source);
+    const next = await journal.append({
+      ...user,
+      id: "u-next",
+      text: "Next original input",
+    });
+    assert.deepEqual(next, await journal.readItemList("t"));
+    assert.deepEqual(
+      next.map((item) => item.id),
+      ["u", "host-source", "u-next"],
+    );
+    first.splice(0);
+    assert.equal(
+      (await journal.readItemList("t")).length,
+      3,
+      "receipt is not a retained authority/cache",
+    );
+  } finally {
+    await journal.close();
+  }
+});
+
+test("append never publishes a receipt before semantic durability and never returns one on unknown write outcome", async () => {
+  const options = await setup();
+  let entered!: () => void;
+  let release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const journal = new DomainThreadJournal({
+    ...options,
+    onItemListAppendPhase: async (phase) => {
+      if (phase !== "published") return;
+      entered();
+      await gate;
+      throw new Error("Synthetic uncertain semantic sync");
+    },
+  });
+  try {
+    await journal.append(metadata);
+    let receiptReturned = false;
+    const append = journal.append(user).then((receipt) => {
+      receiptReturned = true;
+      return receipt;
+    });
+    const rejected = assert.rejects(append, {
+      name: "ThreadJournalAppendOutcomeUnknownError",
+    });
+    await writing;
+    assert.equal(receiptReturned, false);
+    release();
+    await rejected;
+    assert.equal(receiptReturned, false);
+    await assert.rejects(
+      journal.append({ ...user, id: "must-not-dispatch" }),
+      /unknown|injected|Synthetic/u,
+    );
+  } finally {
+    release();
+    await journal.close();
+  }
+});

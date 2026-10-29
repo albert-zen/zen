@@ -197,7 +197,7 @@ export class DomainThreadJournal implements ThreadJournal {
       this.#live.set(first.threadId, structuredClone(previous));
     });
   }
-  async append(raw: CanonicalItem): Promise<void> {
+  async append(raw: CanonicalItem): Promise<ContextItem[]> {
     const item = decodeCanonicalItem(raw);
     return this.#operation(item.threadId, async () => {
       await this.#migrate(item.threadId);
@@ -213,7 +213,7 @@ export class DomainThreadJournal implements ThreadJournal {
         await this.#writeFence(item.threadId);
         await this.#items.create(item.threadId, semantic);
         this.#live.set(item.threadId, [item]);
-        return;
+        return semantic;
       }
       await this.#reconcileCompilation(item.threadId);
       const previous = await this.#read(item.threadId);
@@ -235,14 +235,10 @@ export class DomainThreadJournal implements ThreadJournal {
               Number((r.data as { sequence?: number })?.sequence ?? -1),
             ),
         ) + 1;
+      let semantic: ContextItem[];
       try {
         await this.#route(item, sequence, []);
-        const semantic = contextItemsFromLegacy(
-          item,
-          previous,
-          sequence,
-          contexts,
-        );
+        semantic = contextItemsFromLegacy(item, previous, sequence, contexts);
         if (semantic.length) await this.#items.append(item.threadId, semantic);
       } catch (error) {
         this.#live.delete(item.threadId);
@@ -254,6 +250,9 @@ export class DomainThreadJournal implements ThreadJournal {
         throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
       }
       this.#live.set(item.threadId, [...previous, item]);
+      // These exact items were read/reconciled in this serialized append and
+      // the new suffix is durable now. No follow-up full-log scan is needed.
+      return [...contexts, ...semantic];
     });
   }
   async appendContext(raw: ContextItem): Promise<void> {

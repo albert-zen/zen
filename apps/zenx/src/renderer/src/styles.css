@@ -8769,10 +8769,56 @@ button:disabled {
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
-.compaction-projection summary {
-  padding: 10px 0;
+.compaction-views {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.compaction-views [role="tab"] {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
   cursor: pointer;
-  color: var(--color-text-secondary);
+}
+.compaction-views [aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--color-accent);
+}
+.compaction-views [role="tab"]:focus-visible,
+.compaction-view:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.compaction-view {
+  min-width: 0;
+}
+.compaction-view h3 {
+  margin: 8px 0;
+  font-size: var(--font-size-caption);
+  font-weight: 500;
+}
+.compaction-view .original-history-reader {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+.compaction-view .original-history-unavailable {
+  margin: 0;
+}
+.compaction-view .original-history-locator,
+.compaction-record {
+  margin-top: 16px;
+}
+@media (pointer: coarse) {
+  .compaction-views [role="tab"] {
+    min-height: 44px;
+  }
 }
 .context-compaction-detail p {
   font-size: var(--font-size-caption);
@@ -12051,4 +12097,16 @@ button:disabled {
   font-size: 10px;
   max-height: 220px;
   overflow: auto;
+}
+
+.tool-action-target {
+  margin: 0 0 6px 23px;
+  min-width: 0;
+}
+.user-row[data-message-target="true"] .user-bubble {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 4px;
+}
+.user-row[data-sent-message-id]:focus {
+  outline: none;
 }

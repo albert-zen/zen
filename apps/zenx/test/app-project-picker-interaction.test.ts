@@ -3751,7 +3751,7 @@ test("selected Sidebar archive fences Send until a failed response restores Chat
   }
 });
 
-test("selected archive fences a submission already staging its title", async () => {
+test("selected archive fences later sends without waiting for an earlier auxiliary title", async () => {
   const titleResponse = deferred<undefined>();
   const archiveResponse = deferred<unknown>();
   let turnStartCalls = 0;
@@ -3804,7 +3804,13 @@ test("selected archive fences a submission already staging its title", async () 
       send.click();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      turnStartCalls,
+      1,
+      "the earlier send does not wait for its title",
+    );
+    assert.equal(composer.value, "");
+    await setTextareaValue(composer, "Retry after archive failure");
 
     await act(async () => threadMenuButton("Thread one").click());
     const archive = await waitFor(() => exactMenuButton("Archive"));
@@ -3815,7 +3821,11 @@ test("selected archive fences a submission already staging its title", async () 
       await Promise.resolve();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 0);
+    assert.equal(
+      turnStartCalls,
+      1,
+      "title completion cannot resend accepted input",
+    );
     assert.equal(
       document.querySelector<HTMLTextAreaElement>("#thread-composer")?.disabled,
       true,
@@ -3840,7 +3850,7 @@ test("selected archive fences a submission already staging its title", async () 
       await Promise.resolve();
       await Promise.resolve();
     });
-    assert.equal(turnStartCalls, 1);
+    assert.equal(turnStartCalls, 2);
   } finally {
     await unmountApp(harness);
   }
@@ -7167,6 +7177,443 @@ test("Side chat drafts stay with their parent across actual Sidebar navigation",
     );
     assert.equal(restored.value, "Parent one only");
     assert.equal(creates, 0);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const scenario of ["idle", "steer", "new"] as const) {
+  test(`send latency: ${scenario} admission does not wait for auxiliary title persistence`, async (t) => {
+    const title = deferred<undefined>();
+    const admission = deferred<unknown>();
+    const sendTimes: number[] = [];
+    let titleStarted = false;
+    const options: Parameters<typeof mountApp>[1] = {
+      observeTitle: async () => {
+        titleStarted = true;
+        return title.promise;
+      },
+      startProjectThread: async (workspace) => started(liveThread(), workspace),
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(scenario === "steer" ? runningThread() : liveThread());
+        if (method === "zen/turn/send") {
+          sendTimes.push(performance.now());
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    };
+    const harness =
+      scenario === "new"
+        ? await mountApp(oneProject(), options)
+        : await mountThreadApp(options);
+    try {
+      const composer =
+        scenario === "new"
+          ? await waitFor(() =>
+              document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+            )
+          : await selectedComposer();
+      await setTextareaValue(composer, "Synthetic delayed title send");
+      const activatedAt = performance.now();
+      await dispatchComposerKey(composer, { key: "Enter" });
+      await waitFor(() => titleStarted);
+      // Hold an auxiliary operation while observing the real production App
+      // send entry. No Provider requests or fabricated successful messages.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+      const dispatchedBeforeTitle = sendTimes.length === 1;
+      assert.equal(
+        composer.value,
+        "Synthetic delayed title send",
+        "unconfirmed input stays recoverable",
+      );
+      assert.equal(
+        document.querySelectorAll(".user-row").length,
+        0,
+        "no invented accepted bubble",
+      );
+      await act(async () => title.resolve(undefined));
+      await waitFor(() => sendTimes.length === 1);
+      t.diagnostic(
+        JSON.stringify({
+          scenario,
+          titleHoldMs: 200,
+          activationToSendMs: Math.round(sendTimes[0]! - activatedAt),
+          dispatchedBeforeTitle,
+        }),
+      );
+      await act(async () =>
+        admission.reject(
+          new Error("Synthetic admission rejected before commit"),
+        ),
+      );
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
+        "Synthetic delayed title send",
+      );
+      assert.match(
+        document.body.textContent ?? "",
+        /Synthetic admission rejected/u,
+      );
+      assert.equal(sendTimes.length, 1, "failure never automatically resends");
+      assert.ok(
+        dispatchedBeforeTitle,
+        "auxiliary title staging must not block input admission",
+      );
+    } finally {
+      title.resolve(undefined);
+      admission.resolve({});
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("send presentation clears only the matching admitted draft and shows its bubble before elapsed work while title and reply are delayed", async (t) => {
+  const title = deferred<undefined>();
+  const admission = deferred<unknown>();
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let clientId: string | undefined;
+  let sends = 0;
+  const harness = await mountThreadApp({
+    observeTitle: async () => title.promise,
+    onNotification: (listener) => {
+      notify = listener;
+      return () => undefined;
+    },
+    request: async (method, params: any) => {
+      if (method === "zen/thread/resume") return resumed(liveThread());
+      if (method === "zen/turn/send") {
+        sends++;
+        clientId = params.clientUserMessageId;
+        return admission.promise;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let watermark = 0;
+  const emit = async (
+    event: import("../../../src/app-server.js").AppServerEvent,
+  ) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        processEpoch: "test-process-epoch",
+        threadId: "thread-1",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Synthetic canonically admitted message");
+    const activatedAt = performance.now();
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => clientId);
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "turn_started",
+        id: "started",
+        turnId: "turn-delayed",
+        threadId: "thread-1",
+        createdAt: new Date().toISOString(),
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+    });
+    await emit({
+      type: "turn_started",
+      turnId: "turn-delayed",
+      threadId: "thread-1",
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+    assert.equal(document.querySelectorAll(".user-row").length, 0);
+    assert.equal(document.querySelectorAll(".turn-duration").length, 0);
+    assert.equal(composer.value, "Synthetic canonically admitted message");
+    const committedAt = performance.now();
+    await emit({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "admitted-user",
+        turnId: "turn-delayed",
+        threadId: "thread-1",
+        createdAt: new Date().toISOString(),
+        clientId: clientId!,
+        text: "Synthetic canonically admitted message",
+      },
+    });
+    const bubble = document.querySelector(".user-row");
+    assert.ok(bubble);
+    assert.match(
+      bubble.textContent ?? "",
+      /Synthetic canonically admitted message/u,
+    );
+    assert.equal(
+      composer.value,
+      "",
+      "canonical admission clears the exact draft without waiting for the RPC reply or title",
+    );
+    assert.equal(document.querySelectorAll(".turn-duration").length, 1);
+    const turn = bubble.closest(".turn")!;
+    assert.ok(
+      [...turn.children].indexOf(bubble) <
+        [...turn.children].indexOf(turn.querySelector(".turn-running-label")!),
+    );
+    t.diagnostic(
+      JSON.stringify({
+        durableInputHoldMs: 200,
+        activationToBubbleMs: Math.round(performance.now() - activatedAt),
+        canonicalEventToBubbleMs: Math.round(performance.now() - committedAt),
+        titleAndRpcStillPending: true,
+      }),
+    );
+    await setTextareaValue(composer, "New draft survives old acknowledgements");
+    await act(async () => {
+      admission.resolve({});
+      title.reject(new Error("Synthetic auxiliary title failure"));
+    });
+    assert.equal(composer.value, "New draft survives old acknowledgements");
+    assert.equal(sends, 1);
+    assert.match(
+      document.body.textContent ?? "",
+      /Synthetic auxiliary title failure/u,
+    );
+    assert.equal(document.querySelectorAll(".user-row").length, 1);
+  } finally {
+    title.resolve(undefined);
+    admission.resolve({});
+    await unmountApp(harness);
+  }
+});
+
+function toolDestinationThread(
+  name: string,
+  output: Record<string, unknown>,
+): Thread {
+  const thread = sourceNavigationThread();
+  thread.turns[0]!.status = "inProgress";
+  thread.turns[0]!.items = [
+    {
+      type: "commandExecution",
+      id: "destination-call",
+      toolName: name,
+      command: name,
+      toolArguments: { target: "Same name" },
+      pluginId: null,
+      scriptPath: null,
+      cwd: "/work/zen",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: JSON.stringify(output),
+      exitCode: 0,
+      durationMs: null,
+    },
+  ];
+  return thread;
+}
+
+test("tool destination opens and focuses the exact delivered message, not just its thread or same-text neighbor", async () => {
+  const source = toolDestinationThread("zenx_threads_send", {
+    threadId: "destination",
+    messageId: "exact-delivered",
+  });
+  const destination = sourceNavigationThread();
+  destination.id = "destination";
+  const input = destination.turns[0]!.items[0]!;
+  assert.equal(input.type, "threadMessage");
+  destination.turns[0]!.items = [
+    { ...input, id: "same-text-neighbor", clientId: "neighbor" },
+    { ...input, id: "exact-delivered", clientId: "receipt" },
+  ];
+  const calls: string[] = [];
+  const harness = await mountThreadApp({
+    request: async (method, params) => {
+      calls.push(method);
+      if (method === "zen/thread/read")
+        return { thread: nativeRecoveryForThread(destination).thread };
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "thread-1"
+            ? source
+            : destination,
+        );
+      throw Error(method);
+    },
+  });
+  try {
+    await selectedComposer();
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".tool-action-target button"),
+    );
+    assert.equal(link.textContent, "View sent message");
+    assert.ok(
+      link.closest(".trace-reveal") === null,
+      "Action is available independently of tool details",
+    );
+    assert.equal(
+      document
+        .querySelector(".trace-item-toggle")
+        ?.getAttribute("aria-expanded"),
+      "false",
+    );
+    await act(async () => link.click());
+    await waitFor(
+      () =>
+        document.activeElement?.getAttribute("data-sent-message-id") ===
+        "exact-delivered",
+    );
+    assert.equal(
+      document
+        .querySelector('[data-sent-message-id="same-text-neighbor"]')
+        ?.hasAttribute("data-message-target"),
+      false,
+    );
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.ok(
+      calls.every((method) =>
+        ["zen/thread/read", "zen/thread/resume"].includes(method),
+      ),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+for (const failure of ["missing", "pending", "cancelled"] as const) {
+  test(`tool destination ${failure} gives precise feedback without selecting another message`, async () => {
+    const source = toolDestinationThread("zenx_threads_send", {
+      threadId: "destination",
+      messageId: "receipt",
+    });
+    const base = { threadId: "destination", createdAt: "2026-10-28T00:00:00Z" };
+    const items =
+      failure === "missing"
+        ? []
+        : [
+            {
+              ...base,
+              id: "receipt",
+              type: "thread_message_queued",
+              clientId: "client",
+              input: [],
+              sender: {},
+            },
+            ...(failure === "cancelled"
+              ? [
+                  {
+                    ...base,
+                    id: "cancel",
+                    type: "thread_message_cancelled",
+                    queuedItemId: "receipt",
+                    clientId: "client",
+                  },
+                ]
+              : []),
+          ];
+    const resumes: string[] = [];
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        if (method === "zen/thread/read")
+          return { thread: { id: "destination", archived: false, items } };
+        if (method === "zen/thread/resume") {
+          resumes.push((params as { threadId: string }).threadId);
+          return resumed(source);
+        }
+        throw Error(method);
+      },
+    });
+    try {
+      await selectedComposer();
+      const link = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".tool-action-target button"),
+      );
+      await act(async () => link.click());
+      await waitFor(() =>
+        document.querySelector(".tool-action-target [role=alert]"),
+      );
+      assert.match(
+        document.querySelector(".tool-action-target [role=alert]")!
+          .textContent!,
+        failure === "missing"
+          ? /exact sent message is unavailable/
+          : failure === "pending"
+            ? /still queued/
+            : /was cancelled/,
+      );
+      assert.deepEqual(resumes, ["thread-1"]);
+    } finally {
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("tool trigger destination opens actual other-thread definition in the existing plugin tab without writes", async () => {
+  const source = toolDestinationThread("zenx_triggers_update", {
+    id: "exact-trigger",
+    threadId: "actual-owner",
+    label: "Same name",
+  });
+  const commands: string[] = [];
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(source);
+      throw Error(method);
+    },
+    plugins: {
+      get: async () => messageSourcePlugins(),
+      executeCommand: async (_pluginId, command) => {
+        commands.push(command);
+        if (command === "list")
+          return {
+            triggers: ["other", "exact-trigger"].map((id) => ({
+              id,
+              label: "Same name",
+              threadId: "actual-owner",
+              kind: "signal",
+              signal: { name: id },
+              prompt: id,
+              active: false,
+              createdAt: 1,
+            })),
+            history: [],
+          };
+        if (command === "threads") return { threads: [] };
+        if (command === "workspaces") return { workspaces: [] };
+        throw Error(`Unexpected mutation: ${command}`);
+      },
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    const link = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".tool-action-target button"),
+    );
+    await act(async () => link.click());
+    const editor = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        ".auxiliary-panel .trigger-editor textarea",
+      ),
+    );
+    assert.equal(editor.value, "exact-trigger");
+    assert.ok(
+      document.querySelector("#thread-composer") === composer,
+      "Opening the exact trigger preserves the existing composer",
+    );
+    assert.ok(
+      commands.every((command) =>
+        ["list", "threads", "workspaces", "sidebar_facts"].includes(command),
+      ),
+    );
   } finally {
     await unmountApp(harness);
   }

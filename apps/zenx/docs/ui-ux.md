@@ -171,16 +171,16 @@ New thread 保留独立 row，插件入口紧随其后且位于置顶等展示�
 
 ### 4.2 Turn 状态与 disclosure
 
-| Turn 状态             | 默认展示                   | Turn 级交互    | Agent Message                         |
-| --------------------- | -------------------------- | -------------- | ------------------------------------- |
-| Running / incomplete  | 完整展开历史               | 不允许整体收起 | 显示全部中间消息                      |
-| Completed，默认       | 只显示 Final Message       | 可主动展开     | 隐藏中间消息，只保留 Final            |
-| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起     | 中间消息恢复，Final 仍只出现一次      |
-| Interrupted / failed  | 按完成态投影并显示终止结果 | 可展开历史     | 保留明确的 interrupted/error fallback |
+| Turn 状态             | 默认展示                   | Turn 级交互      | Agent Message                                           |
+| --------------------- | -------------------------- | ---------------- | ------------------------------------------------------- |
+| Running / incomplete  | 完整展开历史               | 不允许整体收起   | 显示全部中间消息                                        |
+| Completed，默认       | 只显示 Final Message       | 可主动展开       | 隐藏中间消息，只保留 Final                              |
+| Completed，用户已展开 | 历史 Items + Final Message | 可再次收起       | 中间消息恢复，Final 仍只出现一次                        |
+| Interrupted / failed  | 默认收起历史并显示终止结果 | 可展开或再次收起 | 隐藏所有中间消息，保留明确的 interrupted/error fallback |
 
 - Running Turn 不渲染可操作的 Turn collapse；运行状态文案只表达当前工作。
 - Turn 完成后进入默认收起，但后续刷新不得反复覆盖用户已做出的 disclosure 选择。
-- 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。
+- 如果完成后没有 Final Message，显示明确 fallback，不留下空 Turn。Interrupted / failed 没有实际 Final 时不得把最后一条中间 Agent Message 提升为 Final；显式收起后仅保留用户输入与终止状态，展开可恢复完整历史。运行转终态时仍保护已存在的文本选择或历史控件焦点，不覆盖用户的 disclosure 选择。
 - Final Message 是完成结果，不能与中间 Agent Message 重复渲染。
 - Thread 顶部与每个 Turn metadata 使用一行弱化、紧凑的 usage 摘要展示 input/output tokens
   与 cache hit rate；Thread 顶部还展示当前模型上下文占比。它只消费 Host 从 canonical ItemList
@@ -202,7 +202,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 用户显式选择的 Turn、Trace Group 与 Tool row 展开/收起状态按精确 Thread / Turn / Item 身份保留；切换会话、进入 Settings 或 loading 重挂载后返回仍沿用该选择。它们仅存在于本次 renderer 内存，不写入历史或 Host 配置，也不常驻隐藏会话 DOM。
 
-Trace Group 默认收起，主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
+Trace Group 默认收起，主标题用中英文本地确定性模板显示自然动作摘要，不调用模型、不采用“动作 ×N”清单。摘要最多突出两个动作：上下文压缩边界优先，其余按最近出现顺序，等待/执行包装降级；省略动作保留总数提示。重复命令/消息可自然计数，图片等观察不推断资源数量。只有已确认完成的动作使用完成时态；完整调用数与原始顺序仍可展开查看。主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
 Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
 
@@ -489,7 +489,7 @@ ThreadView
 - 插件与内建功能入口平级，长插件导航在自身区域滚动。会话标题与可操作状态优先，模型元信息按需查看。右栏的平级内容 tabs 不改变实例/草稿/执行生命周期；新建页解释每种内容的用途。
 - 设置保存栏与滚动内容分区；任意设置页存在未保存 Host 草稿时都保留保存入口。离开设置再返回保留草稿；异步保存不覆盖保存开始后继续编辑的值。Appearance 仍即时生效，Host 设置显式 Apply；错误保留草稿并允许重试。Uninstall 位于更多动作，保留数据；永久数据删除在同一菜单的独立危险分区，禁用前不可用，并有独立确认。
 - 共用 motion tokens 为反馈 100ms、进入 150ms、退出 100ms、布局 200ms；动画不控制业务提交。含 Electron 原生 Browser view 的右栏不单独平移 DOM 占位，以免与真实页面 bounds 脱节。菜单/对话框交由 primitive 的 presence 管理卸载，details 使用可反向的内在高度过渡；reduced motion 取消位移和动画，保留状态反馈。
-- 压缩完成行只从 canonical compaction 派生。默认展示发起者、摘要字符数与“完整输入占用未知”；字符不是 tokens。展开优先呈现可选取和复制的 Markdown 摘要，独立说明保留原始 Items 数量、时点与后续增长；真实 Core 消息投影在诊断 disclosure 中。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
+- 每次压缩只从 canonical compaction 派生一条完成行：压缩状态、发起者与唯一展开入口，不再附加第二行“查看原始历史”。展开后以并列、键盘可切换的“保留的上下文 / 原始历史 / 诊断信息”视图组织内容，不叠加同义 disclosure。“保留的上下文”默认呈现可选取和复制的 Markdown 摘要、摘要字符数与“完整输入占用未知”，并说明保留原始 Items 数量、时点与后续增长；字符不是 tokens。“原始历史”保留准确范围、分页与完整原始条目读取；“诊断信息”独立呈现真实 Core 消息投影、逻辑引用与 canonical 压缩记录。历史消息条数、摘要字符数、摘要调用 tokenUsage 均不冒充完整模型输入；未记录的完整输入占用不展示为 0 或伪造节省比例。
 - `test/fixtures/controls-visual.html` 提供共享控件、禁用、长目录、对话框与长中文压缩摘要的开发展示面；不是产品导航入口。
 
 ## Room 与 Thread 的共享输入体验
@@ -616,7 +616,7 @@ Reuse the shared switch visual and native hover title; the stable accessible lab
 
 ### Original history after compaction
 
-Each compaction with an enabled original reference offers “View original history” directly on its event. The inline reader shows the logical locator and exact canonical cutoff, pages the existing public journal projection, and offers explicit full-Item chunk reads. Disabled or legacy references have no lookup action; unavailable targets and failures remain visible with an explicit retry. Closing, changing compaction or navigating away discards pending display results without changing the journal or current conversation.
+Each compaction has one collapsed event and one disclosure. Its Original history peer view mounts the inline reader on demand, pages the existing public journal projection at the exact canonical cutoff, and offers explicit full-Item chunk reads. The logical locator and canonical record belong to the Diagnostics peer view, not another nested disclosure. Disabled or legacy references show an explicit unavailable explanation without a lookup action; unavailable targets and failures remain visible with an explicit retry. Closing, switching views, changing compaction or navigating away discards pending display results without changing the journal or current conversation.
 
 ### Message-level Fork
 
@@ -766,6 +766,8 @@ A Thread's own name is the single source of its displayed title, whether it come
 
 Active collapsed groups and item rows show actual public item content: `Thinking` / `思考中` followed by a latest-text excerpt of at most 240 Unicode characters of exposed reasoning text (falling back to the provider summary, then the plain localized label), or the complete `item.command` with its existing tool category. Omitted reasoning context is marked with a leading ellipsis; a partial leading Latin word is skipped without splitting Unicode characters. Whitespace is collapsed for the reasoning excerpt only; full reasoning and command remain in their original disclosures. The preview is one line, at most 72ch and bounded by the row; an overflowing excerpt fades over its final 48px without fading short text. Streaming updates do not reset group membership, order, disclosure state, observed task state or the top work-duration header.
 
+The sweep belongs only to the chronologically latest process sequence in the running Turn, whether a single Thinking / Tool row or a grouped sequence. A newer sequence takes ownership immediately across assistant-message boundaries, even before its tool result exists. Earlier background tasks keep their actual status and counters but do not sweep. The latest header also carries the Turn-level sweep during model-only continuation after its tools have settled; tooltip and accessible text explicitly describe the Agent still working, not the tools still executing. Expanded nested rows do not duplicate that sweep. Pending approval, stopping and terminal Turns are static; no synthetic reasoning/history Item is inserted to create an indicator.
+
 The exact animation reference is DeepSeek Harness [`639ed015`, TextShimmer.module.css](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-primitives/src/TextShimmer.module.css): a width-relative 105° mask with transparent 0%, black 40–60%, transparent 100%; 1.5s `steps(48, end)`, 0.3s initial delay, −100% to +100% travel during the first 66.6667% and a hold for the remaining cycle. The counter-transform keeps icon strokes, prefix and excerpt aligned under one sweep. The separate excerpt fade follows [`ReasoningRow.module.css`](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/client/ui-chat/src/client/chat/ReasoningRow.module.css). This supersedes the earlier fixed 4.5rem T3 band, not the accepted T3-style top header. Existing ZenX muted base/foreground crest tokens, hidden/offscreen pause and static reduced-motion/forced-colors fallbacks remain.
 
 ### 2026-10-20: Bundled What's New
@@ -854,3 +856,23 @@ Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失�
 ### Interactive information board
 
 Information contributions use a top-right popup and an optional independently pinned narrow rail; they are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger; pin/unpin is an explicit user choice, with a usable narrow-screen popup fallback.
+
+### Send admission feedback (2026-10-28)
+
+Auxiliary title staging must not block input admission. Its own receipt or failure
+updates naming feedback independently; sending still uses exactly one normal
+AppServer request and never adds a model call or automatic retry. The submitted
+draft remains recoverable until an admission reply or the exact canonical client
+identity confirms acceptance; later edits cannot be cleared by an old reply.
+
+A live `turn_started` can precede durable initial input. An empty running Turn
+therefore shows **Preparing**, without elapsed agent-work time or an invented
+user bubble. Once admitted input (or actual runtime content on a restored view)
+is present, the existing canonical start timestamp supplies the work duration.
+An active Turn continues its existing duration while a steer is pending. No
+canonical timestamps, Trace observations or runtime ordering are rewritten to
+make the interface appear faster.
+
+### Tool result destination actions
+
+跨线程发送与创建/修改触发器的工具记录提供独立于详情展开的目标动作。发送动作只通过工具结果与既有 canonical ref 身份打开目标 Thread 的确切已送达消息，并暂停自动跟随、滚动和聚焦该消息；排队回执只通过 canonical client 身份关联其实际送达 Item。触发器动作复用已注册插件 Tab，打开精确 definition，而非按名称搜索。缺失、排队、已归档、远端路径不可用或插件缺失必须如实说明，不选择相似对象、不重放工具、不在查看时执行或保存触发器。

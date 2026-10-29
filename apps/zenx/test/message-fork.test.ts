@@ -81,12 +81,30 @@ function buttons() {
   return [...document.querySelectorAll<HTMLButtonElement>(".message-fork")];
 }
 
+async function revealHistory() {
+  const toggle = document.querySelector<HTMLButtonElement>(".turn-toggle");
+  assert.ok(toggle, "Ended Turn has a history disclosure");
+  if (toggle.getAttribute("aria-expanded") === "false")
+    await act(async () => toggle.click());
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.ok(
+    document.querySelector('[data-read-message-id="message-b"]'),
+    "The response under test must be mounted before checking Fork eligibility",
+  );
+}
+
 test("only the terminal Agent response places Fork after Copy and binds its exact identity", async () => {
   await mount(async (render) => {
     const calls: unknown[] = [];
     await render(fixture(), async (target) => {
       calls.push(target);
     });
+    assert.equal(
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+      "false",
+    );
+    assert.equal(buttons().length, 0, "Interrupted history starts collapsed");
+    await revealHistory();
     assert.equal(buttons().length, 1);
     for (const button of buttons()) {
       assert.equal(button.previousElementSibling?.className, "message-copy");
@@ -96,7 +114,10 @@ test("only the terminal Agent response places Fork after Copy and binds its exac
       );
       assert.equal(button.title, "Fork thread from this message");
       await act(async () => button.focus());
-      assert.equal(document.activeElement, button);
+      assert.ok(
+        document.activeElement === button,
+        "Fork action receives keyboard focus",
+      );
     }
     await act(async () => buttons()[0]!.click());
     assert.deepEqual(calls, [
@@ -112,22 +133,24 @@ test("stream-only and wrong-thread or wrong-turn Items cannot become fork bounda
       (item) => item.id !== "message-b",
     );
     await render({ ...thread, canonicalItems: items }, noop);
+    await revealHistory();
     assert.equal(buttons().length, 0);
     await render(
       {
         ...thread,
-        canonicalItems: items.map((item) => ({
+        canonicalItems: thread.canonicalItems!.map((item) => ({
           ...item,
           threadId: "other-thread",
         })),
       },
       noop,
     );
+    await revealHistory();
     assert.equal(buttons().length, 0);
     await render(
       {
         ...thread,
-        canonicalItems: items.map((item) =>
+        canonicalItems: thread.canonicalItems!.map((item) =>
           item.type === "agent_message"
             ? {
                 ...item,
@@ -138,6 +161,7 @@ test("stream-only and wrong-thread or wrong-turn Items cannot become fork bounda
       },
       noop,
     );
+    await revealHistory();
     assert.equal(buttons().length, 0);
   });
 });
@@ -153,7 +177,9 @@ test("repeat clicks share the pending action and failures stay visible and retry
       calls++;
       await pending;
     });
+    await revealHistory();
     const button = buttons()[0]!;
+    assert.ok(button, "Durable terminal response exposes Fork after expansion");
     await act(async () => {
       button.click();
       button.click();
@@ -185,6 +211,8 @@ test("pending completion loses navigation ownership after switching threads", as
       await pending;
     };
     await render(fixture(), callback);
+    await revealHistory();
+    assert.equal(buttons().length, 1);
     await act(async () => buttons()[0]!.click());
     assert.equal(isCurrent(), true);
     await render(
@@ -193,7 +221,10 @@ test("pending completion loses navigation ownership after switching threads", as
     );
     assert.equal(isCurrent(), false);
     await act(async () => finish());
-    assert.equal(document.querySelector('[role="alert"]'), null);
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "Obsolete fork completion does not create an error in the new Thread",
+    );
   });
 });
 
@@ -235,9 +266,18 @@ for (const status of [
           `[data-read-message-id="${id}"]`,
         )!;
         assert.ok(message, "history must be visible for this regression check");
-        assert.equal(message.querySelector(".assistant-message-actions"), null);
-        assert.equal(message.querySelector(".message-copy"), null);
-        assert.equal(message.querySelector(".message-fork"), null);
+        assert.ok(
+          message.querySelector(".assistant-message-actions") === null,
+          "Intermediate commentary has no message action row",
+        );
+        assert.ok(
+          message.querySelector(".message-copy") === null,
+          "Intermediate commentary has no Copy action",
+        );
+        assert.ok(
+          message.querySelector(".message-fork") === null,
+          "Intermediate commentary has no Fork action",
+        );
       }
       assert.equal(
         document.querySelectorAll(".assistant-message-actions").length,

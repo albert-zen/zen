@@ -263,7 +263,11 @@ await withPreviewBrowser(
           3,
           "Three assistant-separated lifecycle rows",
         );
-        assert.equal(rows[0].active, "true", "Origin shell remains active");
+        assert.equal(
+          rows[0].active,
+          "false",
+          "Earlier shell stays unsettled without a sweep",
+        );
         assert.equal(rows[1].active, "false", "Returned wait is settled");
         assert.equal(rows[1].sweep, false, "Returned wait has no sweep");
         assert.match(rows[1].text, /Waited/u);
@@ -271,15 +275,19 @@ await withPreviewBrowser(
         assert.equal(rows[2].active, "true", "Pending wait remains active");
         assert.equal(rows[2].sweep, true, "Pending wait has sweep");
         assert.match(rows[2].text, /Waiting/u);
-        assertSweep(before.activities[0], entry, `${name} origin shell`);
-        assertSweep(before.activities[1], entry, `${name} pending wait`);
+        assert.equal(
+          before.activities.length,
+          1,
+          "Only latest process header sweeps",
+        );
+        assertSweep(before.activities[0], entry, `${name} pending wait`);
         await animationTime(300);
-        const start = await crop(before.activities[1].rect);
+        const start = await crop(before.activities[0].rect);
         await screenshot(`${name}-sweep-start.png`);
         await animationTime(800);
         const pixels = await pixelDifference(
           start,
-          await crop(before.activities[1].rect),
+          await crop(before.activities[0].rect),
         );
         assert.ok(
           pixels.changedPixels >= 4 && pixels.maxChannelDelta >= 10,
@@ -376,18 +384,11 @@ await withPreviewBrowser(
         if (!empty) {
           assert.equal(
             expanded.activities.length,
-            2,
-            `${name}: active group and actual item`,
+            1,
+            `${name}: only the latest group header owns the turn-level sweep`,
           );
-          assertPreview(
-            expanded.activities[1],
-            expected,
-            `${name} expanded item`,
-            !short,
-          );
-          assertSweep(expanded.activities[1], entry, `${name} expanded item`);
           await evaluate(
-            "document.querySelector('.trace-items .activity-text[data-active=\"true\"]').closest('button').click()",
+            "document.querySelector('.trace-items .activity-text[data-preview=\"true\"]').closest('button').click()",
           );
           await delay(200);
         }
@@ -395,7 +396,7 @@ await withPreviewBrowser(
         details.expanded = expanded;
         // Keep the original DOM identities, disclosure and keyboard focus through live updates.
         await evaluate(
-          `window.__previewNodes = { group: document.querySelector('.trace-toggle'), content: document.querySelector('.trace-toggle .activity-content'), item: document.querySelector('.trace-items .activity-text[data-active="true"]')?.closest('button') }; window.__previewNodes.group.focus()`,
+          `window.__previewNodes = { group: document.querySelector('.trace-toggle'), content: document.querySelector('.trace-toggle .activity-content'), item: document.querySelector('.trace-items .activity-text[data-preview="true"]')?.closest('button') }; window.__previewNodes.group.focus()`,
         );
         if (reasoning)
           await evaluate("window.__processStylePreview.streamStep()");

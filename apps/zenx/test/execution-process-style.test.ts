@@ -50,17 +50,22 @@ for (const theme of ["light", "dark"]) {
           metadata.querySelector(".turn-duration")!.textContent!,
           /^Working for /u,
         );
-        assert.equal(
-          metadata.querySelector("svg"),
-          null,
+        assert.ok(
+          metadata.querySelector("svg") === null,
           "No phase-dependent leading glyph",
         );
         assert.equal(
           metadata.querySelector('[role="status"]')?.className,
           "sr-only",
         );
-        assert.equal(history.querySelector(".turn-duration"), null);
-        assert.equal(turn.querySelector(".turn-status-footer"), null);
+        assert.ok(
+          history.querySelector(".turn-duration") === null,
+          "History does not duplicate the work duration",
+        );
+        assert.ok(
+          turn.querySelector(".turn-status-footer") === null,
+          "Active work metadata stays above history",
+        );
       }
     });
   });
@@ -92,21 +97,27 @@ test("completing the same turn leaves metadata above history and preserves focus
         "completed",
       ),
     );
-    assert.equal(document.querySelector(".turn"), turn);
+    assert.ok(
+      document.querySelector(".turn") === turn,
+      "Completing a turn preserves its mounted element",
+    );
     const header = turn.querySelector(":scope > .turn-toggle")!;
     assert.equal([...turn.children].indexOf(header), index);
     assert.equal(header.nextElementSibling?.className, "turn-history");
     assert.match(header.textContent!, /Worked.*3s/u);
-    assert.equal(
+    assert.ok(
       turn.querySelector(
         ".turn-running-label, .turn-status-footer, .turn-duration",
-      ),
-      null,
+      ) === null,
+      "Completed turn has no duplicate active metadata",
     );
-    assert.equal(document.activeElement, tool);
+    assert.ok(
+      document.activeElement === tool,
+      "Completing a turn preserves tool focus",
+    );
   });
 });
-test("active group and singleton icons sweep with text while returned waits and completion stay static", async () => {
+test("latest group and singleton icons sweep through returned waits until the turn completes", async () => {
   await withRuntimeDom(async (h) => {
     for (const grouped of [false, true]) {
       const base = grouped ? [runtimeCommand("previous")] : [];
@@ -119,13 +130,47 @@ test("active group and singleton icons sweep with text while returned waits and 
         row.querySelector(".activity-text")?.getAttribute("data-active"),
         "true",
       );
-      await h.render(runtimeThread([...base, runtimeWait("wait", "task-one")]));
+      const items = [...base, runtimeWait("wait", "task-one")];
+      await h.render(runtimeThread(items));
       const waiting = document.querySelector(
         grouped ? ".trace-toggle" : ".trace-item-toggle, .trace-item-static",
       )!;
-      assert.equal(waiting.querySelector(".activity-sweep svg"), null);
+      // The wait invocation is settled, but this latest process still carries
+      // the active Turn's model-only continuation cue (ui-ux.md).
+      assert.ok(waiting.querySelector(".activity-sweep svg"));
       assert.equal(
         waiting.querySelector(".activity-text")?.getAttribute("data-active"),
+        "true",
+      );
+      assert.equal(
+        waiting
+          .querySelector(".trace-item-label, .trace-activity-title")!
+          .getAttribute("title")
+          ?.startsWith("Agent is still working"),
+        true,
+      );
+      await h.render(runtimeThread(items, "completed"));
+      if (
+        document
+          .querySelector(".turn-toggle")
+          ?.getAttribute("aria-expanded") === "false"
+      ) {
+        await h.click(".turn-toggle");
+      }
+      assert.equal(
+        document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
+        "true",
+      );
+      const completed = document.querySelector(
+        grouped ? ".trace-toggle" : ".trace-item-toggle, .trace-item-static",
+      )!;
+      assert.ok(completed, "Completed process remains available in history");
+      assert.ok(
+        completed.querySelector(".activity-sweep svg") === null,
+        "Completed Turns have no active icon sweep",
+      );
+      assert.equal(
+        completed.querySelector(".activity-text")?.getAttribute("data-active"),
         "false",
       );
     }
@@ -185,7 +230,10 @@ test("approval and stopping retain the same visible work-duration header", async
       header.querySelector(".turn-work-label")!.textContent!,
       /^Working for /u,
     );
-    assert.equal(header.querySelector("svg"), null);
+    assert.ok(
+      header.querySelector("svg") === null,
+      "Approval metadata has no leading glyph",
+    );
     assert.ok(
       document.querySelector(".approval-request-allow"),
       "Approval action stays separate",
@@ -205,7 +253,10 @@ test("approval and stopping retain the same visible work-duration header", async
       header.querySelector(".turn-work-label")!.textContent!,
       /^Working for /u,
     );
-    assert.equal(header.querySelector("svg"), null);
+    assert.ok(
+      header.querySelector("svg") === null,
+      "Stopping metadata has no leading glyph",
+    );
     await act(async () => release());
   });
 });
@@ -244,13 +295,19 @@ test("unknown start/end and recovery never invent a work duration", async () => 
         const active = runtimeThread([thinking]);
         active.turns[0]!.startedAt = null;
         await h.render(active);
-        assert.equal(document.querySelector(".turn-duration"), null);
+        assert.ok(
+          document.querySelector(".turn-duration") === null,
+          "Missing start time does not invent an active duration",
+        );
         assert.equal(
           document.querySelector(".turn-work-label")!.textContent,
           i18n.t("shell:working"),
         );
         await h.render(recoveryScenario("recovering"));
-        assert.equal(document.querySelector(".turn-duration"), null);
+        assert.ok(
+          document.querySelector(".turn-duration") === null,
+          "Recovery does not invent a work duration",
+        );
         assert.equal(
           document.querySelector(".turn-work-label")!.textContent,
           i18n.t("shell:working"),
@@ -260,8 +317,14 @@ test("unknown start/end and recovery never invent a work duration", async () => 
           language === "en" ? /Retrying/u : /正在重试/u,
         );
         const recovery = document.querySelector(".turn-recovery-attempt")!;
-        assert.equal(recovery.closest(".sr-only"), null);
-        assert.equal(recovery.closest(".turn-work-label"), null);
+        assert.ok(
+          recovery.closest(".sr-only") === null,
+          "Recovery attempt remains visible",
+        );
+        assert.ok(
+          recovery.closest(".turn-work-label") === null,
+          "Recovery attempt remains separate from the work label",
+        );
         assert.match(
           recovery.textContent!,
           language === "en" ? /Retrying.*Attempt 1/u : /正在重试.*第 1 次/u,

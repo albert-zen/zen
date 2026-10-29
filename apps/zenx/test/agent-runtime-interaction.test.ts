@@ -86,11 +86,14 @@ test("action-set headers keep one mounted disclosure and metadata while current 
     assert.equal(document.querySelector(".trace-activity-title"), title);
     assert.equal(document.querySelector(".turn-running-label"), metadata);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
-    assert.equal(title.textContent, "Run command ×1 · Inspect page ×1");
-    assert.equal(title.getAttribute("title"), title.textContent);
+    assert.equal(title.textContent, "Inspected page and ran a command");
+    assert.equal(
+      title.getAttribute("title"),
+      `Agent is still working · ${title.textContent!}`,
+    );
     assert.equal(
       title.querySelector(".activity-text")?.getAttribute("data-active"),
-      "false",
+      "true",
     );
     assert.equal(
       metadata.getAttribute("data-compact"),
@@ -117,11 +120,11 @@ test("returned wait and approval retain static metadata rather than duplicate ac
       document
         .querySelector(".trace-toggle .activity-text")
         ?.getAttribute("data-active"),
-      "false",
+      "true",
     );
     assert.equal(
       document.querySelector(".trace-activity-title")?.textContent,
-      "Wait for task ×1 · Run command ×1",
+      "Ran a command and waited for task",
     );
     await h.render(
       runtimeThread([
@@ -140,7 +143,7 @@ test("returned wait and approval retain static metadata rather than duplicate ac
   });
 });
 
-test("submitted generic call is requested and static until an authoritative running receipt", async () => {
+test("submitted generic call retains requested status while latest process signals ongoing turn work", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread([runtimeCommand("raw", "npm test", "inProgress")]),
@@ -322,7 +325,7 @@ for (const release of [false, true])
     });
   });
 
-test("interrupted partial answer and unconfirmed task remain readable; review opens pending activity", async () => {
+test("interrupted partial answer stays folded while unconfirmed warning remains; review opens pending activity", async () => {
   await withRuntimeDom(async (h) => {
     await h.render(
       runtimeThread(
@@ -337,19 +340,23 @@ test("interrupted partial answer and unconfirmed task remain readable; review op
         "interrupted",
       ),
     );
-    assert.match(document.body.textContent!, /Validated the first two files/u);
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /Validated the first two files/u,
+    );
     assert.match(
       document.querySelector(".turn-outcome")!.textContent!,
       /not confirm/u,
     );
     assert.equal(
-      document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
+      document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
       "false",
     );
     await h.click(".turn-outcome button");
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
+    assert.match(document.body.textContent!, /Validated the first two files/u);
     assert.equal(
       document.querySelector(".trace-toggle")?.getAttribute("aria-expanded"),
       "true",

@@ -451,7 +451,7 @@ test("a 241-character failure remains fully accessible through Details", async (
   });
 });
 
-test("failure outcome remains visible alongside retained partial output", async () => {
+test("failure outcome remains visible when retained partial output is expanded", async () => {
   await withDom(async (root) => {
     const partial = agent("Retained result");
     const failed = {
@@ -475,6 +475,11 @@ test("failure outcome remains visible alongside retained partial output", async 
         }),
       ),
     );
+    assert.ok(
+      document.querySelector(".turn-history") === null,
+      "Failed turn history starts collapsed",
+    );
+    await act(async () => requiredButton(".turn-toggle").click());
     assert.match(
       requiredElement(".turn-history").textContent ?? "",
       /Retained result/u,
@@ -813,17 +818,19 @@ test("compaction progress is a transcript item and completed items reveal exact 
         "workflow-status",
       ),
     );
-    assert.match(event.textContent ?? "", /Keep this request/u);
-    assert.match(event.textContent ?? "", /Kept answer/u);
+    assert.doesNotMatch(event.textContent ?? "", /Keep this request/u);
+    assert.doesNotMatch(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /Continue with the accepted plan/u);
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
     );
-    assert.equal(
-      requiredElement(".compaction-projection").hasAttribute("open"),
-      false,
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
+    assert.equal(requiredElement(".compaction-projection").tagName, "DIV");
+    assert.match(event.textContent ?? "", /Keep this request/u);
+    assert.match(event.textContent ?? "", /Kept answer/u);
     assert.match(event.textContent ?? "", /not tokens/u);
     assert.match(
       event.textContent ?? "",
@@ -925,6 +932,9 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
         requiredElement(".compaction-summary").textContent ?? "",
         /Continue with the accepted plan/u,
       );
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
+      );
       const diagnostics = requiredElement(".compaction-projection");
       assert.match(diagnostics.textContent ?? "", /unavailable/u);
       assert.match(diagnostics.textContent ?? "", /boundary does not exist/u);
@@ -958,6 +968,10 @@ for (const provenance of ["human", "automatic", "agent"] as const) {
       await renderView(partial);
       await act(async () =>
         requiredButton(".context-compaction-toggle").click(),
+      );
+
+      await act(async () =>
+        requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
       );
 
       // A later authoritative read restores exact diagnostics, with no invented context while waiting.
@@ -1014,6 +1028,9 @@ test("compaction with a present boundary but missing retained items keeps its su
     assert.match(
       requiredElement(".compaction-summary").textContent ?? "",
       /Continue with the accepted plan/u,
+    );
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
     );
     assert.match(
       requiredElement(".compaction-projection").textContent ?? "",
@@ -2060,7 +2077,7 @@ test("terminal Turn timestamps show time only today and add a date across local 
 
     assert.equal(
       (html.match(new RegExp(`>${todayTime}</time>`, "gu")) ?? []).length,
-      2,
+      status === "completed" ? 2 : 1,
     );
     assert.doesNotMatch(html, />(?:Completed|Interrupted|Failed) /u);
   }
@@ -3054,7 +3071,7 @@ function commandItem(id: string, value: string): ThreadItem {
   };
 }
 
-test("failed turn opens received trace and preserves the error without a final answer", () => {
+test("failed turn folds received trace and preserves the error without a final answer", () => {
   const failed = turnWithItems("failed", [
     user("request"),
     reasoning("Observed trace"),
@@ -3068,15 +3085,15 @@ test("failed turn opens received trace and preserves the error without a final a
   const document = new JSDOM(renderTurns([failed])).window.document;
   assert.equal(
     document.querySelector(".turn-toggle")?.getAttribute("aria-expanded"),
-    "true",
+    "false",
   );
-  assert.match(
-    document.querySelector(".turn-history")?.textContent ?? "",
-    /Partial answer/u,
+  assert.ok(
+    document.querySelector(".turn-history") === null,
+    "Failed turn history starts collapsed",
   );
-  assert.match(
-    document.querySelector(".turn-history")?.textContent ?? "",
-    /Observed trace/u,
+  assert.doesNotMatch(
+    document.body.textContent ?? "",
+    /Partial answer|Observed trace/u,
   );
   assert.equal(document.querySelector(".turn-final"), null);
   assert.match(
@@ -3559,6 +3576,7 @@ test("tool details disclose full input independently of scrollable output", asyn
 
 test("running and completed durations share second, minute and hour formatting", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 10_000 });
+  // Elapsed work belongs to admitted input; an empty initial Turn is Preparing.
   await withDom(async (root) => {
     for (const [duration, label] of [
       [0, "0s"],
@@ -3572,7 +3590,10 @@ test("running and completed durations share second, minute and hour formatting",
       [90_061_000, "25h 1m 1s"],
     ] as const) {
       t.mock.timers.setTime(10_000 + duration);
-      await renderInteractive(root, turnWithItems("inProgress", []));
+      await renderInteractive(
+        root,
+        turnWithItems("inProgress", [user("Admitted synthetic input")]),
+      );
       assert.equal(
         requiredElement(".turn-running-label .turn-work-label").textContent,
         `Working for ${label}`,
@@ -3588,8 +3609,12 @@ test("running and completed durations share second, minute and hour formatting",
 
 test("running duration ticks from turn start and stops on completion", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
+  // Elapsed work belongs to admitted input; an empty initial Turn is Preparing.
   await withDom(async (root) => {
-    await renderInteractive(root, turnWithItems("inProgress", []));
+    await renderInteractive(
+      root,
+      turnWithItems("inProgress", [user("Admitted synthetic input")]),
+    );
     assert.equal(
       requiredElement(".turn-running-label .turn-work-label").textContent,
       "Working for 12s",
@@ -3610,7 +3635,10 @@ test("running duration ticks from turn start and stops on completion", async (t)
       "Working for 1h 0m 0s",
     );
     await renderInteractive(root, turnWithItems("completed", [], 3_600_000));
-    assert.equal(document.querySelector(".turn-running-label"), null);
+    assert.ok(
+      document.querySelector(".turn-running-label") === null,
+      "completed work has no live timer",
+    );
     await act(async () => t.mock.timers.tick(2_000));
     assert.equal(
       requiredElement(".turn-toggle").textContent,
@@ -4299,7 +4327,7 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
   assert.match(remoteHtml, /peer-reported/);
 });
 
-test("singleton activity highlight follows actual receipt and turn lifetime", () => {
+test("latest singleton sweep follows turn lifetime without changing actual receipt status", () => {
   const base = commandItem("activity-call", "sleep 2");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4333,7 +4361,7 @@ test("singleton activity highlight follows actual receipt and turn lifetime", ()
         dom.window.document
           .querySelector(".trace-singleton .activity-text")
           ?.getAttribute("data-active") === "true",
-        turnStatus === "inProgress" && phase === "running",
+        turnStatus === "inProgress",
         `${turnStatus}/${phase}`,
       );
       dom.window.close();
@@ -4613,7 +4641,7 @@ test("pending wait sweeps while returned waits stay settled across groups", () =
         sequences[0]!
           .querySelector(".activity-text")
           ?.getAttribute("data-active"),
-        "true",
+        "false",
       );
       assert.equal(
         sequences[1]!
