@@ -35,11 +35,11 @@ const b = runtimeMessage(
 for (const grouped of [false, true]) {
   for (const state of [
     "requested",
-    "running",
+    "yielded",
     "settled",
     "thinking",
   ] as const) {
-    test(`${grouped ? "group" : "singleton"} C (${state}) owns the only sweep after running A and assistant B`, async () => {
+    test(`${grouped ? "group" : "singleton"} C (${state}) sweeps only for an actual pending invocation or thinking after returned A and assistant B`, async () => {
       await withRuntimeDom(async (h) => {
         const c: ThreadItem =
           state === "thinking"
@@ -50,7 +50,7 @@ for (const grouped of [false, true]) {
                 content: ["Public synthetic reasoning"],
                 status: "inProgress",
               }
-            : state === "running"
+            : state === "yielded"
               ? runtimeTask("c-current", "task-c", "running")
               : runtimeCommand(
                   "c-current",
@@ -64,34 +64,37 @@ for (const grouped of [false, true]) {
           c,
         ];
         const original = JSON.stringify(items);
+        const expectedActive = state === "requested" || state === "thinking";
         await h.render(runtimeThread([a]));
-        assert.deepEqual(activeHeaders(), [true]);
+        assert.deepEqual(activeHeaders(), [false]);
         const old = sequences()[0];
         await h.render(runtimeThread(items));
         assert.ok(
           sequences()[0] === old,
-          "Earlier process keeps stable identity",
+          "Earlier returned invocation keeps stable identity",
         );
-        assert.deepEqual(activeHeaders(), [false, true]);
+        assert.deepEqual(activeHeaders(), [false, expectedActive]);
         assert.equal(
           document.querySelectorAll(".turn-history .activity-sweep").length,
-          1,
+          expectedActive ? 1 : 0,
         );
         assert.equal(
           old?.getAttribute("data-unsettled"),
-          "true",
-          "Earlier task remains honestly unsettled",
+          "false",
+          "Earlier returned invocation stays settled independently of its process",
         );
         const header = sequences()[1]!.querySelector(
           ".trace-activity-title, .trace-item-label",
         )!;
         assert.equal(
-          header.getAttribute("title")?.split(" · ")[0],
-          "Agent is still working",
+          header.getAttribute("title")?.split(" · ")[0] ===
+            "Agent is still working",
+          expectedActive,
         );
         assert.equal(
-          header.parentElement?.querySelector(":scope > .sr-only")?.textContent,
-          "Agent is still working",
+          header.parentElement?.querySelector(":scope > .sr-only")
+            ?.textContent === "Agent is still working",
+          expectedActive,
         );
         const toggle = sequences()[1]!.querySelector("button")!;
         await h.click(
@@ -102,8 +105,8 @@ for (const grouped of [false, true]) {
         assert.equal(toggle.getAttribute("aria-expanded"), "true");
         assert.equal(
           document.querySelectorAll(".turn-history .activity-sweep").length,
-          1,
-          "Expanded details do not duplicate the turn-level sweep",
+          expectedActive ? 1 : 0,
+          "Expanded details never add or revive a completed invocation sweep",
         );
         await h.render(
           runtimeThread([
@@ -114,7 +117,7 @@ for (const grouped of [false, true]) {
             ),
           ]),
         );
-        assert.deepEqual(activeHeaders(), [false, true]);
+        assert.deepEqual(activeHeaders(), [false, expectedActive]);
         assert.equal(toggle.getAttribute("aria-expanded"), "true");
         assert.equal(JSON.stringify(items), original);
       });

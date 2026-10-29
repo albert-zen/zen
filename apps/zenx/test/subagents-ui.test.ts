@@ -259,6 +259,11 @@ test("two opening clicks before a render dispatch only one App draft request", a
       1,
     );
     assert.equal(f.button("New side chat").disabled, true);
+    assert.ok(f.button("New side chat").querySelector(".mini-spinner"));
+    assert.match(
+      f.button("New side chat").textContent ?? "",
+      /Loading parent context/,
+    );
     await act(async () => creation.resolve({ thread: { id: "created" } }));
     assert.deepEqual(f.routes, []);
   } finally {

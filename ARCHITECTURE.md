@@ -22,9 +22,11 @@ Native Computer diagnostics capture a bounded, allowlisted per-request observati
 - **ZenX sidebar recovery** — The existing main-owned sidebar store projects per-owner committed patch/state facts from the same durable Trace facility, retaining its CAS and scope admission; JSON is only a rebuildable cache, legacy snapshots seed one explicitly attributed import, and trusted UI/tool entry points supply source labels without claiming a human actor or creating model Items.
 - **Passive preparation observations** — Small Trace-only callbacks pair actual preparation/materialization/compiler start and finish facts in a single Host clock domain; failures close the span without changing the operation result, model semantics, permission or log-derived state.
 - **Frozen sample** — Model/provider/endpoint/settings are selected once per sample; transport retries reuse that selection, while the next sample sees new choices. Live resource/session revocation is checked immediately before dispatch without changing the frozen destination. Already-dispatched effects are not undone.
-- **Semantic compaction selection** — Persisted summaries, read-only short source references and immutable reset-source exclusions are compiler inputs, not adapter prose; accepted raw facts remain unchanged in the durable log, and later selection cannot revive a reset response or its tool receipt. Agentic retention uses coarse recent Item/message counts or a retained-token budget, never a per-sample Item-reference index; guidance belongs in the tool definition and a once-per-threshold-episode notice. Previously committed sample references and selection bytes remain immutable historical inputs, not current capabilities.
+- **Semantic compaction selection** — Persisted summaries, read-only short source references and immutable reset-source exclusions are compiler inputs, not adapter prose; accepted raw facts remain unchanged in the durable log, and later selection cannot revive a reset response or its tool receipt. Agentic retention uses coarse recent Item/message counts or a retained-token budget, never a per-sample Item-reference index; guidance belongs in the tool definition and a once-per-threshold-episode notice. Previously committed sample references and selection bytes remain immutable historical inputs, not current capabilities. New versioned compaction selections identify their committed initiator in model-visible text and distinguish the continuation from a new user request; legacy selection bytes remain unchanged.
 - **External configuration observations** — Global provider profiles and credential sessions retain their existing dedicated authority; nonsecret startup/publication/session facts are observed in Trace, without credentials or arbitrary provider parameters. Failed observation cannot undo logout or revive a revoked resource. Per-Thread control changes still require durable source-log acknowledgement.
+- **Compaction admission observations** — Host-generated compaction records its initiating path, threshold evidence, elapsed outcome and auxiliary sample links in Trace; only a durable committed selection reports success, while unknown journal outcomes remain unknown. These observations neither initiate a reset nor enter model context. Native live status projects the same exact operation into existing composer feedback, including pre-admission side chat sends; disconnect makes pending observation unknown, and only an exact committed Item or a new matching selection beyond the captured start-prefix fence clears it; an older compaction of the same boundary is never evidence for a new operation. Explicit command request identity is separate from feedback so native observations cannot revoke draft-clear authority or allow a stale reply to consume an edited draft. CAS has no invented equivalent event.
 - **Auxiliary model samples** — Title, image-probe and compaction requests persist exact source facts and a strict semantic context bundle before the sole compiler; unique auxiliary Trace partitions are observation identities, never hidden Threads, execution objects or another store. The owner closes its passive transport captures.
+- **Initial Thread publication** — Fork/import creation may batch bounded, same-Thread Trace frames through the existing writer queue and unchanged checksummed JSONL format; each batch acknowledges only after durable file/directory sync, and the existing publication fence follows every source batch before ItemList publication. An unfenced partial creation is neither a discoverable Thread nor a recompilation/retry source; no new history store, execution authority or replay is introduced.
 - **Storage ownership** — One cooperative writer holds a native kernel file lock for admitted IO lifetime; no PID/TTL reclamation, SQLite same-process lock, service, durable execution state or automatic side-effect replay is introduced. Missing backend fails closed.
 
 Reconstruction is being landed in independently tested source checkpoints. The default CLI/ZenX Host now uses the log-first Domain journal and durable Trace, and ordinary agent samples persist compiler inputs before adapter dispatch. Compaction, title and image-probe call sites now use durable auxiliary context bundles; full cross-app and platform acceptance remain explicit gates; this checkpoint is not a completed migration/release claim. These contracts replace conflicting older mixed-journal descriptions below.
@@ -143,9 +145,9 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   工具调用、工具结果与失败，都是 Item。
 - **Canonical Item Decoder** — JSONL journal 只在读取边界用一个穷尽的 runtime decoder 接纳现行与明确 legacy Item shape，拒绝不能安全重放的结构，而写侧继续只使用同一组 canonical TypeScript 类型。
 - **Thread** — 一个 agent 上下文，权威状态是一条 append-only 的 Item list。
-- **Thread Fork** — 普通 fork / Copy 由 Core 在最近一个完整 Turn 或原生请求指定的已落盘 `agent_message` 精确 Item 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；精确消息边界包含该消息且排除全部后续历史，复用 snapshot-only 工具、Turn 与队列闭合使继承执行惰性化，只在显式新输入后启动新 Turn；源 Thread 不变，新 Thread 不继承其活动执行或 Host 资源。
+- **Thread Fork** — 普通 fork / Copy 由 Core 在最近一个完整 Turn 或原生请求指定的已落盘 `agent_message` 精确 Item 边界原子复制并重标识 canonical Item 前缀，再追加 `thread_forked` 来源事实；精确消息边界包含该消息且排除后续语义历史；若该消息是已完成 Turn 的最终语义边界，保留已观察到的原始完成回执（原时间/结果，不算本地执行），否则复用 snapshot-only 工具、Turn 与队列闭合使继承执行惰性化，只在显式新输入后启动新 Turn；源 Thread 不变，新 Thread 不继承其活动执行或 Host 资源。
 - **Child Thread** — Core 在创建普通 Thread 时将不可变 `parentThreadId` 与初始历史原子保存，原生 AppServer 按同目录 fresh/fork/side-chat 创建并投影关系；普通 Copy 不继承亲缘关系，父线程归档不联动子线程，不增加委派任务或调度状态。 ZenX 并排工作区按目标 Thread ID 保留多个会话 Tab；打开集合、排序和选择只属 renderer-local UI 状态，不新增 Thread 或执行语义。
-- **Side chat draft** — ZenX keeps unsent side-chat Composer state and exact canonical/context prefix IDs in renderer memory; only first valid Send creates the ordinary child through AppServer, which validates and copies those append-only prefixes without a second history store.
+- **Side chat draft** — ZenX keeps unsent side-chat Composer state and exact canonical/context prefix IDs in renderer memory; only first valid Send creates the ordinary child through AppServer, which validates and copies those append-only prefixes without a second history store. The draft may retain that read-only opening display projection until promotion, never borrowing parent execution, queue, reading acknowledgments or action authority.
 - **Side chat snapshot** — Side chat creation snapshots the parent’s full canonical ItemList into an ordinary child Thread, appends canonical snapshot-only tool/Turn/queue closures and one standalone `thread_instruction`, and never starts execution or changes the parent. Snapshot-only tool receipts explicitly report `executed:false`; sampling places these observations at their original call-batch closure before compaction selection, without rewriting the stored source history. `thread_instruction` is a persisted model-visible instruction without a Turn; it projects through the explicit developer-role instruction channel and survives compaction.
 - **Thread Instruction** — `thread_instruction` is a canonical standalone instruction with no Turn ID; native journal validation, context projection and compaction preserve it, while legacy CAS projection does not invent a Turn for it.
 - **Child creation selection** — 子线程可在创建时覆盖 Provider/model/effort；fresh 将选择写入初始 metadata，fork/side-chat 在保留历史选择的复制前缀后追加普通配置 Item，并随初始 journal 原子发布。省略时保留原有继承语义；显式设置走原生 configured 创建入口，使旧 Host 明确拒绝而不忽略选择。
@@ -172,6 +174,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **Tool Execution Mode** — Tool Runtime 对执行 body 只声明 `parallel_safe` 或 `exclusive`；未声明按 `exclusive`，builtin shell 的独立进程声明 `parallel_safe`，该分类不是权限或资源 scope。
 - **ToolTaskManager** — ToolEnvironment 统一拥有普通工具的 Host-local 执行、按 Thread 隔离的 task_id、增量输出与 wait；交回时间（默认 10 秒、最高 180 秒）和执行超时（默认 10 分钟）分开，快速结果原样返回，任务不参与 journal 重建。
 - **Shell lifecycle observations** — ShellToolRuntime 从成功 spawn、直接子进程 exit 与两个输出流 end 产生正交的 foreground/stdio 事实，ToolTaskManager 将同一时点的可选快照放入普通工具回执；这些事实不改变任务状态、close 结算、取消或 journal/restart 语义。
+- **Current Shell status and navigation** — ZenX polls the existing exact-owner Shell session observation independently of Turn lifetime, with display metadata read from the existing single-Thread summary projection rather than reconstructing history, counts only native-observed running commands, and carries disposable exact session focus intents into the existing Terminal tab; unknown reads, queued work and output collection remain distinct, while a memory-only owner-scoped sidebar intent fence retires delayed navigation after newer local choices without treating its own Host receipt as a new intent; no execution ledger or model request is added.
 - **Shared Shell view** — ToolTaskManager projects its actual Shell tasks as bounded Host-local session observations (origin, stable task ID, captured output, lifecycle); ZenX only attaches views, while human PTY input stays a Host-only capability and the Agent reads the same sessions via shell_sessions / wait. No separate execution registry, transcript authority, remote fallback or process revival is introduced.
 - **Windows Shell ownership** — ZenX injects an invocation-local launch observer that reuses exact-handle, creation-time-checked process termination; conservative ancestry snapshots never adopt ambiguous PIDs, and failed cancellation evidence remains unconfirmed in the existing ToolTaskManager rather than being inferred from pipe closure or settlement.
 - **Windows PTY dependency contract** — ZenX pins and verifies the node-pty cleanup implementation so public terminal close retains native-handle/reader cleanup without asynchronous unverified PID kills; install and package staging share the same fail-closed patch, with no new execution owner.
@@ -933,17 +936,20 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 每块独立摘要后按原顺序合并，累计 usage 写入同一个 compaction Item；合并摘要仍须满足上述
 80% 最终投影目标，否则不写 journal 并明确失败。
 
-成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
-`contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
-达到配置 trigger 百分比的整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
-缺失窗口只可能来自尚待修复的 legacy/incomplete metadata，不能通过正常 runtime admission；这里仍
-防御性地不猜测窗口。缺失或无效 usage、非成功 Turn 与已覆盖边界都不追加。
-自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
-诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
-下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
-若 Provider 没有报告 usage，Host 在下一 Turn 写入任何 canonical Item 前，用包含待提交输入的
-消息估算检查配置 trigger 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
-再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
+成功 Turn 完成后，Host 在辅助采样 admission 时冻结当前 Provider selection、catalog entry 与
+`contextWindow`。只有本轮最高有效 Provider `inputTokens` 达到配置 trigger 才执行；缺失或无效
+usage、非成功 Turn 与已覆盖边界不触发这条路径。自动生成/验证/persistence 在成功 Turn handle
+settle 前尝试一次，已知失败只保留 warning 与 Trace/原生状态反馈，不得把已完成 Turn 改成 failed；
+提交结果未知停止后续采样，不猜测成功，也不自动重试。下一 Turn 写入输入前另以完整待提交投影
+估算检查 trigger；有尚未覆盖的 completed boundary 才先压缩，因此这次发送的 ACK 会等待压缩。
+
+活动 Turn 工具轮之间取有效 Provider input usage 与下一次完整投影估算的较大值（包括新工具结果）。
+`agenticEnabled=false` 在 trigger 自动压缩；开启时在 trigger 给模型一次语义提醒，在
+`min(100, max(trigger, min(99, trigger+15)))` 百分比由 Host 兜底。只允许压缩已完成历史，不压缩活动
+Turn 本身；没有 completed boundary 且已达窗口时明确失败。Agentic reset 刚成功时清除旧 usage epoch，
+不会紧接着用旧用量再触发 Host reset。Compiler 只应用已提交选择，不自行启动模型调用、压缩或 retry。生成摘要前必须验证 completed boundary
+严格晚于当前任意压缩的生效 boundary；较晚 agentic reset 不能让旧 completed prefix 再次触发付费摘要。
+所有正常 Provider admission 都要求已配置正数 contextWindow；不存在运行时“未知模型默认窗口”。
 
 Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
 原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、

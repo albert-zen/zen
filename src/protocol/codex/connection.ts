@@ -837,7 +837,11 @@ export class CodexConnection {
   }
 
   async #projectEvent(event: AppServerEvent): Promise<void> {
-    if (event.type === "context_item_completed") return;
+    if (
+      event.type === "context_item_completed" ||
+      event.type === "context_compaction_status"
+    )
+      return;
     // Native queue admission diagnostics have no CAS equivalent.
     if (
       event.type === "model_catalog_updated" ||
@@ -1304,6 +1308,7 @@ export class CodexConnection {
   #sendErrorNotification(error: unknown, event: AppServerEvent): void {
     if (
       event.type === "context_item_completed" ||
+      event.type === "context_compaction_status" ||
       event.type === "thread_deleted_updated" ||
       event.type === "thread_started" ||
       event.type === "thread_name_updated" ||
@@ -1370,6 +1375,7 @@ function eventRepresentedInSnapshot(
   snapshot: ThreadSnapshot,
 ): boolean {
   switch (event.type) {
+    case "context_compaction_status":
     case "context_item_completed":
       return true; // Native semantic inspector; not represented by CAS.
     case "thread_deleted_updated":

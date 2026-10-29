@@ -141,3 +141,63 @@ test("compaction view tabs support scoped arrow navigation and independent rows"
     assert.equal(panel.id, tabs[2]!.getAttribute("aria-controls"));
   });
 });
+
+test("native automatic compaction shows cause before input admission and escapes local failure details", async () => {
+  const { applyCompactionStatus } =
+    await import("../src/renderer/src/compaction-feedback.js");
+  const { emptyComposerState } =
+    await import("../src/renderer/src/composer-state.js");
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  await i18n.changeLanguage("en");
+  const event = {
+    type: "context_compaction_status" as const,
+    threadId: "thread",
+    operationId: "synthetic-op",
+    initiator: "automatic" as const,
+    coveredThroughItemId: "boundary",
+    startedAfterItemId: "start-fence",
+    phase: "pending" as const,
+    trigger: {
+      reason: "next_turn_estimate" as const,
+      estimatedInputTokens: 810,
+      thresholdTokens: 800,
+    },
+    contextWindow: 1000,
+    triggerPercent: 80,
+    targetPercent: 80,
+    agenticEnabled: false,
+  };
+  await withRuntimeDom(async (h) => {
+    const view = { ...thread, turns: [], canonicalItems: [] };
+    const pending = applyCompactionStatus(emptyComposerState(), event);
+    await h.render(view, { composer: pending });
+    assert.match(
+      document.querySelector('.context-compaction-progress[role="status"]')!
+        .textContent!,
+      /Automatically compacting context.*Next-turn context estimate/su,
+    );
+    assert.equal(
+      document.querySelector(".context-compaction-event"),
+      null,
+      "pending is not a committed summary",
+    );
+    const failed = applyCompactionStatus(pending, {
+      ...event,
+      phase: "failed",
+      error: { name: "Error", message: "<script>synthetic();</script>" },
+    });
+    await h.render(view, { composer: failed });
+    assert.match(
+      document.querySelector('.context-compaction-progress[role="alert"]')!
+        .textContent!,
+      /no replacement committed/u,
+    );
+    const details = document.querySelector(".context-compaction-error-detail")!;
+    assert.equal(details.querySelector("script"), null);
+    assert.match(
+      details.querySelector("pre")!.textContent!,
+      /<script>synthetic\(\);<\/script>/u,
+    );
+    assert.equal(document.querySelector(".context-compaction-event"), null);
+  });
+});

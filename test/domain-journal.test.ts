@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  writeFile,
+  mkdir,
+  open,
+  type FileHandle,
+} from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { DomainThreadJournal } from "../src/domain-journal.js";
@@ -340,6 +347,274 @@ test("append never publishes a receipt before semantic durability and never retu
     );
   } finally {
     release();
+    await journal.close();
+  }
+});
+
+test("initial creation batches existing Trace records and waits for durability before publication", async () => {
+  const options = await setup();
+  const facts: CanonicalItem[] = [
+    metadata,
+    ...Array.from({ length: 260 }, (_, index) => ({
+      ...user,
+      id: `u-${index}`,
+    })),
+  ];
+  let entered!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const batches: number[] = [];
+  let acknowledged = false;
+  const journal = new DomainThreadJournal({
+    ...options,
+    trace: {
+      read: options.trace.read.bind(options.trace),
+      readArtifact: options.trace.readArtifact.bind(options.trace),
+      record: options.trace.record.bind(options.trace),
+      recordBatch: async (events: readonly TraceEvent[]) => {
+        batches.push(events.length);
+        entered();
+        await gate;
+        return await Promise.all(
+          events.map((event) => options.trace.record(event)),
+        );
+      },
+    },
+  });
+  const creation = journal.create(facts).then(() => {
+    acknowledged = true;
+  });
+  try {
+    await Promise.race([reached, creation]);
+    assert.ok(
+      batches.length > 0,
+      "initial creation must use the batch observation port",
+    );
+    assert.equal(acknowledged, false);
+    assert.deepEqual(await journal.listThreadIds(), []);
+    await assert.rejects(readFile(path.join(options.directory, "t.jsonl")), {
+      code: "ENOENT",
+    });
+    release();
+    await creation;
+    assert.ok(batches.every((count) => count <= 256));
+    assert.ok(batches.length >= 2);
+    assert.deepEqual(await journal.read("t"), facts);
+    await journal.close();
+    const cold = new DomainThreadJournal(options);
+    assert.deepEqual(await cold.read("t"), facts);
+    assert.equal((await cold.readItemList("t")).length, 260);
+    await cold.close();
+  } finally {
+    release();
+    await creation.catch(() => undefined);
+    await journal.close();
+  }
+});
+
+test("partial initial Trace publication never becomes a cold Thread and cannot be overwritten by retry", async () => {
+  const options = await setup();
+  const facts = [metadata, user];
+  const journal = new DomainThreadJournal({
+    ...options,
+    trace: {
+      read: options.trace.read.bind(options.trace),
+      readArtifact: options.trace.readArtifact.bind(options.trace),
+      record: options.trace.record.bind(options.trace),
+      recordBatch: async (events: readonly TraceEvent[]) => {
+        await options.trace.record(events[0]!);
+        return events.map(() => ({
+          durability: "degraded" as const,
+          error: "Synthetic partial initial batch",
+        }));
+      },
+    },
+  });
+  try {
+    await assert.rejects(journal.create(facts), {
+      name: "ThreadJournalAppendOutcomeUnknownError",
+    });
+    assert.deepEqual(await journal.listThreadIds(), []);
+    assert.deepEqual(await journal.read("t"), []);
+    await assert.rejects(
+      journal.create(facts),
+      /unknown|incomplete|reconcile/i,
+    );
+  } finally {
+    await journal.close();
+  }
+  const cold = new DomainThreadJournal({
+    ...options,
+    trace: new FileTraceStore(options.trace.directory),
+  });
+  try {
+    assert.deepEqual(await cold.listThreadIds(), []);
+    assert.deepEqual(await cold.read("t"), []);
+    await assert.rejects(
+      cold.readItemList("t"),
+      /publication|incomplete|unknown/i,
+    );
+    await assert.rejects(
+      cold.assertRecoverySafe("t"),
+      /publication|incomplete|unknown/i,
+    );
+    await assert.rejects(cold.create(facts), /publication|incomplete|unknown/i);
+    await assert.rejects(
+      cold.append(metadata),
+      /publication|incomplete|unknown/i,
+    );
+    assert.deepEqual(await cold.listThreadIds(), []);
+    assert.equal(
+      (await options.trace.read("t")).records.length,
+      1,
+      "retry must not append to an uncertain initial identity",
+    );
+  } finally {
+    await cold.close();
+  }
+});
+
+test("initial serial fallback also requires every observation to be durable", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal({
+    ...options,
+    trace: {
+      read: options.trace.read.bind(options.trace),
+      readArtifact: options.trace.readArtifact.bind(options.trace),
+      record: async (event: TraceEvent) =>
+        (event.data as { item?: { type: string } }).item?.type === "model_usage"
+          ? {
+              durability: "degraded" as const,
+              error: "Synthetic initial usage write failure",
+            }
+          : options.trace.record(event),
+    },
+  });
+  try {
+    await assert.rejects(
+      journal.create([
+        metadata,
+        user,
+        {
+          ...user,
+          id: "usage",
+          type: "model_usage",
+          modelResponseId: "response",
+          inputTokens: 1,
+          outputTokens: 1,
+        },
+      ]),
+      { name: "ThreadJournalAppendOutcomeUnknownError" },
+    );
+    assert.deepEqual(await journal.listThreadIds(), []);
+  } finally {
+    await journal.close();
+  }
+});
+
+test("real later-batch fsync failure leaves a completed-looking initial copy unpublished after cold restart", async (t) => {
+  const options = await setup();
+  const probe = await open(path.join(options.root, "prototype"), "wx");
+  const prototype = Object.getPrototypeOf(probe) as FileHandle;
+  await probe.close();
+  const sync = prototype.sync;
+  let fileSyncs = 0;
+  const injected = t.mock.method(
+    prototype,
+    "sync",
+    async function (this: FileHandle) {
+      if ((await this.stat()).isFile() && ++fileSyncs === 2)
+        throw Error("Synthetic second initial batch fsync failure");
+      await sync.call(this);
+    },
+  );
+  const journal = new DomainThreadJournal(options);
+  const facts: CanonicalItem[] = [
+    metadata,
+    ...Array.from({ length: 260 }, (_, index) => ({
+      ...user,
+      id: `u-${index}`,
+    })),
+    {
+      ...user,
+      id: "final",
+      type: "agent_message",
+      text: "Completed-looking copied answer",
+    },
+    { ...user, id: "end", type: "turn_completed", status: "completed" },
+  ];
+  try {
+    await assert.rejects(
+      journal.create(facts),
+      /second initial batch fsync failure/,
+    );
+    assert.deepEqual(await journal.listThreadIds(), []);
+  } finally {
+    injected.mock.restore();
+    await journal.close();
+  }
+  const observed = await new FileTraceStore(options.trace.directory).read("t");
+  assert.equal(
+    observed.completeness,
+    "complete",
+    "all JSONL frames may be readable even though fsync was not confirmed",
+  );
+  assert.equal(
+    (observed.records.at(-1)?.data as { item: CanonicalItem }).item.type,
+    "turn_completed",
+  );
+  const cold = new DomainThreadJournal({
+    ...options,
+    trace: new FileTraceStore(options.trace.directory),
+  });
+  try {
+    assert.deepEqual(await cold.listThreadIds(), []);
+    assert.deepEqual(await cold.read("t"), []);
+    await assert.rejects(cold.readItemList("t"), /no publication fence/);
+    await assert.rejects(cold.create(facts), /incomplete/);
+    assert.deepEqual(await cold.listThreadIds(), []);
+  } finally {
+    await cold.close();
+  }
+});
+
+test("an exact frozen ItemList does not bypass original canonical relational validation", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    await assert.rejects(
+      journal.create(
+        [
+          metadata,
+          user,
+          {
+            threadId: user.threadId,
+            createdAt: user.createdAt,
+            id: "invalid-compaction",
+            type: "context_compaction",
+            providerProfileId: "p",
+            modelId: "m",
+            reasoningEffort: "medium",
+            tokenUsage: { inputTokens: 1, outputTokens: 1 },
+            initiator: "human",
+            algorithmVersion: "zen.context-compaction.v3",
+            coveredThroughItemId: user.id,
+            retainedItemIds: ["missing-original-item"],
+            summary: "Exact supplied summary",
+          },
+        ],
+        [],
+      ),
+      /missing|unavailable|retained|Unknown|Unknown retained/i,
+    );
+    assert.deepEqual(await journal.listThreadIds(), []);
+    assert.equal((await options.trace.read("t")).records.length, 0);
+  } finally {
     await journal.close();
   }
 });

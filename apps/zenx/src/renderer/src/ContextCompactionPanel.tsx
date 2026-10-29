@@ -14,6 +14,8 @@ export function ContextCompactionPanel({
 }) {
   const { t } = useTranslation("settings");
   const mode = config?.retention?.mode ?? "budget";
+  const trigger = config?.triggerPercent ?? 80;
+  const fallback = Math.min(100, Math.max(trigger, Math.min(99, trigger + 15)));
   const finals = config?.retention?.finalMessages ?? "none";
   const retention = (
     update: NonNullable<ContextCompactionConfig["retention"]>,
@@ -117,6 +119,12 @@ export function ContextCompactionPanel({
           {t(
             "contextCompactionPanel.automaticCompactionRunsAtCompletedTurnBoundariesOrBefore",
           )}
+        </p>
+        <p className="settings-note">
+          {t("contextCompactionPanel.currentAutomaticPolicy", {
+            trigger: numeric(trigger),
+            fallback: numeric(fallback),
+          })}
         </p>
       </section>
       <section

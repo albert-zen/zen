@@ -4,12 +4,8 @@ import type { IconName } from "./icons.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import {
   commandSummary,
-  commandStatus,
-  commandPhaseLabel,
+  commandActionCompleted,
   commandPhase,
-  commandTask,
-  isTerminalCommandPhase,
-  commandTitle,
   toolPresentation,
   type CommandPhase,
   type CommandItem,
@@ -124,10 +120,7 @@ export function traceDisplayRows(
   });
 }
 
-export function projectTurn(
-  turn: Turn,
-  observations: TraceObservationIndex = createTraceObservationIndex(turn.items),
-): TurnDisplayProjection {
+export function projectTurn(turn: Turn): TurnDisplayProjection {
   const inputItems = turn.items.filter(
     (
       item,
@@ -235,7 +228,7 @@ export function projectTurn(
         : {
             kind: "traceGroup",
             id,
-            summary: traceSummary(traceItems, observations),
+            summary: traceSummary(traceItems, turn.status),
             items: traceItems,
           },
     );
@@ -285,94 +278,20 @@ export function projectTurn(
   };
 }
 
-export interface TraceObservationIndex {
-  tasks: ReadonlyMap<string, { itemId: string; phase: CommandPhase }>;
-}
-/** Disposable observation facts, never a second runtime state. A task cannot restart. */
-export function createTraceObservationIndex(
-  items: readonly ThreadItem[],
-): TraceObservationIndex {
-  const tasks = new Map<string, { itemId: string; phase: CommandPhase }>();
-  for (const item of items) {
-    if (item.type !== "commandExecution") continue;
-    const task = commandTask(item);
-    if (task === null) continue;
-    const prior = tasks.get(task.id);
-    if (
-      prior &&
-      isTerminalCommandPhase(prior.phase) &&
-      !isTerminalCommandPhase(task.phase)
-    )
-      continue;
-    tasks.set(task.id, {
-      // Keep activity on the task's originating call, not a returned observer.
-      itemId: item.toolName === "wait" ? (prior?.itemId ?? item.id) : item.id,
-      phase: task.phase,
-    });
-  }
-  return { tasks };
-}
-export function observedCommandPhase(
-  item: CommandItem,
-  observations: TraceObservationIndex,
-): CommandPhase {
-  const phase = commandPhase(item);
-  const task = commandTask(item);
-  if (
-    item.toolName === "wait" ||
-    task === null ||
-    isTerminalCommandPhase(phase)
-  )
-    return phase;
-  return observations.tasks.get(task.id)?.phase ?? phase;
-}
-export function observedCommandStatus(
-  item: CommandItem,
-  observations: TraceObservationIndex,
-): string {
-  const phase = observedCommandPhase(item, observations);
-  return phase === commandPhase(item)
-    ? commandStatus(item)
-    : commandPhaseLabel(phase);
-}
-function observedCommandSummary(
-  item: CommandItem,
-  observations: TraceObservationIndex,
-): string {
-  return observedCommandPhase(item, observations) === commandPhase(item)
-    ? commandSummary(item)
-    : `${commandTitle(item)} · ${observedCommandStatus(item, observations).toLowerCase()}`;
-}
-
 export interface TraceActivity {
   total: number;
   active: number;
-  outstanding: number;
-  cancelled: number;
-  unconfirmed: number;
-  pending: number;
-  running: number;
-  waiting: number;
   current: CommandItem | null;
   phase: CommandPhase | "thinking" | "idle";
   categories: Array<{ label: string; count: number }>;
 }
 export function summarizeTraceActivity(
   items: readonly ThreadItem[],
-  context: TraceObservationIndex | readonly ThreadItem[] = items,
+  turnStatus: Turn["status"] = "inProgress",
 ): TraceActivity {
-  const observations = Array.isArray(context)
-    ? createTraceObservationIndex(context)
-    : (context as TraceObservationIndex);
   const result: TraceActivity = {
     total: 0,
     active: 0,
-    outstanding: 0,
-    cancelled: 0,
-    unconfirmed: 0,
-    pending: 0,
-    running: 0,
-    waiting: 0,
     current: null,
     phase: "idle",
     categories: [],
@@ -384,49 +303,17 @@ export function summarizeTraceActivity(
     result.total += 1;
     const category = toolPresentation(item.toolName ?? item.command).category;
     categories.set(category, (categories.get(category) ?? 0) + 1);
-    const phase = observedCommandPhase(item, observations);
-    if (phase === "cancelled" || phase === "declined") result.cancelled += 1;
-    const task = commandTask(item);
-    const observed =
-      task === null || item.toolName === "wait"
-        ? null
-        : observations.tasks.get(task.id);
-    if (
-      isTerminalCommandPhase(phase) ||
-      (observed &&
-        (isTerminalCommandPhase(observed.phase) || observed.itemId !== item.id))
-    )
-      continue;
+    const phase = commandPhase(item, turnStatus);
+    if (phase !== "requested") continue;
     active.push({ item, phase });
     result.active += 1;
-    if (task !== null && item.toolName !== "wait") result.outstanding += 1;
-    if (phase === "running") result.running += 1;
-    if (phase === "waiting") result.waiting += 1;
-    if (phase === "cancellation_unconfirmed") result.unconfirmed += 1;
-    if (
-      phase === "cancel_requested" ||
-      phase === "queued" ||
-      phase === "admitting" ||
-      phase === "requested"
-    )
-      result.pending += 1;
   }
-  const priority: CommandPhase[] = [
-    "cancellation_unconfirmed",
-    "cancel_requested",
-    "running",
-    "waiting",
-    "admitting",
-    "queued",
-    "requested",
-  ];
-  const current = priority
-    .map((phase) => active.findLast((entry) => entry.phase === phase))
-    .find(Boolean);
+  const current = active.at(-1);
   result.current = current?.item ?? null;
   result.phase =
     current?.phase ??
-    (items.some(
+    (turnStatus === "inProgress" &&
+    items.some(
       (item) => item.type === "reasoning" && item.status === "inProgress",
     )
       ? "thinking"
@@ -439,24 +326,21 @@ export function summarizeTraceActivity(
 }
 export function traceSummary(
   items: readonly ThreadItem[],
-  observations: TraceObservationIndex | readonly ThreadItem[] = items,
+  turnStatus: Turn["status"] = "inProgress",
 ): string {
-  const index = Array.isArray(observations)
-    ? createTraceObservationIndex(observations)
-    : (observations as TraceObservationIndex);
-  const activity = summarizeTraceActivity(items, index);
+  const activity = summarizeTraceActivity(items, turnStatus);
   if (activity.phase === "thinking") return i18n.t("shell:thinking");
   const commands = items.filter(
     (item): item is CommandItem => item.type === "commandExecution",
   );
   if (commands.length === 1) {
     const item = commands[0]!;
-    return observedCommandSummary(item, index);
+    return commandSummary(item, turnStatus);
   }
-  if (activity.current) return observedCommandSummary(activity.current, index);
+  if (activity.current) return commandSummary(activity.current, turnStatus);
   if (activity.total === 0) return i18n.t("shell:thoughts");
   return settledTraceSummary(commands, (item) =>
-    observedCommandPhase(item, index),
+    commandActionCompleted(item) ? commandPhase(item, turnStatus) : "unknown",
   );
 }
 

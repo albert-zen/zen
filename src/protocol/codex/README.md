@@ -119,12 +119,12 @@ completed reasoning Item。
 incomplete Turn、没有新 eligible boundary、generation / abort / validation / journal
 失败都明确返回且不隐藏重试。Z11 不发送 compaction progress notification。
 
-当 admitted catalog 的 `contextWindow` 已知时，成功 Turn 在 Provider 实际报告的
-最高 `inputTokens` 达到窗口 80% 整数上界后自动走同一生成、验证与 append 路径。
-Unknown window、缺失或无效 usage、未成功 Turn 与已覆盖边界不触发；自动失败通过
-既有 Turn execution `error`（`willRetry: false`）与失败 completion 明确投影，不增加
-wire method、后台 retry 或 compaction progress notification。手动 `thread/compact`
-仍使用最新完整 Turn 边界，不能更改历史或队列。
+Host 自动压缩可以在成功 Turn 最高 Provider input usage 达到阈值后、下一 Turn admission 前的
+完整投影估算达到阈值时，或活动 Turn 工具轮之间触发；默认 trigger 是窗口 80%。只压缩 eligible
+completed history；细节由 Core 配置及 ARCHITECTURE.md 定义。自动失败不把已完成 Turn 改成
+failed，也不后台重试。原生 `context_compaction_status` 提供精确 operation 的 pending/committed/
+failed/cancelled/unknown 反馈；它不是 CAS 0.146.0 event，本 adapter 不伪造映射。成功摘要仍由已提交
+canonical Item 投影，完整触发证据属于 Trace。手动 `thread/compact` 仍使用最新完整 Turn 边界。
 
 `model/list` 的 `supportedReasoningEfforts`、`defaultReasoningEffort` 与
 `inputModalities` 直接来自结构化 catalog，不再硬编码。固定 0.146.0 CAS schema 要求

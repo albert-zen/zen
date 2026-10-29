@@ -186,6 +186,10 @@ test("repeat clicks share the pending action and failures stay visible and retry
     });
     assert.equal(calls, 1);
     assert.equal(button.disabled, true);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    assert.equal(button.title, "Forking / copying this thread…");
+    assert.equal(button.getAttribute("aria-label"), button.title);
+    assert.ok(button.querySelector('.mini-spinner[aria-hidden="true"]'));
     await act(async () =>
       reject(new Error("The exact message is unavailable")),
     );

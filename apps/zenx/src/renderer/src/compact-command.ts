@@ -83,6 +83,7 @@ export async function requestContextCompaction(
     }));
     return;
   }
+  const requestToken = {};
   const pending = {
     status: "pending" as const,
     message: i18n.t("common:compacting"),
@@ -90,6 +91,7 @@ export async function requestContextCompaction(
   options.update((current) => ({
     ...current,
     submission: null,
+    compactionRequest: { token: requestToken },
     compaction: pending,
   }));
   try {
@@ -106,16 +108,20 @@ export async function requestContextCompaction(
     } catch (reason) {
       refreshFailure = localErrorText(reason);
     }
-    options.update((current) =>
-      current.compaction !== pending
-        ? current
-        : {
-            ...current,
-            draft:
-              options.clearCommandDraft && current.draft === state.draft
-                ? { text: "", images: [] }
-                : current.draft,
-            compaction: {
+    options.update((current) => {
+      if (current.compactionRequest?.token !== requestToken) return current;
+      const { compactionRequest: _settled, ...rest } = current;
+      return {
+        ...rest,
+        draft:
+          options.clearCommandDraft &&
+          current.draftRevision === state.draftRevision &&
+          current.draft === state.draft
+            ? { text: "", images: [] }
+            : current.draft,
+        compaction: hasOtherNativeCompaction(current)
+          ? current.compaction
+          : {
               status: "succeeded",
               message: i18n.t(
                 refreshFailure === undefined
@@ -126,21 +132,43 @@ export async function requestContextCompaction(
                 ? {}
                 : { detail: refreshFailure }),
             },
-          },
-    );
+      };
+    });
   } catch (reason) {
-    options.update((current) =>
-      current.compaction !== pending
-        ? current
-        : {
-            ...current,
-            compaction: { status: "failed", ...compactError(reason) },
-          },
-    );
+    options.update((current) => {
+      if (current.compactionRequest?.token !== requestToken) return current;
+      const observedCommit = current.compactionRequest.observedCommitItemId;
+      const failure = compactError(reason);
+      const { compactionRequest: _settled, ...rest } = current;
+      return {
+        ...rest,
+        compaction: hasOtherNativeCompaction(current)
+          ? current.compaction
+          : observedCommit === undefined || !failure.outcomeUnknown
+            ? { status: "failed", ...failure }
+            : {
+                status: "succeeded",
+                message: i18n.t("common:compacted"),
+                detail: localErrorText(reason),
+              },
+      };
+    });
   }
 }
 
-function compactError(reason: unknown): { message: string; detail: string } {
+/** A late local reply may settle its own draft, never another native operation. */
+function hasOtherNativeCompaction(state: ComposerState): boolean {
+  return (
+    state.compaction?.operationId !== undefined &&
+    state.compaction.operationId !== state.compactionRequest?.operationId
+  );
+}
+
+function compactError(reason: unknown): {
+  message: string;
+  detail: string;
+  outcomeUnknown: boolean;
+} {
   // Typed service codes determine outcome. Free-form provider/transport text is
   // local diagnostic evidence, never a source of inferred commit status.
   const value = reason !== null && typeof reason === "object" ? reason : null;
@@ -164,9 +192,17 @@ function compactError(reason: unknown): { message: string; detail: string } {
   const original = localErrorText(reason);
   const detail = [code, original].filter(Boolean).join("\n");
   if (code === "thread_busy")
-    return { message: i18n.t("common:compactWait"), detail };
+    return {
+      message: i18n.t("common:compactWait"),
+      detail,
+      outcomeUnknown: false,
+    };
   if (code === "compaction_not_available")
-    return { message: i18n.t("common:compactNoNew"), detail };
+    return {
+      message: i18n.t("common:compactNoNew"),
+      detail,
+      outcomeUnknown: false,
+    };
   // These service failures are raised before the compaction record is appended.
   const notApplied = new Set([
     "compaction_generation_failed",
@@ -179,9 +215,14 @@ function compactError(reason: unknown): { message: string; detail: string } {
     "compaction_aborted",
   ]);
   if (code !== null && notApplied.has(code))
-    return { message: i18n.t("common:compactFailedNotApplied"), detail };
+    return {
+      message: i18n.t("common:compactFailedNotApplied"),
+      detail,
+      outcomeUnknown: false,
+    };
   return {
     message: i18n.t("common:compactUnconfirmed"),
+    outcomeUnknown: true,
     detail: `${i18n.t("common:compactUnknown")}\n\n${detail}`,
   };
 }

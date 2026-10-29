@@ -253,6 +253,7 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "model_catalog_updated":
     case "queue_failed":
     case "queue_admission_started":
+    case "context_compaction_status":
       return false;
   }
 }
@@ -276,6 +277,7 @@ function eventRepresentedInSnapshot(
       return true;
     case "queue_failed":
     case "queue_admission_started":
+    case "context_compaction_status":
       return true; // Ephemeral feedback is not journal-backed state.
     case "thread_deleted_updated":
       return true; // A readable snapshot supersedes earlier delete/restore events.

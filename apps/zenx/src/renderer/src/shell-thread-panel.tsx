@@ -1,4 +1,6 @@
 /// <reference types="vite/client" />
+import type { ShellTargetRequest } from "./shell-target-navigation.js";
+import { shellListing } from "./background-shell-state.js";
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Terminal } from "@xterm/xterm";
@@ -16,9 +18,13 @@ const ended = (status: ShellSessionSummary["status"]) =>
 export function ShellThreadPanel({
   threadId,
   active,
+  targetRequest,
+  onTargetConsumed,
 }: {
   threadId: string;
   active: boolean;
+  targetRequest?: ShellTargetRequest | null;
+  onTargetConsumed?(requestId: number): void;
 }) {
   const { t } = useTranslation("panels");
   const api = window.zenx.shellPanel;
@@ -27,13 +33,29 @@ export function ShellThreadPanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  const targetConsumed = useRef(onTargetConsumed);
+  targetConsumed.current = onTargetConsumed;
+  const heading = useRef<HTMLDivElement>(null);
+  const focusTarget = useRef<string | null>(null);
+  useEffect(() => {
+    if (selected && focusTarget.current === selected.taskId) {
+      focusTarget.current = null;
+      heading.current?.focus({ preventScroll: true });
+    }
+  }, [selected]);
   const epoch = useRef(0);
   const mutationBusy = useRef(false);
   const viewEpoch = useRef(0);
+  const observationSequence = useRef(0);
+  const exactObservation = useRef<{
+    sequence: number;
+    session: ShellSessionSummary;
+  } | null>(null);
   useEffect(() => {
     const generation = ++epoch.current;
     mutationBusy.current = false;
     viewEpoch.current++;
+    exactObservation.current = null;
     setListing(null);
     setSelected(null);
     setError("");
@@ -48,12 +70,40 @@ export function ShellThreadPanel({
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
+      const sequence = ++observationSequence.current;
       try {
-        const result = (await api.request({
-          operation: "list",
+        let result = shellListing(
+          await api.request({
+            operation: "list",
+            threadId,
+          }),
           threadId,
-        })) as ShellPanelListing;
+        );
         if (cancelled) return;
+        const exact = exactObservation.current;
+        const listed =
+          exact &&
+          result.sessions.find(
+            (session) => session.taskId === exact.session.taskId,
+          );
+        // A delayed list cannot undo a newer exact read. Terminal task facts
+        // are irreversible even if a later request returns an older snapshot.
+        if (
+          exact &&
+          (sequence < exact.sequence ||
+            (listed && ended(exact.session.status) && !ended(listed.status)))
+        )
+          result = {
+            ...result,
+            sessions: [
+              exact.session,
+              ...result.sessions.filter(
+                (session) => session.taskId !== exact.session.taskId,
+              ),
+            ],
+          };
+        else if (exact && listed)
+          exactObservation.current = { sequence, session: listed };
         setListing(result);
         setSelected((previous) =>
           previous
@@ -62,7 +112,10 @@ export function ShellThreadPanel({
             : null,
         );
       } catch (e) {
-        if (!cancelled) {
+        if (
+          !cancelled &&
+          sequence >= (exactObservation.current?.sequence ?? 0)
+        ) {
           setListing(null);
           setError(String(e));
         }
@@ -76,6 +129,75 @@ export function ShellThreadPanel({
       clearTimeout(timer);
     };
   }, [threadId, active, api]);
+  useEffect(() => {
+    if (
+      !active ||
+      !api ||
+      !targetRequest ||
+      targetRequest.threadId !== threadId
+    )
+      return;
+    let retired = false;
+    const selection = ++viewEpoch.current;
+    const sequence = ++observationSequence.current;
+    setSelected(null);
+    setError("");
+    setStopConfirm(false);
+    void api
+      .request({ operation: "read", threadId, taskId: targetRequest.taskId })
+      .then((value) => {
+        if (retired || selection !== viewEpoch.current) return;
+        const read = value as ShellSessionRead;
+        if (
+          read?.session?.threadId !== threadId ||
+          read.session.taskId !== targetRequest.taskId
+        )
+          throw new Error("Shell session not found for this thread");
+        const previous = exactObservation.current;
+        const observed =
+          previous?.session.taskId === read.session.taskId &&
+          ended(previous.session.status) &&
+          !ended(read.session.status)
+            ? previous.session
+            : read.session;
+        exactObservation.current = {
+          sequence: Math.max(sequence, previous?.sequence ?? 0),
+          session: observed,
+        };
+        focusTarget.current = observed.taskId;
+        setSelected(observed);
+        setListing((current) =>
+          current
+            ? {
+                ...current,
+                sessions: [
+                  observed,
+                  ...current.sessions.filter(
+                    (session) => session.taskId !== observed.taskId,
+                  ),
+                ],
+              }
+            : {
+                sessions: [observed],
+                cwd: observed.cwd,
+                host: "local",
+                // Only the list grants creation availability; an exact read
+                // can present its observed session while that list is pending.
+                canCreate: false,
+              },
+        );
+      })
+      .catch((error) => {
+        if (!retired && selection === viewEpoch.current)
+          setError(String(error));
+      })
+      .finally(() => {
+        if (!retired) targetConsumed.current?.(targetRequest.requestId);
+      });
+    return () => {
+      retired = true;
+    };
+  }, [active, api, threadId, targetRequest]);
   const create = async () => {
     if (!api || mutationBusy.current || !listing?.canCreate) return;
     const generation = epoch.current;
@@ -158,7 +280,7 @@ export function ShellThreadPanel({
             <Icon name="arrow-left" />
           </button>
         ) : null}
-        <div className="shell-heading-context">
+        <div className="shell-heading-context" ref={heading} tabIndex={-1}>
           {selected ? (
             <strong
               title={

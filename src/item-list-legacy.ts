@@ -10,7 +10,7 @@ import {
   type UserInput,
 } from "./item.js";
 import {
-  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  compactionSummaryPrefix,
   itemsAfterLatestAgenticCompaction,
 } from "./context-compaction.js";
 import {
@@ -339,7 +339,8 @@ export function contextItemsFromLegacy(
       if (reference)
         metadata.referenceBindings =
           reference.referenceBindings as unknown as JsonValue;
-      metadata.summaryOffset = CONTEXT_COMPACTION_SUMMARY_PREFIX.length;
+      const summaryPrefix = compactionSummaryPrefix(item);
+      metadata.summaryOffset = summaryPrefix.length;
       metadata.summaryLength = item.summary.length;
       const eligible = new Set(
         itemsAfterLatestAgenticCompaction([...previous, item]).map(
@@ -369,7 +370,7 @@ export function contextItemsFromLegacy(
           kind: "selection",
           role: "user",
           content: {
-            text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${reference ? `\n${reference.text}` : ""}`,
+            text: `${summaryPrefix}${item.summary}${reference ? `\n${reference.text}` : ""}`,
             ...exclusions,
             coveredThroughItemId: item.coveredThroughItemId,
             coveredSequence,

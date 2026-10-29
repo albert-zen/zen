@@ -112,6 +112,18 @@ function fixture(
         if (id !== snapshot.id) throw new Error("Unknown thread");
         return { ...snapshot };
       },
+      readThreadSummary: async (id) => {
+        if (id !== snapshot.id) throw new Error("Unknown thread");
+        return {
+          threadId: id,
+          currentMetadata: { ...snapshot },
+          archived: snapshot.archived,
+          status: "idle",
+          createdAt: "",
+          updatedAt: "",
+          preview: "",
+        };
+      },
       dispatchHostTool: async (_expected, launch) => ({ result: launch() }),
       beginHostOperation: () => {
         operations++;

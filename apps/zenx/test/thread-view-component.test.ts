@@ -492,7 +492,7 @@ test("failure outcome remains visible when retained partial output is expanded",
   });
 });
 
-test("manual retry keeps drafts and attachments, coalesces clicks and reports errors", async () => {
+test("terminal outcome has no implicit Agent retry and preserves the unsent draft", async () => {
   await withDom(async (root) => {
     const composer = addComposerImages(
       editComposer(emptyComposerState(), "Keep my draft"),
@@ -514,10 +514,6 @@ test("manual retry keeps drafts and attachments, coalesces clicks and reports er
     let sends = 0,
       edits = 0,
       retries = 0;
-    let reject!: (error: Error) => void;
-    const pending = new Promise<void>((_resolve, fail) => {
-      reject = fail;
-    });
     const failed = {
       ...turnWithItems("failed", []),
       error: {
@@ -545,7 +541,6 @@ test("manual retry keeps drafts and attachments, coalesces clicks and reports er
             onRetryTurn: async (turnId: string) => {
               assert.equal(turnId, failed.id);
               retries += 1;
-              await pending;
             },
           }),
         ),
@@ -553,15 +548,11 @@ test("manual retry keeps drafts and attachments, coalesces clicks and reports er
     await render(false);
     const textarea = requiredElement<HTMLTextAreaElement>("#thread-composer");
     textarea.setSelectionRange(2, 5);
-    const action = requiredButton(".turn-outcome-primary-action");
-    assert.match(action.textContent ?? "", /^Retry$/u);
-    await act(async () => {
-      action.click();
-      action.click();
-    });
-    assert.equal(retries, 1);
-    assert.ok(action.disabled);
-    assert.equal(action.getAttribute("aria-busy"), "true");
+    assert.ok(
+      document.querySelector(".turn-outcome-primary-action") === null,
+      "Expected no matching element",
+    );
+    assert.equal(retries, 0);
     assert.equal(textarea.value, "Keep my draft");
     assert.ok(
       document.querySelector(
@@ -572,18 +563,12 @@ test("manual retry keeps drafts and attachments, coalesces clicks and reports er
     assert.equal(textarea.selectionEnd, 5);
     assert.equal(edits, 0);
     assert.equal(sends, 0);
-    await act(async () => reject(new Error("Synthetic admission unavailable")));
-    assert.match(
-      requiredElement(".turn-retry-error").textContent ?? "",
-      /admission unavailable/u,
-    );
-    assert.ok(!action.disabled);
     await render(true);
-    assert.ok(requiredButton(".turn-outcome-primary-action").disabled);
-    await act(async () =>
-      requiredButton(".turn-outcome-primary-action").click(),
+    assert.ok(
+      document.querySelector(".turn-outcome-primary-action") === null,
+      "Expected no matching element",
     );
-    assert.equal(retries, 1);
+    assert.equal(retries, 0);
   });
 });
 
@@ -797,7 +782,7 @@ test("compaction progress is a transcript item and completed items reveal exact 
     assert(compactionToggle.classList.contains("workflow-status"));
     assert.equal(compactionToggle.getAttribute("aria-expanded"), "false");
     assert.match(event.textContent ?? "", /Context compacted/u);
-    assert.match(event.textContent ?? "", /Human initiated/u);
+    assert.match(event.textContent ?? "", /Explicit request/u);
     assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
     assert.equal(compactionToggle.getAttribute("aria-expanded"), "true");
@@ -2482,7 +2467,10 @@ test("terminal transition folds Turn history without discarding explicit trace c
       root,
       turnWithItems("completed", [...items, agent("Done")]),
     );
-    assert.equal(document.querySelector(".trace-toggle"), null);
+    assert.ok(
+      document.querySelector(".trace-toggle") === null,
+      "Expected no matching element",
+    );
     await act(async () => requiredButton(".turn-toggle").click());
     assert.equal(
       requiredButton(".trace-toggle").getAttribute("aria-expanded"),
@@ -3095,7 +3083,10 @@ test("failed turn folds received trace and preserves the error without a final a
     document.body.textContent ?? "",
     /Partial answer|Observed trace/u,
   );
-  assert.equal(document.querySelector(".turn-final"), null);
+  assert.ok(
+    document.querySelector(".turn-final") === null,
+    "Expected no matching element",
+  );
   assert.match(
     document.querySelector(".turn-outcome")?.textContent ?? "",
     /Execution interrupted/u,
@@ -3193,8 +3184,15 @@ test("shell headings and pending calls do not claim that a started call is runni
       requiredElement(".trace-item-toggle").textContent ?? "",
       /Shell/,
     );
-    assert.equal(requiredElement(".tool-status").textContent, "Requested");
-    assert.equal(document.querySelector(".trace-item .mini-spinner"), null);
+    assert.ok(
+      document.querySelector(".tool-status") === null,
+      "Expected no matching element",
+    );
+    assert.ok(
+      document.querySelector(
+        '.trace-item .mini-spinner[aria-label="Awaiting tool result"]',
+      ),
+    );
   });
 });
 
@@ -3209,7 +3207,7 @@ test("public reasoning content without a summary has an honest heading", () => {
   assert.doesNotMatch(html, /Reasoning details/u);
 });
 
-test("yielded shell work reports the actual task receipt phase", async () => {
+test("yielded shell call is complete while raw task receipt remains in details", async () => {
   await withDom(async (root) => {
     const base = commandItem("shell-start", "npm run dev");
     assert.equal(base.type, "commandExecution");
@@ -3228,7 +3226,7 @@ test("yielded shell work reports the actual task receipt phase", async () => {
     await renderInteractive(root, turnWithItems("inProgress", [running]));
     assert.equal(
       requiredElement(".turn-running-label").getAttribute("data-compact"),
-      "true",
+      "false",
     );
     assert.equal(
       requiredElement(".turn > .turn-running-label").className,
@@ -3239,13 +3237,16 @@ test("yielded shell work reports the actual task receipt phase", async () => {
     );
     assert.equal(
       document.querySelector(".tool-status")?.textContent,
-      "Running",
+      "Completed",
     );
     await renderInteractive(
       root,
       turnWithItems("inProgress", [{ ...running, toolName: "wait" }]),
     );
-    assert.equal(document.querySelector(".tool-status")?.textContent, "Waited");
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Completed",
+    );
     await renderInteractive(
       root,
       turnWithItems("inProgress", [
@@ -3262,7 +3263,10 @@ test("yielded shell work reports the actual task receipt phase", async () => {
         },
       ]),
     );
-    assert.equal(document.querySelector(".tool-status")?.textContent, "Ended");
+    assert.equal(
+      document.querySelector(".tool-status")?.textContent,
+      "Completed",
+    );
   });
 });
 
@@ -3283,12 +3287,12 @@ test("folded task group and expanded wait row use the invocation phase", async (
     );
     const group = requiredButton(".trace-toggle");
     assert.equal(group.getAttribute("aria-expanded"), "false");
-    assert.match(group.textContent ?? "", /Waited for task/u);
+    assert.match(group.textContent ?? "", /Checked task status/u);
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "true");
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Waited",
+      "Completed",
     );
 
     await renderInteractive(
@@ -3301,31 +3305,31 @@ test("folded task group and expanded wait row use the invocation phase", async (
         },
       ]),
     );
-    assert.match(group.textContent ?? "", /Waited for task/u);
+    assert.match(group.textContent ?? "", /Checked task status/u);
     assert.equal(
       requiredElement(".trace-items .tool-status").textContent,
-      "Waited",
+      "Completed",
     );
     await act(async () => group.click());
     assert.equal(group.getAttribute("aria-expanded"), "false");
   });
 });
 
-test("generic tool task observations distinguish waiting and unconfirmed cancellation", async () => {
+test("generic yielded tool calls complete independently of process lifecycle", async () => {
   await withDom(async (root) => {
     const base = commandItem("image-task", "generate image");
     if (base.type !== "commandExecution") throw new Error("missing command");
     const cases = [
-      ["browser_click", "queued", "Queued"],
-      ["wait", "queued", "Waited"],
-      ["image_generate", "running", "Running"],
-      ["wait", "running", "Waited"],
-      ["wait", "cancel_requested", "Waited"],
-      ["wait", "cancellation_unconfirmed", "Waited"],
-      ["wait", "cancelled", "Waited"],
-      ["wait", "timed_out", "Waited"],
-      ["wait", "failed", "Waited"],
-      ["wait", "completed", "Waited"],
+      ["browser_click", "queued", "Completed"],
+      ["wait", "queued", "Completed"],
+      ["image_generate", "running", "Completed"],
+      ["wait", "running", "Completed"],
+      ["wait", "cancel_requested", "Completed"],
+      ["wait", "cancellation_unconfirmed", "Completed"],
+      ["wait", "cancelled", "Completed"],
+      ["wait", "timed_out", "Completed"],
+      ["wait", "failed", "Completed"],
+      ["wait", "completed", "Completed"],
     ] as const;
     for (const [toolName, status, expected] of cases) {
       await renderInteractive(
@@ -3425,7 +3429,10 @@ test("tool images appear only inside expanded tool details beside unchanged call
         }),
       ),
     );
-    assert.equal(document.querySelector('[aria-label="Tool images"]'), null);
+    assert.ok(
+      document.querySelector('[aria-label="Tool images"]') === null,
+      "Expected no matching element",
+    );
     await act(async () => requiredButton(".trace-item-toggle").click());
     assert.ok(document.querySelector('[aria-label="Tool images"]'));
     assert.ok(document.querySelector('[aria-label="Preview Tool image 1"]'));
@@ -3768,7 +3775,7 @@ test("send preferences keep the current choice on a failed save and expose the e
   });
 });
 
-test("completed thread actions show the action without a second success badge", async () => {
+test("completed thread actions retain past tense alongside neutral call completion", async () => {
   await withDom(async (root) => {
     const item = commandItem("sent", "threads_send");
     if (item.type !== "commandExecution") throw new Error("missing command");
@@ -3780,10 +3787,13 @@ test("completed thread actions show the action without a second success badge", 
       requiredElement(".trace-item-toggle").textContent ?? "",
       /Sent message/,
     );
-    assert.equal(document.querySelector(".trace-item .tool-status"), null);
-    assert.doesNotMatch(
-      requiredElement(".trace-item-toggle").textContent ?? "",
-      /completed/i,
+    assert.equal(
+      document.querySelector(".trace-item .tool-status")?.textContent,
+      "Completed",
+    );
+    assert.ok(
+      document.querySelector(".trace-item .mini-spinner") === null,
+      "Expected no matching element",
     );
   });
 });
@@ -4327,7 +4337,7 @@ test("remote sender remains visibly remote without exposing raw IDs in the messa
   assert.match(remoteHtml, /peer-reported/);
 });
 
-test("latest singleton sweep follows turn lifetime without changing actual receipt status", () => {
+test("returned singleton never sweeps merely because the enclosing Turn is active", () => {
   const base = commandItem("activity-call", "sleep 2");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4361,7 +4371,7 @@ test("latest singleton sweep follows turn lifetime without changing actual recei
         dom.window.document
           .querySelector(".trace-singleton .activity-text")
           ?.getAttribute("data-active") === "true",
-        turnStatus === "inProgress",
+        false,
         `${turnStatus}/${phase}`,
       );
       dom.window.close();
@@ -4369,7 +4379,7 @@ test("latest singleton sweep follows turn lifetime without changing actual recei
   }
 });
 
-test("tool results use neutral ended labels without failure or nonzero rollups", () => {
+test("tool returns complete their invocation without failure or nonzero rollups", () => {
   const base = commandItem("shell-nonzero", "grep absent file");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4392,7 +4402,10 @@ test("tool results use neutral ended labels without failure or nonzero rollups",
   );
   try {
     const doc = dom.window.document;
-    assert.equal(doc.querySelector(".trace-nonzero, .trace-failed"), null);
+    assert.ok(
+      doc.querySelector(".trace-nonzero, .trace-failed") === null,
+      "Expected no matching element",
+    );
     assert.doesNotMatch(
       doc.querySelector(".trace-toggle")?.textContent ?? "",
       /failed|nonzero/i,
@@ -4402,15 +4415,15 @@ test("tool results use neutral ended labels without failure or nonzero rollups",
     );
     try {
       assert.match(
-        singleton.window.document.querySelector(".tool-status.ended")
+        singleton.window.document.querySelector(".tool-status.completed")
           ?.textContent ?? "",
-        /Ended/,
+        /Completed/,
       );
-      assert.equal(
+      assert.ok(
         singleton.window.document.querySelector(
           ".tool-status.failed, .tool-status.shell-nonzero",
-        ),
-        null,
+        ) === null,
+        "Expected no matching element",
       );
     } finally {
       singleton.window.close();
@@ -4420,7 +4433,7 @@ test("tool results use neutral ended labels without failure or nonzero rollups",
   }
 });
 
-test("earlier shell rows inherit neutral settlement across separated trace groups", () => {
+test("earlier shell rows stay complete regardless of later process settlement", () => {
   const base = commandItem("early-shell", "grep absent file");
   assert.equal(base.type, "commandExecution");
   if (base.type !== "commandExecution") return;
@@ -4461,8 +4474,8 @@ test("earlier shell rows inherit neutral settlement across separated trace group
     const marks = [...dom.window.document.querySelectorAll(".tool-status")];
     assert.equal(marks.length, 2);
     for (const mark of marks) {
-      assert.equal(mark.textContent, "Ended");
-      assert.equal(mark.className, "tool-status ended");
+      assert.equal(mark.textContent, "Completed");
+      assert.equal(mark.className, "tool-status completed");
     }
   } finally {
     dom.window.close();
@@ -4649,7 +4662,7 @@ test("pending wait sweeps while returned waits stay settled across groups", () =
           ?.getAttribute("data-active"),
         "false",
       );
-      assert.match(sequences[1]!.textContent ?? "", /Waited/);
+      assert.match(sequences[1]!.textContent ?? "", /Checked task status/);
       assert.equal(
         sequences[2]!
           .querySelector(".activity-text")
@@ -4750,5 +4763,50 @@ test("image failure details are closed, plain text and keyboard reachable in the
     await act(async () => root.render(null));
     assert.equal(document.activeElement, trigger);
     trigger.remove();
+  });
+});
+
+test("a side chat opening context is readable but cannot steer or control its running parent", async () => {
+  await withDom(async (root) => {
+    const parent = thread([
+      turnWithItems("inProgress", [
+        user("Frozen parent question"),
+        agent("Parent partial answer"),
+      ]),
+    ]);
+    const submitted: unknown[] = [];
+    const composer = editComposer(emptyComposerState(), "My separate question");
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: null,
+          contextPreview: parent,
+          composerId: "side-chat-draft-test",
+          composer,
+          approvals: [],
+          onDraftChange: () => {},
+          onInterrupt: async () => {
+            throw new Error("Must not interrupt parent");
+          },
+          onRespondToApproval: noop,
+          onSubmit: async (...args) => {
+            submitted.push(args.slice(0, 2));
+          },
+        }),
+      ),
+    );
+    assert.match(document.body.textContent ?? "", /Frozen parent question/);
+    assert.match(document.body.textContent ?? "", /Parent partial answer/);
+    assert.equal(document.querySelector(".thread-empty"), null);
+    assert.equal(document.querySelector(".turn-running-label"), null);
+    assert.equal(document.querySelector('[aria-label="Stop"]'), null);
+    assert.equal(document.querySelector(".message-fork"), null);
+    await act(async () => requiredButton('[aria-label="Send"]').click());
+    assert.deepEqual(submitted, [["start", null]]);
+    assert.equal(
+      parent.turns[0]?.status,
+      "inProgress",
+      "preview does not rewrite parent status",
+    );
   });
 });

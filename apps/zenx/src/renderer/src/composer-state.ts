@@ -33,8 +33,21 @@ export interface ComposerState {
     clientId: string;
     stage: "queued" | "delivered" | "completed" | "ended";
   };
+  /** Local explicit-request identity is independent of live status presentation. */
+  compactionRequest?: {
+    token: object;
+    operationId?: string;
+    observedCommitItemId?: string;
+  };
+  /** Current connection watermark for compaction feedback, never durable. */
+  compactionObservation?: { processEpoch: string; watermark: number };
   /** Transient command feedback; never a message or durable execution state. */
   compaction?: {
+    operationId?: string;
+    coveredThroughItemId?: string;
+    startedAfterItemId?: string;
+    compactionItemId?: string;
+    outcomeUnknown?: boolean;
     status: "pending" | "succeeded" | "failed";
     message: string;
     detail?: string;
@@ -174,6 +187,38 @@ export function reconcileCanonicalAdmission(
     status: "completed" | "failed" | "interrupted";
   },
 ): ComposerState {
+  const feedback = state.compaction;
+  if (feedback?.operationId !== undefined) {
+    const fence = items.findIndex(
+      (item) => item.id === feedback.startedAfterItemId,
+    );
+    const committed = items.find(
+      (item, index) =>
+        item.type === "context_compaction" &&
+        (feedback.compactionItemId !== undefined
+          ? item.id === feedback.compactionItemId
+          : (feedback.status === "pending" ||
+              feedback.outcomeUnknown === true) &&
+            fence >= 0 &&
+            index > fence &&
+            item.coveredThroughItemId === feedback.coveredThroughItemId),
+    );
+    if (committed !== undefined) {
+      const { compaction: _observed, ...rest } = state;
+      state = {
+        ...rest,
+        ...(state.compactionRequest === undefined ||
+        state.compactionRequest.operationId !== feedback.operationId
+          ? {}
+          : {
+              compactionRequest: {
+                ...state.compactionRequest,
+                observedCommitItemId: committed.id,
+              },
+            }),
+      };
+    }
+  }
   const submission = state.submission;
   const clientId =
     submission?.clientUserMessageId ?? state.confirmedAdmission?.clientId;
@@ -247,6 +292,12 @@ export function acceptComposerSubmission(
   if (submission === null) return state;
   return {
     ...(state.compaction === undefined ? {} : { compaction: state.compaction }),
+    ...(state.compactionRequest === undefined
+      ? {}
+      : { compactionRequest: state.compactionRequest }),
+    ...(state.compactionObservation === undefined
+      ? {}
+      : { compactionObservation: state.compactionObservation }),
     draftRevision: state.draftRevision,
     draft: canClearSubmittedDraft(state, submission)
       ? { text: "", images: [] }
