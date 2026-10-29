@@ -1,3 +1,4 @@
+import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import {
   sidebarTabId,
   sidebarTabFromId,
@@ -10,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
   useEffect,
+  useContext,
   useLayoutEffect,
   useRef,
   useState,
@@ -171,6 +173,7 @@ export function AuxiliaryPanel({
   conversations = [],
 }: AuxiliaryPanelProps) {
   useTranslation("panels");
+  const shellNavigation = useContext(ShellTargetNavigationContext);
   const roomContext =
     conversationContext?.kind === "room" ? conversationContext : undefined;
   const [choosing, setChoosing] = useState(false);
@@ -435,8 +438,16 @@ export function AuxiliaryPanel({
           ? descriptor.path.split("/").at(-1)!
           : descriptor.kind === "webpage"
             ? descriptor.url
-            : descriptor.kind),
-      icon: existing?.icon ?? (descriptor.kind === "file" ? "file" : "browser"),
+            : descriptor.kind === "terminal"
+              ? i18n.t("panels:shellTitle")
+              : descriptor.kind),
+      icon:
+        existing?.icon ??
+        (descriptor.kind === "file"
+          ? "file"
+          : descriptor.kind === "terminal"
+            ? "terminal"
+            : "browser"),
       ...(descriptor.kind === "file" ? { path: descriptor.path } : {}),
     });
   }
@@ -1840,9 +1851,18 @@ export function AuxiliaryPanel({
                   tab.id === "terminal") &&
                 threadId !== undefined ? (
                   <ShellThreadPanel
-                    key={threadId}
-                    threadId={threadId}
+                    key={tab.resourceThreadId ?? threadId}
+                    threadId={tab.resourceThreadId ?? threadId}
                     active={open === true && visible}
+                    targetRequest={
+                      shellNavigation?.request?.ownerKey ===
+                      (presentationState
+                        ? sidebarOwnerKey(presentationState.owner)
+                        : `thread:${threadId}`)
+                        ? shellNavigation.request
+                        : null
+                    }
+                    onTargetConsumed={shellNavigation?.consumed}
                   />
                 ) : null}
                 {(tab.descriptor?.kind === "computer" ||

@@ -31,6 +31,8 @@ const measure = `(() => {
     inputs: document.querySelectorAll('.user-row').length,
     intermediate: /Intermediate B:|Partial D:/.test(document.querySelector('.messages')?.textContent ?? ''),
     outcome: document.querySelector('.turn-outcome')?.textContent,
+    processRollup: !!document.querySelector('.trace-counts, .turn-outcome-review, .turn-outcome-primary-action'),
+    spinners: history?.querySelectorAll('.mini-spinner').length ?? 0,
     overflow: document.documentElement.scrollWidth > innerWidth,
     rows: rows.map(row => ({ unsettled: row.dataset.unsettled, text: row.textContent, active: row.querySelector('.activity-text')?.dataset.active, expanded: row.querySelector('button')?.getAttribute('aria-expanded') })),
     sweeps: [...document.querySelectorAll('.turn-history .activity-sweep')].map(sweep => ({ display: getComputedStyle(sweep).display, animation: getComputedStyle(sweep).animationName, title: sweep.closest('.trace-activity-title, .trace-item-label')?.title }))
@@ -71,6 +73,7 @@ await withPreviewBrowser(
           await delay(200);
           const before = await evaluate(measure);
           assert.equal(before.overflow, false, name);
+          assert.equal(before.processRollup, false, name);
           if (scene === "interrupted-comments") {
             assert.equal(before.collapsed, true);
             assert.equal(before.history, false);
@@ -110,15 +113,17 @@ await withPreviewBrowser(
           } else {
             assert.deepEqual(
               before.rows.map((row) => row.active),
-              ["false", "true"],
+              ["false", scene === "latest-settled" ? "false" : "true"],
             );
             assert.equal(
               before.rows[0].unsettled,
-              "true",
-              "Earlier task fact remains intact",
+              "false",
+              "Earlier invocation stays completed even while its process runs",
             );
-            assert.equal(before.sweeps.length, 1);
-            assert.match(before.sweeps[0].title, /Agent is still working/u);
+            const active = scene === "latest-settled" ? 0 : 1;
+            assert.equal(before.sweeps.length, active);
+            if (active)
+              assert.match(before.sweeps[0].title, /Agent is still working/u);
             await screenshot(`${name}.png`);
             await evaluate(
               "document.querySelector('.turn-history > section:last-of-type > button').focus(); document.querySelector('.turn-history > section:last-of-type > button').click()",
@@ -127,7 +132,7 @@ await withPreviewBrowser(
             const expanded = await evaluate(measure);
             assert.equal(
               expanded.sweeps.length,
-              1,
+              active,
               "Expanded rows never duplicate the sweep",
             );
             assert.equal(expanded.overflow, false);
@@ -142,6 +147,13 @@ await withPreviewBrowser(
             );
             await screenshot(`${name}-reduced.png`);
             await send("Emulation.setEmulatedMedia", { features: [] });
+            await evaluate("window.__processStylePreview.returnLatest()");
+            await delay(100);
+            const returned = await evaluate(measure);
+            assert.equal(returned.sweeps.length, 0);
+            assert.equal(returned.spinners, 0);
+            assert.equal(returned.rows.at(-1).unsettled, "false");
+            await screenshot(`${name}-returned.png`);
             // Move focus out of history before interruption; preserve-selection behavior is separately covered.
             await evaluate(
               "document.activeElement.blur(); window.__processStylePreview.interrupt()",
@@ -152,6 +164,20 @@ await withPreviewBrowser(
             assert.equal(interrupted.final, false);
             assert.equal(interrupted.sweeps.length, 0);
             await screenshot(`${name}-interrupted.png`);
+            await evaluate("window.__processStylePreview.returnLatest(true)");
+            await delay(100);
+            assert.equal(
+              (await evaluate(measure)).history,
+              false,
+              "Late receipt cannot open interrupted history",
+            );
+            await evaluate("document.querySelector('.turn-toggle').click()");
+            await delay(100);
+            const late = await evaluate(measure);
+            assert.equal(late.sweeps.length, 0);
+            assert.equal(late.spinners, 0);
+            assert.equal(late.processRollup, false);
+            await screenshot(`${name}-late-error.png`);
             evidence.cases.push({
               scene,
               theme,
@@ -159,7 +185,9 @@ await withPreviewBrowser(
               before,
               expanded,
               reduced,
+              returned,
               interrupted,
+              late,
             });
           }
           await writeFile(
@@ -172,5 +200,5 @@ await withPreviewBrowser(
   },
 );
 console.log(
-  `Verified ${evidence.cases.length} real-browser transcript cases with screenshots, reduced motion, latest-only activity and explicit interruption collapse.`,
+  `Verified ${evidence.cases.length} real-browser transcript cases with screenshots, reduced motion, receipt-only activity, yielded returns, late errors and explicit interruption collapse.`,
 );

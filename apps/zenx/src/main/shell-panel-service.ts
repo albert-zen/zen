@@ -11,40 +11,51 @@ export class ShellPanelService {
   constructor(
     readonly app: Pick<
       ZenAppServer,
-      "readThread" | "beginHostOperation" | "dispatchHostTool"
+      | "readThread"
+      | "readThreadSummary"
+      | "beginHostOperation"
+      | "dispatchHostTool"
     >,
     readonly tools: ToolEnvironment,
   ) {}
   async request(input: unknown): Promise<ShellPanelResult> {
     validateShellPanelRequest(input);
-    const thread = await this.app.readThread(input.threadId);
     const tasks = this.tools.taskManager;
-    const canInput =
-      !thread.archived && thread.sandbox === "danger-full-access";
-    if (input.operation === "list")
-      return {
-        sessions: tasks.listShellSessions(thread.id).map((session) => ({
-          ...session,
-          inputAvailable: canInput && session.inputAvailable,
-        })),
-        cwd: thread.cwd,
-        host: "local",
-        canCreate: canInput,
-        ...(thread.archived
-          ? { restriction: "archived" }
-          : thread.sandbox !== "danger-full-access"
-            ? { restriction: "sandbox" }
-            : {}),
-      };
-    if (input.operation === "read") {
+    if (input.operation === "list" || input.operation === "read") {
+      // The existing summary projection is sufficient for display policy and cwd.
+      // Polling must not clone ItemList or derive every historical Turn.
+      const summary = await this.app.readThreadSummary(input.threadId);
+      if (summary.status === "systemError") throw new Error(summary.error);
+      const canInput =
+        !summary.archived &&
+        summary.currentMetadata.sandbox === "danger-full-access";
+      if (input.operation === "list")
+        return {
+          sessions: tasks
+            .listShellSessions(summary.threadId)
+            .map((session) => ({
+              ...session,
+              inputAvailable: canInput && session.inputAvailable,
+            })),
+          cwd: summary.currentMetadata.cwd,
+          host: "local",
+          canCreate: canInput,
+          ...(summary.archived
+            ? { restriction: "archived" }
+            : summary.currentMetadata.sandbox !== "danger-full-access"
+              ? { restriction: "sandbox" }
+              : {}),
+        };
       const view = tasks.readShellSession(
-        thread.id,
+        summary.threadId,
         input.taskId,
         input.cursor,
       );
       view.session.inputAvailable &&= canInput;
       return view;
     }
+    // Mutations still use the authoritative Thread and existing dispatch fence.
+    const thread = await this.app.readThread(input.threadId);
     if (input.operation === "stop")
       return tasks.stopShellSession(thread.id, input.taskId);
     if (thread.archived)

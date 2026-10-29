@@ -62,7 +62,7 @@ test("group glyphs use a bounded first-seen set of existing tool presentations",
 
 test("adding tool types preserves the mounted decorative slot, activity and disclosure", async () => {
   await withRuntimeDom(async (h) => {
-    const first = runtimeTask("first", "task-one", "running");
+    const first = runtimeCommand("first", "npm test", "inProgress");
     const second = runtimeCommand("second");
     await h.render(runtimeThread([first, second]));
     const toggle = document.querySelector<HTMLButtonElement>(".trace-toggle")!;
@@ -127,7 +127,7 @@ test("wide and narrow group rows fit the visible glyphs without a phantom second
   );
   assert.match(
     css,
-    /\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 14px;/su,
+    /\.trace-toggle\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\) 14px;/su,
   );
   assert.match(
     css,

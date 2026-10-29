@@ -260,9 +260,11 @@ function CreateSideChat({
         ) : (
           <Icon name="plus" />
         )}
-        <span className="sr-only" role="status">
-          {busy ? i18n.t("panels:sideChatLoadingContext") : null}
-        </span>
+        {busy ? (
+          <span className="sr-only" role="status">
+            {i18n.t("panels:sideChatLoadingContext")}
+          </span>
+        ) : null}
         {compact ? null : (
           <span>
             {busy

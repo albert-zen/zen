@@ -228,6 +228,58 @@ test("message Fork exposes a stale-boundary failure and retries only after anoth
   }
 });
 
+test("an unconfirmed message Fork refreshes summaries without repeating creation or losing the source", async () => {
+  let created = false;
+  let attempts = 0;
+  const source = threadWithMessage("boundary");
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary(),
+            ...(created
+              ? [summary("existing-copy", "Existing copy after reply loss")]
+              : []),
+          ],
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(source);
+      if (method === "zen/thread/fork") {
+        attempts++;
+        created = true;
+        throw new Error(
+          "Synthetic transport reply lost; creation outcome is unknown",
+        );
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    await waitFor(() =>
+      document.querySelectorAll(".thread-row").length === 2 ? true : null,
+    );
+    assert.equal(attempts, 1, "a summary refresh never retries creation");
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /reply lost.*unknown/,
+    );
+    assert.ok(
+      document.querySelector('[data-read-message-id="agent-boundary"]'),
+      "the original final remains visible",
+    );
+    assert.equal(button.disabled, false);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
   const a = {
     ...thread(),

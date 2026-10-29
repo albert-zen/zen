@@ -1,3 +1,8 @@
+import {
+  ShellTargetNavigationContext,
+  openShellTarget,
+  type ShellTargetRequest,
+} from "./shell-target-navigation.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
@@ -457,22 +462,28 @@ function AppConversationProviders({
   models,
   modelCatalogError,
   openSideChatDraft,
+  shellNavigation,
   ...actions
 }: React.ComponentProps<typeof ThreadViewActionsProvider> & {
   models: readonly ModelSummary[];
   modelCatalogError: string | null;
+  shellNavigation: NonNullable<
+    React.ContextType<typeof ShellTargetNavigationContext>
+  >;
   openSideChatDraft: NonNullable<
     React.ContextType<typeof SideChatDraftContext>
   >;
 }) {
   return (
-    <SubagentCreationModelsContext.Provider
-      value={{ models, error: modelCatalogError }}
-    >
-      <SideChatDraftContext.Provider value={openSideChatDraft}>
-        <ThreadViewActionsProvider {...actions} />
-      </SideChatDraftContext.Provider>
-    </SubagentCreationModelsContext.Provider>
+    <ShellTargetNavigationContext.Provider value={shellNavigation}>
+      <SubagentCreationModelsContext.Provider
+        value={{ models, error: modelCatalogError }}
+      >
+        <SideChatDraftContext.Provider value={openSideChatDraft}>
+          <ThreadViewActionsProvider {...actions} />
+        </SideChatDraftContext.Provider>
+      </SubagentCreationModelsContext.Provider>
+    </ShellTargetNavigationContext.Provider>
   );
 }
 
@@ -2753,6 +2764,67 @@ function AppContent() {
     );
   }, [page, pluginSnapshot]);
 
+  const [shellTargetRequest, setShellTargetRequest] =
+    useState<ShellTargetRequest | null>(null);
+  const shellTargetIntent = useRef(0);
+  const shellNavigationScope = useRef("");
+  shellNavigationScope.current = `${page}:${selectedRoom?.id ?? selectedThreadId ?? ""}`;
+  useEffect(() => {
+    setShellTargetRequest(null);
+    shellTargetIntent.current++;
+  }, [page, selectedThreadId, selectedRoom?.id]);
+  const shellNavigation: NonNullable<
+    React.ContextType<typeof ShellTargetNavigationContext>
+  > = {
+    request: shellTargetRequest,
+    consumed: (requestId) =>
+      setShellTargetRequest((current) =>
+        current?.requestId === requestId ? null : current,
+      ),
+    open: async (target, source) => {
+      const api = window.zenx.shellPanel;
+      if (!api) throw new Error(i18n.t("panels:shellUnavailable"));
+      const intent = ++shellTargetIntent.current;
+      const scope = shellNavigationScope.current;
+      const owner = selectedRoom
+        ? { kind: "room" as const, id: selectedRoom.id }
+        : selectedThreadId
+          ? { kind: "thread" as const, id: selectedThreadId }
+          : null;
+      if (
+        !owner ||
+        (selectedRoom &&
+          !selectedRoom.members.some(
+            (member) => member.threadId === target.threadId,
+          ))
+      )
+        throw new Error(i18n.t("panels:backgroundShellOpenFailed"));
+      const current = () =>
+        source.isCurrent() &&
+        shellTargetIntent.current === intent &&
+        shellNavigationScope.current === scope;
+      if (
+        !(await openShellTarget({
+          target,
+          owner,
+          api,
+          sidebar: sidebarState.controller,
+          isCurrent: current,
+        }))
+      )
+        return;
+      setSideChatSelections((previous) => ({
+        ...previous,
+        [owner.kind === "room" ? `room:${owner.id}` : owner.id]: "",
+      }));
+      setShellTargetRequest({
+        ...target,
+        ownerKey: `${owner.kind}:${owner.id}`,
+        requestId: intent,
+      });
+    },
+  };
+
   const [remoteMessageSource, setRemoteMessageSource] =
     useState<FleetMessageSourceView | null>(null);
   useEffect(() => setRemoteMessageSource(null), [page, selectedThreadId]);
@@ -3040,6 +3112,10 @@ function AppContent() {
         )
           await resumeThread(result.thread.id);
       } catch (error) {
+        // A lost reply can leave an already-created copy. Refresh only the
+        // read projections so it can be found; never repeat creation or guess
+        // which Thread should replace the source viewport.
+        void Promise.all([loadThreadSummaries(), loadProjects()]);
         if (!owner.isVisible())
           setRequestError(
             i18n.t("shell:messageForkFailed", { error: describeError(error) }),
@@ -3439,6 +3515,7 @@ function AppContent() {
 
   const shell = (
     <AppConversationProviders
+      shellNavigation={shellNavigation}
       openSideChatDraft={openSideChatDraft}
       fork={forkMessage}
       source={openMessageSource}

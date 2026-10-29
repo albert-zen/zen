@@ -97,17 +97,20 @@ test("explicit actions with the same label retain their different surfaces", () 
 
 test("live groups name the real current operation and retain waiting semantics", () => {
   const done = call("done", "browser_inspect");
-  const running = runtimeTask("active", "task", "running");
+  const running = {
+    ...runtimeTask("active", "task", "running"),
+    status: "inProgress" as const,
+  };
   assert.equal(
     traceSummary([done, running]),
-    "Running · npm run check --workspace @zen/zenx",
+    "npm run check --workspace @zen/zenx · requested",
   );
   assert.equal(
     traceSummary([
       done,
       { ...runtimeWait("wait", "task"), status: "inProgress" },
     ]),
-    "Waiting for task",
+    "Wait for task · requested",
   );
 });
 

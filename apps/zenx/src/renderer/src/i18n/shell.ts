@@ -279,18 +279,11 @@ export const en = {
   traceOtherActions_other: "{{count}} other actions",
   traceRunCode: "Run code",
   toolEnded: "Ended",
-  toolCancelled: "{{count}} cancelled or declined",
-  lastKnownPending: "{{count}} task results still pending",
-  stopUnconfirmed: "Background action may still be running",
-  stopUnconfirmedNote:
-    "Stopping this conversation does not confirm that the background action stopped. Review its latest receipt before continuing.",
   stoppedNote: "Progress kept.",
   interruptedNote:
     "This conversation is no longer being followed. Its final state has not been confirmed.",
-  reviewActivity: "Review activity",
   automaticRetryStopped: "Retry unsuccessful",
   executionStopped: "Execution interrupted",
-  retryTask: "Retry",
   manualRetryNoLongerAvailable:
     "This turn can no longer be retried. Refresh the conversation to see its current state.",
   manualRetryUnconfirmed:
@@ -1160,17 +1153,10 @@ export const zhCN = {
   traceOtherActions_other: "其他 {{count}} 次操作",
   traceRunCode: "运行代码",
   toolEnded: "已结束",
-  toolCancelled: "{{count}} 次已取消或拒绝",
-  lastKnownPending: "{{count}} 个任务结果仍待确认",
-  stopUnconfirmed: "后台操作可能仍在运行",
-  stopUnconfirmedNote:
-    "停止对话并不表示后台操作已停止。继续前请先查看最新回执。",
   stoppedNote: "已有内容已保留",
   interruptedNote: "此对话已断开跟随，最终状态尚未确认。",
-  reviewActivity: "查看运行过程",
   automaticRetryStopped: "自动重试未成功",
   executionStopped: "执行已中断",
-  retryTask: "重试",
   manualRetryNoLongerAvailable: "此轮执行已无法重试，请刷新会话查看当前状态。",
   manualRetryUnconfirmed: "尚未确认重试是否已接收。再次点击将核对同一请求。",
   turnActivityHistory: "运行过程",

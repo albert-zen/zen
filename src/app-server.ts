@@ -1305,6 +1305,18 @@ export class ZenAppServer {
     );
   }
 
+  /** Host observation only: read one existing summary without materializing history. */
+  async readThreadSummary(threadId: string): Promise<NativeThreadSummary> {
+    await this.#ensureThreadSummaries();
+    const summary = this.#threadSummaries!.get(threadId);
+    if (summary === undefined)
+      throw new AppServerError(
+        "thread_not_found",
+        `Unknown thread: ${threadId}`,
+      );
+    return structuredClone(summary);
+  }
+
   async readThread(threadId: string): Promise<ThreadSnapshot> {
     const thread = await this.#requireThread(threadId);
     return await this.#snapshot(thread);
@@ -6139,17 +6151,34 @@ function remapForkContext(
       ids.get(copied.content.coveredThroughItemId) ??
       copied.content.coveredThroughItemId;
     copied.content.retainedItemIds = copied.content.retainedItemIds.map(remap);
+    if (copied.content.excludedItemIds !== undefined)
+      copied.content.excludedItemIds =
+        copied.content.excludedItemIds.map(remap);
   }
   const metadata = copied.source.metadata;
-  if (metadata !== undefined)
+  if (metadata !== undefined) {
     for (const key of [
       "deliveryAfter",
       "modelResponseId",
       "sourceModelResponseId",
+      "onlySampleId",
     ]) {
       const value = metadata[key];
-      if (typeof value === "string") metadata[key] = ids.get(value) ?? value;
+      if (typeof value === "string") metadata[key] = remap(value);
     }
+    for (const key of ["mediaOccurrence", "omittedMedia"]) {
+      const occurrences = metadata[key];
+      if (Array.isArray(occurrences))
+        metadata[key] = occurrences.map((occurrence) =>
+          occurrence !== null &&
+          typeof occurrence === "object" &&
+          !Array.isArray(occurrence) &&
+          typeof occurrence.itemId === "string"
+            ? { ...occurrence, itemId: remap(occurrence.itemId) }
+            : occurrence,
+        );
+    }
+  }
   return copied;
 }
 

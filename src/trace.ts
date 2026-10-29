@@ -83,6 +83,8 @@ export interface TraceReadResult {
 }
 export interface RuntimeTrace {
   record(event: TraceEvent): Promise<TraceReceipt>;
+  /** Same-Thread, artifact-free publication; a failed batch returns only degraded receipts. */
+  recordBatch?(events: readonly TraceEvent[]): Promise<TraceReceipt[]>;
 }
 export interface TraceReader {
   read(
@@ -189,6 +191,111 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       } catch (error) {
         this.#segments.delete(snapshot.threadId);
         return this.#failed(snapshot.threadId, id, error);
+      }
+    });
+  }
+  /** Bounded fsync groups keep the existing independent, checksummed record format. */
+  async recordBatch(events: readonly TraceEvent[]): Promise<TraceReceipt[]> {
+    if (events.length === 0) return [];
+    const prepared = events.map((event) => ({
+      event,
+      id: randomUUID(),
+      clock: traceClock(),
+    }));
+    const fail = (error: unknown) =>
+      prepared.map(({ event, id }) =>
+        this.#failed(
+          typeof event?.threadId === "string" ? event.threadId : "invalid",
+          id,
+          error,
+        ),
+      );
+    let snapshots: Array<{ event: TraceEvent; id: string; clock: TraceClock }>;
+    const threadId = events[0]?.threadId;
+    try {
+      if (typeof threadId !== "string")
+        throw new Error("Invalid Trace thread id");
+      assertIdentifier(threadId);
+      snapshots = prepared.map(({ event, id, clock }) => {
+        if (event.threadId !== threadId)
+          throw new Error("Trace batch requires one Thread");
+        if (typeof event.type !== "string" || !event.type)
+          throw new Error("Trace event type is required");
+        if (
+          event.artifacts !== undefined &&
+          (!Array.isArray(event.artifacts) || event.artifacts.length !== 0)
+        )
+          throw new Error("Trace batch does not accept artifacts; use record");
+        return {
+          id,
+          clock,
+          event: {
+            ...event,
+            ...(event.data === undefined
+              ? {}
+              : { data: jsonSnapshot(event.data) }),
+            artifacts: [],
+          },
+        };
+      });
+    } catch (error) {
+      return fail(error);
+    }
+    return this.#serialize(threadId, async () => {
+      try {
+        await this.#initialize(threadId);
+        await this.#recordGap(threadId);
+        const receipts: TraceReceipt[] = [];
+        let group: TraceRecord[] = [],
+          frames: Buffer[] = [],
+          bytes = 0;
+        const flush = async () => {
+          if (group.length === 0) return;
+          const sync = await this.#appendFrames(threadId, frames);
+          receipts.push(
+            ...group.map((record) => ({
+              durability: "durable" as const,
+              recordId: record.id,
+              sequence: record.sequence,
+              sync,
+            })),
+          );
+          group = [];
+          frames = [];
+          bytes = 0;
+        };
+        for (const { event, id, clock } of snapshots) {
+          const record: TraceRecord = {
+            id,
+            threadId,
+            sequence: this.#allocate(threadId),
+            type: event.type,
+            clock,
+            artifacts: [],
+            ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
+            ...(event.sampleId === undefined
+              ? {}
+              : { sampleId: event.sampleId }),
+            ...(event.data === undefined ? {} : { data: event.data }),
+          };
+          const frame = encodeFrame(record);
+          if (
+            group.length >= 256 ||
+            (group.length > 0 && bytes + frame.byteLength > 1024 * 1024)
+          )
+            await flush();
+          group.push(record);
+          frames.push(frame);
+          bytes += frame.byteLength;
+        }
+        await flush();
+        if (this.#gaps.size === 0) this.#lastError = undefined;
+        return receipts;
+      } catch (error) {
+        // Even earlier flushed groups have no successful batch acknowledgement.
+        // Preserve all observed bytes; subsequent writes must use a fresh segment.
+        this.#segments.delete(threadId);
+        return fail(error);
       }
     });
   }
@@ -415,17 +522,20 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     this.#gaps.delete(threadId);
   }
   async #append(record: TraceRecord): Promise<"file-and-directory" | "file"> {
-    let segment = this.#segments.get(record.threadId);
+    return this.#appendFrames(record.threadId, [encodeFrame(record)]);
+  }
+  async #appendFrames(
+    threadId: string,
+    frames: readonly Uint8Array[],
+  ): Promise<"file-and-directory" | "file"> {
+    let segment = this.#segments.get(threadId);
     if (segment === undefined) {
       segment = `${clockDomain}-${randomUUID()}.jsonl`;
-      this.#segments.set(record.threadId, segment);
+      this.#segments.set(threadId, segment);
     }
-    const body = JSON.stringify(record),
-      frame = Buffer.from(
-        JSON.stringify({ record, sha256: digest(body) }) + "\n",
-      );
-    await this.#assertDirectories("threads", record.threadId);
-    const target = path.join(this.#threadPath(record.threadId), segment);
+    const frame = frames.length === 1 ? frames[0]! : Buffer.concat(frames);
+    await this.#assertDirectories("threads", threadId);
+    const target = path.join(this.#threadPath(threadId), segment);
     const file = await open(
       target,
       constants.O_WRONLY |
@@ -442,11 +552,11 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       const current = await lstat(target);
       assertOwnedRegularFile(current);
       assertSameFile(opened, current);
-      await this.#assertDirectories("threads", record.threadId);
+      await this.#assertDirectories("threads", threadId);
     } finally {
       await file.close();
     }
-    return (await syncDirectory(this.#threadPath(record.threadId)))
+    return (await syncDirectory(this.#threadPath(threadId)))
       ? "file-and-directory"
       : "file";
   }
@@ -770,6 +880,11 @@ export class InMemoryTraceStore implements RuntimeTrace, TraceReader {
     };
   }
   async flush(): Promise<void> {}
+}
+function encodeFrame(record: TraceRecord): Buffer {
+  return Buffer.from(
+    JSON.stringify({ record, sha256: digest(JSON.stringify(record)) }) + "\n",
+  );
 }
 function digest(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");

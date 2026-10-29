@@ -105,6 +105,16 @@ export function commandStatus(
   return commandPhaseLabel(commandPhase(item, turnStatus));
 }
 
+/** Past-tense action claims need success evidence, unlike invocation completion. */
+export function commandActionCompleted(item: CommandItem): boolean {
+  if (item.status !== "completed" || commandPhase(item) !== "completed")
+    return false;
+  // A successful wait reports an observation, not completion of its target.
+  if (item.toolName === "wait") return true;
+  const task = commandTask(item);
+  return task === null || task.phase === "completed";
+}
+
 // These are presentation labels for known capabilities, never execution routing.
 function actions(): Record<string, string> {
   return {
@@ -288,8 +298,7 @@ export function commandTitle(
 ): string {
   const name = item.toolName ?? item.command.trim().split(/\s+/u)[0] ?? "tool";
   const args = item.toolArguments;
-  const completed =
-    item.status === "completed" && commandPhase(item) === "completed";
+  const completed = commandActionCompleted(item);
   const key = name
     .replace(/^zenx_/u, "")
     .replace(/^browser_(?:workspace|connected)_/u, "browser_");

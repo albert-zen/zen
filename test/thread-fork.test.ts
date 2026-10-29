@@ -11,7 +11,12 @@ import { pendingQueuedMessages } from "../src/input-queue.js";
 import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
 import { DomainThreadJournal } from "../src/domain-journal.js";
 import { FileTraceStore } from "../src/trace.js";
-import { compileItemList } from "../src/item-list.js";
+import {
+  compileItemList,
+  contextItemsFromLegacy,
+  type ContextItem,
+} from "../src/item-list.js";
+import { sampledMediaOccurrences } from "../src/loop-recovery.js";
 import { StaticModelCatalog } from "../src/model-catalog.js";
 import {
   type ModelAdapter,
@@ -972,7 +977,7 @@ test("forking a completed final message retains the observed completion without 
     completion,
   );
   assert.equal(
-    fork.itemList.some((item) => JSON.stringify(item).includes("Later input")),
+    fork.itemList!.some((item) => JSON.stringify(item).includes("Later input")),
     false,
   );
   const summary = (await server.listThreadSummaries()).find(
@@ -1014,3 +1019,403 @@ test("forking a completed final message retains the observed completion without 
     /Later input|Exact final answer 2/,
   );
 });
+
+test("fork preserves agentic reset exclusions across remapped identities and cold nested copies", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-fork-exclusions-"));
+  const options = {
+    directory: path.join(root, "threads"),
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata: new InMemoryThreadMetadataStore(),
+  };
+  const journal = new DomainThreadJournal(options);
+  let cold: DomainThreadJournal | undefined;
+  t.after(async () => {
+    await cold?.close();
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const base = {
+    threadId: "source",
+    turnId: "turn",
+    createdAt: "2026-10-29T00:00:00Z",
+  };
+  const facts: CanonicalItem[] = [
+    {
+      threadId: "source",
+      id: "meta",
+      createdAt: base.createdAt,
+      type: "thread_metadata",
+      cwd: os.tmpdir(),
+      provider: "synthetic",
+      model: "model",
+      sandbox: "read-only",
+      approvalPolicy: "always",
+    },
+    { ...base, id: "start", type: "turn_started" },
+    { ...base, id: "user", type: "user_message", text: "old" },
+    {
+      ...base,
+      id: "reason",
+      type: "reasoning",
+      reasoningContent: "discard",
+      summary: "discard",
+      contentVisibility: "public",
+    },
+    { ...base, id: "response", type: "agent_message", text: "discard" },
+    {
+      ...base,
+      id: "call",
+      type: "tool_call",
+      callId: "compact",
+      name: "compact_context",
+      arguments: {},
+      modelResponseId: "response",
+    },
+    { ...base, id: "steer", type: "user_message", text: "unseen" },
+    {
+      ...base,
+      id: "reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      initiator: "agent",
+      algorithmVersion: "zen.context-compaction.agentic.v2",
+      coveredThroughItemId: "user",
+      sourceModelResponseId: "response",
+      callId: "compact",
+      retainedItemIds: [],
+      includeOriginalReference: false,
+      summary: "  exact continuation  ",
+    },
+    {
+      ...base,
+      id: "receipt",
+      type: "tool_result",
+      callId: "compact",
+      output: "working context reset",
+      exitCode: 0,
+    },
+    { ...base, id: "final", type: "agent_message", text: "Final answer" },
+    { ...base, id: "end", type: "turn_completed", status: "completed" },
+  ];
+  await journal.create(facts);
+  const model: ModelAdapter = {
+    provider: "synthetic",
+    async *stream() {
+      throw Error("No model dispatch allowed");
+    },
+  };
+  const server = createServer(model, { journal });
+  const before = await server.readThread("source");
+  const expected = compileItemList(before.itemList!).messages;
+  const fork = await server.forkThread({
+    sourceThreadId: "source",
+    through: { type: "item", itemId: "final" },
+    workspace: { type: "same-directory" },
+  });
+  assert.deepEqual(compileItemList(fork.itemList!).messages, expected);
+  assert.doesNotMatch(
+    JSON.stringify(compileItemList(fork.itemList!).messages),
+    /discard/,
+  );
+  const reset = fork.itemList!.find((item) => item.kind === "selection")!;
+  assert.equal(reset.kind, "selection");
+  if (reset.kind !== "selection") throw Error("selection expected");
+  assert.ok(
+    reset.content.excludedItemIds!.every((id) =>
+      fork.itemList!.some((item) => item.id === id),
+    ),
+  );
+  assert.deepEqual(reset.content.excludedCallIds, ["compact"]);
+  assert.equal(
+    reset.content.text,
+    "[Zen compacted context]\n  exact continuation  ",
+  );
+  await journal.close();
+  cold = new DomainThreadJournal({
+    ...options,
+    trace: new FileTraceStore(options.trace.directory),
+  });
+  const restored = createServer(model, { journal: cold, idPrefix: "nested" });
+  const recovered = await restored.readThread(fork.id);
+  const final = recovered.items.findLast(
+    (item) => item.type === "agent_message",
+  )!;
+  const nested = await restored.forkThread({
+    sourceThreadId: fork.id,
+    through: { type: "item", itemId: final.id },
+    workspace: { type: "same-directory" },
+  });
+  assert.deepEqual(compileItemList(nested.itemList!).messages, expected);
+});
+
+test("fork remaps sample-local and nested media addresses without transferring reference ownership", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-fork-media-"));
+  const journal = new DomainThreadJournal({
+    directory: path.join(root, "threads"),
+    trace: new FileTraceStore(path.join(root, "trace")),
+    metadata: new InMemoryThreadMetadataStore(),
+  });
+  t.after(async () => {
+    await journal.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const base = {
+    threadId: "source",
+    turnId: "turn",
+    createdAt: "2026-10-29T00:00:00Z",
+  };
+  const media = {
+    type: "image" as const,
+    attachment: {
+      type: "attachment" as const,
+      sha256: "a".repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 68,
+      width: 1,
+      height: 1,
+    },
+  };
+  const facts: CanonicalItem[] = [
+    {
+      threadId: "source",
+      id: "meta",
+      createdAt: base.createdAt,
+      type: "thread_metadata",
+      cwd: os.tmpdir(),
+      provider: "synthetic",
+      model: "model",
+      sandbox: "read-only",
+      approvalPolicy: "always",
+    },
+    { ...base, id: "start", type: "turn_started" },
+    {
+      ...base,
+      id: "root",
+      type: "tool_call",
+      callId: "root-call",
+      name: "run_code",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child",
+      type: "tool_call",
+      callId: "child-call",
+      parentCallId: "root-call",
+      name: "observe",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child-result",
+      type: "tool_result",
+      callId: "child-call",
+      output: "image observed",
+      exitCode: 0,
+      modelContent: [media],
+    },
+    {
+      ...base,
+      id: "root-result",
+      type: "tool_result",
+      callId: "root-call",
+      output: "program finished",
+      exitCode: 0,
+    },
+    { ...base, id: "final", type: "agent_message", text: "Exact final" },
+    { ...base, id: "end", type: "turn_completed", status: "completed" },
+  ];
+  const contexts: ContextItem[] = [];
+  for (const [index, fact] of facts.entries())
+    contexts.push(
+      ...contextItemsFromLegacy(fact, facts.slice(0, index), index, contexts),
+    );
+  const occurrence = {
+    itemId: "child-result",
+    field: "modelContent",
+    partIndex: 0,
+    sha256: media.attachment.sha256,
+  };
+  const ownership = [
+    {
+      ref: "s1",
+      ownerThreadId: "source",
+      namespace: "source",
+      kind: "item",
+      value: { id: "child-result" },
+    },
+  ];
+  contexts.splice(
+    contexts.findIndex((item) => item.id === "final"),
+    0,
+    {
+      ...base,
+      id: "sample-notice",
+      kind: "message",
+      role: "developer",
+      source: {
+        kind: "media_unavailable",
+        sequence: 5,
+        metadata: {
+          onlySampleId: "final",
+          omittedMedia: [occurrence],
+          referenceBindings: ownership,
+        },
+      },
+      content: {
+        text: "Exact unavailable image diagnostic",
+        parts: [{ type: "text", text: "Exact unavailable image diagnostic" }],
+      },
+    },
+  );
+  await journal.create(facts, contexts);
+  const model: ModelAdapter = {
+    provider: "synthetic",
+    async *stream() {
+      throw Error("No model dispatch allowed");
+    },
+  };
+  const server = createServer(model, { journal });
+  const fork = await server.forkThread({
+    sourceThreadId: "source",
+    through: { type: "item", itemId: "final" },
+    workspace: { type: "same-directory" },
+  });
+  const final = fork.items.find((item) => item.type === "agent_message")!;
+  const child = fork.items.find(
+    (item) => item.type === "tool_result" && item.callId === "child-call",
+  )!;
+  const notice = fork.itemList!.find(
+    (item) => item.source.kind === "media_unavailable",
+  )!;
+  assert.equal(notice.source.metadata?.onlySampleId, final.id);
+  assert.deepEqual(notice.source.metadata?.omittedMedia, [
+    { ...occurrence, itemId: child.id },
+  ]);
+  assert.deepEqual(notice.source.metadata?.referenceBindings, ownership);
+  const compiled = compileItemList(fork.itemList!, {
+    inputModalities: ["text", "image"],
+  });
+  assert.deepEqual(
+    sampledMediaOccurrences(fork.items, compiled.messages, ["text", "image"]),
+    [{ ...occurrence, itemId: child.id }],
+  );
+  const withheld = compileItemList(fork.itemList!, {
+    sampleId: final.id,
+    inputModalities: ["text", "image"],
+  });
+  assert.match(
+    JSON.stringify(withheld.messages),
+    /Exact unavailable image diagnostic/,
+  );
+  assert.doesNotMatch(JSON.stringify(withheld.messages), /"type":"image"/);
+});
+
+for (const mode of ["fork", "side-chat"] as const)
+  test(`${mode}: a deliberate fresh attempt after an unpublished failure does not expose or reuse the partial copy`, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-fork-retry-"));
+    const trace = new FileTraceStore(path.join(root, "trace"));
+    let failNext = true;
+    let partialId = "";
+    const options = {
+      directory: path.join(root, "threads"),
+      metadata: new InMemoryThreadMetadataStore(),
+      trace: {
+        record: trace.record.bind(trace),
+        read: trace.read.bind(trace),
+        readArtifact: trace.readArtifact.bind(trace),
+        recordBatch: async (
+          events: Parameters<FileTraceStore["recordBatch"]>[0],
+        ) => {
+          if (!failNext) return trace.recordBatch(events);
+          failNext = false;
+          partialId = events[0]!.threadId;
+          await trace.record(events[0]!);
+          return events.map(() => ({
+            durability: "degraded" as const,
+            error: "Synthetic confirmed pre-publication failure",
+          }));
+        },
+      },
+    };
+    const journal = new DomainThreadJournal(options);
+    let cold: DomainThreadJournal | undefined;
+    t.after(async () => {
+      await cold?.close();
+      await journal.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    let samples = 0;
+    const model: ModelAdapter = {
+      provider: "retry-copy",
+      async *stream() {
+        samples++;
+        yield { type: "text_delta", delta: "Exact completed answer" };
+      },
+    };
+    const server = createServer(model, { journal });
+    const source = await server.startThread();
+    await (
+      await server.startTurn(source.id, "Synthetic request")
+    ).done;
+    const before = await server.readThread(source.id);
+    const selected = before.items.findLast(
+      (item) => item.type === "agent_message",
+    )!;
+    const attempt = () =>
+      mode === "fork"
+        ? server.forkThread({
+            sourceThreadId: source.id,
+            through: { type: "item", itemId: selected.id },
+            workspace: { type: "same-directory" },
+          })
+        : server.createChildThread({
+            parentThreadId: source.id,
+            mode: "side-chat",
+            snapshot: {
+              itemId: before.items.at(-1)!.id,
+              contextItemId: before.itemList?.at(-1)?.id ?? null,
+            },
+          });
+    await assert.rejects(attempt(), /pre-publication failure/);
+    assert.deepEqual(await journal.listThreadIds(), [source.id]);
+    assert.equal(
+      (await server.listThreadSummaries()).some(
+        (summary) => summary.threadId === partialId,
+      ),
+      false,
+    );
+    assert.equal(
+      samples,
+      1,
+      "the failure does not dispatch or automatically retry",
+    );
+    const copied = await attempt(); // Explicit new action, not an idempotent transport retry.
+    assert.notEqual(copied.id, partialId);
+    assert.equal(copied.turns[0]?.status, "completed");
+    assert.deepEqual(
+      (await journal.listThreadIds()).sort(),
+      [source.id, copied.id].sort(),
+    );
+    assert.equal((await trace.read(partialId)).records.length, 1);
+    assert.deepEqual(await server.readThread(source.id), before);
+    assert.equal(samples, 1);
+    await journal.close();
+    cold = new DomainThreadJournal({
+      ...options,
+      trace: new FileTraceStore(trace.directory),
+    });
+    const restored = createServer(model, {
+      journal: cold,
+      idPrefix: "restored",
+    });
+    assert.equal(
+      (await restored.readThread(copied.id)).turns[0]?.status,
+      "completed",
+    );
+    await assert.rejects(restored.readThread(partialId), /Unknown thread/);
+    await assert.rejects(
+      cold.readItemList(partialId),
+      /publication.*incomplete/,
+    );
+  });

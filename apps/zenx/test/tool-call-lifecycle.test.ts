@@ -10,6 +10,8 @@ import {
 } from "./fixtures/agent-runtime-data.js";
 import {
   commandPhase,
+  commandTitle,
+  commandSummary,
   commandStatus,
 } from "../src/renderer/src/tool-presentation.js";
 import { summarizeTraceActivity } from "../src/renderer/src/turn-projection.js";
@@ -65,7 +67,10 @@ test("yield, another pending wait, interruption and a late receipt never reactiv
       ]),
     );
     const sequences = document.querySelectorAll(".trace-singleton");
-    assert.equal(sequences[0]!.querySelector('[data-active="true"]'), null);
+    assert.ok(
+      sequences[0]!.querySelector('[data-active="true"]') === null,
+      "Expected no matching element",
+    );
     assert.ok(
       sequences[1]!.querySelector(".mini-spinner"),
       "only the pending invocation spins",
@@ -76,23 +81,26 @@ test("yield, another pending wait, interruption and a late receipt never reactiv
         "interrupted",
       ),
     );
-    assert.equal(document.querySelector(".turn-history"), null);
-    assert.equal(
+    assert.ok(
+      document.querySelector(".turn-history") === null,
+      "Expected no matching element",
+    );
+    assert.ok(
       document.querySelector(
         ".trace-counts, .turn-outcome-primary-action, .turn-outcome-review",
-      ),
-      null,
+      ) === null,
+      "Expected no matching element",
     );
     assert.doesNotMatch(
       document.body.textContent!,
       /background.*running|awaiting.*task.*result|cancelled or declined/iu,
     );
     await h.click(".turn-toggle");
-    assert.equal(
+    assert.ok(
       document.querySelector(
         ".turn-history .mini-spinner, .turn-history [data-active='true']",
-      ),
-      null,
+      ) === null,
+      "Expected no matching element",
     );
     assert.match(
       document.querySelectorAll(".trace-singleton")[1]!.textContent!,
@@ -111,11 +119,11 @@ test("yield, another pending wait, interruption and a late receipt never reactiv
         "interrupted",
       ),
     );
-    assert.equal(
+    assert.ok(
       document.querySelector(
         ".turn-history .mini-spinner, .turn-history [data-active='true']",
-      ),
-      null,
+      ) === null,
+      "Expected no matching element",
     );
     await h.click(".trace-singleton:last-child .trace-item-toggle");
     assert.match(
@@ -143,5 +151,38 @@ test("unknown calls remain unknown and actual errors complete the invocation wit
   assert.equal(
     commandPhase(runtimeCommand("error", "pwd", "failed")),
     "completed",
+  );
+});
+
+test("returned task receipts complete calls without claiming their external action succeeded", () => {
+  for (const processStatus of [
+    "admitting",
+    "queued",
+    "running",
+    "cancel_requested",
+    "cancellation_unconfirmed",
+    "failed",
+    "timed_out",
+    "cancelled",
+  ] as const) {
+    const item = {
+      ...runtimeTask("send", "task", processStatus),
+      toolName: "zenx_threads_send",
+    };
+    assert.equal(commandPhase(item), "completed");
+    assert.equal(commandStatus(item), "Completed");
+    assert.equal(commandTitle(item), "Send message");
+    assert.equal(commandSummary(item), "Send message");
+  }
+  assert.equal(
+    commandTitle({
+      ...runtimeTask("sent", "task", "completed"),
+      toolName: "zenx_threads_send",
+    }),
+    "Sent message",
+  );
+  assert.equal(
+    commandTitle(runtimeWait("wait", "task")),
+    "Checked task status",
   );
 });
