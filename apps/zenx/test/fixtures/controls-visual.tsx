@@ -7,7 +7,7 @@ import {
   Dialog,
 } from "../../src/renderer/src/ui/controls.js";
 import { PermissionSelect } from "../../src/renderer/src/PermissionSelect.js";
-import { ContextCompactionEvent } from "../../src/renderer/src/ThreadView.js";
+import { ContextCompactionEvent } from "../../src/renderer/src/ContextCompactionEvent.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 installScrollbarVisibility(document);

@@ -654,3 +654,58 @@ test("Host/UI calibrates from the exact sent sample, not thread totals or cached
   assert.equal(usage.thread.inputTokens, 1200);
   assert.notEqual(usage.context.inputTokens, 1200);
 });
+
+test("native deferred presentation estimates only eager declarations and namespace summaries", () => {
+  const tool = {
+    name: "lookup",
+    description: "short",
+    fullDescription: "full docs ".repeat(10000),
+    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+  };
+  const descriptor = (description: string) => ({
+    protocol: "openai-responses" as const,
+    tools: [
+      {
+        type: "namespace",
+        name: "plugin_docs",
+        description: "Stable plugin summary",
+        tools: [
+          {
+            type: "function",
+            name: tool.name,
+            description,
+            parameters: tool.inputSchema,
+            defer_loading: true,
+          },
+        ],
+      },
+      { type: "tool_search" },
+    ],
+  });
+  const first = estimateModelInput([], [tool], "", descriptor("small"));
+  assert.deepEqual(
+    estimateModelInput([], [tool], "", descriptor(tool.fullDescription)),
+    first,
+  );
+  assert.ok(first.toolDefinitions > 0);
+  const discovered = estimateModelInput(
+    [
+      {
+        role: "tool_discovery",
+        protocol: "openai-responses",
+        endpointSha256: "a".repeat(64),
+        items: [
+          {
+            type: "tool_search_output",
+            tools: [{ description: tool.fullDescription }],
+          },
+        ],
+      },
+    ],
+    [tool],
+    "",
+    descriptor(tool.fullDescription),
+  );
+  assert.ok(discovered.conversation > first.conversation);
+  assert.equal(discovered.toolDefinitions, first.toolDefinitions);
+});

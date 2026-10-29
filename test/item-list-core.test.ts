@@ -655,3 +655,36 @@ test("compiler preserves exact committed provider presentation and later fallbac
     undefined,
   );
 });
+
+test("agentic reset excludes hosted discovery from its own source response", async () => {
+  const { itemsAfterLatestAgenticCompaction } =
+    await import("../src/context-compaction.js");
+  const discovery: CanonicalItem = {
+    ...base,
+    id: "hosted",
+    type: "tool_discovery",
+    modelResponseId: "source",
+    protocol: "openai-responses",
+    endpointSha256: "a".repeat(64),
+    items: [{ type: "tool_search_call", id: "search" }],
+  };
+  const items = [
+    { ...base, id: "boundary", type: "user_message", text: "old" },
+    discovery,
+    {
+      ...base,
+      id: "reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: "boundary",
+      sourceModelResponseId: "source",
+    },
+  ] as CanonicalItem[];
+  assert.equal(
+    itemsAfterLatestAgenticCompaction(items).some(
+      (item) => item.id === "hosted",
+    ),
+    false,
+  );
+  assert.equal(discovery.items[0]?.id, "search");
+});

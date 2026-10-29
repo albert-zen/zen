@@ -549,3 +549,42 @@ test("retaining small raw output preserves the inline presentation and supplies 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("optional spool failure does not discard complete small model or program output", async (t) => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zen-spool-small-failure-"),
+  );
+  const blocked = path.join(root, "not-a-directory");
+  await writeFile(blocked, "synthetic unavailable spool");
+  const spool = new ToolOutputSpool({
+    rootDirectory: blocked,
+    previewBytes: 8,
+  });
+  t.after(async () => {
+    await spool.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+  const { attachToolOutputCapture } = await import("../src/tool.js");
+  const { programToolResult } = await import("../src/code-runtime-output.js");
+  for (const output of ["", "child", "42:child"]) {
+    const capture = await spool.captureText(output);
+    assert.equal(capture.path, undefined);
+    assert.equal(capture.sourceTruncated, false);
+    assert.equal(capture.output, output);
+    assert.equal(renderToolOutput(capture), output);
+    const program = await programToolResult(
+      attachToolOutputCapture(
+        { output: renderToolOutput(capture), exitCode: 0 },
+        capture,
+      ),
+    );
+    assert.equal(program.output, output);
+    assert.equal(program.outputInfo.complete, true);
+  }
+  const upstream = await spool.captureText("child", { sourceTruncated: true });
+  assert.equal(upstream.sourceTruncated, true);
+  assert.equal(upstream.output, undefined);
+  const oversized = await spool.captureText("larger than memory preview");
+  assert.equal(oversized.sourceTruncated, true);
+  assert.equal(oversized.output, undefined);
+});

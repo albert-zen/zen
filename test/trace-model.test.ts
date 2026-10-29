@@ -314,3 +314,32 @@ test("first content observations are nonempty exposed events with exact transpor
     ],
   );
 });
+
+test("trace wrapper preserves pure provider tool presentation preparation", () => {
+  const adapter = {
+    provider: "synthetic",
+    prepareToolPresentation(
+      model: string,
+      tools: readonly import("../src/model.js").ModelTool[],
+    ) {
+      assert.equal(this.provider, "synthetic");
+      return {
+        protocol: "openai-responses" as const,
+        tools: [
+          { type: "tool_search", model, names: tools.map((tool) => tool.name) },
+        ],
+      };
+    },
+    async *stream(): AsyncIterable<import("../src/model.js").ModelEvent> {},
+  };
+  const trace = {
+    record: async () => {
+      throw new Error("pure preparation must not observe or dispatch");
+    },
+  } as unknown as RuntimeTrace;
+  const wrapped = observeModelWithTrace(adapter, trace);
+  assert.deepEqual(wrapped.prepareToolPresentation?.("synthetic-model", []), {
+    protocol: "openai-responses",
+    tools: [{ type: "tool_search", model: "synthetic-model", names: [] }],
+  });
+});
