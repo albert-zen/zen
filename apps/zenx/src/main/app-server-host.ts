@@ -1,3 +1,5 @@
+import { localErrorDetail } from "../local-error-detail.js";
+import { BoardToolService } from "./board-tool-service.js";
 import { ShellPanelService } from "./shell-panel-service.js";
 import { randomUUID } from "node:crypto";
 import { FleetToolGateway } from "../../../../src/protocol/native/remote-tools.js";
@@ -26,6 +28,13 @@ import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
+const boardActions = new Map<
+  string,
+  {
+    controller: AbortController;
+    ownerCheck?: (error?: Error) => void;
+  }
+>();
 const roomListeners = new Set<
   (event: { roomId: string; threadId: string }) => void
 >();
@@ -74,6 +83,86 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "board-tool/owner-result") {
+    boardActions
+      .get(command.requestId)
+      ?.ownerCheck?.(
+        command.error === undefined ? undefined : new Error(command.error),
+      );
+    return;
+  }
+  if (command.type === "board-tool/cancel") {
+    boardActions
+      .get(command.requestId)
+      ?.controller.abort(new Error("Board action cancellation requested"));
+    return;
+  }
+  if (command.type === "board-tool/request") {
+    const controller = new AbortController();
+    if (boardActions.has(command.requestId)) {
+      send({
+        type: "board-tool/result",
+        requestId: command.requestId,
+        error:
+          "Board action identity is already in use; do not repeat the request",
+      });
+      return;
+    }
+    const action: {
+      controller: AbortController;
+      ownerCheck?: (error?: Error) => void;
+    } = { controller };
+    boardActions.set(command.requestId, action);
+    try {
+      if (!appServer || !targetToolEnvironment)
+        throw new Error("Board tool Host is unavailable");
+      const result = await new BoardToolService(
+        appServer,
+        targetToolEnvironment,
+        () =>
+          new Promise<void>((resolve, reject) => {
+            controller.signal.throwIfAborted();
+            const timer = setTimeout(
+              () =>
+                done(
+                  new Error("Board owner validation timed out before dispatch"),
+                ),
+              5000,
+            );
+            const abort = () =>
+              done(new Error("Board action cancelled before owner validation"));
+            const done = (error?: Error) => {
+              clearTimeout(timer);
+              controller.signal.removeEventListener("abort", abort);
+              delete action.ownerCheck;
+              if (error) reject(error);
+              else resolve();
+            };
+            action.ownerCheck = done;
+            controller.signal.addEventListener("abort", abort, { once: true });
+            send({
+              type: "board-tool/check-owner",
+              requestId: command.requestId,
+            });
+          }),
+      ).execute(command.input, controller.signal);
+      send({ type: "board-tool/result", requestId: command.requestId, result });
+    } catch (error) {
+      send({
+        type: "board-tool/result",
+        requestId: command.requestId,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Board tool outcome is unconfirmed; do not retry automatically",
+        errorDetail: localErrorDetail(error),
+      });
+    } finally {
+      boardActions.delete(command.requestId);
+    }
+    return;
+  }
+
   if (command.type === "model-debug/request") {
     try {
       if (!appServer) throw new Error("Local Host unavailable");
@@ -513,6 +602,8 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  for (const action of boardActions.values())
+    action.controller.abort(new Error("Board Host is closing"));
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {

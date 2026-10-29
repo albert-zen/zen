@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { installZenXBundledPluginsAtStartup } from "../src/main/bundled-plugin-startup.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZENX_ROOMS_CAPABILITY_ID } from "../src/main/capabilities/automation-control-package.js";
+import { ZenXBoardCapabilityPackage } from "../src/main/capabilities/board-package.js";
 import { ZenXFleetCapabilityPackage } from "../src/main/capabilities/fleet-package.js";
 import type { ZenXSelfControlCapabilityPackage } from "../src/main/capabilities/self-control-package.js";
 import type { FleetSettingsService } from "../src/main/fleet-settings.js";
@@ -74,6 +75,7 @@ test("startup repairs a bundled plugin profile that points at an old worktree", 
 
   const installCalls: unknown[][] = [];
   const plugins = [
+    { id: "zenx-board", lifecycle: "uninstalled" },
     {
       id: ZENX_ROOMS_CAPABILITY_ID,
       lifecycle: "installed",
@@ -191,6 +193,7 @@ test("startup refreshes changed bytes at the same bundled path and preserves ina
         { id: "zenx-self-control", lifecycle: "uninstalled" },
         { id: "zenx-triggers", lifecycle: "uninstalled" },
         { id: "zenx-subagents", lifecycle: "uninstalled" },
+        { id: "zenx-board", lifecycle: "uninstalled" },
         { id: "zenx-fleet", lifecycle: "uninstalled" },
       ],
     }),
@@ -229,6 +232,7 @@ test("startup refreshes changed bytes at the same bundled path and preserves ina
 
 test("Subagents is installed on first startup and explicit uninstall is preserved", async () => {
   const definitions = [
+    { id: "zenx-board", lifecycle: "uninstalled" },
     { id: "zenx-rooms", lifecycle: "uninstalled" },
     { id: "zenx-self-control", lifecycle: "uninstalled" },
     { id: "zenx-triggers", lifecycle: "uninstalled" },
@@ -283,6 +287,7 @@ test("Fleet startup preserves an npm override and explicit uninstall, and repair
         { id: "zenx-self-control", lifecycle: "uninstalled" },
         { id: "zenx-triggers", lifecycle: "uninstalled" },
         { id: "zenx-subagents", lifecycle: "uninstalled" },
+        { id: "zenx-board", lifecycle: "uninstalled" },
         {
           id: definition.pluginId,
           lifecycle,
@@ -389,6 +394,7 @@ test("Fleet startup commits the normal package without grants and keeps disabled
             { id: "zenx-self-control", lifecycle: "uninstalled" },
             { id: "zenx-triggers", lifecycle: "uninstalled" },
             { id: "zenx-subagents", lifecycle: "uninstalled" },
+            { id: "zenx-board", lifecycle: "uninstalled" },
           ],
         }),
         bundledPluginPackageCurrent: (
@@ -478,6 +484,151 @@ test("Fleet startup commits the normal package without grants and keeps disabled
     assert.deepEqual(service.hostSnapshot().definitions, []);
     assert.equal(await readFile(catalogFile, "utf8"), uninstalledCatalog);
     assert.equal(invocations, 0);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Board startup installs a normal profile without invoking actions and honors disabled/uninstalled state", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-board-profile-"),
+  );
+  const userData = path.join(directory, "profile");
+  const resourcesDirectory = path.join(directory, "resources");
+  const definition = FIRST_PARTY_PLUGIN_PACKAGES.board;
+  await mkdir(path.join(resourcesDirectory, "plugins"), { recursive: true });
+  await copyFile(
+    fileURLToPath(
+      new URL(`../resources/plugins/${definition.tarball}`, import.meta.url),
+    ),
+    path.join(resourcesDirectory, "plugins", definition.tarball),
+  );
+  let effects = 0;
+  const unexpected = async (): Promise<never> => {
+    effects++;
+    throw new Error("Startup must not read/send/execute Board actions");
+  };
+  const board = new ZenXBoardCapabilityPackage({
+    readOwner: unexpected,
+    deliver: unexpected,
+    execute: unexpected,
+  });
+  const create = () =>
+    new ZenXCapabilityService({
+      userDataDirectory: userData,
+      resourcesDirectory,
+      bundledProvidersOnly: true,
+      pnpmCliPath: fileURLToPath(
+        new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
+      ),
+      trustedProfileLoaders: {
+        [definition.pluginId]: createDelegatingFirstPartyProfileLoader(
+          () => board,
+        ),
+      },
+    });
+  let service = create();
+  const startup = () =>
+    installZenXBundledPluginsAtStartup(
+      {
+        pluginCatalogAvailable: () => service.pluginCatalogAvailable(),
+        pluginSnapshot: () => ({
+          plugins: [
+            ...service.pluginSnapshot().plugins,
+            ...[
+              "zenx-rooms",
+              "zenx-self-control",
+              "zenx-triggers",
+              "zenx-subagents",
+              "zenx-fleet",
+            ].map((id) => ({ id, lifecycle: "uninstalled" })),
+          ],
+        }),
+        bundledPluginPackageCurrent: (
+          ...args: Parameters<
+            ZenXCapabilityService["bundledPluginPackageCurrent"]
+          >
+        ) => service.bundledPluginPackageCurrent(...args),
+        installBundledPluginPackage: (
+          ...args: Parameters<
+            ZenXCapabilityService["installBundledPluginPackage"]
+          >
+        ) => service.installBundledPluginPackage(...args),
+        browserProfilePackage: () => {
+          throw new Error("unavailable");
+        },
+        computerProfilePackage: () => {
+          throw new Error("unavailable");
+        },
+        recordBundledPluginStartupError: (_id: string, error: unknown) => {
+          throw error;
+        },
+      } as unknown as ZenXCapabilityService,
+      resourcesDirectory,
+    );
+  const catalogFile = path.join(userData, "capability-grants.json");
+  try {
+    await service.initialize();
+    await startup();
+    const installed = service
+      .pluginSnapshot()
+      .plugins.find((plugin) => plugin.id === definition.pluginId);
+    assert.equal(installed?.lifecycle, "enabled");
+    assert.equal(installed?.source, "bundled");
+    assert.equal(installed?.profileSource?.packageName, definition.packageName);
+    assert.equal(
+      (service.pluginSnapshot().information ?? []).some(
+        (entry) =>
+          entry.pluginId === definition.pluginId && entry.id === "board",
+      ),
+      true,
+    );
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .panels.some((entry) => entry.pluginId === definition.pluginId),
+      false,
+    );
+    assert.equal(
+      "grants" in JSON.parse(await readFile(catalogFile, "utf8")),
+      false,
+    );
+    assert.equal(effects, 0);
+
+    await service.setEnabled(definition.pluginId, false);
+    await service.close();
+    service = create();
+    await service.initialize();
+    await startup();
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === definition.pluginId)?.lifecycle,
+      "installed",
+    );
+    assert.equal(
+      (service.pluginSnapshot().information ?? []).some(
+        (entry) => entry.pluginId === definition.pluginId,
+      ),
+      false,
+    );
+    assert.deepEqual(service.hostSnapshot().definitions, []);
+
+    await service.uninstall(definition.pluginId);
+    const uninstalled = await readFile(catalogFile, "utf8");
+    await service.close();
+    service = create();
+    await service.initialize();
+    await startup();
+    assert.equal(
+      service
+        .pluginSnapshot()
+        .plugins.find((plugin) => plugin.id === definition.pluginId)?.lifecycle,
+      "uninstalled",
+    );
+    assert.equal(await readFile(catalogFile, "utf8"), uninstalled);
+    assert.equal(effects, 0);
   } finally {
     await service.close();
     await rm(directory, { recursive: true, force: true });

@@ -1,4 +1,9 @@
 import {
+  validateBoardToolRequest,
+  type BoardToolRequest,
+} from "../board-host.js";
+import type { ToolExecutionResult } from "../../../../src/tool.js";
+import {
   isBrowserModelRoute,
   isBrowserModelTargets,
   isBrowserSidebarTargets,
@@ -72,6 +77,9 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | { type: "board-tool/request"; requestId: string; input: BoardToolRequest }
+  | { type: "board-tool/cancel"; requestId: string }
+  | { type: "board-tool/owner-result"; requestId: string; error?: string }
   | {
       type: "model-debug/request";
       requestId: string;
@@ -147,6 +155,7 @@ export type HostCommand =
 
 export interface CapabilityResultCommand {
   browserModelTargets?: BrowserModelTargets;
+  browserSidebarTargets?: BrowserModelRoute[];
   type: "capability/result";
   invocationId: string;
   generationToken: string;
@@ -159,6 +168,15 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | { type: "board-tool/check-owner"; requestId: string }
+  | {
+      type: "board-tool/result";
+      requestId: string;
+      result?: ToolExecutionResult;
+      error?: string;
+      /** Local UI diagnostic only, never model or authority data. */
+      errorDetail?: string;
+    }
   | {
       type: "model-debug/result";
       requestId: string;
@@ -329,6 +347,21 @@ export function isHostCommand(value: unknown): value is HostCommand {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "board-tool/cancel")
+    return typeof fleet.requestId === "string";
+  if (fleet.type === "board-tool/owner-result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error === undefined || typeof fleet.error === "string")
+    );
+  if (fleet.type === "board-tool/request") {
+    try {
+      validateBoardToolRequest(fleet.input);
+      return typeof fleet.requestId === "string";
+    } catch {
+      return false;
+    }
+  }
   if (fleet.type === "model-debug/request") {
     try {
       validateModelRequestDebugCommand(fleet.input);
@@ -360,6 +393,7 @@ export function isHostCommand(value: unknown): value is HostCommand {
     );
   const command = value as {
     browserModelTargets?: unknown;
+    browserSidebarTargets?: unknown;
     type?: unknown;
     requestId?: unknown;
     options?: unknown;
@@ -399,6 +433,8 @@ export function isHostCommand(value: unknown): value is HostCommand {
     (type === "capability/result" &&
       (command.browserModelTargets === undefined ||
         isBrowserModelTargets(command.browserModelTargets)) &&
+      (command.browserSidebarTargets === undefined ||
+        isBrowserSidebarTargets(command.browserSidebarTargets)) &&
       typeof command.invocationId === "string" &&
       typeof command.generationToken === "string") ||
     (type === "capabilities/replace" &&
@@ -450,6 +486,26 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "board-tool/check-owner")
+    return typeof fleet.requestId === "string";
+  if (fleet.type === "board-tool/result")
+    return (
+      typeof fleet.requestId === "string" &&
+      (fleet.error !== undefined
+        ? typeof fleet.error === "string" &&
+          fleet.error.length > 0 &&
+          (fleet.errorDetail === undefined ||
+            typeof fleet.errorDetail === "string") &&
+          fleet.result === undefined
+        : fleet.errorDetail === undefined &&
+          typeof fleet.result === "object" &&
+          fleet.result !== null &&
+          typeof (fleet.result as Record<string, unknown>).output ===
+            "string" &&
+          Number.isSafeInteger(
+            (fleet.result as Record<string, unknown>).exitCode,
+          ))
+    );
   if (fleet.type === "model-debug/result")
     return (
       typeof fleet.requestId === "string" &&

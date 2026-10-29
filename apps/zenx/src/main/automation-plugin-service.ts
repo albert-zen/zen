@@ -901,6 +901,21 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       replyToMessageId,
     );
   }
+  async postAddressedRoomMessage(
+    roomId: string,
+    threadId: string,
+    operationId: string,
+    text: string,
+  ): Promise<RoomDeliveryView> {
+    if (!this.roomsAvailable())
+      throw new Error("Rooms are disabled or unavailable");
+    return await this.#service.postAddressedRoomMessage(
+      roomId,
+      threadId,
+      operationId,
+      text,
+    );
+  }
   async prepareAssistantIntroduction(
     roomId: string,
     operationId: string,

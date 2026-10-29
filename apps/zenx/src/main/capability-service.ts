@@ -656,6 +656,29 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     selected.assertModelTarget(route, threadId);
   }
 
+  async readBrowserModelTarget(
+    threadId: string,
+    targetId: string,
+  ): Promise<BrowserModelRoute | undefined> {
+    const selected = this.#browserProfilePackage;
+    const available = () =>
+      this.#browserProfilePackage === selected &&
+      this.pluginSnapshot().plugins.some(
+        (plugin) =>
+          plugin.id === "browser" && plugin.enabled && plugin.available,
+      );
+    if (
+      !available() ||
+      !(
+        selected instanceof BrowserZenXCapabilityPackage ||
+        selected instanceof BrowserBackendRegistry
+      )
+    )
+      return;
+    const route = await selected.readModelTarget(threadId, targetId);
+    return available() ? route : undefined;
+  }
+
   async readBrowserTargetUrl(
     threadId: string,
     targetId: string,
@@ -1407,6 +1430,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
       case "zenx-rooms":
         packageName = ZENX_ROOMS_PACKAGE_NAME;
         tarball = ZENX_ROOMS_TARBALL;
+        break;
+      case "zenx-board":
+        packageName = FIRST_PARTY_PLUGIN_PACKAGES.board.packageName;
+        tarball = FIRST_PARTY_PLUGIN_PACKAGES.board.tarball;
         break;
       case "zenx-subagents":
         packageName = FIRST_PARTY_PLUGIN_PACKAGES.subagents.packageName;

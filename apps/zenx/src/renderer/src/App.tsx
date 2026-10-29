@@ -1,3 +1,4 @@
+import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
@@ -151,7 +152,11 @@ import {
   loadedPluginContributions,
   pluginRoutePath,
 } from "./plugin-contributions.js";
-import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
+import {
+  PluginProductPage,
+  pluginUiRegistry,
+  useAppearance,
+} from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
@@ -484,6 +489,7 @@ export function App() {
 }
 
 function AppContent() {
+  const appearance = useAppearance();
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
@@ -3979,6 +3985,31 @@ function AppContent() {
                 threadLoading={threadLoading}
               />
             )}
+            {pluginSnapshot &&
+            ((page === "agent" &&
+              newThreadDraft === null &&
+              selectedThreadId) ||
+              selectedRoomId) ? (
+              <PluginInformationHost
+                key={
+                  selectedRoomId
+                    ? `room:${selectedRoomId}`
+                    : `thread:${selectedThreadId}`
+                }
+                snapshot={pluginSnapshot}
+                registry={pluginUiRegistry}
+                resourcePanelWidth={workspacePanelWidth}
+                owner={
+                  selectedRoomId
+                    ? { kind: "room", roomId: selectedRoomId }
+                    : { kind: "thread", threadId: selectedThreadId! }
+                }
+                theme={appearance}
+                navigate={openPage}
+                executeCommand={window.zenx.plugins.executeCommand}
+                readHandle={window.zenx.plugins.readHandle}
+              />
+            ) : null}
             {selectedRoom &&
             (roomSidebarState?.open ?? Boolean(roomPanel)) &&
             pluginSnapshot ? (

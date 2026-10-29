@@ -11788,6 +11788,331 @@ button:disabled {
   overflow: auto;
 }
 
+/* Information is independent from workspace resources and never claims their tabs. */
+.information-toolbar {
+  position: fixed;
+  z-index: 81;
+  top: 4px;
+  right: 48px;
+  -webkit-app-region: no-drag;
+}
+.information-toolbar > button {
+  width: 36px;
+  height: 36px;
+}
+:root[data-platform="linux"] .information-toolbar,
+:root[data-platform="win32"] .information-toolbar {
+  top: calc(var(--native-titlebar-height) + 4px);
+  right: 48px;
+}
+/* The information entry sits immediately before Close, without covering Restore,
+   tab hit targets or the existing platform-specific leading safe area. */
+.workspace:has(> .information-toolbar)
+  > .auxiliary-panel[data-open="true"]
+  > .auxiliary-heading
+  .auxiliary-close-button {
+  margin-inline-start: 44px;
+}
+.information-popover {
+  padding: 0;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(720px, calc(100vh - 70px));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.information-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.information-title,
+.information-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.information-title {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.information-header-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.information-content {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+}
+.information-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 6px 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.information-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.information-tabs button[aria-pressed="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+.information-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--workspace-panel-width, 0px);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-surface-main);
+  border-left: 1px solid var(--color-border-subtle);
+  z-index: 3;
+}
+.workspace:has(> .information-rail[data-floating="false"])
+  > :is(.agent-surface, .plugin-product-page) {
+  width: calc(100% - var(--workspace-panel-width, 0px) - 320px);
+}
+.board-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.board-heading {
+  margin-bottom: 2px;
+}
+.board-eyebrow {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  color: var(--color-text-muted);
+}
+.board-heading h2 {
+  font-size: 19px;
+  line-height: 1.25;
+  margin: 7px 0;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.board-heading p,
+.board-note p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.board-heading small {
+  display: block;
+  font-size: 10px;
+  margin-top: 10px;
+  color: var(--color-text-muted);
+}
+.board-note {
+  border-left: 2px solid var(--color-border-subtle);
+  padding-left: 11px;
+}
+.board-note h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.board-metric {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  align-items: baseline;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.board-metric > span {
+  color: var(--color-text-secondary);
+}
+.board-metric strong {
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.board-metric small {
+  grid-column: 1 / -1;
+  color: var(--color-text-muted);
+}
+.board-progress > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.board-progress small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.board-progress progress {
+  width: 100%;
+  height: 5px;
+  accent-color: var(--color-text-secondary);
+}
+.board-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.board-field input:not([type="checkbox"]),
+.board-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-main);
+  font: inherit;
+}
+.board-field textarea {
+  min-height: 78px;
+  resize: vertical;
+  font-weight: 400;
+}
+.board-field.checkbox {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: center;
+}
+.board-action {
+  width: 100%;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-main);
+  color: var(--color-text-primary);
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  font: inherit;
+}
+.board-action:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+.board-action.primary {
+  background: var(--color-text-primary);
+  color: var(--color-surface-main);
+  border-color: var(--color-text-primary);
+}
+.board-action.primary:hover:not(:disabled) {
+  background: var(--color-text-secondary);
+  color: var(--color-surface-main);
+  border-color: var(--color-text-secondary);
+}
+.board-action:disabled {
+  opacity: 0.5;
+}
+.board-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 10px;
+}
+.board-footer .icon-button {
+  width: 25px;
+  height: 25px;
+}
+.board-custom {
+  width: 100%;
+  min-height: 260px;
+  border: 0;
+  border-radius: 6px;
+}
+.board-error,
+.board-confirm {
+  border: 1px solid var(--color-border-subtle);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.board-error p,
+.board-confirm p {
+  margin: 0 0 8px;
+}
+.board-error button,
+.board-confirm button,
+.board-empty button {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 5px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+.board-result {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  margin: 0;
+}
+.board-empty {
+  padding: 32px 22px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.board-empty h3 {
+  font-size: 16px;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.information-rail[data-floating="true"] {
+  width: min(360px, calc(100% - 16px));
+  top: 8px;
+  bottom: 8px;
+  right: 8px;
+  z-index: 85;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px var(--color-shadow);
+}
+@media (pointer: coarse) {
+  .information-toolbar > button,
+  .information-header-actions .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+.board-outcomes {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.board-outcomes summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.board-outcomes pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  max-height: 220px;
+  overflow: auto;
+}
+
 .tool-action-target {
   margin: 0 0 6px 23px;
   min-width: 0;

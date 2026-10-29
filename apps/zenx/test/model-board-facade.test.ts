@@ -1,0 +1,615 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ModelTool } from "../../../src/model.js";
+import type { ToolExecutionResult, ToolInvocation } from "../../../src/tool.js";
+import {
+  ModelReferenceRegistry,
+  trustedModelReferenceBindings,
+} from "../../../src/model-references.js";
+import {
+  attachBrowserSidebarTargets,
+  readBrowserSidebarTargets,
+  type BrowserModelRoute,
+} from "../src/main/capabilities/model-browser-metadata.js";
+import {
+  hasModelToolFacade,
+  invokeModelToolFacade,
+  isModelCallableTool,
+  modelPluginDocument,
+  modelToolDefinition,
+} from "../src/main/capabilities/model-tool-facade.js";
+import {
+  asJson,
+  object,
+} from "../src/main/capabilities/model-facade-fields.js";
+
+const caller = "RAW-owning-thread";
+const epoch = "host-epoch";
+const roomId = "RAW-room";
+const route: BrowserModelRoute = {
+  ownerThreadId: caller,
+  sessionId: "RAW-session",
+  sessionEpoch: "RAW-session-epoch",
+  backend: "workspace",
+  tabId: "RAW-backend-tab",
+  targetId: "RAW-product-target",
+};
+const externalRoute: BrowserModelRoute = {
+  ...route,
+  backend: "connected/chrome",
+  connectionId: "RAW-connection",
+  generation: "RAW-generation",
+  tabId: "RAW-connected-tab",
+  targetId: "RAW-external-target",
+};
+function fixture() {
+  const references = new ModelReferenceRegistry();
+  const refs = references.scope(caller);
+  const room = refs.bind("rooms", "room", { id: roomId });
+  const tab = refs.bind("browser", "tab", { route: { ...route } }, epoch);
+  const external = refs.bind(
+    "browser",
+    "tab",
+    { route: { ...externalRoute } },
+    epoch,
+  );
+  const native: ToolInvocation[] = [];
+  const rawResults: ToolExecutionResult[] = [];
+  return {
+    references,
+    refs,
+    room,
+    tab,
+    external,
+    native,
+    rawResults,
+    call(
+      name: string,
+      args: Record<string, unknown>,
+      raw: ToolExecutionResult = { output: "{}", exitCode: 0 },
+    ) {
+      return invokeModelToolFacade({
+        epoch,
+        references,
+        invocation: {
+          name,
+          arguments: args,
+          threadId: caller,
+          callId: "synthetic-call",
+          cwd: "/synthetic",
+          signal: new AbortController().signal,
+          traceOutput: {
+            async recordResult(result) {
+              rawResults.push(result as ToolExecutionResult);
+              return { durability: "degraded", error: "synthetic fixture" };
+            },
+            recordInvocation: async () => {},
+            recordReferenceBindings: async () => {},
+            recordAcceptedResult: async () => {},
+            write: async () => {},
+            end: async () => {},
+            flush: async () => {},
+            hasObservedResult: () => true,
+            hasAcceptedResult: () => false,
+          },
+        },
+        async dispatch(invocation) {
+          native.push(invocation);
+          return raw;
+        },
+      });
+    },
+  };
+}
+function document(owner: unknown = { kind: "thread" }) {
+  return {
+    id: "plan",
+    title: "Exact authored title",
+    summary: "Review fields before choosing an action",
+    owner,
+    blocks: [
+      { kind: "field", id: "scope", field: "scope", label: "Scope" },
+      { kind: "note", id: "note", text: "Literal {{scope}} and r999" },
+    ],
+    events: [
+      {
+        id: "choose",
+        label: "Choose",
+        actions: [
+          { kind: "set", values: { selected: 'quoted "text"' } },
+          {
+            kind: "if",
+            field: "selected",
+            equals: true,
+            then: [
+              { kind: "submit", text: "Deliver {{scope}} only on action" },
+            ],
+            otherwise: [
+              { kind: "script", command: "printf '%s' '{{valuesBase64}}'" },
+            ],
+          },
+        ],
+      },
+    ],
+    initialValues: { scope: "initial", approved: false },
+    html: "<style>p{color:red}</style><p>Literal r999</p><script>void 0</script>",
+  };
+}
+function nativeSnapshot() {
+  const doc = document({ kind: "room", roomId, threadId: caller });
+  const actions: Record<string, unknown>[] = [
+    { kind: "navigate", target: { kind: "browser", id: route.targetId } },
+    {
+      kind: "navigate",
+      target: { kind: "external-browser", id: externalRoute.targetId },
+    },
+    { kind: "navigate", target: { kind: "browser", id: "RAW-closed" } },
+    {
+      kind: "navigate",
+      target: { kind: "url", url: "https://example.test/a?q={{scope}}" },
+    },
+  ];
+  return {
+    document: {
+      ...doc,
+      events: [...doc.events, { id: "navigate", label: "Open", actions }],
+    },
+    revision: 7,
+    draftRevision: 12,
+    values: { scope: "x".repeat(8192), approved: true },
+    pinned: true,
+  };
+}
+test("Board definitions expose scoped owners and explicit full document reads", () => {
+  const source = (name: string): ModelTool => ({
+    name,
+    description: "Native document",
+    inputSchema: { type: "object", properties: {} },
+  });
+  assert.equal(hasModelToolFacade("zenx_board_put"), true);
+  assert.equal(hasModelToolFacade("zenx_board_read"), true);
+  assert.equal(hasModelToolFacade("zenx_board_ui"), false);
+  assert.equal(isModelCallableTool({ name: "zenx_board_ui" }), false);
+  const read = modelToolDefinition(source("zenx_board_read"));
+  assert.match(JSON.stringify(read.inputSchema), /document/);
+  assert.match(JSON.stringify(read.inputSchema), /semantic/);
+  assert.doesNotMatch(JSON.stringify(read.inputSchema), /threadId|roomId/);
+  const put = modelToolDefinition(source("zenx_board_put"));
+  assert.match(JSON.stringify(put.inputSchema), /external-browser/);
+  assert.match(JSON.stringify(put.inputSchema), /\^r/);
+  const schema = JSON.stringify(put.inputSchema);
+  for (const key of [
+    "values",
+    "text",
+    "command",
+    "timeoutMs",
+    "field",
+    "equals",
+    "then",
+    "otherwise",
+  ])
+    assert.ok(
+      schema.includes(`"${key}":`),
+      `Action schema must declare ${key}`,
+    );
+  assert.ok(
+    schema.length < 24000,
+    "Action schema must remain bounded, not expand six levels exponentially",
+  );
+  assert.match(modelPluginDocument("zenx-board", "native"), /document/);
+  assert.match(modelPluginDocument("zenx-board", "native"), /valuesBase64/);
+});
+
+test("Board model definitions teach every template and the actual isolated SDK", () => {
+  const put = modelToolDefinition({
+    name: "zenx_board_put",
+    description: "Native document",
+    inputSchema: { type: "object", properties: {} },
+  });
+  const documentSchema = object(object(put.inputSchema.properties).document);
+  const blocks = object(object(documentSchema.properties).blocks);
+  assert.equal(blocks.maxItems, 64);
+  const branches = object(blocks.items).anyOf;
+  assert.ok(Array.isArray(branches));
+  const expected = {
+    note: { fields: ["id", "text", "title"], required: ["id", "kind", "text"] },
+    metric: {
+      fields: ["id", "title", "value", "detail"],
+      required: ["id", "kind", "title", "value"],
+    },
+    progress: {
+      fields: ["id", "title", "value", "max"],
+      required: ["id", "kind", "title", "value"],
+    },
+    field: {
+      fields: ["id", "label", "field", "input", "options", "placeholder"],
+      required: ["id", "kind", "label", "field"],
+    },
+    action: {
+      fields: ["id", "label", "event", "emphasis"],
+      required: ["id", "kind", "label", "event"],
+    },
+  };
+  assert.equal(branches.length, Object.keys(expected).length);
+  for (const [kind, shape] of Object.entries(expected)) {
+    const branch = object(
+      branches.find(
+        (branch) =>
+          object(object(object(branch).properties).kind).const === kind,
+      ),
+    );
+    const properties = object(branch.properties);
+    for (const field of shape.fields)
+      assert.ok(field in properties, `${kind} declares ${field}`);
+    assert.deepEqual(branch.required, shape.required);
+    assert.equal(branch.additionalProperties, false);
+    if (kind === "field") {
+      assert.deepEqual(object(properties.input).enum, [
+        "text",
+        "textarea",
+        "select",
+        "checkbox",
+      ]);
+      assert.equal(object(properties.options).maxItems, 100);
+    }
+  }
+  const guide = modelPluginDocument("zenx-board", "native");
+  for (const snippet of [
+    "kind: 'field'",
+    "input: 'select'",
+    "options:",
+    "kind: 'action'",
+    "event: 'answer'",
+    "{{choice}}",
+    "zenxPluginUi.context.values",
+    "commands.execute('draft', { choice:",
+    "commands.execute('event', { eventId:",
+    "commands.execute('navigate', { target })",
+    "interaction.run(async (sdk)",
+    "sdk.navigation.navigate('https://example.test/result')",
+    "five minutes",
+    "document",
+    "owner",
+    "No automatic retry",
+  ])
+    assert.ok(guide.includes(snippet), `Board guide teaches ${snippet}`);
+  assert.doesNotMatch(guide, /commands\.execute\('draft', \{\s*values/);
+});
+
+test("Board owner defaults to the caller and resolves scoped Room refs only", async () => {
+  const f = fixture();
+  const doc = document();
+  await f.call("zenx_board_put", { document: doc });
+  assert.deepEqual(f.native.at(-1)!.arguments.document, {
+    ...doc,
+    owner: { kind: "thread", threadId: caller },
+  });
+  await f.call("zenx_board_read", {});
+  assert.deepEqual(f.native.at(-1)!.arguments, {
+    owner: { kind: "thread", threadId: caller },
+  });
+  await f.call("zenx_board_read", {
+    owner: { kind: "room", room: f.room },
+    view: "document",
+  });
+  assert.deepEqual(f.native.at(-1)!.arguments, {
+    owner: { kind: "room", roomId, threadId: caller },
+    view: "document",
+  });
+  assert.deepEqual(doc, document(), "decoding must not mutate authored input");
+  for (const owner of [
+    { kind: "thread", threadId: caller },
+    { kind: "room", roomId },
+    { kind: "room", room: "r99999" },
+    { kind: "room", room: f.tab },
+    { kind: "other" },
+  ]) {
+    const before = f.native.length;
+    await assert.rejects(f.call("zenx_board_read", { owner }));
+    assert.equal(f.native.length, before);
+  }
+  const foreign = new ModelReferenceRegistry().scope("foreign");
+  const foreignRoom = foreign.bind("rooms", "room", { id: roomId });
+  const fork = new ModelReferenceRegistry().scope(caller, foreign.newBindings);
+  const { decodeBoardArguments } =
+    await import("../src/main/capabilities/model-board-facade.js");
+  assert.throws(() =>
+    decodeBoardArguments(
+      "zenx_board_read",
+      {
+        owner: { kind: "room", room: foreignRoom },
+      },
+      fork,
+      epoch,
+    ),
+  );
+});
+
+test("Board navigation resolves exact Browser refs and retains private admission sideband", async () => {
+  const f = fixture();
+  const doc = {
+    ...document(),
+    events: [
+      {
+        id: "open",
+        label: "Open",
+        actions: [
+          {
+            kind: "if",
+            field: "selected",
+            equals: true,
+            then: [
+              { kind: "navigate", target: { kind: "browser", tab: f.tab } },
+            ],
+            otherwise: [
+              {
+                kind: "navigate",
+                target: { kind: "external-browser", tab: f.external },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  await f.call("zenx_board_put", { document: doc });
+  const native = f.native.at(-1)!;
+  const actions = (native.arguments.document as typeof doc).events[0]!.actions;
+  assert.deepEqual(actions[0]!.then[0], {
+    kind: "navigate",
+    target: { kind: "browser", id: route.targetId },
+  });
+  assert.deepEqual(actions[0]!.otherwise[0], {
+    kind: "navigate",
+    target: { kind: "external-browser", id: externalRoute.targetId },
+  });
+  assert.deepEqual(readBrowserSidebarTargets(native), [route, externalRoute]);
+  for (const target of [
+    { kind: "browser", id: route.targetId },
+    { kind: "browser", tab: f.external },
+    { kind: "browser", tab: f.room },
+    { kind: "browser", tab: "r99999" },
+  ]) {
+    const before = f.native.length;
+    await assert.rejects(
+      f.call("zenx_board_put", {
+        document: {
+          ...doc,
+          events: [
+            {
+              id: "open",
+              label: "Open",
+              actions: [{ kind: "navigate", target }],
+            },
+          ],
+        },
+      }),
+    );
+    assert.equal(f.native.length, before);
+  }
+});
+
+test("explicit full Board read preserves every authored field while projecting exact live targets independently", async () => {
+  const f = fixture();
+  const snapshot = nativeSnapshot();
+  const raw = attachBrowserSidebarTargets(
+    {
+      output: JSON.stringify(snapshot),
+      exitCode: 0,
+      contentType: "application/json",
+      structuredContent: asJson(snapshot),
+    },
+    [route, externalRoute],
+  );
+  const result = await f.call("zenx_board_read", { view: "document" }, raw);
+  const projected = JSON.parse(result.output);
+  assert.deepEqual(projected.document.owner, { kind: "room", room: f.room });
+  assert.deepEqual(projected.document.blocks, snapshot.document.blocks);
+  assert.deepEqual(projected.document.events[0], snapshot.document.events[0]);
+  assert.equal(projected.document.html, snapshot.document.html);
+  assert.deepEqual(
+    projected.document.initialValues,
+    snapshot.document.initialValues,
+  );
+  assert.deepEqual(projected.values, snapshot.values);
+  assert.equal(projected.revision, undefined);
+  assert.equal(projected.draftRevision, undefined);
+  assert.equal(projected.pinned, undefined);
+  const actions = projected.document.events[1].actions;
+  assert.deepEqual(actions[0].target, { kind: "browser", tab: f.tab });
+  assert.deepEqual(actions[1].target, {
+    kind: "external-browser",
+    tab: f.external,
+  });
+  assert.equal(actions[2].target.status, "unavailable");
+  assert.equal(actions[2].target.id, undefined);
+  assert.equal(actions[2].target.tab, undefined);
+  assert.deepEqual(actions[3], snapshot.document.events[1]!.actions[3]);
+  assert.doesNotMatch(result.output, /RAW-/);
+  assert.deepEqual(result.structuredContent, projected);
+  assert.ok(
+    trustedModelReferenceBindings(result)?.some(
+      (binding) => binding.namespace === "browser",
+    ),
+  );
+  assert.equal(f.rawResults[0], raw);
+  assert.match(f.rawResults[0]!.output, /RAW-product-target/);
+  assert.deepEqual(JSON.parse(raw.output), snapshot);
+});
+
+test("Board read never trusts JSON target routes, mismatched owners or ambiguous route metadata", async () => {
+  const f = fixture();
+  const snapshot = nativeSnapshot();
+  for (const routes of [
+    undefined,
+    [{ ...route, ownerThreadId: "foreign" }],
+    [{ ...route, backend: "connected/chrome" }],
+    [route, { ...route, sessionEpoch: "different" }],
+  ]) {
+    const raw = {
+      output: JSON.stringify({ ...snapshot, browserSidebarTargets: [route] }),
+      exitCode: 0,
+    };
+    if (routes) attachBrowserSidebarTargets(raw, routes);
+    const result = await f.call("zenx_board_read", { view: "document" }, raw);
+    const projected = JSON.parse(result.output);
+    assert.equal(
+      projected.document.events[1].actions[0].target.status,
+      "unavailable",
+    );
+    assert.equal(projected.document.html, snapshot.document.html);
+    assert.doesNotMatch(result.output, /RAW-/);
+  }
+});
+
+test("compact Board receipts omit product bookkeeping without changing literal field values", async () => {
+  const f = fixture();
+  const semantic = {
+    id: "plan",
+    title: "Board",
+    summary: "Semantic summary",
+    fields: [{ id: "scope", field: "scope", label: "Scope" }],
+    actions: [{ id: "submit", label: "Send" }],
+    values: { scope: "Literal r999", approved: true },
+    truncated: false,
+    revision: 9,
+    draftRevision: 12,
+    notice: "Draft values are not approval",
+  };
+  for (const name of ["zenx_board_read", "zenx_board_put"]) {
+    const result = await f.call(
+      name,
+      name === "zenx_board_put" ? { document: document() } : {},
+      { output: JSON.stringify(semantic), exitCode: 0 },
+    );
+    const {
+      revision: _revision,
+      draftRevision: _draftRevision,
+      ...expected
+    } = semantic;
+    assert.deepEqual(JSON.parse(result.output), expected);
+  }
+});
+
+test("stale epoch and cross-owner Browser provenance cannot reach Board dispatch", async () => {
+  const f = fixture();
+  const stale = f.refs.bind(
+    "browser",
+    "tab",
+    { route: { ...route } },
+    "old-epoch",
+  );
+  const foreign = f.refs.bind(
+    "browser",
+    "tab",
+    {
+      route: { ...route, ownerThreadId: "foreign" },
+    },
+    epoch,
+  );
+  for (const tab of [stale, foreign]) {
+    await assert.rejects(
+      f.call("zenx_board_put", {
+        document: {
+          ...document(),
+          events: [
+            {
+              id: "open",
+              label: "Open",
+              actions: [{ kind: "navigate", target: { kind: "browser", tab } }],
+            },
+          ],
+        },
+      }),
+    );
+  }
+  assert.equal(f.native.length, 0);
+});
+
+test("full Board read preserves legacy route text inertly while new puts reject it", async () => {
+  const f = fixture();
+  const routeText = "plugin:legacy/view?selection={{scope}}#literal";
+  const snapshot = nativeSnapshot();
+  const legacyEvent = {
+    id: "legacy",
+    label: "Inspect old navigation",
+    actions: [
+      {
+        kind: "if",
+        field: "scope",
+        equals: "old",
+        then: [{ kind: "navigate", route: routeText }],
+        otherwise: [{ kind: "set", values: { scope: "new" } }],
+      },
+    ],
+  };
+  const legacy = {
+    ...snapshot,
+    document: {
+      ...snapshot.document,
+      events: [...snapshot.document.events, legacyEvent],
+    },
+  };
+  const result = await f.call(
+    "zenx_board_read",
+    { view: "document" },
+    {
+      output: JSON.stringify(legacy),
+      exitCode: 0,
+    },
+  );
+  const projected = JSON.parse(result.output);
+  const action = projected.document.events[2].actions[0].then[0];
+  assert.equal(action.route, routeText);
+  assert.equal(action.status, "unavailable");
+  assert.match(action.reason, /legacy|Legacy/);
+  assert.equal(action.target, undefined);
+  assert.deepEqual(
+    projected.document.events[2].actions[0].otherwise,
+    legacyEvent.actions[0]!.otherwise,
+  );
+  assert.deepEqual(projected.document.blocks, legacy.document.blocks);
+  assert.equal(projected.document.html, legacy.document.html);
+  const before = f.native.length;
+  await assert.rejects(
+    f.call("zenx_board_put", {
+      document: { ...document(), events: [legacyEvent] },
+    }),
+  );
+  assert.equal(
+    f.native.length,
+    before,
+    "Legacy routes must never reach native authoring dispatch",
+  );
+});
+
+test("Board target diagnostics retain actual failure reasons without native routing IDs or local error details", async () => {
+  const f = fixture();
+  const snapshot = nativeSnapshot();
+  const diagnostic = {
+    kind: "browser",
+    id: route.targetId,
+    status: "unknown",
+    error: `Backend liveness read failed for ${route.targetId} owned by ${caller}: connection reset`,
+    errorDetail: "LOCAL-ONLY stack/cause diagnostic",
+  };
+  const raw = {
+    output: JSON.stringify({
+      ...snapshot,
+      navigationDiagnostics: [diagnostic],
+    }),
+    exitCode: 0,
+  };
+  const result = await f.call("zenx_board_read", { view: "document" }, raw);
+  const projected = JSON.parse(result.output);
+  const target = projected.document.events[1].actions[0].target;
+  assert.equal(target.status, "unknown");
+  assert.match(target.reason, /Backend liveness read failed.*connection reset/);
+  assert.equal(target.tab, undefined);
+  assert.equal(target.id, undefined);
+  assert.equal(projected.navigationDiagnostics, undefined);
+  assert.doesNotMatch(result.output, /RAW-|LOCAL-ONLY/);
+  assert.equal(projected.document.html, snapshot.document.html);
+  assert.equal(f.rawResults[0], raw);
+  assert.match(raw.output, /RAW-product-target|LOCAL-ONLY/);
+});

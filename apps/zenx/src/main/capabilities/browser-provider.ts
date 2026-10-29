@@ -158,6 +158,8 @@ export type BrowserLiveObservationListener = (
 export interface ZenXBrowserBackend {
   /** Bind the provider's opaque session to its trusted Thread owner. */
   bindThreadSession?(sessionId: string, threadId: string): void;
+  /** Read-only exact existing-target liveness; must never adopt or create targets. */
+  hasTab?(sessionId: string, tabId: string): boolean | Promise<boolean>;
   /** Trusted human UI only: never include the unredacted URL in tool results. */
   readCurrentUrl?(sessionId: string, tabId: string): Promise<string>;
   scroll?(
@@ -683,6 +685,13 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     listener: BrowserThreadListener,
   ): () => void {
     return this.#threadObservation.observe(request, listener);
+  }
+
+  async readModelTarget(
+    threadId: string,
+    targetId: string,
+  ): Promise<BrowserModelRoute | undefined> {
+    return await this.#threadObservation.readModelTarget(threadId, targetId);
   }
 
   async readTargetUrl(threadId: string, targetId: string): Promise<string> {

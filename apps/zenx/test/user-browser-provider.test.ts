@@ -3117,3 +3117,30 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
     this.closeCount += 1;
   }
 }
+
+test("Board exact connected-target liveness checks full native targets without adopting or truncating discovery", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("board");
+    const original = client.listTargets.bind(client);
+    client.listTargets = async () => [
+      ...Array.from({ length: 600 }, (_, index) => ({
+        targetId: `unowned-${index}`,
+        type: "page",
+        url: "https://example.test",
+        title: "Unowned",
+      })),
+      ...(await original()),
+    ];
+    assert.equal(await backend.hasTab("board", "target-1"), true);
+    await assert.rejects(
+      backend.hasTab("board", "unowned-0"),
+      /not|unknown|unavailable|session|belong/i,
+    );
+    client.primaryTargetPresent = false;
+    assert.equal(await backend.hasTab("board", "target-1"), false);
+  } finally {
+    await backend.close();
+  }
+});
