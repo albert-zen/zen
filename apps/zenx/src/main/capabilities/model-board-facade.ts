@@ -21,8 +21,15 @@ import {
 export const isBoardModelTool = (name: string) =>
   name === "zenx_board_put" || name === "zenx_board_read";
 
-export const boardModelDocument =
-  "Compose conversation-owned information Boards with short authored document/block/event IDs. Owner defaults to {kind:'thread'} for the calling Thread; Room ownership uses {kind:'room',room:<scoped Room ref>} and still requires current membership. put preserves user field values and does not execute actions. read defaults to compact semantic state; explicitly request view:'document' for complete authored blocks, events, HTML/CSS/JS and current values before editing. Notes, metrics, progress, fields and action templates compose freely with isolated custom HTML/CSS/JS. Fields are draft data, never approval. Submit text interpolates {{field}}; scripts interpolate only {{valuesBase64}} as base64 JSON, never user text directly into shell code. if actions use field/equals with then/otherwise actions and may inspect result.exitCode/result.output after confirmed script completion. Navigate actions use target:{kind:'url',url} or {kind:'browser'|'external-browser',tab:<exact Browser tab ref>}; a full read marks closed targets unavailable without losing the rest of the document. Local, submit, script and conditional events run only through explicit user interaction and existing permissions, never merely from read/put. Do not automatically retry unknown outcomes.";
+export const boardModelDocument = `Compose conversation-owned information Boards with short authored document/block/event IDs. Owner defaults to { kind: 'thread' } for the calling Thread; Room ownership uses { kind: 'room', room: <scoped Room ref> } and still requires current membership. put preserves user field values and does not execute actions. read defaults to compact semantic state; explicitly request view: 'document' for complete authored blocks, events, HTML/CSS/JS and current values before editing.
+
+Templates compose freely with isolated custom HTML/CSS/JS. Every block has id and kind: note needs text, optional title; metric needs title/value (string), optional detail; progress needs title/value (number), optional positive max; field needs label/field, optional input (text default, textarea, select, checkbox), options and placeholder; action needs label/event (declared event ID), optional emphasis. For a form/question, pair fields with an explicit action, for example blocks: [{ id: 'question', kind: 'field', label: 'Choose a scope', field: 'choice', input: 'select', options: ['Small', 'Full'] }, { id: 'answerButton', kind: 'action', label: 'Send answer', event: 'answer', emphasis: true }], initialValues: { choice: 'Small' }, events: [{ id: 'answer', label: 'Send answer', actions: [{ kind: 'submit', text: 'My choice: {{choice}}' }] }]. Fields are draft data, never approval.
+
+Submit text interpolates {{field}}; scripts interpolate only {{valuesBase64}} as base64 JSON, never user text directly into shell code. if actions use field/equals with then/otherwise actions and may inspect result.exitCode/result.output after confirmed script completion. Navigate actions use target: { kind: 'url', url } or { kind: 'browser' | 'external-browser', tab: <exact Browser tab ref> }; a full read marks closed targets unavailable without losing the rest of the document.
+
+Custom HTML receives window.zenxPluginUi. Read zenxPluginUi.context.board and zenxPluginUi.context.values; listen for zenx-plugin-ui:change to refresh them. From a genuine user click/key handler, await zenxPluginUi.commands.execute('draft', { choice: 'Full' }) to save a scalar field map (not a nested values object), or await zenxPluginUi.commands.execute('event', { eventId: 'answer', values: { choice: 'Full' } }) to request a declared event; values is optional. Inspect the event result.error before continuing. await zenxPluginUi.navigation.navigate('https://example.test/result') opens only an absolute HTTP(S) URL through the Host, never an application route. commands.execute('navigate', { target }) also accepts a typed URL or an existing native Browser target; model authors should instead declare Browser navigation events using scoped tab refs and invoke those event IDs, never invent or embed native target IDs.
+
+For asynchronous interaction chains, begin inside the user handler and use only the callback's scoped SDK: await zenxPluginUi.interaction.run(async (sdk) => { const result = await sdk.commands.execute('event', { eventId: 'answer' }); if (result.error) throw new Error(result.error); await sdk.navigation.navigate('https://example.test/result'); }). This retains the witnessed gesture across script awaits longer than the direct five-second window, for at most five minutes and only the same mounted document revision and owner; the scope ends when the callback finishes. It does not grant approval, bypass existing permissions, schedule background work or authorize a replacement document. Local, submit, script and conditional events require explicit user interaction, never merely read/put. No automatic retry of errors or unknown outcomes.`;
 
 const ownerSchema = {
   anyOf: [
@@ -75,6 +82,86 @@ const valuesSchema = {
   additionalProperties: scalarSchema,
   description:
     "Short field names with bounded scalar values; draft values never grant approval.",
+};
+const shortIdSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-zA-Z][a-zA-Z0-9_.-]*$",
+  description: "Authored short ID; reserved prototype keys are not allowed.",
+};
+const labelSchema = { type: "string", minLength: 1, maxLength: 256 };
+const bodySchema = { type: "string", minLength: 1, maxLength: 8192 };
+const blockSchema = {
+  anyOf: [
+    {
+      type: "object",
+      properties: {
+        id: shortIdSchema,
+        kind: { const: "note" },
+        text: bodySchema,
+        title: labelSchema,
+      },
+      required: ["id", "kind", "text"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        id: shortIdSchema,
+        kind: { const: "metric" },
+        title: labelSchema,
+        value: labelSchema,
+        detail: bodySchema,
+      },
+      required: ["id", "kind", "title", "value"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        id: shortIdSchema,
+        kind: { const: "progress" },
+        title: labelSchema,
+        value: { type: "number", minimum: 0 },
+        max: { type: "number", exclusiveMinimum: 0 },
+      },
+      required: ["id", "kind", "title", "value"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        id: shortIdSchema,
+        kind: { const: "field" },
+        label: labelSchema,
+        field: shortIdSchema,
+        input: {
+          enum: ["text", "textarea", "select", "checkbox"],
+          description: "Defaults to text; checkbox values are booleans.",
+        },
+        options: { type: "array", maxItems: 100, items: labelSchema },
+        placeholder: labelSchema,
+      },
+      required: ["id", "kind", "label", "field"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: {
+        id: shortIdSchema,
+        kind: { const: "action" },
+        label: labelSchema,
+        event: {
+          ...shortIdSchema,
+          description: "Exact ID of an event declared in this document.",
+        },
+        emphasis: { type: "boolean" },
+      },
+      required: ["id", "kind", "label", "event"],
+      additionalProperties: false,
+    },
+  ],
 };
 function actionSchema(nested = false): Record<string, unknown> {
   const children = {
@@ -148,20 +235,21 @@ export function boardModelDefinition<T extends ModelTool>(source: T): T {
             document: {
               type: "object",
               properties: {
-                id: { type: "string" },
-                title: { type: "string" },
-                summary: { type: "string" },
+                id: shortIdSchema,
+                title: labelSchema,
+                summary: { type: "string", minLength: 1, maxLength: 1024 },
                 owner: ownerSchema,
-                blocks: { type: "array", items: { type: "object" } },
+                blocks: { type: "array", maxItems: 64, items: blockSchema },
                 initialValues: valuesSchema,
-                html: { type: "string" },
+                html: { type: "string", minLength: 1, maxLength: 200000 },
                 events: {
                   type: "array",
+                  maxItems: 32,
                   items: {
                     type: "object",
                     properties: {
-                      id: { type: "string" },
-                      label: { type: "string" },
+                      id: shortIdSchema,
+                      label: labelSchema,
                       actions: {
                         type: "array",
                         maxItems: 128,

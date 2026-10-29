@@ -51,7 +51,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
   readonly storage = { version: 1, initialValue: { boards: {} } };
   #sdk?: Pick<ZenXPluginHostSdkV1, "storage">;
   #tail: Promise<unknown> = Promise.resolve();
-  readonly #running = new Set<string>();
+  readonly #running = new Map<string, AbortController>();
   constructor(readonly host: BoardHostPort) {}
   createRuntime() {
     return new ZenXBoardCapabilityPackage(this.host);
@@ -138,6 +138,15 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         };
         boards[key] = next;
         await this.#save(boards);
+        // The existing in-flight interaction guard follows committed document replacement.
+        // Its signal is checked again by native sidebar/tool admission after async preparation.
+        this.#running
+          .get(key)
+          ?.abort(
+            new Error(
+              "Board document changed; the pending interaction was stopped. Review the replacement before running another action.",
+            ),
+          );
         return semantic(next);
       }
       if (name === "zenx_board_read") {
@@ -221,7 +230,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     const key = boardOwnerKey(owner);
     if (this.#running.has(key))
       throw new Error("A Board action is already running; it was not repeated");
-    this.#running.add(key);
+    const replaced = new AbortController();
+    signal = AbortSignal.any([signal, replaced.signal]);
+    this.#running.set(key, replaced);
     try {
       const snapshot = await this.#serial(async () => {
         const current = (await this.#boards())[key];
@@ -233,16 +244,26 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           );
         return structuredClone(current);
       });
-      signal.throwIfAborted();
-      await this.host.readOwner(owner);
-      if (!this.host.navigate)
-        throw new Error("Board resource navigation is unavailable");
-      await this.host.navigate(owner, target, signal);
-      return {
-        snapshot,
-        navigation: [target],
-        outcomes: [{ kind: "navigate" }],
-      };
+      try {
+        signal.throwIfAborted();
+        await this.host.readOwner(owner);
+        if (!this.host.navigate)
+          throw new Error("Board resource navigation is unavailable");
+        await this.host.navigate(owner, target, signal);
+        return {
+          snapshot,
+          navigation: [target],
+          outcomes: [{ kind: "navigate" }],
+        };
+      } catch (error) {
+        return {
+          snapshot,
+          navigation: [],
+          outcomes: [],
+          error: error instanceof Error ? error.message : String(error),
+          errorDetail: localErrorDetail(error),
+        };
+      }
     } finally {
       this.#running.delete(key);
     }
@@ -256,7 +277,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     const key = boardOwnerKey(owner);
     if (this.#running.has(key))
       throw new Error("A Board action is already running; it was not repeated");
-    this.#running.add(key);
+    const replaced = new AbortController();
+    signal = AbortSignal.any([signal, replaced.signal]);
+    this.#running.set(key, replaced);
     try {
       const snapshot = await this.#serial(async () => {
         const current = (await this.#boards())[key];
@@ -452,7 +475,11 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           result.snapshot = await this.#serial(async () => {
             const boards = await this.#boards();
             const current = boards[key];
-            if (!current || current.draftRevision !== snapshot.draftRevision)
+            if (
+              !current ||
+              current.revision !== snapshot.revision ||
+              current.draftRevision !== snapshot.draftRevision
+            )
               throw new Error(
                 "A newer user draft was preserved; local action changes were not saved",
               );

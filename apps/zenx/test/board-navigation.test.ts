@@ -379,3 +379,191 @@ test("a committed Room availability publication cancels the same Board action", 
   assert.equal((await running).exitCode, 130);
   assert.equal(executions, 1);
 });
+
+test("custom navigation failure keeps local cause details without a successful navigation receipt", async () => {
+  const f = fixture();
+  const board = new ZenXBoardCapabilityPackage(f.host);
+  board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+  const invoke = (name: string, args: Record<string, unknown>, ui = false) =>
+    board.invoke(name, {
+      name,
+      callId: "synthetic",
+      cwd: "/synthetic",
+      threadId: owner.threadId,
+      arguments: ui ? { input: args } : args,
+      signal: signal(),
+      ...(ui ? { trustedPluginUi: true as const } : {}),
+    });
+  await invoke("zenx_board_put", { document });
+  f.host.options.readBrowserModelTarget = async () => {
+    throw new Error("Synthetic connection lost", {
+      cause: new Error("Synthetic nested native cause"),
+    });
+  };
+  const result = (await invoke(
+    "zenx_board_ui",
+    {
+      operation: "navigate",
+      owner,
+      revision: 1,
+      target: { kind: "browser", id: route.targetId },
+    },
+    true,
+  )) as any;
+  assert.equal(result.error, "Synthetic connection lost");
+  assert.match(result.errorDetail, /Synthetic nested native cause/);
+  assert.deepEqual(result.navigation, []);
+  assert.deepEqual(result.outcomes, []);
+  assert.equal(f.writes(), 0);
+});
+
+for (const custom of [true, false])
+  test(`${custom ? "custom" : "declared"} navigation cannot commit after its document is replaced during native preparation`, async () => {
+    let state = emptySidebarState({ kind: "thread", id: owner.threadId });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let writes = 0;
+    const f = fixture();
+    f.host.options.sidebar = {
+      read: async (_owner, admit) => {
+        admit?.();
+        return structuredClone(state);
+      },
+      update: async (request, admit) => {
+        entered();
+        await paused;
+        admit?.(); // Existing final Host sidebar admission boundary.
+        writes++;
+        state = applySidebarPatch(state, request.patch);
+        return { applied: true, state };
+      },
+    };
+    const board = new ZenXBoardCapabilityPackage(f.host);
+    board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+    const invoke = (name: string, args: Record<string, unknown>, ui = false) =>
+      board.invoke(name, {
+        name,
+        callId: "synthetic",
+        cwd: "/synthetic",
+        threadId: owner.threadId,
+        arguments: ui ? { input: args } : args,
+        signal: signal(),
+        ...(ui ? { trustedPluginUi: true as const } : {}),
+      });
+    const target = { kind: "url", url: "https://example.test/old" };
+    const authored = {
+      ...document,
+      events: [
+        {
+          id: "open",
+          label: "Open old",
+          actions: [{ kind: "navigate", target }],
+        },
+      ],
+    };
+    await invoke("zenx_board_put", { document: authored });
+    const running = invoke(
+      "zenx_board_ui",
+      custom
+        ? { operation: "navigate", owner, revision: 1, target }
+        : {
+            operation: "event",
+            owner,
+            revision: 1,
+            draftRevision: 0,
+            eventId: "open",
+          },
+      true,
+    );
+    await started;
+    await invoke("zenx_board_put", {
+      document: { ...authored, title: "Replacement" },
+    });
+    release();
+    const result = (await running) as any;
+    assert.match(result.error, /Board document changed/);
+    assert.equal(
+      writes,
+      0,
+      "replacement invalidates final admission, not just an earlier read",
+    );
+    assert.deepEqual(result.navigation, []);
+  });
+
+test("updating another owner's Board does not revoke an unrelated running interaction", async () => {
+  const f = fixture();
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let observed: AbortSignal | undefined;
+  f.host.options.executeTool = async (_request, live) => {
+    observed = live;
+    entered();
+    await paused;
+    live.throwIfAborted();
+    return { output: "Synthetic confirmed", exitCode: 0 };
+  };
+  const board = new ZenXBoardCapabilityPackage(f.host);
+  board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+  const invoke = (
+    name: string,
+    args: Record<string, unknown>,
+    ui = false,
+    threadId = owner.threadId,
+  ) =>
+    board.invoke(name, {
+      name,
+      callId: "synthetic",
+      cwd: "/synthetic",
+      threadId,
+      arguments: ui ? { input: args } : args,
+      signal: signal(),
+      ...(ui ? { trustedPluginUi: true as const } : {}),
+    });
+  const authored = {
+    ...document,
+    events: [
+      {
+        id: "run",
+        label: "Run",
+        actions: [{ kind: "script", command: "synthetic" }],
+      },
+    ],
+  };
+  await invoke("zenx_board_put", { document: authored });
+  const running = invoke(
+    "zenx_board_ui",
+    {
+      operation: "event",
+      owner,
+      revision: 1,
+      draftRevision: 0,
+      eventId: "run",
+    },
+    true,
+  );
+  await started;
+  const other = { kind: "thread", threadId: "other-owner" };
+  await invoke(
+    "zenx_board_put",
+    { document: { ...authored, owner: other } },
+    false,
+    other.threadId,
+  );
+  assert.equal(observed?.aborted, false);
+  release();
+  const result = (await running) as any;
+  assert.equal(result.error, undefined);
+  assert.equal(result.outcomes[0].result.exitCode, 0);
+});

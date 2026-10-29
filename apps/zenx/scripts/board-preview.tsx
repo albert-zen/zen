@@ -18,6 +18,7 @@ import { registerBoardUi } from "../src/renderer/src/board-ui.js";
 import { boardManifest } from "../../../packages/zenx-board-plugin/src/manifest.js";
 import type {
   BoardSnapshot,
+  BoardNavigationTarget,
   BoardEventResult,
 } from "../../../packages/zenx-board-plugin/src/board.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
@@ -27,7 +28,7 @@ import "../src/renderer/src/styles.css";
 void i18n.changeLanguage("en");
 const registry = createPluginUiRegistry();
 registerBoardUi(registry);
-const custom = String.raw`<style>body{margin:0;font:13px system-ui;line-height:1.5}section{border:1px solid var(--plugin-border,#ddd);border-radius:8px;padding:13px}h3{margin:0 0 6px;font-size:13px}p{margin:4px 0 12px;opacity:.7}button{border:1px solid #bbb8;background:transparent;color:inherit;border-radius:5px;padding:7px 9px;font:inherit;margin-right:5px}small{display:block;margin-top:12px;opacity:.6}</style><section><h3>Custom interactive canvas</h3><p>Local interaction, script execution and model delivery are independent.</p><button id="local">Local count · 0</button><button id="chain">Check & share</button><button id="docs">Open docs</button><small id="result">No message sent</small></section><script>let count=0;addEventListener('zenx-plugin-ui:init',({detail:{sdk}})=>{document.getElementById('local').onclick=()=>{document.getElementById('local').textContent='Local count · '+(++count)};document.getElementById('docs').onclick=()=>sdk.interaction.run(async({commands})=>{await commands.execute('event',{eventId:'openDocs'});document.getElementById('result').textContent='Docs opened locally · no message sent';});sdk.commands.execute('event',{eventId:'sendCustom',values:{answer:'ONLOAD MUST NOT SEND'}}).then(()=>document.body.dataset.onload='allowed',()=>document.body.dataset.onload='blocked');document.getElementById('chain').onclick=async()=>{const button=document.getElementById('chain');button.disabled=true;document.getElementById('result').textContent='Checking locally…';try{await sdk.interaction.run(async({commands})=>{const result=await commands.execute('event',{eventId:'check'});if(result.error)throw new Error(result.error);await commands.execute('event',{eventId:'sendCustom',values:{answer:'Custom count '+count+'; script checked successfully.'}})});document.getElementById('result').textContent='Admitted after async check';}catch(error){document.getElementById('result').textContent=error.message;}finally{button.disabled=false;}}});</script>`;
+const custom = String.raw`<style>body{margin:0;font:13px system-ui;line-height:1.5}section{border:1px solid var(--plugin-border,#ddd);border-radius:8px;padding:13px}h3{margin:0 0 6px;font-size:13px}p{margin:4px 0 12px;opacity:.7}button{border:1px solid #bbb8;background:transparent;color:inherit;border-radius:5px;padding:7px 9px;font:inherit;margin-right:5px}small{display:block;margin-top:12px;opacity:.6}</style><section><h3>Custom interactive canvas</h3><p>Local interaction, script execution and model delivery are independent.</p><button id="local">Local count · 0</button><button id="chain">Check & share</button><button id="docs">Open docs</button><small id="result">No message sent</small></section><script>let count=0;addEventListener('zenx-plugin-ui:init',({detail:{sdk}})=>{document.getElementById('local').onclick=()=>{document.getElementById('local').textContent='Local count · '+(++count)};document.getElementById('docs').onclick=()=>sdk.interaction.run(async({navigation})=>{await navigation.navigate('https://example.test/docs');document.getElementById('result').textContent='Docs opened locally · no message sent';}).catch(error=>{document.getElementById('result').textContent=error.message});sdk.commands.execute('event',{eventId:'sendCustom',values:{answer:'ONLOAD MUST NOT SEND'}}).then(()=>document.body.dataset.onload='allowed',()=>document.body.dataset.onload='blocked');document.getElementById('chain').onclick=async()=>{const button=document.getElementById('chain');button.disabled=true;document.getElementById('result').textContent='Checking locally…';try{await sdk.interaction.run(async({commands})=>{const result=await commands.execute('event',{eventId:'check'});if(result.error)throw new Error(result.error);await commands.execute('event',{eventId:'sendCustom',values:{answer:'Custom count '+count+'; script checked successfully.'}})});document.getElementById('result').textContent='Admitted after async check';}catch(error){document.getElementById('result').textContent=error.message;}finally{button.disabled=false;}}});</script>`;
 const focusProbe = `<input id="focus-probe" autofocus value="Synthetic autofocus attempt"><p>On-load effect attempts must be rejected.</p><script>addEventListener('zenx-plugin-ui:init', ({detail:{sdk}}) => { document.getElementById('focus-probe').focus(); Promise.allSettled([sdk.commands.execute('draft',{note:'ONLOAD MUST NOT OVERWRITE'}),sdk.commands.execute('event',{eventId:'sendCustom',values:{answer:'ONLOAD MUST NOT SEND'}}),sdk.navigation.navigate('/synthetic-unwanted-navigation')]).then(results => { document.body.insertAdjacentHTML('beforeend','<p>Blocked attempts: '+results.filter(result=>result.status==='rejected').length+'/3</p>'); }); });</script>`;
 let current: BoardSnapshot = {
   revision: 1,
@@ -97,16 +98,6 @@ let current: BoardSnapshot = {
         ],
       },
       {
-        id: "openDocs",
-        label: "Open documentation",
-        actions: [
-          {
-            kind: "navigate",
-            target: { kind: "url", url: "https://example.test/docs" },
-          },
-        ],
-      },
-      {
         id: "send",
         label: "Send selection",
         actions: [{ kind: "submit", text: "{{scope}} · {{note}}" }],
@@ -140,6 +131,22 @@ const command = async (_plugin: string, _command: string, input?: unknown) => {
     };
     return structuredClone(current);
   }
+  if (args.operation === "navigate") {
+    if (
+      args.revision !== current.revision ||
+      JSON.stringify(args.owner) !== JSON.stringify(current.document.owner)
+    )
+      throw new Error("Synthetic Board navigation owner or document changed");
+    const target = args.target as BoardNavigationTarget;
+    calls.push({ operation: "navigate", target });
+    await navigateResource(target);
+    changed();
+    return {
+      snapshot: structuredClone(current),
+      outcomes: [{ kind: "navigate" }],
+      navigation: [target],
+    } satisfies BoardEventResult;
+  }
   if (args.operation === "event") {
     if (
       args.revision !== current.revision ||
@@ -156,30 +163,8 @@ const command = async (_plugin: string, _command: string, input?: unknown) => {
     window.dispatchEvent(new Event("fixture-change"));
     if (args.eventId === "check")
       await new Promise((resolve) => setTimeout(resolve, 6200));
-    if (args.eventId === "existingBrowser") {
-      const tab = browserTabs.find((tab) => tab.id === "fixture-existing");
-      if (!tab)
-        throw new Error("Synthetic exact Browser is no longer available");
-      editResource({
-        open: true,
-        tabs: resource.tabs.some(
-          (item) => item.kind === "browser" && item.id === tab.id,
-        )
-          ? resource.tabs
-          : [...resource.tabs, { kind: "browser", id: tab.id }],
-        selectedTab: `browser:${tab.id}`,
-      });
-    }
-    if (args.eventId === "openDocs") {
-      const tabs = await browserCommand(
-        "synthetic-thread",
-        "new",
-        undefined,
-        "https://example.test/docs",
-      );
-      const tab = tabs.at(-1)!;
-      editResource({ open: true, selectedTab: `browser:${tab.id}` });
-    }
+    if (args.eventId === "existingBrowser")
+      await navigateResource({ kind: "browser", id: "fixture-existing" });
     const result: BoardEventResult = {
       snapshot: acceptedSnapshot,
       outcomes: [
@@ -187,8 +172,7 @@ const command = async (_plugin: string, _command: string, input?: unknown) => {
           kind:
             args.eventId === "check"
               ? "script"
-              : args.eventId === "existingBrowser" ||
-                  args.eventId === "openDocs"
+              : args.eventId === "existingBrowser"
                 ? "navigate"
                 : "submit",
           result: { status: "accepted", exitCode: 0 },
@@ -257,6 +241,29 @@ const changed = () => window.dispatchEvent(new Event("fixture-change"));
 function editResource(patch: ThreadSidebarPatch) {
   resource = applySidebarPatch(resource, patch);
   changed();
+}
+async function navigateResource(target: BoardNavigationTarget) {
+  if (target.kind === "url") {
+    const parsed = new URL(target.url);
+    if (!["http:", "https:"].includes(parsed.protocol))
+      throw new Error("Synthetic navigation accepts only HTTP(S)");
+    const tabs = await browserCommand(threadId, "new", undefined, target.url);
+    editResource({ open: true, selectedTab: `browser:${tabs.at(-1)!.id}` });
+    return;
+  }
+  const tab =
+    target.kind === "browser" &&
+    browserTabs.find((tab) => tab.id === target.id);
+  if (!tab) throw new Error("Synthetic exact Browser is no longer available");
+  editResource({
+    open: true,
+    tabs: resource.tabs.some(
+      (item) => item.kind === "browser" && item.id === tab.id,
+    )
+      ? resource.tabs
+      : [...resource.tabs, { kind: "browser", id: tab.id }],
+    selectedTab: `browser:${tab.id}`,
+  });
 }
 async function browserCommand(
   owner: string,
@@ -488,8 +495,7 @@ function Preview() {
               calls.filter(
                 (call) =>
                   call.event === "existingBrowser" ||
-                  call.event === "openDocs" ||
-                  call.navigate,
+                  call.operation === "navigate",
               ).length
             }
           </p>
@@ -550,9 +556,10 @@ function Preview() {
           resourcePanelWidth={resourceWidth}
           owner={{ kind: "thread", threadId }}
           theme={theme}
-          navigate={(route) => {
-            calls.push({ navigate: route });
-            changed();
+          navigate={() => {
+            throw new Error(
+              "Board custom content must not use application navigation",
+            );
           }}
           executeCommand={command}
           readHandle={async () => null}

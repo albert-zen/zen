@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
   BoardBlock,
+  BoardEventResult,
+  BoardNavigationTarget,
   BoardValues,
 } from "../../../../../packages/zenx-board-plugin/src/board.js";
 import {
@@ -83,12 +85,73 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   const errorDetail = session.error
     ? session.errorDetail
     : visibleLocalError?.detail;
-  const customSdk = useMemo(
-    () => ({
+  const customSdk = useMemo(() => {
+    const captured = session.snapshot;
+    const currentDocument = () =>
+      active.mounted &&
+      captured &&
+      session.snapshot?.revision === captured.revision &&
+      session.snapshot.document.id === captured.document.id &&
+      JSON.stringify(session.snapshot.document.owner) ===
+        JSON.stringify(captured.document.owner);
+    const navigate = async (target: BoardNavigationTarget) => {
+      try {
+        if (!currentDocument() || !captured)
+          throw new Error(
+            "Board changed; review the current document before navigating",
+          );
+        setLocalError(null);
+        const result = (await commands.current.execute("ui", {
+          operation: "navigate",
+          owner: captured.document.owner,
+          revision: captured.revision,
+          target,
+        })) as BoardEventResult;
+        if (result.error)
+          throw Object.assign(new Error(result.error), {
+            localDiagnosticDetail: result.errorDetail ?? result.error,
+          });
+        return result;
+      } catch (error) {
+        if (currentDocument()) showLocalError(error);
+        throw error;
+      }
+    };
+    return {
       ...sdk,
-      context: { board: session.snapshot?.document, values: session.values },
+      context: { board: captured?.document, values: session.values },
+      navigation: {
+        navigate: async (url: string) => {
+          let parsed: URL;
+          try {
+            parsed = new URL(url);
+          } catch {
+            throw new Error(
+              "Board navigation requires an absolute HTTP(S) URL; application routes are not supported",
+            );
+          }
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+            throw new Error(
+              "Board navigation requires an absolute HTTP(S) URL; application routes are not supported",
+            );
+          return await navigate({ kind: "url", url });
+        },
+      },
       commands: {
         execute: async (command: string, input?: unknown) => {
+          if (command === "navigate") {
+            const target = (
+              input as { target?: BoardNavigationTarget } | undefined
+            )?.target;
+            if (
+              !target ||
+              !["url", "browser", "external-browser"].includes(target.kind)
+            )
+              throw new Error(
+                "Board navigate requires a typed URL or existing Browser target",
+              );
+            return await navigate(target);
+          }
           if (command === "draft") {
             if (
               typeof input !== "object" ||
@@ -112,13 +175,12 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
             return await run(id, (input as { values?: BoardValues }).values);
           }
           throw new Error(
-            "Custom Board content may only save fields or request a declared event",
+            "Custom Board content may only save fields, navigate to a typed resource or request a declared event",
           );
         },
       },
-    }),
-    [sdk, session, session.snapshot, session.values],
-  );
+    };
+  }, [sdk, session, session.snapshot, session.values, active]);
   if (session.loading && !session.snapshot)
     return (
       <p role="status" className="board-empty">
@@ -172,7 +234,7 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
           bundleHtml={board.html}
           exportName="board"
           sdk={customSdk}
-          requireUserActivationFor={["event", "draft"]}
+          requireUserActivationFor={["event", "draft", "navigate"]}
           interactionScope={`${key}:${session.snapshot.revision}`}
         />
       ) : null}

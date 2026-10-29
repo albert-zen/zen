@@ -202,17 +202,48 @@ export class BoardUiSession {
     clearTimeout(this.#timer);
     const edit = this.#edit;
     try {
-      await this.#saving;
-    } catch {
-      /* The explicit discard does not retry a failed save. */
+      try {
+        await this.#saving;
+      } catch {
+        /* The explicit discard does not retry a failed save. */
+      }
+      if (this.#edit !== edit)
+        throw new Error(
+          "Newer local typing was preserved; discard again if intended",
+        );
+      const read = ++this.#read;
+      const next = (await this.command({
+        operation: "read",
+        owner: this.owner,
+      })) as BoardSnapshot | null;
+      if (this.#edit !== edit)
+        throw new Error(
+          "Newer local typing was preserved; discard again if intended",
+        );
+      if (
+        read !== this.#read ||
+        (next &&
+          this.snapshot &&
+          (next.revision < this.snapshot.revision ||
+            next.draftRevision < this.snapshot.draftRevision))
+      )
+        throw new Error(
+          "Board changed while discarding your draft; local fields were preserved",
+        );
+      // Only a confirmed current replacement may clear dirty. A failed read must
+      // never leave visible unsaved fields marked saved or let Submit skip them.
+      this.snapshot = next;
+      this.values = { ...(next?.values ?? {}) };
+      this.dirty = false;
+      this.loading = false;
+      this.#clearError();
+    } catch (error) {
+      this.#readError = false;
+      this.#fail(error);
+      throw error;
+    } finally {
+      this.#emit();
     }
-    if (this.#edit !== edit)
-      throw new Error(
-        "Newer local typing was preserved; discard again if intended",
-      );
-    this.dirty = false;
-    this.#clearError();
-    await this.refresh();
   }
   async pin(pinned: boolean) {
     if (!this.snapshot) return;

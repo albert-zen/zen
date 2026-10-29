@@ -425,3 +425,67 @@ test("Board error details are collapsed plain text, clear after recovery, and ne
     dom.window.close();
   }
 });
+
+test("failed discard keeps visible fields dirty and cannot submit older saved values", async () => {
+  let saved = state();
+  let failSave = true;
+  let failRead = false;
+  const submitted: unknown[] = [];
+  const session = new BoardUiSession(saved.document.owner, async (input) => {
+    if (input.operation === "read") {
+      if (failRead) throw new Error("Discard read failed");
+      return structuredClone(saved);
+    }
+    if (input.operation === "draft") {
+      if (failSave) throw new Error("Draft save failed");
+      saved = {
+        ...saved,
+        draftRevision: saved.draftRevision + 1,
+        values: input.values as BoardSnapshot["values"],
+      };
+      return structuredClone(saved);
+    }
+    submitted.push(structuredClone(saved.values));
+    return { snapshot: saved, outcomes: [{ kind: "submit" }], navigation: [] };
+  });
+  await session.refresh();
+  session.edit({ answer: "visible-unsaved" });
+  await assert.rejects(session.flush(), /Draft save failed/);
+  failRead = true;
+  await assert.rejects(session.discardLocalDraft(), /Discard read failed/);
+  assert.equal(session.values.answer, "visible-unsaved");
+  assert.equal(session.dirty, true);
+  await assert.rejects(session.run("submit"), /Draft save failed/);
+  assert.deepEqual(submitted, []);
+  failSave = false;
+  await session.run("submit");
+  assert.deepEqual(submitted, [{ answer: "visible-unsaved" }]);
+  assert.equal(session.values.answer, "visible-unsaved");
+});
+
+test("discard waits for confirmed replacement and never clears newer typing", async () => {
+  const saved = state();
+  let pendingRead: ReturnType<typeof deferred<BoardSnapshot>> | null = null;
+  const session = new BoardUiSession(saved.document.owner, async (input) => {
+    if (input.operation === "read")
+      return pendingRead?.promise ?? structuredClone(saved);
+    throw new Error("Do not save from discard");
+  });
+  await session.refresh();
+  session.edit({ answer: "first local edit" });
+  pendingRead = deferred<BoardSnapshot>();
+  const discard = session.discardLocalDraft();
+  await Promise.resolve();
+  assert.equal(session.dirty, true);
+  assert.equal(session.values.answer, "first local edit");
+  session.edit({ answer: "newer local edit" });
+  pendingRead.resolve(saved);
+  await assert.rejects(discard, /Newer local typing was preserved/);
+  assert.equal(session.values.answer, "newer local edit");
+  assert.equal(session.dirty, true);
+  pendingRead = null;
+  await session.discardLocalDraft();
+  assert.equal(session.values.answer, "old");
+  assert.equal(session.dirty, false);
+  assert.equal(session.error, null);
+});

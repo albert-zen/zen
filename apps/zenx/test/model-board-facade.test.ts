@@ -18,7 +18,10 @@ import {
   modelPluginDocument,
   modelToolDefinition,
 } from "../src/main/capabilities/model-tool-facade.js";
-import { asJson } from "../src/main/capabilities/model-facade-fields.js";
+import {
+  asJson,
+  object,
+} from "../src/main/capabilities/model-facade-fields.js";
 
 const caller = "RAW-owning-thread";
 const epoch = "host-epoch";
@@ -195,6 +198,82 @@ test("Board definitions expose scoped owners and explicit full document reads", 
   );
   assert.match(modelPluginDocument("zenx-board", "native"), /document/);
   assert.match(modelPluginDocument("zenx-board", "native"), /valuesBase64/);
+});
+
+test("Board model definitions teach every template and the actual isolated SDK", () => {
+  const put = modelToolDefinition({
+    name: "zenx_board_put",
+    description: "Native document",
+    inputSchema: { type: "object", properties: {} },
+  });
+  const documentSchema = object(object(put.inputSchema.properties).document);
+  const blocks = object(object(documentSchema.properties).blocks);
+  assert.equal(blocks.maxItems, 64);
+  const branches = object(blocks.items).anyOf;
+  assert.ok(Array.isArray(branches));
+  const expected = {
+    note: { fields: ["id", "text", "title"], required: ["id", "kind", "text"] },
+    metric: {
+      fields: ["id", "title", "value", "detail"],
+      required: ["id", "kind", "title", "value"],
+    },
+    progress: {
+      fields: ["id", "title", "value", "max"],
+      required: ["id", "kind", "title", "value"],
+    },
+    field: {
+      fields: ["id", "label", "field", "input", "options", "placeholder"],
+      required: ["id", "kind", "label", "field"],
+    },
+    action: {
+      fields: ["id", "label", "event", "emphasis"],
+      required: ["id", "kind", "label", "event"],
+    },
+  };
+  assert.equal(branches.length, Object.keys(expected).length);
+  for (const [kind, shape] of Object.entries(expected)) {
+    const branch = object(
+      branches.find(
+        (branch) =>
+          object(object(object(branch).properties).kind).const === kind,
+      ),
+    );
+    const properties = object(branch.properties);
+    for (const field of shape.fields)
+      assert.ok(field in properties, `${kind} declares ${field}`);
+    assert.deepEqual(branch.required, shape.required);
+    assert.equal(branch.additionalProperties, false);
+    if (kind === "field") {
+      assert.deepEqual(object(properties.input).enum, [
+        "text",
+        "textarea",
+        "select",
+        "checkbox",
+      ]);
+      assert.equal(object(properties.options).maxItems, 100);
+    }
+  }
+  const guide = modelPluginDocument("zenx-board", "native");
+  for (const snippet of [
+    "kind: 'field'",
+    "input: 'select'",
+    "options:",
+    "kind: 'action'",
+    "event: 'answer'",
+    "{{choice}}",
+    "zenxPluginUi.context.values",
+    "commands.execute('draft', { choice:",
+    "commands.execute('event', { eventId:",
+    "commands.execute('navigate', { target })",
+    "interaction.run(async (sdk)",
+    "sdk.navigation.navigate('https://example.test/result')",
+    "five minutes",
+    "document",
+    "owner",
+    "No automatic retry",
+  ])
+    assert.ok(guide.includes(snippet), `Board guide teaches ${snippet}`);
+  assert.doesNotMatch(guide, /commands\.execute\('draft', \{\s*values/);
 });
 
 test("Board owner defaults to the caller and resolves scoped Room refs only", async () => {
