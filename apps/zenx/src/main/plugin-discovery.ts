@@ -18,6 +18,13 @@ export const ZENX_PLUGIN_TOOL = "zenx_plugin";
 /** Builtin-owned disclosure metadata, never model instructions or a tool index. */
 export const PLUGIN_DISCLOSURE_CONTENT_TYPE = "zen/plugin-disclosure";
 
+const DISCOVER_NEXT_STEP =
+  'Call zenx_plugin with operation: "read" and a relevant exact pluginId to get usage instructions and expose its tools on the next model request. Discover alone does not expose tools.';
+const READ_NEXT_STEP =
+  "Use this plugin's actual schemas on the next model request: direct tool definitions and/or tools.* in the refreshed run_code SDK. If reading inside run_code, finish that program first. Only currently available tools are exposed; reading does not install or enable plugins.";
+const DISCOVERY_PERMISSIONS =
+  "Disclosure is not approval; plugin tools may inspect or change state under current permissions/approvals.";
+
 export type AvailablePlugin = ZenXAvailablePlugin;
 
 /** Current Host-owned catalog view; lifecycle state stays outside the Thread. */
@@ -33,8 +40,11 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly name = ZENX_PLUGIN_TOOL;
   readonly specification: ModelTool = {
     name: this.name,
-    description:
-      "Discover available ZenX plugins, inspect selected plugin readiness, or read one plugin's main document and tool index. Readiness never enables a plugin or approves tool permissions.",
+    description: [
+      "Discover enabled ZenX plugins; use readiness with pluginIds for lifecycle status. Call read with an exact pluginId to get usage instructions and a tool index.",
+      "A successful read exposes that plugin's currently available tool schemas on the next model request: direct tool definitions and/or tools.* in the refreshed run_code SDK. Finish the current run_code program before invoking newly disclosed tools. discover/readiness alone do not expose tools.",
+      "Metadata reads do not execute plugin actions or grant permissions; reading does not install or enable plugins. Plugin tools are not necessarily read-only: they may inspect or change state under current permissions/approvals.",
+    ].join(" "),
     inputSchema: {
       oneOf: [
         {
@@ -94,7 +104,7 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
           operation: "readiness",
           plugins: pluginReadiness(summaries, pluginIds),
           nextStep:
-            "Open Settings, then Plugins, for missing or disabled plugins. Read the enabled plugin's main document for its own configuration and readiness tools.",
+            'Open Settings, then Plugins, for missing or disabled plugins. Call zenx_plugin with operation: "read" and the enabled plugin\'s exact pluginId to get setup guidance and expose its tools on the next model request.',
           permissionChecks:
             "Tool permissions are checked on use. Ready does not mean approved, configured, or end-to-end verified.",
         }),
@@ -110,6 +120,7 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
         output: JSON.stringify({
           operation,
           plugins: plugins.map(summaryFromPlugin),
+          nextStep: DISCOVER_NEXT_STEP,
         }),
         exitCode: 0,
       };
@@ -127,6 +138,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
     return {
       output: JSON.stringify({
         operation,
+        nextStep: READ_NEXT_STEP,
+        permissionChecks: DISCOVERY_PERMISSIONS,
         plugin: {
           ...summaryFromPlugin(plugin),
           mainDocument: plugin.mainDocument,

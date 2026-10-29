@@ -345,44 +345,49 @@ test("real ZenX child-host projection hides v2 schemas until canonical read hist
     initial.map((tool) => tool.name),
     ["wait", "shell", "shell_sessions", "zenx_plugin"],
   );
-  assert.deepEqual(initial.at(-1), {
-    name: "zenx_plugin",
-    description:
-      "Discover available ZenX plugins, inspect selected plugin readiness, or read one plugin's main document and tool index. Readiness never enables a plugin or approves tool permissions.",
-    inputSchema: {
-      oneOf: [
-        {
-          type: "object",
-          properties: {
-            operation: { const: "readiness" },
-            pluginIds: {
-              type: "array",
-              items: { type: "string", minLength: 1, maxLength: 128 },
-              minItems: 1,
-              maxItems: 32,
+  const discovery = initial.at(-1)!;
+  assert.match(discovery.description, /successful read.*next model request/u);
+  assert.match(discovery.description, /direct tool definitions.*run_code SDK/u);
+  assert.match(discovery.description, /not necessarily read-only/u);
+  assert.deepEqual(
+    { name: discovery.name, inputSchema: discovery.inputSchema },
+    {
+      name: "zenx_plugin",
+      inputSchema: {
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              operation: { const: "readiness" },
+              pluginIds: {
+                type: "array",
+                items: { type: "string", minLength: 1, maxLength: 128 },
+                minItems: 1,
+                maxItems: 32,
+              },
             },
+            required: ["operation", "pluginIds"],
+            additionalProperties: false,
           },
-          required: ["operation", "pluginIds"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: { operation: { const: "discover" } },
-          required: ["operation"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: {
-            operation: { const: "read" },
-            pluginId: { type: "string" },
+          {
+            type: "object",
+            properties: { operation: { const: "discover" } },
+            required: ["operation"],
+            additionalProperties: false,
           },
-          required: ["operation", "pluginId"],
-          additionalProperties: false,
-        },
-      ],
+          {
+            type: "object",
+            properties: {
+              operation: { const: "read" },
+              pluginId: { type: "string" },
+            },
+            required: ["operation", "pluginId"],
+            additionalProperties: false,
+          },
+        ],
+      },
     },
-  });
+  );
 
   const items = canonicalReadPair({
     operation: "read",

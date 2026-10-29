@@ -343,7 +343,12 @@ test("Settings host installs one tarball through the committed profile and Agent
       path.join(directory, "zen-data", "threads", `${thread.id}.jsonl`),
     );
     const results = items.filter((item) => item.type === "tool_result");
-    assert.deepEqual(JSON.parse(results.at(-3)!.output), {
+    const { nextStep, ...discovery } = JSON.parse(results.at(-3)!.output);
+    assert.match(
+      nextStep,
+      /operation: "read".*exact pluginId.*next model request/u,
+    );
+    assert.deepEqual(discovery, {
       operation: "discover",
       plugins: [
         {
@@ -354,8 +359,13 @@ test("Settings host installs one tarball through the committed profile and Agent
         },
       ],
     });
+    const read = JSON.parse(results.at(-2)!.output);
+    assert.match(
+      read.nextStep,
+      /next model request.*direct tool definitions.*run_code SDK/u,
+    );
     assert.equal(
-      JSON.parse(results.at(-2)!.output).plugin.mainDocument,
+      read.plugin.mainDocument,
       "Use profile_fixture_echo to echo exact bytes.",
     );
     assert.equal(results.at(-1)!.output, "profile:exact profile bytes");
