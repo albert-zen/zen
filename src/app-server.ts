@@ -45,6 +45,7 @@ import {
 } from "./attachment.js";
 import {
   boundedCompactionBoundary,
+  compactionBoundaryAdvances,
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
   compactionSummaryPrefix,
   contextCompactionTokenBudget,
@@ -337,6 +338,8 @@ export interface ContextCompactionStatusEvent {
   operationId: string;
   initiator: "human" | "automatic";
   coveredThroughItemId: string;
+  /** Canonical prefix observed before this operation; not a wall-clock guess. */
+  startedAfterItemId: string;
   trigger: GeneratedContextCompactionOptions["trigger"];
   contextWindow: number | null;
   triggerPercent: number;
@@ -1248,6 +1251,14 @@ export class ZenAppServer {
       // Keep configuration in the copied boundary's contiguous tail so a
       // nested fork inherits it before the new provenance/instruction Items.
       thread.append(forked);
+      if (!fullContext && itemId !== undefined) {
+        const completion = observedFinalMessageCompletion(
+          sourceItems,
+          terminalIndex,
+        );
+        if (completion !== undefined)
+          thread.append({ ...completion, id: this.#id(), threadId });
+      }
       if (fullContext || itemId !== undefined) {
         appendForkSnapshotClosures(
           thread,
@@ -1336,6 +1347,18 @@ export class ZenAppServer {
         .filter((summary) => summary.archived === archived)
         .sort((left, right) => left.threadId.localeCompare(right.threadId)),
     );
+  }
+
+  /** Host observation only: read one existing summary without materializing history. */
+  async readThreadSummary(threadId: string): Promise<NativeThreadSummary> {
+    await this.#ensureThreadSummaries();
+    const summary = this.#threadSummaries!.get(threadId);
+    if (summary === undefined)
+      throw new AppServerError(
+        "thread_not_found",
+        `Unknown thread: ${threadId}`,
+      );
+    return structuredClone(summary);
   }
 
   async readThread(threadId: string): Promise<ThreadSnapshot> {
@@ -3202,8 +3225,7 @@ export class ZenAppServer {
           `Thread ${threadId} has no eligible completed Turn boundary`,
         );
       }
-      const previous = latestCompaction(thread.items);
-      if (previous?.coveredThroughItemId === boundary.item.id) {
+      if (!compactionBoundaryAdvances(thread.items, boundary)) {
         throw new AppServerError(
           "compaction_not_available",
           `Thread ${threadId} is already compacted through its latest eligible boundary`,
@@ -4683,12 +4705,17 @@ export class ZenAppServer {
               `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
             );
           }
+          if (
+            latestCompaction(thread.items) !== undefined &&
+            active.contextCompactionNotice === undefined
+          ) {
+            active.contextCompactionNotice =
+              "[Host context notice] No completed history beyond the current context selection is available for automatic compaction. Context has not been replaced. The active Turn may continue within the configured window.";
+            active.contextCompactionNoticeIssued = false;
+          }
           return false;
         }
-        if (
-          latestCompaction(thread.items)?.coveredThroughItemId ===
-          boundary.item.id
-        ) {
+        if (!compactionBoundaryAdvances(thread.items, boundary)) {
           return false;
         }
         await this.#appendContextCompaction({
@@ -4846,10 +4873,7 @@ export class ZenAppServer {
         `Automatic context compaction boundary did not match completed Turn ${options.completed.turnId}`,
       );
     }
-    if (
-      latestCompaction(options.thread.items)?.coveredThroughItemId ===
-      boundary.item.id
-    ) {
+    if (!compactionBoundaryAdvances(options.thread.items, boundary)) {
       return;
     }
 
@@ -4977,8 +5001,7 @@ export class ZenAppServer {
     }
     if (
       boundary === undefined ||
-      latestCompaction(options.thread.items)?.coveredThroughItemId ===
-        boundary.item.id
+      !compactionBoundaryAdvances(options.thread.items, boundary)
     ) {
       return;
     }
@@ -5083,8 +5106,14 @@ export class ZenAppServer {
   async #appendContextCompaction(
     options: GeneratedContextCompactionOptions,
   ): Promise<ContextCompactionItem> {
+    if (!compactionBoundaryAdvances(options.thread.items, options.boundary))
+      throw new AppServerError(
+        "compaction_not_available",
+        "Context compaction has no completed boundary beyond the current selection",
+      );
     const operationId = randomUUID();
     const started = process.hrtime.bigint();
+    const startedAfterItemId = options.thread.items.at(-1)!.id;
     const context = {
       threadId: options.thread.id,
       turnId: options.trigger.turnId ?? null,
@@ -5097,6 +5126,7 @@ export class ZenAppServer {
         initiator: options.initiator,
         ...options.trigger,
         coveredThroughItemId: options.boundary.item.id,
+        startedAfterItemId,
         contextWindow: options.selection.model.contextWindow,
         triggerPercent: options.contextCompaction.triggerPercent,
         targetPercent: options.contextCompaction.targetPercent,
@@ -5110,6 +5140,7 @@ export class ZenAppServer {
       operationId,
       initiator: options.initiator,
       coveredThroughItemId: options.boundary.item.id,
+      startedAfterItemId,
       trigger: { ...options.trigger },
       contextWindow: options.selection.model.contextWindow,
       triggerPercent: options.contextCompaction.triggerPercent,
@@ -6097,6 +6128,27 @@ function forkablePrefix(
   return items.slice(0, end);
 }
 
+/** An exact final-message cut may precede its already-observed lifecycle receipt.
+ * Retain that receipt, not later semantic content or an invented local execution.
+ * Any intervening same-Turn content makes this an intermediate snapshot instead.
+ */
+function observedFinalMessageCompletion(
+  items: readonly CanonicalItem[],
+  boundaryIndex: number,
+): Extract<CanonicalItem, { type: "turn_completed" }> | undefined {
+  const boundary = items[boundaryIndex];
+  if (boundary?.type !== "agent_message" || boundary.incomplete === true)
+    return undefined;
+  for (let index = boundaryIndex + 1; index < items.length; index++) {
+    const item = items[index]!;
+    if (item.turnId !== boundary.turnId) continue;
+    if (item.type === "turn_completed")
+      return item.status === "completed" ? item : undefined;
+    if (item.type !== "model_usage") return undefined;
+  }
+  return undefined;
+}
+
 /** Close only copied execution projections; never operate on the source Thread. */
 function appendForkSnapshotClosures(
   thread: Thread,
@@ -6271,17 +6323,34 @@ function remapForkContext(
       ids.get(copied.content.coveredThroughItemId) ??
       copied.content.coveredThroughItemId;
     copied.content.retainedItemIds = copied.content.retainedItemIds.map(remap);
+    if (copied.content.excludedItemIds !== undefined)
+      copied.content.excludedItemIds =
+        copied.content.excludedItemIds.map(remap);
   }
   const metadata = copied.source.metadata;
-  if (metadata !== undefined)
+  if (metadata !== undefined) {
     for (const key of [
       "deliveryAfter",
       "modelResponseId",
       "sourceModelResponseId",
+      "onlySampleId",
     ]) {
       const value = metadata[key];
-      if (typeof value === "string") metadata[key] = ids.get(value) ?? value;
+      if (typeof value === "string") metadata[key] = remap(value);
     }
+    for (const key of ["mediaOccurrence", "omittedMedia"]) {
+      const occurrences = metadata[key];
+      if (Array.isArray(occurrences))
+        metadata[key] = occurrences.map((occurrence) =>
+          occurrence !== null &&
+          typeof occurrence === "object" &&
+          !Array.isArray(occurrence) &&
+          typeof occurrence.itemId === "string"
+            ? { ...occurrence, itemId: remap(occurrence.itemId) }
+            : occurrence,
+        );
+    }
+  }
   return copied;
 }
 

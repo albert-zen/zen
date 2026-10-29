@@ -155,6 +155,7 @@ test("native automatic compaction shows cause before input admission and escapes
     operationId: "synthetic-op",
     initiator: "automatic" as const,
     coveredThroughItemId: "boundary",
+    startedAfterItemId: "start-fence",
     phase: "pending" as const,
     trigger: {
       reason: "next_turn_estimate" as const,

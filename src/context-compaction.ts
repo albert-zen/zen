@@ -377,6 +377,19 @@ export function latestCompletedCompactionBoundary(
   return undefined;
 }
 
+/** A generated reset must never revisit a prefix superseded by any later reset. */
+export function compactionBoundaryAdvances(
+  items: readonly CanonicalItem[],
+  boundary: CompactionBoundary,
+): boolean {
+  const previous = latestCompaction(items);
+  if (previous === undefined) return true;
+  const index = items.findIndex(
+    (item) => item.id === previous.coveredThroughItemId,
+  );
+  return index >= 0 && boundary.index > index;
+}
+
 export function boundedCompactionBoundary(
   items: readonly CanonicalItem[],
   options: BoundedCompactionBoundaryOptions,
@@ -392,7 +405,8 @@ export function boundedCompactionBoundary(
   const boundary = options.allowOpenTurns
     ? latestCompletedCompactionBoundary(items)
     : latestEligibleCompactionBoundary(items);
-  if (boundary === undefined) return undefined;
+  if (boundary === undefined || !compactionBoundaryAdvances(items, boundary))
+    return undefined;
 
   return planCompactionRetention(items, boundary, options);
 }

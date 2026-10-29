@@ -1,3 +1,4 @@
+import type { Thread } from "../../protocol-client/index.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import {
   emptyComposerState,
@@ -14,6 +15,8 @@ export interface SideChatDraft<Boundary = unknown> {
   parentThreadId: string;
   roomId?: string;
   boundary: Boundary;
+  /** Read-only opening snapshot, discarded with this local draft. */
+  contextPreview?: Thread;
   inheritedModel?: string;
   inheritedEffort?: string | null;
   model?: string;
@@ -42,6 +45,7 @@ export class SideChatDrafts<Boundary = unknown> {
     parentThreadId: string,
     boundary: Boundary,
     options: {
+      contextPreview?: Thread;
       roomId?: string;
       model?: string;
       effort?: string;
@@ -105,6 +109,8 @@ export class SideChatDrafts<Boundary = unknown> {
       if (!draft.threadId) {
         try {
           draft.threadId = await create(draft);
+          // Creation is confirmed; publish the sending stage before admission.
+          this.changed();
         } catch (error) {
           const rejection = error as {
             code?: unknown;

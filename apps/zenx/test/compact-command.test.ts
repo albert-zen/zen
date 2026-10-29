@@ -273,3 +273,233 @@ test("a failed view refresh cannot turn a committed compaction into an unknown o
   assert.match(state.compaction.message, /compacted.*could not refresh/u);
   assert.ok(state.compaction.detail?.includes("Snapshot connection closed"));
 });
+
+test("real manual compaction survives native feedback and canonical refresh without losing request draft authority", async (t) => {
+  const { ZenAppServer } = await import("../../../src/app-server.js");
+  const { InMemoryThreadJournal } = await import("../../../src/journal.js");
+  const { AgentRuntime } = await import("../../../src/runtime.js");
+  const { ToolEnvironment } = await import("../../../src/tool.js");
+  const { ProviderRegistry } =
+    await import("../../../src/provider-registry.js");
+  const { StaticModelCatalog } = await import("../../../src/model-catalog.js");
+  const { InMemoryThreadMetadataStore } =
+    await import("../../../src/thread-metadata.js");
+  const { applyCompactionStatus } =
+    await import("../src/renderer/src/compaction-feedback.js");
+  const { reconcileCanonicalAdmission } =
+    await import("../src/renderer/src/composer-state.js");
+  const { tmpdir } = await import("node:os");
+  for (const scenario of [
+    "native",
+    "canonical",
+    "edited",
+    "refresh-failure",
+    "lost-reply",
+    "typed-rejection",
+  ] as const) {
+    await t.test(scenario, async () => {
+      let summaries = 0;
+      const server = new ZenAppServer({
+        journal: new InMemoryThreadJournal(),
+        runtime: new AgentRuntime({
+          toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+        }),
+        providerRegistry: new ProviderRegistry([
+          {
+            providerProfileId: "synthetic",
+            modelCatalog: new StaticModelCatalog([
+              { id: "synthetic", isDefault: true, contextWindow: 100_000 },
+            ]),
+            adapter: {
+              provider: "synthetic",
+              async *stream(request) {
+                if (request.debugContext?.purpose === "compaction") summaries++;
+                yield {
+                  type: "text_delta" as const,
+                  delta: "synthetic answer or summary",
+                };
+              },
+            },
+          },
+        ]),
+        threadMetadata: new InMemoryThreadMetadataStore(),
+        defaults: {
+          cwd: tmpdir(),
+          providerProfileId: "synthetic",
+          modelId: "synthetic",
+          reasoningEffort: "medium",
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+        },
+        contextCompaction: { includeOriginalReference: false },
+      });
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "synthetic input")
+      ).done;
+      let state = editComposer(emptyComposerState(), "/compact");
+      const facts = [...(await server.readThread(thread.id)).items];
+      let sequence = 0;
+      const unsubscribe = server.subscribe((event) => {
+        if (event.type === "context_compaction_status") {
+          if (scenario !== "canonical" || event.phase !== "committed")
+            state = applyCompactionStatus(state, event, {
+              processEpoch: "synthetic-epoch",
+              watermark: ++sequence,
+            });
+        } else if (event.type === "item_completed") {
+          facts.push(event.item);
+          state = reconcileCanonicalAdmission(state, facts);
+        }
+      });
+      await requestContextCompaction({
+        threadId: thread.id,
+        active: false,
+        clearCommandDraft: true,
+        read: () => state,
+        update: (change) => {
+          state = change(state);
+        },
+        compact: async () => {
+          const result = await server.compactThread(thread.id);
+          if (scenario === "edited") {
+            state = editComposer(state, "new draft");
+            state = editComposer(state, "/compact");
+          }
+          if (scenario === "typed-rejection")
+            throw Object.assign(
+              new Error("Synthetic typed no-new-history response"),
+              { code: "compaction_not_available" },
+            );
+          if (scenario === "lost-reply")
+            throw new Error(
+              "Synthetic reply connection closed after durable commit",
+            );
+          return result;
+        },
+        refresh: async () => {
+          if (scenario === "refresh-failure")
+            throw new Error("Synthetic refresh failure");
+          state = reconcileCanonicalAdmission(
+            state,
+            (await server.readThread(thread.id)).items,
+          );
+        },
+      });
+      unsubscribe();
+      assert.equal(summaries, 1);
+      assert.equal(
+        state.compaction?.status,
+        scenario === "typed-rejection" ? "failed" : "succeeded",
+      );
+      assert.equal(state.compactionRequest, undefined);
+      assert.equal(
+        state.draft.text,
+        scenario === "edited" ||
+          scenario === "lost-reply" ||
+          scenario === "typed-rejection"
+          ? "/compact"
+          : "",
+      );
+      if (scenario === "refresh-failure")
+        assert.match(state.compaction!.detail!, /Synthetic refresh failure/u);
+      if (scenario === "lost-reply")
+        assert.match(state.compaction!.detail!, /after durable commit/u);
+    });
+  }
+});
+
+test("late explicit reply or refresh never replaces a newer native compaction observation", async (t) => {
+  const { applyCompactionStatus } =
+    await import("../src/renderer/src/compaction-feedback.js");
+  for (const settlement of [
+    "success",
+    "refresh-failure",
+    "request-failure",
+  ] as const) {
+    for (const phase of ["pending", "failed", "unknown"] as const) {
+      await t.test(`${settlement} / later ${phase}`, async () => {
+        let state = editComposer(emptyComposerState(), "/compact");
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let reached!: () => void;
+        const waiting = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        const explicit = {
+          type: "context_compaction_status" as const,
+          threadId: "synthetic-thread",
+          operationId: "explicit-1",
+          initiator: "human" as const,
+          coveredThroughItemId: "boundary-1",
+          startedAfterItemId: "prefix-1",
+          trigger: { reason: "explicit_request" as const },
+          contextWindow: 1_000,
+          triggerPercent: 80,
+          targetPercent: 80,
+          agenticEnabled: false,
+        };
+        const request = requestContextCompaction({
+          threadId: explicit.threadId,
+          active: false,
+          clearCommandDraft: true,
+          read: () => state,
+          update: (change) => {
+            state = change(state);
+          },
+          compact: async () => {
+            state = applyCompactionStatus(state, {
+              ...explicit,
+              phase: "pending",
+            });
+            state = applyCompactionStatus(state, {
+              ...explicit,
+              phase: "committed",
+              compactionItemId: "commit-1",
+            });
+            if (settlement === "request-failure") {
+              reached();
+              await held;
+              throw new Error("Synthetic late lost reply");
+            }
+          },
+          refresh: async () => {
+            reached();
+            await held;
+            if (settlement === "refresh-failure")
+              throw new Error("Synthetic late refresh failure");
+          },
+        });
+        await waiting;
+        state = editComposer(state, "new input");
+        const automatic = {
+          ...explicit,
+          operationId: "automatic-2",
+          initiator: "automatic" as const,
+          coveredThroughItemId: "boundary-2",
+          startedAfterItemId: "prefix-2",
+          trigger: {
+            reason: "next_turn_estimate" as const,
+            estimatedInputTokens: 810,
+            thresholdTokens: 800,
+          },
+        };
+        state = applyCompactionStatus(state, {
+          ...automatic,
+          phase: "pending",
+        });
+        if (phase !== "pending")
+          state = applyCompactionStatus(state, { ...automatic, phase });
+        const newer = state.compaction;
+        release();
+        await request;
+        assert.equal(state.compaction, newer);
+        assert.equal(state.compaction?.operationId, "automatic-2");
+        assert.equal(state.compactionRequest, undefined);
+        assert.equal(state.draft.text, "new input");
+      });
+    }
+  }
+});

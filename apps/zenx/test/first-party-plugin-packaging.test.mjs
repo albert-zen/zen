@@ -36,6 +36,7 @@ const preparedPluginsDirectory = path.resolve(
 );
 
 const expected = [
+  ["@zenx/board-plugin", "zenx-board-plugin-1.0.0.tgz"],
   ["@zenx/fleet-plugin", "zenx-fleet-plugin-1.0.0.tgz"],
   ["@zenx/subagents-plugin", "zenx-subagents-plugin-1.0.0.tgz"],
   ["@zenx/imzenx-plugin", "zenx-imzenx-plugin-1.0.3.tgz"],
@@ -260,6 +261,41 @@ test("all prepared first-party plugins are self-contained ordinary npm tarballs"
           !files.some(
             (file) => file.includes(".venv") || file.includes("__pycache__"),
           ),
+        );
+      } else if (packageName === "@zenx/board-plugin") {
+        assert.deepEqual(files, [
+          "README.md",
+          "dist/board.d.ts",
+          "dist/board.js",
+          "dist/manifest.d.ts",
+          "dist/manifest.js",
+          "dist/runtime.d.ts",
+          "dist/runtime.js",
+          "package.json",
+          "zenx.plugin.json",
+        ]);
+        const manifest = JSON.parse(
+          (
+            await run("tar", [
+              "-xOf",
+              path.join(directory, "plugins", filename),
+              "package/zenx.plugin.json",
+            ])
+          ).stdout,
+        );
+        assert.equal(manifest.id, "zenx-board");
+        assert.equal(manifest.runtime.entry, "./dist/runtime.js");
+        assert.deepEqual(manifest.contributions.information, [
+          { id: "board", title: "Board", surfaceId: "board" },
+        ]);
+        assert.deepEqual(
+          manifest.tools.map((tool) => tool.name),
+          ["zenx_board_put", "zenx_board_read", "zenx_board_ui"],
+        );
+        assert.equal(
+          manifest.contributions.panels,
+          undefined,
+          "Board is not a resource-tab panel",
         );
       } else if (packageName === "@zenx/browser-plugin")
         assert.deepEqual(files, [

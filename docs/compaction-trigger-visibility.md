@@ -77,6 +77,14 @@ window, trigger/target percentages and Agentic mode.
   observations never synthesize a success card or change a completed Turn to
   failed. Connection loss retires pending feedback to unknown; no automatic
   replay occurs. Exact epoch/watermark/operation fences reject stale feedback.
+  Recovery requires the exact committed Item or a new matching selection after
+  the canonical prefix captured at operation start; an old reset of the same
+  boundary cannot erase new pending, failed or unknown feedback. Manual request
+  identity is independent of feedback and preserves exact draft/revision guards.
+- Generated compaction now rejects non-advancing boundaries before summary
+  generation. A newer agentic reset cannot make Host fallback summarize an
+  already-superseded completed prefix; the model receives an explicit no-new-
+  completed-history notice while still within the configured window.
 - Settings previously claimed compaction never ran within an unfinished Turn;
   this contradicted the active-tool-round path. Settings now show all three Host
   timings and the current configured trigger/fallback formula, without adding or
@@ -101,7 +109,9 @@ ordering, failure and unknown append outcomes, source-to-auxiliary correlation,
 old-version text, current model notice, selection/replay/retention and active
 boundaries. Renderer tests cover all feedback outcomes, stale operation/epoch /
 watermark rejection, disconnect/canonical reconciliation, no premature success,
-readable escaped errors, and the existing summary views. Hosted tests run from
+readable escaped errors, real synthetic Host manual requests with live status
+and canonical refresh, draft edit/reply races, old-boundary feedback, and the
+existing summary views. Hosted tests run from
 `apps/zenx`, not the repository root.
 
 Build the production-component, offline synthetic review document:

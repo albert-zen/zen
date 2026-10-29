@@ -17,6 +17,13 @@ export function applyCompactionStatus(
     return state;
   if (
     event.phase !== "pending" &&
+    state.compactionRequest !== undefined &&
+    state.compaction?.status === "pending" &&
+    state.compaction.operationId === undefined
+  )
+    return state;
+  if (
+    event.phase !== "pending" &&
     state.compaction?.operationId !== undefined &&
     state.compaction.operationId !== event.operationId
   )
@@ -52,8 +59,34 @@ export function applyCompactionStatus(
             watermark: observation.watermark,
           },
         }),
+    ...(event.phase === "pending" &&
+    event.trigger.reason === "explicit_request" &&
+    state.compactionRequest !== undefined &&
+    state.compactionRequest.operationId === undefined
+      ? {
+          compactionRequest: {
+            ...state.compactionRequest,
+            operationId: event.operationId,
+          },
+        }
+      : {}),
+    ...(event.phase === "committed" &&
+    event.compactionItemId !== undefined &&
+    state.compactionRequest?.operationId === event.operationId
+      ? {
+          compactionRequest: {
+            ...state.compactionRequest,
+            observedCommitItemId: event.compactionItemId,
+          },
+        }
+      : {}),
     compaction: {
       operationId: event.operationId,
+      startedAfterItemId: event.startedAfterItemId,
+      ...(event.compactionItemId === undefined
+        ? {}
+        : { compactionItemId: event.compactionItemId }),
+      ...(event.phase === "unknown" ? { outcomeUnknown: true } : {}),
       coveredThroughItemId: event.coveredThroughItemId,
       status:
         phase === "pending"
@@ -102,6 +135,7 @@ export function markCompactionOutcomeUnknown(
     compaction: {
       ...state.compaction,
       status: "failed",
+      outcomeUnknown: true,
       message: i18n.t("shell:compactionOutcomeUnknown"),
     },
   };

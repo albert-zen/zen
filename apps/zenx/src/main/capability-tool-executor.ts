@@ -5,6 +5,7 @@ import {
 } from "./capabilities/model-browser-facade.js";
 import {
   attachBrowserModelTargets,
+  attachBrowserSidebarTargets,
   readBrowserModelRoute,
   readBrowserSidebarTargets,
 } from "./capabilities/model-browser-metadata.js";
@@ -273,11 +274,11 @@ export class ZenXHostToolBundle implements ToolBundle {
           ? {}
           : { sourceTruncated: command.sourceTruncated }),
       };
-      pending.resolve(
-        command.browserModelTargets
-          ? attachBrowserModelTargets(result, command.browserModelTargets)
-          : result,
-      );
+      if (command.browserModelTargets)
+        attachBrowserModelTargets(result, command.browserModelTargets);
+      if (command.browserSidebarTargets)
+        attachBrowserSidebarTargets(result, command.browserSidebarTargets);
+      pending.resolve(result);
     } else {
       pending.reject(new Error(command.error));
     }

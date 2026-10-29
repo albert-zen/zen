@@ -18,6 +18,7 @@ const event: ContextCompactionStatusEvent = {
   operationId: "operation-1",
   initiator: "automatic",
   coveredThroughItemId: "completed-boundary",
+  startedAfterItemId: "start-fence",
   phase: "pending",
   trigger: {
     reason: "next_turn_estimate",
@@ -87,7 +88,9 @@ test("native compaction feedback distinguishes pending, known failure, unknown a
   );
   assert.equal(
     reconcileCanonicalAdmission(unknown, [
+      { id: "start-fence", type: "turn_completed" } as CanonicalItem,
       {
+        id: "new-commit",
         type: "context_compaction",
         coveredThroughItemId: "completed-boundary",
       } as CanonicalItem,
@@ -147,5 +150,76 @@ test("exact native epoch and watermark prevent delayed starts or ends from repla
       { processEpoch: "new-epoch", watermark: 1 },
     ).compaction?.status,
     "pending",
+  );
+});
+
+test("an older reset of the same boundary cannot erase a new pending or failed operation", () => {
+  const history = [
+    {
+      id: "old-commit",
+      type: "context_compaction",
+      coveredThroughItemId: event.coveredThroughItemId,
+    },
+    { id: "start-fence", type: "turn_completed" },
+  ] as CanonicalItem[];
+  for (const phase of ["pending", "failed", "unknown"] as const) {
+    const current = applyCompactionStatus(emptyComposerState(), {
+      ...event,
+      phase,
+    });
+    assert.equal(reconcileCanonicalAdmission(current, history), current);
+  }
+  const fresh = [
+    ...history,
+    {
+      id: "new-commit",
+      type: "context_compaction",
+      coveredThroughItemId: event.coveredThroughItemId,
+    } as CanonicalItem,
+  ];
+  const pending = applyCompactionStatus(emptyComposerState(), event);
+  assert.equal(
+    reconcileCanonicalAdmission(pending, fresh).compaction,
+    undefined,
+  );
+  const failed = applyCompactionStatus(pending, { ...event, phase: "failed" });
+  assert.equal(
+    reconcileCanonicalAdmission(failed, fresh),
+    failed,
+    "a different later operation is not proof that a known failed operation committed",
+  );
+});
+
+test("a new explicit request cannot inherit a late old operation receipt", () => {
+  const local = {
+    ...emptyComposerState(),
+    compactionRequest: { token: {} },
+    compaction: {
+      status: "pending" as const,
+      message: "Local request pending",
+    },
+  };
+  const late = {
+    ...event,
+    phase: "committed" as const,
+    compactionItemId: "old-commit",
+  };
+  assert.equal(applyCompactionStatus(local, late), local);
+  const started = applyCompactionStatus(local, {
+    ...event,
+    initiator: "human",
+    operationId: "current-request",
+    trigger: { reason: "explicit_request" },
+  });
+  assert.equal(started.compactionRequest?.operationId, "current-request");
+  assert.equal(applyCompactionStatus(started, late), started);
+  const committed = applyCompactionStatus(started, {
+    ...late,
+    operationId: "current-request",
+    compactionItemId: "current-commit",
+  });
+  assert.equal(
+    committed.compactionRequest?.observedCommitItemId,
+    "current-commit",
   );
 });

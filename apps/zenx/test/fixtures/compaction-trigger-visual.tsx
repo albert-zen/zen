@@ -50,6 +50,7 @@ async function mount() {
       initiator: reason === "explicit_request" ? "human" : "automatic",
       phase,
       coveredThroughItemId: "turn-done",
+      startedAfterItemId: "turn-done",
       contextWindow: 128_000,
       triggerPercent: 80,
       targetPercent: 80,

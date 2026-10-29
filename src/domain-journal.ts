@@ -163,12 +163,25 @@ export class DomainThreadJournal implements ThreadJournal {
       } catch (error) {
         if (!isMissing(error)) throw error;
       }
+      if (this.#uncertain.has(first.threadId))
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Initial Thread publication is unknown; reconcile instead of retrying",
+        );
+      const priorTrace = await this.trace.read(first.threadId, {
+        verifyArtifacts: false,
+      });
+      if (priorTrace.records.length || priorTrace.completeness !== "complete")
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Initial Thread publication is incomplete; existing Trace cannot be overwritten",
+        );
       const contexts: ContextItem[] = [];
       const previous: CanonicalItem[] = [];
       for (const raw of items) {
         const item = decodeCanonicalItem(raw);
         if (item.threadId !== first.threadId)
           throw new Error("Mixed Thread creation");
+        // Preserve relational validation of the original facts even when the
+        // caller supplies the exact frozen compiler inputs.
         contexts.push(
           ...contextItemsFromLegacy(item, previous, previous.length, contexts),
         );
@@ -180,23 +193,72 @@ export class DomainThreadJournal implements ThreadJournal {
           : exactItemList.map(decodeContextItem);
       if (semantic.some((i) => i.threadId !== first.threadId))
         throw new Error("Mixed frozen ItemList");
-      for (const [sequence, item] of previous.entries())
-        await this.#route(item, sequence, semantic);
-      if (exactItemList !== undefined)
-        for (const item of semantic)
-          await this.#record(
-            {
+      const events = function* (): Generator<TraceEvent> {
+        for (const [sequence, item] of previous.entries())
+          yield {
+            threadId: item.threadId,
+            ...(item.turnId === undefined ? {} : { turnId: item.turnId }),
+            type: "runtime_item",
+            data: { item, sequence },
+          };
+        if (exactItemList !== undefined)
+          for (const item of semantic)
+            yield {
               threadId: first.threadId,
               type: "context_source",
               data: { item, origin: "frozen-import" },
-            },
-            true,
-          );
-      await this.#writeFence(first.threadId);
-      await this.#items.create(first.threadId, semantic);
-      this.#live.set(first.threadId, structuredClone(previous));
+            };
+      };
+      try {
+        await this.#recordInitial(events());
+        // This existing publication fence is written only after all original
+        // facts and exact semantic sources are durable. A partial initial copy
+        // without it must never be compiled into an apparently complete Thread.
+        await this.#writeFence(first.threadId);
+        await this.#items.create(first.threadId, semantic);
+        this.#live.set(first.threadId, structuredClone(previous));
+      } catch (error) {
+        this.#uncertain.add(first.threadId);
+        this.#live.delete(first.threadId);
+        throw error instanceof ThreadJournalAppendOutcomeUnknownError
+          ? error
+          : new ThreadJournalAppendOutcomeUnknownError(error);
+      }
     });
   }
+  /** Bounded initial publication only; ordinary append retains its exact receipt. */
+  async #recordInitial(events: Iterable<TraceEvent>): Promise<void> {
+    if (this.trace.recordBatch === undefined) {
+      for (const event of events) await this.#record(event, true);
+      return;
+    }
+    let batch: TraceEvent[] = [];
+    let bytes = 0;
+    const flush = async () => {
+      if (!batch.length) return;
+      const receipts = await this.trace.recordBatch!(batch);
+      if (receipts.length !== batch.length)
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Initial Trace batch has an incomplete durability receipt",
+        );
+      for (const [index, receipt] of receipts.entries())
+        if (receipt.durability !== "durable") {
+          this.#options.onTraceDegraded?.(batch[index]!.threadId, receipt);
+          throw new ThreadJournalAppendOutcomeUnknownError(receipt.error);
+        }
+      batch = [];
+      bytes = 0;
+    };
+    for (const event of events) {
+      const size = Buffer.byteLength(JSON.stringify(event));
+      if (batch.length && (batch.length >= 256 || bytes + size > 1024 * 1024))
+        await flush();
+      batch.push(event);
+      bytes += size;
+    }
+    await flush();
+  }
+
   async append(raw: CanonicalItem): Promise<ContextItem[]> {
     const item = decodeCanonicalItem(raw);
     return this.#operation(item.threadId, async () => {
@@ -208,6 +270,13 @@ export class DomainThreadJournal implements ThreadJournal {
       if (!(await this.#items.exists(item.threadId))) {
         if (item.type !== "thread_metadata")
           throw new Error("Thread must begin with original metadata");
+        const priorTrace = await this.trace.read(item.threadId, {
+          verifyArtifacts: false,
+        });
+        if (priorTrace.records.length || priorTrace.completeness !== "complete")
+          throw new ThreadJournalAppendOutcomeUnknownError(
+            "Initial Thread publication is incomplete; existing Trace cannot be overwritten",
+          );
         const semantic = contextItemsFromLegacy(item, [], 0, []);
         await this.#route(item, 0, semantic);
         await this.#writeFence(item.threadId);
@@ -300,6 +369,18 @@ export class DomainThreadJournal implements ThreadJournal {
       )
     )
       throw new Error("Cannot compile through damaged source log");
+    if (!(await this.#items.exists(threadId))) {
+      try {
+        await lstat(this.#path(threadId));
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+        if (observed.records.length)
+          throw new ThreadJournalAppendOutcomeUnknownError(
+            "Initial Thread publication is incomplete; no publication fence exists",
+          );
+        return;
+      }
+    }
     const contexts = await this.#items.read(threadId);
     const present = new Set(contexts.map((item) => item.id));
     const previous: CanonicalItem[] = [];

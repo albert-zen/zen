@@ -1,3 +1,4 @@
+import { registerBoardUi } from "./board-ui.js";
 import { registerSubagentsUi } from "./subagents-ui.js";
 import { registerImZenXUi } from "./imzenx-ui.js";
 import { useEffect, useState } from "react";
@@ -19,6 +20,7 @@ registerBundledAutomationUi(pluginUiRegistry);
 registerBundledBrowserUi(pluginUiRegistry);
 registerImZenXUi(pluginUiRegistry);
 registerSubagentsUi(pluginUiRegistry);
+registerBoardUi(pluginUiRegistry);
 
 export function PluginProductPage({
   snapshot,

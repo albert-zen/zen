@@ -446,7 +446,12 @@ function validateUi(
     requireString(menu.label, "menu label");
     menuIds.add(menuId);
   }
-  for (const collection of ["settings", "panels", "threadHeaders"] as const) {
+  for (const collection of [
+    "settings",
+    "panels",
+    "information",
+    "threadHeaders",
+  ] as const) {
     const contributionIds = new Set<string>();
     for (const item of optionalArray(
       contributions[collection],

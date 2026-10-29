@@ -836,6 +836,26 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     );
   }
 
+  /** Pure liveness/ownership lookup; loading and human-controlled tabs remain live. */
+  hasThreadTab(threadId: string, tabId: string): boolean {
+    const tab = this.#tabs.get(tabId);
+    return (
+      !!tab && tab.threadId === threadId && !tab.view.webContents.isDestroyed()
+    );
+  }
+
+  hasTab(sessionId: string, tabId: string): boolean {
+    const threadId = this.#sessionThreads.get(sessionId);
+    return !!threadId && this.hasThreadTab(threadId, tabId);
+  }
+
+  isSidebarIntentClosed(threadId: string, intentId: string): boolean {
+    const id = `sidebar-${createHash("sha256")
+      .update(JSON.stringify([threadId, intentId]))
+      .digest("hex")}`;
+    return this.#closedSidebarIntents.has(id);
+  }
+
   async readCurrentUrl(sessionId: string, tabId: string): Promise<string> {
     const tab = this.#requireAgentTab(sessionId, tabId);
     const incarnation = this.#sessionIncarnations.get(sessionId);

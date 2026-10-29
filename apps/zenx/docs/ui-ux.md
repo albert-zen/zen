@@ -204,7 +204,7 @@ Trace sequence projection 按 Item 顺序生成：
 
 Trace Group 默认收起，主标题用中英文本地确定性模板显示自然动作摘要，不调用模型、不采用“动作 ×N”清单。摘要最多突出两个动作：上下文压缩边界优先，其余按最近出现顺序，等待/执行包装降级；省略动作保留总数提示。重复命令/消息可自然计数，图片等观察不推断资源数量。只有已确认完成的动作使用完成时态；完整调用数与原始顺序仍可展开查看。主标题显示动作集合摘要；调用总数与 Item 数量降为可访问详情，保留 disclosure icon。展开后，每个 Thinking / Tool Call row 仍默认收起；row 使用一致的密度、字号、间距和 disclosure 行为，以图标、标签和状态区分。组关闭后可以把组内 Items 恢复为收起，但该行为必须稳定、可预测。Turn 进入 completed / interrupted / failed 终态时统一折叠其中间 trace；用户随后展开完成态 Turn 时可以再次操作这些 disclosure。
 
-Tool 展示动作、执行进度和中性的已结束状态；超时、取消、拒绝、审批与取消未确认保留具体事实标签，不另设通用失败标签或计数。状态更新同一个稳定 Item，不创建重复 row；原始结果、输出与退出码保留在详情，长 payload 在摘要截断，在详情内换行或局部滚动。
+Tool row 展示 Agent 工具调用自身的生命周期，不是返回结果所描述的 Terminal / 后台进程生命周期。只在当前 Turn 中调用尚未返回时显示 spinner / 活动动效；收到工具回执即为已完成，包括 yield 后进程仍运行、等待、取消或错误的回执。成功动作可用自然完成时态，错误回执只表示调用已完成，不伪造动作成功；原始错误、输出、退出码和结构化结果保留在详情。Turn 已结束但调用没有回执时，保留结果未知的事实，不以 Turn 终态伪造工具完成。后续 wait 回执不能改写先前调用的状态。聊天流不展示进程取消/待确认计数、通用后台仍运行警告或会隐式重跑 Agent 的 Retry；实际进程状态只属于独立任务/Terminal 产品状态。状态更新同一个稳定 Item，不创建重复 row；长 payload 在摘要截断，在详情内换行或局部滚动。
 
 `run_code` outer command 与 nested `tools.*` command 仍属于同一 trace sequence。展开后，UI
 只根据 ZAS protocol projection 携带的 canonical `callId / parentCallId` 缩进实际 child；不得从
@@ -356,7 +356,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Sidebar 的 Plugin spaces 位于**整个 Projects group 之前**。Plugin contribution 不能插入 Projects header 与 Project/Thread list 之间，也不能把这个 group 拆成两段。
 - 人类使用插件页面、settings、panel、command/menu 或普通领域 action 不创建 Turn；只有标为 **Run Agent** 的显式动作才调用 AppServer 并产生普通 canonical Turn。
 - Plugin 生命周期只有 `installed`、`enabled`、`uninstalled`。Disable 撤销 active UI/tools 但保留安装；Uninstall 撤销 runtime/UI/tool 注册并默认保留 data。Bundled plugin 也可卸载和重装；删除 data 必须是独立动作。
-- 工具调用摘要展示动作、进度与中性的“已结束”，不汇总工具失败或 Shell 非零计数。原始输出、stderr、退出码与结构化结果保留在调用详情中；超时、取消、拒绝和结果未确认保留专门事实标签。此为展示层选择，不改模型、canonical 结果或安全行为，也不根据 stderr 有无判断成败。
+- 工具调用摘要遵循第 4.2 节的调用生命周期：实际回执到达即为调用已完成，不能把回执里的进程状态用作调用状态，不汇总工具失败、取消或 Shell 非零计数。原始输出、stderr、退出码与结构化结果保留在调用详情中；无回执保留未知事实。此为展示层选择，不改模型、canonical 结果或安全行为，也不根据 stderr 有无判断成败。
 - Result renderer 只读取既有 `ToolResultItem` 上的可选 structured content；它缺失、disabled 或 uninstalled 时使用 text/JSON fallback。历史模型文本、reasoning、tool call/result 与 title trace 保持原样，不能为 renderer 或能力变化扫描、脱敏或重写。
 
 ### 6.2 Experiment / guidance / TBD
@@ -547,7 +547,7 @@ New PAW setup discloses an hourly heartbeat and model-quota use before Create. I
 - Subagents 的常规入口为右侧工作区加号菜单中的 Subagents Tab。Tab 内显示当前会话的子线程，选择后在右栏阅读/对话；不在主标题下重复铺设 Subagents 行或快捷标签。
 - 每个 Subagent / Side chat Thread 的左侧栏显隐独立保存到本机 Host profile，默认隐藏；Subagents 树每一行提供始终可见、可键盘/触控操作的“在侧栏显示”开关，显示/隐藏只影响该 Thread，不递归改变后代。隐藏后仍可从 Subagents 树访问，已打开的独立标签保持不变。
 - 显隐与 Pin/Unpin 完全独立：显示不会自动置顶，隐藏不会取消置顶；隐藏的已置顶子线程不进入 Pinned 列表，再次显示才恢复既有置顶位置。普通线程与独立 Fork 仍默认显示。旧全局 showSubagents 开关移除，既有 localStorage 值不迁移为逐线程显示授权。
-- Subagents Tab 提供 New side chat：点击新建时固定父会话的完整上下文边界并打开 renderer-local 草稿；首次有效 Send 才以该边界创建 fork 子线程并发送。未发送就关闭不创建真实 Thread，不进入子会话列表、Sidebar 或持久工作区。草稿在本次 renderer 内按创建入口的 Thread/Room 工作区和精确父会话独立保留，导航与切换不串归属；模型与 effort 选择只属于该草稿。创建后的上下文末尾追加明确的 side-chat 身份与等待用户请求的指令，不继承可执行待办队列，也不改变父会话执行。创建已确认而发送失败时，同一草稿重用 child ID 和发送幂等键，不重复创建。主动深入交互时可以全屏打开真实子线程。
+- Subagents Tab 提供 New side chat：点击新建时固定父会话的完整上下文边界并打开 renderer-local 草稿；首次有效 Send 才以该边界创建 fork 子线程并发送。未发送就关闭不创建真实 Thread，不进入子会话列表、Sidebar 或持久工作区。草稿在本次 renderer 内按创建入口的 Thread/Room 工作区和精确父会话独立保留，导航与切换不串归属；模型与 effort 选择只属于该草稿。 草稿立即显示固定边界的父会话只读记录，不伪装为空白新会话；父会话仍在执行的部分只呈现静态快照，不显示旁聊正在执行。读取、创建子线程与发送消息各阶段均有可访问的进度提示；创建和发送期间不能重复提交，失败保留原输入。创建后的上下文末尾追加明确的 side-chat 身份与等待用户请求的指令，不继承可执行待办队列，也不改变父会话执行。创建已确认而发送失败时，同一草稿重用 child ID 和发送幂等键，不重复创建。主动深入交互时可以全屏打开真实子线程。
 - 全屏子线程在现有 top bar 中使用可返回祖先的路径式面包屑标识位置；不另占标题栏下方一行。普通根会话不显示空面包屑。
 - 验收至少检查浅色/深色、桌面/窄屏、长文本、空状态/错误状态、键盘与焦点、打开/关闭/切换后的草稿和上下文归属。修复前后截图绑定实际构建版本；未实际查看的页面必须明确列为未验。
 - 产品改动在 PR 分支交付，不直接修改主线；独立 Review 和实际操作证据共同支持结论，不能相互替代。
@@ -576,7 +576,7 @@ is the user's explicit ZenX decision, not a claim about those products.
 
 ### Agent activity, approval review and pending messages
 
-Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Task receipts determine background lifetime independently of call disposition. A stopped turn can still have an unconfirmed background action; the latest terminal receipt retires earlier nonterminal observations across groups.
+Agent activity is a disposable projection of native turn items. Consecutive tool/reasoning items stay in stable disclosures; assistant/user messages remain chronological boundaries and final replies stay outside process folds. Counts describe calls, not promised successful work. Historical task receipts remain inspectable evidence, not current process state or transcript process counters. The separate composer-adjacent background-command row reads exact-owner native Shell sessions independently of call and Turn disposition; only those current observations supply its running count. Newer local sidebar choices retire pending Terminal jumps, while the jump's own Host receipt does not count as a new choice.
 
 Turn-level metadata remains before history throughout running and completion. Its duration is explicitly labelled “Working for …” while active and “Worked for …” after normal completion; both are localized as “已工作 …”, not bare digits. Existing duplicate-status suppression, input arguments, item order and disclosure behavior are unchanged. Running states share one unboxed row; terminal diagnostics use a panel rather than a status capsule.
 
@@ -620,7 +620,7 @@ Each compaction has one collapsed event and one disclosure. Its Original history
 
 ### Message-level Fork
 
-Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending repeated clicks share one request across viewport remounts; errors remain visible and retryable. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
+Only the terminal Agent response exposes Copy and Fork in its hover/focus action row. Intermediate commentary, tool-adjacent replies, and in-progress responses never expose this action row, even when their canonical Items are durable. The existing terminal-response selection remains authoritative (the final completed reply, or the last non-empty reply on a failed/interrupted Turn). Fork appears directly after Copy when that response has a durable canonical Item. The action binds the source Thread and exact canonical Agent Item ID; streaming-only messages cannot be fork boundaries. It uses the native Core fork with the inclusive prefix, never later Items, historical tool replay or an automatic new Turn. The original Thread is unchanged. Pending activation immediately replaces the Fork icon with a spinner; its tooltip and accessible name say that this thread is being forked/copied, and the disabled button prevents duplicate clicks until copying and navigation finish. Pending repeated clicks share one request across viewport remounts; errors retain the source context and exact local details. An uncertain creation reply triggers only a read-only summary refresh so an already-created copy can be found; it never automatically repeats creation or guesses a destination. Creation currently has no protocol idempotency key, so an explicit retry is not claimed safe after an unknown outcome. Forking a genuinely completed final response retains its observed completion and keeps the exact final text outside the collapsed process; the cut before the completion receipt must not invent cancellation or live background ownership. Success opens the new Thread unless newer navigation or a newer fork action superseded that intent. Touch/no-hover actions remain visible with 44px targets and keyboard focus is explicit. The thread-level action uses the same Fork icon and localized Fork label while retaining its latest-complete-Turn boundary and the same working directory. Shared Fork artwork stays within the 16×16 icon viewBox, including all three endpoint strokes.
 
 ### Compact activity context
 
@@ -853,6 +853,10 @@ Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失�
 
 图片加载失败保持简短摘要，但队列缩略图及预览必须提供默认折叠的本机错误详情；详情为纯文本，不写回模型内容。预览里的详情摘要与正文可由 Tab 到达，Escape 与关闭后焦点恢复不变。重试仍是明确用户动作，不因展开详情重发模型/工具请求。
 
+### Interactive information board
+
+Information contributions use a top-right popup and an optional independently pinned narrow rail; they are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger; pin/unpin is an explicit user choice, with a usable narrow-screen popup fallback.
+
 ### Send admission feedback (2026-10-28)
 
 Auxiliary title staging must not block input admission. Its own receipt or failure
@@ -873,11 +877,15 @@ make the interface appear faster.
 
 跨线程发送与创建/修改触发器的工具记录提供独立于详情展开的目标动作。发送动作只通过工具结果与既有 canonical ref 身份打开目标 Thread 的确切已送达消息，并暂停自动跟随、滚动和聚焦该消息；排队回执只通过 canonical client 身份关联其实际送达 Item。触发器动作复用已注册插件 Tab，打开精确 definition，而非按名称搜索。缺失、排队、已归档、远端路径不可用或插件缺失必须如实说明，不选择相似对象、不重放工具、不在查看时执行或保存触发器。
 
+### Current background commands
+
+A compact disclosure above the Composer reads the existing local Shell session list for the exact current Thread, independently of Agent Turn completion. It displays the actual number of native-observed running Agent commands; queued, starting, foreground-exited/output-collecting, stop-requested and stop-unconfirmed tasks are separate facts, never guessed running or stopped from historical tool receipts. The expanded list retains each command and current observation and opens its exact Terminal session in the existing owning Thread/Room sidebar. Reading or navigation never starts a Turn, creates a terminal, retries an Agent or inherits a source Thread's live tasks after fork. The list refreshes while mounted, including after the Turn ends; read failure removes stale running counts and offers explicit Refresh with original local error details. Finished/expired tasks cease contributing to the running count; retained output and exit status remain available in Terminal.
+
 ### Context compaction trigger transparency
 
 自动与显式生成压缩的原生实时观察复用现有 composer 压缩状态：开始显示发起者和触发原因，
 包括下一轮接纳前等待；成功只来自已提交 canonical 选择，失败/取消与提交未知明确区分并保留
 可展开本机错误与阈值证据。非活跃/新建 side chat 的精确 child Thread 亦接收反馈，不能提前假称
 输入已接纳或 agent 已开始工作。失联使 pending 观察变成未知，不自动重试；重新读到同一唯一
-completed boundary 的已提交压缩才消除此未决反馈。既有设置清楚说明 agentic 开关不关闭宿主
+committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消除此未决反馈；旧的同 boundary 压缩不能抹掉新的进行中或失败。显式请求身份独立于状态对象，只有同一请求且未编辑的原草稿可清空。既有设置清楚说明 agentic 开关不关闭宿主
 自动压缩，以及完成后、发送前、活动工具轮之间的不同条件；不新增开关或修改阈值策略。

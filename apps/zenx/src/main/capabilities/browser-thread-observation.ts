@@ -305,6 +305,42 @@ export class BrowserThreadObservation {
     };
   }
 
+  /** Reobserve only an already-owned native target, never discovery/adoption. */
+  async readModelTarget(
+    threadId: string,
+    targetId: string,
+  ): Promise<BrowserModelRoute | undefined> {
+    const session = [...this.#sessions.values()].find(
+      (value) =>
+        value.threadId === threadId &&
+        [...value.targets.values()].some(
+          (target) => target.summary.id === targetId,
+        ),
+    );
+    const target =
+      session &&
+      [...session.targets.values()].find(
+        (value) => value.summary.id === targetId,
+      );
+    if (this.#closed || !session || !target || !this.#backend.hasTab) return;
+    const route: BrowserModelRoute = {
+      ownerThreadId: threadId,
+      sessionId: session.sessionId,
+      sessionEpoch: session.providerSessionId,
+      tabId: target.summary.tabId,
+      targetId,
+    };
+    if (
+      !(await this.#backend.hasTab(
+        session.providerSessionId,
+        target.summary.tabId,
+      ))
+    )
+      return;
+    this.assertModelTarget(route, threadId);
+    return route;
+  }
+
   async readTargetUrl(threadId: string, targetId: string): Promise<string> {
     const session = [...this.#sessions.values()].find(
       (value) =>

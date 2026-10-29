@@ -63,6 +63,7 @@ await writeFile(path.join(outputDirectory, "ui-polish-visual.html"), html);
 const sources = [
   "scripts/build-ui-polish-visual.mjs",
   "scripts/capture-ui-polish-visual.mjs",
+  "scripts/capture-sidechat-visual.mjs",
   "scripts/preview-browser.mjs",
   "scripts/preview-browser-lifecycle.mjs",
   "src/renderer/src/App.tsx",
@@ -71,6 +72,10 @@ const sources = [
   "src/renderer/src/auxiliary-panel.tsx",
   "src/renderer/src/FleetComposerSurface.tsx",
   "src/renderer/src/ThreadView.tsx",
+  "src/renderer/src/side-chat-drafts.ts",
+  "src/renderer/src/subagents-ui.tsx",
+  "src/renderer/src/thread-view-state.ts",
+  "src/renderer/src/i18n/panels.ts",
   "src/renderer/src/Sidebar.tsx",
   "src/renderer/src/auxiliary-tab-reorder.css",
   "src/renderer/src/fleet-ui.css",

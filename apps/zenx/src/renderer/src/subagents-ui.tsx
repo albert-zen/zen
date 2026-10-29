@@ -255,10 +255,21 @@ function CreateSideChat({
         disabled={!parent || busy || !active || selectionInvalid}
         onClick={() => void create()}
       >
-        <Icon name="plus" />
+        {busy ? (
+          <span className="mini-spinner" aria-hidden="true" />
+        ) : (
+          <Icon name="plus" />
+        )}
+        {busy ? (
+          <span className="sr-only" role="status">
+            {i18n.t("panels:sideChatLoadingContext")}
+          </span>
+        ) : null}
         {compact ? null : (
           <span>
-            {busy ? i18n.t("panels:creating") : i18n.t("panels:sideChat")}
+            {busy
+              ? i18n.t("panels:sideChatLoadingContext")
+              : i18n.t("panels:sideChat")}
           </span>
         )}
       </button>

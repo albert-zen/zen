@@ -594,7 +594,7 @@ function updateCommandResult(thread: Thread, result: ToolResultItem): Thread {
   };
 }
 
-function projectNativeThread(
+export function projectNativeThread(
   snapshot: NativeThreadRecoverySnapshot["thread"],
 ): Thread {
   const metadata = snapshot.items.find(

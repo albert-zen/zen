@@ -4262,6 +4262,122 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
   });
 });
 
+test("active fallback does not summarize an old completed prefix superseded by agentic reset", async () => {
+  let normal = 0;
+  let summaries = 0;
+  const observations = compactionObservations();
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaries++;
+        yield { type: "text_delta", delta: "synthetic generated summary" };
+        return;
+      }
+      normal++;
+      if (normal === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 800, outputTokens: 1 };
+        return;
+      }
+      if (normal === 2) {
+        yield {
+          type: "tool_call",
+          callId: "synthetic-reset",
+          name: "compact_context",
+          arguments: {
+            text: "synthetic agent continuation",
+            includeOriginalReference: false,
+          },
+        };
+        return;
+      }
+      if (normal === 3) {
+        yield {
+          type: "tool_call",
+          callId: "synthetic-high-usage",
+          name: "shell",
+          arguments: { command: "printf synthetic" },
+        };
+        yield { type: "usage", inputTokens: 960, outputTokens: 1 };
+        return;
+      }
+      assert.equal(
+        summaries,
+        1,
+        "no summary request is dispatched for the already-superseded completed boundary",
+      );
+      assert(
+        request.messages.some(
+          (message) =>
+            message.role === "user" &&
+            "content" in message &&
+            message.content.some(
+              (part) =>
+                part.type === "text" &&
+                part.text.includes(
+                  "No completed history beyond the current context selection",
+                ),
+            ),
+        ),
+      );
+      yield {
+        type: "text_delta",
+        delta: "continued without an invalid fallback",
+      };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    auxiliaryModel: observations.auxiliaryModel,
+    contextCompaction: { agenticEnabled: true },
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 1000 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed input")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "continue with an agent reset")
+  ).done;
+  assert.equal(normal, 4);
+  assert.equal(
+    summaries,
+    2,
+    "after Turn 2 completes its genuinely new completed boundary remains eligible",
+  );
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "completed");
+  const compactions = snapshot.items.filter(
+    (item) => item.type === "context_compaction",
+  );
+  assert.equal(compactions.length, 3);
+  assert(
+    compactions.every(
+      (item, index) =>
+        index === 0 ||
+        snapshot.items.findIndex(
+          (fact) => fact.id === item.coveredThroughItemId,
+        ) >
+          snapshot.items.findIndex(
+            (fact) => fact.id === compactions[index - 1]!.coveredThroughItemId,
+          ),
+    ),
+  );
+  assert(
+    !observations.events.some(
+      (event) =>
+        event.type === "context_compaction_started" &&
+        (event.data as Record<string, unknown>).reason ===
+          "active_turn_fallback",
+    ),
+  );
+});
+
 // These tests exercise history/retention with deliberately tiny windows. Use a
 // tiny disclosed-schema fixture, not production shell documentation that alone
 // exceeds those windows. Full real-schema admission is covered in context-budget.test.ts.

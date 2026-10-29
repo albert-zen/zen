@@ -228,6 +228,58 @@ test("message Fork exposes a stale-boundary failure and retries only after anoth
   }
 });
 
+test("an unconfirmed message Fork refreshes summaries without repeating creation or losing the source", async () => {
+  let created = false;
+  let attempts = 0;
+  const source = threadWithMessage("boundary");
+  const harness = await mountApp({
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            summary(),
+            ...(created
+              ? [summary("existing-copy", "Existing copy after reply loss")]
+              : []),
+          ],
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(source);
+      if (method === "zen/thread/fork") {
+        attempts++;
+        created = true;
+        throw new Error(
+          "Synthetic transport reply lost; creation outcome is unknown",
+        );
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    },
+  });
+  try {
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(".thread-row")!.click(),
+    );
+    const button = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".message-fork"),
+    );
+    await act(async () => button.click());
+    await waitFor(() =>
+      document.querySelectorAll(".thread-row").length === 2 ? true : null,
+    );
+    assert.equal(attempts, 1, "a summary refresh never retries creation");
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /reply lost.*unknown/,
+    );
+    assert.ok(
+      document.querySelector('[data-read-message-id="agent-boundary"]'),
+      "the original final remains visible",
+    );
+    assert.equal(button.disabled, false);
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("actual App navigation restores exact thread disclosures after loading remounts", async () => {
   const a = {
     ...thread(),
@@ -1408,6 +1460,7 @@ test("App observes a terminal event transferred in a valid resume response", asy
 });
 
 interface MountOptions {
+  shellPanel?: import("../src/shell-panel.js").ShellPanelBridge;
   sidebarApi?: ThreadSidebarApi;
   titles?: typeof window.zenx.titles;
   readFile?(threadId: string, path: string): Promise<never>;
@@ -1457,6 +1510,7 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    shellPanel: options.shellPanel,
     workspaceFiles: {
       applications: async () => ({ platform: "linux", applications: {} }),
       read: options.readFile,
@@ -3185,3 +3239,79 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
     dispose();
   }
 }
+
+for (const closeAfterClick of [true, false])
+  test(`a pending background Terminal jump ${closeAfterClick ? "does not reopen a newer closed sidebar" : "accepts its own sidebar receipt"}`, async () => {
+    const read = deferred<any>();
+    const session = {
+      taskId: "exact",
+      threadId: "thread-1",
+      origin: "agent",
+      kind: "command",
+      command: "synthetic exact",
+      cwd: "/work/zen",
+      createdAt: "2026-10-29T00:00:00Z",
+      status: "running",
+      exitCode: null,
+      lifecycle: { foreground: "running", stdio: "open" },
+      inputAvailable: false,
+      retained: false,
+    } as const;
+    const harness = await mountApp({
+      shellPanel: {
+        request: async (input) =>
+          input.operation === "list"
+            ? {
+                host: "local",
+                sessions: [session],
+                cwd: "/work/zen",
+                canCreate: false,
+              }
+            : read.promise,
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume") return resumed(thread());
+        throw Error(method);
+      },
+    });
+    const click = async (selector: string) =>
+      act(async () =>
+        document.querySelector<HTMLButtonElement>(selector)!.click(),
+      );
+    try {
+      await click(".thread-row");
+      await waitFor(() => document.querySelector(".background-shell-status"));
+      await click('[aria-label="Open side panel"]');
+      await waitFor(() => document.querySelector(".auxiliary-close-button"));
+      await click(".background-shell-disclosure");
+      await click(".background-shell-list button");
+      if (closeAfterClick) {
+        await click(".auxiliary-close-button");
+        assert.equal(
+          document
+            .querySelector("#thread-workspace-panel")
+            ?.getAttribute("data-open"),
+          "false",
+        );
+      }
+      await act(async () =>
+        read.resolve({ session, output: "", cursor: 0, truncated: false }),
+      );
+      if (closeAfterClick)
+        assert.equal(
+          document
+            .querySelector("#thread-workspace-panel")
+            ?.getAttribute("data-open"),
+          "false",
+          "Late command jump must not reopen an explicitly closed sidebar",
+        );
+      else
+        await waitFor(
+          () =>
+            document.querySelector(".shell-heading-context strong")
+              ?.textContent === "synthetic exact",
+        );
+    } finally {
+      await harness.unmount();
+    }
+  });

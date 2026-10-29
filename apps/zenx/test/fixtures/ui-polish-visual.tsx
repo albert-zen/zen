@@ -46,6 +46,14 @@ const uiPolishTelemetry = {
   machineThreadCreateCalls: 0,
   sideChatCreateCommandCalls: 0,
 };
+// Deterministic holds for the Side chat UI acceptance scene only. No Host/model calls.
+const sideChatFixture = {
+  creates: 0,
+  sends: 0,
+  releaseCreation: () => {},
+  releaseAdmission: () => {},
+  failAdmission: () => {},
+};
 const options = {
   request: async (method: string, request?: unknown) => {
     uiPolishTelemetry.protocolCalls.push(method);
@@ -91,6 +99,31 @@ const options = {
           ),
         ).thread,
       };
+    }
+    if (params.get("scene") === "sidechat") {
+      if (method === "zen/trace/client-activation") return { observed: true };
+      if (method === "zen/thread/create-child-configured") {
+        sideChatFixture.creates += 1;
+        return await new Promise((resolve) => {
+          sideChatFixture.releaseCreation = () =>
+            resolve({
+              thread: resumed(
+                threadWithMessage(
+                  "Inherited synthetic parent context.",
+                  "sidechat-created",
+                ),
+              ).thread,
+            });
+        });
+      }
+      if (method === "zen/turn/send") {
+        sideChatFixture.sends += 1;
+        return await new Promise((resolve, reject) => {
+          sideChatFixture.releaseAdmission = () => resolve({});
+          sideChatFixture.failAdmission = () =>
+            reject(new Error("Synthetic send failure; input retained."));
+        });
+      }
     }
     if (method === "thread/compact") {
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -504,7 +537,10 @@ if (params.has("launchers") || params.has("conversationTabs")) {
   });
 }
 Object.defineProperty(window, "zenx", { value: zenx });
-Object.assign(window, { __uiPolishTelemetry: uiPolishTelemetry });
+Object.assign(window, {
+  __uiPolishTelemetry: uiPolishTelemetry,
+  __sideChatFixture: sideChatFixture,
+});
 localStorage.setItem("zenx-sidebar-mode", "projects");
 const scene = params.get("scene") ?? "welcome";
 

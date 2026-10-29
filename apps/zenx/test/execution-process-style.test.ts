@@ -27,10 +27,10 @@ for (const theme of ["light", "dark"]) {
     await withRuntimeDom(async (h) => {
       document.documentElement.dataset.appearance = theme;
       for (const [phase, item] of [
-        ["running", runtimeTask("running", "task-one", "running")],
+        ["idle", runtimeTask("returned", "task-one", "running")],
         ["thinking", thinking],
         [
-          "waiting",
+          "requested",
           { ...runtimeWait("waiting", "task-one"), status: "inProgress" },
         ],
         ["requested", runtimeCommand("requested", "echo ready", "inProgress")],
@@ -117,7 +117,7 @@ test("completing the same turn leaves metadata above history and preserves focus
     );
   });
 });
-test("latest group and singleton icons sweep through returned waits until the turn completes", async () => {
+test("latest group and singleton stop sweeping when a wait returns even while the turn continues", async () => {
   await withRuntimeDom(async (h) => {
     for (const grouped of [false, true]) {
       const base = grouped ? [runtimeCommand("previous")] : [];
@@ -135,19 +135,21 @@ test("latest group and singleton icons sweep through returned waits until the tu
       const waiting = document.querySelector(
         grouped ? ".trace-toggle" : ".trace-item-toggle, .trace-item-static",
       )!;
-      // The wait invocation is settled, but this latest process still carries
-      // the active Turn's model-only continuation cue (ui-ux.md).
-      assert.ok(waiting.querySelector(".activity-sweep svg"));
+      // A returned invocation does not borrow the enclosing Turn's lifetime.
+      assert.ok(
+        waiting.querySelector(".activity-sweep svg") === null,
+        "Returned invocation has no activity sweep",
+      );
       assert.equal(
         waiting.querySelector(".activity-text")?.getAttribute("data-active"),
-        "true",
+        "false",
       );
       assert.equal(
         waiting
           .querySelector(".trace-item-label, .trace-activity-title")!
           .getAttribute("title")
           ?.startsWith("Agent is still working"),
-        true,
+        false,
       );
       await h.render(runtimeThread(items, "completed"));
       if (

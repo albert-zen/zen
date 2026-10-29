@@ -18,6 +18,11 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
     packageName: "@zenx/computer-plugin",
     tarball: "zenx-computer-plugin-macos-1.4.0.tgz",
   },
+  board: {
+    pluginId: "zenx-board",
+    packageName: "@zenx/board-plugin",
+    tarball: "zenx-board-plugin-1.0.0.tgz",
+  },
   subagents: {
     pluginId: "zenx-subagents",
     packageName: "@zenx/subagents-plugin",
@@ -41,6 +46,14 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
 });
 
 export const FIRST_PARTY_MARKETPLACE_ENTRIES = Object.freeze([
+  {
+    pluginId: "zenx-board",
+    packageName: FIRST_PARTY_PLUGIN_PACKAGES.board.packageName,
+    name: "Board",
+    description:
+      "Agent-defined questions, forms and interactive information without replacing chat.",
+    icon: "layers",
+  },
   {
     pluginId: "zenx-fleet",
     packageName: FIRST_PARTY_PLUGIN_PACKAGES.fleet.packageName,

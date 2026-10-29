@@ -106,9 +106,9 @@ test(
           assert.equal(item.aggregatedOutput, result.output);
           assert.equal(item.exitCode, code);
           assert.equal(item.status, code === 0 ? "completed" : "failed");
-          assert.equal(commandPhase(item), code === 0 ? "completed" : "failed");
+          assert.equal(commandPhase(item), "completed");
 
-          if (code !== 0) assert.equal(commandStatus(item), "Ended");
+          if (code !== 0) assert.equal(commandStatus(item), "Completed");
           assert.deepEqual(
             structuredClone(result),
             before,
@@ -122,7 +122,7 @@ test(
         assert.match(spawnFailure.output, /shell spawn failed/);
         assert.equal(
           commandStatus(project(spawnFailure)),
-          "Ended",
+          "Completed",
           "no claim that a process spawned or exited",
         );
       } finally {
@@ -152,7 +152,7 @@ test(
         );
         const item = project(result, "wait");
 
-        assert.equal(commandPhase(item), "failed");
+        assert.equal(commandPhase(item), "completed");
         assert.equal(
           commandTask(item)?.phase,
           timeout ? "timed_out" : "failed",
@@ -203,7 +203,7 @@ test(
       });
       const item = project(result, "wait");
 
-      assert.equal(commandPhase(item), "failed");
+      assert.equal(commandPhase(item), "completed");
       assert.equal(commandTask(item)?.phase, "cancelled");
       assert.equal(item.exitCode, 130);
     } finally {

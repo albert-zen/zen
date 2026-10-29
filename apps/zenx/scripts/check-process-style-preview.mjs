@@ -65,9 +65,57 @@ try {
       );
     }
   }
+  api.selectScene("latest-requested");
+  await wait();
+  assert.equal(
+    dom.window.document.querySelectorAll(".turn-history .mini-spinner").length,
+    1,
+  );
+  api.returnLatest();
+  await wait();
+  assert.equal(
+    dom.window.document.querySelectorAll(
+      ".turn-history .mini-spinner, .turn-history .activity-sweep",
+    ).length,
+    0,
+  );
+  api.waitAgain();
+  await wait();
+  assert.equal(
+    dom.window.document.querySelectorAll(".turn-history .mini-spinner").length,
+    1,
+  );
+  api.interrupt();
+  await wait();
+  assert.ok(dom.window.document.querySelector(".turn-history") === null);
+  api.returnLatest(true);
+  await wait();
+  assert.ok(dom.window.document.querySelector(".turn-history") === null);
+  dom.window.document.querySelector(".turn-toggle").click();
+  await wait();
+  assert.equal(
+    dom.window.document.querySelectorAll(
+      ".turn-history .mini-spinner, .turn-history .activity-sweep",
+    ).length,
+    0,
+  );
+  assert.ok(
+    dom.window.document.querySelector(
+      ".trace-counts, .turn-outcome-primary-action, .turn-outcome-review",
+    ) === null,
+  );
+  const latest = [
+    ...dom.window.document.querySelectorAll(".trace-singleton"),
+  ].at(-1);
+  latest.querySelector(".trace-item-toggle").click();
+  await wait();
+  assert.match(
+    latest.querySelector(".trace-detail").textContent,
+    /Synthetic tool error/u,
+  );
   assert.deepEqual(errors, []);
   console.log(
-    "10 actual-component scenes and four same-turn transitions passed DOM-only smoke.",
+    `${api.scenes.length} actual-component scenes, four same-turn transitions and return → new wait → interruption → late error passed DOM-only smoke.`,
   );
 } finally {
   dom.window.close();

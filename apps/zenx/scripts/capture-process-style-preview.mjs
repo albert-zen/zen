@@ -266,15 +266,20 @@ await withPreviewBrowser(
         assert.equal(
           rows[0].active,
           "false",
-          "Earlier shell stays unsettled without a sweep",
+          "Returned shell invocation is settled without a sweep",
         );
         assert.equal(rows[1].active, "false", "Returned wait is settled");
         assert.equal(rows[1].sweep, false, "Returned wait has no sweep");
-        assert.match(rows[1].text, /Waited/u);
+        assert.match(rows[1].text, /Checked task status/u);
         assert.doesNotMatch(rows[1].text, /Waiting/u);
         assert.equal(rows[2].active, "true", "Pending wait remains active");
         assert.equal(rows[2].sweep, true, "Pending wait has sweep");
-        assert.match(rows[2].text, /Waiting/u);
+        assert.equal(
+          await evaluate(
+            `Boolean(document.querySelectorAll(".trace-singleton")[2]?.querySelector('.mini-spinner[aria-label="Awaiting tool result"]'))`,
+          ),
+          true,
+        );
         assert.equal(
           before.activities.length,
           1,
