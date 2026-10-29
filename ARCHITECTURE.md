@@ -956,7 +956,7 @@ compaction 与原始 Item 都继续留在 journal。
 
 Agentic compaction 记录 `provenance: agentic`、active `turnId`、source `callId` /
 `sourceModelResponseId`、采样时已见的 `coveredThroughItemId`、原样 text 与版本化算法，不记录
-Provider fields 或 token usage，也不保留 covered Item。模型投影从 text 开始，排除发起 reset 的
+Provider fields 或 token usage；covered Item 只按已验证的粗粒度策略保留并记录 `retainedItemIds`。模型投影从 text 开始，排除发起 reset 的
 model response 所产生的 reasoning、pre-tool agent message 与 compact call/result，同时保留 boundary
 之后模型没有见过的 steer/user input；journal 与 transcript 仍保存全部原始 trace 和完整 call/result 对。
 后续 agentic reset 以更晚 boundary supersede 前者；后续 generated compaction 只能从最新 agentic

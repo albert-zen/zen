@@ -638,6 +638,7 @@ export class AgentRuntime {
           await this.#completeItem(toolCallItem, options);
           toolCallItems.push(toolCallItem);
         }
+        let agenticCompactionCommitted = false;
         await this.#runToolBatch(
           turnId,
           toolCallItems,
@@ -647,16 +648,18 @@ export class AgentRuntime {
             ...options,
             configuration: result.configuration,
             modelAdapter: result.modelAdapter,
+            agenticCompactionCommitted: () => {
+              agenticCompactionCommitted = true;
+              options.agenticCompactionCommitted?.();
+            },
           },
           scheduler,
         );
         try {
           await options.afterToolBatch?.({
             inputTokens: result.inputTokens,
-            agenticCompaction: result.toolCalls.some(
-              (toolCall) =>
-                toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-            ),
+            // An attempted/rejected reset is not a new context or usage epoch.
+            agenticCompaction: agenticCompactionCommitted,
           });
         } catch (error) {
           // The batch has settled and its actual results are already canonical.

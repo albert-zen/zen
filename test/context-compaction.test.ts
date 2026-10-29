@@ -3747,6 +3747,65 @@ test("freezes the admitted Provider selection while a settings update waits", as
   assert.equal(compacted.reasoningEffort, "medium");
 });
 
+test("a rejected agentic reset does not rearm the same high-pressure reminder episode", async () => {
+  const requests: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        yield { type: "text_delta", delta: "summary" };
+        return;
+      }
+      requests.push(cloneRequest(request));
+      const index = requests.length - 1;
+      if (index === 3) yield { type: "text_delta", delta: "done" };
+      else
+        yield {
+          type: "tool_call",
+          callId: `failed-reset-${index}`,
+          name: index === 1 ? "compact_context" : "shell",
+          arguments:
+            index === 1
+              ? { text: "must not reset", retention: { itemIds: ["c1"] } }
+              : { command: "printf ok" },
+        };
+      yield {
+        type: "usage",
+        inputTokens: index === 3 ? 100 : 8_500,
+        outputTokens: 1,
+      };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 10_000 },
+    ]),
+    contextCompaction: { agenticEnabled: true },
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "synthetic input")
+  ).done;
+  assert.equal(requests.length, 4);
+  assert.deepEqual(
+    requests.flatMap((request, index) =>
+      JSON.stringify(request.messages).includes("[Host context notice]")
+        ? [index]
+        : [],
+    ),
+    [1],
+  );
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(
+    snapshot.items.some(
+      (item) =>
+        item.type === "context_compaction" && item.provenance === "agentic",
+    ),
+    false,
+  );
+});
 test("agentic reminders are scoped to threshold crossings and reset, never every sample", async () => {
   const requests: ModelRequest[] = [];
   const usage = [100, 7_000, 8_000, 8_100, 100, 8_000, 8_000, 8_000, 100];
