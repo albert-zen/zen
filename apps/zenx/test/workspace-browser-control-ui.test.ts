@@ -36,12 +36,7 @@ const tab = (changes = {}): WorkspaceBrowserTab => ({
 });
 async function withPanel(
   run: (h: {
-    render(
-      changes?: object,
-      threadId?: string,
-      open?: boolean,
-      presentationId?: string,
-    ): Promise<void>;
+    render(changes?: object, threadId?: string, open?: boolean): Promise<void>;
     button(label: string): HTMLButtonElement;
     calls: unknown[][];
     mounts: Record<string, unknown>[];
@@ -89,19 +84,13 @@ async function withPanel(
       mounted = false;
     }
   };
-  const render = async (
-    changes = {},
-    threadId = "thread-a",
-    open = true,
-    presentationId?: string,
-  ) => {
+  const render = async (changes = {}, threadId = "thread-a", open = true) => {
     await act(async () =>
       root.render(
         React.createElement(WorkspaceBrowserPanel, {
           threadId,
           tab: tab(changes),
           open,
-          presentationId,
         }),
       ),
     );
@@ -301,6 +290,11 @@ test("native smoke layout probe resolves the current permission UI in every stat
       for (const state of [
         {},
         { control: "human", requiresFreshObservation: true },
+        {
+          control: "human",
+          agentActionsInFlight: 1,
+          requiresFreshObservation: true,
+        },
         { requiresFreshObservation: true },
         { agentActionsInFlight: 1, requiresFreshObservation: true },
         { agentActionOutcomeUnknown: true, requiresFreshObservation: true },
@@ -329,6 +323,7 @@ test("native smoke layout probe resolves the current permission UI in every stat
         assert.equal(measured.permissionFocusable, true);
         assert.equal(measured.permissionDetailsAccessible, true);
         assert.equal(measured.legacyControlCount, 0);
+        assert.equal(measured.controlStatusRows, 0);
       }
     }
   } finally {
@@ -355,26 +350,61 @@ test("unknown outcome keeps a reserved toolbar status slot when cleared", async 
   });
 });
 
-test("page chrome distinguishes live inspection, dispatched actions, and human control", async () => {
+test("tab glyph owns Agent activity; human-control safety stays in the stable permission control", async () => {
   await withPanel(async ({ render }) => {
-    await render({ agentInspectionsInFlight: 1 });
+    for (const activity of [
+      { agentInspectionsInFlight: 1 },
+      { agentActionsInFlight: 1 },
+      { agentActionsInFlight: 0, agentInspectionsInFlight: 0 },
+    ]) {
+      await render({ ...activity, control: "agent" });
+      assert.ok(
+        document.querySelector(".workspace-browser-activity") === null,
+        "Agent activity has no duplicate text row",
+      );
+      assert.ok(
+        document.querySelector(".workspace-browser-control-status") === null,
+        "Agent activity does not reserve a decorative status row",
+      );
+      assert.equal(
+        document
+          .querySelector(".workspace-browser-panel")
+          ?.hasAttribute("data-agent-active"),
+        false,
+      );
+    }
+    await render({ agentActionsInFlight: 1, control: "human" });
     assert.match(
-      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
-      /inspecting this page/u,
-    );
-    await render({
-      agentInspectionsInFlight: 0,
-      agentActionsInFlight: 1,
-      control: "human",
-    });
-    assert.match(
-      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
+      document.querySelector('[role="switch"]')?.getAttribute("title") ?? "",
       /action.*finishing/u,
+    );
+    assert.match(
+      document.querySelector('[role="switch"]')?.getAttribute("title") ?? "",
+      /already dispatched/u,
     );
     await render({ agentActionsInFlight: 0, control: "human" });
     assert.match(
-      document.querySelector(".workspace-browser-activity")?.textContent ?? "",
+      document.querySelector('[role="switch"]')?.getAttribute("title") ?? "",
       /You have control/u,
+    );
+    const permission = document.querySelector('[role="switch"]')!;
+    assert.equal(
+      document.getElementById(permission.getAttribute("aria-describedby")!)
+        ?.textContent,
+      permission.getAttribute("title"),
+    );
+    assert.ok(
+      document.querySelector(".workspace-browser-control-status") === null,
+      "Human takeover cannot add a row or resize the native viewport",
+    );
+    const css = readFileSync(
+      new URL("../src/renderer/src/styles.css", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(
+      css,
+      /\.workspace-browser-control-status/u,
+      "No hidden placeholder row is reserved for Agent mode",
     );
   });
 });
@@ -407,30 +437,30 @@ test("blank viewport distinguishes websites, loading and errors; theme updates r
   });
 });
 
-test("presentation acknowledgement and appearance updates share one native lease", async () => {
+test("human-mounted page retains one native lease through appearance and activity updates", async () => {
   await withPanel(async ({ render, mounts }) => {
     const viewport = document.querySelector(".workspace-browser-viewport")!;
     viewport.getBoundingClientRect = () =>
       ({ x: 0, y: 0, width: 640, height: 480 }) as DOMRect;
-    await render({ url: "about:blank" }, "thread-a", true, "presentation-a");
-    const acknowledged = mounts.at(-1)!;
-    assert.equal(acknowledged.presentationId, "presentation-a");
-    assert.ok(acknowledged.bounds);
+    await render({ url: "about:blank" });
+    await act(async () => window.dispatchEvent(new window.Event("resize")));
+    const mounted = mounts.at(-1)!;
+    assert.ok(mounted.bounds);
     await act(async () => {
       document.documentElement.dataset.appearance = "dark";
     });
     const themed = mounts.at(-1)!;
-    assert.equal(themed.lease, acknowledged.lease);
+    assert.equal(themed.lease, mounted.lease);
     assert.equal(themed.appearance, "dark");
+    assert.deepEqual(themed.bounds, mounted.bounds);
+    const count = mounts.length;
+    await render({ url: "about:blank", agentInspectionsInFlight: 1 });
     assert.equal(
-      themed.presentationId,
-      undefined,
-      "acknowledged token must not be replayed by theme changes",
+      mounts.length,
+      count,
+      "Agent activity cannot request or acknowledge presentation",
     );
-    assert.deepEqual(themed.bounds, acknowledged.bounds);
-    await render({ url: "about:blank" }, "thread-a", true, "presentation-b");
-    assert.equal(mounts.at(-1)!.lease, acknowledged.lease);
-    assert.equal(mounts.at(-1)!.presentationId, "presentation-b");
-    assert.equal(mounts.at(-1)!.appearance, "dark");
+    assert.equal(mounts.at(-1)!.lease, mounted.lease);
+    assert.ok(mounts.every((request) => !("presentationId" in request)));
   });
 });

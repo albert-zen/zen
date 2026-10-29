@@ -124,6 +124,7 @@ async function fixture() {
     threadId = "thread-a",
     providerRevision = "provider-a",
     open = true,
+    fixedTargetId = "connected-a",
   ) => {
     await act(async () =>
       root.render(
@@ -134,6 +135,7 @@ async function fixture() {
           open,
           onOpenChange() {},
           embedded: true,
+          fixedTargetId,
         }),
       ),
     );
@@ -329,6 +331,7 @@ test("connected shortcut sends only exact selected identity to the Host, never a
     await f.targets([target({ url: "https://example.com/after-redirect" })]);
     await act(async () => f.button().click());
     assert.deepEqual(f.externalRequests[1], ["thread-a", "connected-a"]);
+    await f.renderConnected("thread-a", "provider-a", true, "connected-b");
     await f.targets(
       [target(), target({ id: "connected-b", url: "https://other.example/" })],
       "connected-b",
@@ -437,6 +440,7 @@ test("connected external opening locks duplicates, reports failure and fences er
       }),
     );
     await act(async () => f.button().click());
+    await f.renderConnected("thread-a", "provider-a", true, "connected-b");
     await f.targets([target({ id: "connected-b" })]);
     await act(async () => reject(new Error("Old target failed")));
     assert.equal(document.querySelector('[role="alert"]'), null);

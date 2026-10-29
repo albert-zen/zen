@@ -58,7 +58,6 @@ export const en = {
   computerBackgroundAppActivity:
     "Agent is typing into {{application}}'s current focus; app focus may change",
   computerApplication: "Computer application",
-  followAgentLatestApplication: "Follow agent's latest application",
   computerActivityUnknown:
     "Computer operation in progress · target mode unknown",
   computerNoCurrentActivity: "No current Agent operation in this window",
@@ -408,8 +407,11 @@ export const en = {
   waitingForTheAgentToUseA: "Waiting for the Agent to use a Computer window.",
   computerWorkspace: "Computer workspace",
   computerWindow: "Computer window",
-  followAgent: "Follow Agent",
-  followAgentLatestWindow: "Follow Agent · latest window",
+  chooseBrowserPage: "Choose a page",
+  chooseComputerTarget: "Choose a window or application",
+  selectedComputerTargetUnavailable:
+    "Selected window or application unavailable",
+  computerObservationPending: "Loading Computer targets…",
   window: "Window",
   thisRoomIsNoLongerAvailableFor:
     "This Room is no longer available for automatic-reply setup. Return to Rooms and choose a current member.",
@@ -1102,7 +1104,6 @@ export const zhCN = {
   computerBackgroundAppActivity:
     "Agent 正在向 {{application}} 的当前焦点输入；应用内焦点可能变化",
   computerApplication: "Computer 应用",
-  followAgentLatestApplication: "跟随 Agent 最近操作的应用",
   computerActivityUnknown: "电脑操作进行中 · 目标模式未知",
   computerNoCurrentActivity: "此窗口当前没有 Agent 操作",
   sideChatModelSettings: "侧会话模型设置",
@@ -1420,8 +1421,10 @@ export const zhCN = {
   waitingForTheAgentToUseA: "等待 Agent 使用计算机窗口。",
   computerWorkspace: "计算机工作区",
   computerWindow: "计算机窗口",
-  followAgent: "跟随 Agent",
-  followAgentLatestWindow: "跟随 Agent · 最新窗口",
+  chooseBrowserPage: "选择页面",
+  chooseComputerTarget: "选择窗口或应用",
+  selectedComputerTargetUnavailable: "所选窗口或应用不可用",
+  computerObservationPending: "正在加载电脑观察目标…",
   window: "窗口",
   thisRoomIsNoLongerAvailableFor:
     "此房间已无法设置自动回复。请返回房间并选择当前成员。",

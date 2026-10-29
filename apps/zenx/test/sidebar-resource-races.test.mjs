@@ -164,7 +164,7 @@ test("late materialize reply does not close native tab already retained by concu
     dom.window.close();
   }
 });
-test("implicit first selected Room resource retains its descriptor owner", async () => {
+test("unselected Room resource stays dormant and explicit choice retains its descriptor owner", async () => {
   const dom = setup();
   const calls = [];
   window.zenx = {
@@ -185,28 +185,38 @@ test("implicit first selected Room resource retains its descriptor owner", async
     selectedTab: null,
     resourceThreadId: "b",
   };
+  function Harness() {
+    const [selectedTab, onSelectTab] = React.useState(undefined);
+    return React.createElement(AuxiliaryPanel, {
+      presentationState: { ...state, selectedTab: selectedTab ?? null },
+      conversationContext: {
+        kind: "room",
+        roomId: "r",
+        resourceThread: { threadId: "b", title: "B" },
+        resourceThreads: [
+          { threadId: "a", title: "A" },
+          { threadId: "b", title: "B" },
+        ],
+      },
+      title: "R",
+      open: true,
+      onOpenChange: () => {},
+      snapshot: null,
+      selectedTab,
+      onSelectTab,
+    });
+  }
   try {
-    await act(async () =>
-      root.render(
-        React.createElement(AuxiliaryPanel, {
-          presentationState: state,
-          conversationContext: {
-            kind: "room",
-            roomId: "r",
-            resourceThread: { threadId: "b", title: "B" },
-            resourceThreads: [
-              { threadId: "a", title: "A" },
-              { threadId: "b", title: "B" },
-            ],
-          },
-          title: "R",
-          open: true,
-          onOpenChange: () => {},
-          snapshot: null,
-          onSelectTab: () => {},
-        }),
-      ),
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(
+      calls.length,
+      0,
+      "a first descriptor is not implicitly selected or read",
     );
+    const tab = document.querySelector('[role="tab"]');
+    assert.ok(Boolean(tab), "the exact resource is available to human choice");
+    assert.equal(tab.getAttribute("aria-selected"), "false");
+    await act(async () => tab.click());
     assert.ok(calls.length > 0);
     assert.equal(calls[0].threadId, "a", JSON.stringify(calls));
   } finally {
@@ -429,186 +439,143 @@ test("late materialize after descriptor removal/unmount closes native on origina
   }
 });
 import { sidebarTabFromId } from "../src/thread-sidebar-state.js";
-test("controlled Room native presentation persists scoped selection without suppressing its own handoff", async () => {
-  const dom = setup();
-  Object.assign(globalThis, { MutationObserver: dom.window.MutationObserver });
-  let present;
-  let latest;
-  const mounts = [];
-  window.zenx = {
-    workspaceBrowser: {
-      onChanged: () => () => {},
-      onPresentation: (listener) => {
-        present = listener;
-        return () => {};
-      },
-      presentationContext: async () => {},
-      declinePresentation: async () => {},
-      onFocusAddress: () => () => {},
-      mount: async (value) => mounts.push(value),
-      command: async () => [],
-    },
-    plugins: {},
-  };
-  const root = createRoot(document.getElementById("root"));
-  function Harness() {
-    const [state, setState] = React.useState({
-      ...emptySidebarState({ kind: "room", id: "handoff-room" }),
-      open: true,
-      resourceThreadId: "handoff-member",
+for (const lateHydration of [false, true]) {
+  test(`${lateHydration ? "late hydrated" : "controlled"} Room browser choices normalize the exact owner only after human selection`, async () => {
+    const dom = setup();
+    Object.assign(globalThis, {
+      MutationObserver: dom.window.MutationObserver,
     });
-    latest = state;
-    return React.createElement(AuxiliaryPanel, {
-      presentationState: state,
-      conversationContext: {
-        kind: "room",
-        roomId: "handoff-room",
-        resourceThread: { threadId: "handoff-member", title: "M" },
-        resourceThreads: [{ threadId: "handoff-member", title: "M" }],
-      },
-      title: "R",
-      open: state.open,
-      onOpenChange: (open) => setState((s) => ({ ...s, open })),
-      snapshot: null,
-      selectedTab: state.selectedTab ?? void 0,
-      onSelectTab: (id) =>
-        setState((s) => ({
-          ...s,
-          selectedTab: id,
-          tabs: [sidebarTabFromId(id)],
-        })),
-    });
-  }
-  try {
-    await act(async () => root.render(React.createElement(Harness)));
-    const now = Date.now();
-    await act(async () =>
-      present({
-        threadId: "handoff-member",
-        requestId: "handoff-req",
-        operationSequence: 1e3,
-        sessionEpoch: "handoff-epoch",
-        requestedAt: now + 1,
-        expiresAt: now + 1e4,
-        tab: {
-          id: "handoff-native",
-          threadId: "handoff-member",
-          title: "Page",
-          url: "https://example.com/",
-          loading: false,
-          canGoBack: false,
-          canGoForward: false,
-          sharedWithAgent: true,
-          control: "agent",
-          agentActionsInFlight: 0,
+    let changed;
+    let latest;
+    let hydrate;
+    const mounts = [];
+    const commands = [];
+    const native = {
+      id: "chosen-native",
+      threadId: "room-member",
+      title: "Page",
+      url: "https://example.com/",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      sharedWithAgent: true,
+      control: "agent",
+      agentActionsInFlight: 0,
+      agentActionOutcomeUnknown: false,
+      requiresFreshObservation: false,
+    };
+    window.zenx = {
+      workspaceBrowser: {
+        onChanged: (listener) => {
+          changed = listener;
+          return () => {};
         },
-      }),
-    );
-    assert.equal(latest.selectedTab, "browser:@handoff-member:handoff-native");
-    assert.equal(document.querySelector(".browser-follow-button"), null);
-    assert.equal(
-      [...document.querySelectorAll("button")].some((b) =>
-        b.textContent?.includes("Follow agent"),
-      ),
-      false,
-    );
-  } finally {
-    await act(async () => root.unmount());
-    dom.window.close();
-  }
-});
-test("late hydrated Room native presentation retains fresh scope normalization", async () => {
-  const dom = setup();
-  Object.assign(globalThis, { MutationObserver: dom.window.MutationObserver });
-  let present;
-  let latest;
-  const mounts = [];
-  let hydrate;
-  window.zenx = {
-    workspaceBrowser: {
-      onChanged: () => () => {},
-      onPresentation: (listener) => {
-        present = listener;
-        return () => {};
-      },
-      presentationContext: async () => {},
-      declinePresentation: async () => {},
-      onFocusAddress: () => () => {},
-      mount: async (value) => mounts.push(value),
-      command: async () => [],
-    },
-    plugins: {},
-  };
-  const root = createRoot(document.getElementById("root"));
-  function Harness() {
-    const [hydrated, setHydrated] = React.useState(false);
-    hydrate = () => setHydrated(true);
-    const [state, setState] = React.useState({
-      ...emptySidebarState({ kind: "room", id: "hydration-room" }),
-      open: true,
-      resourceThreadId: "hydration-member",
-    });
-    latest = state;
-    return React.createElement(AuxiliaryPanel, {
-      presentationState: hydrated ? state : void 0,
-      conversationContext: {
-        kind: "room",
-        roomId: "hydration-room",
-        resourceThread: { threadId: "hydration-member", title: "M" },
-        resourceThreads: [{ threadId: "hydration-member", title: "M" }],
-      },
-      title: "R",
-      open: state.open,
-      onOpenChange: (open) => setState((s) => ({ ...s, open })),
-      snapshot: null,
-      selectedTab: state.selectedTab ?? void 0,
-      onSelectTab: (id) =>
-        setState((s) => ({
-          ...s,
-          selectedTab: id,
-          tabs: [sidebarTabFromId(id)],
-        })),
-    });
-  }
-  try {
-    await act(async () => root.render(React.createElement(Harness)));
-    await act(async () => hydrate());
-    const now = Date.now();
-    await act(async () =>
-      present({
-        threadId: "hydration-member",
-        requestId: "hydration-req",
-        operationSequence: 1e3,
-        sessionEpoch: "hydration-epoch",
-        requestedAt: now + 1,
-        expiresAt: now + 1e4,
-        tab: {
-          id: "hydration-native",
-          threadId: "hydration-member",
-          title: "Page",
-          url: "https://example.com/",
-          loading: false,
-          canGoBack: false,
-          canGoForward: false,
-          sharedWithAgent: true,
-          control: "agent",
-          agentActionsInFlight: 0,
+        onFocusAddress: () => () => {},
+        mount: async (value) => mounts.push(value),
+        command: async (threadId, command) => {
+          commands.push([threadId, command]);
+          return command === "new" ? [native] : [];
         },
-      }),
-    );
-    assert.equal(
-      latest.selectedTab,
-      "browser:@hydration-member:hydration-native",
-    );
-    assert.equal(document.querySelector(".browser-follow-button"), null);
-    assert.equal(
-      [...document.querySelectorAll("button")].some((b) =>
-        b.textContent?.includes("Follow agent"),
-      ),
-      false,
-    );
-  } finally {
-    await act(async () => root.unmount());
-    dom.window.close();
-  }
-});
+      },
+      plugins: {},
+    };
+    const root = createRoot(document.getElementById("root"));
+    function Harness() {
+      const [hydrated, setHydrated] = React.useState(!lateHydration);
+      hydrate = () => setHydrated(true);
+      const [state, setState] = React.useState({
+        ...emptySidebarState({ kind: "room", id: "choice-room" }),
+        open: true,
+        resourceThreadId: "room-member",
+      });
+      latest = state;
+      return React.createElement(AuxiliaryPanel, {
+        presentationState: hydrated ? state : undefined,
+        conversationContext: {
+          kind: "room",
+          roomId: "choice-room",
+          resourceThread: { threadId: "room-member", title: "M" },
+          resourceThreads: [{ threadId: "room-member", title: "M" }],
+        },
+        title: "R",
+        open: state.open,
+        onOpenChange: (open) => setState((s) => ({ ...s, open })),
+        snapshot: null,
+        selectedTab: state.selectedTab ?? undefined,
+        onSelectTab: (id) =>
+          setState((s) => ({
+            ...s,
+            selectedTab: id,
+            tabs: [sidebarTabFromId(id)],
+          })),
+      });
+    }
+    try {
+      await act(async () => root.render(React.createElement(Harness)));
+      await act(async () =>
+        changed({
+          threadId: "room-member",
+          tabs: [{ ...native, agentActionsInFlight: 1 }],
+        }),
+      );
+      assert.equal(
+        latest.selectedTab,
+        null,
+        "Agent discovery never chooses a Room resource",
+      );
+      assert.equal(mounts.length, 0);
+      if (lateHydration) await act(async () => hydrate());
+      assert.equal(
+        latest.selectedTab,
+        null,
+        "late hydration never chooses the discovered Agent target",
+      );
+      const chooseBrowser = [
+        ...document.querySelectorAll(".workspace-tab-types button"),
+      ].find(
+        (button) => button.querySelector("strong")?.textContent === "Browser",
+      );
+      assert.ok(
+        Boolean(chooseBrowser),
+        "manual Browser choice stays available",
+      );
+      await act(async () => chooseBrowser.click());
+      assert.equal(latest.selectedTab, "browser:@room-member:chosen-native");
+      assert.deepEqual(latest.tabs, [
+        {
+          kind: "browser",
+          id: "chosen-native",
+          resourceThreadId: "room-member",
+        },
+      ]);
+      assert.ok(
+        commands.some(
+          ([threadId, command]) =>
+            threadId === "room-member" && command === "new",
+        ),
+        "the explicit human open uses the exact Room member",
+      );
+      await act(async () =>
+        changed({
+          threadId: "room-member",
+          tabs: [
+            native,
+            { ...native, id: "agent-other", agentActionsInFlight: 1 },
+          ],
+        }),
+      );
+      assert.equal(
+        latest.selectedTab,
+        "browser:@room-member:chosen-native",
+        "new Agent targets never replace the human Room choice",
+      );
+      assert.ok(
+        document.querySelector(".browser-follow-button") === null,
+        "no Follow control remains",
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+}

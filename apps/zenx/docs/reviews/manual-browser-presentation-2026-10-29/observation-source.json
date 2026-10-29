@@ -1,0 +1,32 @@
+{
+  "commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+  "dirtyFiles": [],
+  "fixture": "manual-observation-visual",
+  "scope": "Exact integrated production renderer components with synthetic Host catalogs, target frames and activity only. No model/API calls, native provider/window/input, user profiles or private screenshots. CSP denies network connections. Browser fixture is not native Electron validation.",
+  "builderSha256": "9e1ca2385dcd2cdd949b46c6bffed8deac78f515377324164bebbdffa0a5ae9e",
+  "sources": {
+    "apps/zenx/src/external-link-policy.ts": "4c25348967364aaae14d3696798f5eb17e49b826471e95d430a3eea6283dafe0",
+    "apps/zenx/src/renderer/src/agent-action-pointer.tsx": "8a8e43e20071435d59911cb5186d46ad42952ab109b917d424b72c60807b9086",
+    "apps/zenx/src/renderer/src/browser-external-open.tsx": "f4b9b2167580cb2e0c00b4b03871a08dea4a28c8c8eeb23624ef2a4b459b96f4",
+    "apps/zenx/src/renderer/src/browser-thread-panel.tsx": "5a7ef75ce9743dbc37b43e5f4510b291a800e8bedf2e1a89aba75245e6124a11",
+    "apps/zenx/src/renderer/src/computer-thread-panel.tsx": "644f3afa4c9713c4d7a5627587e48500da87c057c2c9738dc84d1c1dd86203e1",
+    "apps/zenx/src/renderer/src/i18n.ts": "96f9181b7318ff52a04b267849b32b8591a7ac621c19b015c4b5fa7804d6d350",
+    "apps/zenx/src/renderer/src/i18n/common.ts": "c8cfa08c66058e2a2661d3233ba3ea777338a45066c784c0d4e5b58a7051559a",
+    "apps/zenx/src/renderer/src/i18n/panels.ts": "3323eee167e1126b663edab83f5546ffecf74e8d1d9844f22304d90e981814d5",
+    "apps/zenx/src/renderer/src/i18n/selector.ts": "68431ca2011c334a923812fe094b65683cf6cbb99ea857c6f146ea4f25771fb8",
+    "apps/zenx/src/renderer/src/i18n/settings.ts": "26df658daf14bbdc97ae29aeced713e0eb76153856c4d9071cad35b70e51275d",
+    "apps/zenx/src/renderer/src/i18n/shell.ts": "d95df56db1970940b05d3b297c2aa42b200380048ac9cf2c5deec4e33b86dfaf",
+    "apps/zenx/src/renderer/src/icons.tsx": "493d7458c4514b1793c832d6b4e8322ebbf55caafc7229cd91a330b1572a6cc4",
+    "apps/zenx/src/renderer/src/styles.css": "85aa50eff61590e227913b17915aa4d558f590b0c0927b64e63b80cdfb6175cc",
+    "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "apps/zenx/src/renderer/src/ui/controls.tsx": "9fe2235fa72c268a8fb6c306a3a836d700780006fb24e14954f9def683bc1629",
+    "apps/zenx/test/fixtures/manual-observation-visual.css": "2c786e62d57f78862c9fc4bf41f3b5932a781050c6e09b1a6500d3df3b390e81",
+    "apps/zenx/test/fixtures/manual-observation-visual.html": "69cb5844e8e09568782dbe8f8892160bf20d4923e52481f4cf9ad5e764a095e3",
+    "apps/zenx/test/fixtures/manual-observation-visual.tsx": "a69822882dbf62014699861d345a01fba467bb1f4fbc0485a13f733696bebe1c"
+  },
+  "artifacts": {
+    "index.js": "f53dae912063e980e306f5f0b17811a2116d7b68a1574e1ef0fd1fc740a8e847",
+    "agent-runtime.css": "46181431380696ee08e5b04005e6693b513f3cfaec3ca18023b6c991a6bb3a7f",
+    "index.html": "f6c21c0d5a6b0024675660affdf9bae77586a3b683659c3b888b97cab6b8f016"
+  }
+}

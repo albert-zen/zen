@@ -460,7 +460,12 @@ for (const throughHostSdk of [false, true]) {
         "the unresolved Browser list must not rewrite the persisted order",
       );
       resolveList([
-        { id: "browser-1", title: "Existing browser", url: "about:blank" },
+        {
+          id: "browser-1",
+          threadId: "thread-a",
+          title: "Existing browser",
+          url: "about:blank",
+        },
       ]);
       await act(async () => await Promise.resolve());
       const choose = (name: string) =>
@@ -486,8 +491,18 @@ for (const throughHostSdk of [false, true]) {
         else choose("Notes").click();
       });
       resolveBrowser([
-        { id: "browser-1", title: "Existing browser", url: "about:blank" },
-        { id: "browser-2", title: "Delayed browser", url: "about:blank" },
+        {
+          id: "browser-1",
+          threadId: "thread-a",
+          title: "Existing browser",
+          url: "about:blank",
+        },
+        {
+          id: "browser-2",
+          threadId: "thread-a",
+          title: "Delayed browser",
+          url: "about:blank",
+        },
       ]);
       await act(async () => await Promise.resolve());
       assert.equal(

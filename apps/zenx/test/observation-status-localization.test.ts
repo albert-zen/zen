@@ -70,7 +70,7 @@ test("localized observation statuses preserve unsupported and snapshot reasons p
     });
     assert.match(
       document.body.textContent ?? "",
-      /Waiting for the Agent to use a Computer window/,
+      /Choose a window or application/,
     );
     assert.match(
       document.body.textContent ?? "",

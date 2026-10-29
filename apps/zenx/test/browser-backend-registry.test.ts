@@ -462,7 +462,7 @@ function selectedTab(events: BrowserThreadEvent[]): string | undefined {
   return event?.targets.find((target) => target.id === event.selectedId)?.tabId;
 }
 
-test("Follow Agent follows each child's latest selection and the last active backend, while explicit selection stays pinned", async () => {
+test("Agent activity never chooses an observer target and explicit selection stays pinned across backends", async () => {
   const workspace = tabFixture("Workspace"),
     connected = tabFixture("Connected");
   const registry = new BrowserBackendRegistry(
@@ -481,9 +481,8 @@ test("Follow Agent follows each child's latest selection and the last active bac
       "browser_workspace_open",
       invocation({ url: "https://example.test/a" }),
     );
-    const targetId = events
-      .filter((event) => event.type === "targets")
-      .at(-1)!.selectedId!;
+    const targetId = events.filter((event) => event.type === "targets").at(-1)!
+      .targets[0]!.id;
     stopPinned = registry.observeThread(
       { threadId: "thread", frames: false, targetId },
       (event) => pinned.push(event),
@@ -492,34 +491,34 @@ test("Follow Agent follows each child's latest selection and the last active bac
       "browser_workspace_open",
       invocation({ url: "https://example.test/b" }),
     );
-    assert.equal(selectedTab(events), "workspace:tab-2");
+    assert.equal(selectedTab(events), undefined);
     await registry.invoke(
       "browser_connected_open",
       invocation({ url: "https://example.test/c" }),
     );
-    assert.equal(selectedTab(events), "connected:tab-1");
+    assert.equal(selectedTab(events), undefined);
     await registry.invoke("browser_workspace_list_tabs", invocation());
     assert.equal(
       selectedTab(events),
-      "connected:tab-1",
-      "listing the other backend must not move Follow Agent",
+      undefined,
+      "listing the other backend never chooses an observer target",
     );
     await registry.invoke(
       "browser_connected_open",
       invocation({ url: "https://example.test/d" }),
     );
-    assert.equal(selectedTab(events), "connected:tab-2");
+    assert.equal(selectedTab(events), undefined);
     await registry.invoke(
       "browser_workspace_navigate",
       invocation({ tabId: "workspace:tab-1", url: "https://example.test/e" }),
     );
     assert.equal(
       selectedTab(events),
-      "workspace:tab-1",
-      "follow must use the child's selectedId, not the last target in its list",
+      undefined,
+      "operating a target never selects it for an observer",
     );
     await registry.invoke("browser_connected_list_tabs", invocation());
-    assert.equal(selectedTab(events), "workspace:tab-1");
+    assert.equal(selectedTab(events), undefined);
     assert.equal(selectedTab(pinned), "workspace:tab-1");
     const reopened: BrowserThreadEvent[] = [];
     const stopReopened = registry.observeThread(
@@ -528,8 +527,8 @@ test("Follow Agent follows each child's latest selection and the last active bac
     );
     assert.equal(
       selectedTab(reopened),
-      "workspace:tab-1",
-      "last activity survives closing and reopening the panel",
+      undefined,
+      "reopening without a human target choice never follows last activity",
     );
     stopReopened();
   } finally {
@@ -588,7 +587,11 @@ test("production external backend's synchronous metadata replay subscribes once 
   try {
     await registry.invoke("browser_connected_list_tabs", invocation());
     stop = registry.observeThread(
-      { threadId: "thread", frames: true },
+      {
+        threadId: "thread",
+        frames: true,
+        targetId: observationTarget(registry),
+      },
       (event) => events.push(event),
     );
     await new Promise((resolve) => setImmediate(resolve));
@@ -644,7 +647,7 @@ test("backend switches fence late frames, and registry retirement releases every
     connected.backend,
   );
   const events: BrowserThreadEvent[] = [];
-  const stop = registry.observeThread(
+  let stop = registry.observeThread(
     { threadId: "thread", frames: true },
     (event) => events.push(event),
   );
@@ -653,10 +656,34 @@ test("backend switches fence late frames, and registry retirement releases every
       "browser_workspace_open",
       invocation({ url: "https://example.test/a" }),
     );
+    assert.equal(sources.length, 0, "unselected catalog never captures");
+    stop();
+    stop = registry.observeThread(
+      {
+        threadId: "thread",
+        frames: true,
+        targetId: observationTarget(registry, "workspace:tab-1"),
+      },
+      (event) => events.push(event),
+    );
     const first = sources.at(-1)!;
     await registry.invoke(
       "browser_connected_open",
       invocation({ url: "https://example.test/b" }),
+    );
+    assert.equal(
+      sources.at(-1)?.backend,
+      "workspace",
+      "Agent action does not switch the human-selected backend",
+    );
+    stop();
+    stop = registry.observeThread(
+      {
+        threadId: "thread",
+        frames: true,
+        targetId: observationTarget(registry, "connected:tab-1"),
+      },
+      (event) => events.push(event),
     );
     assert.equal(sources.at(-1)?.backend, "connected");
     assert.equal(first.stopped, true);
@@ -704,7 +731,7 @@ test("backend switches fence late frames, and registry retirement releases every
   }
 });
 
-test("successful session closure clears its last activity without changing other threads or admitting list activity", async () => {
+test("session closure and later listings never choose a replacement observation target", async () => {
   const workspace = tabFixture("Workspace"),
     connected = tabFixture("Connected");
   const registry = new BrowserBackendRegistry(
@@ -729,7 +756,7 @@ test("successful session closure clears its last activity without changing other
       "browser_workspace_open",
       invocation({ url: "https://example.test/c" }, "other-thread"),
     );
-    assert.equal(selectedTab(events), "connected:tab-1");
+    assert.equal(selectedTab(events), undefined);
     workspace.backend.navigate = async () => {
       throw new Error("navigation failed");
     };
@@ -743,11 +770,10 @@ test("successful session closure clears its last activity without changing other
       ),
       /navigation failed/,
     );
-    assert.equal(selectedTab(events), "connected:tab-1");
+    assert.equal(selectedTab(events), undefined);
     await registry.invoke("browser_connected_close_session", invocation());
-    assert.equal(selectedTab(events), "workspace:tab-1");
-    // A different connected session can expose targets without inheriting the
-    // closed session's last-action preference.
+    assert.equal(selectedTab(events), undefined);
+    // A different connected session exposes targets without selecting any.
     connected.backend.listTabs = async (sessionId) => [
       {
         sessionId,
@@ -765,20 +791,23 @@ test("successful session closure clears its last activity without changing other
     registry.observeThread({ threadId: "thread", frames: false }, (event) =>
       reopened.push(event),
     )();
-    assert.equal(selectedTab(reopened), "workspace:tab-1");
+    assert.equal(selectedTab(reopened), undefined);
   } finally {
     stop();
     await registry.close();
   }
 });
 
-test("a renderer failure during the post-action selection refresh cannot reject the completed action", async () => {
+test("a renderer failure during catalog publication cannot reject the completed action", async () => {
   const registry = new BrowserBackendRegistry(
     fixture("Workspace").backend,
     fixture("Connected").backend,
   );
   registry.observeThread({ threadId: "thread", frames: false }, (event) => {
-    if (event.type === "targets" && event.selectedId?.startsWith("connected:"))
+    if (
+      event.type === "targets" &&
+      event.targets.some((target) => target.id.startsWith("connected:"))
+    )
       throw new Error("renderer destroyed");
   });
   try {
@@ -812,7 +841,7 @@ test("synchronous retirement during subscription creation disposes its late hand
   const events: BrowserThreadEvent[] = [];
   let retiring: Promise<void> | undefined;
   const stop = registry.observeThread(
-    { threadId: "thread", frames: true },
+    { threadId: "thread", frames: true, targetId: observationTarget(registry) },
     (event) => {
       events.push(event);
       if (event.type === "status" && event.status === "live")
@@ -1036,7 +1065,8 @@ test("human current-URL reads keep exact connection generation and Thread identi
     const snapshot = events.findLast((event) => event.type === "targets")!;
     assert.equal(snapshot.type, "targets");
     if (snapshot.type !== "targets") return;
-    const targetId = snapshot.selectedId!;
+    assert.equal(snapshot.selectedId, undefined);
+    const targetId = snapshot.targets[0]!.id;
     await assert.rejects(
       registry.readTargetUrl("foreign-thread", targetId),
       /unavailable/,
@@ -1131,3 +1161,23 @@ test("external activity is qualified to connection generation and late settlemen
   );
   await registry.close();
 });
+
+function observationTarget(
+  registry: BrowserBackendRegistry,
+  tabId?: string,
+): string {
+  let catalog: Extract<BrowserThreadEvent, { type: "targets" }> | undefined;
+  registry.observeThread({ threadId: "thread", frames: false }, (event) => {
+    if (event.type === "targets") catalog = event;
+  })();
+  assert.equal(
+    catalog?.selectedId,
+    undefined,
+    "catalog discovery has no implicit selected target",
+  );
+  const target = tabId
+    ? catalog?.targets.find((target) => target.tabId === tabId)
+    : catalog?.targets[0];
+  assert.ok(target, "manual choice uses an exact discovered target");
+  return target.id;
+}

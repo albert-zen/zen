@@ -13,11 +13,6 @@ export const ipcChannels = {
   skillsImport: "zenx:skills:import",
   skillsMode: "zenx:skills:mode",
   workspaceBrowserCommand: "zenx:workspace-browser:command",
-  workspaceBrowserPresentation: "zenx:workspace-browser:presentation",
-  workspaceBrowserPresentationContext:
-    "zenx:workspace-browser:presentation-context",
-  workspaceBrowserDeclinePresentation:
-    "zenx:workspace-browser:decline-presentation",
   workspaceBrowserMount: "zenx:workspace-browser:mount",
   workspaceBrowserChanged: "zenx:workspace-browser:changed",
   workspaceBrowserFocusAddress: "zenx:workspace-browser:focus-address",

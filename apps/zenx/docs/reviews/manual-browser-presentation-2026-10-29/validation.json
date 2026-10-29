@@ -1,0 +1,145 @@
+{
+  "source_commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+  "public_source_commit": "066b1752749d294ebaa7bb42e3f2966c14c22c34",
+  "source_tree": "12c832321f1983834ae9441e0821802659f9ff7d",
+  "environment": "Cloud Linux with cached dependencies; native Electron and node-pty unavailable; Unix control-socket fixture bind denied. npm_config_cache=/tmp/task-npm-cache inherited by children.",
+  "checks": {
+    "focused_after_geometry_fix": {
+      "source_commit": "e41e03a8f0e72604db4358c47ea88fdefc1aa57a",
+      "production_identical_to_accepted": true,
+      "passed": 187,
+      "failed": 0,
+      "files": [
+        "test/auxiliary-browser-tabs.test.ts",
+        "test/auxiliary-panel.test.ts",
+        "test/browser-activity-order.test.ts",
+        "test/browser-backend-registry.test.ts",
+        "test/browser-current-url.test.ts",
+        "test/browser-external-activity.test.ts",
+        "test/browser-external-open.test.ts",
+        "test/browser-external-target.test.ts",
+        "test/browser-live-page.test.ts",
+        "test/browser-manual-target-selection.test.ts",
+        "test/browser-observation-error.test.ts",
+        "test/browser-presentation.test.ts",
+        "test/browser-thread-observation.test.ts",
+        "test/computer-action-pointer.test.ts",
+        "test/computer-app-keyboard.test.ts",
+        "test/computer-thread-observation.test.ts",
+        "test/computer-thread-panel.test.ts",
+        "test/model-computer-upgrade.test.ts",
+        "test/observation-status-localization.test.ts",
+        "test/owned-template-labels-localization.test.ts",
+        "test/sidebar-resource-races.test.mjs",
+        "test/workspace-browser-control-ui.test.ts",
+        "test/workspace-browser-shared-target.test.ts",
+        "test/workspace-browser-tab-activity.test.ts"
+      ],
+      "runner": "node --import tsx --test --test-concurrency=4"
+    },
+    "bounded_assertion_regression": {
+      "source_commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+      "passed": 11,
+      "failed": 0,
+      "command": "node --import tsx --test test/workspace-browser-control-ui.test.ts"
+    },
+    "node_web_types": {
+      "status": "passed",
+      "command": "npm run typecheck:prepared --workspace @zen/zenx"
+    },
+    "production_build": {
+      "status": "passed main/preload/renderer; no native launch",
+      "command": "npm run build:prepared --workspace @zen/zenx"
+    },
+    "prepared_plugins_brand_sdk_format_diff": {
+      "status": "passed",
+      "note": "Own SDK output; prepared first-party plugins; brand check; all changed source paths formatted and diff checked."
+    },
+    "core_sdk_imzenx": {
+      "command": "npm run test:node",
+      "core_passed": 1560,
+      "core_failed": 0,
+      "core_skipped": 2,
+      "sdk_passed": 25,
+      "imzenx_plugin_passed": 45,
+      "source_scope": "Core/SDK/IMZenX sources unchanged across later renderer-only revisions."
+    },
+    "initial_unfiltered_zenx": {
+      "passed": 4827,
+      "failed": 11,
+      "skipped": 49,
+      "total": 4887,
+      "status": "failed; not a final-head success",
+      "resolution": "Three superseded synthetic owner/auto-selection fixtures corrected and verified; eight unsupported environment executions remain distinct."
+    },
+    "pre_geometry_filtered_zenx": {
+      "source_commit": "0992b1ffc696c7555ef3eb2c88f78a06d67a8786",
+      "passed": 4831,
+      "failed": 0,
+      "skipped": 49,
+      "reported_total": 4880,
+      "status": "passed with explicit environment exclusions; not full unfiltered or native acceptance"
+    },
+    "accepted_source_filtered_zenx": {
+      "source_commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+      "status": "failed: one unchanged plugin-profile transaction timed out; all exclusions remain explicit",
+      "runner": "node --import tsx --test --test-concurrency=4 --test-skip-pattern=<exact seven names below>; all .test.ts/.test.mjs except unavailable-Electron import file",
+      "passed": 4830,
+      "failed": 1,
+      "skipped": 49,
+      "reported_total": 4880,
+      "duration_ms": 493290.725348,
+      "failing_test": "dev same-version update commits after a post-fence client disconnect",
+      "failure": "Plugin dev transaction timed out after 10000ms before Catalog commit fence",
+      "isolated_rerun": {
+        "status": "passed on same source with unchanged timeout",
+        "passed": 1,
+        "failed": 0,
+        "duration_ms": 21284.895088,
+        "command": "node --import tsx --test --test-name-pattern='^dev same-version update commits after a post-fence client disconnect$' test/plugin-profile-install.test.ts",
+        "verdict_limit": "Isolated pass does not change the failed aggregate result or prove its cause."
+      }
+    },
+    "independent_review_before_geometry_fix": {
+      "source_commit": "0992b1ffc696c7555ef3eb2c88f78a06d67a8786",
+      "passed": 25,
+      "failed": 0,
+      "scope": "manual/error/live/localization/auxiliary/strip"
+    },
+    "independent_final_geometry_review": {
+      "source_commit": "734137ff36e60cc4fee7b5587f7295ec35efd617",
+      "passed": 23,
+      "failed": 0,
+      "scope": "control/activity/error plus source and archive review",
+      "archive_verification": "Five 1180x757 JPEGs inspected, zero EXIF entries, ten checksums valid, all74+18 source hashes match accepted source, public066 tree identical. Intermediate CUA interactions remain operator-reported, not independently replayed."
+    }
+  },
+  "explicit_environment_exclusions": {
+    "named_tests": [
+      "owned independent control survives a hung main loop and refuses forged target credentials",
+      "wrong OS start identity preserves the live fixture rather than signalling it",
+      "missing ownership receipt and unavailable private endpoint fail closed",
+      "desktop manager reaches the same child Host task; no session survives Host replacement",
+      "real PTY shares human input/output and task identity with Agent read/wait",
+      "stopping a terminal closes its foreground fixture process",
+      "human PTY outlives the Agent deadline and still exits on Host disposal"
+    ],
+    "test_files": ["test/workspace-browser-persistence-smoke.test.mjs"],
+    "reasons": [
+      "First three named cases: listen EPERM for synthetic /tmp control.sock before readiness.",
+      "Next four named cases: missing native pty.node.",
+      "Excluded file: importing unavailable Electron fails before its tests register."
+    ],
+    "count_note": "The test runner omits skip-pattern matches from reported totals; 49 reported skips are existing suite skips, not these exclusions."
+  },
+  "native_hosted_validation": {
+    "previous_commit": "2371ef6b77523679e9ed8b73b37c4c825471b656",
+    "previous_failed_job": "https://github.com/albert-zen/zen/actions/runs/40857439085/job/123392060068",
+    "failure": "At 320px/en, conditional human-control row displaced native viewport from [0,58,320,642] to [0,80,320,620].",
+    "repair": "Remove extra row; retain complete safety text in existing permission tooltip/accessible description. Preserve exact geometry deepEqual and add human-plus-inflight probe.",
+    "current_status": "The previously failing Exercise Workspace background capture and targeted input step passed on the public tree-equivalent source. Remaining hosted/platform checks were still running when this result was reported; no full CI pass asserted.",
+    "current_commit": "066b1752749d294ebaa7bb42e3f2966c14c22c34",
+    "current_job": "https://github.com/albert-zen/zen/actions/runs/40858904418/job/123396944653",
+    "verification_source": "Root CI watcher reported the exact hosted step result."
+  }
+}

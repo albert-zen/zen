@@ -17,7 +17,7 @@ import type {
 } from "../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
-test("an older delayed open cannot replace newer exact-target presentation", async () => {
+test("delayed Agent opens preserve admission order but never replace human target selection", async () => {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -32,8 +32,6 @@ test("an older delayed open cannot replace newer exact-target presentation", asy
       disconnect() {}
     },
   });
-  let workspacePresentation!: (request: any) => void;
-  const declined: string[] = [];
   const callbacks = new Map<string, (event: BrowserThreadEvent) => void>();
   const envelopes: BrowserObservationEnvelope[] = [];
   const renderer = {
@@ -131,14 +129,6 @@ test("an older delayed open cannot replace newer exact-target presentation", asy
       mount: async () => {},
       onFocusAddress: () => () => {},
       onChanged: () => () => {},
-      onPresentation: (listener: typeof workspacePresentation) => {
-        workspacePresentation = listener;
-        return () => {};
-      },
-      presentationContext: async () => {},
-      declinePresentation: async (id: string) => {
-        declined.push(id);
-      },
     },
     browserObservation: {
       subscribe(
@@ -174,10 +164,12 @@ test("an older delayed open cannot replace newer exact-target presentation", asy
       cwd: "/workspace",
     });
   let expanded = false;
+  let openPanel!: (value: boolean) => void;
   function Harness() {
     const [open, setOpen] = useState(false);
     const [selectedTab, onSelectTab] = useState("terminal");
     expanded = open;
+    openPanel = setOpen;
     return React.createElement(AuxiliaryPanel, {
       threadId: "external-activity",
       title: "Task",
@@ -214,15 +206,18 @@ test("an older delayed open cannot replace newer exact-target presentation", asy
       openResolvers[1]!();
       await newer;
     });
-    assert.match(selected()!, /Page opened-1/);
+    assert.equal(selected(), "Terminal");
+    assert.equal(expanded, false);
+    await act(async () => openPanel(true));
+    await act(async () => button("Page two · External · read-only").click());
     await act(async () => {
       openResolvers[0]!();
       await older;
     });
     assert.match(
       selected()!,
-      /Page opened-1/,
-      "older delayed open must not steal from newer operation",
+      /Page two/,
+      "older delayed open must not steal from human selection",
     );
     const starts = envelopes
       .map((envelope) => envelope.event)
@@ -237,86 +232,29 @@ test("an older delayed open cannot replace newer exact-target presentation", asy
       [openOrders[1], openOrders[0]],
       "late publication retains original Host admission order",
     );
-    const workspaceRequest = (sequence: number, id: string) => ({
-      requestId: id,
-      operationSequence: sequence,
-      sessionEpoch: "workspace-session",
-      requestedAt: Date.now(),
-      expiresAt: Date.now() + 750,
-      threadId: "external-activity",
-      tab: {
-        id,
-        threadId: "external-activity",
-        title: `Workspace ${id}`,
-        url: "https://example.test/same",
-        loading: false,
-        canGoBack: false,
-        canGoForward: false,
-        sharedWithAgent: true,
-        control: "agent",
-        agentActionsInFlight: 0,
-        agentActionOutcomeUnknown: false,
-        requiresFreshObservation: false,
-      },
-    });
-    // A later Workspace notification owns the same Thread watermark.
+    document.getElementById("composer")!.focus();
     await act(async () => {
       older = invoke("open");
-    });
-    const currentWorkspace = workspaceRequest(
-      browserOperationOrder(),
-      "current-workspace",
-    );
-    await act(async () => workspacePresentation(currentWorkspace));
-    assert.match(selected()!, /Workspace current-workspace/);
-    await act(async () => {
-      openResolvers[2]!();
-      await older;
-    });
-    assert.match(
-      selected()!,
-      /Workspace current-workspace/,
-      "late external open cannot override newer Workspace presentation",
-    );
-    // Conversely, an older Workspace request cannot replace newer external intent.
-    const staleWorkspace = workspaceRequest(
-      browserOperationOrder(),
-      "stale-workspace",
-    );
-    await act(async () => {
       newer = invoke("open");
     });
     await act(async () => {
       openResolvers[3]!();
       await newer;
     });
-    assert.match(selected()!, /Page opened-3/);
-    await act(async () => workspacePresentation(staleWorkspace));
-    assert.match(selected()!, /Page opened-3/);
-    assert.ok(declined.includes("stale-workspace"));
-    // Rejected late external activity must not rewrite the explicit Follow target.
-    await act(async () => {
-      older = invoke("open");
-    });
-    await act(async () => {
-      newer = invoke("open");
-    });
-    await act(async () => {
-      openResolvers[5]!();
-      await newer;
-    });
+    assert.match(selected()!, /Page two/);
     await act(async () => button("Terminal").click());
+    document.getElementById("composer")!.focus();
     await act(async () => {
-      openResolvers[4]!();
+      openResolvers[2]!();
       await older;
     });
     assert.equal(selected(), "Terminal");
-    await act(async () => button("Follow Agent").click());
-    assert.match(
-      selected()!,
-      /Page opened-5/,
-      "Follow retains newer Host intent after a late completion",
+    assert.equal(document.activeElement?.id, "composer");
+    assert.ok(
+      button("Follow Agent") === undefined,
+      "no Follow Agent control remains",
     );
+    assert.deepEqual([...activeFrames.values()], []);
   } finally {
     await act(async () => root.unmount());
     catalog.close();

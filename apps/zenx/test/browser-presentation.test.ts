@@ -7,10 +7,7 @@ import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
-import type {
-  WorkspaceBrowserPresentation,
-  WorkspaceBrowserTab,
-} from "../src/main/workspace-browser.js";
+import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
 
 const page = (id: string): WorkspaceBrowserTab => ({
   id,
@@ -27,7 +24,7 @@ const page = (id: string): WorkspaceBrowserTab => ({
   requiresFreshObservation: false,
 });
 
-test("workspace presentation reuses exact tab and lease, yields to user navigation, and explicitly resumes", async () => {
+test("Agent Browser updates never open, select, mount or focus; human navigation remains available", async () => {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -53,29 +50,18 @@ test("workspace presentation reuses exact tab and lease, yields to user navigati
     bottom: 440,
     toJSON: () => ({}),
   });
-  let receive!: (request: WorkspaceBrowserPresentation) => void;
   let changed!: (value: {
     threadId: string;
     tabs: WorkspaceBrowserTab[];
   }) => void;
+  let legacyPresentation: ((request: unknown) => void) | undefined;
   const mounts: any[] = [];
-  const declined: string[] = [];
   const contexts: any[] = [];
-  let operationSequence = 0;
-  const requests = (
-    id: string,
-    epoch = "epoch-a",
-    requestedAt = Date.now() + 1,
-  ): WorkspaceBrowserPresentation => ({
-    requestId: crypto.randomUUID(),
-    operationSequence: ++operationSequence,
-    sessionEpoch: epoch,
-    requestedAt,
-    expiresAt: requestedAt + 750,
-    threadId: "presentation-ui",
-    tab: page(id),
-  });
-  (dom.window as any).zenx = {
+  const selections: string[] = [];
+  let setOpen!: (open: boolean) => void;
+  let choose!: (id: string) => void;
+  let isOpen = false;
+  (window as any).zenx = {
     plugins: {},
     workspaceBrowser: {
       onChanged: (fn: typeof changed) => {
@@ -84,24 +70,24 @@ test("workspace presentation reuses exact tab and lease, yields to user navigati
       },
       command: async () => [page("1"), page("2")],
       onFocusAddress: () => () => {},
-      onPresentation: (fn: typeof receive) => {
-        receive = fn;
+      onPresentation: (fn: typeof legacyPresentation) => {
+        legacyPresentation = fn;
         return () => {};
       },
-      presentationContext: async (request: any) => {
+      presentationContext: async (request: unknown) => {
         contexts.push(request);
       },
-      declinePresentation: async (id: string) => {
-        declined.push(id);
-      },
-      mount: async (request: any) => {
+      mount: async (request: unknown) => {
         mounts.push(request);
       },
     },
   };
   function Harness() {
     const [open, onOpenChange] = useState(false);
-    const [selectedTab, onSelectTab] = useState("browser:2");
+    const [selectedTab, onSelectTab] = useState("");
+    setOpen = onOpenChange;
+    choose = onSelectTab;
+    isOpen = open;
     return React.createElement(AuxiliaryPanel, {
       threadId: "presentation-ui",
       title: "Task",
@@ -109,106 +95,112 @@ test("workspace presentation reuses exact tab and lease, yields to user navigati
       open,
       onOpenChange,
       selectedTab,
-      onSelectTab,
+      onSelectTab: (id: string) => {
+        selections.push(id);
+        onSelectTab(id);
+      },
     });
   }
   const root = createRoot(document.getElementById("root")!);
   const selected = () =>
     document.querySelector('[role="tab"][aria-selected="true"]')?.textContent;
-  const tabs = () => [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-  ];
+  const tab = (name: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (value) => value.textContent === name,
+    )!;
+  const update = async (tabs: WorkspaceBrowserTab[]) =>
+    act(async () => changed({ threadId: "presentation-ui", tabs }));
   try {
     await act(async () => root.render(React.createElement(Harness)));
     const composer = document.getElementById("composer")!;
     composer.focus();
-    const first = requests("1");
-    await act(async () => receive(first));
-    assert.equal(selected(), "Page 1");
-    assert.ok(
-      document.activeElement === composer,
-      "automatic reveal never takes keyboard focus",
-    );
-    assert.equal(tabs().length, 2, "same URL is not a deduplication key");
-    assert.equal(mounts.at(-1).tabId, "1");
-    const lease = mounts.at(-1).lease;
-    const unmounts = mounts.filter((request) => !request.tabId).length;
-    await act(async () => receive(requests("1", "epoch-b")));
-    assert.equal(mounts.at(-1).lease, lease);
-    assert.equal(
-      mounts.filter((request) => !request.tabId).length,
-      unmounts,
-      "same-page activity must not remount or invalidate observation",
-    );
-    await act(async () =>
-      tabs()
-        .find((tab) => tab.textContent === "Page 2")!
-        .click(),
-    );
-    const next = requests("1", "epoch-b");
-    await act(async () => receive(next));
-    assert.equal(selected(), "Page 2");
-    assert.ok(declined.includes(next.requestId));
-    await act(async () =>
-      changed({
-        threadId: "presentation-ui",
-        tabs: [{ ...page("1"), agentInspectionsInFlight: 1 }, page("2")],
-      }),
-    );
     assert.equal(
       selected(),
-      "Page 2",
-      "activity/list updates cannot reclaim selection",
+      undefined,
+      "newly discovered tabs do not choose the first page",
     );
     assert.equal(
-      document.querySelectorAll(
-        '.workspace-content-tab[data-agent-active="true"]',
-      ).length,
-      1,
+      tab("Page 1").tabIndex,
+      0,
+      "unselected tabs retain a keyboard entry point",
     );
+    assert.equal(
+      legacyPresentation,
+      undefined,
+      "no automatic-presentation listener remains",
+    );
+    assert.deepEqual(contexts, []);
+    assert.equal(mounts.length, 0);
+    await update([
+      { ...page("1"), agentActionsInFlight: 1 },
+      page("2"),
+      page("3"),
+    ]);
+    assert.equal(isOpen, false);
+    assert.equal(selected(), undefined);
+    assert.deepEqual(selections, []);
+    assert.ok(
+      document.activeElement === composer,
+      "Agent updates preserve Composer focus",
+    );
+    await act(async () => setOpen(true));
+    assert.equal(selected(), undefined);
+    assert.equal(mounts.length, 0);
+    await act(async () => tab("Page 2").click());
+    assert.equal(selected(), "Page 2");
+    assert.equal(mounts.at(-1)!.tabId, "2");
+    const lease = mounts.at(-1)!.lease;
+    composer.focus();
+    await update([
+      { ...page("1"), agentInspectionsInFlight: 2 },
+      page("2"),
+      page("3"),
+      page("4"),
+    ]);
+    assert.equal(selected(), "Page 2");
+    assert.ok(
+      document.activeElement === composer,
+      "Agent updates preserve Composer focus",
+    );
+    assert.equal(
+      mounts.at(-1)!.lease,
+      lease,
+      "other-target activity does not remount the human selection",
+    );
+    assert.equal(document.body.textContent?.includes("Follow Agent"), false);
     await act(async () =>
-      [...document.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Follow Agent")!
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
         .click(),
     );
-    assert.equal(selected(), "Page 1");
+    await update([page("1"), page("2"), page("3")]);
     assert.equal(
-      mounts.at(-1).presentationId,
+      selected(),
       undefined,
-      "explicit follow does not replay an expired automatic token",
+      "Agent updates do not dismiss an open human chooser",
     );
+    await act(async () => tab("Page 2").click());
     await act(async () =>
       document
         .querySelector<HTMLButtonElement>('[aria-label="Close side panel"]')!
         .click(),
     );
-    const closed = requests("2", "epoch-b");
-    await act(async () => receive(closed));
-    assert.ok(declined.includes(closed.requestId));
-    assert.equal(
-      mounts.at(-1).tabId,
-      undefined,
-      "closed workspace has no mounted native page",
+    composer.focus();
+    await update([{ ...page("1"), agentActionsInFlight: 1 }, page("2")]);
+    assert.equal(isOpen, false);
+    assert.ok(
+      document.activeElement === composer,
+      "Agent updates preserve Composer focus",
     );
-    const expired = requests("1", "epoch-c", Date.now() - 1000);
-    await act(async () => receive(expired));
-    assert.ok(declined.includes(expired.requestId));
-    Object.defineProperty(document, "visibilityState", {
-      value: "hidden",
-      configurable: true,
-    });
-    const hidden = requests("1", "epoch-d");
-    await act(async () => receive(hidden));
-    assert.ok(declined.includes(hidden.requestId));
+    assert.equal(mounts.at(-1)!.tabId, undefined);
+    await act(async () => setOpen(true));
     assert.equal(
-      mounts.at(-1).tabId,
-      undefined,
-      "closed workspace has no mounted native page",
+      selected(),
+      "Page 2",
+      "reopening retains the explicit human choice",
     );
-    assert.equal(contexts[0].threadId, "presentation-ui");
   } finally {
     await act(async () => root.unmount());
-    assert.equal(contexts.at(-1).threadId, undefined);
     dom.window.close();
     delete (globalThis as any).ResizeObserver;
   }
@@ -295,9 +287,9 @@ test("external read-only pages share the strip without merging same-URL identiti
       onChanged: () => () => {},
       onFocusAddress: () => () => {},
       mount: async () => {},
-      command: async (_thread: string, command: string) => {
+      command: async (threadId: string, command: string) => {
         commands.push(command);
-        return [page("1")];
+        return [{ ...page("1"), threadId }];
       },
     },
     browserObservation: {

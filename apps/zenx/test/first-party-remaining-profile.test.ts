@@ -386,7 +386,11 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     );
     const liveEvents: unknown[] = [];
     const stopLive = service.observeBrowserLive(
-      { threadId: "profile-a", frames: true },
+      {
+        threadId: "profile-a",
+        targetId: (resourcesA.at(-1) as { id: string }[])[0]!.id,
+        frames: true,
+      },
       (event) => liveEvents.push(event),
     );
     const oldCallback = liveCallbacks.at(-1)!;
@@ -418,7 +422,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
     stopA();
     stopB();
     const computerEvents: any[] = [];
-    const stopComputer = service.observeComputerLive(
+    let stopComputer = service.observeComputerLive(
       { threadId: "profile-a", frames: true },
       (event) => computerEvents.push(event),
     );
@@ -427,6 +431,19 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       "computer_inspect",
       { target: { pid: 1, windowTitle: "Fixture" } },
       "profile-a",
+    );
+    assert.equal(
+      computerLiveCallbacks.length,
+      0,
+      "Agent inspection publishes a catalog without choosing the human target",
+    );
+    const computerTargetId = computerEvents
+      .filter((event) => event.type === "targets")
+      .at(-1).targets[0].id;
+    stopComputer();
+    stopComputer = service.observeComputerLive(
+      { threadId: "profile-a", targetId: computerTargetId, frames: true },
+      (event) => computerEvents.push(event),
     );
     const oldComputerCallback = computerLiveCallbacks.at(-1)!;
     assert.equal(
@@ -493,6 +510,20 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       "computer_inspect",
       { target: { pid: 1, windowTitle: "Fixture" } },
       "profile-a",
+    );
+    assert.equal(
+      replacementCallbacks.length,
+      0,
+      "a new provider target cannot replace the previously selected identity",
+    );
+    const replacementTargetId = computerEvents
+      .filter((event) => event.type === "targets")
+      .at(-1).targets[0].id;
+    assert.notEqual(replacementTargetId, computerTargetId);
+    stopComputer();
+    stopComputer = service.observeComputerLive(
+      { threadId: "profile-a", targetId: replacementTargetId, frames: true },
+      (event) => computerEvents.push(event),
     );
     assert.equal(replacementCallbacks.length, 1);
     stopComputer();
@@ -661,7 +692,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       );
     }
     const closeEvents: any[] = [];
-    const stopOnClose = service.observeComputerLive(
+    let stopOnClose = service.observeComputerLive(
       { threadId: "close-thread", frames: true },
       (event) => closeEvents.push(event),
     );
@@ -671,6 +702,16 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
       { target: { pid: 1, windowTitle: "Fixture" } },
       "close-thread",
     );
+    assert.equal(replacementCallbacks.length, 1);
+    const closeTargetId = closeEvents
+      .filter((event) => event.type === "targets")
+      .at(-1).targets[0].id;
+    stopOnClose();
+    stopOnClose = service.observeComputerLive(
+      { threadId: "close-thread", targetId: closeTargetId, frames: true },
+      (event) => closeEvents.push(event),
+    );
+    assert.equal(replacementCallbacks.length, 2);
     const callbackBeforeClose = replacementCallbacks.at(-1)!;
     await service.close();
     assert.equal(replacementStops, 2);

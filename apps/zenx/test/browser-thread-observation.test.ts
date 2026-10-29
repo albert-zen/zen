@@ -90,6 +90,22 @@ test("thread subscriptions, manual page selection, late frames and provider reti
     (event) => b.push(event),
   );
   await capability.invoke("browser_open", invocation("thread-a"));
+  assert.equal(
+    listeners.length,
+    0,
+    "Agent opening never selects an observation",
+  );
+  assert.equal(
+    a.findLast((event) => event.type === "targets").selectedId,
+    undefined,
+  );
+  const firstTarget = a.findLast((event) => event.type === "targets").targets[0]
+    .id;
+  stopA();
+  stopA = capability.observeThread(
+    { threadId: "thread-a", frames: true, targetId: firstTarget },
+    (event) => a.push(event),
+  );
   const firstA = listeners.at(-1)!;
   const frame = {
     type: "frame",
@@ -110,9 +126,6 @@ test("thread subscriptions, manual page selection, late frames and provider reti
     b.some((event) => event.type === "frame"),
     false,
   );
-  const firstTarget = a.findLast(
-    (event) => event.type === "targets",
-  ).selectedId;
   stopA();
   stopA = capability.observeThread(
     { threadId: "thread-a", frames: true, targetId: firstTarget },
@@ -172,11 +185,18 @@ test("live target metadata refreshes the open thread sidebar without restarting 
   } as unknown as ZenXBrowserBackend;
   const capability = new BrowserZenXCapabilityPackage(backend);
   const events: any[] = [];
-  const stop = capability.observeThread(
-    { threadId: "thread-a", frames: true },
+  const stopCatalog = capability.observeThread(
+    { threadId: "thread-a", frames: false },
     (event) => events.push(event),
   );
   await capability.invoke("browser_open", invocation("thread-a"));
+  const targetId = events.findLast((event) => event.type === "targets")
+    .targets[0].id;
+  stopCatalog();
+  const stop = capability.observeThread(
+    { threadId: "thread-a", frames: true, targetId },
+    (event) => events.push(event),
+  );
   const live = listeners.at(-1)!;
   live.send({
     type: "metadata",

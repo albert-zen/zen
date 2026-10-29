@@ -17,7 +17,7 @@ import type {
 } from "../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
-test("real Host catalog activity reveals exact peer tab, keeps frame lane, respects user opt-out and retirement", async () => {
+test("real Host activity never presents a peer tab; explicit selection keeps its exact read-only frame lane", async () => {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -32,8 +32,6 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
       disconnect() {}
     },
   });
-  let workspacePresentation!: (request: any) => void;
-  const declined: string[] = [];
   const callbacks = new Map<string, (event: BrowserThreadEvent) => void>();
   const envelopes: BrowserObservationEnvelope[] = [];
   const renderer = {
@@ -121,14 +119,6 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
     workspaceBrowser: {
       command: async () => [],
       onChanged: () => () => {},
-      onPresentation: (listener: typeof workspacePresentation) => {
-        workspacePresentation = listener;
-        return () => {};
-      },
-      presentationContext: async () => {},
-      declinePresentation: async (id: string) => {
-        declined.push(id);
-      },
     },
     browserObservation: {
       subscribe(
@@ -163,10 +153,12 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
       cwd: "/workspace",
     });
   let expanded = false;
+  let openPanel!: (value: boolean) => void;
   function Harness() {
     const [open, setOpen] = useState(false);
     const [selectedTab, onSelectTab] = useState("terminal");
     expanded = open;
+    openPanel = setOpen;
     return React.createElement(AuxiliaryPanel, {
       threadId: "external-activity",
       title: "Task",
@@ -196,7 +188,12 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
     await act(async () => {
       pending = invoke("navigate", tabs[0].tabId);
     });
-    assert.equal(expanded, true);
+    assert.equal(expanded, false);
+    assert.equal(selected(), "Terminal");
+    assert.deepEqual(frameTargets, []);
+    await act(async () => openPanel(true));
+    assert.equal(selected(), "Terminal");
+    await act(async () => button("Page one · External · read-only").click());
     assert.match(selected()!, /Page one/);
     assert.equal(document.activeElement?.id, "composer");
     assert.equal(frameTargets.at(-1), "one");
@@ -223,28 +220,15 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
       0,
     );
     await act(async () => button("Terminal").click());
-    await act(async () =>
-      workspacePresentation({
-        requestId: "workspace-after-user-optout",
-        operationSequence: browserOperationOrder(),
-        sessionEpoch: "other-workspace-session",
-        requestedAt: Date.now() + 1,
-        expiresAt: Date.now() + 750,
-        threadId: "external-activity",
-        tab: { id: "workspace-tab", threadId: "external-activity" },
-      }),
-    );
-    assert.equal(
-      selected(),
-      "Terminal",
-      "a different backend/session cannot clear the Thread's user opt-out",
-    );
-    assert.deepEqual(declined, ["workspace-after-user-optout"]);
     await act(async () => {
       pending = invoke("navigate", tabs[1].tabId);
     });
     assert.equal(selected(), "Terminal");
-    await act(async () => button("Follow Agent").click());
+    assert.ok(
+      button("Follow Agent") === undefined,
+      "no Follow Agent control remains",
+    );
+    await act(async () => button("Page two · External · read-only").click());
     assert.match(selected()!, /Page two/);
     assert.equal(frameTargets.at(-1), "two");
     assert.deepEqual([...activeFrames.values()], ["two"]);
@@ -300,7 +284,7 @@ test("real Host catalog activity reveals exact peer tab, keeps frame lane, respe
       /Page two/,
       "hidden activity is not replayed on return",
     );
-    await act(async () => button("Follow Agent").click());
+    await act(async () => button("Page three · External · read-only").click());
     assert.match(selected()!, /Page three/);
     assert.deepEqual([...activeFrames.values()], ["three"]);
     await act(async () =>

@@ -72,12 +72,20 @@ test("Computer pointer stays in its thread and target, and repeated actions reta
   const observation = new ComputerThreadObservation(implementation);
   const events: Array<{
     type: string;
-    targets?: Array<{ pointer?: ComputerActionPointer }>;
+    targets?: Array<{ id: string; pointer?: ComputerActionPointer }>;
   }> = [];
-  const stop = observation.observe({ threadId: "a", frames: true }, (event) =>
-    events.push(event),
+  const catalog = observation.observe(
+    { threadId: "a", frames: false },
+    (event) => events.push(event),
   );
   observation.publish("a", "first", target, pointer());
+  const targetId = events.findLast((event) => event.type === "targets")!
+    .targets![0]!.id;
+  catalog();
+  const stop = observation.observe(
+    { threadId: "a", frames: true, targetId },
+    (event) => events.push(event),
+  );
   observation.publish("a", "second", target, { ...pointer(), x: 0.5 });
   assert.equal(state.starts, 1);
   assert.equal(state.stops, 0);
@@ -90,10 +98,14 @@ test("Computer pointer stays in its thread and target, and repeated actions reta
     { pid: 43, windowTitle: "Other" },
     pointer(),
   );
-  assert.equal(state.starts, 2);
-  assert.equal(state.stops, 1);
+  assert.equal(
+    state.starts,
+    1,
+    "another Agent target never switches the selected capture",
+  );
+  assert.equal(state.stops, 0);
   stop();
-  assert.equal(state.stops, 2);
+  assert.equal(state.stops, 1);
 });
 
 test("a successful Computer action explicitly restarts a failed same-window capture", async () => {
@@ -120,8 +132,14 @@ test("a successful Computer action explicitly restarts a failed same-window capt
   const capability = new ComputerZenXCapabilityPackage(implementation);
   let control = (await inspectOwned(capability)).controls[0]!.selector;
   const events: ComputerThreadEvent[] = [];
-  capability.observeThread({ threadId: "a", frames: true }, (event) =>
+  capability.observeThread({ threadId: "a", frames: false }, (event) =>
     events.push(event),
+  )();
+  const catalog = events.findLast((event) => event.type === "targets")!;
+  assert.equal(catalog.type, "targets");
+  capability.observeThread(
+    { threadId: "a", frames: true, targetId: catalog.targets[0]!.id },
+    (event) => events.push(event),
   );
   const press = (callId: string) =>
     capability.invoke("computer_press", {
@@ -185,7 +203,7 @@ test("Computer pointer rejects stale and invalid geometry and does not replay on
   observation.publish("a", "outside", target, { ...pointer(), y: 1.1 });
   const events: Array<{
     type: string;
-    targets?: Array<{ pointer?: ComputerActionPointer }>;
+    targets?: Array<{ id: string; pointer?: ComputerActionPointer }>;
   }> = [];
   observation.observe({ threadId: "a", frames: false }, (event) =>
     events.push(event),
@@ -207,7 +225,7 @@ test("Computer observation accepts only a positive native window identity", () =
   const observation = new ComputerThreadObservation(implementation);
   const events: Array<{
     type: string;
-    targets?: Array<{ pointer?: ComputerActionPointer }>;
+    targets?: Array<{ id: string; pointer?: ComputerActionPointer }>;
   }> = [];
   observation.observe({ threadId: "a", frames: false }, (event) =>
     events.push(event),
@@ -236,7 +254,7 @@ test("Computer action pointer is observable but omitted from the canonical tool 
   const control = (await inspectOwned(capability)).controls[0]!.selector;
   const events: Array<{
     type: string;
-    targets?: Array<{ pointer?: ComputerActionPointer }>;
+    targets?: Array<{ id: string; pointer?: ComputerActionPointer }>;
   }> = [];
   capability.observeThread({ threadId: "a", frames: false }, (event) =>
     events.push(event),

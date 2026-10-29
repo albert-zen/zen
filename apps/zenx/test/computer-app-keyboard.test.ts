@@ -296,8 +296,22 @@ test("application activity has no old-window pointer, live capture or fresh-fram
   });
   assert.equal(
     captures,
+    0,
+    "a newly observed window never automatically replaces the app target",
+  );
+  const latest = events.findLast((event) => event.type === "targets")!;
+  assert.equal(latest.type, "targets");
+  const window = latest.targets.find(
+    (target) => target.target.windowTitle === "Actual window",
+  )!;
+  projection.observe(
+    { threadId: "owner", frames: true, targetId: window.id },
+    () => {},
+  );
+  assert.equal(
+    captures,
     1,
-    "a real live window still subscribes after fresh publication",
+    "explicit human window choice starts its fresh read-only capture",
   );
   projection.close();
 });

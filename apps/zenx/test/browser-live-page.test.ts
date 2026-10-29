@@ -16,6 +16,7 @@ const BrowserPage = () =>
     open: true,
     onOpenChange: () => {},
     providerRevision: "test",
+    fixedTargetId: "page-a",
   });
 
 test("Browser observer keeps a compact toolbar without inventing an unknown mode", async () => {
@@ -428,7 +429,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   await act(async () =>
     dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange")),
   );
-  assert.equal(subscriptions, 3);
+  assert.equal(subscriptions, 2);
   assert.equal(image.getAttribute("src"), null);
   await act(async () => {
     listener?.({
@@ -456,7 +457,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   assert.equal(dom.window.document.activeElement === before, true);
 
   await act(async () => root.unmount());
-  assert.equal(disposals, 3);
+  assert.equal(disposals, 2);
   dom.window.close();
 });
 

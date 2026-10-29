@@ -50,7 +50,7 @@ test("Computer observation is thread and invocation scoped and stops the exact l
 
   const events: ComputerThreadEvent[] = [];
   const stop = observation.observe(
-    { threadId: "thread-a", frames: true },
+    manualRequest(observation, "thread-a"),
     (event) => events.push(event),
   );
   const targets = events.find((event) => event.type === "targets");
@@ -132,7 +132,7 @@ for (const status of ["unavailable", "failed"] as const) {
     };
     const observation = new ComputerThreadObservation(backend);
     const events: ComputerThreadEvent[] = [];
-    observation.observe({ threadId: "thread-a", frames: true }, (event) =>
+    observation.observe(manualRequest(observation, "thread-a"), (event) =>
       events.push(event),
     );
 
@@ -187,7 +187,7 @@ test("a synchronous terminal callback cannot overwrite an explicit replacement c
     return () => stopped.push(capture);
   };
   const observation = new ComputerThreadObservation(backend);
-  observation.observe({ threadId: "thread-a", frames: true }, (event) => {
+  observation.observe(manualRequest(observation, "thread-a"), (event) => {
     if (event.type === "status" && event.status === "unavailable") {
       observation.publish("thread-a", "fresh-inspection", windowTarget);
     }
@@ -268,7 +268,7 @@ test("session invalidation stops preview and fences late pixels until a fresh ac
   );
   observation.publish("thread-a", "call-a", windowTarget);
   const events: ComputerThreadEvent[] = [];
-  observation.observe({ threadId: "thread-a", frames: true }, (event) =>
+  observation.observe(manualRequest(observation, "thread-a"), (event) =>
     events.push(event),
   );
   const oldListener = backend.liveListener;
@@ -312,7 +312,7 @@ test("session invalidation stops preview and fences late pixels until a fresh ac
   settle();
   observation.publish("thread-a", "fresh-active-inspect", windowTarget);
   assert.equal(backend.liveTargets.length, 2);
-  observation.observe({ threadId: "thread-b", frames: true }, (event) =>
+  observation.observe(manualRequest(observation, "thread-b"), (event) =>
     events.push(event),
   );
   assert.equal(
@@ -320,5 +320,88 @@ test("session invalidation stops preview and fences late pixels until a fresh ac
     2,
     "another thread publication never revives old pixels",
   );
+  observation.close();
+});
+
+/** Simulate discovery followed by explicit human target choice, never latest-target following. */
+function manualRequest(
+  observation: ComputerThreadObservation,
+  threadId: string,
+) {
+  let targets: Extract<ComputerThreadEvent, { type: "targets" }> | undefined;
+  const stop = observation.observe({ threadId, frames: false }, (event) => {
+    if (event.type === "targets") targets = event;
+  });
+  if (!targets?.targets.length) {
+    observation.startActivity(
+      threadId,
+      "discover-window",
+      windowTarget,
+      "background-window",
+    )();
+  }
+  stop();
+  assert.equal(
+    targets?.selectedId,
+    undefined,
+    "catalog does not select the Agent target",
+  );
+  assert.ok(targets?.targets[0]);
+  return { threadId, frames: true, targetId: targets.targets[0].id };
+}
+
+test("Computer discovery and activity never select an unchosen target or switch a chosen window", () => {
+  const backend = fakeBackend();
+  const observation = new ComputerThreadObservation(backend);
+  const catalog: ComputerThreadEvent[] = [];
+  observation.observe({ threadId: "thread-a", frames: true }, (event) =>
+    catalog.push(event),
+  );
+  observation.publish("thread-a", "first", windowTarget);
+  assert.equal(backend.liveTargets.length, 0);
+  assert.equal(
+    catalog.findLast((event) => event.type === "targets")?.selectedId,
+    undefined,
+  );
+  const request = manualRequest(observation, "thread-a");
+  const selected: ComputerThreadEvent[] = [];
+  observation.observe(request, (event) => selected.push(event));
+  assert.equal(backend.liveTargets.length, 1);
+  const second = { pid: 99, windowTitle: "Other window" };
+  const settle = observation.startActivity(
+    "thread-a",
+    "second",
+    second,
+    "foreground",
+  );
+  observation.publish("thread-a", "second", second);
+  settle();
+  assert.equal(
+    backend.liveTargets.length,
+    1,
+    "new Agent target never changes the selected capture",
+  );
+  assert.equal(
+    selected.findLast((event) => event.type === "targets")?.selectedId,
+    request.targetId,
+  );
+  observation.publish("thread-a", "update-selected", windowTarget);
+  backend.liveListener?.(fixtureFrame());
+  assert.equal(
+    selected.at(-1)?.type,
+    "frame",
+    "chosen window continues to update naturally",
+  );
+  for (let n = 0; n < 9; n++)
+    observation.publish("thread-a", `new-${n}`, {
+      pid: 200 + n,
+      windowTitle: `New ${n}`,
+    });
+  assert.equal(
+    selected.findLast((event) => event.type === "targets")?.selectedId,
+    undefined,
+    "evicted choice is unavailable, never replaced",
+  );
+  assert.equal(backend.liveTargets.length, 1);
   observation.close();
 });
