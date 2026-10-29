@@ -347,3 +347,280 @@ test("file tree supports folder keyboard navigation, prototype-like names, refre
     dom.window.close();
   }
 });
+
+test("refresh observes actual disk changes while preserving expansion, selection and usable failure state", async () => {
+  const workspace = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-explorer-refresh-"),
+  );
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { WorkspaceFileExplorer } =
+    await import("../src/renderer/src/workspace-file-explorer.js");
+  const root = createRoot(document.getElementById("root")!);
+  let failure = false;
+  const opened: string[] = [];
+  const reads: string[] = [];
+  (window as any).zenx = {
+    workspaceFiles: {
+      list: async (_thread: string, directory: string) => {
+        reads.push(directory);
+        if (failure) throw new Error("EACCES: fixture folder cannot be read");
+        return listWorkspaceFiles(workspace, directory);
+      },
+      search: (_thread: string, query: string) =>
+        searchWorkspaceFiles(workspace, query),
+    },
+  };
+  const settle = async () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    });
+  const row = (name: string) =>
+    document.querySelector<HTMLButtonElement>(`[data-file-path="${name}"]`);
+  const refresh = () =>
+    document.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh file list"]',
+    )!;
+  try {
+    await mkdir(path.join(workspace, "src"));
+    await mkdir(path.join(workspace, "docs"));
+    await writeFile(
+      path.join(workspace, "src/selected.ts"),
+      "const draft = true;",
+    );
+    await writeFile(path.join(workspace, "docs/old.md"), "Old");
+    await act(async () =>
+      root.render(
+        React.createElement(WorkspaceFileExplorer, {
+          threadId: "fixture",
+          selectedPath: "src/selected.ts",
+          onOpen: (file: string) => opened.push(file),
+        }),
+      ),
+    );
+    await settle();
+    await act(async () => row("docs")!.click());
+    await settle();
+    assert.ok(
+      row("docs/old.md") !== null,
+      "unrelated expanded folder is visible",
+    );
+    assert.ok(
+      refresh().parentElement?.lastElementChild === refresh(),
+      "refresh is the trailing action, not the leading toggle",
+    );
+    const beforeMutation = reads.length;
+    await writeFile(path.join(workspace, "docs/new.md"), "New");
+    await rm(path.join(workspace, "docs/old.md"));
+    await settle();
+    assert.equal(
+      reads.length,
+      beforeMutation,
+      "no hidden timer polls Thread history or the filesystem",
+    );
+    await act(async () => refresh().click());
+    await settle();
+    assert.ok(
+      row("docs/old.md") === null,
+      "deleted entry disappears on real refresh",
+    );
+    assert.ok(
+      row("docs/new.md") !== null,
+      "new disk entry appears without reopening the folder",
+    );
+    assert.equal(row("docs")?.getAttribute("aria-expanded"), "true");
+    assert.equal(row("src/selected.ts")?.getAttribute("data-current"), "true");
+    assert.equal(
+      row("docs")?.getAttribute("aria-selected"),
+      "true",
+      "refresh preserves keyboard cursor",
+    );
+    assert.deepEqual(
+      opened,
+      [],
+      "refresh never reopens the editor or touches its draft",
+    );
+
+    failure = true;
+    await act(async () => refresh().click());
+    await settle();
+    assert.match(
+      document.body.textContent!,
+      /last loaded files are still shown/,
+    );
+    assert.match(
+      document.body.textContent!,
+      /EACCES: fixture folder cannot be read/,
+    );
+    assert.ok(
+      row("docs/new.md") !== null,
+      "failed refresh preserves actionable last-loaded rows",
+    );
+    assert.equal(row("docs/new.md")?.disabled, false);
+    assert.equal(
+      refresh().disabled,
+      false,
+      "refresh can be retried after failure",
+    );
+    assert.doesNotMatch(document.body.textContent!, /No files in this folder/);
+    failure = false;
+    await act(async () => refresh().click());
+    await settle();
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "successful refresh clears error details",
+    );
+
+    await act(async () => row("docs")!.click());
+    await writeFile(path.join(workspace, "docs/later.md"), "Later");
+    await act(async () => row("docs")!.click());
+    await settle();
+    assert.ok(
+      row("docs/later.md") !== null,
+      "reopening a cached folder reads its current disk listing",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("refresh retains the current query/results during failure and rejects retired directory reads", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { WorkspaceFileExplorer } =
+    await import("../src/renderer/src/workspace-file-explorer.js");
+  const root = createRoot(document.getElementById("root")!);
+  let childReads = 0;
+  let retired: (value: any) => void = () => {};
+  let searchFailure = false;
+  const queries: string[] = [];
+  const listing = (name: string) => ({
+    path: "src",
+    entries: [{ name, path: `src/${name}`, kind: "file" }],
+    truncated: false,
+  });
+  (window as any).zenx = {
+    workspaceFiles: {
+      list: async (_thread: string, directory: string) => {
+        if (directory === ".")
+          return {
+            path: ".",
+            entries: [{ name: "src", path: "src", kind: "directory" }],
+            truncated: false,
+          };
+        if (++childReads === 1)
+          return await new Promise((resolve) => {
+            retired = resolve;
+          });
+        return listing("current.ts");
+      },
+      search: async (_thread: string, query: string) => {
+        queries.push(query);
+        if (searchFailure) throw new Error("Search access denied");
+        return {
+          cwd: "/fixture",
+          entries: [{ name: "current.ts", path: "src/current.ts" }],
+          scanned: 2,
+          truncated: false,
+        };
+      },
+    },
+  };
+  const refresh = () =>
+    document.querySelector<HTMLButtonElement>(
+      '[aria-label="Refresh file list"]',
+    )!;
+  const settle = async () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 230));
+    });
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(WorkspaceFileExplorer, {
+          threadId: "a",
+          onOpen: () => {},
+        }),
+      ),
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[data-file-path="src"]')!
+        .click(),
+    );
+    await act(async () => refresh().click());
+    await act(async () => retired(listing("retired.ts")));
+    assert.ok(
+      document.querySelector('[data-file-path="src/current.ts"]') !== null,
+      "latest directory refresh is authoritative",
+    );
+    assert.ok(
+      document.querySelector('[data-file-path="src/retired.ts"]') === null,
+      "retired response cannot overwrite refresh",
+    );
+    const input = document.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        dom.window.HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "current");
+      input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    });
+    await settle();
+    searchFailure = true;
+    await act(async () => refresh().click());
+    assert.ok(
+      document.querySelector('[data-file-path="src/current.ts"]') !== null,
+      "pending refresh does not blank results",
+    );
+    await settle();
+    assert.equal(input.value, "current");
+    assert.deepEqual(queries, ["current", "current"]);
+    assert.match(
+      document.body.textContent!,
+      /last loaded files are still shown/,
+    );
+    assert.match(document.body.textContent!, /Search access denied/);
+    assert.ok(
+      document.querySelector('[data-file-path="src/current.ts"]') !== null,
+      "failed search keeps its last results with warning",
+    );
+    assert.equal(refresh().disabled, false);
+    searchFailure = false;
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[role="alert"] button')!
+        .click(),
+    );
+    await settle();
+    assert.ok(
+      document.querySelector('[role="alert"]') === null,
+      "search retry recovers in place",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

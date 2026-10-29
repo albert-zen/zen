@@ -46,6 +46,8 @@ const measure = `(() => {
     renderedText:editor?.textContent.slice(-500),
     treeVisible:!!nav?.getClientRects().length, tree:box(nav),
     toggle:rect(toggle), toggleInBreadcrumb:!!location?.contains(toggle),
+    toggleAtBodyStart:toggle?.parentElement===document.querySelector('.auxiliary-body') && toggle?.parentElement.firstElementChild===toggle,
+    fileActions:{search:rect(nav?.querySelector('.workspace-file-search')),input:rect(nav?.querySelector('input[type="search"]')),clear:rect(nav?.querySelector('.workspace-file-search button')),collapse:rect(nav?.querySelector('.workspace-file-actions > button:nth-child(2)')),refresh:rect(nav?.querySelector('.workspace-file-actions > button:last-child')),query:nav?.querySelector('input[type="search"]')?.value},
     toggleInHeading:!!document.querySelector('.auxiliary-heading')?.contains(toggle),
     toggleCount:document.querySelectorAll('.workspace-navigation-toggle').length,
     togglePressed:toggle?.getAttribute('aria-pressed'), toggleLabel:toggle?.getAttribute('aria-label'),
@@ -315,7 +317,7 @@ try {
     }
   };
   const near = (a, b) => Math.abs(a - b) <= 2;
-  const toggleSelector = `${fileSelector} .workspace-navigation-toggle`;
+  const toggleSelector = ".auxiliary-body > .workspace-navigation-toggle";
   await send("Page.enable");
   await send("Runtime.enable");
   lifecycle.captureStarted();
@@ -370,8 +372,10 @@ try {
     await capture("source-start");
     check(
       receipt,
-      "toggle-in-breadcrumb-not-tab-header",
-      receipt.initial.toggleInBreadcrumb && !receipt.initial.toggleInHeading,
+      "toggle-at-fixed-leading-body-anchor",
+      receipt.initial.toggleAtBodyStart &&
+        !receipt.initial.toggleInBreadcrumb &&
+        !receipt.initial.toggleInHeading,
     );
     check(receipt, "one-shared-tree-toggle", receipt.initial.toggleCount === 1);
     check(
@@ -387,6 +391,79 @@ try {
       receipt.initial.treeVisible && receipt.initial.togglePressed === "true",
     );
     bounded(receipt, "source-start", receipt.initial);
+    if (options.width >= 700) {
+      // Home is the production resize minimum, not an injected width override.
+      await clickSelector(".workspace-file-resizer");
+      await key("Home", "Home", 36);
+      await clickSelector(".workspace-file-search input");
+      await send("Input.insertText", { text: "long" });
+      await delay(350);
+      receipt.minimumTree = await evaluate(measure);
+      const a = receipt.minimumTree.fileActions;
+      const separate = (left, right) =>
+        left &&
+        right &&
+        (left.right <= right.x ||
+          right.right <= left.x ||
+          left.bottom <= right.y ||
+          right.bottom <= left.y);
+      check(
+        receipt,
+        "140px-search-has-usable-width",
+        near(receipt.minimumTree.tree.width, 140) && a.input.width >= 40,
+        JSON.stringify(a),
+      );
+      check(
+        receipt,
+        "140px-clear-stays-inside-search",
+        a.clear &&
+          a.clear.x >= a.search.x &&
+          a.clear.right <= a.search.right &&
+          a.clear.bottom <= a.search.bottom,
+        JSON.stringify(a),
+      );
+      check(
+        receipt,
+        "140px-actions-do-not-overlap",
+        separate(a.search, a.collapse) &&
+          separate(a.search, a.refresh) &&
+          separate(receipt.minimumTree.toggle, a.collapse) &&
+          separate(receipt.minimumTree.toggle, a.refresh),
+        JSON.stringify(a),
+      );
+      check(
+        receipt,
+        "resize-retains-active-file",
+        receipt.minimumTree.activeId === receipt.initial.activeId,
+      );
+      await capture("140px-query");
+      await clickSelector(toggleSelector);
+      receipt.minimumTreeHidden = await evaluate(measure);
+      check(
+        receipt,
+        "140px-toggle-anchor-stays-fixed",
+        near(
+          receipt.minimumTreeHidden.toggle.x,
+          receipt.minimumTree.toggle.x,
+        ) &&
+          near(
+            receipt.minimumTreeHidden.toggle.y,
+            receipt.minimumTree.toggle.y,
+          ),
+      );
+      await clickSelector(toggleSelector);
+      receipt.minimumTreeRestored = await evaluate(measure);
+      check(
+        receipt,
+        "140px-query-survives-toggle",
+        receipt.minimumTreeRestored.fileActions.query === "long" &&
+          receipt.minimumTreeRestored.activeId === receipt.initial.activeId,
+      );
+      await clickSelector(".workspace-file-search button");
+      await clickSelector(".workspace-file-resizer");
+      await key("End", "End", 35);
+      await delay(200);
+    }
     await wheel(0, 720);
     receipt.sourceScrolled = await evaluate(measure);
     check(
@@ -431,7 +508,7 @@ try {
     receipt.sourceTreeHidden = await evaluate(measure);
     check(
       receipt,
-      "tree-hides-from-breadcrumb",
+      "tree-hides-from-fixed-leading-toggle",
       !receipt.sourceTreeHidden.treeVisible &&
         receipt.sourceTreeHidden.togglePressed === "false",
     );
@@ -455,8 +532,9 @@ try {
     );
     check(
       receipt,
-      "markdown-toggle-in-breadcrumb",
-      receipt.markdownStart.toggleInBreadcrumb &&
+      "markdown-toggle-at-fixed-leading-body-anchor",
+      receipt.markdownStart.toggleAtBodyStart &&
+        !receipt.markdownStart.toggleInBreadcrumb &&
         receipt.markdownStart.toggleCount === 1,
     );
     bounded(receipt, "markdown-start", receipt.markdownStart);

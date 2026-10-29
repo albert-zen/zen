@@ -1,4 +1,5 @@
 import "./dom-primitives.js";
+import { waitForFocus } from "./wait-for-focus.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -49,7 +50,7 @@ const snapshot: ZenXPluginSnapshot = {
   ],
 };
 
-test("late information admission measures Browser coexistence, tracks wrapped header and transfers pin focus", async () => {
+test("Board uses one headerless toggle, measures Browser coexistence and retires hidden owners", async () => {
   const dom = new JSDOM(
     '<main class="workspace"><aside class="auxiliary-panel" data-open="true"><header class="auxiliary-heading"></header></aside><div id="root"></div></main>',
     { url: "https://zenx.local" },
@@ -61,10 +62,10 @@ test("late information admission measures Browser coexistence, tracks wrapped he
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   const observed = new Set<Element>();
-  const callbacks = new Set<() => void>();
+  const callbacks = new Set<(entries: ResizeObserverEntry[]) => void>();
   const prior = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class {
-    constructor(readonly callback: () => void) {
+    constructor(readonly callback: (entries: ResizeObserverEntry[]) => void) {
       callbacks.add(callback);
     }
     observe(target: Element) {
@@ -90,13 +91,15 @@ test("late information admission measures Browser coexistence, tracks wrapped he
       ),
   });
   let current: ZenXPluginSnapshot = { ...snapshot, information: [] };
+  let threadId = "fixture";
+  localStorage.setItem("zenx.information.pin.thread:fixture", "fixture:info");
   function Harness() {
     const theme = useAppearance();
     return React.createElement(PluginInformationHost, {
       snapshot: current,
       registry,
       resourcePanelWidth: 480,
-      owner: { kind: "thread", threadId: "fixture" },
+      owner: { kind: "thread", threadId },
       theme,
       navigate() {},
       executeCommand: async () => null,
@@ -105,16 +108,17 @@ test("late information admission measures Browser coexistence, tracks wrapped he
   }
   const root = createRoot(document.getElementById("root")!);
   const click = async (selector: string) => {
-    await act(async () => {
-      document.querySelector<HTMLButtonElement>(selector)!.click();
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    const target = document.querySelector<HTMLButtonElement>(selector)!;
+    const closing = target.getAttribute("aria-expanded") === "true";
+    await act(async () => target.click());
+    if (closing) await act(async () => waitForFocus(target));
   };
   try {
     await act(async () => root.render(React.createElement(Harness)));
-    assert.equal(document.querySelector(".information-toolbar"), null);
+    assert.ok(
+      document.querySelector(".information-toolbar") === null,
+      "no contributions means no Board toggle",
+    );
     current = snapshot;
     await act(async () => root.render(React.createElement(Harness)));
     assert.ok(
@@ -132,26 +136,37 @@ test("late information admission measures Browser coexistence, tracks wrapped he
       /120px/,
       "popup height is bounded below the measured header, not shifted over its controls",
     );
-    await click("[data-information-pin]");
-    const rail = document.querySelector<HTMLElement>(".information-rail")!;
-    assert.equal(
-      rail.dataset.floating,
-      "true",
-      "480px Browser leaves insufficient chat + rail width",
+    const trigger = document.querySelector<HTMLButtonElement>(
+      ".information-toolbar button",
+    )!;
+    assert.equal(trigger.getAttribute("aria-pressed"), "true");
+    assert.equal(trigger.getAttribute("aria-expanded"), "true");
+    assert.ok(
+      document.querySelector(".information-header") === null,
+      "the duplicate Board header is absent",
     );
-    assert.equal(rail.style.top, "68px");
+    assert.ok(
+      document.querySelector(".information-rail") === null,
+      "the obsolete pinned rail is absent",
+    );
+    assert.ok(
+      document.querySelector("[data-information-pin]") === null,
+      "no duplicate pin control remains",
+    );
     assert.equal(
-      document.activeElement,
-      rail.querySelector("[data-information-pin]"),
-      "pin focuses the new Unpin action, not a removed popup",
+      document
+        .querySelector(".information-popover")
+        ?.getAttribute("aria-label"),
+      "Fixture",
     );
     headerBottom = 160;
     await act(async () => {
-      for (const callback of callbacks) callback();
+      for (const callback of callbacks) callback([]);
     });
-    assert.equal(
-      rail.style.top,
-      "124px",
+    assert.match(
+      document.querySelector<HTMLElement>(".information-popover")!.style
+        .maxHeight,
+      /176px/,
       "wrapped/fullscreen header remains clear",
     );
     for (const theme of ["dark", "light", "dark"]) {
@@ -166,6 +181,63 @@ test("late information admission measures Browser coexistence, tracks wrapped he
         theme,
       );
     }
+    for (let repeat = 0; repeat < 3; repeat++) {
+      await click(".information-toolbar button");
+      assert.ok(
+        document.querySelector(".information-popover") === null,
+        "closing hides the Board popup",
+      );
+      assert.equal(trigger.getAttribute("aria-pressed"), "false");
+      assert.equal(trigger.getAttribute("aria-expanded"), "false");
+      await click(".information-toolbar button");
+      assert.ok(
+        Boolean(document.querySelector(".information-popover")),
+        "the same toggle reopens the Board popup",
+      );
+      assert.equal(trigger.getAttribute("aria-pressed"), "true");
+    }
+    await act(async () => {
+      document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      );
+    });
+    await act(async () => waitForFocus(trigger));
+    assert.ok(
+      document.querySelector(".information-popover") === null,
+      "closing hides the Board popup",
+    );
+    assert.ok(
+      document.activeElement === trigger,
+      "Escape returns focus to the sole toggle",
+    );
+    await click(".information-toolbar button");
+    threadId = "another-owner";
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover") === null,
+      "owner changes close presentation without auto-opening the next owner",
+    );
+    await click(".information-toolbar button");
+    current = { ...snapshot, information: [] };
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-toolbar") === null,
+      "no contributions means no Board toggle",
+    );
+    current = snapshot;
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover") === null,
+      "re-admission never reopens a revoked surface",
+    );
+    assert.equal(
+      localStorage.getItem("zenx.information.pin.thread:fixture"),
+      "fixture:info",
+      "obsolete pin preferences are neither restored nor rewritten",
+    );
   } finally {
     await act(async () => root.unmount());
     globalThis.ResizeObserver = prior;
@@ -173,7 +245,7 @@ test("late information admission measures Browser coexistence, tracks wrapped he
   }
 });
 
-test("information reserves its own slot and primary hover keeps inverse text contrast", async () => {
+test("information reserves its slot, uses neutral pressed state and keeps primary hover contrast", async () => {
   const css = await readFile(
     new URL("../src/renderer/src/styles.css", import.meta.url),
     "utf8",
@@ -190,6 +262,11 @@ test("information reserves its own slot and primary hover keeps inverse text con
     css,
     /\.board-action\.primary:hover:not\(:disabled\)\s*\{[^}]*background: var\(--color-text-secondary\);[^}]*color: var\(--color-surface-main\);/,
   );
+  assert.match(
+    css,
+    /\.information-toolbar > \.icon-button\[aria-pressed="true"\]\s*\{\s*color: var\(--color-text-muted\);\s*background: var\(--color-surface-active\);\s*\}/,
+  );
+  assert.doesNotMatch(css, /\.information-(?:header|rail)/);
   assert.match(app, /const appearance = useAppearance\(\)/);
   assert.match(app, /theme=\{appearance\}/);
   assert.doesNotMatch(app, /document\.documentElement\.dataset\.theme/);

@@ -36,17 +36,11 @@ export function PluginInformationHost({
   const { t } = useTranslation("panels");
   const contributions = snapshot.information ?? [];
   const ownerKey = conversationKey(owner);
-  const storageKey = `zenx.information.pin.${ownerKey}`;
-  const [pin, setPin] = useState<string | null>(() => readPin(storageKey));
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
-  const rail = useRef<HTMLElement>(null);
-  const focusAfterPin = useRef(false);
-  const [floating, setFloating] = useState(false);
   const [headerBottom, setHeaderBottom] = useState(0);
-  const [railTop, setRailTop] = useState(8);
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
     if (!workspace) return;
@@ -54,11 +48,8 @@ export function PluginInformationHost({
       '.auxiliary-panel[data-open="true"] > .auxiliary-heading',
     );
     const measure = () => {
-      const bounds = workspace.getBoundingClientRect();
-      setFloating(bounds.width - resourcePanelWidth - 320 < 360);
       const bottom = heading?.getBoundingClientRect().bottom ?? 0;
       setHeaderBottom(bottom);
-      setRailTop(Math.max(8, bottom - bounds.top + 8));
     };
     measure();
     const observer =
@@ -71,33 +62,10 @@ export function PluginInformationHost({
     // A late-admitted contribution mounts the toolbar after the initial null render.
   }, [resourcePanelWidth, contributions.length]);
   useEffect(() => {
-    if (!pin || !focusAfterPin.current) return;
-    const frame = requestAnimationFrame(() => {
-      rail.current
-        ?.querySelector<HTMLButtonElement>("[data-information-pin]")
-        ?.focus();
-      focusAfterPin.current = false;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [pin]);
-  useEffect(() => {
-    setPin(readPin(storageKey));
     setOpen(false);
-  }, [storageKey]);
-  const pinned = contributions.find((item) => item.key === pin);
+  }, [ownerKey, contributions.length === 0]);
   const active =
-    pinned ??
-    contributions.find((item) => item.key === selected) ??
-    contributions[0];
-  const changePin = (key: string | null) => {
-    try {
-      if (key) localStorage.setItem(storageKey, key);
-      else localStorage.removeItem(storageKey);
-    } catch {
-      /* Storage may be disabled; retain this window's explicit presentation choice. */
-    }
-    setPin(key);
-  };
+    contributions.find((item) => item.key === selected) ?? contributions[0];
   if (!active) return null;
   const admissionId = snapshot.plugins.find(
     (plugin) => plugin.id === active.pluginId,
@@ -117,47 +85,6 @@ export function PluginInformationHost({
       className="information-content"
     />
   );
-  const header = (
-    <header className="information-header">
-      <div className="information-title">
-        <Icon name="list-detail" size={16} />
-        <strong>{active.title}</strong>
-      </div>
-      <div className="information-header-actions">
-        <button
-          type="button"
-          className="icon-button"
-          data-information-pin
-          title={pinned ? t("boardUnpin") : t("boardPin")}
-          aria-label={pinned ? t("boardUnpin") : t("boardPin")}
-          onClick={() => {
-            if (pinned) {
-              changePin(null);
-              setOpen(true);
-            } else {
-              focusAfterPin.current = true;
-              changePin(active.key);
-              setOpen(false);
-            }
-          }}
-        >
-          <Icon name={pinned ? "pin-off" : "pin"} size={16} />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={t("boardClose")}
-          onClick={() => {
-            changePin(null);
-            setOpen(false);
-            trigger.current?.focus();
-          }}
-        >
-          <Icon name="x" size={16} />
-        </button>
-      </div>
-    </header>
-  );
   const tabs =
     contributions.length > 1 ? (
       <nav className="information-tabs" aria-label={t("boardViews")}>
@@ -168,7 +95,6 @@ export function PluginInformationHost({
             aria-pressed={item.key === active.key}
             onClick={() => {
               setSelected(item.key);
-              if (pinned) changePin(item.key);
             }}
           >
             {item.title}
@@ -177,73 +103,39 @@ export function PluginInformationHost({
       </nav>
     ) : null;
   return (
-    <>
-      <div ref={toolbar} className="information-toolbar">
-        <Popover open={open && !pinned} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <button
-              ref={trigger}
-              type="button"
-              className="icon-button"
-              aria-label={t("boardTitle")}
-              title={t("boardTitle")}
-              aria-pressed={Boolean(pinned)}
-              onClick={
-                pinned
-                  ? () => {
-                      changePin(null);
-                      setOpen(false);
-                    }
-                  : undefined
-              }
-            >
-              <Icon name="list-detail" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            side="bottom"
-            align="end"
-            className="information-popover"
-            style={{
-              maxHeight: `min(720px, calc(100vh - ${Math.max(headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
-            }}
-            sideOffset={Math.max(
-              8,
-              headerBottom -
-                (trigger.current?.getBoundingClientRect().bottom ?? 0) +
-                8,
-            )}
-            aria-label={active.title}
-            onCloseAutoFocus={(event) => {
-              if (pinned || focusAfterPin.current) event.preventDefault();
-            }}
+    <div ref={toolbar} className="information-toolbar">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            ref={trigger}
+            type="button"
+            className="icon-button"
+            aria-label={t("boardTitle")}
+            title={t("boardTitle")}
+            aria-pressed={open}
           >
-            {header}
-            {tabs}
-            {surface}
-          </PopoverContent>
-        </Popover>
-      </div>
-      {pinned ? (
-        <aside
-          ref={rail}
-          data-floating={floating}
-          style={{ top: floating ? railTop : Math.max(0, railTop - 8) }}
-          className="information-rail"
-          aria-label={t("boardPanelLabel", { title: active.title })}
+            <Icon name="list-detail" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="bottom"
+          align="end"
+          className="information-popover"
+          style={{
+            maxHeight: `min(720px, calc(100vh - ${Math.max(headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
+          }}
+          sideOffset={Math.max(
+            8,
+            headerBottom -
+              (trigger.current?.getBoundingClientRect().bottom ?? 0) +
+              8,
+          )}
+          aria-label={active.title}
         >
-          {header}
           {tabs}
           {surface}
-        </aside>
-      ) : null}
-    </>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
-}
-function readPin(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
 }

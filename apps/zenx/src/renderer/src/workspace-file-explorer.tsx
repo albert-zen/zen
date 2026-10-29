@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WorkspaceFileListing,
@@ -53,6 +53,7 @@ function FileExplorer({
     query: string;
     value?: WorkspaceFileSearch;
     error?: string;
+    pending?: boolean;
   }>();
   const [cursor, setCursor] = useState<string>();
   const [revision, setRevision] = useState(0);
@@ -64,64 +65,92 @@ function FileExplorer({
   const needle = query.trim();
   const searchValue = search?.query === needle ? search.value : undefined;
   const searchError = search?.query === needle ? search.error : undefined;
-  const searching = !!needle && !searchValue && !searchError;
-  const load = async (directory: string) => {
-    if (inFlight.current.has(directory)) return;
-    const epoch = generation.current;
-    inFlight.current.add(directory);
-    setPending(new Set(inFlight.current));
-    setErrors((current) => {
-      const next = { ...current };
-      delete next[directory];
-      return next;
-    });
-    try {
-      const value = await window.zenx.workspaceFiles.list(threadId, directory);
-      if (generation.current === epoch)
-        setFolders((current) => ({ ...current, [directory]: value }));
-    } catch (error) {
-      if (generation.current === epoch)
-        setErrors((current) => ({
-          ...current,
-          [directory]: error instanceof Error ? error.message : String(error),
-        }));
-    } finally {
-      if (generation.current === epoch) {
-        inFlight.current.delete(directory);
-        setPending(new Set(inFlight.current));
+  const searching = !!needle && (search?.query !== needle || search.pending);
+  const load = useCallback(
+    async (directory: string) => {
+      if (inFlight.current.has(directory)) return;
+      const epoch = generation.current;
+      inFlight.current.add(directory);
+      setPending(new Set(inFlight.current));
+      setErrors((current) => {
+        const next = { ...current };
+        delete next[directory];
+        return next;
+      });
+      try {
+        const value = await window.zenx.workspaceFiles.list(
+          threadId,
+          directory,
+        );
+        if (generation.current === epoch)
+          setFolders((current) => ({ ...current, [directory]: value }));
+      } catch (error) {
+        if (generation.current === epoch)
+          setErrors((current) => ({
+            ...current,
+            [directory]: error instanceof Error ? error.message : String(error),
+          }));
+      } finally {
+        if (generation.current === epoch) {
+          inFlight.current.delete(directory);
+          setPending(new Set(inFlight.current));
+        }
       }
-    }
-  };
+    },
+    [threadId],
+  );
   useEffect(() => {
-    generation.current++;
-    inFlight.current.clear();
-    setFolders({});
-    setErrors({});
-    setExpanded(new Set());
-    setCursor(undefined);
     void load(".");
     return () => {
       generation.current++;
+      inFlight.current.clear();
     };
-  }, [revision]);
+  }, [load]);
+  const refresh = () => {
+    // Retire older reads without blanking the last useful listing, focus or
+    // expansion. Refresh is discovery-only: never reload open files or drafts.
+    generation.current++;
+    inFlight.current.clear();
+    setErrors({});
+    void load(".");
+    for (const directory of expanded) {
+      const parts = directory.split("/");
+      if (
+        parts
+          .slice(0, -1)
+          .every((_, index) =>
+            expanded.has(parts.slice(0, index + 1).join("/")),
+          )
+      )
+        void load(directory);
+    }
+    setRevision((value) => value + 1);
+  };
   useEffect(() => {
     let active = true;
-    setSearch(undefined);
-    if (!needle) return;
+    if (!needle) {
+      setSearch(undefined);
+      return;
+    }
+    setSearch((current) => ({
+      query: needle,
+      value: current?.query === needle ? current.value : undefined,
+      pending: true,
+    }));
     const timer = setTimeout(() => {
       void window.zenx.workspaceFiles.search(threadId, needle).then(
         (value) => {
           if (active) {
             setSearch({ query: needle, value });
-            setCursor(undefined);
           }
         },
         (error) => {
           if (active)
-            setSearch({
+            setSearch((current) => ({
               query: needle,
+              value: current?.query === needle ? current.value : undefined,
               error: error instanceof Error ? error.message : String(error),
-            });
+            }));
         },
       );
     }, 180);
@@ -143,7 +172,7 @@ function FileExplorer({
     for (const parent of parents) void load(parent);
     // Opening a file reveals its ancestors, but later manual collapse stays respected.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPath, revision]);
+  }, [selectedPath]);
 
   const rows: Row[] = [];
   let treeTruncated = false;
@@ -197,8 +226,8 @@ function FileExplorer({
       else next.add(entry.path);
       return next;
     });
-    if (!expanded.has(entry.path) && !Object.hasOwn(folders, entry.path))
-      void load(entry.path);
+    // A previously collapsed folder may have changed on disk in the meantime.
+    if (!expanded.has(entry.path)) void load(entry.path);
   };
   const activate = (entry: Entry) => {
     if (busy) return;
@@ -212,8 +241,14 @@ function FileExplorer({
     setCursor(undefined);
     searchInput.current?.focus();
   };
-  const folderNotes = Object.entries(folders).filter(
-    ([directory]) => directory === "." || expanded.has(directory),
+  const visibleDirectories = new Set([
+    ".",
+    ...rows
+      .filter((entry) => entry.kind === "directory" && expanded.has(entry.path))
+      .map((entry) => entry.path),
+  ]);
+  const folderNotes = Object.entries(folders).filter(([directory]) =>
+    visibleDirectories.has(directory),
   );
   return (
     <div
@@ -239,18 +274,6 @@ function FileExplorer({
         aria-label={i18n.t("panels:workspaceFiles")}
         title={workspacePath}
       >
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={i18n.t("panels:refreshFileList")}
-          title={i18n.t("panels:refreshFileList")}
-          disabled={pending.has(".") || searching}
-          aria-busy={pending.has(".") || searching}
-          data-refreshing={pending.has(".") || searching}
-          onClick={() => setRevision((value) => value + 1)}
-        >
-          <Icon name="reload" />
-        </button>
         <div className="workspace-file-search">
           <Icon name="search" />
           <input
@@ -305,6 +328,18 @@ function FileExplorer({
           }}
         >
           <Icon name="collapse-folders" />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={i18n.t("panels:refreshFileList")}
+          title={i18n.t("panels:refreshFileList")}
+          disabled={pending.has(".") || searching}
+          aria-busy={pending.has(".") || searching}
+          data-refreshing={pending.has(".") || searching}
+          onClick={refresh}
+        >
+          <Icon name="reload" />
         </button>
       </div>
       <div className="workspace-file-tree-scroll">
@@ -421,16 +456,21 @@ function FileExplorer({
         ) : null}
         {searchError ? (
           <p role="alert" className="workspace-file-note">
-            {searchError}
+            {searchValue ? i18n.t("panels:fileListRefreshFailed") + " " : null}
+            {searchError}{" "}
+            <button type="button" onClick={refresh}>
+              {i18n.t("panels:retry")}
+            </button>
           </p>
         ) : null}
         {!needle
           ? Object.entries(errors)
-              .filter(
-                ([directory]) => directory === "." || expanded.has(directory),
-              )
+              .filter(([directory]) => visibleDirectories.has(directory))
               .map(([directory, error]) => (
                 <p role="alert" className="workspace-file-note" key={directory}>
+                  {folders[directory]
+                    ? i18n.t("panels:fileListRefreshFailed") + " "
+                    : null}
                   {directory}: {error}{" "}
                   <button type="button" onClick={() => void load(directory)}>
                     {i18n.t("panels:retry")}
@@ -441,7 +481,8 @@ function FileExplorer({
         {!searching &&
         rows.length === 0 &&
         (searchValue || folders["."]) &&
-        !searchError ? (
+        !searchError &&
+        !errors["."] ? (
           <p className="workspace-file-note">
             {i18n.t(
               needle
@@ -454,7 +495,9 @@ function FileExplorer({
           ? folderNotes
               .filter(
                 ([directory, folder]) =>
-                  directory !== "." && folder.entries.length === 0,
+                  directory !== "." &&
+                  folder.entries.length === 0 &&
+                  !errors[directory],
               )
               .map(([directory]) => (
                 <p key={directory} className="workspace-file-note">
