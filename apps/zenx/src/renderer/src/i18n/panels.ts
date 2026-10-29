@@ -1158,7 +1158,8 @@ export const zhCN = {
   shellSandbox:
     "交互终端需要此线程的完全访问权限，已有的受限 Shell 命令仍可使用。",
   backgroundShellTitle: "后台命令",
-  backgroundShellRunning: "{{count}} 条后台命令正在运行",
+  backgroundShellRunning_one: "{{count}} 条后台命令正在运行",
+  backgroundShellRunning_other: "{{count}} 条后台命令正在运行",
   backgroundShellCount_starting: "{{count}} 条命令正在启动",
   backgroundShellCount_queued: "{{count}} 条命令排队中",
   backgroundShellCount_output: "{{count}} 条命令已退出，正在收集输出",

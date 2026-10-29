@@ -6,7 +6,10 @@ import {
   MessageForkContext,
 } from "../../src/renderer/src/ThreadView.js";
 import { ThreadReadingStateProvider } from "../../src/renderer/src/thread-reading-state.js";
-import { emptyComposerState } from "../../src/renderer/src/composer-state.js";
+import {
+  emptyComposerState,
+  editComposer,
+} from "../../src/renderer/src/composer-state.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
 import {
   runtimeThread,
@@ -34,29 +37,38 @@ function makeThread(id: string) {
 function Preview() {
   const [thread, setThread] = useState(() => makeThread("source"));
   const [requests, setRequests] = useState(0);
-  const [composer, setComposer] = useState(() => ({
-    ...emptyComposerState(),
-    draft: "",
-  }));
+  const [composer, setComposer] = useState(emptyComposerState);
+  const [pendingCopy, setPendingCopy] = useState<{
+    complete: () => void;
+    fail: () => void;
+  } | null>(null);
   const fork = async () => {
     setRequests((count) => count + 1);
     await new Promise<void>((resolve, reject) => {
-      Object.assign(window, {
-        __forkPreview: {
-          complete: () => {
-            setThread(makeThread("copy"));
-            resolve();
-          },
-          fail: () =>
-            reject(
-              new Error(
-                zh
-                  ? "合成复制失败；原会话保留。"
-                  : "Synthetic copy failure; source preserved.",
-              ),
-            ),
+      let settled = false;
+      const controls = {
+        complete: () => {
+          if (settled) return;
+          settled = true;
+          setPendingCopy(null);
+          setThread(makeThread("copy"));
+          resolve();
         },
-      });
+        fail: () => {
+          if (settled) return;
+          settled = true;
+          setPendingCopy(null);
+          reject(
+            new Error(
+              zh
+                ? "合成复制失败；原会话保留。"
+                : "Synthetic copy failure; source preserved.",
+            ),
+          );
+        },
+      };
+      setPendingCopy(controls);
+      Object.assign(window, { __forkPreview: controls });
     });
   };
   return (
@@ -77,13 +89,31 @@ function Preview() {
             <span style={{ marginLeft: 16 }}>
               Synthetic only · {requests} fork request(s)
             </span>
+            <span style={{ display: "inline-flex", gap: 8, marginLeft: 16 }}>
+              <button
+                type="button"
+                data-fork-preview="complete"
+                disabled={!pendingCopy}
+                onClick={() => pendingCopy?.complete()}
+              >
+                Complete copy
+              </button>
+              <button
+                type="button"
+                data-fork-preview="fail"
+                disabled={!pendingCopy}
+                onClick={() => pendingCopy?.fail()}
+              >
+                Fail copy
+              </button>
+            </span>
           </header>
           <ThreadView
             thread={thread}
             approvals={[]}
             composer={composer}
             onDraftChange={(draft) =>
-              setComposer((current) => ({ ...current, draft }))
+              setComposer((current) => editComposer(current, draft))
             }
             onInterrupt={async () => undefined}
             onRespondToApproval={async () => undefined}

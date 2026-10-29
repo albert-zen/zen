@@ -48,6 +48,7 @@ import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { workspaceLauncherSnapshot } from "./workspace-launcher-snapshot.js";
 import { nativeRecoveryForThread } from "./native-recovery-fixture.js";
 import { encodeModelKey } from "../../../src/protocol/model-key.js";
+import { createUiPolishTitleBridge } from "./fixtures/ui-polish-title-bridge.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
 
@@ -2962,7 +2963,13 @@ test("Room Side chat drafts stay visible locally, close without creating, and fi
 test("Room Side chat promotion waits for its receipt and preserves a newer user tab selection", () =>
   roomSideChatScenario(true));
 
-async function roomSideChatScenario(navigateWhilePromoting: boolean) {
+test("visual fixture title bridge lets real App side chat progress from held creation to held send", () =>
+  roomSideChatScenario(false, true));
+
+async function roomSideChatScenario(
+  navigateWhilePromoting: boolean,
+  holdCreateAndSend = false,
+) {
   const room = {
     id: "side-chat-room",
     name: "Side chat Room",
@@ -3067,19 +3074,11 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
   };
   const creates: unknown[] = [];
   const sends: unknown[] = [];
+  const creationRelease = deferred<void>();
+  const admissionRelease = deferred<void>();
   const harness = await mountApp({
     pluginSnapshot: snapshot,
-    titles: {
-      get: async () => ({}),
-      onChange: () => () => undefined,
-      observe: async () => undefined,
-      rename: async () => {
-        throw Error("No title rename expected");
-      },
-      retry: async () => {
-        throw Error("No title retry expected");
-      },
-    },
+    titles: createUiPolishTitleBridge(),
     sidebarApi,
     request: async (method, params) => {
       if (method === "zen/thread/read")
@@ -3088,10 +3087,12 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
         return resumed(thread((params as { threadId: string }).threadId));
       if (method === "zen/thread/create-child-configured") {
         creates.push(params);
+        if (holdCreateAndSend) await creationRelease.promise;
         return { thread: resumed(thread("room-child")).thread };
       }
       if (method === "zen/turn/send") {
         sends.push(params);
+        if (holdCreateAndSend) await admissionRelease.promise;
         return {};
       }
       if (method === "zen/trace/client-activation") return { observed: true };
@@ -3169,6 +3170,22 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
       props(send).onClick();
     });
     assert.equal(creates.length, 1, document.body.textContent ?? "");
+    if (holdCreateAndSend) {
+      assert.equal(sends.length, 0);
+      assert.match(
+        document.querySelector(".side-chat-context-note")?.textContent ?? "",
+        /Creating side chat/,
+      );
+      await act(async () => creationRelease.resolve());
+      await waitFor(() => sends.length === 1);
+      assert.match(
+        document.querySelector(".side-chat-context-note")?.textContent ?? "",
+        /Sending your message/,
+      );
+      assert.equal(document.querySelector(".composer-error"), null);
+      assert.equal(composer.value, "Room side request");
+      await act(async () => admissionRelease.resolve());
+    }
     if (navigateWhilePromoting) {
       await waitFor(() => promotionBlocked);
       assert.equal(
@@ -3234,6 +3251,8 @@ async function roomSideChatScenario(navigateWhilePromoting: boolean) {
     assert.ok(document.querySelector('[role="tab"][id*="thread:room-child"]'));
     assert.match(document.body.textContent ?? "", /Synthetic Room body/);
   } finally {
+    creationRelease.resolve();
+    admissionRelease.resolve();
     promotionRelease.resolve();
     await harness.unmount();
     dispose();
