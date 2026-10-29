@@ -214,7 +214,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **Plugin Package Trust** — 安装即信任 package 代码，但 dependency build scripts 只由 bundled pnpm 按 profile 显式 `allowBuilds` 执行，不引入风险引擎或参数级权限矩阵。
 - **First-party Plugin Tarball** — Browser、Computer、ZenX self-control、Triggers 与 Rooms 的标准 npm tarball，随 App Resources 分发并通过同一个 profile installer 首装或重装。
 - **Plugin Marketplace Inventory** — ZenX 唯一的插件浏览与管理读模型，把 Host-owned 内置库存、只读外部 package metadata 和 Catalog 中已安装 package 合并去重，所有动作仍委托同一个 profile lifecycle authority。
-- **Plugin Discovery Projection** — 常驻 `zenx_plugin` 工具用普通 `discover` / `read` 调用选择后续模型可见插件能力；选择事实只由既有 tool call/result 推导，不新增 catalog/disclosure Item。
+- **Plugin Discovery Projection** — 常驻 `zenx_plugin` 的成功 `read` 从普通 tool call/result 推导后续模型采样的能力披露；它只改变模型可见性，不注册 Runtime、启用插件或授予权限，`discover` / `readiness` 本身不披露工具，不新增 catalog/disclosure Item。
 - **Room Header Presentation Slot** — App 提供仅匹配当前 Room 路由的 renderer-local 标题栏位置；Rooms 可经 React portal 展示既有操作，但不取得新的导航、执行或持久状态 authority。
 - **Generic UI Host** — ZenX 为插件提供 sidebar、pages/subroutes、settings、panel、commands/menu 与 result renderer 的受控宿主 surface，不允许插件直接接管核心 DOM、router 或 Agent 页面语义。
 - **Plugin UI SDK** — 第一方 bundled 插件和隔离运行的第三方插件共享的逻辑 UI contribution API；信任和进程隔离不同，不产生两套产品语义。
@@ -727,9 +727,16 @@ connection descriptor 发布，并让该 authority 独立于窗口生命周期�
   directories，缺失路径显式失败且不建立 durable recovery。
 - `structuredContent` 继续使用既有 1 MiB JSON-compatible 校验和 canonical 存储合同，
   不写入 Tool Output Spool，也不以临时文件替代结构化结果。
-- 模型初始只看到 builtin tools 与一个稳定入口 `zenx_plugin`。`discover` 只返回
-  plugin id、name、short description、status；`read` 返回 main document 与 tool index。
-  读取后，从后续模型采样开始披露该插件普通、namespaced structured tool schemas。
+- 模型初始只看到 builtin tools 与一个稳定入口 `zenx_plugin`。`discover` 返回
+  plugin id、name、short description、status 及明确的 `read` 下一步；`read` 返回
+  main document、tool index 与能力披露/权限边界说明。成功读取后，从后续模型采样开始
+  披露该插件当前可用的普通 namespaced structured tool schemas：按 presentation mode
+  进入 direct tool definitions 和/或 `run_code` SDK / `ALL_TOOLS`。当前已冻结的模型响应
+  与正在运行的 `run_code` 不会获得新工具；应结束程序，在下一次采样使用新 schema。
+  Runtime 已由 Host 生命周期注册；读取不安装、启用、配置或重新注册插件，也不执行插件
+  动作或授予权限。发现入口的检查语义不代表插件工具全都只读：各工具可观察或修改状态，
+  仍受其精确 schema、当前 Host 权限与审批约束。此说明在 provider-neutral 工具定义及
+  普通结果中交付，不在 Provider adapter 注入新的指令。
 - `discover`、`read` 与后续插件调用全部使用既有普通 `tool_call` / `tool_result`。
   不新增 `PluginCatalogSnapshotItem`、`ToolDisclosureItem` 或任何其他 canonical Item；
   重放时从 ItemList 中已有调用与结果派生后续投影。

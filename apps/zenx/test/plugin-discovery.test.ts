@@ -16,7 +16,12 @@ import type {
 import { ProviderRegistry } from "../../../src/provider-registry.js";
 import { AgentRuntime } from "../../../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.js";
-import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
+import {
+  ShellToolRuntime,
+  ToolEnvironment,
+  type CompositeToolRuntime,
+} from "../../../src/tool.js";
+import { buildToolPresentation } from "../../../src/tool-presentation.js";
 import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import type {
   ZenXPluginCatalogState,
@@ -131,7 +136,7 @@ test("ordinary discovery history progressively exposes one plugin and routes its
   assert.equal(results.at(-1)?.output, exactOutput);
   assert.equal(results.at(-1)?.exitCode, 7);
 
-  const discover = JSON.parse(results[0]!.output) as unknown;
+  const discover = discoveryPayload(results[0]!.output);
   assert.deepEqual(discover, {
     operation: "discover",
     plugins: [
@@ -143,7 +148,7 @@ test("ordinary discovery history progressively exposes one plugin and routes its
       },
     ],
   });
-  const read = JSON.parse(results[1]!.output) as unknown;
+  const read = discoveryPayload(results[1]!.output);
   assert.deepEqual(read, {
     operation: "read",
     plugin: {
@@ -158,6 +163,228 @@ test("ordinary discovery history progressively exposes one plugin and routes its
 
   await fixture.close();
 });
+
+test("discovery guidance reaches every presentation and read changes visibility, not registrations", async (t) => {
+  const fixture = await fixtureEnvironment({ runCode: true });
+  t.after(() => fixture.close());
+  const registrations = fixture.environment.definitionEntries;
+  const catalog = fixture.registry.pluginSnapshot();
+  assert(
+    registrations.some((entry) => entry.definition.name === "fixture_echo"),
+  );
+  const initial = fixture.projection.definitions([]);
+  assert(!initial.some((tool) => tool.name === "fixture_echo"));
+
+  for (const mode of ["direct", "code", "both"] as const) {
+    const presentation = buildToolPresentation(initial, mode);
+    const descriptions = presentation.modelTools
+      .map((tool) => tool.description)
+      .join("\n");
+    assert.match(descriptions, /successful read.*next model request/u);
+    assert.match(
+      descriptions,
+      /direct tool definitions.*tools\.\*.*run_code SDK/u,
+    );
+    assert.match(
+      descriptions,
+      /Finish the current run_code program before invoking/u,
+    );
+    assert.match(
+      descriptions,
+      /discover\/readiness alone do not expose tools/u,
+    );
+    assert.match(descriptions, /does not install or enable plugins/u);
+    assert.match(descriptions, /not necessarily read-only/u);
+    assert.match(descriptions, /current permissions\/approvals/u);
+  }
+
+  const read = await fixture.discovery.execute({
+    callId: "read",
+    name: "zenx_plugin",
+    arguments: { operation: "read", pluginId: "fixture" },
+    cwd: process.cwd(),
+    signal: new AbortController().signal,
+  });
+  discoveryPayload(read.output);
+  assert.deepEqual(fixture.environment.definitionEntries, registrations);
+  assert.deepEqual(fixture.registry.pluginSnapshot(), catalog);
+  assert.equal(fixture.invocations, 0);
+  // Returning text alone is not disclosure: the successful ordinary pair must commit.
+  assert.deepEqual(fixture.projection.definitions([]), initial);
+  const items = canonicalPair(
+    { operation: "read", pluginId: "fixture" },
+    read.exitCode,
+    JSON.parse(read.output),
+  );
+  assert(
+    fixture.projection
+      .definitions(items)
+      .some((tool) => tool.name === "fixture_echo"),
+  );
+});
+
+test("code-only discovery keeps the current program frozen and refreshes SDK and catalog next sample", async (t) => {
+  const codeCatalogs: string[][] = [];
+  // Synthetic coordinator uses the production nested invocation/admission port;
+  // it does not pretend to test JavaScript evaluation or a paid provider.
+  const coordinator: CompositeToolRuntime = {
+    name: "run_code",
+    specification: {
+      name: "run_code",
+      description: "Synthetic code coordinator",
+      inputSchema: { type: "object" },
+    },
+    async execute() {
+      throw new Error("composite entry required");
+    },
+    async executeComposite(invocation, nested) {
+      const names = nested.codeContext!.tools.map((tool) => tool.name);
+      codeCatalogs.push(names);
+      if (invocation.arguments.code === "// read fixture") {
+        assert(!names.includes("fixture_echo"));
+        const read = await nested.invoke("zenx_plugin", {
+          operation: "read",
+          pluginId: "fixture",
+        });
+        assert.equal(read.exitCode, 0);
+        discoveryPayload(read.output);
+        const premature = await nested.invoke("fixture_echo", {
+          value: exactOutput,
+        });
+        assert.notEqual(premature.exitCode, 0);
+        assert.match(premature.output, /not available in this model sample/u);
+        assert(
+          !nested.codeContext!.tools.some(
+            (tool) => tool.name === "fixture_echo",
+          ),
+        );
+        return read;
+      }
+      assert(names.includes("fixture_echo"));
+      return await nested.invoke("fixture_echo", { value: exactOutput });
+    },
+  };
+  const fixture = await fixtureEnvironment({ runCode: coordinator });
+  t.after(() => fixture.close());
+  const samples: ModelRequest[] = [];
+  const model: ModelAdapter = {
+    provider: "code-discovery-fixture",
+    async *stream(request) {
+      samples.push(request);
+      assert.deepEqual(
+        request.tools.map((tool) => tool.name),
+        ["run_code"],
+      );
+      const description = request.tools[0]!.description;
+      assert.match(description, /successful read.*next model request/u);
+      if (samples.length === 1) {
+        assert.doesNotMatch(description, /\n  fixture_echo\(/u);
+        yield toolCall("read-program", "run_code", { code: "// read fixture" });
+      } else if (samples.length === 2) {
+        assert.match(description, /\n  fixture_echo\(args:/u);
+        yield toolCall("invoke-program", "run_code", {
+          code: "// invoke fixture",
+        });
+      } else {
+        yield { type: "text_delta", delta: "done" };
+      }
+    },
+  };
+  const server = appServer(model, fixture, new InMemoryThreadJournal(), "code");
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "read and invoke fixture")
+  ).done;
+  assert.equal(samples.length, 3);
+  assert.deepEqual(codeCatalogs, [
+    ["wait", "shell", "zenx_plugin"],
+    ["wait", "shell", "zenx_plugin", "fixture_echo"],
+  ]);
+  assert.equal(fixture.invocations, 1);
+  const snapshot = await server.readThread(thread.id);
+  const readCall = snapshot.items.find(
+    (item) => item.type === "tool_call" && item.name === "zenx_plugin",
+  );
+  assert(readCall?.type === "tool_call");
+  assert.equal(readCall.parentCallId, "read-program");
+  assert.equal(snapshot.turns[0]?.status, "completed");
+});
+
+for (const decision of ["accept", "decline"] as const) {
+  test(`disclosed mutable plugin action still requires its own approval: ${decision}`, async (t) => {
+    const fixture = await fixtureEnvironment();
+    t.after(() => fixture.close());
+    let value = "unchanged";
+    await fixture.registry.install(
+      {
+        manifest: pluginManifest({
+          id: "mutable",
+          name: "Mutable",
+          description: "Synthetic mutable plugin",
+          mainDocument: "Use mutable_write to change fixture state.",
+          toolName: "mutable_write",
+          toolDescription: "Change fixture state",
+        }),
+        invoke: async (_name, invocation) => {
+          value = String(invocation.arguments.value);
+          return { output: value, exitCode: 0 };
+        },
+      },
+      "bundled",
+    );
+    let sample = 0;
+    const model: ModelAdapter = {
+      provider: "mutable-discovery-fixture",
+      async *stream(request) {
+        sample += 1;
+        if (sample === 1) {
+          assert(!request.tools.some((tool) => tool.name === "mutable_write"));
+          yield toolCall("read-mutable", "zenx_plugin", {
+            operation: "read",
+            pluginId: "mutable",
+          });
+        } else if (sample === 2) {
+          assert(request.tools.some((tool) => tool.name === "mutable_write"));
+          assert.equal(value, "unchanged");
+          yield toolCall("write-mutable", "mutable_write", {
+            value: "changed",
+          });
+        } else {
+          yield { type: "text_delta", delta: "done" };
+        }
+      },
+    };
+    const server = appServer(
+      model,
+      fixture,
+      new InMemoryThreadJournal(),
+      "direct",
+      "always",
+    );
+    const thread = await server.startThread();
+    const approvals: string[] = [];
+    await (
+      await server.startTurn(thread.id, "update fixture state", {
+        requestApproval: async (request) => {
+          approvals.push(request.toolName!);
+          return request.toolName === "zenx_plugin" ? "accept" : decision;
+        },
+      })
+    ).done;
+    assert.deepEqual(approvals, ["zenx_plugin", "mutable_write"]);
+    assert.equal(value, decision === "accept" ? "changed" : "unchanged");
+    const snapshot = await server.readThread(thread.id);
+    const actionResult = snapshot.items.find(
+      (item) => item.type === "tool_result" && item.callId === "write-mutable",
+    );
+    assert(actionResult?.type === "tool_result");
+    assert.equal(actionResult.exitCode, decision === "accept" ? 0 : 126);
+    assert.equal(
+      actionResult.executionStatus,
+      decision === "accept" ? "completed" : "declined",
+    );
+  });
+}
 
 test("one discovery snapshot synchronizes direct schemas and the run_code SDK on the next sample", async () => {
   const fixture = await fixtureEnvironment({ runCode: true });
@@ -249,7 +476,7 @@ test("disclosure is rebuilt from journal history and current availability gates 
     cwd: process.cwd(),
     signal: new AbortController().signal,
   });
-  assert.deepEqual(JSON.parse(discovery.output), {
+  assert.deepEqual(discoveryPayload(discovery.output), {
     operation: "discover",
     plugins: [],
   });
@@ -261,7 +488,7 @@ test("disclosure is rebuilt from journal history and current availability gates 
     ["wait", "shell", "zenx_plugin"],
   );
   assert.deepEqual(
-    JSON.parse(
+    discoveryPayload(
       (
         await fixture.discovery.execute({
           callId: "discover-uninstalled",
@@ -429,7 +656,9 @@ class DiscoveryPresentationModel implements ModelAdapter {
   }
 }
 
-async function fixtureEnvironment(options: { runCode?: boolean } = {}) {
+async function fixtureEnvironment(
+  options: { runCode?: boolean | CompositeToolRuntime } = {},
+) {
   const environment = new ToolEnvironment({
     bundles: [
       {
@@ -477,10 +706,12 @@ async function fixtureEnvironment(options: { runCode?: boolean } = {}) {
     identity: { kind: "builtin", id: "zenx-plugin-discovery" },
     tools: [discovery],
   });
-  if (options.runCode === true) {
+  if (options.runCode) {
     environment.registerBundle({
       identity: { kind: "builtin", id: "run-code" },
-      tools: [new RunCodeToolRuntime()],
+      tools: [
+        options.runCode === true ? new RunCodeToolRuntime() : options.runCode,
+      ],
     });
   }
   const projection = new PluginDiscoveryProjection(environment, registry);
@@ -504,6 +735,7 @@ function appServer(
   fixture: Awaited<ReturnType<typeof fixtureEnvironment>>,
   journal: InMemoryThreadJournal,
   toolPresentation?: "direct" | "code" | "both",
+  approvalPolicy: "always" | "never" = "never",
 ): ZenAppServer {
   return new ZenAppServer({
     journal,
@@ -529,7 +761,7 @@ function appServer(
       modelId: "fixture-model",
       reasoningEffort: "medium",
       sandbox: "danger-full-access",
-      approvalPolicy: "never",
+      approvalPolicy,
     },
   });
 }
@@ -665,3 +897,26 @@ test("discovery fixture reads exact semantic tool body without parsing its outco
     }),
   );
 });
+
+/** Check the model-visible workflow without coupling assertions to exact prose. */
+function discoveryPayload(output: string): Record<string, unknown> {
+  const { nextStep, permissionChecks, ...payload } = parseRecord(output);
+  assert.equal(typeof nextStep, "string");
+  assert.match(nextStep as string, /next model request/u);
+  if (payload.operation === "discover") {
+    assert.equal(permissionChecks, undefined);
+    assert.match(nextStep as string, /operation: "read".*exact pluginId/u);
+    assert.match(nextStep as string, /Discover alone does not expose/u);
+  } else {
+    assert.equal(typeof permissionChecks, "string");
+    assert.match(permissionChecks as string, /Disclosure is not approval/u);
+    assert.match(permissionChecks as string, /may inspect or change state/u);
+    assert.match(
+      nextStep as string,
+      /direct tool definitions.*tools\.\*.*run_code SDK/u,
+    );
+    assert.match(nextStep as string, /finish that program first/u);
+    assert.match(nextStep as string, /does not install or enable plugins/u);
+  }
+  return payload;
+}
