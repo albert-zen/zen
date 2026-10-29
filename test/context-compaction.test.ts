@@ -11,6 +11,9 @@ import {
 } from "../src/app-server.js";
 import {
   boundedCompactionBoundary,
+  compactionSummaryPrefix,
+  CONTEXT_COMPACTION_ALGORITHM_VERSION,
+  AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
   normalizeContextCompactionConfig,
   planCompactionRetention,
   validateContextCompactionItem,
@@ -46,13 +49,51 @@ import { projectThread } from "../src/protocol/codex/mapper.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { Thread } from "../src/thread.js";
 import { DomainThreadJournal } from "../src/domain-journal.js";
-import { FileTraceStore } from "../src/trace.js";
+import { FileTraceStore, type TraceEvent } from "../src/trace.js";
 import { OpenAiCompatibleModel } from "../src/model/openai-compatible.js";
 import { closeModelTrace } from "../src/trace-model.js";
 import { FileItemListStore } from "../src/item-list-store.js";
 import type { AuxiliaryModelOptions } from "../src/auxiliary-model.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ShellToolRuntime, ToolEnvironment } from "../src/tool.js";
+
+const agentCompactionPrefix =
+  "[Zen compacted context]\n[Context replacement committed by agent compact_context call; not a new user request. Original history is unchanged; omitted details require an authorized read.]\n";
+const explicitCompactionPrefix =
+  "[Zen compacted context]\n[Context replacement committed by explicit compaction request; not a new user request. Original history is unchanged; omitted details require an authorized read.]\n";
+
+test("new compactions disclose their initiator without rewriting legacy model semantics", () => {
+  assert.equal(
+    compactionSummaryPrefix({
+      algorithmVersion: AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      initiator: "agent",
+    }),
+    agentCompactionPrefix,
+  );
+  assert.equal(
+    compactionSummaryPrefix({
+      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      initiator: "human",
+    }),
+    explicitCompactionPrefix,
+  );
+  assert.match(
+    compactionSummaryPrefix({
+      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+      initiator: "automatic",
+    }),
+    /committed by Host automatic policy; not a new user request/u,
+  );
+  for (const algorithmVersion of [
+    "zen.context-compaction.v1",
+    "zen.context-compaction.v3",
+    "zen.context-compaction.agentic.v2",
+  ])
+    assert.equal(
+      compactionSummaryPrefix({ algorithmVersion, initiator: "automatic" }),
+      "[Zen compacted context]\n",
+    );
+});
 
 test("compaction fixtures distinguish request purpose from ordinary user text", () => {
   const request: ModelRequest = {
@@ -451,7 +492,7 @@ test("agentic compaction replaces the active context and replays identically", a
   assert.equal(generatedSummaries, 0);
   assert(requests[0]?.tools.some((tool) => tool.name === "compact_context"));
   assert.deepEqual(requests[1]?.messages, [
-    { role: "user", text: `[Zen compacted context]\n${source}` },
+    { role: "user", text: `${agentCompactionPrefix}${source}` },
   ]);
   const snapshot = await server.readThread(thread.id);
   const compaction = snapshot.items.find(
@@ -486,7 +527,7 @@ test("agentic compaction replaces the active context and replays identically", a
     ),
   );
   assert.deepEqual(compileModelMessages(snapshot.items), [
-    { role: "user", text: `[Zen compacted context]\n${source}` },
+    { role: "user", text: `${agentCompactionPrefix}${source}` },
     { role: "assistant", text: "continued in the same Turn" },
   ]);
 
@@ -537,7 +578,7 @@ test("repeated coarse resets can retain already-visible user context without dup
     assert.deepEqual(reset.retainedItemIds, [user.id]);
   assert.equal(requests.length, 3);
   assert.deepEqual(requests[2]!.messages, [
-    { role: "user", text: "[Zen compacted context]\nexact continuation 2" },
+    { role: "user", text: `${agentCompactionPrefix}exact continuation 2` },
     {
       role: "user",
       content: [
@@ -635,7 +676,7 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
   );
   assert.equal(
     semanticCompaction.content.text,
-    "[Zen compacted context]\nhandwritten summary\n[Original conversation history; s1; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]",
+    `${agentCompactionPrefix}handwritten summary\n[Original conversation history; s1; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]`,
   );
   assert(requests[2] !== undefined);
   assert.deepEqual(requests[2].messages[0], {
@@ -808,7 +849,7 @@ test("agentic retention rejects native IDs, unknown handles and stale sample han
           assert.deepEqual(currentMessages, [
             {
               role: "user",
-              text: "[Zen compacted context]\nonly this continuation",
+              text: `${agentCompactionPrefix}only this continuation`,
             },
           ]);
         } else {
@@ -886,7 +927,7 @@ test("agentic compaction preserves user steering unseen by its model sample", as
   assert.equal(samples, 2);
   assert.equal(snapshot.turns[0]?.status, "completed");
   assert.deepEqual(requests[1].messages, [
-    { role: "user", text: "[Zen compacted context]\ncontinuation" },
+    { role: "user", text: `${agentCompactionPrefix}continuation` },
     {
       role: "user",
       content: [
@@ -1277,7 +1318,7 @@ test("agentic compaction accepts a sample following an active settings change", 
   assert.deepEqual(requests[2]?.messages, [
     {
       role: "user",
-      text: "[Zen compacted context]\nresume after settings change",
+      text: `${agentCompactionPrefix}resume after settings change`,
     },
   ]);
   assert.equal(snapshot.modelId, "other-model");
@@ -1332,10 +1373,10 @@ test("repeated agentic resets supersede deterministically in one active Turn", a
   ).done;
 
   assert.deepEqual(requests[1]?.messages, [
-    { role: "user", text: "[Zen compacted context]\ncontinuation-1" },
+    { role: "user", text: `${agentCompactionPrefix}continuation-1` },
   ]);
   assert.deepEqual(requests[2]?.messages, [
-    { role: "user", text: "[Zen compacted context]\ncontinuation-2" },
+    { role: "user", text: `${agentCompactionPrefix}continuation-2` },
   ]);
   const snapshot = await server.readThread(thread.id);
   assert.equal(
@@ -1349,7 +1390,7 @@ test("repeated agentic resets supersede deterministically in one active Turn", a
   assert.deepEqual(
     compileModelMessages((await restarted.readThread(thread.id)).items),
     [
-      { role: "user", text: "[Zen compacted context]\ncontinuation-2" },
+      { role: "user", text: `${agentCompactionPrefix}continuation-2` },
       { role: "assistant", text: "final" },
     ],
   );
@@ -1825,7 +1866,7 @@ test("manually compacts long history without changing the complete transcript", 
   );
   assert.equal(item.coveredThroughItemId, before.items.at(-1)?.id);
   assert.equal(item.summary, "summary bytes\nkept verbatim");
-  assert.equal(item.algorithmVersion, "zen.context-compaction.v3");
+  assert.equal(item.algorithmVersion, CONTEXT_COMPACTION_ALGORITHM_VERSION);
   assert.deepEqual(item.tokenUsage, { inputTokens: 101, outputTokens: 7 });
   assert.deepEqual(
     item.retainedItemIds,
@@ -1862,7 +1903,7 @@ test("manually compacts long history without changing the complete transcript", 
   assert.deepEqual(postCompactionRequest.messages, [
     {
       role: "user",
-      text: "[Zen compacted context]\nsummary bytes\nkept verbatim",
+      text: `${explicitCompactionPrefix}summary bytes\nkept verbatim`,
     },
     {
       role: "user",
@@ -2586,7 +2627,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
       yield { type: "text_delta", delta: `answer-${String(normalCalls)}` };
       yield {
         type: "usage",
-        inputTokens: normalCalls === 1 ? 119 : 120,
+        inputTokens: normalCalls === 1 ? 599 : 600,
         outputTokens: 1,
       };
     },
@@ -2595,7 +2636,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
     journal: new InMemoryThreadJournal(),
     model,
     modelCatalog: new StaticModelCatalog([
-      { id: "recording-model", isDefault: true, contextWindow: 200 },
+      { id: "recording-model", isDefault: true, contextWindow: 1_000 },
     ]),
     contextCompaction: { triggerPercent: 60, targetPercent: 40 },
   });
@@ -2615,7 +2656,8 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.items.at(-1)?.type, "context_compaction");
   assert(
-    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <= 80,
+    estimateModelMessageInputTokens(compileModelMessages(snapshot.items)) <=
+      400,
   );
 });
 
@@ -3663,7 +3705,7 @@ test("later compaction supersedes projection deterministically and restart is by
       userTimestamp: userTimestamps[2],
     },
     { role: "assistant", text: "answer" },
-    { role: "user", text: "[Zen compacted context]\nsummary-2" },
+    { role: "user", text: `${explicitCompactionPrefix}summary-2` },
   ]);
 
   const restarted = createServer({ journal, model });
@@ -4410,6 +4452,120 @@ test("active compaction preserves unknown journal outcomes and stop handling", a
   });
 });
 
+test("active fallback does not summarize an old completed prefix superseded by agentic reset", async () => {
+  let normal = 0;
+  let summaries = 0;
+  const observations = compactionObservations();
+  const model: ModelAdapter = {
+    provider: "recording",
+    async *stream(request): AsyncIterable<ModelEvent> {
+      if (isSummaryRequest(request)) {
+        summaries++;
+        yield { type: "text_delta", delta: "synthetic generated summary" };
+        return;
+      }
+      normal++;
+      if (normal === 1) {
+        yield { type: "text_delta", delta: "seed" };
+        yield { type: "usage", inputTokens: 8_000, outputTokens: 1 };
+        return;
+      }
+      if (normal === 2) {
+        yield {
+          type: "tool_call",
+          callId: "synthetic-reset",
+          name: "compact_context",
+          arguments: {
+            text: "synthetic agent continuation",
+            includeOriginalReference: false,
+          },
+        };
+        return;
+      }
+      if (normal === 3) {
+        yield {
+          type: "tool_call",
+          callId: "synthetic-high-usage",
+          name: "shell",
+          arguments: { command: "printf synthetic" },
+        };
+        yield { type: "usage", inputTokens: 9_600, outputTokens: 1 };
+        return;
+      }
+      assert.equal(
+        summaries,
+        1,
+        "no summary request is dispatched for the already-superseded completed boundary",
+      );
+      assert(
+        request.messages.some(
+          (message) =>
+            message.role === "user" &&
+            "content" in message &&
+            message.content.some(
+              (part) =>
+                part.type === "text" &&
+                part.text.includes("Consider calling compact_context"),
+            ),
+        ),
+      );
+      yield {
+        type: "text_delta",
+        delta: "continued without an invalid fallback",
+      };
+      yield { type: "usage", inputTokens: 10, outputTokens: 1 };
+    },
+  };
+  const server = createServer({
+    journal: new InMemoryThreadJournal(),
+    model,
+    auxiliaryModel: observations.auxiliaryModel,
+    contextCompaction: { agenticEnabled: true },
+    modelCatalog: new StaticModelCatalog([
+      { id: "recording-model", isDefault: true, contextWindow: 10_000 },
+    ]),
+  });
+  const thread = await server.startThread();
+  await (
+    await server.startTurn(thread.id, "seed input")
+  ).done;
+  await (
+    await server.startTurn(thread.id, "continue with an agent reset")
+  ).done;
+  assert.equal(normal, 4);
+  assert.equal(
+    summaries,
+    2,
+    "after Turn 2 completes its genuinely new completed boundary remains eligible",
+  );
+  const snapshot = await server.readThread(thread.id);
+  assert.equal(snapshot.turns.at(-1)?.status, "completed");
+  const compactions = snapshot.items.filter(
+    (item) => item.type === "context_compaction",
+  );
+  assert.equal(compactions.length, 3);
+  assert(
+    compactions.every(
+      (item, index) =>
+        index === 0 ||
+        snapshot.items.findIndex(
+          (fact) => fact.id === item.coveredThroughItemId,
+        ) >
+          snapshot.items.findIndex(
+            (fact) => fact.id === compactions[index - 1]!.coveredThroughItemId,
+          ),
+    ),
+  );
+  assert(
+    !observations.events.some(
+      (event) =>
+        event.type === "context_compaction_started" &&
+        (event.data as Record<string, unknown>).reason ===
+          "active_turn_fallback",
+    ),
+  );
+});
+
 // These tests exercise history/retention with deliberately tiny windows. Use a
 // tiny disclosed-schema fixture, not production shell documentation that alone
 // exceeds those windows. Full real-schema admission is covered in context-budget.test.ts.
@@ -4429,6 +4585,257 @@ class HistoryBudgetRuntime extends AgentRuntime {
     };
   }
 }
+
+function compactionObservations() {
+  const events: TraceEvent[] = [];
+  const auxiliaryModel: Pick<AuxiliaryModelOptions, "trace" | "itemListStore"> =
+    {
+      trace: {
+        async record(event) {
+          events.push(structuredClone(event));
+          return {
+            durability: "durable",
+            recordId: String(events.length),
+            sequence: events.length,
+            sync: "file",
+          };
+        },
+      },
+      itemListStore: { async create() {} },
+    };
+  return { events, auxiliaryModel };
+}
+
+test("Trace records each generated compaction cause, evidence, exact commit and auxiliary sample link", async (t) => {
+  for (const reason of [
+    "explicit_request",
+    "completed_turn_usage",
+    "active_turn_threshold",
+    "active_turn_fallback",
+    "next_turn_estimate",
+  ] as const) {
+    await t.test(reason, async () => {
+      const observations = compactionObservations();
+      const requests: ModelRequest[] = [];
+      let normal = 0;
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          requests.push(cloneRequest(request));
+          if (isSummaryRequest(request)) {
+            yield { type: "text_delta", delta: "synthetic continuation" };
+            return;
+          }
+          normal += 1;
+          if (normal === 2 && reason.startsWith("active_turn")) {
+            yield {
+              type: "tool_call",
+              callId: "synthetic-compaction-observation",
+              name: "shell",
+              arguments: { command: "printf synthetic" },
+            };
+            yield {
+              type: "usage",
+              inputTokens: reason === "active_turn_fallback" ? 960 : 810,
+              outputTokens: 1,
+            };
+            return;
+          }
+          yield {
+            type: "text_delta",
+            delta:
+              normal === 1 && reason === "next_turn_estimate"
+                ? "synthetic history ".repeat(300)
+                : "synthetic answer",
+          };
+          if (reason === "completed_turn_usage")
+            yield { type: "usage", inputTokens: 800, outputTokens: 1 };
+        },
+      };
+      const server = createServer({
+        journal: new InMemoryThreadJournal(),
+        model,
+        auxiliaryModel: observations.auxiliaryModel,
+        modelCatalog: new StaticModelCatalog([
+          { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+        ]),
+        contextCompaction: {
+          agenticEnabled: reason === "active_turn_fallback",
+        },
+      });
+      const live: AppServerEvent[] = [];
+      server.subscribe((event) => live.push(event));
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "synthetic first input")
+      ).done;
+      if (reason === "explicit_request") await server.compactThread(thread.id);
+      else if (reason !== "completed_turn_usage")
+        await (
+          await server.startTurn(thread.id, "synthetic next input")
+        ).done;
+      const parent = observations.events.filter(
+        (event) =>
+          event.threadId === thread.id &&
+          event.type.startsWith("context_compaction_"),
+      );
+      const started = parent.find(
+        (event) => event.type === "context_compaction_started",
+      )?.data as Record<string, unknown>;
+      const finished = parent.find(
+        (event) => event.type === "context_compaction_finished",
+      )?.data as Record<string, unknown>;
+      assert.equal(started.reason, reason);
+      assert.equal(
+        started.initiator,
+        reason === "explicit_request" ? "human" : "automatic",
+      );
+      assert.equal(started.contextWindow, 1_000);
+      assert.equal(started.triggerPercent, 80);
+      if (reason === "completed_turn_usage")
+        assert.equal(started.providerInputTokens, 800);
+      if (reason === "active_turn_fallback")
+        assert.equal(started.thresholdTokens, 950);
+      if (reason === "next_turn_estimate")
+        assert(Number(started.estimatedInputTokens) >= 800);
+      assert.equal(finished.operationId, started.operationId);
+      assert.equal(finished.outcome, "committed");
+      const phases = live.filter(
+        (event) => event.type === "context_compaction_status",
+      );
+      assert.deepEqual(
+        phases.map((event) => event.phase),
+        ["pending", "committed"],
+      );
+      assert(
+        phases.every(
+          (event) =>
+            event.operationId === started.operationId &&
+            event.contextWindow === 1_000,
+        ),
+      );
+      assert(
+        live.findIndex(
+          (event) =>
+            event.type === "context_compaction_status" &&
+            event.phase === "pending",
+        ) <
+          live.findIndex(
+            (event) =>
+              event.type === "item_completed" &&
+              event.item.type === "context_compaction",
+          ),
+      );
+      assert(
+        live.findIndex(
+          (event) =>
+            event.type === "item_completed" &&
+            event.item.type === "context_compaction",
+        ) <
+          live.findIndex(
+            (event) =>
+              event.type === "context_compaction_status" &&
+              event.phase === "committed",
+          ),
+      );
+      assert.match(String(finished.elapsedNs), /^\d+$/u);
+      const snapshot = await server.readThread(thread.id);
+      assert(
+        snapshot.items.some(
+          (item) =>
+            item.id === finished.compactionItemId &&
+            item.type === "context_compaction",
+        ),
+      );
+      const links = parent.filter(
+        (event) => event.type === "context_compaction_sample",
+      );
+      assert(links.length > 0);
+      for (const link of links) {
+        const data = link.data as Record<string, unknown>;
+        assert.equal(data.operationId, started.operationId);
+        assert(
+          requests.some(
+            (request) =>
+              request.debugContext?.sampleId === data.sampleId &&
+              request.debugContext?.threadId === data.auxiliaryOwnerId,
+          ),
+        );
+      }
+      assert(
+        !JSON.stringify(snapshot.itemList).includes(
+          '"reason":"' + reason + '"',
+        ),
+        "execution evidence stays out of model semantic contents",
+      );
+    });
+  }
+});
+
+test("Trace never reports a successful compaction for rejected generation or unknown journal commit", async (t) => {
+  for (const outcome of ["failed", "unknown"] as const) {
+    await t.test(outcome, async () => {
+      const observations = compactionObservations();
+      const backing = new InMemoryThreadJournal();
+      const journal: ThreadJournal = {
+        append: async (item) => {
+          if (item.type === "context_compaction" && outcome === "unknown")
+            throw new ThreadJournalAppendOutcomeUnknownError(
+              new Error("synthetic unknown append"),
+            );
+          return await backing.append(item);
+        },
+        listThreadIds: () => backing.listThreadIds(),
+        read: (threadId) => backing.read(threadId),
+      };
+      let summaryCalls = 0;
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          if (isSummaryRequest(request)) {
+            summaryCalls += 1;
+            if (outcome === "failed")
+              throw new Error("synthetic summary rejection");
+          }
+          yield { type: "text_delta", delta: "synthetic summary or answer" };
+        },
+      };
+      const server = createServer({
+        journal,
+        model,
+        auxiliaryModel: observations.auxiliaryModel,
+      });
+      const live: AppServerEvent[] = [];
+      server.subscribe((event) => live.push(event));
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, "synthetic input")
+      ).done;
+      await assert.rejects(server.compactThread(thread.id), /synthetic/u);
+      const finished = observations.events.filter(
+        (event) =>
+          event.threadId === thread.id &&
+          event.type === "context_compaction_finished",
+      );
+      assert.equal(finished.length, 1);
+      assert.equal(
+        (finished[0]!.data as Record<string, unknown>).outcome,
+        outcome,
+      );
+      assert.equal(
+        (finished[0]!.data as Record<string, unknown>).compactionItemId,
+        undefined,
+      );
+      assert.equal(summaryCalls, 1, "observation must never introduce a retry");
+      assert.deepEqual(
+        live
+          .filter((event) => event.type === "context_compaction_status")
+          .map((event) => event.phase),
+        ["pending", outcome],
+      );
+    });
+  }
+});
 
 function createServer(options: {
   journal: ThreadJournal;

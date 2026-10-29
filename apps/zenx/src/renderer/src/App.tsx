@@ -3,6 +3,10 @@ import {
   openShellTarget,
   type ShellTargetRequest,
 } from "./shell-target-navigation.js";
+import {
+  applyCompactionStatus,
+  markCompactionOutcomeUnknown,
+} from "./compaction-feedback.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -1423,6 +1427,10 @@ function AppContent() {
           void resumeThread(selectedThreadIdRef.current, true);
         }
       } else if (status.type === "reconnecting") {
+        for (const id of Object.keys(composerStatesRef.current))
+          updateComposer(id, markCompactionOutcomeUnknown);
+        for (const draft of sideChatDrafts.entries())
+          sideChatDrafts.updateComposer(draft.id, markCompactionOutcomeUnknown);
         invalidateThreadSelection();
         modelCatalogLoadEpoch.current += 1;
         const selectedId = selectedThreadIdRef.current;
@@ -1530,6 +1538,22 @@ function AppContent() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (nativeEvent.type === "context_compaction_status") {
+            if (
+              cached?.processEpoch === projected.processEpoch &&
+              cached.watermark === projected.watermark
+            )
+              updateComposer(projected.threadId, (state) =>
+                applyCompactionStatus(state, nativeEvent, projected),
+              );
+            // A just-created side chat has an exact child ID before first Send,
+            // but is not promoted into the normal Thread cache until admission.
+            for (const draft of sideChatDrafts.entries())
+              if (draft.threadId === projected.threadId)
+                sideChatDrafts.updateComposer(draft.id, (state) =>
+                  applyCompactionStatus(state, nativeEvent, projected),
+                );
+          }
           if (
             nativeEvent.type === "item_completed" &&
             nativeEvent.item.type === "user_message_queue_edited"

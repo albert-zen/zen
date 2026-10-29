@@ -407,3 +407,22 @@ test("running send modes implement the Enter and Cmd/Ctrl+Enter matrix", () => {
     assert.equal(defaultComposerIntent(false, mode, true), "start");
   }
 });
+
+test("send acknowledgement preserves compaction observation fences and independent explicit request", () => {
+  const pending = beginComposerSubmission(
+    editComposer(emptyComposerState(), "synthetic next input"),
+    "start",
+    null,
+    () => "synthetic-send",
+  );
+  const state = {
+    ...pending,
+    compactionObservation: { processEpoch: "epoch", watermark: 42 },
+    compactionRequest: { token: {} },
+    compaction: { status: "failed" as const, message: "Known failure" },
+  };
+  const accepted = acceptComposerSubmission(state, "synthetic-send");
+  assert.equal(accepted.compactionObservation, state.compactionObservation);
+  assert.equal(accepted.compactionRequest, state.compactionRequest);
+  assert.equal(accepted.compaction, state.compaction);
+});

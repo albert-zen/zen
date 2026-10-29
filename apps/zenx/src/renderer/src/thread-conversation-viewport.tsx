@@ -1,3 +1,7 @@
+import {
+  applyCompactionStatus,
+  markCompactionOutcomeUnknown,
+} from "./compaction-feedback.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
@@ -147,6 +151,7 @@ export function ThreadConversationViewport({
     const epoch = ++generation.current;
     const current = () => generation.current === epoch;
     if (serverStatus.type !== "ready") {
+      callbacks.current.updateComposer(markCompactionOutcomeUnknown);
       setLoading(true);
       setThread(null);
       return;
@@ -186,6 +191,12 @@ export function ThreadConversationViewport({
       )
         return;
       watermark = event.watermark;
+      if (event.event.type === "context_compaction_status") {
+        const status = event.event;
+        callbacks.current.updateComposer((state) =>
+          applyCompactionStatus(state, status, event),
+        );
+      }
       projection = applyNativeThreadEvent(projection, event.event);
       setThread(projection);
       if (event.event.type === "thread_settings_updated")

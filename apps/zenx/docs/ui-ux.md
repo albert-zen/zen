@@ -880,3 +880,12 @@ make the interface appear faster.
 ### Current background commands
 
 A compact disclosure above the Composer reads the existing local Shell session list for the exact current Thread, independently of Agent Turn completion. It displays the actual number of native-observed running Agent commands; queued, starting, foreground-exited/output-collecting, stop-requested and stop-unconfirmed tasks are separate facts, never guessed running or stopped from historical tool receipts. The expanded list retains each command and current observation and opens its exact Terminal session in the existing owning Thread/Room sidebar. Reading or navigation never starts a Turn, creates a terminal, retries an Agent or inherits a source Thread's live tasks after fork. The list refreshes while mounted, including after the Turn ends; read failure removes stale running counts and offers explicit Refresh with original local error details. Finished/expired tasks cease contributing to the running count; retained output and exit status remain available in Terminal.
+
+### Context compaction trigger transparency
+
+自动与显式生成压缩的原生实时观察复用现有 composer 压缩状态：开始显示发起者和触发原因，
+包括下一轮接纳前等待；成功只来自已提交 canonical 选择，失败/取消与提交未知明确区分并保留
+可展开本机错误与阈值证据。非活跃/新建 side chat 的精确 child Thread 亦接收反馈，不能提前假称
+输入已接纳或 agent 已开始工作。失联使 pending 观察变成未知，不自动重试；重新读到同一唯一
+committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消除此未决反馈；旧的同 boundary 压缩不能抹掉新的进行中或失败。显式请求身份独立于状态对象，只有同一请求且未编辑的原草稿可清空。既有设置清楚说明 agentic 开关不关闭宿主
+自动压缩，以及完成后、发送前、活动工具轮之间的不同条件；不新增开关或修改阈值策略。

@@ -22,8 +22,9 @@ Native Computer diagnostics capture a bounded, allowlisted per-request observati
 - **ZenX sidebar recovery** — The existing main-owned sidebar store projects per-owner committed patch/state facts from the same durable Trace facility, retaining its CAS and scope admission; JSON is only a rebuildable cache, legacy snapshots seed one explicitly attributed import, and trusted UI/tool entry points supply source labels without claiming a human actor or creating model Items.
 - **Passive preparation observations** — Small Trace-only callbacks pair actual preparation/materialization/compiler start and finish facts in a single Host clock domain; failures close the span without changing the operation result, model semantics, permission or log-derived state.
 - **Frozen sample** — Model/provider/endpoint/settings are selected once per sample; transport retries reuse that selection, while the next sample sees new choices. Live resource/session revocation is checked immediately before dispatch without changing the frozen destination. Already-dispatched effects are not undone.
-- **Semantic compaction selection** — Persisted summaries, read-only short source references and immutable reset-source exclusions are compiler inputs, not adapter prose; accepted raw facts remain unchanged in the durable log, and later selection cannot revive a reset response or its tool receipt. Agentic retention uses coarse recent Item/message counts or a retained-token budget, never a per-sample Item-reference index; guidance belongs in the tool definition and a once-per-threshold-episode notice. Previously committed sample references and selection bytes remain immutable historical inputs, not current capabilities.
+- **Semantic compaction selection** — Persisted summaries, read-only short source references and immutable reset-source exclusions are compiler inputs, not adapter prose; accepted raw facts remain unchanged in the durable log, and later selection cannot revive a reset response or its tool receipt. Agentic retention uses coarse recent Item/message counts or a retained-token budget, never a per-sample Item-reference index; guidance belongs in the tool definition and a once-per-threshold-episode notice. Previously committed sample references and selection bytes remain immutable historical inputs, not current capabilities. New versioned compaction selections identify their committed initiator in model-visible text and distinguish the continuation from a new user request; legacy selection bytes remain unchanged.
 - **External configuration observations** — Global provider profiles and credential sessions retain their existing dedicated authority; nonsecret startup/publication/session facts are observed in Trace, without credentials or arbitrary provider parameters. Failed observation cannot undo logout or revive a revoked resource. Per-Thread control changes still require durable source-log acknowledgement.
+- **Compaction admission observations** — Host-generated compaction records its initiating path, threshold evidence, elapsed outcome and auxiliary sample links in Trace; only a durable committed selection reports success, while unknown journal outcomes remain unknown. These observations neither initiate a reset nor enter model context. Native live status projects the same exact operation into existing composer feedback, including pre-admission side chat sends; disconnect makes pending observation unknown, and only an exact committed Item or a new matching selection beyond the captured start-prefix fence clears it; an older compaction of the same boundary is never evidence for a new operation. Explicit command request identity is separate from feedback so native observations cannot revoke draft-clear authority or allow a stale reply to consume an edited draft. CAS has no invented equivalent event.
 - **Auxiliary model samples** — Title, image-probe and compaction requests persist exact source facts and a strict semantic context bundle before the sole compiler; unique auxiliary Trace partitions are observation identities, never hidden Threads, execution objects or another store. The owner closes its passive transport captures.
 - **Initial Thread publication** — Fork/import creation may batch bounded, same-Thread Trace frames through the existing writer queue and unchanged checksummed JSONL format; each batch acknowledges only after durable file/directory sync, and the existing publication fence follows every source batch before ItemList publication. An unfenced partial creation is neither a discoverable Thread nor a recompilation/retry source; no new history store, execution authority or replay is introduced.
 - **Storage ownership** — One cooperative writer holds a native kernel file lock for admitted IO lifetime; no PID/TTL reclamation, SQLite same-process lock, service, durable execution state or automatic side-effect replay is introduced. Missing backend fails closed.
@@ -935,17 +936,20 @@ Summary Provider 的每个请求也必须落在所选模型的 context window �
 每块独立摘要后按原顺序合并，累计 usage 写入同一个 compaction Item；合并摘要仍须满足上述
 80% 最终投影目标，否则不写 journal 并明确失败。
 
-成功 Turn 使用 admission 时冻结的 Provider adapter、selection、catalog entry 与
-`contextWindow` 判断自动 compaction；只有 Provider 实际报告的有效 `inputTokens`
-达到配置 trigger 百分比的整数上界才执行，多次采样或 tool round 取观察到的最高 input context。
-缺失窗口只可能来自尚待修复的 legacy/incomplete metadata，不能通过正常 runtime admission；这里仍
-防御性地不猜测窗口。缺失或无效 usage、非成功 Turn 与已覆盖边界都不追加。
-自动生成、验证或 persistence 在成功 Turn handle settle 前尝试一次；失败只记录 Host
-诊断，不得把已经 canonical completed 的 Turn 重新投影为 failed，也不在同一 Turn 内重试。
-下一次达到条件的 completed Turn 可以再次尝试，已完成 Turn 的原始 canonical trace 保持不变。
-若 Provider 没有报告 usage，Host 在下一 Turn 写入任何 canonical Item 前，用包含待提交输入的
-消息估算检查配置 trigger 阈值；存在尚未覆盖的 completed boundary 时先完成并持久化同一压缩流程，
-再 admission 新 Turn。这样 oversized completed Turn 不必等下一次普通模型请求失败才被发现。
+成功 Turn 完成后，Host 在辅助采样 admission 时冻结当前 Provider selection、catalog entry 与
+`contextWindow`。只有本轮最高有效 Provider `inputTokens` 达到配置 trigger 才执行；缺失或无效
+usage、非成功 Turn 与已覆盖边界不触发这条路径。自动生成/验证/persistence 在成功 Turn handle
+settle 前尝试一次，已知失败只保留 warning 与 Trace/原生状态反馈，不得把已完成 Turn 改成 failed；
+提交结果未知停止后续采样，不猜测成功，也不自动重试。下一 Turn 写入输入前另以完整待提交投影
+估算检查 trigger；有尚未覆盖的 completed boundary 才先压缩，因此这次发送的 ACK 会等待压缩。
+
+活动 Turn 工具轮之间取有效 Provider input usage 与下一次完整投影估算的较大值（包括新工具结果）。
+`agenticEnabled=false` 在 trigger 自动压缩；开启时在 trigger 给模型一次语义提醒，在
+`min(100, max(trigger, min(99, trigger+15)))` 百分比由 Host 兜底。只允许压缩已完成历史，不压缩活动
+Turn 本身；没有 completed boundary 且已达窗口时明确失败。Agentic reset 刚成功时清除旧 usage epoch，
+不会紧接着用旧用量再触发 Host reset。Compiler 只应用已提交选择，不自行启动模型调用、压缩或 retry。生成摘要前必须验证 completed boundary
+严格晚于当前任意压缩的生效 boundary；较晚 agentic reset 不能让旧 completed prefix 再次触发付费摘要。
+所有正常 Provider admission 都要求已配置正数 contextWindow；不存在运行时“未知模型默认窗口”。
 
 Provider-generated `context_compaction` canonical Item 记录 `provenance`、`coveredThroughItemId`、
 原样 summary、稳定 canonical 顺序的 `retainedItemIds`、实际 Provider selection、
