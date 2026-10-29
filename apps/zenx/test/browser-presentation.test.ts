@@ -287,9 +287,9 @@ test("external read-only pages share the strip without merging same-URL identiti
       onChanged: () => () => {},
       onFocusAddress: () => () => {},
       mount: async () => {},
-      command: async (_thread: string, command: string) => {
+      command: async (threadId: string, command: string) => {
         commands.push(command);
-        return [page("1")];
+        return [{ ...page("1"), threadId }];
       },
     },
     browserObservation: {

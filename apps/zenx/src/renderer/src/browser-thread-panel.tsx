@@ -229,7 +229,10 @@ export function BrowserThreadPanel({
   const explanation =
     failed || status.details
       ? browserFailureReason(status.message, status.details)
-      : statusMessage ||
+      : (unresolvedTarget &&
+        statusMessage === i18n.t("panels:browserPageNotSelected")
+          ? ""
+          : statusMessage) ||
         (emptyCatalog ? i18n.t("panels:askTheAgentToOpenOrInspect") : "");
   // The Host's original local error is evidence, not markup or a second summary.
   const errorDetails = status.details || (failed ? status.message : undefined);
@@ -237,7 +240,9 @@ export function BrowserThreadPanel({
     <div className="browser-observation-feedback" data-status={status.status}>
       <div role="status" aria-live="polite" aria-atomic="true">
         <strong>{statusTitle}</strong>
-        {explanation ? <small>{explanation}</small> : null}
+        {explanation && explanation !== statusTitle ? (
+          <small>{explanation}</small>
+        ) : null}
       </div>
       {errorDetails ? (
         <details

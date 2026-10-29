@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserThreadPanel } from "../src/renderer/src/browser-thread-panel.js";
+import { i18n } from "../src/renderer/src/i18n.js";
 import type {
   BrowserThreadEvent,
   BrowserThreadRequest,
@@ -54,7 +55,9 @@ test("Browser target selection is manual, survives Agent activity and view remou
         receive({
           type: "status",
           status: request.targetId ? "live" : "idle",
-          message: "",
+          message: request.targetId
+            ? ""
+            : "No browser page is selected for this thread.",
         });
         return () => {
           stopped++;
@@ -96,6 +99,23 @@ test("Browser target selection is manual, survives Agent activity and view remou
     assert.deepEqual(opened, [], "first discovered pages never open the panel");
     assert.equal(requests.at(-1)?.frames, false);
     await render();
+    for (const language of ["en", "zh-CN"]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      const feedback = document.querySelector(
+        '.browser-observation-feedback [role="status"]',
+      )!;
+      assert.equal(
+        feedback.textContent,
+        i18n.t("panels:browserPageNotSelected"),
+        "the no-selection explanation must not repeat its localized title",
+      );
+      assert.equal(feedback.querySelectorAll("small").length, 0);
+    }
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
     assert.equal(picker().dataset.value, "");
     assert.match(picker().textContent ?? "", /Choose a page/);
     assert.equal(document.body.textContent?.includes("Follow Agent"), false);
@@ -149,6 +169,26 @@ test("Browser target selection is manual, survives Agent activity and view remou
     await send({ type: "targets", targets });
     assert.equal(picker().dataset.value, "a");
     assert.match(document.body.textContent ?? "", /Selected page unavailable/);
+    await send({
+      type: "status",
+      status: "idle",
+      message: "No browser page is selected for this thread.",
+    });
+    for (const language of ["en", "zh-CN"]) {
+      await act(async () => {
+        await i18n.changeLanguage(language);
+      });
+      assert.equal(
+        document.querySelector('.browser-observation-feedback [role="status"]')
+          ?.textContent,
+        i18n.t("panels:selectedPageUnavailable"),
+        "a stale human selection is unavailable, not unselected",
+      );
+      assert.equal(picker().dataset.value, "a");
+    }
+    await act(async () => {
+      await i18n.changeLanguage("en");
+    });
     assert.equal(
       document.querySelector(".browser-live-frame")?.getAttribute("src"),
       null,
