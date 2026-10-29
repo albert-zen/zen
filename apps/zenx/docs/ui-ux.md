@@ -872,3 +872,12 @@ make the interface appear faster.
 ### Tool result destination actions
 
 跨线程发送与创建/修改触发器的工具记录提供独立于详情展开的目标动作。发送动作只通过工具结果与既有 canonical ref 身份打开目标 Thread 的确切已送达消息，并暂停自动跟随、滚动和聚焦该消息；排队回执只通过 canonical client 身份关联其实际送达 Item。触发器动作复用已注册插件 Tab，打开精确 definition，而非按名称搜索。缺失、排队、已归档、远端路径不可用或插件缺失必须如实说明，不选择相似对象、不重放工具、不在查看时执行或保存触发器。
+
+### Context compaction trigger transparency
+
+自动与显式生成压缩的原生实时观察复用现有 composer 压缩状态：开始显示发起者和触发原因，
+包括下一轮接纳前等待；成功只来自已提交 canonical 选择，失败/取消与提交未知明确区分并保留
+可展开本机错误与阈值证据。非活跃/新建 side chat 的精确 child Thread 亦接收反馈，不能提前假称
+输入已接纳或 agent 已开始工作。失联使 pending 观察变成未知，不自动重试；重新读到同一唯一
+completed boundary 的已提交压缩才消除此未决反馈。既有设置清楚说明 agentic 开关不关闭宿主
+自动压缩，以及完成后、发送前、活动工具轮之间的不同条件；不新增开关或修改阈值策略。

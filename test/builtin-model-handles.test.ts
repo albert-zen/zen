@@ -54,6 +54,11 @@ test("compaction refs are dense exact-source projections, including multiple eli
     ["c1", "c2"],
   );
   assert.match(first.text, /c1 user message; c2 user message/u);
+  assert.match(first.text, /optional retention references/u);
+  assert.match(
+    first.text,
+    /not a compaction event; no context was changed by this list/u,
+  );
   assert.doesNotMatch(
     first.text,
     /source-one|source-two|12345678|synthetic-thread/u,

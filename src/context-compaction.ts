@@ -7,9 +7,9 @@ import type {
 } from "./item.js";
 import type { ModelTool } from "./model.js";
 
-export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v3";
+export const CONTEXT_COMPACTION_ALGORITHM_VERSION = "zen.context-compaction.v4";
 export const AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION =
-  "zen.context-compaction.agentic.v2";
+  "zen.context-compaction.agentic.v3";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL_NAME = "compact_context";
 export const AGENTIC_CONTEXT_COMPACTION_TOOL: ModelTool = Object.freeze({
   name: AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
@@ -1127,6 +1127,26 @@ export function originalItemListReferenceText(
   return `\n[Original ItemList: ${originalItemListReference(threadId, throughItemId)}; logical reference, not a filesystem path. Read only through an available authorized history reader; do not infer hidden content]`;
 }
 
+/** Versioned at admission so old persisted selections keep their exact model text. */
+export function compactionSummaryPrefix(
+  item: Pick<ContextCompactionItem, "algorithmVersion" | "initiator">,
+): string {
+  if (
+    item.algorithmVersion !== CONTEXT_COMPACTION_ALGORITHM_VERSION &&
+    item.algorithmVersion !== AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION
+  )
+    return CONTEXT_COMPACTION_SUMMARY_PREFIX;
+  const initiator =
+    item.initiator === "automatic"
+      ? "Host automatic policy"
+      : item.initiator === "agent"
+        ? "agent compact_context call"
+        : item.initiator === "human"
+          ? "explicit compaction request"
+          : "unrecorded initiator";
+  return `${CONTEXT_COMPACTION_SUMMARY_PREFIX}[Context replacement committed by ${initiator}; not a new user request. Original history is unchanged; omitted details require an authorized read.]\n`;
+}
+
 export function compactionSummaryText(item: ContextCompactionItem): string {
-  return `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${item.summary}${item.includeOriginalReference !== true ? "" : originalItemListReferenceText(item.threadId, item.coveredThroughItemId)}`;
+  return `${compactionSummaryPrefix(item)}${item.summary}${item.includeOriginalReference !== true ? "" : originalItemListReferenceText(item.threadId, item.coveredThroughItemId)}`;
 }

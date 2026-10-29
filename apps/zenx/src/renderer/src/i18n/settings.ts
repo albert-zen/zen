@@ -688,7 +688,7 @@ export const en = {
   "contextCompactionPanel.letTheAgentChooseWhenToReplaceItsWorking":
     "Let the agent choose when to replace its working context during a task. It writes continuation notes, saves details to files, and reads them when needed. Complete conversation history stays available to you.",
   "contextCompactionPanel.theSummaryPromptAndRetentionRulesBelowApplyTo":
-    "The summary prompt and retention rules below apply to generated summaries, not to the agent’s own continuation text. Automatic compaction keeps its existing behavior.",
+    "The summary prompt and retention rules below apply to generated summaries, not to the agent’s own continuation text. Turning this switch off does not disable Host automatic compaction.",
   "contextCompactionPanel.compactionBudget": "Compaction budget",
   "contextCompactionPanel.triggerAndBudget": "Trigger and budget",
   "contextCompactionPanel.compactionTrigger": "Compaction trigger (%)",
@@ -696,7 +696,9 @@ export const en = {
   "contextCompactionPanel.percentagesUseTheSelectedModelSContextWindowThe":
     "Percentages use the selected model’s context window. The post-compaction budget covers both the summary and retained original items and cannot exceed the trigger. Token and image costs are estimates.",
   "contextCompactionPanel.automaticCompactionRunsAtCompletedTurnBoundariesOrBefore":
-    "Automatic compaction runs at completed-turn boundaries or before the next turn, not during an unfinished turn. Complete history stays available in the conversation.",
+    "Host automatic compaction is enabled independently of the Agentic switch: it can run after a successful turn, before the next turn, or between tool rounds in an active turn. Only completed history is summarized; original history stays unchanged.",
+  "contextCompactionPanel.currentAutomaticPolicy":
+    "In an active turn, Agentic off: Host compacts at {{trigger}}%. Agentic on: the model is reminded at {{trigger}}%, and Host fallback can compact at {{fallback}}%. The decision uses the larger of reported input usage and the next-context estimate; after a successful turn it uses the highest reported input usage. Next-turn admission uses an estimate. A new completed-history boundary is required.",
   "contextCompactionPanel.retentionRules": "Retention rules",
   "contextCompactionPanel.originalItemsToRetain": "Original items to retain",
   "contextCompactionPanel.retentionMode": "Retention mode",
@@ -1996,7 +1998,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   "contextCompactionPanel.letTheAgentChooseWhenToReplaceItsWorking":
     "让智能体在任务执行期间自行决定何时替换工作上下文。它会编写续接笔记、将细节保存到文件，并在需要时重新读取。你仍可查看完整会话历史。",
   "contextCompactionPanel.theSummaryPromptAndRetentionRulesBelowApplyTo":
-    "下方的摘要提示词和保留规则只适用于生成的摘要，不适用于智能体自行编写的续接文本。自动压缩行为保持不变。",
+    "下方的摘要提示词和保留规则只适用于生成的摘要，不适用于智能体自行编写的续接文本。关闭此开关不会关闭宿主自动压缩。",
   "contextCompactionPanel.compactionBudget": "压缩预算",
   "contextCompactionPanel.triggerAndBudget": "触发阈值与预算",
   "contextCompactionPanel.compactionTrigger": "压缩触发阈值（%）",
@@ -2004,7 +2006,9 @@ export const zhCN: Record<keyof typeof en, string> = {
   "contextCompactionPanel.percentagesUseTheSelectedModelSContextWindowThe":
     "百分比按所选模型的上下文窗口计算。压缩后预算同时涵盖摘要和保留的原始条目，且不能超过触发阈值。Token 和图像成本均为估算值。",
   "contextCompactionPanel.automaticCompactionRunsAtCompletedTurnBoundariesOrBefore":
-    "自动压缩会在一轮回复完成时或下一轮开始前运行，不会在未完成的回复中执行。完整历史仍可在会话中查看。",
+    "宿主自动压缩不由“智能体自主压缩”开关控制：它可以在成功结束一轮后、下一轮发送前，或活动轮次的工具调用之间执行。只压缩已完成历史；原始历史保持不变。",
+  "contextCompactionPanel.currentAutomaticPolicy":
+    "活动轮次内：关闭智能体自主压缩时，宿主在 {{trigger}}% 自动压缩；开启时，在 {{trigger}}% 提醒模型，在 {{fallback}}% 可由宿主兜底压缩。依据是已报告输入用量与下一次上下文估算的较大值；成功轮次结束后依据本轮最高已报告输入用量，下一轮发送前依据估算。均须有尚未压缩的已完成历史边界。",
   "contextCompactionPanel.retentionRules": "保留规则",
   "contextCompactionPanel.originalItemsToRetain": "保留的原始条目",
   "contextCompactionPanel.retentionMode": "保留模式",

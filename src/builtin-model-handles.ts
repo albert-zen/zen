@@ -132,7 +132,7 @@ export function builtinCompactionReferences(options: {
     text:
       labels.length === 0
         ? ""
-        : `[compact_context retention: ${labels.join("; ")}]`,
+        : `[compact_context optional retention references (not a compaction event; no context was changed by this list): ${labels.join("; ")}]`,
     referenceBindings,
   };
 }

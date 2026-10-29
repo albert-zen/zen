@@ -97,7 +97,11 @@ export function applyNativeThreadEvent(
   event: AppServerEvent,
   nowSeconds = Math.floor(Date.now() / 1_000),
 ): Thread {
-  if (event.type === "model_catalog_updated") return thread;
+  if (
+    event.type === "model_catalog_updated" ||
+    event.type === "context_compaction_status"
+  )
+    return thread;
   if (event.type === "queue_failed" || event.type === "queue_admission_started")
     return thread;
   if (event.type === "context_item_completed") {

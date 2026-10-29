@@ -33,8 +33,12 @@ export interface ComposerState {
     clientId: string;
     stage: "queued" | "delivered" | "completed" | "ended";
   };
+  /** Current connection watermark for compaction feedback, never durable. */
+  compactionObservation?: { processEpoch: string; watermark: number };
   /** Transient command feedback; never a message or durable execution state. */
   compaction?: {
+    operationId?: string;
+    coveredThroughItemId?: string;
     status: "pending" | "succeeded" | "failed";
     message: string;
     detail?: string;
@@ -174,6 +178,17 @@ export function reconcileCanonicalAdmission(
     status: "completed" | "failed" | "interrupted";
   },
 ): ComposerState {
+  if (
+    state.compaction?.operationId !== undefined &&
+    items.some(
+      (item) =>
+        item.type === "context_compaction" &&
+        item.coveredThroughItemId === state.compaction?.coveredThroughItemId,
+    )
+  ) {
+    const { compaction: _observed, ...rest } = state;
+    state = rest;
+  }
   const submission = state.submission;
   const clientId =
     submission?.clientUserMessageId ?? state.confirmedAdmission?.clientId;

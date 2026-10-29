@@ -46,7 +46,7 @@ import {
 import {
   boundedCompactionBoundary,
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
-  CONTEXT_COMPACTION_SUMMARY_PREFIX,
+  compactionSummaryPrefix,
   contextCompactionTokenBudget,
   originalItemListReferenceText,
   latestCompaction,
@@ -331,7 +331,24 @@ export interface ModelCatalogUpdatedEvent {
   revision: number;
 }
 
+export interface ContextCompactionStatusEvent {
+  type: "context_compaction_status";
+  threadId: string;
+  operationId: string;
+  initiator: "human" | "automatic";
+  coveredThroughItemId: string;
+  trigger: GeneratedContextCompactionOptions["trigger"];
+  contextWindow: number | null;
+  triggerPercent: number;
+  targetPercent: number;
+  agenticEnabled: boolean;
+  phase: "pending" | "committed" | "failed" | "cancelled" | "unknown";
+  compactionItemId?: string;
+  error?: { name: string; message: string };
+}
+
 export type AppServerEvent =
+  | ContextCompactionStatusEvent
   | { type: "context_item_completed"; threadId: string; item: ContextItem }
   | Exclude<RuntimeEvent, { type: "item_completed" }>
   | {
@@ -420,6 +437,30 @@ export interface UpdateThreadSettingsInput {
 
 export interface ListedProviderModel extends ProviderModel {
   isDefault: boolean;
+}
+
+/** Observed admission facts; kept in Trace, never in the model's selection content. */
+interface GeneratedContextCompactionOptions {
+  thread: Thread;
+  boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
+  initiator: "human" | "automatic";
+  trigger: {
+    reason:
+      | "explicit_request"
+      | "active_turn_threshold"
+      | "active_turn_fallback"
+      | "completed_turn_usage"
+      | "next_turn_estimate";
+    turnId?: string;
+    providerInputTokens?: number;
+    estimatedInputTokens?: number;
+    thresholdTokens?: number;
+  };
+  includeOriginalReference?: boolean;
+  selection: ResolvedProviderSelection;
+  contextCompaction: ResolvedContextCompactionConfig;
+  signal: AbortSignal;
+  allowOpenTurns?: boolean;
 }
 
 export class ZenAppServer {
@@ -3189,6 +3230,7 @@ export class ZenAppServer {
           thread,
           boundary,
           initiator: "human",
+          trigger: { reason: "explicit_request" },
           selection: admitted.provider,
           contextCompaction:
             options.retention === undefined
@@ -4599,7 +4641,7 @@ export class ZenAppServer {
           ) {
             active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
               Math.round((observedInputTokens / contextWindow) * 100),
-            )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
+            )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue. At ${String(fallbackPercent)}%, Host policy may automatically compact completed history before the next sample.`;
             active.contextCompactionNoticeIssued = false;
           }
           return false;
@@ -4653,6 +4695,19 @@ export class ZenAppServer {
           thread,
           boundary,
           initiator: "automatic",
+          trigger: {
+            reason: automaticAtTrigger
+              ? "active_turn_threshold"
+              : "active_turn_fallback",
+            turnId: options.turnId,
+            ...(inputTokens === undefined
+              ? {}
+              : { providerInputTokens: inputTokens }),
+            estimatedInputTokens,
+            thresholdTokens: automaticAtTrigger
+              ? trigger
+              : automaticCompactionThreshold(contextWindow, fallbackPercent),
+          },
           selection: resolved,
           contextCompaction: options.contextCompaction,
           signal: options.signal,
@@ -4803,6 +4858,15 @@ export class ZenAppServer {
         thread: options.thread,
         boundary,
         initiator: "automatic",
+        trigger: {
+          reason: "completed_turn_usage",
+          turnId: options.completed.turnId,
+          providerInputTokens: inputTokens,
+          thresholdTokens: automaticCompactionThreshold(
+            contextWindow,
+            options.contextCompaction.triggerPercent,
+          ),
+        },
         selection: options.resolved,
         contextCompaction: options.contextCompaction,
         signal: options.signal,
@@ -4922,6 +4986,15 @@ export class ZenAppServer {
       thread: options.thread,
       boundary,
       initiator: "automatic",
+      trigger: {
+        reason: "next_turn_estimate",
+        turnId: options.turnId,
+        estimatedInputTokens: estimate.total,
+        thresholdTokens: automaticCompactionThreshold(
+          contextWindow,
+          options.contextCompaction.triggerPercent,
+        ),
+      },
       selection: options.resolved,
       contextCompaction: options.contextCompaction,
       signal: options.signal,
@@ -4933,6 +5006,7 @@ export class ZenAppServer {
     selection: ResolvedProviderSelection,
     messages: ModelMessage[],
     signal: AbortSignal,
+    operationId: string,
   ) {
     const assertDispatchAllowed = () => {
       this.#assertCurrentThreadAuthority(thread);
@@ -4945,6 +5019,16 @@ export class ZenAppServer {
         ...this.#auxiliaryModel,
         adapter: selection.adapter,
         purpose: "compaction",
+        configuration: {
+          compaction: { ownerThreadId: thread.id, operationId },
+        },
+        onPrepared: async ({ ownerId, sampleId }) => {
+          await this.observeTrace({
+            threadId: thread.id,
+            type: "context_compaction_sample",
+            data: { operationId, auxiliaryOwnerId: ownerId, sampleId },
+          });
+        },
         instructionsMaterialized: true,
         messages,
         tools: [],
@@ -4996,16 +5080,92 @@ export class ZenAppServer {
     });
   }
 
-  async #appendContextCompaction(options: {
-    thread: Thread;
-    boundary: NonNullable<ReturnType<typeof latestEligibleCompactionBoundary>>;
-    initiator: "human" | "automatic";
-    includeOriginalReference?: boolean;
-    selection: ResolvedProviderSelection;
-    contextCompaction: ResolvedContextCompactionConfig;
-    signal: AbortSignal;
-    allowOpenTurns?: boolean;
-  }): Promise<ContextCompactionItem> {
+  async #appendContextCompaction(
+    options: GeneratedContextCompactionOptions,
+  ): Promise<ContextCompactionItem> {
+    const operationId = randomUUID();
+    const started = process.hrtime.bigint();
+    const context = {
+      threadId: options.thread.id,
+      turnId: options.trigger.turnId ?? null,
+    };
+    await this.observeTrace({
+      ...context,
+      type: "context_compaction_started",
+      data: {
+        operationId,
+        initiator: options.initiator,
+        ...options.trigger,
+        coveredThroughItemId: options.boundary.item.id,
+        contextWindow: options.selection.model.contextWindow,
+        triggerPercent: options.contextCompaction.triggerPercent,
+        targetPercent: options.contextCompaction.targetPercent,
+        agenticEnabled: options.contextCompaction.agenticEnabled,
+        selection: options.selection.selection,
+      },
+    });
+    const status = {
+      type: "context_compaction_status" as const,
+      threadId: options.thread.id,
+      operationId,
+      initiator: options.initiator,
+      coveredThroughItemId: options.boundary.item.id,
+      trigger: { ...options.trigger },
+      contextWindow: options.selection.model.contextWindow,
+      triggerPercent: options.contextCompaction.triggerPercent,
+      targetPercent: options.contextCompaction.targetPercent,
+      agenticEnabled: options.contextCompaction.agenticEnabled,
+    };
+    this.#emit({ ...status, phase: "pending" });
+    try {
+      const item = await this.#generateAndCommitContextCompaction(
+        options,
+        operationId,
+      );
+      await this.observeTrace({
+        ...context,
+        type: "context_compaction_finished",
+        data: {
+          operationId,
+          outcome: "committed",
+          compactionItemId: item.id,
+          elapsedNs: (process.hrtime.bigint() - started).toString(),
+          timingScope: "host-including-local-capture",
+        },
+      });
+      this.#emit({ ...status, phase: "committed", compactionItemId: item.id });
+      return item;
+    } catch (error) {
+      const outcome =
+        error instanceof ThreadJournalAppendOutcomeUnknownError
+          ? ("unknown" as const)
+          : options.signal.aborted
+            ? ("cancelled" as const)
+            : ("failed" as const);
+      const diagnostic = {
+        name: error instanceof Error ? error.name : "Error",
+        message: describeCompactionError(error, "Unknown compaction failure"),
+      };
+      await this.observeTrace({
+        ...context,
+        type: "context_compaction_finished",
+        data: {
+          operationId,
+          outcome,
+          elapsedNs: (process.hrtime.bigint() - started).toString(),
+          timingScope: "host-including-local-capture",
+          error: diagnostic,
+        },
+      });
+      this.#emit({ ...status, phase: outcome, error: diagnostic });
+      throw error;
+    }
+  }
+
+  async #generateAndCommitContextCompaction(
+    options: GeneratedContextCompactionOptions,
+    operationId: string,
+  ): Promise<ContextCompactionItem> {
     const sourceContext = contextForFacts(
       options.thread.items.slice(0, options.boundary.index + 1),
       options.thread.itemList,
@@ -5047,6 +5207,7 @@ export class ZenAppServer {
           options.selection,
           messages,
           options.signal,
+          operationId,
         ),
     });
     const contextWindow = options.selection.model.contextWindow;
@@ -5063,7 +5224,7 @@ export class ZenAppServer {
     const summaryTokens = estimateModelMessageInputTokens([
       {
         role: "user",
-        text: `${CONTEXT_COMPACTION_SUMMARY_PREFIX}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : originalItemListReferenceText(options.thread.id, options.boundary.item.id)}`,
+        text: `${compactionSummaryPrefix({ algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION, initiator: options.initiator })}${summary.text}${(options.includeOriginalReference ?? options.contextCompaction.includeOriginalReference) === false ? "" : originalItemListReferenceText(options.thread.id, options.boundary.item.id)}`,
       },
     ]);
     if (summaryTokens > targetTokenBudget) {

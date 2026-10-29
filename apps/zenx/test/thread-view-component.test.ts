@@ -797,7 +797,7 @@ test("compaction progress is a transcript item and completed items reveal exact 
     assert(compactionToggle.classList.contains("workflow-status"));
     assert.equal(compactionToggle.getAttribute("aria-expanded"), "false");
     assert.match(event.textContent ?? "", /Context compacted/u);
-    assert.match(event.textContent ?? "", /Human initiated/u);
+    assert.match(event.textContent ?? "", /Explicit request/u);
     assert.doesNotMatch(event.textContent ?? "", /effective messages/u);
     await act(async () => requiredButton(".context-compaction-toggle").click());
     assert.equal(compactionToggle.getAttribute("aria-expanded"), "true");
