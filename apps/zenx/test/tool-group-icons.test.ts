@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 import { traceGroupIcons } from "../src/renderer/src/turn-projection.js";
 import { toolPresentation } from "../src/renderer/src/tool-presentation.js";
 import { withRuntimeDom } from "./agent-runtime-dom.js";
@@ -167,4 +168,41 @@ test("tool rows reserve an intrinsic text-status column independently of the 14p
     css,
     /\.trace-item-chevron\s*\{[^}]*width: 14px;[^}]*grid-column: 3;/su,
   );
+});
+
+test("tool status slots retain their computed minimum through the full row CSS cascade", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const dom = new JSDOM("<style></style><main></main>");
+  try {
+    // Read the actual stylesheet, not a copied rule: the generic span rule once
+    // silently overrode status min-width while source-presence tests stayed green.
+    dom.window.document.querySelector("style")!.textContent = css.replace(
+      /^@import [^;]+;$/gmu,
+      "",
+    );
+    for (const rowClass of ["trace-item-toggle", "trace-item-static"]) {
+      for (const status of [
+        '<span class="mini-spinner"></span>',
+        '<small class="tool-status completed">Completed</small>',
+        '<small class="tool-status completed">已完成</small>',
+        "",
+      ]) {
+        const main = dom.window.document.querySelector("main")!;
+        main.innerHTML = `<div class="${rowClass}"><span class="trace-item-label">Long synthetic command title</span><span class="trace-item-status">${status}</span><span class="trace-item-chevron"></span></div>`;
+        const computed = (selector: string) =>
+          dom.window.getComputedStyle(main.querySelector(selector)!);
+        assert.equal(computed(".trace-item-status").minWidth, "14px");
+        assert.equal(computed(".trace-item-status").gridColumn, "2");
+        assert.equal(computed(".trace-item-chevron").width, "14px");
+        assert.equal(computed(".trace-item-chevron").gridColumn, "3");
+        assert.equal(computed(".trace-item-label").minWidth, "0px");
+        assert.equal(computed(".trace-item-label").overflow, "hidden");
+      }
+    }
+  } finally {
+    dom.window.close();
+  }
 });

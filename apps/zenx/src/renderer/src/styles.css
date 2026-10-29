@@ -2064,9 +2064,11 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
 }
+.trace-item-label {
+  min-width: 0;
+}
 .trace-item-toggle > span,
 .trace-item-static > span {
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
