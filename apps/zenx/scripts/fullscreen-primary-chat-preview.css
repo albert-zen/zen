@@ -30,9 +30,6 @@
 .fixture-navigation .fixture-boundary {
   margin-bottom: 8px;
 }
-.fullscreen-primary-preview .window-titlebar-session {
-  padding-inline: 20px;
-}
 .synthetic-native-page {
   position: fixed;
   z-index: 5;

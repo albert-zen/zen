@@ -54,8 +54,20 @@ const sources = [
   "src/renderer/src/companion-workspace.tsx",
   "src/renderer/src/ThreadView.tsx",
   "src/renderer/src/bundled-automation-ui.tsx",
+  "src/renderer/src/room-header.tsx",
   "src/renderer/src/workspace-browser-panel.tsx",
   "src/renderer/src/InlineComposerEditor.tsx",
+  "src/renderer/src/main.tsx",
+  "src/renderer/src/PluginProductPage.tsx",
+  "src/renderer/src/thread-sidebar-controller.ts",
+  "src/renderer/src/shell-thread-panel.css",
+  "src/renderer/src/agent-readiness-notice.css",
+  "src/renderer/src/trigger-ui.css",
+  "src/renderer/src/skills.css",
+  "src/renderer/src/rooms-layout.css",
+  "src/renderer/src/room-message-actions.css",
+  "src/renderer/src/room-conversations.css",
+  "src/renderer/src/companion-workspace.css",
   "src/renderer/src/styles.css",
   "src/renderer/src/theme.css",
   "src/renderer/src/i18n/panels.ts",
@@ -72,7 +84,7 @@ await writeFile(
         encoding: "utf8",
       }).trim(),
       scope:
-        "Actual production AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory conversations and browser mount ports. Browser page pixels are an explicitly synthetic DOM stand-in. No Host, Agent, native input, network or persistence; not native Electron acceptance.",
+        "Actual production AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory conversations and browser mount ports. Browser page pixels are an explicitly synthetic DOM stand-in. No Host, Agent, native input, network or Host/profile persistence; production components may write browser-local synthetic read markers. Not native Electron acceptance.",
       sources: Object.fromEntries(
         await Promise.all(
           sources.map(async (source) => [
@@ -90,7 +102,7 @@ await writeFile(
 );
 await writeFile(
   path.join(directory, "README.txt"),
-  `Fullscreen primary-chat evidence. Actual production AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory conversation data. Browser pixels and lease receipts are simulated, not native Electron. No Host, Agent, network, private profile or persistence. Thread/Room owners, draft editing, side chat, reorder, fullscreen and same-page explicit selection are available. source.json identifies exact source hashes. CSP blocks networking. This fixture is not full App integration or full accessibility acceptance.
+  `Fullscreen primary-chat evidence. Actual production AuxiliaryPanel, ThreadView, Composer and RoomsPage with synthetic in-memory conversation data. Browser pixels and lease receipts are simulated, not native Electron. No Host, Agent, network, private profile or Host/profile persistence; production components may write browser-local synthetic read markers. Thread/Room owners, draft editing, side chat, reorder, fullscreen and same-page explicit selection are available. source.json identifies exact source hashes. CSP blocks networking. The title-row geometry is retained without a substitute conversation title; the Room uses its matching App header context with a null slot because header actions are outside this content-only preview; this fixture is not full App/header integration or full accessibility acceptance.
 `,
 );
 console.log(`Built fullscreen primary-chat preview at ${directory}`);

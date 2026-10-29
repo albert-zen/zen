@@ -1,4 +1,5 @@
 /** Production conversation/workspace components; synthetic, memory-only ports. */
+import "../src/renderer/src/shell-thread-panel.css";
 import React, {
   useEffect,
   useMemo,
@@ -11,6 +12,7 @@ import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import { ThreadView } from "../src/renderer/src/ThreadView.js";
 import { RoomsPage } from "../src/renderer/src/bundled-automation-ui.js";
 import { RoomDraftContext } from "../src/renderer/src/room-drafts.js";
+import { RoomHeaderContext } from "../src/renderer/src/room-header.js";
 import {
   emptyComposerState,
   editComposer,
@@ -23,7 +25,13 @@ import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
+import "../src/renderer/src/agent-readiness-notice.css";
 import "../src/renderer/src/trigger-ui.css";
+import "../src/renderer/src/skills.css";
+import "../src/renderer/src/rooms-layout.css";
+import "../src/renderer/src/room-message-actions.css";
+import "../src/renderer/src/room-conversations.css";
+import "../src/renderer/src/companion-workspace.css";
 import "./fullscreen-primary-chat-preview.css";
 
 Object.assign(globalThis, { React });
@@ -316,9 +324,9 @@ function Preview() {
           <div className="window-titlebar-product">
             <ZenXBrand />
           </div>
-          <div className="window-titlebar-session">
-            <strong>{names[owner]}</strong>
-          </div>
+          {/* Preserve production title-row geometry without inventing a bare
+              title outside ConversationTitleBar / PageTitleBar overflow rules. */}
+          <div className="window-titlebar-session" />
         </header>
         <aside className="sidebar fixture-navigation">
           <p className="fixture-boundary">
@@ -403,7 +411,13 @@ function Preview() {
             >
               <div className="page-scroll plugin-page-scroll">
                 <div className="plugin-primary-surface">
-                  <RoomsPage sdk={roomSdk} />
+                  {/* App's header is outside this content-only fixture. Its
+                      matching null slot suppresses the standalone fallback. */}
+                  <RoomHeaderContext.Provider
+                    value={{ roomId: "room-a", element: null }}
+                  >
+                    <RoomsPage sdk={roomSdk} />
+                  </RoomHeaderContext.Provider>
                 </div>
               </div>
             </section>
