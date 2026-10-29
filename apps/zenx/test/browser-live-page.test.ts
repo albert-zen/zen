@@ -18,7 +18,7 @@ const BrowserPage = () =>
     providerRevision: "test",
   });
 
-test("Browser observer keeps status, privacy, and mode in one compact toolbar", async () => {
+test("Browser observer keeps a compact toolbar without inventing an unknown mode", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
   });
@@ -70,11 +70,11 @@ test("Browser observer keeps status, privacy, and mode in one compact toolbar", 
   );
   assert.ok(toolbar);
   assert.match(toolbar.textContent ?? "", /observer only/iu);
-  assert.match(
+  assert.doesNotMatch(toolbar.textContent ?? "", /private page content/iu);
+  assert.doesNotMatch(
     toolbar.textContent ?? "",
-    /private page content may be visible/iu,
+    /temporary local artifacts|agent snapshots/iu,
   );
-  assert.match(toolbar.textContent ?? "", /temporary local artifacts/iu);
   assert.equal(
     dom.window.document.querySelectorAll("[role='status']").length,
     1,
@@ -91,7 +91,7 @@ test("Browser observer keeps status, privacy, and mode in one compact toolbar", 
   assert.match(
     dom.window.document.querySelector(".browser-live-placeholder")
       ?.textContent ?? "",
-    /ask the agent to open or inspect a tab/iu,
+    /reading browser observation/iu,
   );
 
   await act(async () => root.unmount());
@@ -134,7 +134,7 @@ test("Browser status reason remains visible at narrow and 200% CSS viewports", a
   );
 });
 
-test("Browser failed status text clears 4.5:1 on the composed light toolbar", async () => {
+test("Browser failed status text clears 4.5:1 on the light observation stage", async () => {
   const [css, theme] = await Promise.all([
     readFile(
       new URL("../src/renderer/src/styles.css", import.meta.url),
@@ -144,11 +144,7 @@ test("Browser failed status text clears 4.5:1 on the composed light toolbar", as
   ]);
   assert.match(
     css,
-    /\.browser-live-status\[data-status="failed"\],[\s\S]*?\.browser-live-status\[data-status="unavailable"\]\s*\{[^}]*color:\s*var\(--color-text-primary\);/u,
-  );
-  assert.match(
-    css,
-    /\.browser-live-status\[data-status="failed"\] svg,[\s\S]*?\.browser-live-status\[data-status="unavailable"\] svg\s*\{[^}]*color:\s*var\(--color-status-warning\);/u,
+    /\.browser-observation-feedback\[data-status="failed"\] strong,[\s\S]*?\.browser-observation-feedback\[data-status="unavailable"\] strong\s*\{[^}]*color:\s*var\(--color-text-primary\);/u,
   );
 
   const lightTokens = theme.match(
@@ -206,9 +202,9 @@ test("Browser page updates frames without moving focus or announcing every frame
   await act(async () => root.render(React.createElement(BrowserPage)));
   assert.match(
     dom.window.document.querySelector("[role='status']")?.textContent ?? "",
-    /ask the agent/iu,
+    /reading browser observation/iu,
   );
-  assert.match(
+  assert.doesNotMatch(
     dom.window.document.body.textContent ?? "",
     /private page content/iu,
   );
@@ -224,8 +220,8 @@ test("Browser page updates frames without moving focus or announcing every frame
       message: "Watching the Agent's browser tab live.",
     });
   });
-  const status = dom.window.document.querySelector("[role='status']");
-  const statusText = status?.textContent;
+  let statusText: string | null | undefined;
+  let liveStatus: Element | null = null;
   for (let sequence = 1; sequence <= 64; sequence += 1) {
     await act(async () => {
       listener?.({
@@ -239,13 +235,25 @@ test("Browser page updates frames without moving focus or announcing every frame
         },
       });
     });
+    const currentStatus = dom.window.document.querySelector("[role='status']");
+    if (sequence === 1) {
+      liveStatus = currentStatus;
+      statusText = currentStatus?.textContent;
+      assert.match(statusText ?? "", /^Live/);
+    } else {
+      assert.equal(currentStatus === liveStatus, true);
+      assert.equal(currentStatus?.textContent, statusText);
+    }
   }
   const image = dom.window.document.querySelector(
     ".browser-live-frame",
   ) as HTMLImageElement;
   assert.match(image.src, /ZnJhbWUtNjQ=$/u);
-  assert.equal(status?.textContent, statusText);
-  assert.equal(dom.window.document.activeElement, before);
+  assert.equal(
+    dom.window.document.querySelector("[role='status']")?.textContent,
+    statusText,
+  );
+  assert.equal(dom.window.document.activeElement === before, true);
 
   const clearingStatuses = [
     {
@@ -279,7 +287,7 @@ test("Browser page updates frames without moving focus or announcing every frame
       "false",
     );
     assert.ok(dom.window.document.querySelector(".browser-live-placeholder"));
-    assert.equal(dom.window.document.activeElement, before);
+    assert.equal(dom.window.document.activeElement === before, true);
     await act(async () => {
       listener?.({
         type: "frame",
@@ -323,7 +331,7 @@ test("Browser page updates frames without moving focus or announcing every frame
       new RegExp(`${Buffer.from(freshFrame).toString("base64")}$`, "u"),
     );
     assert.equal(liveStatus?.textContent, liveStatusText);
-    assert.equal(dom.window.document.activeElement, before);
+    assert.equal(dom.window.document.activeElement === before, true);
   }
 
   await act(async () => root.unmount());
@@ -415,7 +423,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
     "false",
   );
   assert.ok(dom.window.document.querySelector(".browser-live-placeholder"));
-  assert.equal(dom.window.document.activeElement, before);
+  assert.equal(dom.window.document.activeElement === before, true);
   visibility = "visible";
   await act(async () =>
     dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange")),
@@ -445,7 +453,7 @@ test("Browser page clears its frame while hidden and resumes with a fresh sequen
   });
   assert.match(image.src, /YWZ0ZXItaGlkZGVu$/u);
   assert.equal(liveStatus?.textContent, liveStatusText);
-  assert.equal(dom.window.document.activeElement, before);
+  assert.equal(dom.window.document.activeElement === before, true);
 
   await act(async () => root.unmount());
   assert.equal(disposals, 3);

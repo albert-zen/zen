@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import type {
   BrowserModelTargets,
   BrowserModelRoute,
@@ -488,12 +489,13 @@ export class BrowserThreadObservation {
           },
         );
         if (!this.#observers.has(observer)) this.#stop(observer);
-      } catch {
+      } catch (error) {
         send({
           type: "status",
           status: "unavailable",
           message:
             "This browser page is no longer available. Ask the Agent to inspect it again.",
+          details: localErrorDetail(error),
         });
       }
       return;
@@ -538,12 +540,13 @@ export class BrowserThreadObservation {
           height: screenshot.height,
         });
       })
-      .catch(() =>
+      .catch((error) =>
         send({
           type: "status",
           status: "unavailable",
           message:
             "The last screenshot is no longer available. Ask the Agent to inspect this page again.",
+          details: localErrorDetail(error),
         }),
       );
   }

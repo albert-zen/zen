@@ -1,3 +1,4 @@
+import { subscribeBrowserObservation } from "./browser-observation-ipc.js";
 import type {
   SidebarOwner,
   ThreadSidebarState,
@@ -74,7 +75,6 @@ import type {
   BrowserThreadRequest,
   BrowserThreadEvent,
 } from "../main/capabilities/browser-thread-observation.js";
-import type { BrowserObservationEnvelope } from "../main/browser-live-observation-ipc.js";
 import type {
   ComputerThreadEvent,
   ComputerThreadRequest,
@@ -614,44 +614,8 @@ contextBridge.exposeInMainWorld("zenx", {
     subscribe: (
       request: BrowserThreadRequest,
       listener: (event: BrowserThreadEvent) => void,
-    ): (() => void) => {
-      const eventChannel = request.catalog
-        ? ipcChannels.browserCatalogEvent
-        : ipcChannels.browserLiveEvent;
-      const subscribeChannel = request.catalog
-        ? ipcChannels.browserCatalogSubscribe
-        : ipcChannels.browserLiveSubscribe;
-      const unsubscribeChannel = request.catalog
-        ? ipcChannels.browserCatalogUnsubscribe
-        : ipcChannels.browserLiveUnsubscribe;
-      let active = true;
-      const subscriptionId = crypto.randomUUID();
-      const wrapped = (
-        _event: Electron.IpcRendererEvent,
-        value: BrowserObservationEnvelope,
-      ) => {
-        if (active && value.subscriptionId === subscriptionId)
-          listener(value.event);
-      };
-      ipcRenderer.on(eventChannel, wrapped);
-      void ipcRenderer
-        .invoke(subscribeChannel, subscriptionId, request)
-        .catch(() => {
-          if (active) {
-            listener({
-              type: "status",
-              status: "failed",
-              message: "The live browser view could not be connected.",
-            });
-          }
-        });
-      return () => {
-        if (!active) return;
-        active = false;
-        ipcRenderer.off(eventChannel, wrapped);
-        void ipcRenderer.invoke(unsubscribeChannel, subscriptionId);
-      };
-    },
+    ): (() => void) =>
+      subscribeBrowserObservation(ipcRenderer, request, listener),
   },
   computerObservation: {
     subscribe: (

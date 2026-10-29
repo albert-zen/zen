@@ -64,7 +64,7 @@ export class BrowserLiveObservationIpcBridge {
       request.threadId.length > 512 ||
       typeof request.frames !== "boolean" ||
       (request.targetId !== undefined &&
-        (typeof request.targetId !== "string" || request.targetId.length > 80))
+        !isBrowserObservationTargetId(request.targetId))
     )
       throw new Error("Invalid Browser observation request");
     if (this.#catalogOnly && (request.frames || request.targetId !== undefined))
@@ -135,6 +135,7 @@ export class BrowserLiveObservationIpcBridge {
   ): Promise<void> {
     const subscription = this.#subscriptions.get(renderer);
     if (
+      !isBrowserObservationTargetId(targetId) ||
       !subscription ||
       renderer.isDestroyed() ||
       !subscription.request.frames ||
@@ -185,4 +186,12 @@ export class BrowserLiveObservationIpcBridge {
     for (const renderer of [...this.#subscriptions.keys()])
       this.unsubscribe(renderer);
   }
+}
+
+/** Target IDs are opaque transport values, not a namespace grammar. Current
+ * instance-qualified UUID addresses are 120 characters; allow bounded headroom
+ * without rejecting old provider identities or normalizing any bytes. Exact
+ * source lookup still owns Thread, connection and generation authorization. */
+function isBrowserObservationTargetId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256;
 }

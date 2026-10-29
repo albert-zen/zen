@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import type { NativeImage } from "electron";
 import type {
   BrowserLiveObservationListener,
@@ -55,11 +56,12 @@ export function observeElectronPage(
     try {
       const { title, url, loading } = port.metadata();
       send({ type: "metadata", title, url, loading });
-    } catch {
+    } catch (error) {
       send({
         type: "status",
         status: "failed",
         message: "Browser page metadata is unavailable.",
+        details: localErrorDetail(error),
       });
       stop();
     }
@@ -140,6 +142,7 @@ export function observeElectronPage(
         type: "status",
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
+        details: localErrorDetail(error),
       });
       stop();
     }
