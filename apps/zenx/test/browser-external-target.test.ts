@@ -1,3 +1,4 @@
+import { chooseValue } from "./choice-interaction.js";
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -149,6 +150,21 @@ test("real connected provider through registry, Host bridge and UI opens complet
     assert.equal(
       (result as Array<{ url: string }>)[0]!.url,
       "https://example.test/search",
+    );
+    assert.equal(
+      button().disabled,
+      true,
+      "discovery does not select an observation target",
+    );
+    const targets: BrowserThreadEvent[] = [];
+    registry.observeThread({ threadId: "thread-a", frames: false }, (event) =>
+      targets.push(event),
+    )();
+    const catalog = targets.findLast((event) => event.type === "targets")!;
+    assert.equal(catalog.type, "targets");
+    await chooseValue(
+      document.querySelector<HTMLButtonElement>(".ui-select")!,
+      catalog.targets[0]!.id,
     );
     assert.equal(button().disabled, false);
     await act(async () => button().click());

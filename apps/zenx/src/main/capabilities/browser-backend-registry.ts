@@ -28,7 +28,6 @@ import {
 
 type BackendId = string;
 const workspacePrefix = "browser_workspace_";
-const maxTrackedThreads = 512;
 const connectedPrefix = "browser_connected_";
 const referenceKeys = new Set([
   "tabId",
@@ -151,10 +150,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
   readonly #stopConnections?: () => void;
   readonly #packages = new Map<BackendId, BrowserZenXCapabilityPackage>();
   readonly #connectedUnavailable: string;
-  readonly #lastAction = new Map<
-    string,
-    { backendId: BackendId; sessionId: string }
-  >();
   readonly #observers = new Set<{
     threadId: string;
     refresh: () => void;
@@ -348,30 +343,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
             }),
       });
     const result = await selected.invoke(canonicalName, nativeInvocation);
-    const threadId = invocation.threadId;
-    if (
-      !this.#closed &&
-      this.#packages.get(backendId) === selected &&
-      threadId !== undefined
-    ) {
-      if (canonicalName === "browser_close_session") {
-        const last = this.#lastAction.get(threadId);
-        if (last?.backendId === backendId && last.sessionId === args.sessionId)
-          this.#lastAction.delete(threadId);
-      } else if (canonicalName !== "browser_list_tabs") {
-        // A bounded UI preference only. Listing or a failed action cannot move it.
-        this.#lastAction.delete(threadId);
-        this.#lastAction.set(threadId, {
-          backendId,
-          sessionId: args.sessionId as string,
-        });
-        if (this.#lastAction.size > maxTrackedThreads)
-          this.#lastAction.delete(this.#lastAction.keys().next().value!);
-      }
-      if (canonicalName !== "browser_list_tabs")
-        for (const observer of [...this.#observers])
-          if (observer.threadId === threadId) observer.refresh();
-    }
     const project = (value: unknown) => ({
       ...(qualifyResult(backendId, value) as object),
       backendId: backendId === "workspace" ? "workspace" : "connected",
@@ -514,7 +485,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     listener: BrowserThreadListener,
   ): () => void {
     const targets = new Map<BackendId, BrowserThreadTarget[]>();
-    const childSelections = new Map<BackendId, string>();
     let active = true;
     let selectedId: string | undefined;
     let stopFrames: (() => void) | undefined;
@@ -549,19 +519,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       if (!active) return;
       const refreshRevision = ++refreshGeneration;
       const all = [...targets.values()].flat();
-      const lastBackend = this.#lastAction.get(request.threadId)?.backendId;
-      const priorBackend = selectedId?.split(":")[0];
-      const following = lastBackend ?? priorBackend;
-      const next =
-        request.targetId === undefined
-          ? (all.find(
-              (target) =>
-                target.id ===
-                (following === undefined
-                  ? undefined
-                  : childSelections.get(following)),
-            ) ?? all.at(-1))
-          : all.find((target) => target.id === request.targetId);
+      const next = all.find((target) => target.id === request.targetId);
       send({
         type: "targets",
         targets: all,
@@ -585,7 +543,7 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
         send({
           type: "status",
           status: "idle",
-          message: "No browser page is selected for live observation.",
+          message: "No browser page is selected for this thread.",
         });
         return;
       }
@@ -634,7 +592,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
         stops.delete(key);
         dispose();
         targets.delete(key);
-        childSelections.delete(key);
       }
       for (const [backendId, capability] of this.#packages) {
         if (!active) break;
@@ -677,13 +634,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
                 tabId: qualify(backendId, target.tabId),
               })),
             );
-            if (event.selectedId === undefined)
-              childSelections.delete(backendId);
-            else
-              childSelections.set(
-                backendId,
-                qualify(backendId, event.selectedId),
-              );
             refresh();
           },
         );
@@ -701,7 +651,6 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     if (this.#closed) return;
     this.#closed = true;
     this.#stopConnections?.();
-    this.#lastAction.clear();
     for (const observer of [...this.#observers]) observer.retire();
     await Promise.allSettled([...this.#pendingConnections.values()]);
     await Promise.all(

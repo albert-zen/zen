@@ -25,8 +25,6 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WorkspaceBrowserPanel } from "../renderer/src/workspace-browser-panel.js";
 import { i18n } from "../renderer/src/i18n.js";
-import { ipcChannels } from "../preload/ipc.js";
-import type { WorkspaceBrowserPresentation } from "./workspace-browser.js";
 import type { WorkspaceBrowserTab } from "./workspace-browser.js";
 
 import type { BrowserInspection } from "./capabilities/browser-provider.js";
@@ -650,95 +648,54 @@ void app.whenReady().then(async () => {
       "document.querySelector('#login').click();document.querySelector('input').focus()",
     );
     createdView.webContents.insertText("human draft");
-    phase = "presentation-prepare-existing-human-page";
-    traceShared("presentation-existing-page-ready");
+    phase = "background-inspect-existing-human-page";
+    traceShared("background-existing-page-ready");
     const originalProfile = createdView.webContents.session;
-    // Exercise the real Host/native-view boundary with synthetic local state.
-    // The renderer notification consumer is instrumented here; renderer event,
-    // selection and lease reuse are covered separately by production UI tests.
+    // A closed sidebar must stay closed: the same page can be inspected through
+    // the non-activating compositor without asking the renderer to reveal it.
+    browser.mount(owner.webContents, { lease: "shared-smoke" });
+    assert.equal(owner.contentView.children.length, 0);
     browser.closeSession("shared-session");
     browser.bindThreadSession("shared-session", "shared-thread");
-    browser.presentationContext(owner.webContents, {
-      threadId: "shared-thread",
-      lease: "presentation-smoke-context",
-    });
-    const capturesBeforePresentation = captureCalls;
-    const presentationOrder: string[] = [];
+    const focusedBeforeBackgroundInspect = BrowserWindow.getFocusedWindow();
     const originalSend = owner.webContents.send;
-    let acknowledge!: () => void;
-    let failAcknowledgement!: (reason: unknown) => void;
-    const acknowledged = new Promise<void>((resolve, reject) => {
-      acknowledge = resolve;
-      failAcknowledgement = reject;
-    });
-    const acknowledgementTimer = setTimeout(
-      () =>
-        failAcknowledgement(
-          new Error("Native presentation acknowledgement was not received"),
-        ),
-      2000,
-    );
+    const sentChannels: string[] = [];
     owner.webContents.send = (channel: string, ...args: unknown[]) => {
-      if (channel !== ipcChannels.workspaceBrowserPresentation)
-        return originalSend.call(owner!.webContents, channel, ...args);
-      const request = args[0] as WorkspaceBrowserPresentation;
-      phase = "presentation-request-before-capture";
-      traceShared("presentation-request");
-      presentationOrder.push("request");
-      queueMicrotask(() => {
-        try {
-          assert.equal(request.threadId, "shared-thread");
-          assert.equal(request.tab.id, tabId);
-          assert.equal(
-            captureCalls,
-            capturesBeforePresentation,
-            "native capture cannot start before presentation acknowledgement",
-          );
-          browser.mount(owner!.webContents, {
-            threadId: request.threadId,
-            tabId: request.tab.id,
-            presentationId: request.requestId,
-            lease: "presentation-smoke-page",
-            bounds: { x: 20, y: 20, width: 700, height: 500 },
-          });
-          assert.equal(
-            owner!.contentView.children[0],
-            createdView,
-            "presentation must mount the original WebContentsView",
-          );
-          phase = "presentation-original-view-mounted";
-          traceShared("presentation-mount-ack");
-          presentationOrder.push("mounted");
-          acknowledge();
-        } catch (error) {
-          browser.declinePresentation(owner!.webContents, request.requestId);
-          failAcknowledgement(error);
-        }
-      });
+      sentChannels.push(channel);
+      return originalSend.call(owner!.webContents, channel, ...args);
     };
     let humanObservation: BrowserInspection;
     try {
-      [humanObservation] = await Promise.all([
-        browser.inspect("shared-session", tabId),
-        acknowledged,
-      ]);
-      phase = "presentation-inspected-after-ack";
-      traceShared("presentation-inspection-returned");
-      presentationOrder.push("inspected");
+      humanObservation = await browser.inspect("shared-session", tabId);
+      phase = "background-inspection-returned";
+      traceShared("background-inspection-returned");
     } finally {
-      clearTimeout(acknowledgementTimer);
       owner.webContents.send = originalSend;
-      browser.presentationContext(owner.webContents, {
-        lease: "presentation-smoke-context",
-      });
     }
-    assert.deepEqual(presentationOrder, ["request", "mounted", "inspected"]);
-    assert.equal(humanObservation.automaticPresentation, "shown");
+    assert.equal(
+      Object.hasOwn(humanObservation, "automaticPresentation"),
+      false,
+    );
+    assert.ok(
+      sentChannels.every(
+        (channel) => channel === "zenx:workspace-browser:changed",
+      ),
+    );
+    assert.equal(
+      owner.contentView.children.length,
+      0,
+      "inspection cannot reopen the sidebar",
+    );
+    assert.equal(
+      BrowserWindow.getFocusedWindow(),
+      focusedBeforeBackgroundInspect,
+      "background inspection cannot transfer OS focus",
+    );
     assert.equal(createdView.webContents.id, originalWebContentsId);
     assert.equal(
       createdView.webContents.session,
       originalProfile,
-      "presentation must preserve the actual Chromium profile object",
+      "background inspection must preserve the actual Chromium profile object",
     );
     assert.match(humanObservation.visibleText, /Signed in to local fixture/u);
     assert.equal(
@@ -866,7 +823,7 @@ void app.whenReady().then(async () => {
           "Agent click navigation succeeds on the same shared WebContents",
           "Chromium cancels an older load and the provider reports it stale",
           "synthetic login and form state survive explicit same-page human takeover/return",
-          "automatic presentation acknowledges the original native view before capture and preserves WebContents/profile/login/form identity",
+          "background inspection leaves the sidebar closed and focus unchanged, sends no presentation request, and preserves WebContents/profile/login/form identity",
           "all human-owned Agent mutations reject; return requires fresh observation",
           "human confirmation occurs exactly once and is never replayed on return",
           "old no-reference close remains fenced even after a fresh inspection",

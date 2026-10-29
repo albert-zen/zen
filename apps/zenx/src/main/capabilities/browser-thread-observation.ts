@@ -27,6 +27,7 @@ export interface BrowserThreadTarget extends BrowserTabSummary {
 }
 export interface BrowserThreadRequest {
   threadId: string;
+  /** Only an explicit human-selected target receives observations. Omission is catalog-only. */
   targetId?: string;
   frames: boolean;
   /** Separate catalog/activity lane; never grants frame or external-open authority. */
@@ -83,7 +84,6 @@ interface Observer {
 export class BrowserThreadObservation {
   readonly #backend: ZenXBrowserBackend;
   readonly #sessions = new Map<string, ThreadSession>();
-  readonly #latest = new Map<string, string>();
   readonly #observers = new Set<Observer>();
   #closed = false;
   constructor(backend: ZenXBrowserBackend) {
@@ -160,12 +160,6 @@ export class BrowserThreadObservation {
     if (this.#closed || this.#sessions.get(session.key) !== session) return;
     if (tool === "browser_close_session") {
       this.#sessions.delete(session.key);
-      if (
-        ![...this.#sessions.values()].some(
-          (value) => value.threadId === session.threadId,
-        )
-      )
-        this.#latest.delete(session.threadId);
     } else if (tool === "browser_close") {
       if (tabId !== undefined) session.targets.delete(tabId);
     } else {
@@ -211,8 +205,6 @@ export class BrowserThreadObservation {
               }),
         };
         session.targets.set(summary.tabId, target);
-        if (tool !== "browser_list_tabs")
-          this.#latest.set(session.threadId, target.summary.id);
       }
     }
     this.#notify(session.threadId);
@@ -390,7 +382,6 @@ export class BrowserThreadObservation {
     );
     this.#closed = true;
     this.#sessions.clear();
-    this.#latest.clear();
     for (const observer of this.#observers) this.#render(observer);
     this.#observers.clear();
     return sessions;
@@ -431,11 +422,9 @@ export class BrowserThreadObservation {
       .flatMap((session) =>
         [...session.targets.values()].map((target) => ({ session, target })),
       );
-    const selectedId =
-      observer.request.targetId ?? this.#latest.get(observer.request.threadId);
-    const selected =
-      targets.find(({ target }) => target.summary.id === selectedId) ??
-      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    const selected = targets.find(
+      ({ target }) => target.summary.id === observer.request.targetId,
+    );
     send({
       type: "targets",
       targets: targets.map(({ target }) => target.summary),
@@ -557,11 +546,9 @@ export class BrowserThreadObservation {
       .flatMap((session) =>
         [...session.targets.values()].map((target) => target.summary),
       );
-    const requestedId =
-      observer.request.targetId ?? this.#latest.get(observer.request.threadId);
-    const selected =
-      targets.find((target) => target.id === requestedId) ??
-      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    const selected = targets.find(
+      (target) => target.id === observer.request.targetId,
+    );
     try {
       observer.listener({
         type: "targets",

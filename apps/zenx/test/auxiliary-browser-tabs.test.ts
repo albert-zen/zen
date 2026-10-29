@@ -89,6 +89,14 @@ test("shared browser pages are peer workspace tabs and the type picker unmounts 
     );
     assert.equal(document.querySelectorAll('[role="tablist"]').length, 1);
     assert.equal(document.querySelector(".workspace-browser-tabs"), null);
+    assert.equal(
+      mounts.length,
+      0,
+      "discovered tabs remain unselected until a human chooses",
+    );
+    assert.equal(tabs()[0]!.tabIndex, 0);
+    assert.equal(tabs()[0]!.getAttribute("aria-selected"), "false");
+    await act(async () => tabs()[0]!.click());
     assert.equal(mounts.at(-1)?.tabId, "1");
     await act(async () => button("New workspace tab").click());
     assert.equal(mounts.at(-1)?.tabId, undefined);

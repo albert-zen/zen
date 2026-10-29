@@ -867,7 +867,18 @@ test("late native ACK after lock and unlock cannot revive an old preview", async
       signal: new AbortController().signal,
     } as any);
   const inspected = (await call("computer_inspect", { target })) as any;
-  computer.observeThread({ threadId: "owner", frames: true }, () => {});
+  let targetId: string | undefined;
+  computer.observeThread({ threadId: "owner", frames: false }, (event) => {
+    if (event.type === "targets") targetId = event.targets[0]?.id;
+  })();
+  assert.ok(
+    targetId,
+    "explicit human observation uses the discovered exact target",
+  );
+  computer.observeThread(
+    { threadId: "owner", frames: true, targetId },
+    () => {},
+  );
   assert.equal(captures, 1);
   const action = call("computer_press", {
     target,

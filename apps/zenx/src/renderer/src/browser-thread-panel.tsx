@@ -34,9 +34,14 @@ export function BrowserThreadPanel({
   useTranslation("panels");
   const [targets, setTargets] = useState<BrowserThreadTarget[]>([]);
   const [catalogReceived, setCatalogReceived] = useState(false);
-  const [targetId, setTargetId] = useState<string | undefined>(() =>
-    selections.get(threadId),
-  );
+  const [selection, setSelection] = useState(() => ({
+    threadId,
+    targetId: selections.get(threadId),
+  }));
+  const targetId =
+    selection.threadId === threadId
+      ? selection.targetId
+      : selections.get(threadId);
   const [selectedId, setSelectedId] = useState<string>();
   const [status, setStatus] = useState<{
     status: string;
@@ -78,7 +83,7 @@ export function BrowserThreadPanel({
     let active = true;
     let sequence = 0;
     let live = false;
-    let currentTarget: string | undefined;
+    let currentTarget: string | undefined = fixedTargetId ?? targetId;
     const resetExternal = () => {
       externalGeneration.current++;
       externalPending.current = false;
@@ -103,17 +108,20 @@ export function BrowserThreadPanel({
     const receive = (event: BrowserThreadEvent) => {
       if (!active) return;
       if (event.type === "targets") {
-        if (currentTarget !== event.selectedId) resetExternal();
-        currentTarget = event.selectedId;
+        const selected =
+          event.selectedId === (fixedTargetId ?? targetId) &&
+          event.targets.some((target) => target.id === event.selectedId)
+            ? event.selectedId
+            : undefined;
+        if (currentTarget !== selected) {
+          resetExternal();
+          live = false;
+          clear();
+        }
+        currentTarget = selected;
         setTargets(event.targets);
         setCatalogReceived(true);
-        setSelectedId(event.selectedId);
-        if (
-          event.targets.length > 0 &&
-          open === undefined &&
-          window.innerWidth >= 1100
-        )
-          openChange.current(true);
+        setSelectedId(selected);
       } else if (event.type === "status") {
         live = event.status === "live";
         if (!live) clear();
@@ -123,7 +131,7 @@ export function BrowserThreadPanel({
           details: event.details,
         });
       } else if (event.type === "snapshot") {
-        if (!open || !visible) return;
+        if (!open || !visible || currentTarget === undefined) return;
         const image = imageRef.current;
         if (image) {
           image.src = `data:${event.mimeType};base64,${event.data}`;
@@ -138,6 +146,7 @@ export function BrowserThreadPanel({
         });
       } else if (
         event.type === "frame" &&
+        currentTarget !== undefined &&
         live &&
         open &&
         visible &&
@@ -156,7 +165,8 @@ export function BrowserThreadPanel({
     const stop = window.zenx.browserObservation.subscribe(
       {
         threadId,
-        frames: open === true && visible,
+        frames:
+          open === true && visible && (fixedTargetId ?? targetId) !== undefined,
         ...((fixedTargetId ?? targetId) === undefined
           ? {}
           : { targetId: fixedTargetId ?? targetId }),
@@ -266,7 +276,7 @@ export function BrowserThreadPanel({
   const choose = (value: string) => {
     if (value) selections.set(threadId, value);
     else selections.delete(threadId);
-    setTargetId(value || undefined);
+    setSelection({ threadId, targetId: value || undefined });
   };
   return (
     <aside
@@ -374,10 +384,7 @@ export function BrowserThreadPanel({
               value={targetId ?? ""}
               onValueChange={(value) => choose(value)}
             >
-              <option value="">
-                {i18n.t("panels:followAgent")}
-                {selected ? ` · ${selected.title}` : ""}
-              </option>
+              <option value="">{i18n.t("panels:chooseBrowserPage")}</option>
               {targetId !== undefined &&
               !targets.some((target) => target.id === targetId) ? (
                 <option value={targetId}>
@@ -399,15 +406,6 @@ export function BrowserThreadPanel({
                 </option>
               ))}
             </Select>
-            {targetId !== undefined ? (
-              <button
-                type="button"
-                className="browser-follow-button"
-                onClick={() => choose("")}
-              >
-                {i18n.t("panels:followAgent")}
-              </button>
-            ) : null}
           </>
         )}
         <div className="browser-panel-location browser-url-field">

@@ -2,10 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AuxiliaryPanel } from "../../src/renderer/src/auxiliary-panel.js";
 import { i18n } from "../../src/renderer/src/i18n.js";
-import type {
-  WorkspaceBrowserPresentation,
-  WorkspaceBrowserTab,
-} from "../../src/main/workspace-browser.js";
+import type { WorkspaceBrowserTab } from "../../src/main/workspace-browser.js";
 import type { BrowserThreadEvent } from "../../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXPluginSnapshot } from "../../src/main/capabilities/types.js";
 import "../../src/renderer/src/theme.css";
@@ -55,7 +52,6 @@ const changes = new Set<
   (value: { threadId: string; tabs: WorkspaceBrowserTab[] }) => void
 >();
 let operationSequence = 0;
-const presentations = new Set<(value: WorkspaceBrowserPresentation) => void>();
 const calls: unknown[] = [];
 const externalListeners = new Set<(event: BrowserThreadEvent) => void>();
 let externalOperationSequence = 0;
@@ -103,19 +99,6 @@ const harness = Object.assign(window, {
       });
     }
   },
-  previewPresent: () => {
-    const requestedAt = Date.now();
-    for (const listener of presentations)
-      listener({
-        requestId: crypto.randomUUID(),
-        requestedAt,
-        expiresAt: requestedAt + 750,
-        threadId,
-        sessionEpoch: "synthetic-session-epoch",
-        operationSequence: ++operationSequence,
-        tab: pages[0]!,
-      });
-  },
   previewActivity: (active: boolean) => {
     pages = pages.map((page, index) =>
       index === 0
@@ -151,19 +134,7 @@ const harness = Object.assign(window, {
         changes.add(listener);
         return () => changes.delete(listener);
       },
-      onPresentation: (
-        listener: (value: WorkspaceBrowserPresentation) => void,
-      ) => {
-        presentations.add(listener);
-        return () => presentations.delete(listener);
-      },
       onFocusAddress: () => () => {},
-      presentationContext: async (request: unknown) => {
-        calls.push({ context: request });
-      },
-      declinePresentation: async (requestId: string) => {
-        calls.push({ declined: requestId });
-      },
       mount: async (request: unknown) => {
         calls.push({ syntheticMount: request });
       },
@@ -247,9 +218,6 @@ function Preview() {
           </button>
           <button onClick={() => harness.previewActivity(false)}>
             Finish synthetic activity
-          </button>
-          <button onClick={() => harness.previewPresent()}>
-            Request synthetic presentation
           </button>
           <button onClick={() => harness.previewExternalActivity("started")}>
             Start synthetic external activity

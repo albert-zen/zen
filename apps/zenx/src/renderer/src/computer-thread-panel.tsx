@@ -9,6 +9,8 @@ import type {
   ComputerThreadTarget,
 } from "../../main/capabilities/computer-thread-observation.js";
 
+const selections = new Map<string, string>();
+
 export function ComputerThreadPanel({
   threadId,
   active,
@@ -18,7 +20,15 @@ export function ComputerThreadPanel({
 }) {
   useTranslation("panels");
   const [targets, setTargets] = useState<ComputerThreadTarget[]>([]);
-  const [targetId, setTargetId] = useState<string>();
+  const [selection, setSelection] = useState(() => ({
+    threadId,
+    targetId: selections.get(threadId),
+  }));
+  const targetId =
+    selection.threadId === threadId
+      ? selection.targetId
+      : selections.get(threadId);
+  const [catalogReceived, setCatalogReceived] = useState(false);
   const [status, setStatus] = useState({
     status: "idle",
     message: "",
@@ -41,20 +51,28 @@ export function ComputerThreadPanel({
     let listening = true;
     setFrame(undefined);
     setTargets([]);
+    setCatalogReceived(false);
+    setStatus({ status: "idle", message: "" });
     frameTarget.current = undefined;
     image.current?.removeAttribute("src");
     if (!active || !visible) return;
     const stop = window.zenx.computerObservation.subscribe(
-      { threadId, targetId, frames: true },
+      { threadId, targetId, frames: targetId !== undefined },
       (event) => {
         if (!listening) return;
         if (event.type === "targets") {
-          if (frameTarget.current !== event.selectedId) {
-            frameTarget.current = event.selectedId;
+          const selectedId =
+            event.selectedId === targetId &&
+            event.targets.some((target) => target.id === targetId)
+              ? targetId
+              : undefined;
+          if (frameTarget.current !== selectedId) {
+            frameTarget.current = selectedId;
             setFrame(undefined);
             image.current?.removeAttribute("src");
           }
           setTargets(event.targets);
+          setCatalogReceived(true);
           return;
         }
         if (event.type === "status") {
@@ -65,7 +83,8 @@ export function ComputerThreadPanel({
           }
           return;
         }
-        setFrame(event.frame);
+        if (targetId !== undefined && frameTarget.current === targetId)
+          setFrame(event.frame);
       },
     );
     return () => {
@@ -75,8 +94,7 @@ export function ComputerThreadPanel({
   }, [active, targetId, threadId, visible]);
 
   const selected = targets.find((target) => target.id === targetId);
-  const followed = targetId === undefined ? targets.at(-1) : selected;
-  const activity = followed?.activity;
+  const activity = selected?.activity;
   const activityMessage = activity
     ? activity.kind === "waiting-human"
       ? i18n.t("panels:computerWaitingForHuman")
@@ -85,16 +103,16 @@ export function ComputerThreadPanel({
         : activity.kind === "background-app"
           ? i18n.t("panels:computerBackgroundAppActivity", {
               application:
-                followed?.target.applicationName ??
-                followed?.target.bundleId ??
-                followed?.target.pid,
+                selected?.target.applicationName ??
+                selected?.target.bundleId ??
+                selected?.target.pid,
             })
           : activity.kind === "background-window"
             ? i18n.t("panels:computerBackgroundActivity", {
-                window: followed?.target.windowTitle,
+                window: selected?.target.windowTitle,
               })
             : i18n.t("panels:computerActivityUnknown")
-    : targets.length > 0
+    : selected
       ? i18n.t("panels:computerNoCurrentActivity")
       : undefined;
   return (
@@ -106,31 +124,34 @@ export function ComputerThreadPanel({
       <div className="computer-live-toolbar">
         <Select
           aria-label={i18n.t(
-            followed && !followed.target.windowTitle
+            selected && !selected.target.windowTitle
               ? "panels:computerApplication"
               : "panels:computerWindow",
           )}
-          value={targetId ?? "__follow__"}
-          onValueChange={(value) =>
-            setTargetId(value === "__follow__" ? undefined : value)
-          }
+          value={targetId ?? ""}
+          onValueChange={(value) => {
+            if (value) selections.set(threadId, value);
+            else selections.delete(threadId);
+            setSelection({ threadId, targetId: value || undefined });
+          }}
           title={
-            followed
+            selected
               ? i18n.t("panels:latestComputerAction", {
-                  invocationId: followed.invocationId,
+                  invocationId: selected.invocationId,
                 })
               : undefined
           }
         >
-          <option value="__follow__">
-            {targets.length === 0
-              ? i18n.t("panels:followAgent")
-              : i18n.t(
-                  followed && !followed.target.windowTitle
-                    ? "panels:followAgentLatestApplication"
-                    : "panels:followAgentLatestWindow",
-                )}
-          </option>
+          <option value="">{i18n.t("panels:chooseComputerTarget")}</option>
+          {targetId !== undefined && !selected ? (
+            <option value={targetId}>
+              {i18n.t(
+                catalogReceived
+                  ? "panels:selectedComputerTargetUnavailable"
+                  : "panels:computerObservationPending",
+              )}
+            </option>
+          ) : null}
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
               {target.target.windowTitle ??
@@ -141,7 +162,9 @@ export function ComputerThreadPanel({
           ))}
         </Select>
         <span role="status" data-status={status.status}>
-          {computerStatusMessage(status.message)}
+          {targetId !== undefined && catalogReceived && !selected
+            ? i18n.t("panels:selectedComputerTargetUnavailable")
+            : computerStatusMessage(status.message)}
         </span>
         {activityMessage ? (
           <span
@@ -164,16 +187,16 @@ export function ComputerThreadPanel({
               src={`data:${frame.mimeType};base64,${frame.data}`}
               alt={i18n.t("panels:liveViewOf", {
                 name:
-                  followed?.target.windowTitle ??
+                  selected?.target.windowTitle ??
                   i18n.t("panels:computerWindow"),
               })}
             />
-            {followed ? (
+            {selected ? (
               <AgentActionPointer
-                key={`${threadId}:${followed.id}`}
-                targetKey={`${threadId}:${followed.id}`}
-                actionId={followed.invocationId}
-                pointer={followed.pointer}
+                key={`${threadId}:${selected.id}`}
+                targetKey={`${threadId}:${selected.id}`}
+                actionId={selected.invocationId}
+                pointer={selected.pointer}
                 width={frame.width}
                 height={frame.height}
                 capturedAt={frame.capturedAt}
@@ -199,7 +222,8 @@ export function ComputerThreadPanel({
 }
 
 function computerStatusMessage(message: string): string {
-  if (!message || message === "Waiting for the Agent to use a Computer window.")
+  if (!message) return "";
+  if (message === "Waiting for the Agent to use a Computer window.")
     return i18n.t("panels:waitingForTheAgentToUseA");
   if (message === "This Computer provider does not support a live window view.")
     return i18n.t("panels:computerLiveViewUnsupported");

@@ -230,9 +230,9 @@ export class ComputerThreadObservation {
         ...(validPointer(target.pointer) ? {} : { pointer: undefined }),
       }),
     );
-    const selected =
-      targets.find((target) => target.id === observer.request.targetId) ??
-      (observer.request.targetId === undefined ? targets.at(-1) : undefined);
+    const selected = targets.find(
+      (target) => target.id === observer.request.targetId,
+    );
     const captureAllowed =
       selected?.mode === "live" &&
       !!selected.target.windowTitle &&

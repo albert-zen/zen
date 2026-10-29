@@ -1,7 +1,3 @@
-import {
-  browserOperationOrder,
-  withBrowserOperationOrder,
-} from "../src/main/capabilities/browser-operation-order.js";
 import { BrowserInputUnsupportedError } from "../src/main/capabilities/browser-targeted-input.js";
 import { BrowserBackendRegistry } from "../src/main/capabilities/browser-backend-registry.js";
 import assert from "node:assert/strict";
@@ -1026,6 +1022,7 @@ async function sharedFixture() {
       nextLoad = value;
     },
     sender,
+    window,
     views,
     close: async () => {
       await browser.shutdown();
@@ -1186,11 +1183,13 @@ class FakeWebContents extends EventEmitter {
   reload() {
     return undefined;
   }
-  send() {
-    return undefined;
+  readonly sent: { channel: string; args: unknown[] }[] = [];
+  send(channel: string, ...args: unknown[]) {
+    this.sent.push({ channel, args });
   }
+  focusCalls = 0;
   focus() {
-    return undefined;
+    this.focusCalls += 1;
   }
   close() {
     this.#destroyed = true;
@@ -1219,8 +1218,16 @@ class FakeView {
 class FakeWindow extends EventEmitter {
   readonly contentView = {
     added: [] as FakeView[],
-    addChildView: (view: FakeView) => this.contentView.added.push(view),
-    removeChildView: () => undefined,
+    children: [] as FakeView[],
+    addChildView: (view: FakeView) => {
+      this.contentView.added.push(view);
+      this.contentView.children.push(view);
+    },
+    removeChildView: (view: FakeView) => {
+      this.contentView.children = this.contentView.children.filter(
+        (child) => child !== view,
+      );
+    },
   };
   constructor(readonly webContents: FakeWebContents) {
     super();
@@ -1849,7 +1856,7 @@ for (const command of ["take-control", "return-control"] as const) {
   }
 }
 
-for (const action of ["scroll", "click"] as const)
+for (const action of ["inspect", "scroll", "click"] as const)
   test(`Workspace ${action} forwards cancellation into the pending compositor lease before dispatch`, async () => {
     const { WorkspaceBrowserRenderer } =
       await import("../src/main/workspace-browser-renderer.js");
@@ -1894,22 +1901,24 @@ for (const action of ["scroll", "click"] as const)
       const controller = new AbortController(),
         reason = new Error("cancel before frame");
       const pending =
-        action === "scroll"
-          ? browser.scroll(
-              "session",
-              tab.tabId,
-              observation.observationId,
-              "down",
-              100,
-              controller.signal,
-            )
-          : browser.click(
-              "session",
-              tab.tabId,
-              observation.observationId,
-              observation.targets[0]!.targetId,
-              controller.signal,
-            );
+        action === "inspect"
+          ? browser.inspect("session", tab.tabId, controller.signal)
+          : action === "scroll"
+            ? browser.scroll(
+                "session",
+                tab.tabId,
+                observation.observationId,
+                "down",
+                100,
+                controller.signal,
+              )
+            : browser.click(
+                "session",
+                tab.tabId,
+                observation.observationId,
+                observation.targets[0]!.targetId,
+                controller.signal,
+              );
       const rejected = assert.rejects(pending, (error) => error === reason);
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(observedSignal, controller.signal);
@@ -2003,74 +2012,186 @@ for (const change of ["navigation", "control", "session", "mount"] as const) {
   });
 }
 
-async function presentationFixture() {
+async function navigationFixture() {
   const f = await sharedFixture();
-  const tab = f.browser.command(f.sender as never, "thread-a", "new")[0]!;
+  const first = f.browser.command(f.sender as never, "thread-a", "new")[0]!;
+  const target = f.browser
+    .command(f.sender as never, "thread-a", "new")
+    .at(-1)!;
   await new Promise((resolve) => setImmediate(resolve));
-  f.browser.bindThreadSession("presentation-session", "thread-a");
-  f.browser.presentationContext(f.sender as never, {
-    threadId: "thread-a",
-    lease: "context-a",
-  });
-  const requests: import("../src/main/workspace-browser.js").WorkspaceBrowserPresentation[] =
-    [];
-  (f.sender as any).send = (channel: string, request: any) => {
-    if (channel === "zenx:workspace-browser:presentation")
-      requests.push(request);
-  };
-  const mount = (request = requests.at(-1)!) =>
+  f.browser.bindThreadSession("navigation-session", "thread-a");
+  const mount = (tabId: string, lease = "human-selected-page") =>
     f.browser.mount(f.sender as never, {
       threadId: "thread-a",
-      tabId: tab.id,
-      lease: "presentation-view",
-      presentationId: request.requestId,
+      tabId,
+      lease,
       bounds: { x: 10, y: 20, width: 640, height: 480 },
     });
-  return { ...f, tab, requests, mount };
+  const snapshot = () =>
+    f.browser.command(f.sender as never, "thread-a", "list");
+  return { ...f, first, target, mount, snapshot };
 }
 
-test("automatic presentation mounts the existing page before capture without expiring its observation", async () => {
-  const f = await presentationFixture();
+for (const sidebarClosed of [false, true]) {
+  test(`Agent inspect/click leave ${sidebarClosed ? "closed sidebar" : "different selected tab"} and focus unchanged`, async () => {
+    const f = await navigationFixture();
+    try {
+      f.mount(f.first.id);
+      if (sidebarClosed)
+        f.browser.mount(f.sender as never, { lease: "human-selected-page" });
+      const mountedBefore = [...f.window.contentView.children];
+      const mountsBefore = f.window.contentView.added.length;
+      f.sender.sent.length = 0;
+      const web = f.views[1]!.webContents;
+      const inspectionGate = deferred<unknown>();
+      web.debuggerApi.nextEvaluation = inspectionGate;
+      const inspecting = f.browser.inspect("navigation-session", f.target.id);
+      assert.equal(
+        f.snapshot().find((tab) => tab.id === f.target.id)!
+          .agentInspectionsInFlight,
+        1,
+      );
+      assert.equal(
+        f.snapshot().find((tab) => tab.id === f.first.id)!
+          .agentInspectionsInFlight,
+        0,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(
+        web.debuggerApi.evaluations,
+        1,
+        "inspection starts without a renderer acknowledgement",
+      );
+      inspectionGate.resolve(actionInspection);
+      const observed = await inspecting;
+      assert.equal(Object.hasOwn(observed, "automaticPresentation"), false);
+      assert.equal(observed.tabId, f.target.id);
+      assert.equal(
+        f.snapshot().find((tab) => tab.id === f.target.id)!
+          .agentInspectionsInFlight,
+        0,
+      );
+
+      const actionGate = deferred<unknown>();
+      web.debuggerApi.nextEvaluation = actionGate;
+      const action = f.browser.click(
+        "navigation-session",
+        f.target.id,
+        observed.observationId,
+        observed.targets[0]!.targetId,
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(
+        f.snapshot().find((tab) => tab.id === f.target.id)!
+          .agentActionsInFlight,
+        1,
+      );
+      assert.equal(
+        f.snapshot().find((tab) => tab.id === f.first.id)!.agentActionsInFlight,
+        0,
+      );
+      actionGate.resolve({ ok: true });
+      await action;
+      assert.equal(
+        web.debuggerApi.evaluations,
+        2,
+        "exact target executes once, without replay",
+      );
+      assert.equal(f.views[0]!.webContents.debuggerApi.evaluations, 0);
+      assert.ok(
+        f
+          .snapshot()
+          .every(
+            (tab) =>
+              tab.agentActionsInFlight === 0 &&
+              tab.agentInspectionsInFlight === 0,
+          ),
+      );
+      assert.deepEqual(f.window.contentView.children, mountedBefore);
+      assert.equal(f.window.contentView.added.length, mountsBefore);
+      assert.equal(
+        f.sender.focusCalls +
+          f.views.reduce((sum, view) => sum + view.webContents.focusCalls, 0),
+        0,
+      );
+      assert.ok(f.sender.sent.length > 0, "busy state remains observable");
+      assert.ok(
+        f.sender.sent.every(
+          ({ channel }) => channel === "zenx:workspace-browser:changed",
+        ),
+        "Agent activity publishes state only, never presentation or focus requests",
+      );
+      assert.equal(
+        f.views.length,
+        2,
+        "reuse the original pages without URL recreation",
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("concurrent hidden inspections count each admitted call until its own settlement", async () => {
+  const f = await navigationFixture();
+  const firstGate = deferred<unknown>();
+  const secondGate = deferred<unknown>();
   try {
-    const web = f.views[0]!.webContents;
-    web.debuggerApi.defaultValue = actionInspection;
-    const before = web.debuggerApi.evaluations;
-    let admittedSequence = 0;
-    const capture = withBrowserOperationOrder(() => {
-      admittedSequence = browserOperationOrder();
-      return f.browser.inspect("presentation-session", f.tab.id);
-    });
+    const web = f.views[1]!.webContents;
+    const count = () =>
+      f.snapshot().find((tab) => tab.id === f.target.id)!
+        .agentInspectionsInFlight;
+    web.debuggerApi.nextEvaluation = firstGate;
+    const first = f.browser.inspect("navigation-session", f.target.id);
+    await new Promise((resolve) => setImmediate(resolve));
+    web.debuggerApi.nextEvaluation = secondGate;
+    const second = f.browser.inspect("navigation-session", f.target.id);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(count(), 2);
+    firstGate.resolve(actionInspection);
+    await first;
     assert.equal(
-      f.requests[0]!.operationSequence,
-      admittedSequence,
-      "Workspace presentation preserves Host operation provenance",
-    );
-    assert.equal(f.requests.length, 1);
-    assert.equal(web.debuggerApi.evaluations, before);
-    assert.equal(f.requests[0]!.tab.id, f.tab.id);
-    f.mount();
-    const observation = await capture;
-    assert.equal(observation.automaticPresentation, "shown");
-    web.debuggerApi.defaultValue = { ok: true };
-    await f.browser.click(
-      "presentation-session",
-      f.tab.id,
-      observation.observationId,
-      observation.targets[0]!.targetId,
-    );
-    assert.equal(
-      f.views.length,
+      count(),
       1,
-      "never recreate an authenticated page by URL",
+      "one completion cannot clear another admitted inspection",
+    );
+    secondGate.resolve(actionInspection);
+    await second;
+    assert.equal(count(), 0);
+    assert.equal(web.debuggerApi.evaluations, 2);
+    assert.deepEqual(f.window.contentView.children, []);
+    assert.equal(f.window.contentView.added.length, 0);
+  } finally {
+    firstGate.resolve(actionInspection);
+    secondGate.resolve(actionInspection);
+    await f.close();
+  }
+});
+
+test("Agent open never mounts or focuses its new target while a different human tab is selected", async () => {
+  const f = await navigationFixture();
+  try {
+    f.mount(f.first.id);
+    f.sender.sent.length = 0;
+    const opened = await f.browser.open(
+      "navigation-session",
+      "https://example.test/agent-new",
+    );
+    assert.notEqual(opened.tabId, f.first.id);
+    assert.deepEqual(f.window.contentView.children, [f.views[0]]);
+    assert.equal(f.window.contentView.added.length, 1);
+    assert.equal(
+      f.sender.focusCalls +
+        f.views.reduce((sum, view) => sum + view.webContents.focusCalls, 0),
+      0,
+    );
+    assert.ok(
+      f.sender.sent.every(
+        ({ channel }) => channel === "zenx:workspace-browser:changed",
+      ),
     );
     assert.equal(
-      f.requests.length,
-      1,
-      "results and subsequent actions cannot reclaim selection",
-    );
-    assert.equal(
-      f.browser.command(f.sender as never, "thread-a", "list")[0]!
-        .agentInspectionsInFlight,
+      f.snapshot().find((tab) => tab.id === opened.tabId)!.agentActionsInFlight,
       0,
     );
   } finally {
@@ -2078,98 +2199,112 @@ test("automatic presentation mounts the existing page before capture without exp
   }
 });
 
-test("presentation deadline permits bounded background inspection and rejects delayed native mounting", async () => {
-  const f = await presentationFixture();
+test("explicit human mount and navigation retain exact ownership and stale lease cleanup safety", async () => {
+  const f = await navigationFixture();
   try {
-    const observation = await f.browser.inspect(
-      "presentation-session",
-      f.tab.id,
+    f.mount(f.first.id);
+    f.mount(f.target.id, "new-human-selection");
+    f.browser.mount(f.sender as never, { lease: "human-selected-page" });
+    assert.deepEqual(f.window.contentView.children, [f.views[1]]);
+    f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "navigate",
+      f.target.id,
+      "https://example.test/human-request",
     );
-    assert.ok(observation.observationId);
-    assert.equal(observation.automaticPresentation, "not-shown");
-    assert.throws(() => f.mount(), /automatic display expired/);
-    await f.browser.inspect("presentation-session", f.tab.id);
-    assert.equal(f.requests.length, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      (await f.browser.inspect("navigation-session", f.target.id)).url,
+      "https://example.test/human-request",
+    );
+    assert.throws(
+      () =>
+        f.browser.mount(new FakeWebContents(100) as never, {
+          threadId: "thread-a",
+          tabId: f.target.id,
+          lease: "forged",
+          bounds: { x: 0, y: 0, width: 640, height: 480 },
+        }),
+      /owning window/,
+    );
+    assert.throws(
+      () =>
+        f.browser.mount(f.sender as never, {
+          threadId: "thread-b",
+          tabId: f.target.id,
+          lease: "forged",
+          bounds: { x: 0, y: 0, width: 640, height: 480 },
+        }),
+      /not in this Thread/,
+    );
+    assert.deepEqual(f.window.contentView.children, [f.views[1]]);
   } finally {
     await f.close();
   }
 });
 
-test("cancelling a pending presentation prevents capture and leaves its page intact", async () => {
-  const f = await presentationFixture();
+test("cancelled background inspection settles busy state without a display acknowledgement", async () => {
+  const f = await navigationFixture();
   try {
+    const web = f.views[1]!.webContents;
+    const preAborted = new AbortController();
+    preAborted.abort(new Error("cancel before inspection"));
+    await assert.rejects(
+      f.browser.inspect("navigation-session", f.target.id, preAborted.signal),
+      /cancel before inspection/,
+    );
+    assert.equal(web.debuggerApi.evaluations, 0);
+    const gate = deferred<unknown>();
+    web.debuggerApi.nextEvaluation = gate;
     const controller = new AbortController();
-    const capture = f.browser.inspect(
-      "presentation-session",
-      f.tab.id,
+    const inspecting = f.browser.inspect(
+      "navigation-session",
+      f.target.id,
       controller.signal,
     );
-    controller.abort(new Error("cancel pending display"));
-    await assert.rejects(capture, /cancel pending display/);
-    assert.throws(() => f.mount(), /automatic display expired/);
-    assert.equal(f.views[0]!.webContents.debuggerApi.evaluations, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new Error("cancel background inspection"));
+    gate.resolve(actionInspection);
+    await assert.rejects(inspecting, /cancel background inspection/);
     assert.equal(
-      (await f.browser.listTabs("presentation-session"))[0]!.tabId,
-      f.tab.id,
+      f.snapshot().find((tab) => tab.id === f.target.id)!
+        .agentInspectionsInFlight,
+      0,
     );
+    assert.equal(f.snapshot().length, 2);
+    assert.deepEqual(f.window.contentView.children, []);
   } finally {
     await f.close();
   }
 });
 
-test("a replaced session cannot mount or inspect through its old presentation epoch", async () => {
-  const f = await presentationFixture();
-  try {
-    const capture = f.browser.inspect("presentation-session", f.tab.id);
-    const old = f.requests[0]!;
-    f.browser.closeSession("presentation-session");
-    f.browser.bindThreadSession("presentation-session", "thread-a");
-    await assert.rejects(capture, /session or target changed/);
-    const next = f.browser.inspect("presentation-session", f.tab.id);
-    assert.notEqual(f.requests[1]!.sessionEpoch, old.sessionEpoch);
-    assert.throws(() => f.mount(old), /automatic display expired/);
-    f.mount();
-    await next;
-  } finally {
-    await f.close();
-  }
-});
-
-test("Thread navigation retires a pending reveal without switching the main conversation", async () => {
-  const f = await presentationFixture();
-  try {
-    const capture = f.browser.inspect("presentation-session", f.tab.id);
-    f.browser.presentationContext(f.sender as never, {
-      threadId: "thread-b",
-      lease: "context-b",
-    });
-    // An older effect cleanup must not retire the newer Thread context.
-    f.browser.presentationContext(f.sender as never, { lease: "context-a" });
-    await capture;
-    assert.throws(() => f.mount(), /automatic display expired/);
-    assert.equal(f.views.length, 1);
-  } finally {
-    await f.close();
-  }
-});
-
-test("concurrent operations join the same pending presentation before either captures", async () => {
-  const f = await presentationFixture();
-  try {
-    const first = f.browser.inspect("presentation-session", f.tab.id);
-    const second = f.browser.inspect("presentation-session", f.tab.id);
-    assert.equal(f.requests.length, 1);
-    assert.equal(f.views[0]!.webContents.debuggerApi.evaluations, 0);
-    f.mount();
-    const results = await Promise.all([first, second]);
-    assert.ok(
-      results.every((result) => result.automaticPresentation === "shown"),
-    );
-    assert.equal(f.views.length, 1);
-  } finally {
-    await f.close();
-  }
-});
+for (const change of ["session", "shutdown"] as const) {
+  test(`${change} during background inspection settles without a display acknowledgement`, async () => {
+    const f = await navigationFixture();
+    try {
+      const gate = deferred<unknown>();
+      f.views[1]!.webContents.debuggerApi.nextEvaluation = gate;
+      const inspecting = f.browser.inspect("navigation-session", f.target.id);
+      await new Promise((resolve) => setImmediate(resolve));
+      if (change === "session") {
+        f.browser.closeSession("navigation-session");
+        f.browser.bindThreadSession("navigation-session", "thread-a");
+      } else await f.browser.shutdown();
+      gate.resolve(actionInspection);
+      await assert.rejects(
+        inspecting,
+        /session changed|Unknown browser target/,
+      );
+      assert.ok(
+        f.snapshot().every((tab) => tab.agentInspectionsInFlight === 0),
+      );
+      assert.deepEqual(f.window.contentView.children, []);
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 test("blank browser native background follows appearance without recoloring websites, loading or errors", async () => {
   const f = await sharedFixture();
@@ -2233,39 +2368,34 @@ test("blank browser native background follows appearance without recoloring webs
   }
 });
 
-test("same-lease presentation and theme changes retain the captured observation", async () => {
-  const f = await presentationFixture();
+test("same-lease human mount and theme changes retain the captured observation", async () => {
+  const f = await navigationFixture();
   try {
-    const view = f.views[0]!;
+    const view = f.views[1]!;
     view.webContents.debuggerApi.defaultValue = actionInspection;
     const request = {
       threadId: "thread-a",
-      tabId: f.tab.id,
+      tabId: f.target.id,
       lease: "combined",
       bounds: { x: 10, y: 20, width: 640, height: 480 },
     };
     f.browser.mount(f.sender as never, { ...request, appearance: "light" });
-    const capturing = f.browser.inspect("presentation-session", f.tab.id);
-    assert.equal(f.requests.length, 1);
-    f.browser.mount(f.sender as never, {
-      ...request,
-      appearance: "dark",
-      presentationId: f.requests[0]!.requestId,
-    });
+    const observation = await f.browser.inspect(
+      "navigation-session",
+      f.target.id,
+    );
+    f.browser.mount(f.sender as never, { ...request, appearance: "dark" });
     assert.equal(view.backgroundColor, "#000000");
-    const observation = await capturing;
-    assert.equal(observation.automaticPresentation, "shown");
     f.browser.mount(f.sender as never, { ...request, appearance: "light" });
     assert.equal(view.backgroundColor, "#ffffff");
     view.webContents.debuggerApi.defaultValue = { ok: true };
     await f.browser.click(
-      "presentation-session",
-      f.tab.id,
+      "navigation-session",
+      f.target.id,
       observation.observationId,
       observation.targets[0]!.targetId,
     );
-    assert.equal(f.views.length, 1);
-    assert.equal(f.requests.length, 1);
+    assert.equal(f.views.length, 2);
   } finally {
     await f.close();
   }

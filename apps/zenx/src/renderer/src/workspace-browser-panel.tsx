@@ -12,7 +12,6 @@ type BrowserPanelProps = {
   threadId: string;
   tab: WorkspaceBrowserTab;
   open: boolean;
-  presentationId?: string;
 };
 
 export function WorkspaceBrowserPanel(props: BrowserPanelProps) {
@@ -24,12 +23,7 @@ export function WorkspaceBrowserPanel(props: BrowserPanelProps) {
   );
 }
 
-function BrowserPanel({
-  threadId,
-  tab: active,
-  open,
-  presentationId,
-}: BrowserPanelProps) {
+function BrowserPanel({ threadId, tab: active, open }: BrowserPanelProps) {
   useTranslation("panels");
   const [address, setAddress] = useState("");
   const [error, setError] = useState("");
@@ -42,9 +36,6 @@ function BrowserPanel({
   const area = useRef<HTMLDivElement>(null);
   const addressInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
-  const presentationRef = useRef(presentationId);
-  presentationRef.current = presentationId;
-  const mountCurrent = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     generation.current++;
     const api = window.zenx.workspaceBrowser;
@@ -67,7 +58,6 @@ function BrowserPanel({
     if (!open || !active || !area.current) return;
     const lease = crypto.randomUUID();
     let stopped = false;
-    let acknowledgedPresentation: string | undefined;
     let mountQueued = false;
     let pendingMount = false;
     const mount = () => {
@@ -76,7 +66,6 @@ function BrowserPanel({
         mountQueued = true;
         return;
       }
-      const presentationId = presentationRef.current;
       const rect = area.current?.getBoundingClientRect();
       const visible =
         document.visibilityState !== "hidden" &&
@@ -89,9 +78,6 @@ function BrowserPanel({
           threadId,
           tabId: active.id,
           lease,
-          ...(presentationId && acknowledgedPresentation !== presentationId
-            ? { presentationId }
-            : {}),
           appearance:
             document.documentElement.dataset.appearance === "dark"
               ? "dark"
@@ -109,7 +95,6 @@ function BrowserPanel({
         })
         .then(() => {
           if (visible) {
-            acknowledgedPresentation = presentationId;
             if (!stopped) setMountError("");
           }
         })
@@ -127,7 +112,6 @@ function BrowserPanel({
           }
         });
     };
-    mountCurrent.current = mount;
     const observer = new ResizeObserver(mount);
     observer.observe(area.current);
     // Keep the same mount lease when appearance changes: recoloring a blank
@@ -143,7 +127,6 @@ function BrowserPanel({
     mount();
     return () => {
       stopped = true;
-      mountCurrent.current = undefined;
       observer.disconnect();
       themeObserver.disconnect();
       window.removeEventListener("resize", mount);
@@ -154,9 +137,6 @@ function BrowserPanel({
         .catch(() => undefined);
     };
   }, [open, active?.id, threadId]);
-  useEffect(() => {
-    mountCurrent.current?.();
-  }, [presentationId]);
   const command = async (
     operation: WorkspaceBrowserCommand,
     tabId = active?.id,
@@ -193,18 +173,6 @@ function BrowserPanel({
     }
   };
   const agentAllowed = active.control === "agent";
-  const actionCount = active.agentActionsInFlight;
-  const inspectionCount = active.agentInspectionsInFlight ?? 0;
-  const activity =
-    actionCount > 0
-      ? agentAllowed
-        ? i18n.t("panels:browserAgentActing")
-        : i18n.t("panels:browserActionFinishing")
-      : inspectionCount > 0
-        ? i18n.t("panels:browserAgentInspecting")
-        : agentAllowed
-          ? i18n.t("panels:browserAgentAllowedIdle")
-          : i18n.t("panels:browserHumanControl");
   const permissionDetail = [
     i18n.t("panels:browserAgentPermission"),
     i18n.t(
@@ -230,10 +198,6 @@ function BrowserPanel({
   return (
     <section
       className="workspace-browser-panel"
-      data-agent-active={
-        active.agentActionsInFlight > 0 ||
-        (active.agentInspectionsInFlight ?? 0) > 0
-      }
       aria-label={i18n.t("panels:browserWorkspace")}
       onKeyDown={(event) => {
         if (
@@ -342,20 +306,15 @@ function BrowserPanel({
             {permissionDetail}
           </span>
         </form>
-        <span
-          className="workspace-browser-activity"
-          role="status"
-          aria-live="polite"
-          data-state={
-            actionCount > 0 || inspectionCount > 0
-              ? "active"
-              : agentAllowed
-                ? "allowed"
-                : "human"
-          }
-        >
-          {activity}
-        </span>
+        {!agentAllowed ? (
+          <span className="workspace-browser-control-status" role="status">
+            {i18n.t(
+              active.agentActionsInFlight > 0
+                ? "panels:browserActionFinishing"
+                : "panels:browserHumanControl",
+            )}
+          </span>
+        ) : null}
         {active.error ? (
           <p role="alert" className="browser-ui-error">
             {active.error}

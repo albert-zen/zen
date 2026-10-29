@@ -276,7 +276,11 @@ test("unavailable observer and snapshot failures retain details without changing
       unavailable = resolve;
     });
     const stop = observation.observe(
-      { threadId: "owner", frames: true },
+      {
+        threadId: "owner",
+        frames: true,
+        targetId: session.targets.get("native")!.summary.id,
+      },
       (event) => {
         events.push(event);
         if (event.type === "status" && event.status === "unavailable")

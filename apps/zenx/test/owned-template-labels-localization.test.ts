@@ -252,12 +252,13 @@ test("Browser name and Computer action tooltip translate without resetting pinne
       ".computer-thread-panel .ui-select",
     )!;
     assert.equal(browser.getAttribute("aria-label"), `Browser for ${title}`);
-    assert.equal(computer.title, `Latest Computer action ${invocationId}`);
+    assert.doesNotMatch(computer.title, /Latest Computer action/);
     await chooseValue(
       document.querySelector<HTMLButtonElement>("#thread-browser-target")!,
       "raw-page/id",
     );
     await chooseValue(computer, "raw-window/id");
+    assert.equal(computer.title, `Latest Computer action ${invocationId}`);
     assert.deepEqual(requests.browser!.at(-1), {
       threadId: "raw-browser-thread",
       frames: true,

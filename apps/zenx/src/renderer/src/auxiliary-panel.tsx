@@ -19,7 +19,6 @@ import React, {
 } from "react";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import type { BrowserThreadTarget } from "../../main/capabilities/browser-thread-observation.js";
-import type { WorkspaceBrowserPresentation } from "../../main/workspace-browser.js";
 import type { WorkspaceBrowserTab } from "../../main/workspace-browser.js";
 import { WorkspaceBrowserPanel } from "./workspace-browser-panel.js";
 import { BrowserThreadPanel } from "./browser-thread-panel.js";
@@ -50,32 +49,9 @@ interface ContentTab {
   resourceThreadId?: string;
   descriptor?: ThreadSidebarTab;
   browser?: WorkspaceBrowserTab;
+  browserActivityLabel?: string;
   externalBrowser?: BrowserThreadTarget;
   render?: () => React.ReactNode;
-}
-
-/** Per-conversation expanded state; the panel remounts on every thread switch. */
-const browserFollowingByThread = new Map<
-  string,
-  { epoch: string; suppressed: boolean; tabId: string }
->();
-
-const externalPresentations = new Set<string>();
-const browserOperationWatermarks = new Map<string, number>();
-function acceptBrowserOperation(threadId: string, sequence: number): boolean {
-  if (
-    !Number.isSafeInteger(sequence) ||
-    sequence < 1 ||
-    sequence < (browserOperationWatermarks.get(threadId) ?? 0)
-  )
-    return false;
-  browserOperationWatermarks.delete(threadId);
-  browserOperationWatermarks.set(threadId, sequence);
-  if (browserOperationWatermarks.size > 512)
-    browserOperationWatermarks.delete(
-      browserOperationWatermarks.keys().next().value!,
-    );
-  return true;
 }
 
 const expandedByConversation = new Map<string, boolean>();
@@ -201,8 +177,6 @@ export function AuxiliaryPanel({
     const tab = sidebarTabFromId(id);
     return sidebarTabId({ ...tab, resourceThreadId: threadId });
   };
-  const scopedIdRef = useRef(scopedId);
-  scopedIdRef.current = scopedId;
   // Room identity owns presentation only. Execution APIs always use a real Thread.
   const threadId = roomContext
     ? roomResource?.threadId
@@ -289,13 +263,8 @@ export function AuxiliaryPanel({
     });
   };
   const restoreToggleFocus = useRef(false);
-  const autoOpening = useRef(false);
   useLayoutEffect(() => {
     if (open) {
-      if (autoOpening.current) {
-        autoOpening.current = false;
-        return;
-      }
       if (document.activeElement?.id === "thread-browser-toggle")
         panel.current
           ?.querySelector<HTMLButtonElement>(".auxiliary-close-button")
@@ -312,28 +281,10 @@ export function AuxiliaryPanel({
   const [externalTargets, setExternalTargets] = useState<BrowserThreadTarget[]>(
     [],
   );
-  const currentExternalIds = useRef(new Set<string>());
-  const dismissedExternalRef = useRef(dismissedExternal);
-  dismissedExternalRef.current = dismissedExternal;
-  const [presentation, setPresentation] =
-    useState<WorkspaceBrowserPresentation>();
-  const automaticSelection = useRef<string | undefined>(undefined);
-  const presentationCallbacks = useRef({ onSelectTab, onOpenChange });
-  presentationCallbacks.current = {
-    onSelectTab: (id) => onSelectTab(scopedId(id)),
-    onOpenChange,
-  };
-  const lastBrowserIntent = useRef(0);
-  const [followRevision, setFollowRevision] = useState(0);
-  const suppressFollowing = () => {
-    lastBrowserIntent.current = Date.now();
-    autoOpening.current = false;
-    setPresentation(undefined);
-    const state = threadId ? browserFollowingByThread.get(threadId) : undefined;
-    if (state) state.suppressed = true;
-    setFollowRevision((value) => value + 1);
-  };
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
+  // A command reply may arrive after a newer current-state event. Never let
+  // that older snapshot erase live activity (or resurrect settled activity).
+  const browserSnapshotVersion = useRef(0);
   const [browserListThread, setBrowserListThread] = useState<string>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -396,13 +347,25 @@ export function AuxiliaryPanel({
       path: draft.base.path,
     })),
     ...(threadId !== undefined && browserListThread === threadId
-      ? browserTabs
+      ? browserTabs.filter((tab) => tab.threadId === threadId)
       : []
     ).map((tab) => ({
       id: `browser:${tab.id}`,
       title: tab.title || i18n.t("panels:newTab"),
       icon: "browser" as const,
       browser: tab,
+      // Permission, loading and past outcomes are not activity. The Host
+      // publishes these current counts for the exact owning Thread and tab.
+      browserActivityLabel:
+        tab.agentActionsInFlight > 0
+          ? i18n.t(
+              tab.control === "human"
+                ? "panels:browserActionFinishing"
+                : "panels:browserAgentActing",
+            )
+          : (tab.agentInspectionsInFlight ?? 0) > 0
+            ? i18n.t("panels:browserAgentInspecting")
+            : undefined,
     })),
     ...(computer
       ? [
@@ -499,20 +462,6 @@ export function AuxiliaryPanel({
     if (presentationState) return;
     if (browserListReady && JSON.stringify(order) !== signature)
       setOrder(JSON.parse(signature));
-    const selectionKnown = selectedTab?.startsWith("custom:")
-      ? true
-      : selectedTab?.startsWith("file:") || selectedTab?.startsWith("browser:")
-        ? browserListReady
-        : snapshot !== null;
-    if (
-      browserListReady &&
-      selectionKnown &&
-      selectedTab &&
-      !ids.includes(selectedTab)
-    ) {
-      selectionEpoch.current += 1;
-      onSelectTab(ids[0] ?? "");
-    }
   }, [
     browserListReady,
     ids,
@@ -527,15 +476,15 @@ export function AuxiliaryPanel({
   const canReorder =
     tabs.length > 1 && (!presentationState || Boolean(onTabsChange));
   const active =
-    selectedTab && ids.includes(selectedTab) ? selectedTab : ids[0];
+    selectedTab && ids.includes(selectedTab) ? selectedTab : undefined;
   const idsRef = useRef(ids);
-  const activeRef = useRef(active);
+  const selectedTabRef = useRef(selectedTab);
   const orderRef = useRef(order);
   const threadIdRef = useRef(threadId);
   const resourceEpoch = useRef(0);
   if (threadIdRef.current !== threadId) resourceEpoch.current += 1;
   idsRef.current = ids;
-  activeRef.current = active;
+  selectedTabRef.current = selectedTab;
   orderRef.current = order;
   threadIdRef.current = threadId;
   const clearTabDrag = () => {
@@ -717,6 +666,8 @@ export function AuxiliaryPanel({
     const intent = `${sidebarOwnerKey(presentationState.owner)}:${descriptor.id}`;
     if (materializing.current.has(intent)) return;
     materializing.current.add(intent);
+    const browserVersion = browserSnapshotVersion.current;
+    const bindingEpoch = resourceEpoch.current;
     void window.zenx.workspaceBrowser
       .command(owner, "materialize", intent, descriptor.url)
       .then(async (value) => {
@@ -733,7 +684,10 @@ export function AuxiliaryPanel({
         });
         if (retained === false)
           await window.zenx.workspaceBrowser.command(owner, "close", tab.id);
-        else if (mounted.current && threadIdRef.current === owner) {
+        else if (
+          resourceCurrent(bindingEpoch, owner) &&
+          browserSnapshotVersion.current === browserVersion
+        ) {
           setBrowserTabs(value);
           setBrowserListThread(owner);
         }
@@ -751,7 +705,7 @@ export function AuxiliaryPanel({
     presentationState,
     onReplaceTab,
   ]);
-  const showChooser = choosing || tabs.length === 0;
+  const showChooser = choosing || active === undefined;
   const fileSurface =
     (!showChooser && active?.startsWith("file:")) ||
     (showChooser && pickingFile);
@@ -798,8 +752,6 @@ export function AuxiliaryPanel({
     else setFileNavigationWidth(clamped);
   };
   const select = (id: string, focusTab = false) => {
-    suppressFollowing();
-    setPresentation(undefined);
     selectionEpoch.current += 1;
     reorderedFocus.current = null;
     pendingTabFocus.current = focusTab ? id : null;
@@ -910,6 +862,7 @@ export function AuxiliaryPanel({
     const stop = api.onChanged((value) => {
       if (alive && value.threadId === threadId) {
         changed = true;
+        browserSnapshotVersion.current += 1;
         setBrowserListThread(threadId);
         setBrowserTabs(value.tabs);
       }
@@ -931,7 +884,6 @@ export function AuxiliaryPanel({
     };
   }, [threadId]);
   useEffect(() => {
-    currentExternalIds.current.clear();
     setExternalTargets([]);
     setExternalListScope(externalScope);
     setDismissedExternal([]);
@@ -943,63 +895,10 @@ export function AuxiliaryPanel({
       { threadId, frames: false, catalog: true },
       (event) => {
         if (!alive) return;
-        if (event.type === "activity") {
-          if (
-            event.phase !== "started" ||
-            event.threadId !== threadId ||
-            !acceptBrowserOperation(threadId, event.operationSequence) ||
-            !currentExternalIds.current.has(event.targetId)
-          )
-            return;
-          const prior = browserFollowingByThread.get(threadId);
-          const following =
-            prior?.epoch === event.sessionEpoch
-              ? prior
-              : {
-                  epoch: event.sessionEpoch,
-                  suppressed: prior?.suppressed ?? false,
-                  tabId: "",
-                };
-          following.tabId = `external-browser:${event.targetId}`;
-          browserFollowingByThread.set(threadId, following);
-          if (browserFollowingByThread.size > 512)
-            browserFollowingByThread.delete(
-              browserFollowingByThread.keys().next().value!,
-            );
-          setFollowRevision((value) => value + 1);
-          const key = JSON.stringify([event.sessionEpoch, event.targetId]);
-          if (externalPresentations.has(key)) return;
-          externalPresentations.add(key);
-          if (externalPresentations.size > 512)
-            externalPresentations.delete(
-              externalPresentations.values().next().value!,
-            );
-          if (
-            following.suppressed ||
-            dismissedExternalRef.current.includes(event.targetId) ||
-            document.visibilityState === "hidden" ||
-            Date.now() - event.requestedAt > 5_000 ||
-            lastBrowserIntent.current >= event.requestedAt
-          ) {
-            following.suppressed = true;
-            return;
-          }
-          automaticSelection.current = scopedIdRef.current(following.tabId);
-          setPresentation(undefined);
-          setChoosing(false);
-          setPickingFile(false);
-          presentationCallbacks.current.onSelectTab(following.tabId);
-          autoOpening.current = true;
-          presentationCallbacks.current.onOpenChange(true);
-          return;
-        }
         if (event.type !== "targets") return;
         // Preserve exact observer/backend/connection identity, never match URLs.
         const external = event.targets.filter(
           (target) => target.backendId !== "workspace",
-        );
-        currentExternalIds.current = new Set(
-          external.map((target) => target.id),
         );
         setExternalTargets((previous) => [
           ...previous
@@ -1014,97 +913,6 @@ export function AuxiliaryPanel({
       stop();
     };
   }, [threadId, browser, snapshot]);
-  useEffect(() => {
-    const api = window.zenx.workspaceBrowser;
-    setPresentation(undefined);
-    automaticSelection.current = undefined;
-    if (!threadId || !api?.onPresentation) return;
-    const lease = crypto.randomUUID();
-    let alive = true;
-    const stop = api.onPresentation((request) => {
-      if (!alive || request.threadId !== threadId) return;
-      if (!acceptBrowserOperation(threadId, request.operationSequence)) {
-        void api.declinePresentation(request.requestId).catch(() => undefined);
-        return;
-      }
-      const previous = browserFollowingByThread.get(threadId);
-      const following =
-        previous?.epoch === request.sessionEpoch
-          ? previous
-          : {
-              epoch: request.sessionEpoch,
-              suppressed: previous?.suppressed ?? false,
-              tabId: `browser:${request.tab.id}`,
-            };
-      following.tabId = `browser:${request.tab.id}`;
-      browserFollowingByThread.set(threadId, following);
-      if (browserFollowingByThread.size > 512)
-        browserFollowingByThread.delete(
-          browserFollowingByThread.keys().next().value!,
-        );
-      setFollowRevision((value) => value + 1);
-      if (
-        following.suppressed ||
-        document.visibilityState === "hidden" ||
-        request.expiresAt <= Date.now() ||
-        lastBrowserIntent.current >= request.requestedAt
-      ) {
-        following.suppressed = true;
-        void api.declinePresentation(request.requestId).catch(() => undefined);
-        return;
-      }
-      automaticSelection.current = scopedIdRef.current(
-        `browser:${request.tab.id}`,
-      );
-      setBrowserTabs((tabs) => [
-        ...tabs.filter((tab) => tab.id !== request.tab.id),
-        request.tab,
-      ]);
-      setBrowserListThread(threadId);
-      setPresentation(request);
-      setChoosing(false);
-      setPickingFile(false);
-      presentationCallbacks.current.onSelectTab(automaticSelection.current);
-      autoOpening.current = true;
-      presentationCallbacks.current.onOpenChange(true);
-    });
-    void api.presentationContext({ threadId, lease }).catch((reason) => {
-      if (alive) setError(String(reason));
-    });
-    return () => {
-      alive = false;
-      stop();
-      void api.presentationContext({ lease }).catch(() => undefined);
-    };
-  }, [threadId]);
-  useEffect(() => {
-    if (
-      automaticSelection.current &&
-      selectedTab !== automaticSelection.current
-    )
-      suppressFollowing();
-    if (open === false && automaticSelection.current) suppressFollowing();
-  }, [selectedTab, open]);
-  const following = threadId
-    ? browserFollowingByThread.get(threadId)
-    : undefined;
-  const followAgent = () => {
-    if (!following) return;
-    if (following.tabId.startsWith("external-browser:")) {
-      const id = following.tabId.slice("external-browser:".length);
-      if (!currentExternalIds.current.has(id)) return;
-      setDismissedExternal((previous) =>
-        previous.filter((value) => value !== id),
-      );
-    }
-    following.suppressed = false;
-    setPresentation(undefined);
-    automaticSelection.current = scopedIdRef.current(following.tabId);
-    onSelectTab(automaticSelection.current);
-    onOpenChange(true);
-    setChoosing(false);
-    setFollowRevision(followRevision + 1);
-  };
   const add = async (id: string) => {
     const operationEpoch = ++selectionEpoch.current;
     const bindingEpoch = resourceEpoch.current;
@@ -1126,10 +934,12 @@ export function AuxiliaryPanel({
     }
     if (threadId === undefined) return;
     setBusy(true);
+    const browserVersion = browserSnapshotVersion.current;
     try {
       const value = await window.zenx.workspaceBrowser.command(threadId, "new");
       if (!resourceCurrent(bindingEpoch, threadId)) return;
-      setBrowserTabs(value);
+      if (browserSnapshotVersion.current === browserVersion)
+        setBrowserTabs(value);
       if (selectionEpoch.current !== operationEpoch) return;
       const created = value.at(-1);
       if (created) select(`browser:${created.id}`, true);
@@ -1181,6 +991,7 @@ export function AuxiliaryPanel({
             messageFilePath(messageLinkRequest.value, workspacePath),
           );
         } else {
+          const browserVersion = browserSnapshotVersion.current;
           const tabs = await window.zenx.workspaceBrowser.command(
             threadId,
             "new",
@@ -1188,7 +999,8 @@ export function AuxiliaryPanel({
             messageLinkRequest.value,
           );
           if (current()) {
-            setBrowserTabs(tabs);
+            if (browserSnapshotVersion.current === browserVersion)
+              setBrowserTabs(tabs);
             const newest = tabs.at(-1);
             if (newest) select(`browser:${newest.id}`);
           }
@@ -1203,7 +1015,7 @@ export function AuxiliaryPanel({
     // A request id represents a single click; render changes must not replay it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messageLinkRequest?.id, threadId]);
-  const remove = (id: string, expectedEpoch?: number) => {
+  const remove = (id: string, expectedEpoch?: number, closedIndex = 0) => {
     if (onRemoveTab) {
       onRemoveTab(id);
       return;
@@ -1211,11 +1023,11 @@ export function AuxiliaryPanel({
     const currentIds = idsRef.current;
     const currentOrder = orderRef.current;
     const source = currentOrder.includes(id) ? currentOrder : currentIds;
-    const index = source.indexOf(id);
+    const index = source.includes(id) ? source.indexOf(id) : closedIndex;
     const remaining = source.filter((value) => value !== id);
     setOrder(remaining);
     if (
-      activeRef.current === id &&
+      selectedTabRef.current === id &&
       (expectedEpoch === undefined || selectionEpoch.current === expectedEpoch)
     ) {
       selectionEpoch.current += 1;
@@ -1224,6 +1036,9 @@ export function AuxiliaryPanel({
   };
   const closeTab = async (tab: ContentTab) => {
     setError("");
+    // The close notification can remove the tab before the command replies.
+    // Retain only this human close's position; newer selection remains fenced.
+    const closedIndex = idsRef.current.indexOf(tab.id);
     const bindingEpoch = resourceEpoch.current;
     let operationEpoch: number | undefined;
     if (tab.path) {
@@ -1265,14 +1080,17 @@ export function AuxiliaryPanel({
         return;
       }
       operationEpoch = selectionEpoch.current;
+      const browserVersion = browserSnapshotVersion.current;
       try {
         const value = await window.zenx.workspaceBrowser.command(
           owner,
           "close",
           browserId,
         );
-        if (resourceCurrent(bindingEpoch, owner)) setBrowserTabs(value);
-        else if (!onRemoveTab) return;
+        if (resourceCurrent(bindingEpoch, owner)) {
+          if (browserSnapshotVersion.current === browserVersion)
+            setBrowserTabs(value);
+        } else if (!onRemoveTab) return;
       } catch (reason) {
         if (mounted.current) setError(String(reason));
         return;
@@ -1280,10 +1098,9 @@ export function AuxiliaryPanel({
     }
     if (tab.externalBrowser)
       setDismissedExternal((ids) => [...ids, tab.externalBrowser!.id]);
-    remove(tab.id, operationEpoch);
+    remove(tab.id, operationEpoch, closedIndex);
   };
   const close = () => {
-    suppressFollowing();
     setExpanded(false);
     restoreToggleFocus.current = true;
     onOpenChange(false);
@@ -1380,10 +1197,9 @@ export function AuxiliaryPanel({
               <span
                 className="workspace-content-tab"
                 data-active={!showChooser && active === tab.id}
+                data-browser-tab={tab.browser ? true : undefined}
                 data-agent-active={Boolean(
-                  (tab.browser &&
-                    (tab.browser.agentActionsInFlight > 0 ||
-                      (tab.browser.agentInspectionsInFlight ?? 0) > 0)) ||
+                  tab.browserActivityLabel ||
                   (tab.externalBrowser?.activityCount ?? 0) > 0,
                 )}
                 key={tab.id}
@@ -1442,7 +1258,7 @@ export function AuxiliaryPanel({
                   id={`aux-tab-${tab.id}`}
                   aria-selected={!showChooser && active === tab.id}
                   aria-controls={`aux-content-${tab.id}`}
-                  tabIndex={active === tab.id ? 0 : -1}
+                  tabIndex={(active ?? tabs[0]?.id) === tab.id ? 0 : -1}
                   aria-keyshortcuts={
                     canReorder ? "Alt+ArrowLeft Alt+ArrowRight" : undefined
                   }
@@ -1451,7 +1267,17 @@ export function AuxiliaryPanel({
                       ? i18n.t("panels:reorderWorkspaceTabHint")
                       : undefined
                   }
-                  title={tab.path ?? tab.browser?.url ?? tab.title}
+                  aria-label={
+                    tab.browserActivityLabel
+                      ? `${tab.title} — ${tab.browserActivityLabel}`
+                      : undefined
+                  }
+                  title={[
+                    tab.path ?? tab.browser?.url ?? tab.title,
+                    tab.browserActivityLabel,
+                  ]
+                    .filter(Boolean)
+                    .join("\n")}
                   onClick={() => select(tab.id)}
                   onKeyDown={(event) => {
                     if (
@@ -1481,8 +1307,17 @@ export function AuxiliaryPanel({
                     }
                   }}
                 >
-                  <Icon name={tab.icon} />
-                  <span>{tab.title}</span>
+                  {tab.browser ? (
+                    <span
+                      className="workspace-browser-tab-icon"
+                      aria-hidden="true"
+                    >
+                      <Icon name={tab.icon} />
+                    </span>
+                  ) : (
+                    <Icon name={tab.icon} />
+                  )}
+                  <span className="workspace-tab-title">{tab.title}</span>
                   {tab.path &&
                   threadId !== undefined &&
                   entries.has(
@@ -1532,7 +1367,6 @@ export function AuxiliaryPanel({
             title={i18n.t("panels:newWorkspaceTab")}
             aria-pressed={showChooser}
             onClick={() => {
-              suppressFollowing();
               selectionEpoch.current += 1;
               setChoosing(true);
               setPickingFile(false);
@@ -1560,15 +1394,6 @@ export function AuxiliaryPanel({
         >
           <Icon name={expanded ? "minimize" : "maximize"} />
         </button>
-        {following?.suppressed ? (
-          <button
-            type="button"
-            className="browser-follow-button"
-            onClick={followAgent}
-          >
-            {i18n.t("panels:followAgent")}
-          </button>
-        ) : null}
         <button
           type="button"
           className="icon-button auxiliary-close-button"
@@ -1916,11 +1741,6 @@ export function AuxiliaryPanel({
                     threadId={threadId}
                     tab={tab.browser}
                     open={open === true}
-                    presentationId={
-                      presentation?.tab.id === tab.browser.id
-                        ? presentation.requestId
-                        : undefined
-                    }
                   />
                 ) : null}
                 {(tab.descriptor?.kind === "terminal" ||

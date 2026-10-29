@@ -562,8 +562,14 @@ test("Attached native loading follows real page events without another Agent cal
     const web = views[0]!.webContents;
     web.loading = true;
     await invoke("browser_list_tabs");
+    capability.observeThread({ threadId: "thread-a", frames: false }, (event) =>
+      events.push(event),
+    )();
+    const targetId = selected().targets[0]!.id;
+    assert.equal(selected().selectedId, undefined);
     bridge.subscribe(renderer, "initial", {
       threadId: "thread-a",
+      targetId,
       frames: true,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -593,6 +599,7 @@ test("Attached native loading follows real page events without another Agent cal
     assert.equal(events.length, count);
     bridge.subscribe(renderer, "reopened", {
       threadId: "thread-a",
+      targetId,
       frames: true,
     });
     await new Promise((resolve) => setImmediate(resolve));
