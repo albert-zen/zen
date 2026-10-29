@@ -15,7 +15,7 @@ export const boardManifest = {
   },
   storageVersion: 1,
   mainDocument:
-    "Read and compose the current conversation information Board. Use short document/block/event IDs. put replaces the document but preserves user-owned field values; read returns compact semantic state, never full HTML. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
+    "Read and compose the current conversation information Board. Use short document/block/event IDs. put replaces the document but preserves user-owned field values; read defaults to compact semantic state; explicitly request view:document to inspect all authored blocks, events and HTML. User draft values are unsent, never approval. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
   provider: {
     id: "zenx-board",
     platforms: ["*"],
@@ -53,13 +53,14 @@ export const boardManifest = {
     {
       name: "zenx_board_read",
       description:
-        "Read compact semantic Board state and short event/field IDs; never full HTML.",
+        "Read compact semantic Board state by default. Use view:document explicitly for the full authored document, blocks, events, HTML and unsent draft values; large responses use the existing output spool.",
       inputSchema: {
         type: "object",
         properties: {
           owner: {
             type: "object",
           },
+          view: { type: "string", enum: ["semantic", "document"] },
         },
         required: [],
         additionalProperties: false,

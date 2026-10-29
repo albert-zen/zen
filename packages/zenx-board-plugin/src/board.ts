@@ -72,6 +72,8 @@ export interface BoardEventResult {
   navigation: string[];
   /** Explicit partial failure; completed actions are never automatically replayed. */
   error?: string;
+  /** Owner-readable transient local diagnostic; never stored or model-projected. */
+  errorDetail?: string;
 }
 export function boardOwnerKey(owner: BoardOwner): string {
   return owner.kind === "thread"

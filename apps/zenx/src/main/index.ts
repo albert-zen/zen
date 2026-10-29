@@ -689,6 +689,13 @@ async function bootstrapZenX(): Promise<void> {
     const boardPackage = new ZenXBoardCapabilityPackage(
       new BoardHostService({
         appServer: selfControlPort,
+        readThreadSummary: async (threadId) => {
+          if (!appServerManager) throw new Error("App Server is not attached");
+          return (await appServerManager.listThreadSummaries()).find(
+            (entry) =>
+              entry.threadId === threadId && entry.status !== "systemError",
+          );
+        },
         get rooms() {
           if (!automationService)
             throw new Error("Rooms service is unavailable");

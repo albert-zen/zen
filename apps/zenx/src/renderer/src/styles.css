@@ -11804,6 +11804,14 @@ button:disabled {
 :root[data-platform="win32"] .information-toolbar {
   right: calc(var(--windows-control-region) + 44px);
 }
+/* The information entry sits immediately before Close, without covering Restore,
+   tab hit targets or the existing platform-specific leading safe area. */
+.workspace:has(> .information-toolbar)
+  > .auxiliary-panel[data-open="true"]
+  > .auxiliary-heading
+  .auxiliary-close-button {
+  margin-inline-start: 44px;
+}
 .information-popover {
   padding: 0;
   width: min(360px, calc(100vw - 24px));
@@ -12005,6 +12013,11 @@ button:disabled {
   background: var(--color-text-primary);
   color: var(--color-surface-main);
   border-color: var(--color-text-primary);
+}
+.board-action.primary:hover:not(:disabled) {
+  background: var(--color-text-secondary);
+  color: var(--color-surface-main);
+  border-color: var(--color-text-secondary);
 }
 .board-action:disabled {
   opacity: 0.5;

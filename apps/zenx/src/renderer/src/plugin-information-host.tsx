@@ -45,19 +45,31 @@ export function PluginInformationHost({
   const rail = useRef<HTMLElement>(null);
   const focusAfterPin = useRef(false);
   const [floating, setFloating] = useState(false);
+  const [headerBottom, setHeaderBottom] = useState(0);
+  const [railTop, setRailTop] = useState(8);
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
     if (!workspace) return;
-    const measure = () =>
-      setFloating(
-        workspace.getBoundingClientRect().width - resourcePanelWidth - 320 <
-          360,
-      );
+    const heading = workspace.querySelector<HTMLElement>(
+      '.auxiliary-panel[data-open="true"] > .auxiliary-heading',
+    );
+    const measure = () => {
+      const bounds = workspace.getBoundingClientRect();
+      setFloating(bounds.width - resourcePanelWidth - 320 < 360);
+      const bottom = heading?.getBoundingClientRect().bottom ?? 0;
+      setHeaderBottom(bottom);
+      setRailTop(Math.max(8, bottom - bounds.top + 8));
+    };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(workspace);
-    return () => observer.disconnect();
-  }, [resourcePanelWidth]);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(workspace);
+    if (heading) observer?.observe(heading);
+    return () => observer?.disconnect();
+    // A late-admitted contribution mounts the toolbar after the initial null render.
+  }, [resourcePanelWidth, contributions.length]);
   useEffect(() => {
     if (!pin || !focusAfterPin.current) return;
     const frame = requestAnimationFrame(() => {
@@ -192,9 +204,15 @@ export function PluginInformationHost({
             side="bottom"
             align="end"
             className="information-popover"
+            sideOffset={Math.max(
+              8,
+              headerBottom -
+                (trigger.current?.getBoundingClientRect().bottom ?? 0) +
+                8,
+            )}
             aria-label={active.title}
             onCloseAutoFocus={(event) => {
-              if (pinned) event.preventDefault();
+              if (pinned || focusAfterPin.current) event.preventDefault();
             }}
           >
             {header}
@@ -207,6 +225,7 @@ export function PluginInformationHost({
         <aside
           ref={rail}
           data-floating={floating}
+          style={floating ? { top: railTop } : undefined}
           className="information-rail"
           aria-label={t("boardPanelLabel", { title: active.title })}
         >

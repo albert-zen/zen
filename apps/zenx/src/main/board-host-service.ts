@@ -31,6 +31,10 @@ interface BoardAppServerPort extends AssistantInputPort {
 }
 export interface BoardHostServiceOptions {
   appServer: BoardAppServerPort;
+  /** Existing native summary projection; passive Board refresh never loads Items. */
+  readThreadSummary(
+    threadId: string,
+  ): Promise<{ threadId: string; archived: boolean } | undefined>;
   rooms: {
     roomsAvailable(): boolean;
     snapshot(): { rooms: ZenXRoom[] };
@@ -81,10 +85,8 @@ export class BoardHostService {
   async readOwner(input: unknown): Promise<BoardOwner> {
     const owner = validateBoardOwner(input);
     this.#assertRoom(owner);
-    const { thread } = await this.options.appServer.request("zen/thread/read", {
-      threadId: owner.threadId,
-    });
-    if (thread.id !== owner.threadId || thread.archived)
+    const thread = await this.options.readThreadSummary(owner.threadId);
+    if (!thread || thread.threadId !== owner.threadId || thread.archived)
       throw new Error("Board Thread is unavailable or archived");
     this.#assertRoom(owner);
     return owner;

@@ -1,3 +1,4 @@
+import { localErrorDetail } from "../../local-error-detail.js";
 import { randomUUID } from "node:crypto";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
@@ -105,7 +106,19 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         await this.#save(boards);
         return semantic(next);
       }
-      if (name === "zenx_board_read") return current ? semantic(current) : null;
+      if (name === "zenx_board_read") {
+        if (
+          args.view !== undefined &&
+          args.view !== "semantic" &&
+          args.view !== "document"
+        )
+          throw new Error("Board read view must be semantic or document");
+        return current
+          ? args.view === "document"
+            ? current
+            : semantic(current)
+          : null;
+      }
       if (args.operation === "read") return current ?? null;
       if (!current) throw new Error("No board exists for this conversation");
       if (args.operation === "draft") {
@@ -287,6 +300,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         await run(event.actions);
       } catch (error) {
         result.error = error instanceof Error ? error.message : String(error);
+        result.errorDetail = localErrorDetail(error);
       }
       // Local set actions update only this unchanged draft; action outputs are transient, not product history.
       const changed = Object.fromEntries(
@@ -312,6 +326,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             return current;
           });
         } catch (error) {
+          result.errorDetail = [result.errorDetail, localErrorDetail(error)]
+            .filter(Boolean)
+            .join("\n\n");
           result.error = [
             result.error,
             error instanceof Error ? error.message : String(error),
@@ -352,6 +369,9 @@ function semantic(state: BoardSnapshot) {
     id: state.document.id,
     title: state.document.title,
     summary: state.document.summary,
+    revision: state.revision,
+    draftRevision: state.draftRevision,
+    valuesMeaning: "Unsent user drafts, not approval or a submitted message",
     fields: fields.slice(0, 16).map((block) => ({
       id: block.id,
       label: block.label.slice(0, 80),

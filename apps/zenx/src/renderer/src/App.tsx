@@ -152,7 +152,11 @@ import {
   loadedPluginContributions,
   pluginRoutePath,
 } from "./plugin-contributions.js";
-import { PluginProductPage, pluginUiRegistry } from "./PluginProductPage.js";
+import {
+  PluginProductPage,
+  pluginUiRegistry,
+  useAppearance,
+} from "./PluginProductPage.js";
 import { SettingsView, type SettingsTab } from "./SettingsView.js";
 import { ThreadTitleEditor } from "./thread-title-editor.js";
 import { Sidebar, ThreadDebugMenuContext } from "./Sidebar.js";
@@ -485,6 +489,7 @@ export function App() {
 }
 
 function AppContent() {
+  const appearance = useAppearance();
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const { i18n: activeI18n } = useTranslation("shell");
@@ -3999,11 +4004,7 @@ function AppContent() {
                     ? { kind: "room", roomId: selectedRoomId }
                     : { kind: "thread", threadId: selectedThreadId! }
                 }
-                theme={
-                  document.documentElement.dataset.theme === "dark"
-                    ? "dark"
-                    : "light"
-                }
+                theme={appearance}
                 navigate={openPage}
                 executeCommand={window.zenx.plugins.executeCommand}
                 readHandle={window.zenx.plugins.readHandle}
