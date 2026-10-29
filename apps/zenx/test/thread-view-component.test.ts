@@ -21,7 +21,7 @@ import {
 } from "../src/renderer/src/composer-state.js";
 const { act, createElement } = React;
 Object.assign(globalThis, { React });
-const { ThreadView, ContextUsageIndicator } =
+const { ThreadView, ContextUsageIndicator, ContextCompactionEvent } =
   await import("../src/renderer/src/ThreadView.js");
 const { requestContextCompaction } =
   await import("../src/renderer/src/compact-command.js");
@@ -4808,5 +4808,53 @@ test("a side chat opening context is readable but cannot steer or control its ru
       "inProgress",
       "preview does not rewrite parent status",
     );
+  });
+});
+
+test("compaction diagnostics render hosted discovery payload with tool semantics", async () => {
+  const item = compactionHistory().find(
+    (item) => item.type === "context_compaction",
+  )!;
+  if (item.type !== "context_compaction") throw new Error("fixture missing");
+  await withDom(async (root) => {
+    await act(async () =>
+      root.render(
+        createElement(ContextCompactionEvent, {
+          projection: {
+            canonicalIndex: 6,
+            item,
+            effectiveMessages: [
+              {
+                role: "tool_discovery",
+                protocol: "openai-responses",
+                endpointSha256: "a".repeat(64),
+                items: [
+                  {
+                    type: "tool_search_call",
+                    id: "synthetic-search",
+                    arguments: { query: "Find docs" },
+                  },
+                  {
+                    type: "tool_search_output",
+                    id: "synthetic-output",
+                    tools: [],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    await act(async () => requiredButton(".context-compaction-toggle").click());
+    await act(async () =>
+      requiredButton('.compaction-views [role="tab"]:nth-child(3)').click(),
+    );
+    const projection = requiredElement(".compaction-projection");
+    assert.match(projection.textContent ?? "", /Tool/u);
+    assert.match(projection.textContent ?? "", /tool_search_call/u);
+    assert.match(projection.textContent ?? "", /tool_search_output/u);
+    assert.match(projection.textContent ?? "", /Find docs/u);
+    assert.match(projection.textContent ?? "", /openai-responses/u);
   });
 });

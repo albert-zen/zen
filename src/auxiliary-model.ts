@@ -155,7 +155,15 @@ export function materializeAuxiliaryInputs(
     },
   });
   for (const message of messages) {
-    if (message.role === "reasoning") {
+    if (message.role === "tool_discovery") {
+      const { role: _role, ...content } = message;
+      items.push({
+        ...base("tool_discovery"),
+        kind: "tool_discovery",
+        role: "assistant",
+        content,
+      });
+    } else if (message.role === "reasoning") {
       items.push({
         ...base(
           "reasoning",

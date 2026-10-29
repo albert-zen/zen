@@ -279,7 +279,7 @@ function projectBrowserResult(
     ownerThreadId: string;
     epoch?: string;
   }[] = [],
-): unknown {
+): Record<string, unknown> {
   const op = operation(name),
     bind = (kind: string, value: unknown) =>
       refs.bind("browser", kind, asJson(value), epoch);
@@ -550,25 +550,12 @@ export async function invokeBrowserModelToolFacade(options: {
       "capability-result-before-model-projection",
     ),
   );
-  let inspection: { ref: string; tool: string } | undefined;
-  if (
-    invocation.modelTraceInspectionTool === "trace_read" &&
-    capture?.durability === "durable" &&
-    record(capture.locator)
-  ) {
-    try {
-      inspection = {
-        ref: refs.bind(
-          "trace",
-          "tool-result",
-          asJson({ locator: capture.locator, tool: "trace_read" }),
-        ),
-        tool: "trace_read",
-      };
-    } catch (error) {
-      if (!(error instanceof ModelReferenceBudgetError)) throw error;
-    }
-  }
+  // The successful compact projection is the preview; raw IDs stay in the file.
+  const {
+    preview: _preview,
+    previewTruncated: _previewTruncated,
+    ...resultFile
+  } = record(capture?.resultFile) ?? {};
   const retained = refs.newBindings;
   const receipt = (output: string, bindings = refs.newBindings) =>
     attachModelReferenceBindings(
@@ -589,8 +576,8 @@ export async function invokeBrowserModelToolFacade(options: {
   }
   try {
     return receipt(
-      JSON.stringify(
-        projectBrowserResult(
+      JSON.stringify({
+        ...projectBrowserResult(
           invocation.name,
           value,
           args,
@@ -600,7 +587,8 @@ export async function invokeBrowserModelToolFacade(options: {
           connections,
           invocation.modelReferences,
         ),
-      ),
+        ...(capture?.resultFile ? { raw_result_file: resultFile } : {}),
+      }),
     );
   } catch (error) {
     if (
@@ -626,9 +614,12 @@ export async function invokeBrowserModelToolFacade(options: {
           classification: Object.keys(facts).length ? "known" : "unclassified",
           ...facts,
         },
-        ...(inspection ? { trace: inspection } : {}),
+        ...(capture?.resultFile ? { raw_result_file: capture.resultFile } : {}),
         safeNextStep:
-          "Read current state or retained Trace; never repeat a mutation merely because projection is unavailable.",
+          (capture?.resultFile
+            ? "Read raw_result_file with shell/file tools, or current state. "
+            : "Raw result file unavailable; read current state. ") +
+          "Never repeat a mutation merely because projection is unavailable.",
       }),
       retained,
     );

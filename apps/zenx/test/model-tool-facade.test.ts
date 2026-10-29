@@ -737,7 +737,7 @@ test("real Rooms exact message refs preserve literal user UUIDs, replies and imm
     ),
   );
 });
-test("postdispatch projection budget preserves known and unclassified outcomes, reserves inspectable durable Trace ref only", async () => {
+test("postdispatch projection budget preserves known and unclassified outcomes, publishes only available local result files", async () => {
   for (const inspectable of [false, true]) {
     const registry = new ModelReferenceRegistry();
     const seed = registry.scope("caller"),
@@ -766,13 +766,25 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
         cwd: "/synthetic",
         arguments: { parent, mode: "fresh" },
         modelReferences: seed.newBindings,
-        ...(inspectable ? { modelTraceInspectionTool: "trace_read" } : {}),
         signal: signal(),
         traceOutput: syntheticTrace({
           recordResult: async (value) => {
             trace.push(value);
             return {
               durability: "durable",
+              ...(inspectable
+                ? {
+                    resultFile: {
+                      path: "/synthetic/result.json",
+                      mediaType: "application/json",
+                      byteLength: 999,
+                      preview: "{}",
+                      previewTruncated: true,
+                      sourceTruncated: false,
+                      captureComplete: true,
+                    },
+                  }
+                : {}),
               locator: {
                 threadId: "caller",
                 recordId: "record-" + UUID,
@@ -800,22 +812,12 @@ test("postdispatch projection budget preserves known and unclassified outcomes, 
     assert.equal(result.contentType, undefined);
     assert.deepEqual(trace, [raw]);
     const bindings = trustedModelReferenceBindings(result)!;
-    assert.equal(bindings.length, inspectable ? 2 : 1);
-    if (inspectable) {
-      assert.equal(output.trace.tool, "trace_read");
-      const restored = new ModelReferenceRegistry().scope("caller", bindings);
-      assert.deepEqual(
-        restored.resolve(output.trace.ref, "trace", "tool-result"),
-        {
-          locator: {
-            threadId: "caller",
-            recordId: "record-" + UUID,
-            callId: "budget",
-          },
-          tool: "trace_read",
-        },
-      );
-    } else assert.equal(output.trace, undefined);
+    assert.equal(bindings.length, 1);
+    assert.equal(
+      output.raw_result_file?.path,
+      inspectable ? "/synthetic/result.json" : undefined,
+    );
+    assert.equal(output.trace, undefined);
   }
   const result = await invokeModelToolFacade({
     invocation: {
@@ -1197,7 +1199,6 @@ test("degraded Trace capture never invents an inspection ref or loses known back
       cwd: "/synthetic",
       arguments: { cwd: "/synthetic" },
       signal: signal(),
-      modelTraceInspectionTool: "trace_read",
       traceOutput: syntheticTrace({
         recordResult: async () => ({
           durability: "degraded",
@@ -1252,4 +1253,74 @@ test("native Thread creation runtime settings project their generated model key 
       )!.value as ToolExecutionResult
     ).output.includes(raw.runtime.model),
   );
+});
+
+test("successful plugin and browser projections expose actual pre-projection files without duplicating native IDs", async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { FileTraceStore } = await import("../../../src/trace.js");
+  const { createToolTraceCapture } = await import("../../../src/trace-tool.js");
+  const { ShellToolRuntime } = await import("../../../src/tool.js");
+  const directory = await mkdtemp(join(tmpdir(), "model-raw-files-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const trace = new FileTraceStore(directory);
+  for (const [name, value] of [
+    [
+      "zenx_threads_list",
+      {
+        threads: [{ id: "RAW-private-thread", title: "Synthetic" }],
+        backendOnly: "original evidence",
+      },
+    ],
+    [
+      "browser_connections",
+      [
+        {
+          connectionId: "RAW-private-connection",
+          label: "Synthetic",
+          state: "disconnected",
+          backendOnly: "original evidence",
+        },
+      ],
+    ],
+  ] as const) {
+    const raw = { output: JSON.stringify(value), exitCode: 0 };
+    const result = await invokeModelToolFacade({
+      invocation: {
+        name,
+        callId: name,
+        threadId: "owner",
+        cwd: directory,
+        arguments: {},
+        signal: signal(),
+        traceOutput: createToolTraceCapture(trace, {
+          threadId: "owner",
+          callId: name,
+        }),
+      },
+      epoch: "synthetic",
+      references: new ModelReferenceRegistry(),
+      dispatch: async () => raw,
+    });
+    const projected = JSON.parse(result.output);
+    assert.equal(projected.projection, undefined);
+    assert.ok(projected.raw_result_file.path.startsWith(directory));
+    assert.equal(projected.raw_result_file.preview, undefined);
+    assert.ok(!result.output.includes("RAW-private"));
+    const read = await new ShellToolRuntime().execute({
+      name: "shell",
+      callId: "read",
+      cwd: directory,
+      arguments: {
+        command: `cat ${JSON.stringify(projected.raw_result_file.path)}`,
+      },
+      signal: signal(),
+      // Synthetic owned artifact read: exercise the real shell, not OS containment.
+      // CI need not install bwrap; production sandbox policy is unchanged.
+      sandbox: "danger-full-access",
+    });
+    assert.deepEqual(JSON.parse(read.output), raw);
+    assert.ok(read.output.includes("original evidence"));
+  }
 });

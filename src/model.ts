@@ -1,3 +1,4 @@
+import type { ToolDiscoveryContent } from "./item.js";
 import type { OpaqueReasoningReplayProvenance } from "./item.js";
 import type { ModelTransportObservation } from "./model/transport-types.js";
 import { projectRecoveryMedia, recoveryContext } from "./loop-recovery.js";
@@ -91,6 +92,7 @@ export interface ToolCallModelMessage {
     name: string;
     arguments: Record<string, unknown>;
     imported?: ImportedToolCallOrigin;
+    providerNamespace?: string;
   }>;
 }
 
@@ -117,7 +119,8 @@ export type ModelMessage =
   | TypedUserModelMessage
   | ToolCallModelMessage
   | ToolResultModelMessage
-  | ReasoningModelMessage;
+  | ReasoningModelMessage
+  | ({ role: "tool_discovery" } & ToolDiscoveryContent);
 
 export type ReasoningEffort = string;
 
@@ -145,7 +148,14 @@ export interface ModelRequestObservation {
   model: string;
 }
 
+export interface ProviderToolPresentation {
+  protocol: "openai-responses";
+  tools: Record<string, unknown>[];
+}
+
 export interface ModelRequest {
+  /** Compiler-committed native discovery capability for this frozen sample. */
+  providerToolPresentation?: ProviderToolPresentation;
   model: string;
   maxOutputTokens?: number;
   /** null leaves Provider-specific reasoning controls out of the request. */
@@ -171,6 +181,10 @@ export interface ModelRequest {
 }
 
 export interface ModelTool {
+  /** Catalog membership for lazy provider discovery; never an authorization grant. */
+  pluginId?: string;
+  /** Full usage detail retained for selective discovery, not eager declarations. */
+  fullDescription?: string;
   /** Optional source-language presentation; canonical arguments remain JSON. */
   rawSource?: { language: "javascript"; argument: "code" };
   name: string;
@@ -179,6 +193,7 @@ export interface ModelTool {
 }
 
 export type ModelEvent =
+  | ({ type: "tool_discovery" } & ToolDiscoveryContent)
   | { type: "text_delta"; delta: string }
   | { type: "reasoning_started"; reasoningId: string }
   | {
@@ -202,6 +217,7 @@ export type ModelEvent =
     }
   | {
       type: "tool_call";
+      providerNamespace?: string;
       callId: string;
       name: string;
       arguments: Record<string, unknown>;
@@ -217,6 +233,10 @@ export type ModelEvent =
     };
 
 export interface ModelAdapter {
+  prepareToolPresentation?(
+    model: string,
+    tools: readonly ModelTool[],
+  ): ProviderToolPresentation | undefined;
   readonly provider: string;
   /** Adapter-owned static instructions included in every request, for pressure estimates. */
   readonly contextInstructions?: string;
@@ -525,6 +545,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.providerNamespace === undefined
+                ? {}
+                : { providerNamespace: candidate.providerNamespace }),
               ...(candidate.imported === undefined
                 ? {}
                 : { imported: candidate.imported }),
@@ -554,6 +577,9 @@ function compileCanonicalModelMessages(
               callId: candidate.callId,
               name: candidate.name,
               arguments: candidate.arguments,
+              ...(candidate.providerNamespace === undefined
+                ? {}
+                : { providerNamespace: candidate.providerNamespace }),
               ...(candidate.imported === undefined
                 ? {}
                 : { imported: candidate.imported }),
@@ -573,6 +599,14 @@ function compileCanonicalModelMessages(
           ...(item.modelContent === undefined
             ? {}
             : { modelContent: item.modelContent }),
+        });
+        break;
+      case "tool_discovery":
+        messages.push({
+          role: "tool_discovery",
+          protocol: item.protocol,
+          endpointSha256: item.endpointSha256,
+          items: structuredClone(item.items),
         });
         break;
       case "reasoning": {

@@ -54,6 +54,7 @@ export type ItemType =
   | "thread_message_cancelled"
   | "agent_message"
   | "model_usage"
+  | "tool_discovery"
   | "reasoning"
   | "tool_call"
   | "tool_result"
@@ -84,6 +85,7 @@ const CANONICAL_ITEM_TYPES = {
   thread_message_cancelled: true,
   agent_message: true,
   model_usage: true,
+  tool_discovery: true,
   reasoning: true,
   tool_call: true,
   tool_result: true,
@@ -430,6 +432,32 @@ export function validateOpaqueReplayProvenance(
   return structuredClone(object) as unknown as OpaqueReasoningReplayProvenance;
 }
 
+export interface ToolDiscoveryContent {
+  protocol: "openai-responses";
+  endpointSha256: string;
+  items: Record<string, unknown>[];
+}
+
+export interface ToolDiscoveryItem extends ItemBase, ToolDiscoveryContent {
+  modelResponseId?: string;
+  type: "tool_discovery";
+  turnId: string;
+}
+
+export function validateToolDiscoveryContent(value: unknown): void {
+  const content = requireRecord(value, "tool_discovery");
+  if (
+    content.protocol !== "openai-responses" ||
+    typeof content.endpointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(content.endpointSha256)
+  )
+    throw new Error("Invalid hosted discovery replay scope");
+  if (!Array.isArray(content.items) || content.items.length === 0)
+    throw new Error("Empty hosted discovery content");
+  for (const item of content.items) requireRecord(item, "tool_discovery.items");
+  JSON.stringify(content.items);
+}
+
 export type ReasoningItem =
   | (ItemBase & {
       type: "reasoning";
@@ -469,6 +497,7 @@ export interface ToolCallItem extends ItemBase {
   arguments: Record<string, unknown>;
   /** Imported history only; never a registered local tool or execution grant. */
   imported?: ImportedToolCallOrigin;
+  providerNamespace?: string;
 }
 
 export interface ToolResultItem extends ItemBase {
@@ -634,6 +663,7 @@ export type CanonicalItem =
   | UserMessageItem
   | AgentMessageItem
   | ModelUsageItem
+  | ToolDiscoveryItem
   | ReasoningItem
   | ToolCallItem
   | ToolResultItem
@@ -1165,6 +1195,14 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         `${type}.reasoningOutputTokens`,
       );
       break;
+    case "tool_discovery":
+      requireTurnId(item, type);
+      requireOptionalNonEmptyString(
+        item.modelResponseId,
+        `${type}.modelResponseId`,
+      );
+      validateToolDiscoveryContent(item);
+      break;
     case "reasoning":
       requireTurnId(item, type);
       if (item.selection !== undefined)
@@ -1209,6 +1247,10 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         `${type}.modelResponseId`,
       );
       requireOptionalNonEmptyString(item.parentCallId, `${type}.parentCallId`);
+      requireOptionalNonEmptyString(
+        item.providerNamespace,
+        `${type}.providerNamespace`,
+      );
       requireNonEmptyString(item.name, `${type}.name`);
       requireRecord(item.arguments, `${type}.arguments`);
       if (item.imported !== undefined) {

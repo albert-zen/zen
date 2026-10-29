@@ -630,6 +630,8 @@ test("both presentation freezes direct and nested capabilities through scheduler
           name: "run_code",
           arguments: {
             code: `
+              if (!ALL_TOOLS.some(tool => tool.name === "visible_child")) throw Error("missing eligible tool");
+              if (ALL_TOOLS.some(tool => tool.name === "late_hidden")) throw Error("catalog changed after sample");
               const values = await Promise.all([
                 tools.visible_child({ sequence: 1 }),
                 tools.visible_child({ sequence: 2 }),
@@ -697,7 +699,7 @@ test("both presentation freezes direct and nested capabilities through scheduler
     requests[0]?.tools.map(({ name }) => name),
     ["wait", "visible_child", "run_code"],
   );
-  assert.match(
+  assert.doesNotMatch(
     requests[0]?.tools.find(({ name }) => name === "run_code")?.description ??
       "",
     /visible_child/u,

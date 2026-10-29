@@ -127,6 +127,20 @@ export function contextItemsFromLegacy(
       return item.incomplete
         ? []
         : message("assistant", [{ type: "text", text: item.text }]);
+    case "tool_discovery":
+      return [
+        decodeContextItem({
+          ...base,
+          source: source(),
+          kind: "tool_discovery",
+          role: "assistant",
+          content: {
+            protocol: item.protocol,
+            endpointSha256: item.endpointSha256,
+            items: structuredClone(item.items),
+          },
+        }),
+      ];
     case "tool_call":
       if (item.parentCallId !== undefined) return [];
       return [
@@ -139,6 +153,9 @@ export function contextItemsFromLegacy(
             callId: item.callId,
             name: item.name,
             arguments: item.arguments,
+            ...(item.providerNamespace === undefined
+              ? {}
+              : { providerNamespace: item.providerNamespace }),
           },
         }),
       ];
@@ -480,7 +497,8 @@ export function legacyItemFromContext(
     )
       base.text = textFromUserInput(body);
     else return undefined;
-  } else if (item.kind === "tool_call") Object.assign(base, item.content);
+  } else if (item.kind === "tool_discovery") Object.assign(base, item.content);
+  else if (item.kind === "tool_call") Object.assign(base, item.content);
   else if (item.kind === "tool_result") {
     Object.assign(
       base,

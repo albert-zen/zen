@@ -350,3 +350,45 @@ test("wrapper streams once and resolves partial media after execution failure", 
     outputTruncated: false,
   });
 });
+
+test("complete catalog details can be selected without printing unrelated tools and are deeply frozen", async () => {
+  const selected = {
+    name: "fixture_write",
+    description: "Write a value.",
+    pluginId: "fixture",
+    fullDescription: "Write a value. Detailed usage stays in selected output.",
+    inputSchema: {
+      type: "object",
+      properties: { mode: { type: "string", enum: ["append", "replace"] } },
+      required: ["mode"],
+      additionalProperties: false,
+    },
+  };
+  const result = await execute(
+    `
+    const entry = ALL_TOOLS.find(tool => tool.pluginId === "fixture");
+    if (!Object.isFrozen(entry.inputSchema.properties.mode.enum)) throw Error("mutable schema");
+    let rejected = false;
+    try { entry.inputSchema.required.push("wrong"); } catch { rejected = true; }
+    if (!rejected) throw Error("mutable required parameters");
+    text(entry);
+    const result = await tools[entry.name]({mode: "append"});
+    text(result.output);
+  `,
+    {
+      tools: [selected, { name: "unrelated", description: "Do not print me" }],
+      nested: {
+        invoke: async (name, args) => {
+          assert.equal(name, "fixture_write");
+          assert.deepEqual(args, { mode: "append" });
+          return { output: "called without a document-read gate", exitCode: 0 };
+        },
+      },
+    },
+  );
+  assert.equal(
+    result.text,
+    JSON.stringify(selected) + "\ncalled without a document-read gate",
+  );
+  assert.doesNotMatch(result.text, /unrelated|Do not print me/);
+});

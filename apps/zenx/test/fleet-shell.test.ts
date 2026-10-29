@@ -443,7 +443,7 @@ test("spooled target shell output uses the existing bounded preview without expo
   assert.equal(JSON.stringify(result).includes(f.cwd), false);
 });
 
-test("an unavailable spool does not duplicate overlapping short output previews", async (t) => {
+test("unavailable spool preserves complete short output but marks oversized preview loss", async (t) => {
   const f = await fixture(t);
   const unavailable = path.join(f.cwd, "not-a-directory");
   await writeFile(unavailable, "fixture");
@@ -465,6 +465,22 @@ test("an unavailable spool does not duplicate overlapping short output previews"
     new AbortController().signal,
   );
   assert.equal(result.output, "hello-preview");
-  // A lost spool is still reported conservatively; do not hide source uncertainty.
-  assert.equal(result.sourceTruncated, true);
+  // All short output is retained in memory, even without an optional spool file.
+  assert.equal(result.sourceTruncated, false);
+  assert.equal(JSON.stringify(result).includes(unavailable), false);
+
+  const oversized = await new FleetShellGateway(tools).execute(
+    {
+      ...f.request,
+      command: "printf head; printf '%02048d' 0; printf tail",
+      maxOutputBytes: 1024,
+    },
+    () => f.app.readThread(f.thread.id),
+    new AbortController().signal,
+  );
+  // Beyond the in-memory preview, missing backing storage means real byte loss.
+  assert.equal(oversized.output, "head" + "0".repeat(1016) + "tail");
+  assert.equal(Buffer.byteLength(oversized.output), 1024);
+  assert.equal(oversized.sourceTruncated, true);
+  assert.equal(JSON.stringify(oversized).includes(unavailable), false);
 });

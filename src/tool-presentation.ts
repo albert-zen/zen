@@ -2,13 +2,18 @@ import type { ModelTool } from "./model.js";
 
 export type ToolPresentation = "direct" | "code" | "both";
 
+export interface ToolCatalogEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly pluginId?: string;
+  readonly fullDescription: string;
+  readonly inputSchema: Record<string, unknown>;
+}
+
 export interface ToolPresentationSnapshot {
   readonly modelTools: readonly ModelTool[];
-  /** Frozen metadata from this exact disclosed sample for ALL_TOOLS. */
-  readonly codeTools: readonly {
-    readonly name: string;
-    readonly description: string;
-  }[];
+  /** Complete eligible catalog, frozen for this sample; select details programmatically. */
+  readonly codeTools: readonly ToolCatalogEntry[];
   /** Names a model response may submit directly for this sample. */
   readonly modelToolNames: ReadonlySet<string>;
   /** Names the run_code Worker may invoke for this sample. */
@@ -66,7 +71,7 @@ export function buildToolPresentation(
           ];
   return Object.freeze({
     codeTools: Object.freeze(
-      generateToolCatalog(ordinaryTools).map((tool) => Object.freeze(tool)),
+      generateToolCatalog(ordinaryTools).map((tool) => deepFreeze(tool)),
     ),
     modelTools: Object.freeze(
       modelTools.map((definition) => deepFreeze(definition)),
@@ -79,9 +84,8 @@ export function buildToolPresentation(
 }
 
 export function createRunCodeModelTool(
-  ordinaryTools: readonly ModelTool[],
+  _ordinaryTools: readonly ModelTool[] = [],
 ): ModelTool {
-  const sdk = generateToolSdk(ordinaryTools);
   return {
     name: RUN_CODE_NAME,
     rawSource: { language: "javascript", argument: "code" },
@@ -89,7 +93,7 @@ export function createRunCodeModelTool(
       "Run a fresh JavaScript async module with top-level await.",
       "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
       "In-memory helpers: atob/btoa, TextEncoder/TextDecoder, URL/URLSearchParams, crypto.randomUUID(). import.meta is unavailable.",
-      "Only the tools declared below are available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",
+      "Use ALL_TOOLS to find eligible tools available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",
       'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000, "timeout_ms": 600000}. Controls observation wait, preview budget, and execution deadline respectively.',
       "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
       "Tools marked [parallel_safe] can overlap in Promise.all within the host limit; unmarked tools serialize. Await dependent operations sequentially.",
@@ -98,10 +102,10 @@ export function createRunCodeModelTool(
       "Await every tool call; unfinished or unobserved calls fail the program. await yield_control() yields output while execution continues. Timers alone do not keep a finished program alive.",
       'image/audio accept base64 data URIs, MCP blocks (e.g. image({type:"image", mimeType:"image/png", data:"<base64>"})), or current-thread attachment refs. Local paths use tools.view_image; its images return automatically. Unsupported modalities become text references.',
       "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",
-      "Use ALL_TOOLS (name/description) to check tool availability; the tools Proxy also returns functions for unknown names.",
-      "Available tool signatures (TypeScript reference notation only; submitted code must be JavaScript):",
+      "ALL_TOOLS is the complete eligible tool catalog for this program: name, short description, optional pluginId, fullDescription and exact inputSchema. Filter/map it in JavaScript; print only selected entries with text() to retrieve detailed documentation at the conversation tail. The tools Proxy also returns functions for unknown names, so it is not an availability check.",
+      "Stable helper declarations (TypeScript reference notation only; submitted code must be JavaScript):",
       "```ts",
-      sdk,
+      generateToolSdk([]),
       "```",
     ].join("\n"),
     inputSchema: {
@@ -119,16 +123,22 @@ export function createRunCodeModelTool(
   };
 }
 
-/** Metadata for the same disclosed definitions used by the tool SDK. */
+/** Selectable details from the same eligible definitions used for invocation. */
 export function generateToolCatalog(
   tools: readonly ModelTool[],
-): Array<{ name: string; description: string }> {
+): ToolCatalogEntry[] {
   return tools
     .filter(
       (tool) =>
         tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
     )
-    .map(({ name, description }) => ({ name, description }));
+    .map(({ name, description, pluginId, fullDescription, inputSchema }) => ({
+      name,
+      description: compactToolDescription(description),
+      ...(pluginId === undefined ? {} : { pluginId }),
+      fullDescription: fullDescription ?? description,
+      inputSchema: structuredClone(inputSchema),
+    }));
 }
 
 export function generateToolSdk(tools: readonly ModelTool[]): string {
@@ -171,7 +181,7 @@ export function generateToolSdk(tools: readonly ModelTool[]): string {
     "declare function yield_control(): Promise<void>;",
     "declare function setTimeout(callback: (...args: unknown[]) => unknown, delayMs?: number, ...args: unknown[]): number;",
     "declare function clearTimeout(id: number): void;",
-    "declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string }>;",
+    "declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string; pluginId?: string; fullDescription: string; inputSchema: Record<string, unknown> }>;",
   ].join("\n");
 }
 
@@ -331,4 +341,11 @@ function deepFreeze<T>(value: T): T {
   }
   for (const entry of Object.values(value)) deepFreeze(entry);
   return Object.freeze(value);
+}
+
+/** Keep an authored purpose sentence; full usage instructions remain selectable. */
+export function compactToolDescription(description: string): string {
+  return (
+    description.split(/\n|(?<=[.!?])\s+(?=[A-Z])/u)[0]?.trim() || description
+  );
 }

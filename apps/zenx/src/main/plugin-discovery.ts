@@ -1,5 +1,6 @@
 import type { CanonicalItem } from "../../../../src/item.js";
 import { disclosureCallResults } from "./disclosure-history.js";
+import { compactToolDescription } from "../../../../src/tool-presentation.js";
 import type { ModelTool } from "../../../../src/model.js";
 import type {
   ToolExecutionResult,
@@ -19,9 +20,9 @@ export const ZENX_PLUGIN_TOOL = "zenx_plugin";
 export const PLUGIN_DISCLOSURE_CONTENT_TYPE = "zen/plugin-disclosure";
 
 const DISCOVER_NEXT_STEP =
-  'Call zenx_plugin with operation: "read" and a relevant exact pluginId to get usage instructions and expose its tools on the next model request. Discover alone does not expose tools.';
+  'Call zenx_plugin with operation: "read" and a relevant exact pluginId to get usage instructions and exact schemas. Eligible tools are already callable; reading is not an eligibility gate.';
 const READ_NEXT_STEP =
-  "Use this plugin's actual schemas on the next model request: direct tool definitions and/or tools.* in the refreshed run_code SDK. If reading inside run_code, finish that program first. Only currently available tools are exposed; reading does not install or enable plugins.";
+  "Use the exact schemas below. Eligible tools are already callable directly when declared by the provider, or through tools.* inside run_code. Reading does not install or enable plugins.";
 const DISCOVERY_PERMISSIONS =
   "Disclosure is not approval; plugin tools may inspect or change state under current permissions/approvals.";
 
@@ -40,11 +41,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
   readonly name = ZENX_PLUGIN_TOOL;
   readonly specification: ModelTool = {
     name: this.name,
-    description: [
-      "Discover enabled ZenX plugins; use readiness with pluginIds for lifecycle status. Call read with an exact pluginId to get usage instructions and a tool index.",
-      "A successful read exposes that plugin's currently available tool schemas on the next model request: direct tool definitions and/or tools.* in the refreshed run_code SDK. Finish the current run_code program before invoking newly disclosed tools. discover/readiness alone do not expose tools.",
-      "Metadata reads do not execute plugin actions or grant permissions; reading does not install or enable plugins. Plugin tools are not necessarily read-only: they may inspect or change state under current permissions/approvals.",
-    ].join(" "),
+    description:
+      "Discover enabled plugins and read their detailed usage; their eligible tools are already available, with full documentation loaded only when needed.",
     inputSchema: {
       oneOf: [
         {
@@ -104,7 +102,7 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
           operation: "readiness",
           plugins: pluginReadiness(summaries, pluginIds),
           nextStep:
-            'Open Settings, then Plugins, for missing or disabled plugins. Call zenx_plugin with operation: "read" and the enabled plugin\'s exact pluginId to get setup guidance and expose its tools on the next model request.',
+            'Open Settings, then Plugins, for missing or disabled plugins. Call zenx_plugin with operation: "read" and the enabled plugin\'s exact pluginId to get setup guidance and exact tool schemas.',
           permissionChecks:
             "Tool permissions are checked on use. Ready does not mean approved, configured, or end-to-end verified.",
         }),
@@ -143,10 +141,16 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
         plugin: {
           ...summaryFromPlugin(plugin),
           mainDocument: plugin.mainDocument,
-          tools: plugin.tools.map(({ name, description }) => ({
-            name,
-            description,
-          })),
+          tools: plugin.tools.map((tool) => {
+            const current = this.#environment.definitions.find(
+              ({ name }) => name === tool.name,
+            )!;
+            return {
+              name: current.name,
+              description: current.description,
+              inputSchema: current.inputSchema,
+            };
+          }),
         },
       }),
       exitCode: 0,
@@ -157,8 +161,8 @@ export class PluginDiscoveryToolRuntime implements ToolRuntime {
 }
 
 /**
- * Request-time schema projection. Disclosure comes only from canonical history,
- * while the current catalog and Tool Environment gate what remains callable.
+ * Request-time eligibility projection. Documentation reads never grant capability;
+ * the current catalog and Tool Environment gate what remains callable.
  */
 export class PluginDiscoveryProjection {
   readonly #environment: ToolEnvironment;
@@ -169,8 +173,7 @@ export class PluginDiscoveryProjection {
     this.#catalog = catalog;
   }
 
-  definitions(items: readonly CanonicalItem[]): ModelTool[] {
-    const disclosed = disclosedPluginIds(items);
+  definitions(_items: readonly CanonicalItem[]): ModelTool[] {
     const entries = this.#environment.definitionEntries;
     const byName = new Map(
       entries.map((entry) => [entry.definition.name, entry.definition]),
@@ -190,14 +193,21 @@ export class PluginDiscoveryProjection {
             !allPluginTools.has(entry.definition.name)),
       )
       .map((entry) => structuredClone(entry.definition));
-    const pluginTools = currentPlugins
-      .filter((plugin) => disclosed.has(plugin.id))
-      .flatMap((plugin) =>
-        plugin.tools.flatMap((tool) => {
-          const definition = byName.get(tool.name);
-          return definition === undefined ? [] : [structuredClone(definition)];
-        }),
-      );
+    const pluginTools = currentPlugins.flatMap((plugin) =>
+      plugin.tools.flatMap((tool) => {
+        const definition = byName.get(tool.name);
+        return definition === undefined
+          ? []
+          : [
+              {
+                ...structuredClone(definition),
+                pluginId: plugin.id,
+                description: compactToolDescription(definition.description),
+                fullDescription: definition.description,
+              },
+            ];
+      }),
+    );
     return [...baseTools, ...pluginTools];
   }
 }

@@ -264,10 +264,13 @@ export class ToolOutputCapture {
         ? { path: this.#filePath }
         : {}),
       lifetime: "host_instance",
-      sourceTruncated: this.#sourceTruncated || this.#fileUnavailable,
+      // Small output is already complete in memory; a missing optional file
+      // cannot turn those retained bytes into source truncation.
+      sourceTruncated:
+        this.#sourceTruncated || (this.#fileUnavailable && oversized),
       head: decodeHead(Buffer.concat(this.#head), this.#headLimit),
       tail: decodeTail(Buffer.concat(this.#tail), this.#tailLimit),
-      ...(oversized || this.#sourceTruncated || this.#fileUnavailable
+      ...(oversized || this.#sourceTruncated
         ? {}
         : { output: Buffer.concat(this.#small).toString("utf8") }),
     };

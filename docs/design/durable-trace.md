@@ -1,6 +1,6 @@
 # Durable local Trace
 
-Trace is always-on local evidence, not a debug-panel feature. The panel and `trace_read` are readers. A request made before a panel was opened remains readable after restart.
+Trace is always-on local evidence, not a debug-panel feature. The panel and ordinary shell/file tools are readers. A request made before a panel was opened remains readable after restart.
 
 ## Authority and domains
 
@@ -32,7 +32,7 @@ Durability receipts describe synchronization scope: POSIX file and directory syn
 
 Durations within one process use monotonic nanoseconds. Every writer has an explicit clock domain and wall time for display. Cross-process ordering must not subtract unrelated monotonic clocks or pretend wall clocks provide exact elapsed time.
 
-Metadata polling can skip artifact verification explicitly. Opening artifacts verifies their content. Bounded range reads hash the complete artifact while retaining only the requested page in memory. `trace_read` accepts a trusted current-thread reference to one exact observed tool call, not arbitrary paths/thread IDs; returned binary and split UTF-8 ranges are base64 with explicit offsets. It grants no execution authority.
+Metadata polling can skip artifact verification explicitly. Opening artifacts verifies their content. Bounded range reads hash the complete artifact while retaining only the requested page in memory. Model receipts expose existing same-Host JSON/text artifact paths for ordinary shell/file inspection, without a dedicated model Trace reader. These paths preserve raw pre-projection results and explicitly distinguish preview truncation, upstream source truncation, and capture gaps. They grant no execution authority and do not claim remote spool bytes that were never received.
 
 ## Privacy and publication
 

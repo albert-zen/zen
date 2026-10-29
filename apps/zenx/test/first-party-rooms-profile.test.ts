@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   cp,
   mkdir,
@@ -220,7 +221,11 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       JSON.parse(results.at(-3)!.output).plugins[0].id,
       "zenx-rooms",
     );
-    const document = JSON.parse(results.at(-2)!.output).plugin.mainDocument;
+    // Exact schemas can exceed the model preview budget. Inspect the complete
+    // Host-lifetime capture, not the canonical receipt's head/tail fragments.
+    const document = JSON.parse(
+      await completeToolOutput(results.at(-2)!.output),
+    ).plugin.mainDocument;
     assert.match(document, /exact scoped Room, Thread and message refs/u);
     assert.match(
       document,
@@ -1006,3 +1011,21 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+async function completeToolOutput(output: string): Promise<string> {
+  if (!output.startsWith("[tool output receipt]\n")) return output;
+  const header = output.split("\n--- head ---\n", 1)[0]!;
+  const file = /^full_output: (.+)$/mu.exec(header)?.[1];
+  const bytes = /^captured_bytes: (\d+)$/mu.exec(header)?.[1];
+  const sha256 = /^sha256: ([a-f0-9]{64})$/mu.exec(header)?.[1];
+  assert.match(header, /^source_truncated: false$/mu);
+  assert.ok(
+    file && file !== "unavailable",
+    "complete tool output file is required",
+  );
+  assert.ok(bytes && sha256, "tool receipt must include byte count and hash");
+  const content = await readFile(file);
+  assert.equal(content.length, Number(bytes));
+  assert.equal(createHash("sha256").update(content).digest("hex"), sha256);
+  return content.toString("utf8");
+}

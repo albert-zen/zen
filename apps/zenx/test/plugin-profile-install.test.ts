@@ -344,10 +344,7 @@ test("Settings host installs one tarball through the committed profile and Agent
     );
     const results = items.filter((item) => item.type === "tool_result");
     const { nextStep, ...discovery } = JSON.parse(results.at(-3)!.output);
-    assert.match(
-      nextStep,
-      /operation: "read".*exact pluginId.*next model request/u,
-    );
+    assert.match(nextStep, /operation: "read".*exact pluginId.*exact schemas/u);
     assert.deepEqual(discovery, {
       operation: "discover",
       plugins: [
@@ -360,10 +357,7 @@ test("Settings host installs one tarball through the committed profile and Agent
       ],
     });
     const read = JSON.parse(results.at(-2)!.output);
-    assert.match(
-      read.nextStep,
-      /next model request.*direct tool definitions.*run_code SDK/u,
-    );
+    assert.match(read.nextStep, /already callable directly.*tools\.\*/u);
     assert.equal(
       read.plugin.mainDocument,
       "Use profile_fixture_echo to echo exact bytes.",

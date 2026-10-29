@@ -1,13 +1,20 @@
 import { bindModelMediaOrigin } from "./model-media-origin.js";
 import {
   validateUserInput,
+  validateToolDiscoveryContent,
+  type ToolDiscoveryContent,
   validateOpaqueReplayProvenance,
   type OpaqueReasoningReplayProvenance,
   textFromUserInput,
   type JsonValue,
   type UserInput,
 } from "./item.js";
-import { classifyContext, type ModelMessage, type ModelTool } from "./model.js";
+import {
+  classifyContext,
+  type ModelMessage,
+  type ModelTool,
+  type ProviderToolPresentation,
+} from "./model.js";
 
 /** The writable conversation format. Runtime events are deliberately not a variant. */
 export type ContextSourceKind =
@@ -18,6 +25,7 @@ export type ContextSourceKind =
   | "thread_instruction"
   | "tool_call"
   | "tool_result"
+  | "tool_discovery"
   | "reasoning"
   | "context_compaction"
   | "failure"
@@ -55,6 +63,7 @@ export type ContextItem = ContextBase &
           callId: string;
           name: string;
           arguments: Record<string, unknown>;
+          providerNamespace?: string;
         };
       }
     | {
@@ -66,6 +75,11 @@ export type ContextItem = ContextBase &
           exitCode: number | null;
           parts?: UserInput;
         };
+      }
+    | {
+        kind: "tool_discovery";
+        role: "assistant";
+        content: ToolDiscoveryContent;
       }
     | {
         kind: "reasoning";
@@ -90,9 +104,17 @@ export type ContextItem = ContextBase &
           excludedCallIds?: string[];
         };
       }
-    | { kind: "tools"; role: "developer"; content: { tools: ModelTool[] } }
+    | {
+        kind: "tools";
+        role: "developer";
+        content: {
+          tools: ModelTool[];
+          providerToolPresentation?: ProviderToolPresentation;
+        };
+      }
   );
 export interface CompiledItemList {
+  providerToolPresentation?: ProviderToolPresentation;
   messages: ModelMessage[];
   tools: ModelTool[];
   /** Exact immutable input membership evidence; not inserted into the prompt. */
@@ -107,6 +129,7 @@ const sourceKinds: readonly ContextSourceKind[] = [
   "thread_instruction",
   "tool_call",
   "tool_result",
+  "tool_discovery",
   "reasoning",
   "context_compaction",
   "failure",
@@ -270,9 +293,15 @@ export function decodeContextItem(value: unknown): ContextItem {
       break;
     }
     case "tool_call":
-      keys(content, ["callId", "name", "arguments"], "tool_call.content");
+      keys(
+        content,
+        ["callId", "name", "arguments", "providerNamespace"],
+        "tool_call.content",
+      );
       if (item.role !== "assistant" || source.kind !== "tool_call")
         throw new Error("Invalid tool-call role/source");
+      if (content.providerNamespace !== undefined)
+        string(content.providerNamespace, "providerNamespace", false);
       string(content.callId, "callId", false);
       string(content.name, "name", false);
       json(record(content.arguments, "arguments"), "arguments");
@@ -291,6 +320,17 @@ export function decodeContextItem(value: unknown): ContextItem {
         throw new Error("Invalid tool outcome");
       if (content.parts !== undefined)
         parts(content.parts, "tool_result.parts");
+      break;
+    case "tool_discovery":
+      keys(
+        content,
+        ["protocol", "endpointSha256", "items"],
+        "tool_discovery.content",
+      );
+      if (item.role !== "assistant" || source.kind !== "tool_discovery")
+        throw new Error("Invalid discovery role/source");
+      validateToolDiscoveryContent(content);
+      json(content.items, "tool_discovery.items");
       break;
     case "reasoning":
       keys(
@@ -363,7 +403,21 @@ export function decodeContextItem(value: unknown): ContextItem {
       }
       break;
     case "tools":
-      keys(content, ["tools"], "tools.content");
+      keys(content, ["tools", "providerToolPresentation"], "tools.content");
+      if (content.providerToolPresentation !== undefined) {
+        const presentation = record(
+          content.providerToolPresentation,
+          "providerToolPresentation",
+        );
+        keys(presentation, ["protocol", "tools"], "providerToolPresentation");
+        if (
+          presentation.protocol !== "openai-responses" ||
+          !Array.isArray(presentation.tools)
+        )
+          throw new Error("Invalid provider tool presentation");
+        for (const tool of presentation.tools)
+          json(record(tool, "provider tool"), "provider tool");
+      }
       if (
         item.role !== "developer" ||
         source.kind !== "tool_definitions" ||
@@ -372,10 +426,24 @@ export function decodeContextItem(value: unknown): ContextItem {
         throw new Error("Invalid tools declaration");
       for (const value of content.tools) {
         const tool = record(value, "tool");
-        keys(tool, ["name", "description", "inputSchema", "rawSource"], "tool");
+        keys(
+          tool,
+          [
+            "name",
+            "description",
+            "inputSchema",
+            "rawSource",
+            "pluginId",
+            "fullDescription",
+          ],
+          "tool",
+        );
         string(tool.name, "tool.name", false);
         string(tool.description, "tool.description");
         json(record(tool.inputSchema, "tool.inputSchema"), "tool.inputSchema");
+        if (tool.pluginId !== undefined) string(tool.pluginId, "tool.pluginId");
+        if (tool.fullDescription !== undefined)
+          string(tool.fullDescription, "tool.fullDescription");
         if (tool.rawSource !== undefined) {
           const raw = record(tool.rawSource, "rawSource");
           keys(raw, ["language", "argument"], "rawSource");
@@ -553,6 +621,7 @@ export function compileItemList(
     });
   const messages: ModelMessage[] = [];
   let tools: ModelTool[] = [];
+  let providerToolPresentation: ProviderToolPresentation | undefined;
   for (const item of selected) {
     switch (item.kind) {
       case "message":
@@ -586,6 +655,12 @@ export function compileItemList(
             : {
                 modelContent: projectParts(item, item.content.parts),
               }),
+        });
+        break;
+      case "tool_discovery":
+        messages.push({
+          role: "tool_discovery",
+          ...structuredClone(item.content),
         });
         break;
       case "reasoning": {
@@ -624,6 +699,9 @@ export function compileItemList(
         break;
       case "tools":
         tools = structuredClone(item.content.tools);
+        providerToolPresentation = structuredClone(
+          item.content.providerToolPresentation,
+        );
         break;
     }
     if (item.kind === "message") {
@@ -645,7 +723,14 @@ export function compileItemList(
     }
     selectedItemIds.push(item.id);
   }
-  return { messages, tools, selectedItemIds };
+  return {
+    messages,
+    tools,
+    selectedItemIds,
+    ...(providerToolPresentation === undefined
+      ? {}
+      : { providerToolPresentation }),
+  };
 }
 function record(value: unknown, label: string): Record<string, unknown> {
   if (

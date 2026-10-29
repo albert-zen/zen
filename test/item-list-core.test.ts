@@ -548,3 +548,143 @@ test("historical fork receipts close their original batch before later context w
   assert.equal(JSON.stringify(items), before);
   assert.equal(items.at(-1)?.source.metadata?.historicalSnapshot, true);
 });
+
+test("hosted discovery payload is semantic, ordered, round-trippable and compactable", () => {
+  const discovery: CanonicalItem = {
+    ...base,
+    id: "search",
+    type: "tool_discovery",
+    protocol: "openai-responses",
+    endpointSha256: "a".repeat(64),
+    items: [
+      {
+        type: "tool_search_call",
+        id: "search-call",
+        execution: "server",
+        arguments: { query: "find" },
+      },
+      { type: "tool_search_output", id: "search-output", tools: [] },
+    ],
+  };
+  const call: CanonicalItem = {
+    ...base,
+    id: "call",
+    type: "tool_call",
+    callId: "local",
+    name: "lookup",
+    providerNamespace: "plugin_docs",
+    arguments: {},
+  };
+  const contexts = [
+    ...contextItemsFromLegacy(discovery, [], 0),
+    ...contextItemsFromLegacy(call, [discovery], 1),
+  ];
+  assert.deepEqual(legacyItemFromContext(contexts[0]!), discovery);
+  assert.deepEqual(legacyItemFromContext(contexts[1]!), call);
+  const compiled = compileItemList(contexts);
+  assert.deepEqual(
+    compiled.messages.map((m) => m.role),
+    ["tool_discovery", "assistant"],
+  );
+  assert.deepEqual(compiled.messages[0], {
+    role: "tool_discovery",
+    protocol: discovery.protocol,
+    endpointSha256: discovery.endpointSha256,
+    items: discovery.items,
+  });
+  assert.deepEqual(
+    compileItemList([
+      ...contexts,
+      {
+        ...base,
+        id: "compact",
+        kind: "selection",
+        role: "user",
+        source: { kind: "context_compaction", sequence: 2 },
+        content: {
+          text: "summary",
+          coveredThroughItemId: "call",
+          coveredSequence: 1,
+          retainedItemIds: [],
+        },
+      },
+    ]).messages,
+    [{ role: "user", text: "summary" }],
+  );
+  assert.throws(() =>
+    decodeContextItem({
+      ...contexts[0],
+      content: { ...discovery, endpointSha256: "https://wrong" },
+    }),
+  );
+});
+
+test("compiler preserves exact committed provider presentation and later fallback clears it", () => {
+  const presentation = {
+    protocol: "openai-responses" as const,
+    tools: [
+      {
+        type: "namespace",
+        name: "plugin_docs",
+        description: "Exact authored namespace",
+        tools: [{ type: "function", name: "lookup", defer_loading: true }],
+      },
+      { type: "tool_search" },
+    ],
+  };
+  const item: ContextItem = {
+    ...base,
+    id: "catalog",
+    kind: "tools",
+    role: "developer",
+    source: { kind: "tool_definitions", sequence: 0 },
+    content: { tools: [], providerToolPresentation: presentation },
+  };
+  assert.deepEqual(
+    compileItemList([item]).providerToolPresentation,
+    presentation,
+  );
+  const fallback: ContextItem = {
+    ...item,
+    id: "fallback",
+    source: { ...item.source, sequence: 1 },
+    content: { tools: [] },
+  };
+  assert.equal(
+    compileItemList([item, fallback]).providerToolPresentation,
+    undefined,
+  );
+});
+
+test("agentic reset excludes hosted discovery from its own source response", async () => {
+  const { itemsAfterLatestAgenticCompaction } =
+    await import("../src/context-compaction.js");
+  const discovery: CanonicalItem = {
+    ...base,
+    id: "hosted",
+    type: "tool_discovery",
+    modelResponseId: "source",
+    protocol: "openai-responses",
+    endpointSha256: "a".repeat(64),
+    items: [{ type: "tool_search_call", id: "search" }],
+  };
+  const items = [
+    { ...base, id: "boundary", type: "user_message", text: "old" },
+    discovery,
+    {
+      ...base,
+      id: "reset",
+      type: "context_compaction",
+      provenance: "agentic",
+      coveredThroughItemId: "boundary",
+      sourceModelResponseId: "source",
+    },
+  ] as CanonicalItem[];
+  assert.equal(
+    itemsAfterLatestAgenticCompaction(items).some(
+      (item) => item.id === "hosted",
+    ),
+    false,
+  );
+  assert.equal(discovery.items[0]?.id, "search");
+});

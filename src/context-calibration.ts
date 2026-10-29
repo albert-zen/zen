@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import type { CanonicalItem, CanonicalProviderSelection } from "./item.js";
-import type { ModelAdapter, ModelMessage, ModelTool } from "./model.js";
+import type {
+  ModelAdapter,
+  ModelMessage,
+  ModelTool,
+  ProviderToolPresentation,
+} from "./model.js";
 import { estimateModelInput, type ModelInputEstimate } from "./model-usage.js";
 
 export interface ContextEstimateRequest {
@@ -8,6 +13,7 @@ export interface ContextEstimateRequest {
   items: readonly CanonicalItem[];
   messages: readonly ModelMessage[];
   tools: readonly ModelTool[];
+  providerToolPresentation?: ProviderToolPresentation | undefined;
   adapter: ModelAdapter;
   selection: CanonicalProviderSelection;
   inputModalities?: readonly string[] | null;
@@ -50,6 +56,7 @@ export class ContextCalibration {
       request.instructionsMaterialized
         ? undefined
         : request.adapter.contextInstructions,
+      request.providerToolPresentation,
     );
     let adapterId = this.#adapterIds.get(request.adapter);
     if (adapterId === undefined) {
@@ -62,6 +69,7 @@ export class ContextCalibration {
         selection: request.selection,
         protocol: request.adapter.provider,
         tools: request.tools,
+        providerToolPresentation: request.providerToolPresentation,
         instructions: request.adapter.contextInstructions ?? "",
         modalities: request.inputModalities ?? null,
         boundary:

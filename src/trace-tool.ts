@@ -7,12 +7,7 @@ import {
   validateModelReferenceBindings,
   type ModelReferenceBinding,
 } from "./model-references.js";
-import {
-  capturedToolOutput,
-  type ToolExecutionResult,
-  type ToolInvocation,
-  type ToolRuntime,
-} from "./tool.js";
+import { capturedToolOutput, type ToolExecutionResult } from "./tool.js";
 import type {
   RuntimeTrace,
   TraceArtifactInput,
@@ -27,9 +22,22 @@ export type ToolTraceLocator = {
   callId: string;
   toolCallItemId?: string;
 };
+export interface ToolResultFile {
+  path: string;
+  mediaType: string;
+  byteLength: number;
+  preview: string;
+  previewTruncated: boolean;
+  sourceTruncated: boolean;
+  captureComplete: boolean;
+}
 export type ToolTraceResultReceipt =
-  | { durability: "durable"; locator: ToolTraceLocator }
-  | { durability: "degraded"; error: string };
+  | {
+      durability: "durable";
+      locator: ToolTraceLocator;
+      resultFile?: ToolResultFile;
+    }
+  | { durability: "degraded"; error: string; resultFile?: ToolResultFile };
 export interface ToolTraceCapture {
   recordInvocation(details: unknown): Promise<void>;
   recordResult(result: unknown, layer: string): Promise<ToolTraceResultReceipt>;
@@ -242,23 +250,32 @@ export function createToolTraceCapture(
             captureLayer: "javascript-inspection-not-lossless",
           });
         }
+        let readable: string;
+        let mediaType = "application/json";
+        try {
+          readable = JSON.stringify(result);
+          if (readable === undefined) throw new Error("No JSON representation");
+        } catch {
+          readable = inspect(result, {
+            depth: null,
+            maxStringLength: Infinity,
+            maxArrayLength: Infinity,
+          });
+          mediaType = "text/plain";
+        }
+        artifacts.push({
+          name: "result_json",
+          bytes: readable,
+          mediaType,
+          captureLayer: "tool-returned-readable-view",
+        });
+        const preview = readable.slice(0, 2048);
         if (streams.has("task-output")) await sink.end("task-output", true);
         await sink.flush();
         if ([...streams.values()].some((state) => state.loss))
           error ??= "One or more output byte ranges were not retained";
         if (result && typeof result === "object") {
           const typed = result as ToolExecutionResult;
-          // Portable projection is a viewer aid; raw_result preserves other fields and non-JSON values.
-          try {
-            artifacts.push({
-              name: "result_json",
-              bytes: JSON.stringify(typed),
-              mediaType: "application/json",
-              captureLayer: "tool-returned-json-view",
-            });
-          } catch {
-            /* Raw V8 artifact remains the observed value. */
-          }
           if (captured && streams.size === 0) {
             if (captured.path) {
               let file;
@@ -340,9 +357,32 @@ export function createToolTraceCapture(
           artifacts,
         );
         if (receipt.durability !== "durable") return receipt;
-        if (error) return { durability: "degraded", error };
+        const local = receipt.localArtifacts?.find(
+          (artifact) => artifact.name === "result_json",
+        );
+        const resultFile: ToolResultFile | undefined = local
+          ? {
+              path: local.path,
+              mediaType: local.ref.mediaType,
+              byteLength: local.ref.byteLength,
+              preview,
+              previewTruncated: preview.length < readable.length,
+              sourceTruncated:
+                captured?.sourceTruncated === true ||
+                (result as ToolExecutionResult | null)?.sourceTruncated ===
+                  true,
+              captureComplete: !error,
+            }
+          : undefined;
+        if (error)
+          return {
+            durability: "degraded",
+            error,
+            ...(resultFile ? { resultFile } : {}),
+          };
         return {
           durability: "durable",
+          ...(resultFile ? { resultFile } : {}),
           locator: {
             threadId: context.threadId,
             recordId: receipt.recordId,
@@ -447,183 +487,4 @@ export async function readKnownToolResult(
       }
     }
   return undefined;
-}
-/** Bounded passive evidence inspection using only trusted, current-thread provenance. */
-export class TraceReadToolRuntime implements ToolRuntime {
-  readonly name = "trace_read";
-  readonly executionMode = "parallel_safe";
-  readonly specification = {
-    name: this.name,
-    description:
-      "Read retained raw tool evidence using its trace reference. Read-only; evidence is not permission to repeat an action. Returns a bounded page; offset and limit are bytes.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ref: { type: "string" },
-        artifact: { type: "string" },
-        source: {
-          type: "string",
-          description:
-            "Raw output stream name, for example stdout or stderr; use instead of artifact.",
-        },
-        offset: { type: "integer", minimum: 0 },
-        limit: { type: "integer", minimum: 1, maximum: 65536 },
-      },
-      required: ["ref"],
-      additionalProperties: false,
-    },
-  };
-  constructor(readonly reader: TraceReader) {}
-  async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
-    const binding = invocation.modelReferences?.find(
-      (binding) =>
-        binding.ref === invocation.arguments.ref &&
-        binding.ownerThreadId === invocation.threadId &&
-        binding.namespace === "trace" &&
-        binding.kind === "tool-result",
-    );
-    if (
-      !binding ||
-      !binding.value ||
-      typeof binding.value !== "object" ||
-      Array.isArray(binding.value)
-    )
-      throw new Error("Unknown Trace reference for this thread");
-    const value = binding.value as {
-      locator?: ToolTraceLocator;
-      tool?: string;
-    };
-    const locator = value.locator;
-    if (
-      value.tool !== this.name ||
-      !locator ||
-      locator.threadId !== invocation.threadId ||
-      typeof locator.recordId !== "string" ||
-      typeof locator.callId !== "string"
-    )
-      throw new Error("Invalid Trace reference");
-    const record = await readObservedToolResult(this.reader, locator);
-    const offset = invocation.arguments.offset ?? 0,
-      limit = invocation.arguments.limit ?? 8192;
-    if (
-      !Number.isSafeInteger(offset) ||
-      Number(offset) < 0 ||
-      !Number.isSafeInteger(limit) ||
-      Number(limit) < 1 ||
-      Number(limit) > 65536
-    )
-      throw new Error("Invalid Trace byte range");
-    const all = (
-      await this.reader.read(locator.threadId, { verifyArtifacts: false })
-    ).records.filter(
-      (entry) =>
-        entry.sequence <= record.sequence && recordMatches(entry, locator),
-    );
-    const sources = [
-      ...new Set(
-        all
-          .filter(
-            (entry) =>
-              entry.type === "tool_output_chunk" ||
-              entry.type === "tool_output_end",
-          )
-          .map((entry) => (entry.data as { source: string }).source),
-      ),
-    ];
-    if (typeof invocation.arguments.source === "string") {
-      const source = invocation.arguments.source;
-      if (!sources.includes(source))
-        throw new Error("Unknown captured output source");
-      const selected = all.filter(
-          (entry) => (entry.data as { source?: string }).source === source,
-        ),
-        pages: Array<{ offset: number; data: string }> = [];
-      for (const entry of selected)
-        if (entry.type === "tool_output_chunk") {
-          const data = entry.data as { offset: number; byteLength: number },
-            from = Math.max(Number(offset), data.offset),
-            to = Math.min(
-              Number(offset) + Number(limit),
-              data.offset + data.byteLength,
-            );
-          if (to <= from) continue;
-          const artifact = entry.artifacts.find(
-            (artifact) => artifact.name === "tool_output",
-          );
-          if (!artifact) throw new Error("Raw output artifact unavailable");
-          const bytes = this.reader.readArtifactRange
-            ? await this.reader.readArtifactRange(
-                artifact.ref,
-                from - data.offset,
-                to - from,
-              )
-            : (await this.reader.readArtifact(artifact.ref)).subarray(
-                from - data.offset,
-                to - data.offset,
-              );
-          pages.push({
-            offset: from,
-            data: Buffer.from(bytes).toString("base64"),
-          });
-        }
-      const end = selected.findLast(
-        (entry) => entry.type === "tool_output_end",
-      );
-      return {
-        output: JSON.stringify({
-          source,
-          offset,
-          limit,
-          encoding: "base64",
-          pages,
-          end: end?.data ?? null,
-          gaps: selected
-            .filter((entry) => entry.type === "tool_output_gap")
-            .map((entry) => entry.data),
-        }),
-        exitCode: 0,
-      };
-    }
-    const name =
-      typeof invocation.arguments.artifact === "string"
-        ? invocation.arguments.artifact
-        : "result_json";
-    const artifact = record.artifacts.find((entry) => entry.name === name);
-    if (!artifact)
-      return {
-        output: JSON.stringify({
-          sources,
-          artifacts: record.artifacts.map((entry) => ({
-            name: entry.name,
-            ...entry.ref,
-          })),
-        }),
-        exitCode: 0,
-      };
-    const page = this.reader.readArtifactRange
-      ? await this.reader.readArtifactRange(
-          artifact.ref,
-          Number(offset),
-          Number(limit),
-        )
-      : (await this.reader.readArtifact(artifact.ref)).subarray(
-          Number(offset),
-          Number(offset) + Number(limit),
-        );
-    // Base64 preserves exact byte ranges, including split UTF8 and arbitrary binary artifacts.
-    return {
-      output: JSON.stringify({
-        artifact: name,
-        sources,
-        mediaType: artifact.ref.mediaType,
-        offset,
-        byteLength: artifact.ref.byteLength,
-        nextOffset: Number(offset) + page.length,
-        eof: Number(offset) + page.length >= artifact.ref.byteLength,
-        encoding: "base64",
-        data: Buffer.from(page).toString("base64"),
-      }),
-      exitCode: 0,
-    };
-  }
 }

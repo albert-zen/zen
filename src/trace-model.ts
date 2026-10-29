@@ -37,6 +37,12 @@ export function observeModelWithTrace(
   if (existing) return existing;
   const wrapped: ModelAdapter = {
     provider: adapter.provider,
+    ...(adapter.prepareToolPresentation === undefined
+      ? {}
+      : {
+          prepareToolPresentation:
+            adapter.prepareToolPresentation.bind(adapter),
+        }),
     ...(adapter.contextInstructions === undefined
       ? {}
       : { contextInstructions: adapter.contextInstructions }),

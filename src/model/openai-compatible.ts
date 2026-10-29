@@ -194,6 +194,7 @@ export class OpenAiCompatibleModel implements ModelAdapter {
     };
     let pendingReasoning = "";
     for (const message of request.messages) {
+      if (message.role === "tool_discovery") continue;
       if (message.role === "reasoning") {
         if (message.contentVisibility === "public") {
           pendingReasoning = [pendingReasoning, message.reasoningContent]
@@ -796,7 +797,7 @@ async function toChatMessage(
   attachments: Pick<AttachmentStore, "read"> | undefined,
   developerRole: "system" | "developer",
 ): Promise<Readonly<Record<string, unknown>>> {
-  if (message.role === "reasoning") {
+  if (message.role === "reasoning" || message.role === "tool_discovery") {
     throw modelError(
       "configuration",
       "Semantic reasoning must be encoded with its assistant message",

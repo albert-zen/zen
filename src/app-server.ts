@@ -3873,6 +3873,11 @@ export class ZenAppServer {
                                       instructions:
                                         sample.adapter.contextInstructions,
                                     }),
+                                providerToolPresentation:
+                                  sample.adapter.prepareToolPresentation?.(
+                                    sample.selection.modelId,
+                                    presentation.modelTools,
+                                  ),
                                 tools: presentation.modelTools,
                                 inputModalities: sample.model.inputModalities,
                                 ...(notice === undefined ? {} : { notice }),
@@ -3901,6 +3906,12 @@ export class ZenAppServer {
                             active.contextCompactionNoticeIssued = true;
                           return {
                             compiled: true as const,
+                            ...(compiled.providerToolPresentation === undefined
+                              ? {}
+                              : {
+                                  providerToolPresentation:
+                                    compiled.providerToolPresentation,
+                                }),
                             messages: compiled.messages,
                             presentation: {
                               ...presentation,
@@ -4516,6 +4527,10 @@ export class ZenAppServer {
           ? {}
           : { instructions: resolved.adapter.contextInstructions }),
         tools: presentation.modelTools,
+        providerToolPresentation: resolved.adapter.prepareToolPresentation?.(
+          resolved.selection.modelId,
+          presentation.modelTools,
+        ),
         inputModalities: resolved.model.inputModalities,
         id: this.#id,
         now: this.#now,
@@ -4531,6 +4546,7 @@ export class ZenAppServer {
       items,
       messages: compiled.messages,
       tools: compiled.tools,
+      providerToolPresentation: compiled.providerToolPresentation,
       adapter: resolved.adapter,
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,

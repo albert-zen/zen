@@ -7,7 +7,7 @@ import {
   Dialog,
 } from "../../src/renderer/src/ui/controls.js";
 import { PermissionSelect } from "../../src/renderer/src/PermissionSelect.js";
-import { ContextCompactionEvent } from "../../src/renderer/src/ThreadView.js";
+import { ContextCompactionEvent } from "../../src/renderer/src/ContextCompactionEvent.js";
 import "../../src/renderer/src/theme.css";
 import "../../src/renderer/src/styles.css";
 installScrollbarVisibility(document);
@@ -82,7 +82,32 @@ function Preview() {
       <ContextCompactionEvent
         projection={{
           canonicalIndex: 6,
-          effectiveMessages: [{ role: "user", text: "Retained request" }],
+          effectiveMessages: [
+            { role: "user", text: "Retained request" },
+            {
+              role: "tool_discovery",
+              protocol: "openai-responses",
+              endpointSha256: "a".repeat(64),
+              items: [
+                {
+                  type: "tool_search_call",
+                  id: "synthetic-search",
+                  arguments: { query: "Find project documentation" },
+                },
+                {
+                  type: "tool_search_output",
+                  id: "synthetic-output",
+                  tools: [
+                    {
+                      type: "function",
+                      name: "docs_lookup",
+                      description: "Read synthetic project documentation",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
           item: {
             id: "compact-1",
             type: "context_compaction",

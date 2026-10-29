@@ -59,6 +59,12 @@ export type TraceReceipt =
       recordId: string;
       sequence: number;
       sync: "file-and-directory" | "file";
+      /** Existing artifacts readable on this execution Host, never remote spool paths. */
+      localArtifacts?: Array<{
+        name: string;
+        path: string;
+        ref: TraceArtifactRef;
+      }>;
     }
   | { durability: "degraded"; error: string; recordId?: string };
 export interface TraceIssue {
@@ -187,6 +193,10 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
           recordId: id,
           sequence: record.sequence,
           sync,
+          localArtifacts: artifacts.map((artifact) => ({
+            ...artifact,
+            path: this.#artifactPath(artifact.ref.sha256),
+          })),
         };
       } catch (error) {
         this.#segments.delete(snapshot.threadId);

@@ -569,7 +569,6 @@ test("budget failure retains consumed refs, exact trace locator and known outcom
     invocation: {
       ...invocation("zenx_fleet_threads_create", { device: d }),
       modelReferences: scope.newBindings,
-      modelTraceInspectionTool: "trace_read",
       traceOutput: capture,
     },
     epoch: "instance",
@@ -589,12 +588,14 @@ test("budget failure retains consumed refs, exact trace locator and known outcom
   const data = JSON.parse(result.output);
   assert.equal(data.projection, "projection_unavailable");
   assert.equal(data.outcome.created, true);
-  assert.equal(data.trace.tool, "trace_read");
+  assert.equal(data.raw_result_file, undefined);
   assert.equal(effects, 1);
   assert.ok(result.output.length < 1500);
   assert.ok(trustedModelReferenceBindings(result)?.some((b) => b.ref === d));
   assert.ok(
-    trustedModelReferenceBindings(result)?.some((b) => b.namespace === "trace"),
+    !trustedModelReferenceBindings(result)?.some(
+      (b) => b.namespace === "trace",
+    ),
   );
 });
 test("source reply consumes only the trusted received local message route, not sender rediscovery", async () => {
@@ -996,10 +997,9 @@ test("native remote history emits exact Trigger source refs while preserving lit
   assert.equal(JSON.parse(result.output).name, "Trigger");
   assert.ok(!result.output.includes(target));
 });
-test("publication failure with no typed outcome is unclassified and a durable Trace ref reads the original bytes", async (t) => {
+test("publication failure with no typed outcome is unclassified and ordinary shell reads the original local artifact bytes", async (t) => {
   const { FileTraceStore } = await import("../../../src/trace.js"),
-    { createToolTraceCapture, TraceReadToolRuntime } =
-      await import("../../../src/trace-tool.js");
+    { createToolTraceCapture } = await import("../../../src/trace-tool.js");
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "fleet-budget-trace-"),
   );
@@ -1015,12 +1015,12 @@ test("publication failure with no typed outcome is unclassified and a durable Tr
   const nativeOutput = JSON.stringify({
     threadId: "x".repeat(1024 * 1024 + 1),
     literal,
+    targetOnlySpool: "/remote-only/not-transmitted",
   });
   const result = await invokeModelToolFacade({
     invocation: {
       ...invocation("zenx_fleet_threads_create", { device: d }),
       modelReferences: scope.newBindings,
-      modelTraceInspectionTool: "trace_read",
       traceOutput: createToolTraceCapture(traceStore, {
         threadId: "owner",
         callId: "call",
@@ -1032,27 +1032,33 @@ test("publication failure with no typed outcome is unclassified and a durable Tr
     epoch: "fixture",
     dispatch: async () => {
       effects++;
-      return { output: nativeOutput, exitCode: 0 };
+      return { output: nativeOutput, exitCode: 0, sourceTruncated: true };
     },
   });
   const receipt = JSON.parse(result.output);
   assert.equal(receipt.outcome.classification, "unclassified");
   assert.equal(receipt.projection, "projection_unavailable");
   assert.equal(effects, 1);
-  const reader = new TraceReadToolRuntime(traceStore),
-    bindings = trustedModelReferenceBindings(result);
-  const manifest = JSON.parse(
-    (
-      await reader.execute({
-        ...invocation("trace_read", { ref: receipt.trace.ref }),
-        modelReferences: bindings,
-      })
-    ).output,
-  );
-  assert.equal(manifest.encoding, "base64");
-  assert.equal(manifest.artifact, "result_json");
-  assert.ok(manifest.byteLength > 1024 * 1024);
-  assert.equal(manifest.eof, false);
+  const { ShellToolRuntime } = await import("../../../src/tool.js");
+  const shell = new ShellToolRuntime({ maxOutputBytes: 2 * 1024 * 1024 });
+  const read = await shell.execute({
+    ...invocation("shell", {
+      command: `cat ${JSON.stringify(receipt.raw_result_file.path)}`,
+    }),
+    outputAudience: "program",
+    // Synthetic owned artifact read: exercise the real shell, not OS containment.
+    // CI need not install bwrap; production sandbox policy is unchanged.
+    sandbox: "danger-full-access",
+    cwd: directory,
+    task: { previewBytes: 2 * 1024 * 1024 },
+  });
+  assert.equal(JSON.parse(read.output).output, nativeOutput);
+  assert.equal(receipt.raw_result_file.previewTruncated, true);
+  assert.equal(receipt.raw_result_file.sourceTruncated, true);
+  assert.equal(receipt.raw_result_file.captureComplete, true);
+  assert.ok(receipt.raw_result_file.path.startsWith(directory));
+  assert.notEqual(receipt.raw_result_file.path, "/remote-only/not-transmitted");
+  assert.ok(receipt.raw_result_file.byteLength > 1024 * 1024);
   const raw = await traceStore.read("owner");
   const observed = raw.records.find((r) => r.type === "tool_result_observed")!;
   assert.ok(observed.artifacts.length);

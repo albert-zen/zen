@@ -13,6 +13,7 @@ import {
   COMPACT_CONTEXT_NAME,
   createRunCodeModelTool,
   generateToolSdk,
+  generateToolCatalog,
 } from "../src/tool-presentation.js";
 
 const ordinaryTools: ModelTool[] = [
@@ -86,9 +87,9 @@ test("runtime concurrency declarations reach both SDK and discovery descriptions
     snapshot.codeTools.find((tool) => tool.name === "edit_rows")!.description,
     "Edit rows.",
   );
-  assert.match(
+  assert.doesNotMatch(
     snapshot.modelTools.find((tool) => tool.name === "run_code")!.description,
-    /\[parallel_safe\] Read rows\./,
+    /Read rows/,
   );
   assert.equal(parallel.specification.description, "Read rows.");
 });
@@ -134,20 +135,11 @@ test("presentation modes project one frozen ordinary-tool snapshot", () => {
 
   const codeDescription = code.modelTools[0]?.description ?? "";
   assert.equal(codeDescription, both.modelTools.at(-1)?.description);
-  assert.match(codeDescription, /\n  shell\(args:/u);
-  assert.match(codeDescription, /\n  "plugin\.tool-name"\(args:/u);
-  assert.match(
-    codeDescription,
-    /Invoke as tools\["plugin\.tool-name"\]\(\.\.\.\)/u,
-  );
-  assert.match(codeDescription, /\n  default\(args:/u);
-  assert.match(codeDescription, /\n  malformed\(args: unknown\)/u);
-  assert.doesNotMatch(codeDescription, /\n  run_code\(|\n  "run_code"\(/u);
+  assert.equal(codeDescription, createRunCodeModelTool([]).description);
+  assert.match(codeDescription, /Filter\/map it in JavaScript/u);
+  assert.doesNotMatch(codeDescription, /shell\(args:|plugin\.tool-name/u);
 
-  assert.deepEqual(
-    code.codeTools,
-    ordinaryTools.map(({ name, description }) => ({ name, description })),
-  );
+  assert.deepEqual(code.codeTools, generateToolCatalog(ordinaryTools));
   assert.deepEqual(code.codeTools, both.codeTools);
   assert.deepEqual(code.codeTools, direct.codeTools);
   assert.ok(Object.isFrozen(code.codeTools));
@@ -329,4 +321,48 @@ test("shipped image and first-party schemas retain code-mode argument contracts"
       assert.match(sendSdk, /messageType\?:/u);
     }
   }
+});
+
+test("selected discovery metadata survives semantic declaration serialization without changing schemas", async () => {
+  const { prepareSampleContext } =
+    await import("../src/context-preparation.js");
+  const { compileItemList, decodeContextItem } =
+    await import("../src/item-list.js");
+  const tools = [
+    {
+      ...ordinaryTools[0]!,
+      pluginId: "fixture",
+      fullDescription: "Long usage stays in the catalog.",
+    },
+  ];
+  let id = 0;
+  const items = prepareSampleContext({
+    threadId: "thread",
+    sampleId: "sample",
+    items: [],
+    itemList: [],
+    sandbox: "danger-full-access",
+    tools,
+    inputModalities: null,
+    id: () => `context-${++id}`,
+    now: () => "2026-10-29T00:00:00Z",
+  });
+  const reloaded = items.map((item) =>
+    decodeContextItem(JSON.parse(JSON.stringify(item))),
+  );
+  assert.deepEqual(compileItemList(reloaded).tools, tools);
+  assert.deepEqual(
+    prepareSampleContext({
+      threadId: "thread",
+      sampleId: "next-sample",
+      items: [],
+      itemList: reloaded,
+      sandbox: "danger-full-access",
+      tools,
+      inputModalities: null,
+      id: () => `context-${++id}`,
+      now: () => "2026-10-29T00:00:01Z",
+    }),
+    [],
+  );
 });

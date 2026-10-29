@@ -1,3 +1,7 @@
+import {
+  responsesToolPresentation,
+  supportsHostedToolSearch,
+} from "./deferred-tools.js";
 import { contextUserContent } from "./context-content.js";
 import { createHash } from "node:crypto";
 import type { AttachmentStore } from "../attachment.js";
@@ -6,6 +10,7 @@ import {
   type ModelAdapter,
   type ModelEvent,
   type ModelRequest,
+  type ModelTool,
 } from "../model.js";
 import {
   mediaRequestRejected,
@@ -89,13 +94,70 @@ export class OpenAiResponsesModel implements ModelAdapter {
         );
   }
 
+  prepareToolPresentation(
+    model: string,
+    tools: readonly ModelTool[],
+  ):
+    | { protocol: "openai-responses"; tools: Record<string, unknown>[] }
+    | undefined {
+    if (!supportsHostedToolSearch(this.#endpoint, model)) return undefined;
+    const presentation = responsesToolPresentation(tools, true);
+    return presentation.namespaces.size === 0
+      ? undefined
+      : {
+          protocol: "openai-responses",
+          tools: presentation.tools,
+        };
+  }
+
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     request.signal.throwIfAborted();
     if (!request.model.trim())
       throw new Error("Public Responses model is required");
+    const nativeDiscovery =
+      request.providerToolPresentation?.protocol === "openai-responses" &&
+      supportsHostedToolSearch(this.#endpoint, request.model);
+    const presentation = responsesToolPresentation(request.tools, false);
+    if (nativeDiscovery) {
+      // The compiler already committed this exact model-visible presentation.
+      presentation.tools = structuredClone(
+        request.providerToolPresentation!.tools,
+      );
+      for (const group of presentation.tools) {
+        if (
+          group.type !== "namespace" ||
+          typeof group.name !== "string" ||
+          !Array.isArray(group.tools)
+        )
+          continue;
+        for (const member of group.tools) {
+          if (
+            !member ||
+            typeof member.name !== "string" ||
+            !request.tools.some((tool) => tool.name === member.name)
+          ) {
+            throw new Error(
+              "Compiled discovery presentation contains an unavailable tool",
+            );
+          }
+          presentation.namespaces.set(member.name, group.name);
+        }
+      }
+    }
     const input: Record<string, unknown>[] = [];
     const mediaPaths = new Map<string, object>();
     for (const message of request.messages) {
+      if (message.role === "tool_discovery") {
+        // Discovery semantics are endpoint-bound and never sent to compatibility routes.
+        if (
+          nativeDiscovery &&
+          message.protocol === "openai-responses" &&
+          message.endpointSha256 === this.#provenance.endpointSha256
+        ) {
+          input.push(...structuredClone(message.items));
+        }
+        continue;
+      }
       if (message.role === "reasoning") {
         if (message.contentVisibility === "opaque") {
           const provenance = message.opaqueReplayProvenance;
@@ -155,6 +217,11 @@ export class OpenAiResponsesModel implements ModelAdapter {
               ? historicalCallId(call.callId)
               : providerCallId(call.callId),
             name: call.imported ? historicalToolName(call) : call.name,
+            ...(nativeDiscovery &&
+            call.providerNamespace !== undefined &&
+            !call.imported
+              ? { namespace: call.providerNamespace }
+              : {}),
             arguments: serializeArguments(call.arguments),
           });
       } else if (message.role === "user") {
@@ -171,13 +238,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
       else input.push(assistantText(message.text));
     }
     for (const tool of request.tools) assertProviderToolName(tool.name);
-    const tools = request.tools.map((tool) => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema,
-      strict: false,
-    }));
+    const tools = presentation.tools;
     const body = JSON.stringify({
       ...this.#params,
       model: request.model.trim(),
@@ -248,10 +309,18 @@ export class OpenAiResponsesModel implements ModelAdapter {
       for await (const event of parseResponsesStream(
         response.body,
         request.signal,
-        new Set(tools.map((t) => t.name)),
+        new Set(request.tools.map((t) => t.name)),
         new Set(),
         this.#apiKey,
-        { requireEncryptedReasoning: true },
+        {
+          requireEncryptedReasoning: true,
+          ...(nativeDiscovery
+            ? {
+                discoveryEndpointSha256: this.#provenance.endpointSha256,
+                toolNamespaces: presentation.namespaces,
+              }
+            : {}),
+        },
       )) {
         yield event.type === "reasoning" && event.contentVisibility === "opaque"
           ? { ...event, opaqueReplayProvenance: { ...this.#provenance } }
