@@ -44,6 +44,7 @@ import {
   type AttachmentStore,
 } from "./attachment.js";
 import {
+  AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE,
   boundedCompactionBoundary,
   CONTEXT_COMPACTION_ALGORITHM_VERSION,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
@@ -4592,18 +4593,16 @@ export class ZenAppServer {
         // should act at the configured trigger rather than waiting for the
         // emergency margin. Agentic mode gets the reminder window first.
         const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
-        if (!hardFallback && !automaticAtTrigger) {
-          if (
-            options.contextCompaction.agenticEnabled &&
-            active.contextCompactionNotice === undefined
-          ) {
-            active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
-              Math.round((observedInputTokens / contextWindow) * 100),
-            )}% of the configured window. Consider calling compact_context with a concise continuation summary; the current Turn can continue.`;
-            active.contextCompactionNoticeIssued = false;
-          }
-          return false;
+        if (
+          !automaticAtTrigger &&
+          active.contextCompactionNotice === undefined
+        ) {
+          active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
+            Math.round((observedInputTokens / contextWindow) * 100),
+          )}% of the configured window. Consider calling compact_context with a concise continuation summary. ${AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE} The current Turn can continue. At ${String(fallbackPercent)}%, Host policy may automatically compact completed history before the next sample.`;
+          active.contextCompactionNoticeIssued = false;
         }
+        if (!hardFallback && !automaticAtTrigger) return false;
 
         // Use the same bounded retention planner as ordinary compaction. In
         // particular, an active first Turn has no completed boundary: the

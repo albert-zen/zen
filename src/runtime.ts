@@ -1,5 +1,3 @@
-import { resolveBuiltinCompactionReference } from "./builtin-model-handles.js";
-import { itemsAfterLatestAgenticCompaction } from "./context-compaction.js";
 import { compileItemList } from "./item-list.js";
 import {
   contextForFacts,
@@ -70,8 +68,8 @@ import {
   AGENTIC_CONTEXT_COMPACTION_ALGORITHM_VERSION,
   AGENTIC_CONTEXT_COMPACTION_TOOL,
   AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-  normalizeContextCompactionConfig,
-  planCompactionRetention,
+  normalizeAgenticCompactionRetention,
+  planAgenticCompactionRetention,
   CONTEXT_COMPACTION_SUMMARY_PREFIX,
 } from "./context-compaction.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
@@ -640,6 +638,7 @@ export class AgentRuntime {
           await this.#completeItem(toolCallItem, options);
           toolCallItems.push(toolCallItem);
         }
+        let agenticCompactionCommitted = false;
         await this.#runToolBatch(
           turnId,
           toolCallItems,
@@ -649,16 +648,18 @@ export class AgentRuntime {
             ...options,
             configuration: result.configuration,
             modelAdapter: result.modelAdapter,
+            agenticCompactionCommitted: () => {
+              agenticCompactionCommitted = true;
+              options.agenticCompactionCommitted?.();
+            },
           },
           scheduler,
         );
         try {
           await options.afterToolBatch?.({
             inputTokens: result.inputTokens,
-            agenticCompaction: result.toolCalls.some(
-              (toolCall) =>
-                toolCall.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-            ),
+            // An attempted/rejected reset is not a new context or usage epoch.
+            agenticCompaction: agenticCompactionCommitted,
           });
         } catch (error) {
           // The batch has settled and its actual results are already canonical.
@@ -1505,84 +1506,7 @@ export class AgentRuntime {
     }
     let retention;
     try {
-      if (
-        rawRetention !== undefined &&
-        (typeof rawRetention !== "object" ||
-          rawRetention === null ||
-          Array.isArray(rawRetention))
-      ) {
-        throw new Error("retention must be an object");
-      }
-      const supplied = rawRetention as Record<string, unknown> | undefined;
-      if (
-        supplied !== undefined &&
-        Object.keys(supplied).some(
-          (key) =>
-            ![
-              "recentItemCount",
-              "recentTurnCount",
-              "itemIds",
-              "itemRanges",
-              "preserveUserMessages",
-              "finalMessages",
-              "finalMessageCount",
-            ].includes(key),
-        )
-      ) {
-        throw new Error("unsupported retention option");
-      }
-      const cutoff = options.thread.items.findIndex(
-        (item) => item.id === agentic.contextBoundaryItemId,
-      );
-      if (cutoff < 0)
-        throw new Error("Context compaction sample boundary is missing");
-      const eligible = new Set(
-        itemsAfterLatestAgenticCompaction(
-          options.thread.items.slice(0, cutoff + 1),
-        ).map((item) => item.id),
-      );
-      const selected = new Set(
-        compileItemList(options.thread.itemList, {
-          ...(toolCall.modelResponseId === undefined
-            ? {}
-            : { sampleId: toolCall.modelResponseId }),
-        }).selectedItemIds,
-      );
-      const sources = options.thread.itemList.filter(
-        (item) => selected.has(item.id) && eligible.has(item.id),
-      );
-      const resolve = (ref: string) =>
-        resolveBuiltinCompactionReference({
-          ownerThreadId: options.thread.id,
-          ref,
-          history: options.thread.itemList.flatMap((item) =>
-            item.source.metadata !== undefined &&
-            item.source.metadata.onlySampleId === toolCall.modelResponseId &&
-            item.source.metadata.referenceBindings !== undefined
-              ? validateModelReferenceBindings(
-                  item.source.metadata.referenceBindings,
-                )
-              : [],
-          ),
-          sources,
-        });
-      const normalized = normalizeContextCompactionConfig({
-        retention: {
-          mode:
-            supplied?.recentItemCount === undefined
-              ? "selected-items"
-              : "recent-items",
-          ...supplied,
-        },
-      } as Parameters<typeof normalizeContextCompactionConfig>[0]).retention;
-      retention = {
-        ...normalized,
-        itemIds: normalized.itemIds.map(resolve),
-        itemRanges: normalized.itemRanges.map((range) => ({
-          fromItemId: resolve(range.fromItemId),
-          toItemId: resolve(range.toItemId),
-        })),
-      };
+      retention = normalizeAgenticCompactionRetention(rawRetention);
     } catch (error) {
       return immediateScheduledExecution({
         output: `compact_context invalid retention: ${describeError(error)}`,
@@ -1671,7 +1595,7 @@ export class AgentRuntime {
               "Compacted context and repository instructions exceed the selected model context window",
             );
           }
-          const planned = planCompactionRetention(
+          const planned = planAgenticCompactionRetention(
             options.thread.items,
             {
               item: boundaryItem,
@@ -1684,7 +1608,12 @@ export class AgentRuntime {
               estimateRetainedTokens: (retainedItems) =>
                 estimateModelMessageInputTokens(
                   compileItemList(
-                    contextForFacts(retainedItems, options.thread.itemList),
+                    contextForFacts(
+                      retainedItems,
+                      options.thread.itemList,
+                    ).filter((item) =>
+                      retainedItems.some((retained) => retained.id === item.id),
+                    ),
                     {
                       selection: {
                         providerProfileId:

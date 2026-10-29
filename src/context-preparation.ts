@@ -1,17 +1,4 @@
-import { builtinCompactionReferences } from "./builtin-model-handles.js";
-import {
-  AGENTIC_CONTEXT_COMPACTION_TOOL_NAME,
-  itemsAfterLatestAgenticCompaction,
-} from "./context-compaction.js";
-import {
-  validateModelReferenceBindings,
-  ModelReferenceBudgetError,
-} from "./model-references.js";
-import {
-  compileItemList,
-  contextItemsFromLegacy,
-  type ContextItem,
-} from "./item-list.js";
+import { contextItemsFromLegacy, type ContextItem } from "./item-list.js";
 import {
   compileWorkspaceInstructionMessages,
   filePermissionContext,
@@ -141,60 +128,6 @@ export function prepareSampleContext(options: {
     });
   if (options.notice !== undefined)
     addText("context_notice", "user", options.notice, true);
-  if (
-    tools.some((tool) => tool.name === AGENTIC_CONTEXT_COMPACTION_TOOL_NAME)
-  ) {
-    const selected = new Set(
-      compileItemList(options.itemList, { sampleId: options.sampleId })
-        .selectedItemIds,
-    );
-    const eligible = new Set(
-      itemsAfterLatestAgenticCompaction(options.items).map((item) => item.id),
-    );
-    const history = options.itemList.flatMap((item) =>
-      item.source.metadata?.referenceBindings === undefined
-        ? []
-        : validateModelReferenceBindings(
-            item.source.metadata.referenceBindings,
-          ),
-    );
-    try {
-      const references = builtinCompactionReferences({
-        ownerThreadId: options.threadId,
-        sources: options.itemList.filter(
-          (item) => selected.has(item.id) && eligible.has(item.id),
-        ),
-        history,
-      });
-      if (references.text)
-        result.push({
-          ...base(),
-          source: {
-            kind: "context_notice",
-            sequence,
-            metadata: {
-              onlySampleId: options.sampleId,
-              referenceBindings:
-                references.referenceBindings as unknown as import("./item.js").JsonValue,
-            },
-          },
-          kind: "message",
-          role: "developer",
-          content: {
-            text: references.text,
-            parts: [{ type: "text", text: references.text }],
-          },
-        });
-    } catch (error) {
-      if (!(error instanceof ModelReferenceBudgetError)) throw error;
-      addText(
-        "context_notice",
-        "developer",
-        "[Explicit compaction item references are unavailable within the publication budget. Use recentItemCount/recentTurnCount or message categories, not guessed references.]",
-        true,
-      );
-    }
-  }
   const ended = new Set(
     options.items.flatMap((item) =>
       item.type === "turn_completed" || item.type === "turn_aborted"
