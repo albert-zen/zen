@@ -704,7 +704,32 @@ async function bootstrapZenX(): Promise<void> {
         get rooms() {
           if (!automationService)
             throw new Error("Rooms service is unavailable");
-          return automationService;
+          const rooms = automationService;
+          return {
+            roomsAvailable: () =>
+              rooms.roomsAvailable() &&
+              !!capabilityService
+                ?.pluginSnapshot()
+                .plugins.some(
+                  (plugin) =>
+                    plugin.id === "zenx-rooms" &&
+                    plugin.enabled &&
+                    plugin.available,
+                ),
+            snapshot: () => rooms.snapshot(),
+            postAddressedRoomMessage:
+              rooms.postAddressedRoomMessage.bind(rooms),
+            onChange: (listener: () => void) => {
+              const stopRooms = rooms.onChange(listener);
+              // Catalog publication is the existing disable/retirement signal;
+              // Room facts alone need not change when only its plugin stops.
+              const stopCatalog = capabilityService?.onChange(listener);
+              return () => {
+                stopRooms();
+                stopCatalog?.();
+              };
+            },
+          };
         },
         executeTool: async (input, signal, assertOwner) => {
           if (!appServerManager) throw new Error("App Server is not attached");

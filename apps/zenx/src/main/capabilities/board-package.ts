@@ -117,6 +117,8 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     }
     if (name === "zenx_board_ui" && args.operation === "event")
       return await this.#event(owner, args, invocation.signal);
+    if (name === "zenx_board_ui" && args.operation === "navigate")
+      return await this.#navigate(owner, args, invocation.signal);
     return await this.#serial(async () => {
       const boards = await this.#boards();
       const key = boardOwnerKey(owner);
@@ -148,6 +150,13 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         if (!current) return null;
         if (args.view !== "document") return semantic(current);
         const routes: BrowserModelRoute[] = [];
+        const navigationDiagnostics: Array<{
+          kind: string;
+          id: string;
+          status: "unknown" | "unavailable";
+          error?: string;
+          errorDetail?: string;
+        }> = [];
         for (const target of navigationTargets(
           current.document.events.flatMap((event) => event.actions),
         )) {
@@ -160,11 +169,30 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
               !routes.some((entry) => sameRoute(entry, route))
             )
               routes.push(route);
-          } catch {
-            /* One closed/unavailable target never erases authored content. */
+            if (!route)
+              navigationDiagnostics.push({
+                kind: target.kind,
+                id: target.id,
+                status: "unavailable",
+              });
+          } catch (error) {
+            // Transient local evidence is retained in ordinary raw Trace; model projection removes routing IDs/details.
+            navigationDiagnostics.push({
+              kind: target.kind,
+              id: target.id,
+              status: "unknown",
+              error: error instanceof Error ? error.message : String(error),
+              errorDetail: localErrorDetail(error),
+            });
           }
         }
-        return attachBrowserSidebarTargets(current, routes);
+        return attachBrowserSidebarTargets(
+          {
+            ...current,
+            ...(navigationDiagnostics.length ? { navigationDiagnostics } : {}),
+          },
+          routes,
+        );
       }
       if (args.operation === "read") return current ?? null;
       if (!current) throw new Error("No board exists for this conversation");
@@ -184,6 +212,42 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       return current;
     });
   }
+  async #navigate(
+    owner: BoardOwner,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<BoardEventResult> {
+    const target = validateNavigationTarget(args.target);
+    const key = boardOwnerKey(owner);
+    if (this.#running.has(key))
+      throw new Error("A Board action is already running; it was not repeated");
+    this.#running.add(key);
+    try {
+      const snapshot = await this.#serial(async () => {
+        const current = (await this.#boards())[key];
+        if (!current || current.document.owner.threadId !== owner.threadId)
+          throw new Error("Board owner is unavailable");
+        if (current.revision !== args.revision)
+          throw new Error(
+            "Board changed; review the latest content before navigating",
+          );
+        return structuredClone(current);
+      });
+      signal.throwIfAborted();
+      await this.host.readOwner(owner);
+      if (!this.host.navigate)
+        throw new Error("Board resource navigation is unavailable");
+      await this.host.navigate(owner, target, signal);
+      return {
+        snapshot,
+        navigation: [target],
+        outcomes: [{ kind: "navigate" }],
+      };
+    } finally {
+      this.#running.delete(key);
+    }
+  }
+
   async #event(
     owner: BoardOwner,
     args: Record<string, unknown>,
@@ -240,6 +304,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             continue;
           }
           if (action.kind === "navigate") {
+            if (!action.target)
+              throw new Error(
+                "This saved Board uses legacy route navigation. Replace it with a typed URL or exact Browser target before running it.",
+              );
             const target =
               action.target.kind === "url"
                 ? validateNavigationTarget({
@@ -714,7 +782,9 @@ export function validateDocument(
 function navigationTargets(actions: BoardAction[]): BoardNavigationTarget[] {
   return actions.flatMap((action) =>
     action.kind === "navigate"
-      ? [action.target]
+      ? action.target
+        ? [action.target]
+        : []
       : action.kind === "if"
         ? [
             ...navigationTargets(action.then),

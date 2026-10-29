@@ -204,6 +204,9 @@ export function PluginInformationHost({
             side="bottom"
             align="end"
             className="information-popover"
+            style={{
+              maxHeight: `min(720px, calc(100vh - ${Math.max(headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
+            }}
             sideOffset={Math.max(
               8,
               headerBottom -

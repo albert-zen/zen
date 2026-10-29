@@ -89,7 +89,7 @@ test("late information admission measures Browser coexistence, tracks wrapped he
         "Fixture content",
       ),
   });
-  let current = { ...snapshot, information: [] };
+  let current: ZenXPluginSnapshot = { ...snapshot, information: [] };
   function Harness() {
     const theme = useAppearance();
     return React.createElement(PluginInformationHost, {
@@ -126,6 +126,12 @@ test("late information admission measures Browser coexistence, tracks wrapped he
       "resource heading is measured, not an assumed 44px row",
     );
     await click(".information-toolbar button");
+    assert.match(
+      document.querySelector<HTMLElement>(".information-popover")!.style
+        .maxHeight,
+      /120px/,
+      "popup height is bounded below the measured header, not shifted over its controls",
+    );
     await click("[data-information-pin]");
     const rail = document.querySelector<HTMLElement>(".information-rail")!;
     assert.equal(

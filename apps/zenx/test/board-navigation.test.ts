@@ -173,3 +173,209 @@ test("untyped routes and unsafe URL schemes cannot enter authored Board navigati
       }),
     );
 });
+
+test("full document reads distinguish unknown native observation failures and retain local details", async () => {
+  const f = fixture();
+  const board = new ZenXBoardCapabilityPackage(f.host);
+  board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+  const invoke = (name: string, args: Record<string, unknown>) =>
+    board.invoke(name, {
+      name,
+      callId: "synthetic",
+      cwd: "/synthetic",
+      threadId: owner.threadId,
+      arguments: args,
+      signal: signal(),
+    });
+  await invoke("zenx_board_put", { document });
+  f.host.options.readBrowserModelTarget = async () => {
+    throw new Error("Synthetic native listing disconnected", {
+      cause: new Error("Synthetic local cause"),
+    });
+  };
+  const full = (await invoke("zenx_board_read", { view: "document" })) as any;
+  assert.deepEqual(full.document, document);
+  assert.equal(full.navigationDiagnostics[0].status, "unknown");
+  assert.equal(
+    full.navigationDiagnostics[0].error,
+    "Synthetic native listing disconnected",
+  );
+  assert.match(
+    full.navigationDiagnostics[0].errorDetail,
+    /Synthetic local cause/,
+  );
+  assert.deepEqual(readBrowserSidebarTargets(full), []);
+});
+
+test("legacy persisted route documents remain fully readable but cannot execute obsolete routes", async () => {
+  const f = fixture();
+  const sdk = createFixturePluginHost({ pluginId: "zenx-board" }).sdk;
+  const legacy = {
+    ...document,
+    events: [
+      {
+        id: "old",
+        label: "Old",
+        actions: [{ kind: "navigate", route: "plugin:old-authored-route" }],
+      },
+    ],
+  };
+  await sdk.storage.set({
+    boards: {
+      [`thread:${owner.threadId}`]: {
+        document: legacy,
+        revision: 1,
+        draftRevision: 0,
+        values: {},
+        pinned: false,
+      },
+    },
+  });
+  const board = new ZenXBoardCapabilityPackage(f.host);
+  board.start(sdk);
+  const full = (await board.invoke("zenx_board_read", {
+    name: "zenx_board_read",
+    callId: "read",
+    cwd: "/synthetic",
+    threadId: owner.threadId,
+    arguments: { view: "document" },
+    signal: signal(),
+  })) as any;
+  assert.deepEqual(full.document, legacy);
+  const result = (await board.invoke("zenx_board_ui", {
+    name: "zenx_board_ui",
+    callId: "event",
+    cwd: "/synthetic",
+    threadId: owner.threadId,
+    trustedPluginUi: true,
+    arguments: {
+      input: {
+        operation: "event",
+        owner,
+        eventId: "old",
+        revision: 1,
+        draftRevision: 0,
+      },
+    },
+    signal: signal(),
+  })) as any;
+  assert.match(result.error, /legacy route/);
+  assert.equal(f.writes(), 0);
+});
+
+test("custom isolated navigation uses the exact UI owner and current document revision without model delivery", async () => {
+  const f = fixture();
+  const board = new ZenXBoardCapabilityPackage(f.host);
+  board.start(createFixturePluginHost({ pluginId: "zenx-board" }).sdk);
+  const invoke = (name: string, args: Record<string, unknown>, ui = false) =>
+    board.invoke(name, {
+      name,
+      callId: "synthetic",
+      cwd: "/synthetic",
+      threadId: owner.threadId,
+      arguments: ui ? { input: args } : args,
+      signal: signal(),
+      ...(ui ? { trustedPluginUi: true as const } : {}),
+    });
+  await invoke("zenx_board_put", { document });
+  const input = {
+    operation: "navigate",
+    owner,
+    revision: 1,
+    target: { kind: "url", url: "https://example.test/custom" },
+  };
+  await assert.rejects(invoke("zenx_board_ui", input), /human UI/);
+  await assert.rejects(
+    invoke("zenx_board_ui", { ...input, revision: 0 }, true),
+    /Board changed/,
+  );
+  assert.equal(f.writes(), 0);
+  const result = (await invoke("zenx_board_ui", input, true)) as any;
+  assert.equal(f.writes(), 1);
+  assert.deepEqual(result.navigation, [input.target]);
+  assert.deepEqual(result.outcomes, [{ kind: "navigate" }]);
+  assert.deepEqual(result.snapshot.values, {});
+  await assert.rejects(
+    invoke(
+      "zenx_board_ui",
+      { ...input, owner: { kind: "thread", threadId: "foreign" } },
+      true,
+    ),
+    /unavailable/,
+  );
+  await assert.rejects(
+    invoke(
+      "zenx_board_ui",
+      { ...input, target: { kind: "url", url: "plugin:arbitrary" } },
+      true,
+    ),
+    /HTTP/,
+  );
+  assert.equal(f.writes(), 1);
+});
+
+test("a committed Room availability publication cancels the same Board action", async () => {
+  const roomOwner = {
+    kind: "room" as const,
+    roomId: "synthetic-room",
+    threadId: owner.threadId,
+  };
+  let available = true;
+  let notify: () => void = () => {};
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let executions = 0;
+  let observed: AbortSignal | undefined;
+  const host = new BoardHostService({
+    appServer: {
+      request: async () => assert.fail("No full read/model"),
+    } as any,
+    readThreadSummary: async (threadId) => ({ threadId, archived: false }),
+    rooms: {
+      roomsAvailable: () => available,
+      snapshot: () => ({
+        rooms: [
+          {
+            id: roomOwner.roomId,
+            name: "Synthetic",
+            members: [{ name: "Owner", threadId: owner.threadId }],
+            messages: [],
+            createdAt: 0,
+          },
+        ],
+      }),
+      onChange: (listener) => {
+        notify = listener;
+        return () => {
+          notify = () => {};
+        };
+      },
+      postAddressedRoomMessage: async () => assert.fail("No send"),
+    },
+    executeTool: async (_request, live) => {
+      executions++;
+      observed = live;
+      entered();
+      await new Promise<void>((resolve) =>
+        live.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      return {
+        output: "Synthetic native cancellation observed",
+        exitCode: 130,
+      };
+    },
+  });
+  const running = host.execute(
+    roomOwner,
+    { tool: "shell", arguments: { command: "synthetic" } },
+    signal(),
+  );
+  await started;
+  available = false;
+  notify();
+  assert.equal(observed?.aborted, true);
+  assert.equal((await running).exitCode, 130);
+  assert.equal(executions, 1);
+});

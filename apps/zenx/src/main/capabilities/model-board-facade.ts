@@ -22,7 +22,7 @@ export const isBoardModelTool = (name: string) =>
   name === "zenx_board_put" || name === "zenx_board_read";
 
 export const boardModelDocument =
-  "Compose conversation-owned information Boards with short authored document/block/event IDs. Owner defaults to {kind:'thread'} for the calling Thread; Room ownership uses {kind:'room',room:<scoped Room ref>} and still requires current membership. put preserves user field values and does not execute actions. read defaults to compact semantic state; explicitly request view:'document' for complete authored blocks, events, HTML/CSS/JS and current values before editing. Fields are draft data, never approval. Navigate actions use target:{kind:'url',url} or {kind:'browser'|'external-browser',tab:<exact Browser tab ref>}; a full read marks closed targets unavailable without losing the rest of the document. Local, submit, script and conditional events run only through explicit user interaction and existing permissions, never merely from read/put. Do not automatically retry unknown outcomes.";
+  "Compose conversation-owned information Boards with short authored document/block/event IDs. Owner defaults to {kind:'thread'} for the calling Thread; Room ownership uses {kind:'room',room:<scoped Room ref>} and still requires current membership. put preserves user field values and does not execute actions. read defaults to compact semantic state; explicitly request view:'document' for complete authored blocks, events, HTML/CSS/JS and current values before editing. Notes, metrics, progress, fields and action templates compose freely with isolated custom HTML/CSS/JS. Fields are draft data, never approval. Submit text interpolates {{field}}; scripts interpolate only {{valuesBase64}} as base64 JSON, never user text directly into shell code. if actions use field/equals with then/otherwise actions and may inspect result.exitCode/result.output after confirmed script completion. Navigate actions use target:{kind:'url',url} or {kind:'browser'|'external-browser',tab:<exact Browser tab ref>}; a full read marks closed targets unavailable without losing the rest of the document. Local, submit, script and conditional events run only through explicit user interaction and existing permissions, never merely from read/put. Do not automatically retry unknown outcomes.";
 
 const ownerSchema = {
   anyOf: [
@@ -61,6 +61,71 @@ const targetSchema = {
     },
   ],
 };
+const scalarSchema = {
+  anyOf: [
+    { type: "string", maxLength: 8192 },
+    { type: "number" },
+    { type: "boolean" },
+    { type: "null" },
+  ],
+};
+const valuesSchema = {
+  type: "object",
+  maxProperties: 128,
+  additionalProperties: scalarSchema,
+  description:
+    "Short field names with bounded scalar values; draft values never grant approval.",
+};
+function actionSchema(nested = false): Record<string, unknown> {
+  const children = {
+    type: "array",
+    maxItems: 128,
+    items: nested
+      ? {
+          type: "object",
+          description:
+            "The same set/navigate/submit/script/if action shape recursively. At most six conditional levels and 128 total actions per document; native validation enforces every nested action.",
+        }
+      : actionSchema(true),
+  };
+  return {
+    type: "object",
+    properties: {
+      kind: { enum: ["set", "navigate", "submit", "script", "if"] },
+      values: valuesSchema,
+      target: targetSchema,
+      text: {
+        type: "string",
+        minLength: 1,
+        maxLength: 100000,
+        description:
+          "submit: explicit model message with {{field}} substitution.",
+      },
+      command: {
+        type: "string",
+        minLength: 1,
+        maxLength: 100000,
+        description:
+          "script: existing permission-gated shell command. Only {{valuesBase64}} interpolation is allowed; decode JSON rather than interpolating user text into code.",
+      },
+      timeoutMs: { type: "integer", minimum: 1, maximum: 86400000 },
+      field: {
+        type: "string",
+        minLength: 1,
+        maxLength: 64,
+        description:
+          "if: exact scalar field, including result.exitCode/result.output after confirmed execution.",
+      },
+      equals: scalarSchema,
+      then: children,
+      otherwise: children,
+    },
+    required: ["kind"],
+    additionalProperties: false,
+    description:
+      "set requires values; navigate requires target; submit requires text; script requires command; if requires field, equals and then, with optional otherwise.",
+  };
+}
 export function boardModelDefinition<T extends ModelTool>(source: T): T {
   const tool = structuredClone(source);
   tool.description =
@@ -88,7 +153,7 @@ export function boardModelDefinition<T extends ModelTool>(source: T): T {
                 summary: { type: "string" },
                 owner: ownerSchema,
                 blocks: { type: "array", items: { type: "object" } },
-                initialValues: { type: "object" },
+                initialValues: valuesSchema,
                 html: { type: "string" },
                 events: {
                   type: "array",
@@ -99,23 +164,8 @@ export function boardModelDefinition<T extends ModelTool>(source: T): T {
                       label: { type: "string" },
                       actions: {
                         type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            kind: {
-                              enum: [
-                                "set",
-                                "navigate",
-                                "submit",
-                                "script",
-                                "if",
-                              ],
-                            },
-                            target: targetSchema,
-                          },
-                          description:
-                            "Existing Board action: set values; submit text; script command/timeoutMs; navigate target; or if field/equals with then/otherwise action arrays. Nested navigation uses the same exact target schema.",
-                        },
+                        maxItems: 128,
+                        items: actionSchema(),
                       },
                     },
                     required: ["id", "label", "actions"],
@@ -154,6 +204,7 @@ function decodeOwner(value: unknown, refs: ModelReferenceScope) {
 function mapActions(
   document: Record<string, unknown>,
   target: (value: unknown) => unknown,
+  preserveLegacyRoutes = false,
 ): void {
   let count = 0;
   const actions = (values: unknown, depth = 0): unknown[] => {
@@ -163,6 +214,17 @@ function mapActions(
       if (++count > 128) throw Error("Too many Board actions");
       const action = object(value);
       if (action.kind === "navigate") {
+        if (
+          preserveLegacyRoutes &&
+          typeof action.route === "string" &&
+          action.target === undefined
+        )
+          return {
+            ...action,
+            status: "unavailable",
+            reason:
+              "Legacy navigation is inert; review and replace it with an explicit typed target before use.",
+          };
         only(action, ["kind", "target"]);
         return { ...action, target: target(action.target) };
       }
@@ -242,6 +304,7 @@ export function projectBoardResult(
   delete output.draftRevision;
   delete output.pinned;
   delete output.browserSidebarTargets;
+  delete output.navigationDiagnostics;
   const projectOwner = (value: unknown) => {
     const owner = object(value);
     if (owner.threadId !== refs.ownerThreadId)
@@ -257,41 +320,101 @@ export function projectBoardResult(
   if (output.owner !== undefined) output.owner = projectOwner(output.owner);
   const document = record(output.document);
   if (!document) return output;
+  const nativeOwner = object(document.owner);
   document.owner = projectOwner(document.owner);
   const routes = readBrowserSidebarTargets(raw) ?? [];
-  mapActions(document, (value) => {
-    const target = object(value);
-    if (target.kind === "url") return target;
-    const unavailable = (reason: string) => ({
-      kind: target.kind,
-      status: "unavailable",
-      reason,
-    });
-    const matches = routes.filter(
-      (route) =>
-        route.targetId === target.id &&
-        route.ownerThreadId === refs.ownerThreadId &&
-        (target.kind === "external-browser") ===
-          !!route.backend?.startsWith("connected"),
-    );
-    if (
-      (target.kind !== "browser" && target.kind !== "external-browser") ||
-      matches.length !== 1
-    )
-      return unavailable(
-        "Browser target is no longer available; inspect again before replacing this action.",
-      );
-    try {
-      return {
+  const diagnostics = Array.isArray(result.navigationDiagnostics)
+    ? result.navigationDiagnostics
+        .map(record)
+        .filter((value) => value !== undefined)
+    : [];
+  const knownIds = new Set<string>([
+    refs.ownerThreadId,
+    ...Object.values(nativeOwner).filter(
+      (value): value is string =>
+        typeof value === "string" && value !== "thread" && value !== "room",
+    ),
+    ...routes
+      .flatMap((route) => [
+        route.ownerThreadId,
+        route.sessionId,
+        route.sessionEpoch,
+        route.connectionId,
+        route.generation,
+        route.tabId,
+        route.targetId,
+      ])
+      .filter((value): value is string => typeof value === "string"),
+    ...diagnostics
+      .map((diagnostic) => diagnostic.id)
+      .filter((value): value is string => typeof value === "string"),
+  ]);
+  const diagnosticReason = (message: string) => {
+    for (const id of [...knownIds]
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length))
+      message = message.replaceAll(id, "[native target]");
+    return message;
+  };
+  mapActions(
+    document,
+    (value) => {
+      const target = object(value);
+      if (target.kind === "url") return target;
+      const unavailable = (reason: string) => ({
         kind: target.kind,
-        tab: refs.bind("browser", "tab", asJson({ route: matches[0]! }), epoch),
-      };
-    } catch (error) {
-      if (!(error instanceof ModelReferenceBudgetError)) throw error;
-      return unavailable(
-        "Browser reference publication budget exceeded; inspect the target again.",
+        status: "unavailable",
+        reason,
+      });
+      const diagnostic = diagnostics.find(
+        (entry) =>
+          entry.id === target.id &&
+          entry.kind === target.kind &&
+          (entry.status === "unknown" || entry.status === "unavailable"),
       );
-    }
-  });
+      if (diagnostic)
+        return {
+          kind: target.kind,
+          status: diagnostic.status,
+          reason:
+            typeof diagnostic.error === "string" && diagnostic.error
+              ? diagnosticReason(diagnostic.error)
+              : diagnostic.status === "unknown"
+                ? "Browser liveness check failed; inspect local diagnostics before using this target."
+                : "Browser target is no longer available; inspect again before replacing this action.",
+        };
+      const matches = routes.filter(
+        (route) =>
+          route.targetId === target.id &&
+          route.ownerThreadId === refs.ownerThreadId &&
+          (target.kind === "external-browser") ===
+            !!route.backend?.startsWith("connected"),
+      );
+      if (
+        (target.kind !== "browser" && target.kind !== "external-browser") ||
+        matches.length !== 1
+      )
+        return unavailable(
+          "Browser target is no longer available; inspect again before replacing this action.",
+        );
+      try {
+        return {
+          kind: target.kind,
+          tab: refs.bind(
+            "browser",
+            "tab",
+            asJson({ route: matches[0]! }),
+            epoch,
+          ),
+        };
+      } catch (error) {
+        if (!(error instanceof ModelReferenceBudgetError)) throw error;
+        return unavailable(
+          "Browser reference publication budget exceeded; inspect the target again.",
+        );
+      }
+    },
+    true,
+  );
   return output;
 }

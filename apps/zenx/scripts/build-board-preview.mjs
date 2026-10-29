@@ -20,7 +20,7 @@ const result = await build({
     cssCodeSplit: false,
     lib: {
       entry: path.join(root, "scripts/board-preview.tsx"),
-      name: "SidebarStatePreview",
+      name: "BoardInformationPreview",
       formats: ["iife"],
     },
     rollupOptions: { output: { inlineDynamicImports: true } },
@@ -52,6 +52,12 @@ const sources = [
   "src/renderer/src/plugin-information-host.tsx",
   "src/renderer/src/plugin-ui-host.tsx",
   "src/renderer/src/styles.css",
+  "src/renderer/src/theme.css",
+  "src/renderer/src/ui/plugin-theme.ts",
+  "src/renderer/src/auxiliary-panel.tsx",
+  "src/renderer/src/workspace-browser-panel.tsx",
+  "src/renderer/src/PluginProductPage.tsx",
+  "src/renderer/public/plugin-frame.html",
   "scripts/board-preview.tsx",
   "scripts/build-board-preview.mjs",
   "scripts/capture-board-preview.mjs",
@@ -70,7 +76,7 @@ await writeFile(
         encoding: "utf8",
       }).trim(),
       scope:
-        "Actual production Board/information/isolated-frame components with synthetic state/effect ports and outer chat scaffold. No native Electron, private data, model calls or API calls. Source hashes bind screenshots to code.",
+        "Actual production Board/information/isolated-frame, AuxiliaryPanel and WorkspaceBrowserPanel components with synthetic state/effect ports and outer chat scaffold. Browser viewport alone is a fixture placeholder, not native Electron. QA controls and branding remain in the left fixture sidebar. No private data, model calls or API calls. Source hashes bind screenshots to code.",
       sources: Object.fromEntries(
         await Promise.all(
           sources.map(async (source) => [

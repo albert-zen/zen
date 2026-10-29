@@ -174,7 +174,27 @@ test("Board definitions expose scoped owners and explicit full document reads", 
   const put = modelToolDefinition(source("zenx_board_put"));
   assert.match(JSON.stringify(put.inputSchema), /external-browser/);
   assert.match(JSON.stringify(put.inputSchema), /\^r/);
+  const schema = JSON.stringify(put.inputSchema);
+  for (const key of [
+    "values",
+    "text",
+    "command",
+    "timeoutMs",
+    "field",
+    "equals",
+    "then",
+    "otherwise",
+  ])
+    assert.ok(
+      schema.includes(`"${key}":`),
+      `Action schema must declare ${key}`,
+    );
+  assert.ok(
+    schema.length < 24000,
+    "Action schema must remain bounded, not expand six levels exponentially",
+  );
   assert.match(modelPluginDocument("zenx-board", "native"), /document/);
+  assert.match(modelPluginDocument("zenx-board", "native"), /valuesBase64/);
 });
 
 test("Board owner defaults to the caller and resolves scoped Room refs only", async () => {
@@ -361,4 +381,156 @@ test("Board read never trusts JSON target routes, mismatched owners or ambiguous
     assert.equal(projected.document.html, snapshot.document.html);
     assert.doesNotMatch(result.output, /RAW-/);
   }
+});
+
+test("compact Board receipts omit product bookkeeping without changing literal field values", async () => {
+  const f = fixture();
+  const semantic = {
+    id: "plan",
+    title: "Board",
+    summary: "Semantic summary",
+    fields: [{ id: "scope", field: "scope", label: "Scope" }],
+    actions: [{ id: "submit", label: "Send" }],
+    values: { scope: "Literal r999", approved: true },
+    truncated: false,
+    revision: 9,
+    draftRevision: 12,
+    notice: "Draft values are not approval",
+  };
+  for (const name of ["zenx_board_read", "zenx_board_put"]) {
+    const result = await f.call(
+      name,
+      name === "zenx_board_put" ? { document: document() } : {},
+      { output: JSON.stringify(semantic), exitCode: 0 },
+    );
+    const {
+      revision: _revision,
+      draftRevision: _draftRevision,
+      ...expected
+    } = semantic;
+    assert.deepEqual(JSON.parse(result.output), expected);
+  }
+});
+
+test("stale epoch and cross-owner Browser provenance cannot reach Board dispatch", async () => {
+  const f = fixture();
+  const stale = f.refs.bind(
+    "browser",
+    "tab",
+    { route: { ...route } },
+    "old-epoch",
+  );
+  const foreign = f.refs.bind(
+    "browser",
+    "tab",
+    {
+      route: { ...route, ownerThreadId: "foreign" },
+    },
+    epoch,
+  );
+  for (const tab of [stale, foreign]) {
+    await assert.rejects(
+      f.call("zenx_board_put", {
+        document: {
+          ...document(),
+          events: [
+            {
+              id: "open",
+              label: "Open",
+              actions: [{ kind: "navigate", target: { kind: "browser", tab } }],
+            },
+          ],
+        },
+      }),
+    );
+  }
+  assert.equal(f.native.length, 0);
+});
+
+test("full Board read preserves legacy route text inertly while new puts reject it", async () => {
+  const f = fixture();
+  const routeText = "plugin:legacy/view?selection={{scope}}#literal";
+  const snapshot = nativeSnapshot();
+  const legacyEvent = {
+    id: "legacy",
+    label: "Inspect old navigation",
+    actions: [
+      {
+        kind: "if",
+        field: "scope",
+        equals: "old",
+        then: [{ kind: "navigate", route: routeText }],
+        otherwise: [{ kind: "set", values: { scope: "new" } }],
+      },
+    ],
+  };
+  const legacy = {
+    ...snapshot,
+    document: {
+      ...snapshot.document,
+      events: [...snapshot.document.events, legacyEvent],
+    },
+  };
+  const result = await f.call(
+    "zenx_board_read",
+    { view: "document" },
+    {
+      output: JSON.stringify(legacy),
+      exitCode: 0,
+    },
+  );
+  const projected = JSON.parse(result.output);
+  const action = projected.document.events[2].actions[0].then[0];
+  assert.equal(action.route, routeText);
+  assert.equal(action.status, "unavailable");
+  assert.match(action.reason, /legacy|Legacy/);
+  assert.equal(action.target, undefined);
+  assert.deepEqual(
+    projected.document.events[2].actions[0].otherwise,
+    legacyEvent.actions[0]!.otherwise,
+  );
+  assert.deepEqual(projected.document.blocks, legacy.document.blocks);
+  assert.equal(projected.document.html, legacy.document.html);
+  const before = f.native.length;
+  await assert.rejects(
+    f.call("zenx_board_put", {
+      document: { ...document(), events: [legacyEvent] },
+    }),
+  );
+  assert.equal(
+    f.native.length,
+    before,
+    "Legacy routes must never reach native authoring dispatch",
+  );
+});
+
+test("Board target diagnostics retain actual failure reasons without native routing IDs or local error details", async () => {
+  const f = fixture();
+  const snapshot = nativeSnapshot();
+  const diagnostic = {
+    kind: "browser",
+    id: route.targetId,
+    status: "unknown",
+    error: `Backend liveness read failed for ${route.targetId} owned by ${caller}: connection reset`,
+    errorDetail: "LOCAL-ONLY stack/cause diagnostic",
+  };
+  const raw = {
+    output: JSON.stringify({
+      ...snapshot,
+      navigationDiagnostics: [diagnostic],
+    }),
+    exitCode: 0,
+  };
+  const result = await f.call("zenx_board_read", { view: "document" }, raw);
+  const projected = JSON.parse(result.output);
+  const target = projected.document.events[1].actions[0].target;
+  assert.equal(target.status, "unknown");
+  assert.match(target.reason, /Backend liveness read failed.*connection reset/);
+  assert.equal(target.tab, undefined);
+  assert.equal(target.id, undefined);
+  assert.equal(projected.navigationDiagnostics, undefined);
+  assert.doesNotMatch(result.output, /RAW-|LOCAL-ONLY/);
+  assert.equal(projected.document.html, snapshot.document.html);
+  assert.equal(f.rawResults[0], raw);
+  assert.match(raw.output, /RAW-product-target|LOCAL-ONLY/);
 });

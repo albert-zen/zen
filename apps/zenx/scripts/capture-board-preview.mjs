@@ -95,17 +95,50 @@ await withPreviewBrowser(
     };
     await frameClick("local");
     assert.equal(await evaluate("window.__boardFixture.calls.length"), 0);
+    // Navigation stays a local effect, while the production resource panels render it.
+    await frameClick("docs");
+    await waitFor(
+      "window.__boardFixture.resourceState().open && document.querySelector('.workspace-browser-panel')",
+    );
+    assert.equal(
+      await evaluate("window.__boardFixture.browserTabs().at(-1).url"),
+      "https://example.test/docs",
+    );
+    assert.equal(
+      await evaluate(
+        "window.__boardFixture.calls.filter(call=>call.event==='send'||call.event==='sendCustom').length",
+      ),
+      0,
+    );
+    await click(".board-action:not(.primary)");
+    assert.equal(
+      await evaluate("window.__boardFixture.resourceState().selectedTab"),
+      "browser:fixture-existing",
+    );
+    assert.equal(
+      await evaluate("window.__boardFixture.browserTabs().length"),
+      2,
+      "existing shortcut selects without creating a tab",
+    );
+    await screenshot("03a-local-navigation-zero-model.png");
+    await evaluate("window.__boardFixture.toggleResource(false)");
+    await delay(250);
+    await evaluate(
+      "document.querySelector('.board-custom').scrollIntoView({block:'center'})",
+    );
     await frameClick("chain");
     await waitFor(
       "window.__boardFixture.calls.some(call=>call.event==='sendCustom')",
     );
     const calls = await evaluate("window.__boardFixture.calls");
     assert.deepEqual(
-      calls.map((c) => c.event),
+      calls
+        .filter((c) => c.event === "check" || c.event === "sendCustom")
+        .map((c) => c.event),
       ["check", "sendCustom"],
     );
     assert.equal(
-      calls[1].values.answer,
+      calls.find((c) => c.event === "sendCustom").values.answer,
       "Custom count 1; script checked successfully.",
     );
     await screenshot("03-custom-async-chain.png");
@@ -120,8 +153,88 @@ await withPreviewBrowser(
     await evaluate(
       "document.querySelector('.information-content').scrollTop=0",
     );
-    await evaluate("document.querySelector('.window-titlebar button').click()");
+    for (const theme of ["dark", "light", "dark"]) {
+      await evaluate(`window.__boardFixture.setTheme('${theme}')`);
+      await waitFor(`document.documentElement.dataset.appearance==='${theme}'`);
+      await delay(80);
+      assert.equal(
+        await frameEval("document.documentElement.dataset.theme"),
+        theme,
+      );
+    }
     await screenshot("04-pinned-dark.png");
+    // Late contribution admission must reattach measurement; the real Browser is 480px.
+    await evaluate(
+      "window.__boardFixture.setInformation(false); window.__boardFixture.toggleResource(true)",
+    );
+    await waitFor(
+      "!document.querySelector('.information-toolbar') && document.querySelector('.auxiliary-panel[data-open=true]')",
+    );
+    await evaluate(
+      "document.querySelector('[aria-label=\"Side panel width\"]').focus()",
+    );
+    for (let index = 0; index < 2; index++) {
+      await send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "ArrowRight",
+        code: "ArrowRight",
+        windowsVirtualKeyCode: 39,
+      });
+      await send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "ArrowRight",
+        code: "ArrowRight",
+        windowsVirtualKeyCode: 39,
+      });
+    }
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1280,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await evaluate("window.__boardFixture.setInformation(true)");
+    await waitFor(
+      "document.querySelector('.information-rail')?.dataset.floating==='true'",
+    );
+    await delay(350);
+    assert.equal(
+      await evaluate(
+        "Math.round(document.querySelector('.auxiliary-panel').getBoundingClientRect().width)",
+      ),
+      480,
+    );
+    assert.equal(
+      await evaluate(
+        "Math.round(document.querySelector('.information-rail').getBoundingClientRect().width)",
+      ),
+      360,
+    );
+    const headerChecks = await evaluate(
+      `(()=>{const info=document.querySelector('.information-toolbar button');const close=document.querySelector('.auxiliary-close-button');const restore=document.querySelector('[aria-label="Expand side panel"],[aria-label="Restore side panel"]');return [info,close,restore].map(el=>{const r=el.getBoundingClientRect();return {label:el.getAttribute('aria-label'),reachable:el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})})()`,
+    );
+    assert.ok(
+      headerChecks.every((item) => item.reachable),
+      JSON.stringify(headerChecks),
+    );
+    assert.ok(
+      await evaluate(
+        "document.querySelector('.information-rail').getBoundingClientRect().top >= document.querySelector('.auxiliary-heading').getBoundingClientRect().bottom",
+      ),
+    );
+    await screenshot("06-browser-480-board-360.png");
+    await click('[aria-label="Expand side panel"]');
+    await waitFor(
+      "document.querySelector('.auxiliary-panel')?.dataset.expanded==='true'",
+    );
+    await delay(350);
+    await screenshot("07-resource-fullscreen-information.png");
+    await click('[aria-label="Restore side panel"]');
+    await waitFor(
+      "document.querySelector('.auxiliary-panel')?.dataset.expanded==='false'",
+    );
+    await click('[aria-label="Close side panel"]');
+    await waitFor("!window.__boardFixture.resourceState().open");
     await send("Emulation.setDeviceMetricsOverride", {
       width: 760,
       height: 900,
@@ -164,6 +277,11 @@ await withPreviewBrowser(
             "user activation once across 6.2-second async script and custom assembled submit",
             "agent revision preserves draft",
             "chat draft never touched",
+            "real AuxiliaryPanel and WorkspaceBrowserPanel; synthetic native viewport",
+            "late contribution with Browser 480px and floating Board 360px",
+            "header entry, Restore and Close are individually reachable",
+            "typed local navigation selects exact Browser and opens exact docs URL with zero model calls",
+            "SDK dark/light/dark appearance updates",
             "Escape returns focus",
           ],
           calls,
