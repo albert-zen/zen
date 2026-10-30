@@ -102,10 +102,10 @@ test(
       [`${receiver}.swift`, "-o", receiver],
       60_000,
     );
-    const stdoutPath = path.join(directory, "receiver.stdout");
+    const eventsPath = path.join(directory, "receiver.events.jsonl");
     const stderrPath = path.join(directory, "receiver.stderr");
     const stopPath = path.join(directory, "receiver.stop");
-    await writeFile(stdoutPath, "");
+    await writeFile(eventsPath, "");
     // Launch a real registered app, explicitly without activating it. The helper
     // must still acquire foreground focus; fixture setup cannot satisfy its guard.
     const child = spawn(
@@ -114,12 +114,12 @@ test(
         "-g",
         "-n",
         "-W",
-        "--stdout",
-        stdoutPath,
         "--stderr",
         stderrPath,
         receiverBundle,
         "--args",
+        "--events-file",
+        eventsPath,
         "--stop-file",
         stopPath,
       ],
@@ -129,9 +129,10 @@ test(
     const messages: Array<Record<string, any>> = [];
     const focusEvents: Array<Record<string, unknown>> = [];
     evidence.receiverFocusEvents = focusEvents;
+    evidence.receiverLifecycleEvents = messages;
     let consumedLines = 0;
     const collectMessages = async () => {
-      const lines = (await readFile(stdoutPath, "utf8")).split("\n");
+      const lines = (await readFile(eventsPath, "utf8")).split("\n");
       // Leave any partial last line for the next read.
       for (; consumedLines < lines.length - 1; consumedLines++) {
         try {
@@ -149,13 +150,27 @@ test(
     );
     closeReceiver = async () => {
       await writeFile(stopPath, "stop");
-      receiverStopped = await Promise.race([
+      const launcherStopped = await Promise.race([
         closed.then(() => child.exitCode === 0 && child.signalCode === null),
         new Promise<false>((resolve) => {
           const timer = setTimeout(() => resolve(false), 5_000);
           timer.unref();
         }),
       ]);
+      await collectMessages();
+      // open's status is not the application's exit status. Require the owned
+      // receiver's terminal lifecycle observation as well as the launcher's exit.
+      receiverStopped =
+        launcherStopped &&
+        messages.some(
+          (message) =>
+            message.kind === "owned-receiver-terminating" ||
+            message.kind === "owned-receiver-startup-failed",
+        );
+      evidence.launcherExit = {
+        code: child.exitCode,
+        signal: child.signalCode,
+      };
       evidence.receiverShutdown = receiverStopped ? "exited" : "not-confirmed";
       if (!receiverStopped) {
         evidence.status = "failed";
@@ -176,7 +191,7 @@ test(
         assert.equal(
           child.exitCode,
           null,
-          "owned receiver exited before observation",
+          `owned receiver launcher exited before ${kind}; see receiverLifecycleEvents`,
         );
         await new Promise((resolve) => setTimeout(resolve, 20));
       }

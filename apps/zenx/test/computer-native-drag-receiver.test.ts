@@ -71,3 +71,35 @@ test("owned receiver uses background-launched regular app lifecycle without self
     /event\.isActive === true && event\.isKeyWindow === true/,
   );
 });
+
+// A successful open waiter exit never proves that the app reached startup.
+test("owned receiver records startup independently and treats regular policy idempotently", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const acceptance = readFileSync(
+    new URL("./computer-owned-native-acceptance.test.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    fixture,
+    /if initialPolicy != \.regular \{ policySwitchAccepted = application\.setActivationPolicy\(\.regular\) \}/,
+  );
+  assert.match(
+    fixture,
+    /guard application\.activationPolicy\(\) == \.regular else/,
+  );
+  assert.ok(
+    fixture.indexOf('"owned-receiver-starting"') <
+      fixture.indexOf("let application = NSApplication.shared"),
+  );
+  assert.match(fixture, /FileHandle\(forWritingAtPath: path\)/);
+  assert.match(acceptance, /"--events-file",\s*eventsPath/);
+  assert.match(acceptance, /receiverStopped =\s*launcherStopped &&/);
+  assert.match(acceptance, /message\.kind === "owned-receiver-terminating"/);
+  assert.doesNotMatch(fixture, /guard application\.setActivationPolicy/);
+});

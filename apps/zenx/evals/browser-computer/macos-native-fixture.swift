@@ -1,5 +1,23 @@
 import AppKit
 
+func argument(_ name: String) -> String? {
+  guard let index = CommandLine.arguments.firstIndex(of: name), index + 1 < CommandLine.arguments.count else { return nil }
+  return CommandLine.arguments[index + 1]
+}
+// LaunchServices stdio forwarding is not the receiver lifecycle authority.
+// The harness creates this private file before launch; direct writes also cover
+// failures before NSApplication has finished launching.
+let eventOutput: FileHandle = {
+  guard let path = argument("--events-file") else { return .standardOutput }
+  guard let handle = FileHandle(forWritingAtPath: path) else { exit(4) }
+  return handle
+}()
+func report(_ value: [String: Any]) {
+  guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
+  eventOutput.write(data); eventOutput.write(Data([10]))
+}
+report(["kind": "owned-receiver-starting", "pid": Int(getpid()), "bundlePath": Bundle.main.bundlePath])
+
 // Independently observed receiver evidence, not CGEvent posting receipts. This
 // fixture only records events delivered to its own pad; no global event monitor.
 final class DragReceiver: NSView {
@@ -18,9 +36,7 @@ final class DragReceiver: NSView {
       "windowId": window?.windowNumber ?? 0, "windowTitle": window?.title ?? "",
       "downReceived": true, "draggedReceived": samples, "upReceived": true,
       "from": ["x": from.x, "y": from.y], "to": ["x": to.x, "y": to.y]]
-    if let data = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]) {
-      FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
-    }
+    report(receipt)
     if samples > 0 { showResult?("PASS native drag received \(samples) samples and release") }
     start = nil
   }
@@ -38,9 +54,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       "isMainWindow": window.isMainWindow, "canBecomeKey": window.canBecomeKey,
       "activationPolicy": NSApp.activationPolicy().rawValue,
       "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)]
-    if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) {
-      FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
-    }
+    report(state)
+  }
+  func applicationWillTerminate(_ notification: Notification) {
+    report(["kind": "owned-receiver-terminating", "pid": Int(getpid())])
   }
   func applicationDidBecomeActive(_ notification: Notification) { reportFocus("applicationDidBecomeActive") }
   func applicationDidResignActive(_ notification: Notification) { reportFocus("applicationDidResignActive") }
@@ -79,20 +96,26 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       "activationPolicy": NSApp.activationPolicy().rawValue,
       "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1),
       "dragStart": globalPoint(NSPoint(x: 30, y: 25)), "dragEnd": globalPoint(NSPoint(x: 170, y: 25))]
-    if let data = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
-      FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
-    }
+    report(ready)
   }
 }
-let delegate = Delegate()
 let application = NSApplication.shared
-// Configure before the launch lifecycle. An unbundled accessory process shown
-// with orderFrontRegardless is not a normal foreground application's lifecycle.
-guard application.setActivationPolicy(.regular) else { exit(3) }
+let initialPolicy = application.activationPolicy()
+// Bundled apps already have regular policy. A redundant policy-switch return
+// value is not the state predicate; verify the actual policy before proceeding.
+var policySwitchAccepted: Bool? = nil
+if initialPolicy != .regular { policySwitchAccepted = application.setActivationPolicy(.regular) }
+report(["kind": "owned-receiver-policy", "pid": Int(getpid()),
+  "initialPolicy": initialPolicy.rawValue, "activationPolicy": application.activationPolicy().rawValue,
+  "switchAttempted": policySwitchAccepted != nil, "switchAccepted": policySwitchAccepted ?? false])
+guard application.activationPolicy() == .regular else {
+  report(["kind": "owned-receiver-startup-failed", "reason": "regular activation policy unavailable", "pid": Int(getpid())])
+  exit(3)
+}
+let delegate = Delegate()
 application.delegate = delegate
 // Test-owned shutdown only; no PID-based termination of another application.
-if let index = CommandLine.arguments.firstIndex(of: "--stop-file"), index + 1 < CommandLine.arguments.count {
-  let stopFile = CommandLine.arguments[index + 1]
+if let stopFile = argument("--stop-file") {
   Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
     if FileManager.default.fileExists(atPath: stopFile) { application.terminate(nil) }
   }
