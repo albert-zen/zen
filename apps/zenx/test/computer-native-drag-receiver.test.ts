@@ -169,3 +169,38 @@ test("occluder identity diagnostic is exact-PID read-only and excludes private p
   assert.match(diagnostic, /later_exact_pid_read_not_lifetime_binding/);
   assert.ok(end < fixture.indexOf("let application = NSApplication.shared"));
 });
+
+test("owned pointer witness uses public global mouse-down hit without bypassing refusal", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const acceptance = readFileSync(
+    new URL("./computer-owned-native-acceptance.test.ts", import.meta.url),
+    "utf8",
+  );
+  const start = fixture.indexOf("  func reportPointerHit(");
+  const end = fixture.indexOf("  func applicationWillTerminate", start);
+  const witness = fixture.slice(start, end);
+  assert.match(
+    witness,
+    /NSWindow\.windowNumber\(at: point, belowWindowWithWindowNumber: 0\)/,
+  );
+  assert.match(witness, /NSScreen\.screens\.first/);
+  assert.match(witness, /primary\.frame\.maxY - y/);
+  assert.match(witness, /hit == window\.windowNumber/);
+  assert.match(
+    witness,
+    /read_only_mouse_down_hit_snapshot_not_delivery_or_namespace_proof/,
+  );
+  assert.doesNotMatch(witness, /\.activate\(|\.post\(|orderFront|CGWindowList/);
+  const failure = acceptance.slice(
+    acceptance.indexOf("evidence.failure = String(error)"),
+    acceptance.indexOf("const delivered = await waitFor"),
+  );
+  assert.match(failure, /receiverFixture\.pointerWitness/);
+  assert.match(failure, /throw error;/);
+});

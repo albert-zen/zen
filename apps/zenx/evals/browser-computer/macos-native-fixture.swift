@@ -81,6 +81,30 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if let token { state["token"] = token }
     report(state)
   }
+  func reportPointerHit(_ token: String, x: Double, y: Double, selectedCGWindowId: Int) {
+    guard let window, let primary = NSScreen.screens.first,
+          primary.frame.minX == 0, primary.frame.minY == 0 else {
+      report(["kind": "owned-pointer-hit-witness", "token": token, "available": false,
+        "reason": "primary_coordinate_origin_unavailable"])
+      return
+    }
+    // CG/AX global coordinates start at the primary display's top-left;
+    // AppKit screen coordinates start at that display's bottom-left. Do not
+    // use NSScreen.main (which follows key-window focus) or backing pixels.
+    let point = NSPoint(x: x, y: primary.frame.maxY - y)
+    let hit = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+    report(["kind": "owned-pointer-hit-witness", "token": token, "available": true,
+      "pid": Int(getpid()), "ownNSWindowNumber": window.windowNumber,
+      "isActive": NSApp.isActive, "isKeyWindow": window.isKeyWindow,
+      "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1),
+      "observation": "after_refusal_not_atomic_with_dispatch_fence",
+      "selectedCGWindowId": selectedCGWindowId, "hitNSWindowNumber": hit,
+      "matchesOwnNSWindowNumber": hit == window.windowNumber,
+      "ownNSNumberEqualsSelectedCGIdObserved": window.windowNumber == selectedCGWindowId,
+      "cgPoint": ["x": x, "y": y], "appKitPoint": ["x": point.x, "y": point.y],
+      "primaryHeight": primary.frame.height, "belowWindowNumber": 0,
+      "scope": "read_only_mouse_down_hit_snapshot_not_delivery_or_namespace_proof"])
+  }
   func applicationWillTerminate(_ notification: Notification) {
     report(["kind": "owned-receiver-terminating", "pid": Int(getpid())])
   }
@@ -153,6 +177,18 @@ if let probeFile = argument("--focus-probe-file") {
     guard let token = try? String(contentsOfFile: probeFile, encoding: .utf8), !token.isEmpty, token != lastToken else { return }
     lastToken = token
     delegate.reportFocus("probe", token: token)
+  }
+}
+if let probeFile = argument("--pointer-hit-probe-file") {
+  var lastToken = ""
+  Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
+    guard let data = FileManager.default.contents(atPath: probeFile),
+          let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let token = request["token"] as? String, !token.isEmpty, token != lastToken,
+          let x = request["x"] as? Double, let y = request["y"] as? Double,
+          x.isFinite, y.isFinite, let selected = request["selectedCGWindowId"] as? Int, selected > 0 else { return }
+    lastToken = token
+    delegate.reportPointerHit(token, x: x, y: y, selectedCGWindowId: selected)
   }
 }
 application.run()

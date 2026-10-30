@@ -112,6 +112,7 @@ test(
       const stderrPath = path.join(directory, `${name}.stderr`);
       const stopPath = path.join(directory, `${name}.stop`);
       const probePath = path.join(directory, `${name}.probe`);
+      const pointerProbePath = path.join(directory, `${name}.pointer-probe`);
       const fixtureEvidence: Record<string, unknown> = {};
       evidence[name] = fixtureEvidence;
       await writeFile(eventsPath, "");
@@ -129,6 +130,8 @@ test(
           "--args",
           "--window-title",
           `ZenX owned ${name} fixture`,
+          "--pointer-hit-probe-file",
+          pointerProbePath,
           "--focus-probe-file",
           probePath,
           "--events-file",
@@ -221,7 +224,19 @@ test(
         await writeFile(probePath, token);
         return waitFor("owned-focus-state", token);
       };
-      return { waitFor, probe, fixtureEvidence };
+      const pointerWitness = async (
+        x: number,
+        y: number,
+        selectedCGWindowId: number,
+      ) => {
+        const token = String(++probeSequence);
+        await writeFile(
+          pointerProbePath,
+          JSON.stringify({ token, x, y, selectedCGWindowId }),
+        );
+        return waitFor("owned-pointer-hit-witness", token);
+      };
+      return { waitFor, probe, pointerWitness, fixtureEvidence };
     };
     const receiverFixture = await launchFixture(
       "receiver",
@@ -353,6 +368,31 @@ test(
       );
     } catch (error) {
       evidence.failure = String(error);
+      // Observe the public mouse-down hit at the actual refused point, not an
+      // assumed drag start. This cannot authorize dispatch or replace failure.
+      const point = /, point=([^,]+),([^,]+), occluderBounds=/.exec(
+        String(error),
+      );
+      if (
+        point &&
+        Number.isFinite(Number(point[1])) &&
+        Number.isFinite(Number(point[2]))
+      ) {
+        try {
+          const witness = await receiverFixture.pointerWitness(
+            Number(point[1]),
+            Number(point[2]),
+            selected.windowId,
+          );
+          if (witness.available) assert.equal(witness.pid, ready.pid);
+          evidence.pointerHitWitness = witness;
+        } catch {
+          evidence.pointerHitWitness = {
+            available: false,
+            reason: "owned_pointer_hit_observation_failed",
+          };
+        }
+      }
       // Identify only the exact PID already reported by the failed CG fence.
       // Diagnostic failure cannot replace the original refusal or trigger input.
       const occluderPID = /occluderPID=(\d+),/.exec(String(error))?.[1];
