@@ -152,6 +152,12 @@ test("occluder identity diagnostic is exact-PID read-only and excludes private p
   assert.ok(start > 0 && end > start);
   assert.match(diagnostic, /NSRunningApplication\(processIdentifier: pid\)/);
   assert.match(diagnostic, /lastPathComponent/);
+  assert.match(diagnostic, /let processPathCapacity = 4096/);
+  assert.match(
+    diagnostic,
+    /proc_pidpath\(pid, &buffer, UInt32\(processPathCapacity\)\)/,
+  );
+  assert.doesNotMatch(diagnostic, /PROC_PIDPATHINFO_MAXSIZE/);
   assert.doesNotMatch(
     diagnostic,
     /runningApplications|localizedName|NSApplication\.shared|activate\(|terminate\(|CGWindowList|AXUIElement/,

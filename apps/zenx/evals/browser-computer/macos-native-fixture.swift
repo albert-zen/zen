@@ -26,8 +26,12 @@ if let rawPID = argument("--inspect-pid") {
   let app = NSRunningApplication(processIdentifier: pid)
   // A window owner need not be an AppKit application. Read the same PID's
   // executable via libproc when NSRunningApplication cannot identify it.
-  var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
-  let pathSize = proc_pidpath(pid, &buffer, UInt32(PROC_PIDPATHINFO_MAXSIZE))
+  // Apple's xnu bsd/sys/proc_info.h defines the maximum as 4 * MAXPATHLEN;
+  // param.h aliases MAXPATHLEN to PATH_MAX, syslimits.h defines PATH_MAX=1024.
+  // Use that bounded value because Swift does not import the compound macro.
+  let processPathCapacity = 4096
+  var buffer = [CChar](repeating: 0, count: processPathCapacity)
+  let pathSize = proc_pidpath(pid, &buffer, UInt32(processPathCapacity))
   let path = app?.executableURL?.path ?? (pathSize > 0 ? String(cString: buffer) : "")
   identity["available"] = !path.isEmpty || app != nil
   identity["bundleId"] = app?.bundleIdentifier.map { $0 as Any } ?? NSNull()
