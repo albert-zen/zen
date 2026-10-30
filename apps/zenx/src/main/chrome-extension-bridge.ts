@@ -15,6 +15,8 @@ import {
 } from "./capabilities/user-browser-provider.js";
 
 const ALLOWED_TAB_COMMANDS = new Set([
+  "Network.enable",
+  "Network.getResponseBody",
   "DOM.describeNode",
   "Runtime.releaseObject",
   "Input.dispatchMouseEvent",
@@ -32,9 +34,16 @@ const ALLOWED_TAB_COMMANDS = new Set([
   "Runtime.evaluate",
 ]);
 const ALLOWED_TAB_EVENTS = new Set([
+  "Network.requestWillBeSent",
+  "Network.responseReceived",
+  "Network.loadingFinished",
+  "Network.loadingFailed",
+  "Runtime.consoleAPICalled",
+  "Runtime.exceptionThrown",
   "Inspector.detached",
   "Page.backForwardCacheNotUsed",
   "Page.frameNavigated",
+  "Page.frameDetached",
   "Page.frameStartedLoading",
   "Page.frameStartedNavigating",
   "Page.navigatedWithinDocument",

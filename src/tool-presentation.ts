@@ -1,8 +1,9 @@
-import type { ModelTool } from "./model.js";
+import type { CapabilityObjectBinding, ModelTool } from "./model.js";
 
 export type ToolPresentation = "direct" | "code" | "both";
 
 export interface ToolCatalogEntry {
+  readonly objectBinding?: CapabilityObjectBinding;
   readonly name: string;
   readonly description: string;
   readonly pluginId?: string;
@@ -93,6 +94,7 @@ export function createRunCodeModelTool(
       "Run a fresh JavaScript async module with top-level await.",
       "Use pure JavaScript, not TypeScript syntax. No Node.js, filesystem, network, process, require, or package imports; use tools.* for external actions.",
       "In-memory helpers: atob/btoa, TextEncoder/TextDecoder, URL/URLSearchParams, crypto.randomUUID(). import.meta is unavailable.",
+      'Browser and Computer primary interface: capabilities.browser(provider) / capabilities.computer(provider). Discover providers with capabilities.list(); select ALL_TOOLS objectBinding entries for exact available methods and schemas. Re-acquire short references each fresh program, e.g. capabilities.browser("workspace").tab("r1").inspect({}). Facades return unchanged ToolResult; check exitCode. Provider/session owns state; no persistent JS objects. Only declared methods exist; provider extensions remain explicit. Standalone tools.* are compatible entry points to the same operations.',
       "Use ALL_TOOLS to find eligible tools available through tools.*. Select output with text/image/audio; the last expression is not returned automatically.",
       'Optional first line: // @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000, "timeout_ms": 600000}. Controls observation wait, preview budget, and execution deadline respectively.',
       "Awaited tools return their final result. A running outer program returns a task_id; use tools.wait with that task_id to observe new output or completion.",
@@ -102,7 +104,7 @@ export function createRunCodeModelTool(
       "Await every tool call; unfinished or unobserved calls fail the program. await yield_control() yields output while execution continues. Timers alone do not keep a finished program alive.",
       'image/audio accept base64 data URIs, MCP blocks (e.g. image({type:"image", mimeType:"image/png", data:"<base64>"})), or current-thread attachment refs. Local paths use tools.view_image; its images return automatically. Unsupported modalities become text references.',
       "store/load retain bounded JSON values within this thread: keys 1–160 characters, 256 KiB per value, 128 keys/2 MiB total. Ordinary variables are fresh each run; missing keys return undefined. Writes already committed survive later program failure.",
-      "ALL_TOOLS is the complete eligible tool catalog for this program: name, short description, optional pluginId, fullDescription and exact inputSchema. Filter/map it in JavaScript; print only selected entries with text() to retrieve detailed documentation at the conversation tail. The tools Proxy also returns functions for unknown names, so it is not an availability check.",
+      "ALL_TOOLS is the complete eligible tool catalog for this program: name, short description, optional pluginId/objectBinding, fullDescription and exact inputSchema. Filter/map it in JavaScript; print only selected entries with text() to retrieve detailed documentation at the conversation tail. The tools Proxy also returns functions for unknown names, so it is not an availability check.",
       "Stable helper declarations (TypeScript reference notation only; submitted code must be JavaScript):",
       "```ts",
       generateToolSdk([]),
@@ -132,13 +134,25 @@ export function generateToolCatalog(
       (tool) =>
         tool.name !== RUN_CODE_NAME && tool.name !== COMPACT_CONTEXT_NAME,
     )
-    .map(({ name, description, pluginId, fullDescription, inputSchema }) => ({
-      name,
-      description: compactToolDescription(description),
-      ...(pluginId === undefined ? {} : { pluginId }),
-      fullDescription: fullDescription ?? description,
-      inputSchema: structuredClone(inputSchema),
-    }));
+    .map(
+      ({
+        name,
+        description,
+        pluginId,
+        fullDescription,
+        inputSchema,
+        objectBinding,
+      }) => ({
+        ...(objectBinding === undefined
+          ? {}
+          : { objectBinding: structuredClone(objectBinding) }),
+        name,
+        description: compactToolDescription(description),
+        ...(pluginId === undefined ? {} : { pluginId }),
+        fullDescription: fullDescription ?? description,
+        inputSchema: structuredClone(inputSchema),
+      }),
+    );
 }
 
 export function generateToolSdk(tools: readonly ModelTool[]): string {
@@ -167,6 +181,7 @@ export function generateToolSdk(tools: readonly ModelTool[]): string {
     "  structuredContent?: unknown;",
     "};",
     "",
+    'declare const capabilities: { list(): {kind: "browser" | "computer"; provider: string}[]; browser(provider: string): any; computer(provider: string): any };',
     "declare const tools: {",
     ...declarations,
     "};",
@@ -181,7 +196,7 @@ export function generateToolSdk(tools: readonly ModelTool[]): string {
     "declare function yield_control(): Promise<void>;",
     "declare function setTimeout(callback: (...args: unknown[]) => unknown, delayMs?: number, ...args: unknown[]): number;",
     "declare function clearTimeout(id: number): void;",
-    "declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string; pluginId?: string; fullDescription: string; inputSchema: Record<string, unknown> }>;",
+    'declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string; pluginId?: string; objectBinding?: {kind: "browser" | "computer"; provider: string; path: readonly string[]; reference?: {kind: string; argument: string}}; fullDescription: string; inputSchema: Record<string, unknown> }>;',
   ].join("\n");
 }
 

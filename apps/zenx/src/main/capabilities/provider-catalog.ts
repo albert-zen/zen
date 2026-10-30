@@ -1,3 +1,4 @@
+import { browserExtensionOperations } from "./browser-extensions.js";
 import { createProviderProcessDiagnosticReporter } from "./provider-process-diagnostics.js";
 import { SpawnWinAppCliRunner } from "./windows-computer-provider.js";
 import {
@@ -146,7 +147,7 @@ export async function selectBrowserProvider(
             ],
             version: connection.product,
             permissionSummary:
-              "Explicit loopback CDP attachment; uses authenticated page state in place and never exports cookies, storage, headers, or credentials",
+              "Explicit loopback CDP attachment; uses authenticated page state in place and does not export session material automatically; explicit programmable diagnostics may return page or network data",
             sessionMode: "user-session",
           },
         ],
@@ -417,7 +418,7 @@ export function userBrowserManifest(): ZenXPluginManifestV2 {
   return {
     ...manifest,
     description:
-      "An explicit attachment to a user-opened Chrome, Edge, or Chromium CDP session that uses authenticated page state in place without exporting session material.",
+      "An explicit attachment to a user-opened Chrome, Edge, or Chromium CDP session that uses authenticated page state in place with explicitly requested tab-scoped diagnostics.",
     provider: {
       id: "user-browser-cdp",
       platforms: ["darwin", "win32", "linux"],
@@ -885,7 +886,11 @@ export function playwrightBrowserManifest(): ZenXPluginManifestV2 {
     tools: browserCapabilityManifest.tools
       .filter(
         (tool) =>
-          !["browser_pointer_click", "browser_key_press"].includes(tool.name),
+          ![
+            "browser_pointer_click",
+            "browser_key_press",
+            ...browserExtensionOperations.map((op) => `browser_${op}`),
+          ].includes(tool.name),
       )
       .map((tool) => ({
         ...structuredClone(tool),

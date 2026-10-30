@@ -274,3 +274,73 @@ only when that fresh OS application has bundle ID `com.apple.loginwindow`; an
 active foreground without observable window scope is refused. This application
 policy does not change exact-window click or foreground input’s strict desktop
 comparison. Per-chunk fences and matching key-up cleanup remain mandatory.
+
+## Programmable objects
+
+`capabilities.computer(provider)` in `run_code` projects the **currently exposed**
+provider tools. Discover the installed provider with `capabilities.list()` and
+its exact methods/schemas through `ALL_TOOLS[].objectBinding`. It is not another
+execution backend: object calls and `tools.computer_*` reach the same implementation,
+permissions, cancellation, Trace and reference validation, and return the same
+ordinary tool result (including nonzero failures).
+
+- `computer.windows.list({query})`, `computer.environment({})`
+- `computer.window(ref).inspect({full:true})`, `.screenshot({})`, `.select({})`
+- `computer.control(ref).press({})`, `.setValue({value})`
+- Native bound input: `computer.binding(ref).foreground.type({text})`,
+  `.keyPress({key})`, `.shortcut({key,modifiers})`, `.scroll({deltaY})`
+- Native screenshot input: `computer.capture(ref).foreground.click({x,y,button})`
+  or `.background.click({x,y})`; only the latter avoids global takeover.
+  Native `.foreground.drag({x,y,toX,toY})` uses one fresh capture and a bounded
+  left-button path inside that same selected window.
+- Native local OCR: `computer.capture(ref).extensions.vision.ocr({languages})`
+- Explicit application-current-focus input:
+  `computer.appCurrentFocus(bindingRef).type({text})` / `.keyPress({key})`.
+  This intentionally does **not** promise input into the selected window.
+
+Methods exist only when the provider's tool is exposed. Windows and Peekaboo do
+not acquire native macOS OCR/background input through this facade. Legacy
+foreground providers use root `computer.foreground.*` methods and retain their
+original desktop-wide scope; they are not relabeled as exact-window input.
+Unsupported paste or text-selection methods are not fabricated. Right-click
+uses the supported foreground click's explicit `button:"right"` argument.
+
+A new JavaScript program reconstructs its objects from the same short refs; no
+JavaScript global is the owner. The Host's existing Thread/provider generation
+owns windows, observations, bindings and captures. A native Thread has **one
+current selected binding**, not one independent binding per JavaScript object.
+Selecting or screenshotting a different window retires the previous binding and
+capture. Reconstructing an old object never revives them. Session changes,
+provider replacement, native closure/geometry changes, consumed observations and
+capture expiry retain their existing invalidation rules. No call silently
+retargets a stale window to the application's current focus or activates a window
+through observation. Foreground methods remain explicitly permission-gated.
+
+The `window(ref).inspect` method supplies its window target. For a continuation
+cursor use `tools.computer_inspect({cursor})`: a cursor already owns its immutable
+capture, so it cannot be combined with a window target. Inspection remains bounded
+(32 controls on the first page; native macOS can retain up to 120 candidates), not
+an exhaustive tree. Posted input is not evidence of application effect; inspect
+or capture an app-visible result without automatically replaying uncertain input.
+
+Native selection reports `inputCapabilities`: `foregroundWindow` requires a
+matched AX window, `backgroundWindow` requires fresh native capture, and
+`applicationKeyboard` has only application-current-focus scope. These are native
+support observations at selection, **not** permission grants, environment
+readiness or proof of successful input. For a CG-only selected window whose AX
+window appears later, foreground input freshly acquires the unique AX window
+matching the original title/frame and CG window ID before activation. If that
+mapping remains missing or ambiguous, foreground input fails without silently
+choosing the application's focused/main window. A previously retained AX object
+still uses strict native identity verification; this is not an automatic retry
+of an action or permission bypass.
+
+Foreground drag consumes the exact capture and checks the selected window,
+geometry, focus and pointer recipient along its bounded path. Cancellation stops
+further movement and attempts a mouse-up without moving the pointer; if focus has
+changed, release is best-effort and the application effect remains unknown. The
+Host waits for actual helper termination; missing release evidence blocks further
+drag in that provider instance. A release-post receipt is not proof that the
+application received it or completed a drop. Reobserve rather than replaying.
+Native receiver fixtures record drag events independently; Linux tests cannot
+establish macOS delivery or application effect.

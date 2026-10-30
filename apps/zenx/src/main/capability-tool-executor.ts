@@ -324,6 +324,15 @@ function hostedResourcePolicy(
     "browser_",
   );
   const browserPageTools = new Set([
+    "browser_extensions",
+    "browser_evaluate",
+    "browser_network_start",
+    "browser_network_read",
+    "browser_network_response",
+    "browser_console_start",
+    "browser_console_read",
+    "browser_content",
+    "browser_screenshot",
     "browser_navigate",
     "browser_inspect",
     "browser_click",

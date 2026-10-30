@@ -1,3 +1,4 @@
+import type { CapabilityObjectBinding } from "./model.js";
 import type { AttachmentStore } from "./attachment.js";
 import type { RuntimeTrace } from "./trace.js";
 import { createToolTraceCapture, type ToolTraceCapture } from "./trace-tool.js";
@@ -182,6 +183,7 @@ export interface NestedToolInvocationPort {
       name: string;
       description: string;
       pluginId?: string;
+      objectBinding?: CapabilityObjectBinding;
       fullDescription?: string;
       inputSchema?: Record<string, unknown>;
     }[];

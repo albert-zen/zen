@@ -5,6 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { validatePluginManifest as validatePublicPluginManifest } from "@zenx/plugin-sdk";
 
+import { computerObjectBinding } from "../../../../../packages/zenx-computer-plugin/src/object-contract.js";
+
 import type { ModelTool } from "../../../../../src/model.js";
 import type {
   RegisteredZenXCapability,
@@ -1024,7 +1026,13 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
       if (!this.#isProviderAvailable(manifest)) continue;
       for (const tool of manifest.tools) {
         if (this.#isToolExposed(manifest.id, tool)) {
+          const objectBinding = computerObjectBinding(
+            tool.name,
+            manifest.provider.id,
+            tool.inputSchema,
+          );
           definitions.push({
+            ...(objectBinding === undefined ? {} : { objectBinding }),
             name: tool.name,
             description: tool.description,
             inputSchema: structuredClone(tool.inputSchema),

@@ -19,6 +19,7 @@ let windowLocationSetter: Int? = nil
 var fixtureOperation = ""
 let mode = ProcessInfo.processInfo.environment["FIXTURE_MODE"] ?? "normal"
 var posted = 0
+var activationSettled = false
 final class AXUIElement: NSObject {
   let id: Int
   init(_ id: Int) { self.id = id }
@@ -26,6 +27,10 @@ final class AXUIElement: NSObject {
 let original = AXUIElement(17)
 let replacement = AXUIElement(18)
 let appElement = AXUIElement(42)
+let systemElement = AXUIElement(0)
+let foreign = AXUIElement(99)
+let childElement = AXUIElement(20)
+let invalidWindow = AXUIElement(21)
 var selectedWindow = original
 let kAXWindowsAttribute = "windows"
 let kAXTitleAttribute = "title"
@@ -46,47 +51,55 @@ enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
 func fixtureWindowList(_ options: CGWindowListOption, _ id: CGWindowID) -> Any? {
   var row: [String: Any] = ["owner": NSNumber(value: 42), "number": NSNumber(value: 17), "layer": NSNumber(value: 0), "onscreen": true, "title": "Fixture", "bounds": ["X": -100.0, "Y": 20.0, "Width": fixtureOperation != "select" && mode == "resize" ? 401.0 : 400.0, "Height": 200.0]]
   if mode == "active-no-cg-title" || mode == "locked-no-cg-title" { row.removeValue(forKey: "title") }
+  if fixtureOperation != "select" && mode == "ax-late-wrong-cg" { row["number"] = NSNumber(value: 18) }
   if mode == "geometry-ambiguous" { var other = row; other["number"] = NSNumber(value: 18); return [row, other] }
+  if mode == "pointer-noninteractive-overlay" {
+    let overlay: [String: Any] = ["owner": NSNumber(value: 43), "number": NSNumber(value: 99), "layer": NSNumber(value: 20), "onscreen": true, "bounds": ["X": -100.0, "Y": 0.0, "Width": 1024.0, "Height": 768.0]]
+    return [overlay, row]
+  }
   return [row]
 }
-func fixtureWindowList(_ options: [WindowListOption], _ id: CGWindowID) -> Any? {
-  let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
-  if mode == "pointer-missing" { return [] }
-  if mode == "pointer-ambiguous" { return [["alpha": 1.0]] }
-  if mode == "pointer-trusted-edge" || mode == "pointer-forged-edge" || mode == "pointer-status-over-edge" {
-    var edge = window; edge["number"] = NSNumber(value: 19); edge["owner"] = NSNumber(value: mode == "pointer-forged-edge" ? getppid() + 1 : getppid())
-    if mode == "pointer-status-over-edge" { var status = edge; status["number"] = NSNumber(value: 20); return [status, edge, window] }
-    return [edge, window]
-  }
-  if mode == "pointer-overlay" || mode == "pointer-transparent-overlay" || mode == "scroll-overlay" || (mode == "pointer-late-overlay" && posted >= 2) {
-    var overlay = window; overlay["number"] = NSNumber(value: 18)
-    if mode == "pointer-transparent-overlay" { overlay["alpha"] = 0.0 }
-    return [overlay, window]
-  }
-  return [window]
-}
-func AXUIElementCreateSystemWide() -> AXUIElement { appElement }
+func AXUIElementCreateSystemWide() -> AXUIElement { systemElement }
 func AXUIElementCopyElementAtPosition(_ root: AXUIElement, _ x: Float, _ y: Float, _ hit: inout AXUIElement?) -> AXError {
+  guard root === systemElement else { return .failure }
   if mode == "pointer-no-ax-hit" { return .failure }
-  hit = mode == "pointer-wrong-ax-window" ? replacement : original
+  if mode == "pointer-missing" { hit = nil; return .success }
+  if ["pointer-overlay", "pointer-transparent-overlay", "pointer-forged-edge", "pointer-status-over-edge", "scroll-overlay"].contains(mode) || (mode == "pointer-late-overlay" && posted >= 2) { hit = foreign; return .success }
+  if mode == "pointer-wrong-ax-window" { hit = replacement; return .success }
+  hit = ["pointer-child", "pointer-ambiguous", "pointer-foreign-containing-window", "pointer-invalid-window-role", "pointer-containing-pid-unavailable"].contains(mode) ? childElement : original
+  return .success
+}
+func AXUIElementGetPid(_ element: AXUIElement, _ pid: inout pid_t) -> AXError {
+  if mode == "pointer-pid-unavailable" || (mode == "pointer-containing-pid-unavailable" && element === original) { return .failure }
+  pid = element === foreign ? 43 : 42
   return .success
 }
 enum AXError { case success, failure }
 func AXIsProcessTrusted() -> Bool { true }
 func AXUIElementCreateApplication(_ pid: Int32) -> AXUIElement { appElement }
 func AXUIElementPerformAction(_ window: AXUIElement, _ action: String) -> AXError {
-  selectedWindow = mode == "wrong-window" ? replacement : window
+  selectedWindow = ["wrong-window", "activation-deferred-wrong-window"].contains(mode) ? replacement : window
   return .success
 }
 func fixtureEqual(_ a: AnyObject, _ b: AnyObject) -> Bool { a === b }
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
-  if name == "role" { return "window" as NSString }
+  if name == "role" {
+    if element === childElement || element === invalidWindow { return "button" as NSString }
+    return "window" as NSString
+  }
+  if name == "window" && element === childElement {
+    if mode == "pointer-ambiguous" { return nil }
+    if mode == "pointer-invalid-window-role" { return invalidWindow }
+    return mode == "pointer-foreign-containing-window" ? foreign : original
+  }
   if name == "title" { return "Fixture" as NSString }
   if name == "focused" { return selectedWindow }
   return nil
 }
 func windows(_ app: AXUIElement) -> [AXUIElement] {
-  if mode == "locked-no-cg-title" { return [] }
+  if mode == "locked-no-cg-title" || mode == "ax-still-missing" { return [] }
+  if mode.hasPrefix("ax-late") && fixtureOperation == "select" { return [] }
+  if mode == "ax-late-ambiguous" { return [original, replacement] }
   if mode == "same-title-ambiguous" { return [original, replacement] }
   if fixtureOperation != "select" && mode == "closed" { return [] }
   if fixtureOperation != "select" && mode == "reused-id" { return [replacement] }
@@ -104,20 +117,24 @@ final class NSRunningApplication {
   var bundleIdentifier: String? { mode == "no-bundle" ? nil : "fixture.app" }
   var localizedName: String? { "Fixture" }
   enum ActivationOption { case activateIgnoringOtherApps }
-  func activate(options: [ActivationOption]) -> Bool { mode != "activation-failed" }
+  func activate(options: [ActivationOption]) -> Bool {
+    if mode.hasPrefix("activation-deferred") { RunLoop.main.perform { activationSettled = true; if mode == "activation-deferred-cancel" { targetCancelled = 1 } } }
+    return mode != "activation-failed"
+  }
 }
 final class NSWorkspace {
   static let shared = NSWorkspace()
   var runningApplications: [NSRunningApplication] { [NSRunningApplication(processIdentifier: 42)!] }
   var frontmostApplication: NSRunningApplication? {
-    if ["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1 { return NSRunningApplication(processIdentifier: 99) }
+    if mode == "activation-never" || (mode.hasPrefix("activation-deferred") && !activationSettled) { return NSRunningApplication(processIdentifier: 99) }
+    if (["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1) || (mode == "drag-focus-stolen" && posted >= 3) { return NSRunningApplication(processIdentifier: 99) }
     return NSRunningApplication(processIdentifier: 42)
   }
 }
 func fixtureSleep(_ value: UInt32) {}
 typealias CGKeyCode = UInt16
 enum CGMouseButton { case left, right }
-enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseUp, rightMouseDown, rightMouseUp }
+enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseDragged, leftMouseUp, rightMouseDown, rightMouseUp }
 enum CGEventTapLocation { case cghidEventTap }
 enum CGScrollEventUnit { case pixel }
 struct CGEventFlags: OptionSet {
@@ -131,12 +148,15 @@ final class CGEvent {
   var flags: CGEventFlags = []
   var label: String
   var location = CGPoint.zero
+  init?(source: Any?) { label = "pointer" }
   init?(keyboardEventSource: Any?, virtualKey: CGKeyCode, keyDown: Bool) { label = (keyDown ? "down:" : "up:") + String(virtualKey) }
   init?(mouseEventSource: Any?, mouseType: CGEventType, mouseCursorPosition: CGPoint, mouseButton: CGMouseButton) { label = mouseType.rawValue }
   init?(scrollWheelEvent2Source: Any?, units: CGScrollEventUnit, wheelCount: UInt32, wheel1: Int32, wheel2: Int32, wheel3: Int32) { label = "scroll" }
   func keyboardSetUnicodeString(stringLength: Int, unicodeString: UnsafePointer<UniChar>?) { label += ":unicode=" + String(stringLength) }
   func post(tap: CGEventTapLocation) {
     posted += 1
+    if mode == "drag-cancel" && label == "leftMouseDown" { targetCancelled = 1 }
+    if mode.hasSuffix("cancel-after-down") && (label == "leftMouseDown" || label.hasPrefix("down:")) { targetCancelled = 1 }
     FileHandle.standardError.write(Data(("POST:" + label + ":flags=" + String(flags.rawValue) + "\\n").utf8))
   }
 }
@@ -195,8 +215,8 @@ test(
       .replaceAll("usleep(", "fixtureSleep(")
       .replaceAll("CGWindowListCopyWindowInfo(", "fixtureWindowList(")
       .replace(
-        "CFGetTypeID(window) == AXUIElementGetTypeID()",
-        "window is AXUIElement",
+        "CFGetTypeID(containing) == AXUIElementGetTypeID()",
+        "containing is AXUIElement",
       )
       .replace(
         "CFGetTypeID(focused) == AXUIElementGetTypeID()",
@@ -232,6 +252,21 @@ test(
     assert.equal(compilation.status, 0, compilation.stderr);
     for (const mode of [
       "normal",
+      "activation-deferred",
+      "activation-never",
+      "activation-deferred-wrong-window",
+      "activation-deferred-cancel",
+      "key-cancel-after-down",
+      "pointer-cancel-after-down",
+      "typing-cancel-after-down",
+      "shortcut-cancel-after-down",
+      "drag-normal",
+      "drag-cancel",
+      "drag-focus-stolen",
+      "ax-late",
+      "ax-still-missing",
+      "ax-late-ambiguous",
+      "ax-late-wrong-cg",
       "missing-launch-date",
       "active-no-cg-title",
       "no-bundle",
@@ -253,6 +288,12 @@ test(
       "layout-remapped",
       "shortcut-ambiguous",
       "pointer-normal",
+      "pointer-child",
+      "pointer-noninteractive-overlay",
+      "pointer-pid-unavailable",
+      "pointer-containing-pid-unavailable",
+      "pointer-foreign-containing-window",
+      "pointer-invalid-window-role",
       "pointer-overlay",
       "pointer-transparent-overlay",
       "pointer-late-overlay",
@@ -278,11 +319,23 @@ test(
       });
       const request = async (value: object) => {
         child.stdin.write(JSON.stringify(value) + "\n");
-        const line = await lines.next();
+        let line = await lines.next();
         assert.equal(line.done, false, stderr);
+        const first = JSON.parse(line.value!);
+        if (first.phase === "foregroundDragSettled") {
+          assert.equal(first.release, "posted");
+          line = await lines.next();
+          assert.equal(line.done, false, stderr);
+        }
         return JSON.parse(line.value!) as {
           result?: {
             bindingId: string;
+            foregroundWindowInputAvailable?: boolean;
+            inputCapabilities?: {
+              availabilityIsSnapshot: boolean;
+              foregroundWindow: { available: boolean; scope: string };
+              applicationKeyboard: { available: boolean; scope: string };
+            };
             target?: { pid: number; bundleId?: string };
           };
           error?: string;
@@ -310,6 +363,28 @@ test(
           continue;
         }
         assert.ok(selected.result?.bindingId, JSON.stringify(selected));
+        assert.equal(
+          selected.result.inputCapabilities?.availabilityIsSnapshot,
+          true,
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.foregroundWindow.scope,
+          "exact_window",
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.applicationKeyboard.scope,
+          "application_current_focus",
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.applicationKeyboard.available,
+          true,
+        );
+        const initialAX = !mode.startsWith("ax-");
+        assert.equal(selected.result.foregroundWindowInputAvailable, initialAX);
+        assert.equal(
+          selected.result.inputCapabilities?.foregroundWindow.available,
+          initialAX,
+        );
         if (mode === "no-bundle") {
           assert.equal(selected.result.target?.pid, 42);
           assert.equal(
@@ -339,21 +414,23 @@ test(
           });
           assert.match(foreign.error!, /binding expired/);
         }
-        const input = mode.startsWith("pointer-")
-          ? { operation: "click", x: 20, y: 40, button: "left" }
-          : mode.startsWith("scroll-")
-            ? { operation: "scroll", deltaY: 100 }
-            : mode.startsWith("typing")
-              ? { operation: "type", text: "a".repeat(15) + "😀" }
-              : mode.startsWith("shortcut") || mode.startsWith("layout-")
-                ? {
-                    operation: "shortcut",
-                    key: "a",
-                    modifiers: [
-                      mode === "shortcut-option" ? "option" : "command",
-                    ],
-                  }
-                : { operation: "key", key: "enter" };
+        const input = mode.startsWith("drag-")
+          ? { operation: "drag", x: 20, y: 40, toX: 100, toY: 100 }
+          : mode.startsWith("pointer-")
+            ? { operation: "click", x: 20, y: 40, button: "left" }
+            : mode.startsWith("scroll-")
+              ? { operation: "scroll", deltaY: 100 }
+              : mode.startsWith("typing")
+                ? { operation: "type", text: "a".repeat(15) + "😀" }
+                : mode.startsWith("shortcut") || mode.startsWith("layout-")
+                  ? {
+                      operation: "shortcut",
+                      key: "a",
+                      modifiers: [
+                        mode === "shortcut-option" ? "option" : "command",
+                      ],
+                    }
+                  : { operation: "key", key: "enter" };
         const result = await request({
           ...input,
           owner: "thread-a",
@@ -361,8 +438,19 @@ test(
           pointerPassthroughWindowIds: mode.includes("edge") ? [19] : [],
         });
         if (
+          mode === "pointer-overlay" ||
+          mode === "pointer-transparent-overlay"
+        )
+          assert.match(result.error!, /not the selected application/);
+        if (
           [
             "normal",
+            "activation-deferred",
+            "key-cancel-after-down",
+            "pointer-cancel-after-down",
+            "shortcut-cancel-after-down",
+            "drag-normal",
+            "ax-late",
             "missing-launch-date",
             "active-no-cg-title",
             "no-bundle",
@@ -370,6 +458,8 @@ test(
             "shortcut-alt",
             "shortcut-option",
             "pointer-normal",
+            "pointer-child",
+            "pointer-noninteractive-overlay",
             "pointer-trusted-edge",
             "scroll-normal",
           ].includes(mode)
@@ -379,6 +469,9 @@ test(
           assert.match(
             result.error!,
             [
+              "drag-cancel",
+              "typing-cancel-after-down",
+              "drag-focus-stolen",
               "focus-stolen",
               "typing-focus-stolen",
               "layout-changed",
@@ -388,47 +481,86 @@ test(
               ? /partially dispatched; outcome unknown/
               : /no input dispatched/,
           );
-          const retry = await request({
-            operation: "key",
-            key: "enter",
-            owner: "thread-a",
-            bindingId: selected.result.bindingId,
-          });
-          assert.match(retry.error!, /binding expired/);
+          if (
+            ![
+              "drag-cancel",
+              "activation-deferred-cancel",
+              "typing-cancel-after-down",
+            ].includes(mode)
+          ) {
+            const retry = await request({
+              operation: "key",
+              key: "enter",
+              owner: "thread-a",
+              bindingId: selected.result.bindingId,
+            });
+            assert.match(retry.error!, /binding expired/);
+          }
         }
+        if (mode === "drag-cancel" || mode === "drag-focus-stolen")
+          assert.match(result.error!, /drag release posted/);
         child.stdin.end();
         await new Promise<void>((resolve) =>
           child.once("close", () => resolve()),
         );
         assert.equal(
           (stderr.match(/POST:/g) ?? []).length,
-          ["pointer-normal", "pointer-trusted-edge"].includes(mode)
-            ? 3
-            : mode === "scroll-normal"
-              ? 1
-              : mode === "pointer-late-overlay"
-                ? 2
+          mode === "drag-normal"
+            ? 19
+            : mode === "drag-cancel"
+              ? 3
+              : mode === "drag-focus-stolen"
+                ? 4
                 : [
-                      "normal",
-                      "missing-launch-date",
-                      "active-no-cg-title",
-                      "no-bundle",
-                      "shortcut-alt",
-                      "shortcut-option",
+                      "pointer-normal",
+                      "pointer-child",
+                      "pointer-noninteractive-overlay",
+                      "pointer-trusted-edge",
+                      "pointer-cancel-after-down",
                     ].includes(mode)
-                  ? 2
-                  : mode === "typing"
-                    ? 4
-                    : [
-                          "focus-stolen",
-                          "typing-focus-stolen",
-                          "layout-changed",
-                          "layout-remapped",
-                        ].includes(mode)
-                      ? 1
-                      : 0,
+                  ? 3
+                  : mode === "scroll-normal"
+                    ? 1
+                    : mode === "pointer-late-overlay"
+                      ? 2
+                      : [
+                            "normal",
+                            "activation-deferred",
+                            "key-cancel-after-down",
+                            "typing-cancel-after-down",
+                            "shortcut-cancel-after-down",
+                            "ax-late",
+                            "missing-launch-date",
+                            "active-no-cg-title",
+                            "no-bundle",
+                            "shortcut-alt",
+                            "shortcut-option",
+                          ].includes(mode)
+                        ? 2
+                        : mode === "typing"
+                          ? 4
+                          : [
+                                "focus-stolen",
+                                "typing-focus-stolen",
+                                "layout-changed",
+                                "layout-remapped",
+                              ].includes(mode)
+                            ? 1
+                            : 0,
           `${mode}: ${stderr}`,
         );
+        if (mode.startsWith("drag-")) {
+          assert.equal((stderr.match(/POST:leftMouseDown/g) ?? []).length, 1);
+          assert.equal(
+            (stderr.match(/POST:leftMouseUp/g) ?? []).length,
+            1,
+            "release must occur once even after cancellation/focus loss",
+          );
+          assert.equal(
+            (stderr.match(/POST:leftMouseDragged/g) ?? []).length,
+            mode === "drag-normal" ? 16 : mode === "drag-focus-stolen" ? 1 : 0,
+          );
+        }
         if (mode === "typing") {
           assert.match(stderr, /unicode=15/);
           assert.match(stderr, /unicode=2/);
@@ -436,6 +568,13 @@ test(
         }
         if (mode === "shortcut-alt")
           assert.match(stderr, /POST:down:12:flags=1048576/);
+        if (mode.endsWith("cancel-after-down")) {
+          const downs = (stderr.match(/POST:(?:down:|leftMouseDown)/g) ?? [])
+            .length;
+          const ups = (stderr.match(/POST:(?:up:|leftMouseUp)/g) ?? []).length;
+          assert.equal(downs, 1, "cancel must stop before another pair begins");
+          assert.equal(ups, 1, "cancel must preserve the matching release");
+        }
         if (mode === "shortcut-option")
           assert.match(stderr, /POST:down:0:flags=524288/);
       } finally {
@@ -444,3 +583,60 @@ test(
     }
   },
 );
+
+test("missing AX reacquisition stays exact-window and precedes any foreground takeover", () => {
+  const start = MAC_BOUND_TARGET_SOURCE.indexOf(
+    "func acquireMissingAXWindow()",
+  );
+  const end = MAC_BOUND_TARGET_SOURCE.indexOf("func activate()", start);
+  assert.ok(start > 0 && end > start);
+  const acquire = MAC_BOUND_TARGET_SOURCE.slice(start, end);
+  assert.match(acquire, /guard window == nil else/);
+  assert.match(
+    acquire,
+    /AXUIElementCreateApplication\(app.processIdentifier\)/,
+  );
+  assert.match(acquire, /candidates.count == 1/);
+  assert.match(acquire, /kAXTitleAttribute[^\n]+== title/);
+  assert.match(acquire, /frame\(candidate\) == bounds/);
+  assert.match(acquire, /mapped.count == 1[^\n]+== windowId/);
+  assert.doesNotMatch(
+    acquire,
+    /kAXFocusedWindowAttribute|kAXMainWindowAttribute|app.activate|postToPid/,
+  );
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE.slice(end),
+    /func activate\(\) throws \{\s*guard targetCancelled == 0[^\n]*\s*try acquireMissingAXWindow\(\)\s*try verify\(\)/,
+  );
+});
+
+test("global AX pointer admission checks exact PID and containing retained window without CG rectangle veto", () => {
+  const start = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
+  const end = MAC_BOUND_TARGET_SOURCE.indexOf("func ownedRows(", start);
+  const pointer = MAC_BOUND_TARGET_SOURCE.slice(start, end);
+  assert.match(
+    pointer,
+    /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/,
+  );
+  assert.match(
+    pointer,
+    /AXUIElementGetPid\(hit, &hitPID\) == \.success, hitPID == expectedPID/,
+  );
+  assert.match(
+    pointer,
+    /AXUIElementGetPid\(window, &windowPID\) == \.success, windowPID == expectedPID/,
+  );
+  assert.match(pointer, /kAXWindowAttribute/);
+  assert.doesNotMatch(
+    pointer,
+    /CGWindowList|passthrough|com\.apple\.dock|windowNumber\(at|RunLoop|usleep/,
+  );
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE,
+    /CFEqual\(try pointerWindow\(point, app\.processIdentifier\), window\)/,
+  );
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE,
+    /try binding\.fence\(\)[\s\S]*if let pointerPoint \{ try binding\.pointerFence\(pointerPoint\) \}/,
+  );
+});

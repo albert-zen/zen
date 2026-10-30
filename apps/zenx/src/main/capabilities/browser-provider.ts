@@ -1,4 +1,8 @@
 import {
+  browserExtensionOperations,
+  type BrowserExtensionOperation,
+} from "./browser-extensions.js";
+import {
   attachBrowserModelTargets,
   readBrowserModelRoute,
   type BrowserModelRoute,
@@ -156,6 +160,14 @@ export type BrowserLiveObservationListener = (
 ) => void;
 
 export interface ZenXBrowserBackend {
+  readonly extensionOperations?: readonly BrowserExtensionOperation[];
+  extension?(
+    sessionId: string,
+    tabId: string,
+    operation: BrowserExtensionOperation,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
   /** Bind the provider's opaque session to its trusted Thread owner. */
   bindThreadSession?(sessionId: string, threadId: string): void;
   /** Read-only exact existing-target liveness; must never adopt or create targets. */
@@ -276,7 +288,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       id: "browser.tabs.read",
       title: "Inspect browser tabs",
       description:
-        "List tabs and inspect bounded visible text and interactive targets.",
+        "List tabs, inspect visible text and targets, and explicitly read full page content, screenshots, network events/responses and console diagnostics.",
       scope: "browser-session",
     },
     {
@@ -290,7 +302,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       id: "browser.interact",
       title: "Interact with pages",
       description:
-        "Click, type, or select an option in an explicitly targeted visible page element, scroll the page viewport, or dispatch bounded coordinate/key input to the observed tab.",
+        "Interact with the exact observed tab through element, coordinate/key input or programmable JavaScript; JavaScript may mutate the page, submit forms or send requests.",
       scope: "browser-session",
     },
   ],
@@ -573,6 +585,72 @@ const BROWSER_OBSERVABLE_ACTIONS = new Set([
   "browser_key_press",
 ]);
 
+// Extensions reuse the same permission and target routing as ordinary tools.
+for (const operation of [
+  ...browserExtensionOperations,
+  "extensions",
+  "screenshot",
+]) {
+  browserCapabilityManifest.tools.push({
+    name: `browser_${operation}`,
+    description:
+      operation === "evaluate"
+        ? "Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals."
+        : ({
+            network_start:
+              "Start opt-in network event collection on the exact tab attachment; survives fresh code calls, no past traffic recovery.",
+            network_read:
+              "Read bounded captured network events using eventCursor and limit (1–100). Full retained capture is in ephemeral rawPath; evicted cursors fail.",
+            network_response:
+              "Read body and base64Encoded for an observed requestId in this exact attachment. Native response eviction is an error.",
+            console_start:
+              "Start opt-in console/error collection on the exact tab attachment; survives fresh code calls.",
+            console_read:
+              "Read bounded console events with eventCursor and limit (1–100), plus ephemeral full rawPath.",
+            content:
+              "Read full current top-document HTML from the exact owned tab.",
+            screenshot:
+              "Capture the exact tab with existing fenced inspect and return PNG artifact plus fresh observation.",
+            extensions:
+              "List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
+          }[operation] ?? `Explicit tab-scoped ${operation}.`),
+    inputSchema: objectSchema(
+      {
+        sessionId: stringSchema(),
+        tabId: stringSchema(),
+        ...(operation === "evaluate"
+          ? {
+              observationId: stringSchema(),
+              expression: { type: "string", minLength: 1, maxLength: 100000 },
+              world: { type: "string", enum: ["isolated", "main"] },
+            }
+          : {}),
+        ...(["network_read", "console_read"].includes(operation)
+          ? {
+              eventCursor: stringSchema(),
+              limit: { type: "integer", minimum: 1, maximum: 100 },
+            }
+          : {}),
+        ...(operation === "network_response"
+          ? { requestId: stringSchema() }
+          : {}),
+      },
+      [
+        "sessionId",
+        "tabId",
+        ...(operation === "evaluate" ? ["observationId", "expression"] : []),
+        ...(operation === "network_response" ? ["requestId"] : []),
+      ],
+    ),
+    permissions: [
+      operation === "evaluate" ? "browser.interact" : "browser.tabs.read",
+    ],
+    interactionMode: "background_safe",
+    capabilities: ["dedicated_profile", "cdp"],
+    maxOutputBytes: 16384,
+  });
+}
+
 export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
   readonly manifest: ZenXPluginManifestV2;
   readonly #backend: ZenXBrowserBackend;
@@ -702,6 +780,67 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     toolName: string,
     invocation: ToolInvocation,
   ): Promise<unknown> {
+    const extensionOp = toolName.replace(/^browser_/, "");
+    if (
+      [...browserExtensionOperations, "extensions", "screenshot"].includes(
+        extensionOp as BrowserExtensionOperation,
+      )
+    ) {
+      const sessionId = requiredTargetId(invocation.arguments, "sessionId"),
+        tabId = requiredTargetId(invocation.arguments, "tabId");
+      if (extensionOp === "extensions")
+        return {
+          sessionId,
+          tabId,
+          operations: [
+            ...(this.#backend.extensionOperations ?? []),
+            "screenshot",
+          ],
+          evaluationWorld:
+            "isolated (default) or explicitly pinned main world; trusted observation world is never exposed",
+        };
+      if (extensionOp === "screenshot") {
+        const view = await this.#backend.inspect(
+          sessionId,
+          tabId,
+          invocation.signal,
+        );
+        return this.#presentInspection(
+          view,
+          observationReadOptions(invocation.arguments),
+        );
+      }
+      if (
+        !this.#backend.extensionOperations?.includes(
+          extensionOp as BrowserExtensionOperation,
+        ) ||
+        !this.#backend.extension
+      )
+        throw Error(
+          `Browser extension ${extensionOp} is unsupported by this provider`,
+        );
+      if (extensionOp === "evaluate") {
+        const key = this.#observationKey(sessionId, tabId);
+        if (invocation.threadId !== undefined || this.#presentation.has(key))
+          await this.#presentation.assertObservation(
+            key,
+            requiredTargetId(invocation.arguments, "observationId"),
+            invocation.signal,
+          );
+        this.#presentation.invalidate(key);
+      }
+      return {
+        sessionId,
+        tabId,
+        data: await this.#backend.extension(
+          sessionId,
+          tabId,
+          extensionOp as BrowserExtensionOperation,
+          invocation.arguments,
+          invocation.signal,
+        ),
+      };
+    }
     const observe =
       optionalBoolean(invocation.arguments, "observe") ??
       BROWSER_OBSERVABLE_ACTIONS.has(toolName);
@@ -2325,6 +2464,10 @@ const browserElementNameScript = `(element) => {
 
 // The registry is safe only in the provider's named isolated world. Never evaluate
 // these scripts in the page's main world: page-owned keys are not node identity.
+export function browserDocumentGuardScript(identity: string): string {
+  return `(() => { const registry = globalThis[Symbol.for(${JSON.stringify(browserNodeRegistryKey)})]; if (!registry || registry.document !== document || registry.incarnation + "|" + location.href !== ${JSON.stringify(identity)}) throw new Error("Browser document changed; inspect again"); return true; })()`;
+}
+
 const browserNodeRegistryKey = "zenx.browser.observation.nodes.v1";
 export const browserInspectScript = `(() => {
   const registryKey = Symbol.for(${JSON.stringify(browserNodeRegistryKey)});

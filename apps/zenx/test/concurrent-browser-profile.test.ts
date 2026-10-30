@@ -22,9 +22,9 @@ const pnpmCliPath = fileURLToPath(
   new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
 );
 const tarballs = {
-  legacy: "zenx-browser-plugin-user-session-1.1.0.tgz",
-  concurrent: "zenx-browser-plugin-concurrent-1.1.0.tgz",
-  isolated: "zenx-browser-plugin-electron-1.1.0.tgz",
+  legacy: "zenx-browser-plugin-user-session-1.2.0.tgz",
+  concurrent: "zenx-browser-plugin-concurrent-1.2.0.tgz",
+  isolated: "zenx-browser-plugin-electron-1.2.0.tgz",
 };
 function tracked(title: string) {
   let closed = 0;

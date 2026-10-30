@@ -177,6 +177,8 @@ export class BrowserThreadObservation {
         };
         if (typeof summary.tabId !== "string") continue;
         const prior = session.targets.get(summary.tabId);
+        // Extension data is not a new tab metadata or screenshot observation.
+        if ("data" in summary || "operations" in summary) continue;
         const target = {
           failureGeneration: prior?.failureGeneration ?? 0,
           summary: {

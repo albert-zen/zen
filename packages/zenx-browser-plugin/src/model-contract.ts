@@ -2,6 +2,15 @@
 export const browserModelDocument =
   "Browser refs bind an exact backend, tab, observation and owner. Inspect gives a bounded capture; query searches captured targets only, and cursor continues that immutable capture. Actions observe by default with a small captured subset; pass since with a retained observation ref for an exact diff, or full:true for a broader self-contained capture. Diffs replace old action refs via targetChanges.replacements. Discard prior continuation pages after every new observation or first-page diff and follow the new nextCursor. Human takeover requires fresh inspection after return. After actionCompleted plus observationError inspect again; never replay unknown effects.";
 export const browserOperations = [
+  "extensions",
+  "evaluate",
+  "network_start",
+  "network_read",
+  "network_response",
+  "console_start",
+  "console_read",
+  "content",
+  "screenshot",
   "list_tabs",
   "open",
   "navigate",
@@ -57,6 +66,7 @@ export const observationTools = new Set([
   "scroll",
   "pointer_click",
   "key_press",
+  "evaluate",
 ]);
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -104,6 +114,11 @@ export function buildBrowserModelDefinition<
     }
     const native = asRecord(tool.inputSchema.properties) ?? {};
     for (const key of [
+      "world",
+      "expression",
+      "eventCursor",
+      "limit",
+      "requestId",
       "url",
       "text",
       "submit",
@@ -140,6 +155,8 @@ export function buildBrowserModelDefinition<
       : [])
       if (
         [
+          "expression",
+          "requestId",
           "url",
           "text",
           "option",
@@ -162,5 +179,43 @@ export function buildBrowserModelDefinition<
       : {}),
   };
   tool.description = `${op}: ${browserModelDescriptions[op] ?? tool.description}`;
-  return tool;
+  const extended = [
+    "extensions",
+    "evaluate",
+    "network_start",
+    "network_read",
+    "network_response",
+    "console_start",
+    "console_read",
+    "content",
+    "screenshot",
+  ].includes(op);
+  return Object.assign(tool, {
+    objectBinding: {
+      kind: "browser",
+      provider: browserNamespace(tool.name),
+      path:
+        op === "extensions"
+          ? ["supportedExtensions"]
+          : extended
+            ? ["extensions", op]
+            : [op],
+      ...(op === "connections" || sessionTools.has(op)
+        ? {}
+        : {
+            reference: {
+              kind: targetTools.has(op)
+                ? "target"
+                : observationTools.has(op)
+                  ? "observation"
+                  : "tab",
+              argument: targetTools.has(op)
+                ? "target"
+                : observationTools.has(op)
+                  ? "observation"
+                  : "tab",
+            },
+          }),
+    },
+  });
 }

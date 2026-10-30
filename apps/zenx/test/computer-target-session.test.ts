@@ -906,3 +906,139 @@ test("verified WindowServer capture uses the same owner/capture one-shot authori
     1,
   );
 });
+
+test("selection-time mode availability is disclosed without forbidding fresh native AX reacquisition", async () => {
+  const { session, transport, calls } = fixture();
+  const original = transport.request;
+  const inputCapabilities = {
+    availabilityIsSnapshot: true as const,
+    foregroundWindow: {
+      available: false,
+      scope: "exact_window" as const,
+      requires: "matched_ax_window" as const,
+    },
+    backgroundWindow: {
+      available: true,
+      scope: "exact_window" as const,
+      requires: "fresh_native_capture" as const,
+    },
+    applicationKeyboard: {
+      available: true,
+      scope: "application_current_focus" as const,
+    },
+  };
+  transport.request = async (...args) => {
+    const value = await original(...args);
+    return args[0].operation === "select"
+      ? {
+          ...(value as object),
+          foregroundWindowInputAvailable: false,
+          inputCapabilities,
+        }
+      : value;
+  };
+  const selected = await session.select("owner", { pid: 7 }, signal);
+  assert.deepEqual(selected.inputCapabilities, inputCapabilities);
+  assert.equal(selected.foregroundWindowInputAvailable, false);
+  // The native helper owns same-window AX reacquisition and final refusal. A
+  // stale selection snapshot is neither a permanent denial nor permission.
+  await session.input(
+    "owner",
+    { operation: "key", key: "enter" },
+    signal,
+    undefined,
+    selected.bindingId,
+  );
+  assert.equal(calls.at(-1)?.operation, "key");
+  assert.equal(calls.at(-1)?.bindingId, selected.bindingId);
+  assert.equal(calls.filter((call) => call.operation === "select").length, 1);
+  assert.equal(
+    calls.some((call) => call.operation === "backgroundKeyPress"),
+    false,
+  );
+});
+
+test("drag maps both image endpoints, consumes capture, and requires a release receipt", async () => {
+  const { session, transport, calls } = fixture();
+  const original = transport.request;
+  transport.request = async (...args) => {
+    const result = await original(...args);
+    return args[0].operation === "drag"
+      ? { ...(result as object), release: "posted" }
+      : result;
+  };
+  const image = await session.capture("a", { pid: 7 }, signal, async () => ({
+    width: 800,
+    height: 400,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  const action = {
+    operation: "drag" as const,
+    x: 200,
+    y: 100,
+    toX: 600,
+    toY: 300,
+    captureId: image.captureId,
+  };
+  await session.input("a", action, signal);
+  assert.equal(calls.at(-1)?.x, 0);
+  assert.equal(calls.at(-1)?.y, 70);
+  assert.equal(calls.at(-1)?.toX, 200);
+  assert.equal(calls.at(-1)?.toY, 170);
+  await assert.rejects(
+    session.input("a", action, signal),
+    /current window screenshot/,
+  );
+  const next = await session.capture("a", { pid: 7 }, signal, async () => ({
+    width: 800,
+    height: 400,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  transport.request = original;
+  await assert.rejects(
+    session.input("a", { ...action, captureId: next.captureId }, signal),
+    /outcome unknown/,
+  );
+  await assert.rejects(
+    session.input("a", action, signal),
+    /Select a Computer target/,
+  );
+  assert.equal(
+    calls.filter((call) => call.operation === "drag").length,
+    2,
+    "unknown release never replays",
+  );
+});
+
+test("drag rejects expired captures and invalid endpoints before native input", async () => {
+  for (const variant of ["expired", "outside", "not-finite"] as const) {
+    const { session, calls } = fixture();
+    const image = await session.capture("a", { pid: 7 }, signal, async () => ({
+      width: 800,
+      height: 400,
+      expiresAt: new Date(
+        Date.now() + (variant === "expired" ? -1 : 60_000),
+      ).toISOString(),
+    }));
+    await assert.rejects(
+      session.input(
+        "a",
+        {
+          operation: "drag",
+          x: 1,
+          y: 1,
+          toX:
+            variant === "outside" ? 800 : variant === "not-finite" ? NaN : 10,
+          toY: 10,
+          captureId: image.captureId,
+        },
+        signal,
+      ),
+      /unexpired|outside/,
+    );
+    assert.equal(
+      calls.some((call) => call.operation === "drag"),
+      false,
+    );
+  }
+});

@@ -1,3 +1,8 @@
+import {
+  browserExtensionsFixturePath,
+  browserExtensionsFixtureBody,
+  verifyBrowserExtensions,
+} from "./browser-extensions-smoke.js";
 import { smokeConnectedActivity } from "./browser-connected-activity-smoke.js";
 import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
 import assert from "node:assert/strict";
@@ -49,6 +54,12 @@ const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   toJPEG: () => encoded,
 });
 const server = createServer((request, response) => {
+  if (request.url?.startsWith(browserExtensionsFixturePath)) {
+    response.setHeader("content-type", "application/json");
+    response.setHeader("cache-control", "no-store");
+    response.end(browserExtensionsFixtureBody);
+    return;
+  }
   if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
   if (request.url?.startsWith("/input-contract")) {
     response.setHeader("content-type", "text/html; charset=utf-8");
@@ -79,7 +90,7 @@ const server = createServer((request, response) => {
       <canvas width="200" height="80" tabindex="0" onclick="this.focus();document.querySelector('#result').textContent='Canvas clicked '+event.isTrusted"></canvas>
       <form onsubmit="event.preventDefault();document.querySelector('#result').textContent='Submitted '+document.querySelector('#text').value"><input id="text" aria-label="Targeted text"><button type="button" id="next">Next focus</button></form>
       <input type="file" id="native-file"><label for="native-file" style="position:absolute;left:10px;top:350px"><span>Choose native file</span></label>
-      <script>const updateVisibility=()=>document.querySelector('#visibility').textContent='Visibility '+document.visibilityState;updateVisibility();document.addEventListener('visibilitychange',updateVisibility);document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
+      <script>window.__zenProgrammableSmoke=42;const updateVisibility=()=>document.querySelector('#visibility').textContent='Visibility '+document.visibilityState;updateVisibility();document.addEventListener('visibilitychange',updateVisibility);document.addEventListener('focusin',()=>document.querySelector('#focus').textContent='Focus '+(document.activeElement.id||document.activeElement.tagName));</script>`);
     return;
   }
   response.end(
@@ -423,6 +434,15 @@ try {
     "hidden",
     "The operated target must remain inactive after canvas and keyboard default actions",
   );
+  // The following contract suite navigates this exact tab to /input-contract.
+  // Verify the application global while it still belongs to the /opened fixture,
+  // without injecting a replacement global or weakening pinned-context checks.
+  const programmableExtensions = await verifyBrowserExtensions(
+    backend,
+    "windows-smoke",
+    opened.tabId,
+    `http://127.0.0.1:${port}`,
+  );
   const targetedInputContracts = await runTargetedInputContractSmoke({
     backend,
     sessionId: "windows-smoke",
@@ -517,7 +537,8 @@ try {
       provider: "user-browser-cdp",
       product: selected?.version,
       inheritedAuthenticatedState: true,
-      agentReceivedSessionMaterial: false,
+      programmableExtensions,
+      automaticSessionExport: false,
       exactAgentTargetLiveFramesObserved: liveEvents.filter(
         (event) => event.type === "frame",
       ).length,

@@ -1,1 +1,1 @@
-export const BROWSER_PLUGIN_VERSION = "1.1.0";
+export const BROWSER_PLUGIN_VERSION = "1.2.0";

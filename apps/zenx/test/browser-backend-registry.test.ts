@@ -224,12 +224,45 @@ test("a missing external connection never falls back to the Workspace backend", 
 
 test("registry tools retain separate approval names and generated permission scopes", () => {
   const manifest = concurrentBrowserManifest();
-  assert.equal(manifest.tools.length, 24);
+  const operations = [
+    "list_tabs",
+    "open",
+    "navigate",
+    "inspect",
+    "click",
+    "type",
+    "select",
+    "scroll",
+    "pointer_click",
+    "key_press",
+    "close",
+    "close_session",
+    "evaluate",
+    "network_start",
+    "network_read",
+    "network_response",
+    "console_start",
+    "console_read",
+    "content",
+    "extensions",
+    "screenshot",
+  ];
+  const expectedNames = ["workspace", "connected"].flatMap((namespace) =>
+    operations.map((operation) => `browser_${namespace}_${operation}`),
+  );
+  assert.deepEqual(
+    manifest.tools.map((tool) => tool.name).sort(),
+    expectedNames.sort(),
+  );
+  assert.equal(manifest.tools.length, expectedNames.length);
   assert.doesNotMatch(
     JSON.stringify(manifest),
     /browser_(?!workspace_|connected_)/u,
   );
-  assert.equal(new Set(manifest.tools.map((tool) => tool.name)).size, 24);
+  assert.equal(
+    new Set(manifest.tools.map((tool) => tool.name)).size,
+    expectedNames.length,
+  );
   for (const tool of manifest.tools) {
     assert.ok(
       tool.permissions.every((permission) =>
@@ -238,6 +271,34 @@ test("registry tools retain separate approval names and generated permission sco
           : !permission.startsWith("browser.connected."),
       ),
     );
+  }
+  for (const namespace of ["workspace", "connected"]) {
+    const permissionPrefix =
+      namespace === "connected" ? "browser.connected" : "browser";
+    const tool = (operation: string) =>
+      manifest.tools.find(
+        (entry) => entry.name === `browser_${namespace}_${operation}`,
+      )!;
+    assert.deepEqual(
+      tool("evaluate").permissions,
+      [`${permissionPrefix}.interact`],
+      "Arbitrary evaluation must retain interaction permission",
+    );
+    for (const operation of [
+      "network_start",
+      "network_read",
+      "network_response",
+      "console_start",
+      "console_read",
+      "content",
+      "extensions",
+      "screenshot",
+    ])
+      assert.deepEqual(
+        tool(operation).permissions,
+        [`${permissionPrefix}.tabs.read`],
+        `${namespace} ${operation} must retain its own diagnostic read scope`,
+      );
   }
 });
 

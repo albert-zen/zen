@@ -28,6 +28,7 @@ const names = new Set([
   "computer_background_type",
   "computer_background_key_press",
   "computer_foreground_click",
+  "computer_foreground_drag",
   "computer_foreground_key_press",
   "computer_foreground_type",
   "computer_foreground_shortcut",
@@ -41,6 +42,7 @@ const targetTools = new Set([
 const semanticActions = new Set(["computer_press", "computer_set_value"]);
 
 export const computerModelDocument =
+  "Programmable objects are available through capabilities.computer(provider); discover providers with capabilities.list() and exact available methods with ALL_TOOLS objectBinding. These call the same tools and return the same results. Reconstruct window/control/capture/binding objects from short refs in fresh JavaScript programs; the Host owns their lifetime. One native selection per Thread: selecting or screenshotting another window retires the prior binding/capture. appCurrentFocus(binding) explicitly targets application current focus, never the original window. No unsupported platform methods are invented. Use tools.computer_inspect({cursor}) for continuation because cursor already owns its window. " +
   "Read computer_environment for current session availability; native macOS AX may work while locked using fresh controls, but actual native failures remain failures. Locked actions include a fresh native readback; only explicitly disclosed native exact-window capture/input may work while locked; foreground input requires an active session. Session changes never unlock or auto-replay input. List windows where supported and use exact window refs for inspect, screenshot or target selection. Inspect is a bounded capture: query/limit narrow only captured controls and coverage names the scope. Strict Windows native UIA inspect omits the current text Value, including passwords; do not infer text from a control name. Keep a full first-page baseline before requesting since; omit since or use full:true after compaction or lost context. Follow cursor alone for immutable continuation. A diff supplies explicit old-to-new control replacements and current order; retained controls may instead use their old ref with the explicit latest observation ref, subject to native freshness checks. Semantic actions default to a small self-contained follow-up; use since for an exact diff or full:true for a full first page. Native macOS and strict Windows set_value may report valueReadback.matchesRequested after exact native AXValue or ValuePattern readback without echoing the text; this verifies the immediate control value, not save or submit. Confirm broader application effects through a fresh app-visible state. actionCompleted with observationError means inspect again without repeating the action. Foreground tools may take focus and require the selected exact binding/capture; dispatch never proves application effect. Native macOS background_click consumes one exact screenshot capture ref and left-clicks its image-pixel x/y without desktop takeover; it requires fresh verified native full-window capture, a known console session and separate window-input permission. Only captureSource=native_sck_exact_window or native_window_server_exact_window with backgroundInputEligible=true carries window-input image proof; legacy read-only captures never authorize background click. OCR accepts source images up to 16 MP, bounds local recognition to 4 MP, and maps text boxes back to original capture pixels without renewing it. Display-bright capture uses SCK; observed display-asleep capture uses an exact single-window WindowServer primitive. Unknown errors never switch routes or wake the display. Application-internal focus may change. Use a fresh screenshot after every click; never retry an uncertain action." +
   " Native macOS background_type and background_key_press use this owner’s binding only to derive application identity, then post to that application current focus. Internal focus may change; its own windows may reorder only behind the current foreground application. Foreign windows, global foreground/pointer, display and console state must stay stable. No original-window or control guarantee. Separate app keyboard permission and explicit helper support are required; no global takeover, clipboard, wake or automatic replay. Text is bounded to 1024 Unicode scalars; basic keys accept no modifiers.";
 
@@ -142,6 +144,15 @@ export function computerModelDefinition<T extends ComputerModelTool>(
   }
   rename(schema, "bindingId", "binding");
   rename(schema, "captureId", "capture");
+  // A capture already contains the exact native binding. Keep optional binding
+  // for compatibility/cross-checking, but do not require callers to duplicate it.
+  if (
+    (tool.name === "computer_foreground_click" ||
+      tool.name === "computer_foreground_drag") &&
+    object(schema.properties).capture !== undefined &&
+    Array.isArray(schema.required)
+  )
+    schema.required = schema.required.filter((field) => field !== "binding");
   if (semanticActions.has(tool.name)) {
     const props = object(schema.properties);
     delete props.target;

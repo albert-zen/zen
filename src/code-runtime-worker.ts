@@ -1,3 +1,4 @@
+import type { CapabilityObjectBinding } from "./model.js";
 import { createContext, Script, SourceTextModule } from "node:vm";
 import { type MessagePort, workerData } from "node:worker_threads";
 import { installCodeWebGlobals } from "./code-runtime-web.js";
@@ -17,6 +18,7 @@ interface WorkerInput {
   maxMediaBytes: number;
   tools: readonly {
     name: string;
+    objectBinding?: CapabilityObjectBinding;
     description: string;
     pluginId?: string;
     fullDescription?: string;
@@ -368,8 +370,65 @@ const bootstrap = new Script(String.raw`
     }
     return value;
   };
+  // Facades contain no provider/session state. Every call crosses the ordinary
+  // tools bridge, retaining admission, cancellation, observation and Trace.
+  const bindings = config.tools.filter(tool => tool.objectBinding !== undefined);
+  const safeSegment = value => typeof value === 'string' && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(value) && !['__proto__', 'prototype', 'constructor', 'then'].includes(value);
+  for (const tool of bindings) {
+    const binding = tool.objectBinding;
+    if (!['browser', 'computer'].includes(binding.kind) || typeof binding.provider !== 'string' || !binding.provider || !Array.isArray(binding.path) || !binding.path.length || !binding.path.every(safeSegment) || (binding.reference && (!safeSegment(binding.reference.kind) || !safeSegment(binding.reference.argument)))) {
+      throw new Error('Invalid capability object binding: ' + tool.name);
+    }
+  }
+  const capability = (kind, provider) => {
+    const selected = bindings.filter(tool => tool.objectBinding.kind === kind && tool.objectBinding.provider === provider);
+    if (!selected.length) throw new Error('Unavailable capability provider: ' + kind + '/' + String(provider));
+    const build = (entries, reference) => {
+      const object = Object.create(null);
+      for (const tool of entries) {
+        const binding = tool.objectBinding;
+        let parent = object;
+        for (const segment of binding.path.slice(0, -1)) {
+          if (Object.hasOwn(parent, segment) && typeof parent[segment] !== 'object') throw new Error('Conflicting capability path: ' + tool.name);
+          if (!Object.hasOwn(parent, segment)) parent[segment] = Object.create(null);
+          parent = parent[segment];
+        }
+        const method = binding.path[binding.path.length - 1];
+        if (Object.hasOwn(parent, method)) throw new Error('Conflicting capability method: ' + tool.name);
+        parent[method] = (args = {}) => {
+          if (args === null || typeof args !== 'object' || Array.isArray(args)) throw new TypeError('Capability arguments must be an object');
+          const parameters = parse(json(args));
+          if (binding.reference) {
+            const argument = binding.reference.argument;
+            if (Object.hasOwn(parameters, argument) && parameters[argument] !== reference) throw new Error('Conflicting bound reference: ' + argument);
+            parameters[argument] = reference;
+          }
+          return tools[tool.name](parameters);
+        };
+      }
+      return object;
+    };
+    const root = build(selected.filter(tool => !tool.objectBinding.reference));
+    const scopes = [...new Set(selected.flatMap(tool => tool.objectBinding.reference ? [tool.objectBinding.reference.kind] : []))];
+    for (const scope of scopes) {
+      if (Object.hasOwn(root, scope)) throw new Error('Conflicting capability reference factory: ' + scope);
+      root[scope] = reference => {
+        if (typeof reference !== 'string' || !reference.trim()) throw new TypeError('Capability reference must be a nonempty model reference');
+        return freezeCatalog(build(selected.filter(tool => tool.objectBinding.reference?.kind === scope), reference));
+      };
+    }
+    return freezeCatalog(root);
+  };
+  const capabilities = Object.freeze({
+    list: () => [...new Map(bindings.map(tool => {
+      const { kind, provider } = tool.objectBinding;
+      return [kind + '/' + provider, { kind, provider }];
+    })).values()],
+    browser: provider => capability('browser', provider),
+    computer: provider => capability('computer', provider),
+  });
   Object.assign(globalThis, {
-    tools, text, store, load, atob, btoa, TextEncoder, TextDecoder,
+    tools, capabilities, text, store, load, atob, btoa, TextEncoder, TextDecoder,
     image: value => media('image', value),
     audio: value => media('audio', value),
     ALL_TOOLS: freezeCatalog(config.tools),

@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+- **Programmable capability objects** — Fresh `run_code` programs construct disposable Browser/Computer facades from the frozen eligible tool descriptors; each method invokes the same admitted operation as its standalone tool, with existing short-reference resolution, authorization, routing and nested Trace, while providers own tab/app/window/event state and only explicit selected outputs enter model context. Provider extensions are declared capabilities, not emulated common-denominator methods or a second execution-state domain.
+
 - **Hosted tool discovery semantics** — Completed provider-hosted discovery items are immutable model-semantic content in ItemList, compiled in observed call/output order with endpoint-scoped native replay payloads; they never grant local execution authority, and compaction selects them like other historical content. The frozen adapter’s pure tool presentation is committed with the semantic catalog before compilation, including native search presence and namespace descriptions; transport serializes that exact descriptor, while context estimates count eager declarations rather than deferred documentation.
 - **Raw tool file receipts** — Model projections expose the existing same-Host Trace JSON/text artifact path and bounded preview for shell/file inspection, not a dedicated model Trace reader; capture and source truncation facts stay explicit, and remote bytes not received by this Host are never claimed as retained.
 
@@ -10,6 +12,7 @@ Native Computer diagnostics capture a bounded, allowlisted per-request observati
 - **Projectless workspaces** — The local Host exclusively allocates a persistent request-named directory under ZenX’s `~/.zenx/workspaces/YYYY-MM-DD/` (independent of Core journals and Trace; an explicit `ZENX_DATA_DIR` isolates workspaces under that test/custom data root) and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
+- **Foreground pointer admission** — After existing owner, permission, active-session and exact PID/CG/AX target checks, the native macOS adapter queries the system-wide accessibility element at each pointer event's point and requires both its PID and containing retained AX window to match the selection; visual CG rectangle overlap is not an input veto or a bypass list, and unavailable or foreign AX hits fail without fallback. This is a pre-dispatch accessibility-hit observation, not an atomic mouse-routing or application-effect guarantee; per-event focus/geometry/cancellation fences, matching-release cleanup and unknown-outcome semantics remain unchanged.
 - **Automation environment** — A Host-local OS observation port separates session locking, system suspend/resume and unknown display power; macOS starts unknown and samples its native console-session state through the existing AX helper before admission, never inferring unlocked from Electron idle, it retires native observations and aborts admitted calls on session changes, while only the explicitly declared native macOS AX backend admits fresh scoped accessibility calls in a locked session, with mandatory post-action observation; captures and foreground input remain active-only, live pixels retire per target until a fresh active observation, readiness checks publish verification only within the exact environment generation actually sampled, and an operation-lifetime application-suspension blocker never unlocks a device, prevents explicit sleep or creates durable task state.
 - **Local observation text changes** — A first-page diff may carry one Unicode-safe UTF-16 splice against its explicit retained baseline; scope changes, unavailable context and requested full views remain self-contained, and captured tails never become an implicit baseline.
 
@@ -1520,11 +1523,13 @@ Computer window discovery retains AX results and supplements unique current-user
 
 Exact Computer captures retain their trusted image source and background-input eligibility: explicitly unavailable SCK or pre-capture pixel-budget refusal may use the existing active-session-only window thumbnail route, but legacy pixels never authorize native background input and unknown capture failures never fall back.
 
-The existing foreground presenter supplies only live, painted, mouse-ignoring
-edge-indicator native window IDs through a trusted main-only read projection;
-bound pointer input may ignore those exact windows only when native ownership
-matches the helper parent. Interactive indicators and all other occluders still
-refuse input; the projection is neither model input nor durable authorization.
+The existing foreground presenter supplies live, painted, mouse-ignoring
+edge-indicator native window IDs through a trusted main-only compatibility
+projection; those IDs no longer exempt any hit from native pointer admission.
+The system-wide AX hit must identify the selected application's retained window,
+so an interactive host Stop card or other foreign AX recipient still refuses
+input. Visual rectangles alone do not establish interception, and the projection
+is neither model input nor durable authorization.
 
 - **Plugin storage generation ownership** — A Host-process namespace has one mutation queue and current value shared by runtime and first-party storage views. Replacement fences old writers before migration; candidate startup writes are owned by that candidate, rollback restores only its frozen snapshot, and publication revokes old runtime storage handles. Busy/stale access fails explicitly rather than waiting for a lease held by the replacement caller; ordinary Host views follow the current same-version value. This adds no durable journal or automatic retry and does not coordinate separate Host processes sharing one data directory.
 
@@ -1632,6 +1637,10 @@ Board typed resource navigation uses the existing revisioned Thread/Room sidebar
 Agentic compaction 当前工具只接受最近 Item、用户 message、成功 Turn final message、全部完整 agent message 的数量（并集去重），或独立的保留历史 token 预算；后者不含 summary/tools/instructions，并受剩余模型窗口上限约束。完整 tool-response 组不可拆分；显式数量超容量明确失败，预算模式选取可容纳的最新完整 suffix。详细记忆先写文件。每次采样不发布 cN 索引或引用预算提示；只有实际阈值 crossing 的当前 episode 发一次采样级提醒，低于阈值或成功 reset 后重新计数。旧 committed selections、工具调用/结果、旧 onlySampleId 提示保持原文可回放，不重新执行旧调用；当前工具拒绝过时的精确引用参数并提示迁移。
 
 - **Native deferred tool transport** — The public Responses adapter maps the compiler-owned stable plugin catalog to deferred namespaces only for verified endpoint/model capabilities, preserves endpoint-scoped hosted discovery as semantic history, and leaves unsupported transports on ordinary stable real schemas.
+
+Browser programmable extensions share existing exact-target dispatch and permissions; arbitrary evaluate consumes an action observation, while explicit network/console collection owns a bounded disposable attachment-local event buffer with honest eviction cursors and ephemeral raw files, never a new tab registry, replay authority or durable history.
+
+Browser programmable evaluation defaults to a separate DOM isolated world; explicit main-world evaluation requires the current frame’s observed unique execution-context identity and rejects replacement or missing context without unpinned fallback. The trusted observation-registry world is never exposed; bounded outward cancellation leaves native unresolved mutations fenced until settlement or target closure.
 
 The selected-reference input codec is shared by model-semantic admission and renderer presentation: bound v1/v2/v3 envelopes and the exact leading legacy plaintext quote formatter reuse existing selected-source provenance and read-only `sN` references, never a second alias store. Clipboard quote text is the exact excerpt with real line breaks, not a serialized source identity. Ordinary lookalikes and embedded examples remain literal; existing committed semantic history is not rewritten.
 

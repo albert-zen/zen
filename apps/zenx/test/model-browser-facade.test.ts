@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { BrowserEventBuffer } from "../src/main/capabilities/browser-extensions.js";
 import {
   ModelReferenceRegistry,
   trustedModelReferenceBindings,
@@ -626,4 +627,186 @@ test("Browser producer budget preserves completed action and used refs after exa
   assert.deepEqual(trustedModelReferenceBindings(result), seed.newBindings);
   assert.equal(result.structuredContent, undefined);
   assert.equal(result.output.includes("RAW-"), false);
+});
+
+test("Browser extensions use exact short references, native permissions and shared page resource claims", async () => {
+  const f = await workspaceFixture(1);
+  const calls: unknown[] = [];
+  Object.assign(f.backend, {
+    extensionOperations: ["evaluate", "network_read"],
+    extension: async (...args: unknown[]) => {
+      calls.push(args);
+      return { value: 42 };
+    },
+  });
+  try {
+    const list = await f.bridge.call("browser_workspace_list_tabs", {});
+    const tab = list.tabs[0].tab;
+    const supported = await f.bridge.call("browser_workspace_extensions", {
+      tab,
+    });
+    assert.ok(supported.operations.includes("evaluate"));
+    const view = await f.bridge.call("browser_workspace_inspect", { tab });
+    const result = await f.bridge.call("browser_workspace_evaluate", {
+      observation: view.observation,
+      expression: "window.applicationGlobal",
+      world: "main",
+    });
+    assert.equal(result.data.value, 42);
+    assert.equal(calls.length, 1);
+    const native = calls[0] as any[];
+    assert.equal(native[1], "RAW-native-tab");
+    assert.equal(native[3].world, "main");
+    assert.equal(native[3].expression, "window.applicationGlobal");
+    const tool = f.bridge.bundle.tools.find(
+      (t) => t.name === "browser_workspace_evaluate",
+    )!;
+    assert.equal(tool.executionMode, "parallel_safe");
+    const source = f.service.manifest.tools.find(
+      (t) => t.name === "browser_workspace_evaluate",
+    )!;
+    assert.deepEqual(source.permissions, ["browser.interact"]);
+    const binding = (browserModelDefinition(source) as any).objectBinding;
+    assert.deepEqual(binding.reference, {
+      kind: "observation",
+      argument: "observation",
+    });
+    await assert.rejects(
+      f.bridge.call("browser_workspace_evaluate", {
+        observation: view.observation,
+        expression: "1",
+      }),
+      /consumed|stale|unavailable/,
+    );
+    assert.equal(calls.length, 1);
+  } finally {
+    await f.bridge.close();
+  }
+});
+
+test("requested event raw bytes reach existing Trace before bounded projection and survive collection close", async () => {
+  const f = await workspaceFixture(1),
+    buffer = new BrowserEventBuffer();
+  const body = "SYNTHETIC_FULL_EVENT_" + "x".repeat(30000);
+  buffer.push("Network.responseReceived", { requestId: "synthetic", body });
+  Object.assign(f.backend, {
+    extensionOperations: ["network_read"],
+    extension: async () => await buffer.read(),
+  });
+  try {
+    const list = await f.bridge.call("browser_workspace_list_tabs", {});
+    const result = await f.bridge.call("browser_workspace_network_read", {
+      tab: list.tabs[0].tab,
+    });
+    assert.equal(result.data.events[0].rawOnly, true);
+    assert.equal(result.data.rawEvents, undefined);
+    assert.ok(JSON.stringify(result).length < 3000);
+    await buffer.close();
+    const native = f.bridge.trace.find(
+      (value) =>
+        (value as any).layer === "capability-result-before-model-projection" &&
+        JSON.stringify(value).includes("SYNTHETIC_FULL_EVENT_"),
+    );
+    assert.ok(
+      native,
+      "Full requested event bytes must be retained in ordinary raw Trace before close",
+    );
+    assert.ok(JSON.stringify(native).includes(body));
+  } finally {
+    await buffer.close();
+    await f.bridge.close();
+  }
+});
+
+test("ordinary diagnostic previews exclude structured credentials while exact raw Trace is preserved", async () => {
+  const f = await workspaceFixture(1),
+    network = new BrowserEventBuffer(),
+    consoleEvents = new BrowserEventBuffer();
+  network.push("Network.requestWillBeSent", {
+    requestId: "request",
+    request: {
+      url: "https://user:password@example.test/data?token=query-secret#fragment",
+      method: "POST",
+      headers: {
+        Authorization: "synthetic-bearer",
+        Cookie: "synthetic-cookie",
+      },
+      postData: "synthetic-request-body",
+      hasPostData: true,
+    },
+  });
+  network.push("Network.responseReceived", {
+    requestId: "request",
+    response: {
+      url: "https://example.test/data?token=query-secret",
+      status: 200,
+      mimeType: "application/json",
+      headers: { "Set-Cookie": "synthetic-set-cookie" },
+    },
+  });
+  consoleEvents.push("Runtime.consoleAPICalled", {
+    type: "log",
+    args: [
+      { type: "string", value: "literal console text" },
+      {
+        type: "object",
+        value: { headers: { Authorization: "synthetic-console-credential" } },
+      },
+    ],
+  });
+  Object.assign(f.backend, {
+    extensionOperations: ["network_read", "console_read"],
+    extension: async (_session: unknown, _tab: unknown, operation: string) =>
+      await (operation === "network_read" ? network : consoleEvents).read(),
+  });
+  try {
+    const list = await f.bridge.call("browser_workspace_list_tabs", {}),
+      tab = list.tabs[0].tab;
+    const result = await f.bridge.call("browser_workspace_network_read", {
+      tab,
+    });
+    assert.equal(result.data.events[0].params.request.method, "POST");
+    assert.equal(result.data.events[0].params.request.hasPostData, true);
+    assert.equal(
+      result.data.events[0].params.request.url,
+      "https://example.test/data",
+    );
+    assert.equal(result.data.events[1].params.response.status, 200);
+    const compact = JSON.stringify(result);
+    for (const value of [
+      "synthetic-bearer",
+      "synthetic-cookie",
+      "synthetic-request-body",
+      "synthetic-set-cookie",
+      "query-secret",
+      "password",
+      "Authorization",
+      "Set-Cookie",
+    ])
+      assert.equal(compact.includes(value), false, value);
+    const logs = await f.bridge.call("browser_workspace_console_read", { tab });
+    assert.equal(
+      logs.data.events[0].params.args[0].value,
+      "literal console text",
+    );
+    assert.equal(logs.data.events[0].params.args[1].rawOnly, true);
+    assert.equal(
+      JSON.stringify(logs).includes("synthetic-console-credential"),
+      false,
+    );
+    const raw = JSON.stringify(f.bridge.trace);
+    for (const value of [
+      "synthetic-bearer",
+      "synthetic-cookie",
+      "synthetic-request-body",
+      "synthetic-set-cookie",
+      "query-secret",
+      "synthetic-console-credential",
+    ])
+      assert.ok(raw.includes(value), `Raw Trace must retain ${value}`);
+  } finally {
+    await network.close();
+    await consoleEvents.close();
+    await f.bridge.close();
+  }
 });
