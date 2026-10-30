@@ -61,15 +61,12 @@ test("owned receiver uses background-launched regular app lifecycle without self
     acceptance,
     /"CFBundlePackageType"|<key>CFBundlePackageType<\/key>/,
   );
-  assert.match(acceptance, /"-g",\s*"-n",\s*"-W"/);
+  assert.match(acceptance, /background \? \["-g"\] : \[\]/);
   assert.match(
     acceptance,
-    /assert\.notEqual\(\s*ready\.frontmostPID,\s*ready\.pid/,
+    /assert\.notEqual\(\s*preflight\.receiver\.frontmostPID,\s*ready\.pid/,
   );
-  assert.match(
-    acceptance,
-    /event\.isActive === true && event\.isKeyWindow === true/,
-  );
+  assert.match(acceptance, /assert\.equal\(afterAcquisition\.isActive, true\)/);
 });
 
 // A successful open waiter exit never proves that the app reached startup.
@@ -99,7 +96,41 @@ test("owned receiver records startup independently and treats regular policy ide
   );
   assert.match(fixture, /FileHandle\(forWritingAtPath: path\)/);
   assert.match(acceptance, /"--events-file",\s*eventsPath/);
-  assert.match(acceptance, /receiverStopped =\s*launcherStopped &&/);
+  assert.match(acceptance, /const stopped =\s*launcherStopped &&/);
   assert.match(acceptance, /message\.kind === "owned-receiver-terminating"/);
   assert.doesNotMatch(fixture, /guard application\.setActivationPolicy/);
+});
+
+test("owned acquisition starts from fresh observed distractor focus and ends at receiver", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const acceptance = readFileSync(
+    new URL("./computer-owned-native-acceptance.test.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(fixture, /delegate\.reportFocus\("probe", token: token\)/);
+  assert.match(
+    acceptance,
+    /receiverFixture\.probe\(\),\s*distractorFixture\.probe\(\)/,
+  );
+  assert.match(acceptance, /receiverState\.isActive === false/);
+  assert.match(acceptance, /distractorState\.isActive === true/);
+  assert.match(acceptance, /distractorState\.isKeyWindow === true/);
+  assert.match(
+    acceptance,
+    /assert\.equal\(afterAcquisition\.frontmostPID, ready\.pid\)/,
+  );
+  assert.match(
+    acceptance,
+    /assert\.equal\(afterAcquisition\.isKeyWindow, true\)/,
+  );
+  assert.match(
+    acceptance,
+    /for \(const close of fixtureClosers\.reverse\(\)\) await close\(\)/,
+  );
 });

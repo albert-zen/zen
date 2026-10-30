@@ -46,14 +46,15 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var pressCount = 0
   let output = NSTextField(labelWithString: "Not pressed")
   @objc func pressed(_ sender: NSButton) { pressCount += 1; output.stringValue = "PASS native button pressed \(pressCount)" }
-  func reportFocus(_ event: String) {
+  func reportFocus(_ event: String, token: String? = nil) {
     guard let window else { return }
-    let state: [String: Any] = ["kind": "owned-focus-state", "event": event,
+    var state: [String: Any] = ["kind": "owned-focus-state", "event": event,
       "pid": Int(getpid()), "windowId": window.windowNumber,
       "isActive": NSApp.isActive, "isKeyWindow": window.isKeyWindow,
       "isMainWindow": window.isMainWindow, "canBecomeKey": window.canBecomeKey,
       "activationPolicy": NSApp.activationPolicy().rawValue,
       "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1)]
+    if let token { state["token"] = token }
     report(state)
   }
   func applicationWillTerminate(_ notification: Notification) {
@@ -66,7 +67,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   func windowDidBecomeMain(_ notification: Notification) { reportFocus("windowDidBecomeMain") }
   func applicationDidFinishLaunching(_ notification: Notification) {
     window = NSWindow(contentRect:NSRect(x:100,y:100,width:650,height:350),styleMask:[.titled,.closable],backing:.buffered,defer:false)
-    window.title = "ZenX owned native button fixture"
+    window.title = argument("--window-title") ?? "ZenX owned native button fixture"
     window.delegate = self
     let button = NSButton(title:"Native action",target:self,action:#selector(pressed(_:)))
     button.frame = NSRect(x:40,y:200,width:250,height:50)
@@ -82,8 +83,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.contentView!.addSubview(pad)
     window.contentView!.addSubview(button); window.contentView!.addSubview(field); window.contentView!.addSubview(output)
     // A normal key-capable window, not an accessory overlay. The acceptance
-    // launcher uses LaunchServices in the background; only the production
-    // helper requests foreground activation (never this receiver).
+    // launcher creates two owned apps. Neither requests self-activation; the
+    // production helper must acquire the receiver from the owned distractor.
     window.makeKeyAndOrderFront(nil)
     reportFocus("ready")
     func globalPoint(_ local: NSPoint) -> [String: Double] {
@@ -118,6 +119,16 @@ application.delegate = delegate
 if let stopFile = argument("--stop-file") {
   Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
     if FileManager.default.fileExists(atPath: stopFile) { application.terminate(nil) }
+  }
+}
+// Snapshot requests are serviced on the AppKit run loop after launch, rather
+// than treating the one-time ready marker as settled foreground evidence.
+if let probeFile = argument("--focus-probe-file") {
+  var lastToken = ""
+  Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
+    guard let token = try? String(contentsOfFile: probeFile, encoding: .utf8), !token.isEmpty, token != lastToken else { return }
+    lastToken = token
+    delegate.reportFocus("probe", token: token)
   }
 }
 application.run()

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -39,11 +40,11 @@ test(
       sourceRevision: process.env.GITHUB_SHA ?? "local",
     };
     let transport: NativeComputerTargetTransport | undefined;
-    let closeReceiver = async () => {};
+    const fixtureClosers: Array<() => Promise<void>> = [];
     let receiverStopped = true;
     t.after(async () => {
       await transport?.close();
-      await closeReceiver();
+      for (const close of fixtureClosers.reverse()) await close();
       if (evidence.status === "running") evidence.status = "failed";
       if (process.env.ZENX_COMPUTER_OWNED_NATIVE_EVIDENCE)
         await writeFile(
@@ -102,123 +103,208 @@ test(
       [`${receiver}.swift`, "-o", receiver],
       60_000,
     );
-    const eventsPath = path.join(directory, "receiver.events.jsonl");
-    const stderrPath = path.join(directory, "receiver.stderr");
-    const stopPath = path.join(directory, "receiver.stop");
-    await writeFile(eventsPath, "");
-    // Launch a real registered app, explicitly without activating it. The helper
-    // must still acquire foreground focus; fixture setup cannot satisfy its guard.
-    const child = spawn(
-      "/usr/bin/open",
-      [
-        "-g",
-        "-n",
-        "-W",
-        "--stderr",
-        stderrPath,
-        receiverBundle,
-        "--args",
-        "--events-file",
-        eventsPath,
-        "--stop-file",
-        stopPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-    child.stderr.resume();
-    const messages: Array<Record<string, any>> = [];
-    const focusEvents: Array<Record<string, unknown>> = [];
-    evidence.receiverFocusEvents = focusEvents;
-    evidence.receiverLifecycleEvents = messages;
-    let consumedLines = 0;
-    const collectMessages = async () => {
-      const lines = (await readFile(eventsPath, "utf8")).split("\n");
-      // Leave any partial last line for the next read.
-      for (; consumedLines < lines.length - 1; consumedLines++) {
-        try {
-          const message = JSON.parse(lines[consumedLines]!);
-          messages.push(message);
-          if (message.kind === "owned-focus-state" && focusEvents.length < 32)
-            focusEvents.push(message);
-        } catch {
-          /* fixture stdout has no authority */
-        }
-      }
-    };
-    const closed = new Promise<void>((resolve) =>
-      child.once("close", () => resolve()),
-    );
-    closeReceiver = async () => {
-      await writeFile(stopPath, "stop");
-      const launcherStopped = await Promise.race([
-        closed.then(() => child.exitCode === 0 && child.signalCode === null),
-        new Promise<false>((resolve) => {
-          const timer = setTimeout(() => resolve(false), 5_000);
-          timer.unref();
-        }),
-      ]);
-      await collectMessages();
-      // open's status is not the application's exit status. Require the owned
-      // receiver's terminal lifecycle observation as well as the launcher's exit.
-      receiverStopped =
-        launcherStopped &&
-        messages.some(
-          (message) =>
-            message.kind === "owned-receiver-terminating" ||
-            message.kind === "owned-receiver-startup-failed",
-        );
-      evidence.launcherExit = {
-        code: child.exitCode,
-        signal: child.signalCode,
-      };
-      evidence.receiverShutdown = receiverStopped ? "exited" : "not-confirmed";
-      if (!receiverStopped) {
-        evidence.status = "failed";
-        evidence.retainedFixtureDirectory = directory;
-      }
-      if (child.exitCode === null) child.kill("SIGTERM"); // only our open waiter
-      await collectMessages();
-      evidence.receiverStderr = await readFile(stderrPath, "utf8").catch(
-        () => "",
+    const launchFixture = async (
+      name: string,
+      bundle: string,
+      background: boolean,
+    ) => {
+      const eventsPath = path.join(directory, `${name}.events.jsonl`);
+      const stderrPath = path.join(directory, `${name}.stderr`);
+      const stopPath = path.join(directory, `${name}.stop`);
+      const probePath = path.join(directory, `${name}.probe`);
+      const fixtureEvidence: Record<string, unknown> = {};
+      evidence[name] = fixtureEvidence;
+      await writeFile(eventsPath, "");
+      // A normal LaunchServices launch; only the second owned app is foregrounded.
+      // Actual state is checked using fresh run-loop snapshots below.
+      const child = spawn(
+        "/usr/bin/open",
+        [
+          ...(background ? ["-g"] : []),
+          "-n",
+          "-W",
+          "--stderr",
+          stderrPath,
+          bundle,
+          "--args",
+          "--window-title",
+          `ZenX owned ${name} fixture`,
+          "--focus-probe-file",
+          probePath,
+          "--events-file",
+          eventsPath,
+          "--stop-file",
+          stopPath,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
       );
-    };
-    const waitFor = async (kind: string) => {
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline) {
+      child.stderr.resume();
+      const messages: Array<Record<string, any>> = [];
+      const focusEvents: Array<Record<string, unknown>> = [];
+      fixtureEvidence.focusEvents = focusEvents;
+      fixtureEvidence.lifecycleEvents = messages;
+      let consumedLines = 0;
+      const collectMessages = async () => {
+        const lines = (await readFile(eventsPath, "utf8")).split("\n");
+        // Leave any partial last line for the next read.
+        for (; consumedLines < lines.length - 1; consumedLines++) {
+          try {
+            const message = JSON.parse(lines[consumedLines]!);
+            messages.push(message);
+            if (message.kind === "owned-focus-state" && focusEvents.length < 32)
+              focusEvents.push(message);
+          } catch {
+            /* fixture stdout has no authority */
+          }
+        }
+      };
+      const closed = new Promise<void>((resolve) =>
+        child.once("close", () => resolve()),
+      );
+      fixtureClosers.push(async () => {
+        await writeFile(stopPath, "stop");
+        const launcherStopped = await Promise.race([
+          closed.then(() => child.exitCode === 0 && child.signalCode === null),
+          new Promise<false>((resolve) => {
+            const timer = setTimeout(() => resolve(false), 5_000);
+            timer.unref();
+          }),
+        ]);
         await collectMessages();
-        const value = messages.find((message) => message.kind === kind);
-        if (value) return value;
-        assert.equal(
-          child.exitCode,
-          null,
-          `owned receiver launcher exited before ${kind}; see receiverLifecycleEvents`,
+        // open's status is not the application's exit status. Require the owned
+        // receiver's terminal lifecycle observation as well as the launcher's exit.
+        const stopped =
+          launcherStopped &&
+          messages.some(
+            (message) =>
+              message.kind === "owned-receiver-terminating" ||
+              message.kind === "owned-receiver-startup-failed",
+          );
+        fixtureEvidence.launcherExit = {
+          code: child.exitCode,
+          signal: child.signalCode,
+        };
+        fixtureEvidence.shutdown = stopped ? "exited" : "not-confirmed";
+        receiverStopped = receiverStopped && stopped;
+        if (!stopped) {
+          evidence.status = "failed";
+          evidence.retainedFixtureDirectory = directory;
+        }
+        if (child.exitCode === null) child.kill("SIGTERM"); // only our open waiter
+        await collectMessages();
+        fixtureEvidence.stderr = await readFile(stderrPath, "utf8").catch(
+          () => "",
         );
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      throw Error(`Owned receiver did not report ${kind}`);
+      });
+      const waitFor = async (kind: string, token?: string) => {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          await collectMessages();
+          const value = messages.find(
+            (message) =>
+              message.kind === kind &&
+              (token === undefined || message.token === token),
+          );
+          if (value) return value;
+          assert.equal(
+            child.exitCode,
+            null,
+            `owned ${name} launcher exited before ${kind}; see lifecycleEvents`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw Error(`Owned ${name} did not report ${kind}`);
+      };
+      let probeSequence = 0;
+      const probe = async () => {
+        const token = String(++probeSequence);
+        await writeFile(probePath, token);
+        return waitFor("owned-focus-state", token);
+      };
+      return { waitFor, probe, fixtureEvidence };
     };
+    const receiverFixture = await launchFixture(
+      "receiver",
+      receiverBundle,
+      true,
+    );
+    const { waitFor } = receiverFixture;
     evidence.stage = "owned-receiver-readiness";
     const ready = await waitFor("owned-receiver-ready");
-    evidence.receiver = ready;
+    receiverFixture.fixtureEvidence.ready = ready;
     assert.ok(Number.isInteger(ready.pid) && ready.pid > 0);
     assert.equal(
       await realpath(ready.bundlePath),
       await realpath(receiverBundle),
-    );
-    assert.ok(
-      Number.isInteger(ready.frontmostPID) && ready.frontmostPID > 0,
-      "initial foreground application must be observable",
     );
     assert.equal(
       ready.activationPolicy,
       0,
       "receiver must be a regular AppKit app",
     );
-    assert.notEqual(
-      ready.frontmostPID,
-      ready.pid,
-      "background launch must leave real focus acquisition to production helper",
+    // AppKit launch may transiently report the new app as frontmost even with
+    // open -g. Establish a controlled, observed foreground app instead of
+    // asserting on the receiver's pre-settlement ready marker.
+    evidence.stage = "owned-distractor-foreground-preflight";
+    const distractorBundle = path.join(directory, "OwnedDistractor.app");
+    await cp(receiverBundle, distractorBundle, { recursive: true });
+    const distractorPlist = path.join(
+      distractorBundle,
+      "Contents",
+      "Info.plist",
     );
+    await writeFile(
+      distractorPlist,
+      (await readFile(distractorPlist, "utf8")).replace(
+        "dev.zenx.owned-native-receiver",
+        "dev.zenx.owned-native-distractor",
+      ),
+    );
+    const distractorFixture = await launchFixture(
+      "distractor",
+      distractorBundle,
+      false,
+    );
+    const distractorReady = await distractorFixture.waitFor(
+      "owned-receiver-ready",
+    );
+    distractorFixture.fixtureEvidence.ready = distractorReady;
+    assert.equal(
+      await realpath(distractorReady.bundlePath),
+      await realpath(distractorBundle),
+    );
+    assert.ok(Number.isInteger(distractorReady.pid) && distractorReady.pid > 0);
+    assert.notEqual(distractorReady.pid, ready.pid);
+    const preflightDeadline = Date.now() + 10_000;
+    let preflight: {
+      receiver: Record<string, any>;
+      distractor: Record<string, any>;
+    };
+    while (true) {
+      const [receiverState, distractorState] = await Promise.all([
+        receiverFixture.probe(),
+        distractorFixture.probe(),
+      ]);
+      preflight = { receiver: receiverState, distractor: distractorState };
+      if (
+        receiverState.frontmostPID === distractorReady.pid &&
+        receiverState.isActive === false &&
+        distractorState.frontmostPID === distractorReady.pid &&
+        distractorState.isActive === true &&
+        distractorState.isKeyWindow === true
+      )
+        break;
+      assert.ok(
+        Date.now() < preflightDeadline,
+        `Owned distractor did not establish foreground ownership: ${JSON.stringify(preflight)}`,
+      );
+    }
+    evidence.beforeAcquisition = preflight;
+    assert.equal(preflight.receiver.pid, ready.pid);
+    assert.equal(preflight.receiver.windowId, ready.windowId);
+    assert.equal(preflight.distractor.windowId, distractorReady.windowId);
+    assert.equal(preflight.distractor.pid, distractorReady.pid);
+    assert.notEqual(preflight.receiver.frontmostPID, ready.pid);
     transport = new NativeComputerTargetTransport(async () => helper);
     const signal = AbortSignal.timeout(25_000);
     const target = { pid: ready.pid, windowTitle: ready.windowTitle };
@@ -292,13 +378,13 @@ test(
       signal,
     );
     assert.equal(verified.windowId, selected.windowId);
-    await collectMessages();
-    assert.ok(
-      focusEvents.some(
-        (event) => event.isActive === true && event.isKeyWindow === true,
-      ),
-      "receiver independently observed actual activation and key-window ownership",
-    );
+    const afterAcquisition = await receiverFixture.probe();
+    assert.equal(afterAcquisition.pid, ready.pid);
+    assert.equal(afterAcquisition.windowId, selected.windowId);
+    assert.equal(afterAcquisition.frontmostPID, ready.pid);
+    assert.equal(afterAcquisition.isActive, true);
+    assert.equal(afterAcquisition.isKeyWindow, true);
+    evidence.afterAcquisition = afterAcquisition;
     evidence.drag = {
       posted: receipt,
       received: delivered,
