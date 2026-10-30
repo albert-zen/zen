@@ -12,6 +12,7 @@ Native Computer diagnostics capture a bounded, allowlisted per-request observati
 - **Projectless workspaces** — The local Host exclusively allocates a persistent request-named directory under ZenX’s `~/.zenx/workspaces/YYYY-MM-DD/` (independent of Core journals and Trace; an explicit `ZENX_DATA_DIR` isolates workspaces under that test/custom data root) and registers its exact canonical cwd in the existing serialized profile before returning it for ordinary native Thread creation; this product classification includes children sharing that cwd, yields to an explicitly configured Project, and introduces no Git repository, Thread authority, scheduler, cleanup or relocation policy.
 
 - **Browser and Computer plugin model contracts** — First-party packages own pure, bounded model-facing observation/query and tool-definition logic without Core/Harness imports; Host adapters alone bind existing typed references, native targets, Trace and approval/resource generations, preserving static per-tool authorization boundaries and exact freshness checks.
+- **Foreground pointer admission** — After existing owner, permission, active-session and exact PID/CG/AX target checks, the native macOS adapter queries the system-wide accessibility element at each pointer event's point and requires both its PID and containing retained AX window to match the selection; visual CG rectangle overlap is not an input veto or a bypass list, and unavailable or foreign AX hits fail without fallback. This is a pre-dispatch accessibility-hit observation, not an atomic mouse-routing or application-effect guarantee; per-event focus/geometry/cancellation fences, matching-release cleanup and unknown-outcome semantics remain unchanged.
 - **Automation environment** — A Host-local OS observation port separates session locking, system suspend/resume and unknown display power; macOS starts unknown and samples its native console-session state through the existing AX helper before admission, never inferring unlocked from Electron idle, it retires native observations and aborts admitted calls on session changes, while only the explicitly declared native macOS AX backend admits fresh scoped accessibility calls in a locked session, with mandatory post-action observation; captures and foreground input remain active-only, live pixels retire per target until a fresh active observation, readiness checks publish verification only within the exact environment generation actually sampled, and an operation-lifetime application-suspension blocker never unlocks a device, prevents explicit sleep or creates durable task state.
 - **Local observation text changes** — A first-page diff may carry one Unicode-safe UTF-16 splice against its explicit retained baseline; scope changes, unavailable context and requested full views remain self-contained, and captured tails never become an implicit baseline.
 
@@ -1522,11 +1523,13 @@ Computer window discovery retains AX results and supplements unique current-user
 
 Exact Computer captures retain their trusted image source and background-input eligibility: explicitly unavailable SCK or pre-capture pixel-budget refusal may use the existing active-session-only window thumbnail route, but legacy pixels never authorize native background input and unknown capture failures never fall back.
 
-The existing foreground presenter supplies only live, painted, mouse-ignoring
-edge-indicator native window IDs through a trusted main-only read projection;
-bound pointer input may ignore those exact windows only when native ownership
-matches the helper parent. Interactive indicators and all other occluders still
-refuse input; the projection is neither model input nor durable authorization.
+The existing foreground presenter supplies live, painted, mouse-ignoring
+edge-indicator native window IDs through a trusted main-only compatibility
+projection; those IDs no longer exempt any hit from native pointer admission.
+The system-wide AX hit must identify the selected application's retained window,
+so an interactive host Stop card or other foreign AX recipient still refuses
+input. Visual rectangles alone do not establish interception, and the projection
+is neither model input nor durable authorization.
 
 - **Plugin storage generation ownership** — A Host-process namespace has one mutation queue and current value shared by runtime and first-party storage views. Replacement fences old writers before migration; candidate startup writes are owned by that candidate, rollback restores only its frozen snapshot, and publication revokes old runtime storage handles. Busy/stale access fails explicitly rather than waiting for a lease held by the replacement caller; ordinary Host views follow the current same-version value. This adds no durable journal or automatic retry and does not coordinate separate Host processes sharing one data directory.
 

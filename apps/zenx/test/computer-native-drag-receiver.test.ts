@@ -204,3 +204,25 @@ test("owned pointer witness uses public global mouse-down hit without bypassing 
   assert.match(failure, /receiverFixture\.pointerWitness/);
   assert.match(failure, /throw error;/);
 });
+
+test("native owned drag fixture includes a noninteractive overlay without helper exemptions", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const acceptance = readFileSync(
+    new URL("./computer-owned-native-acceptance.test.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(fixture, /overlay\.ignoresMouseEvents = true/);
+  assert.match(fixture, /overlay\.setAccessibilityElement\(false\)/);
+  assert.match(fixture, /overlay\.level = \.floating/);
+  assert.match(
+    acceptance,
+    /assert\.equal\(ready\.overlayIgnoresMouseEvents, true\)/,
+  );
+  assert.doesNotMatch(acceptance, /pointerPassthroughWindowIds/);
+});

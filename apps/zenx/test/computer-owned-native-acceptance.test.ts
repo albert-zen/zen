@@ -128,6 +128,7 @@ test(
           stderrPath,
           bundle,
           "--args",
+          ...(background ? ["--noninteractive-overlay"] : []),
           "--window-title",
           `ZenX owned ${name} fixture`,
           "--pointer-hit-probe-file",
@@ -248,6 +249,10 @@ test(
     const ready = await waitFor("owned-receiver-ready");
     receiverFixture.fixtureEvidence.ready = ready;
     assert.ok(Number.isInteger(ready.pid) && ready.pid > 0);
+    assert.ok(ready.noninteractiveOverlayWindowId > 0);
+    assert.equal(ready.overlayIgnoresMouseEvents, true);
+    evidence.pointerAdmission =
+      "system_wide_ax_exact_target_with_owned_noninteractive_visual_overlay";
     assert.equal(
       await realpath(ready.bundlePath),
       await realpath(receiverBundle),

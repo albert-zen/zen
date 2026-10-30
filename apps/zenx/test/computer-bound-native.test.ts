@@ -27,6 +27,10 @@ final class AXUIElement: NSObject {
 let original = AXUIElement(17)
 let replacement = AXUIElement(18)
 let appElement = AXUIElement(42)
+let systemElement = AXUIElement(0)
+let foreign = AXUIElement(99)
+let childElement = AXUIElement(20)
+let invalidWindow = AXUIElement(21)
 var selectedWindow = original
 let kAXWindowsAttribute = "windows"
 let kAXTitleAttribute = "title"
@@ -49,28 +53,25 @@ func fixtureWindowList(_ options: CGWindowListOption, _ id: CGWindowID) -> Any? 
   if mode == "active-no-cg-title" || mode == "locked-no-cg-title" { row.removeValue(forKey: "title") }
   if fixtureOperation != "select" && mode == "ax-late-wrong-cg" { row["number"] = NSNumber(value: 18) }
   if mode == "geometry-ambiguous" { var other = row; other["number"] = NSNumber(value: 18); return [row, other] }
+  if mode == "pointer-noninteractive-overlay" {
+    let overlay: [String: Any] = ["owner": NSNumber(value: 43), "number": NSNumber(value: 99), "layer": NSNumber(value: 20), "onscreen": true, "bounds": ["X": -100.0, "Y": 0.0, "Width": 1024.0, "Height": 768.0]]
+    return [overlay, row]
+  }
   return [row]
 }
-func fixtureWindowList(_ options: [WindowListOption], _ id: CGWindowID) -> Any? {
-  let window: [String: Any] = ["alpha": 1.0, "bounds": ["X": -100.0, "Y": 20.0, "Width": 400.0, "Height": 200.0], "number": NSNumber(value: 17)]
-  if mode == "pointer-missing" { return [] }
-  if mode == "pointer-ambiguous" { return [["alpha": 1.0]] }
-  if mode == "pointer-trusted-edge" || mode == "pointer-forged-edge" || mode == "pointer-status-over-edge" {
-    var edge = window; edge["number"] = NSNumber(value: 19); edge["owner"] = NSNumber(value: mode == "pointer-forged-edge" ? getppid() + 1 : getppid())
-    if mode == "pointer-status-over-edge" { var status = edge; status["number"] = NSNumber(value: 20); return [status, edge, window] }
-    return [edge, window]
-  }
-  if mode == "pointer-overlay" || mode == "pointer-transparent-overlay" || mode == "scroll-overlay" || (mode == "pointer-late-overlay" && posted >= 2) {
-    var overlay = window; overlay["number"] = NSNumber(value: 18); overlay["owner"] = NSNumber(value: 43); overlay["layer"] = NSNumber(value: 0); overlay["title"] = "Private overlay title"
-    if mode == "pointer-transparent-overlay" { overlay["alpha"] = 0.0 }
-    return [overlay, window]
-  }
-  return [window]
-}
-func AXUIElementCreateSystemWide() -> AXUIElement { appElement }
+func AXUIElementCreateSystemWide() -> AXUIElement { systemElement }
 func AXUIElementCopyElementAtPosition(_ root: AXUIElement, _ x: Float, _ y: Float, _ hit: inout AXUIElement?) -> AXError {
+  guard root === systemElement else { return .failure }
   if mode == "pointer-no-ax-hit" { return .failure }
-  hit = mode == "pointer-wrong-ax-window" ? replacement : original
+  if mode == "pointer-missing" { hit = nil; return .success }
+  if ["pointer-overlay", "pointer-transparent-overlay", "pointer-forged-edge", "pointer-status-over-edge", "scroll-overlay"].contains(mode) || (mode == "pointer-late-overlay" && posted >= 2) { hit = foreign; return .success }
+  if mode == "pointer-wrong-ax-window" { hit = replacement; return .success }
+  hit = ["pointer-child", "pointer-ambiguous", "pointer-foreign-containing-window", "pointer-invalid-window-role", "pointer-containing-pid-unavailable"].contains(mode) ? childElement : original
+  return .success
+}
+func AXUIElementGetPid(_ element: AXUIElement, _ pid: inout pid_t) -> AXError {
+  if mode == "pointer-pid-unavailable" || (mode == "pointer-containing-pid-unavailable" && element === original) { return .failure }
+  pid = element === foreign ? 43 : 42
   return .success
 }
 enum AXError { case success, failure }
@@ -82,7 +83,15 @@ func AXUIElementPerformAction(_ window: AXUIElement, _ action: String) -> AXErro
 }
 func fixtureEqual(_ a: AnyObject, _ b: AnyObject) -> Bool { a === b }
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
-  if name == "role" { return "window" as NSString }
+  if name == "role" {
+    if element === childElement || element === invalidWindow { return "button" as NSString }
+    return "window" as NSString
+  }
+  if name == "window" && element === childElement {
+    if mode == "pointer-ambiguous" { return nil }
+    if mode == "pointer-invalid-window-role" { return invalidWindow }
+    return mode == "pointer-foreign-containing-window" ? foreign : original
+  }
   if name == "title" { return "Fixture" as NSString }
   if name == "focused" { return selectedWindow }
   return nil
@@ -206,8 +215,8 @@ test(
       .replaceAll("usleep(", "fixtureSleep(")
       .replaceAll("CGWindowListCopyWindowInfo(", "fixtureWindowList(")
       .replace(
-        "CFGetTypeID(window) == AXUIElementGetTypeID()",
-        "window is AXUIElement",
+        "CFGetTypeID(containing) == AXUIElementGetTypeID()",
+        "containing is AXUIElement",
       )
       .replace(
         "CFGetTypeID(focused) == AXUIElementGetTypeID()",
@@ -279,6 +288,12 @@ test(
       "layout-remapped",
       "shortcut-ambiguous",
       "pointer-normal",
+      "pointer-child",
+      "pointer-noninteractive-overlay",
+      "pointer-pid-unavailable",
+      "pointer-containing-pid-unavailable",
+      "pointer-foreign-containing-window",
+      "pointer-invalid-window-role",
       "pointer-overlay",
       "pointer-transparent-overlay",
       "pointer-late-overlay",
@@ -425,17 +440,8 @@ test(
         if (
           mode === "pointer-overlay" ||
           mode === "pointer-transparent-overlay"
-        ) {
-          assert.match(
-            result.error!,
-            /selectedWindowId=17, occluderWindowId=18, occluderPID=43, occluderLayer=0/,
-          );
-          assert.match(
-            result.error!,
-            /point=20.0,40.0, occluderBounds=-100.0,20.0,400.0,200.0/,
-          );
-          assert.doesNotMatch(result.error!, /Private overlay title/);
-        }
+        )
+          assert.match(result.error!, /not the selected application/);
         if (
           [
             "normal",
@@ -452,6 +458,8 @@ test(
             "shortcut-alt",
             "shortcut-option",
             "pointer-normal",
+            "pointer-child",
+            "pointer-noninteractive-overlay",
             "pointer-trusted-edge",
             "scroll-normal",
           ].includes(mode)
@@ -505,6 +513,8 @@ test(
                 ? 4
                 : [
                       "pointer-normal",
+                      "pointer-child",
+                      "pointer-noninteractive-overlay",
                       "pointer-trusted-edge",
                       "pointer-cancel-after-down",
                     ].includes(mode)
@@ -600,28 +610,33 @@ test("missing AX reacquisition stays exact-window and precedes any foreground ta
   );
 });
 
-test("occlusion refusal identifies only the first blocker without relaxing its fence", () => {
+test("global AX pointer admission checks exact PID and containing retained window without CG rectangle veto", () => {
   const start = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
   const end = MAC_BOUND_TARGET_SOURCE.indexOf("func ownedRows(", start);
   const pointer = MAC_BOUND_TARGET_SOURCE.slice(start, end);
   assert.match(
     pointer,
-    /guard \(item\[kCGWindowNumber as String\] as\? NSNumber\)\?\.intValue == windowId else/,
+    /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/,
   );
-  assert.match(pointer, /occluderWindowId=/);
-  assert.match(pointer, /occluderPID=/);
-  assert.match(pointer, /occluderLayer=/);
-  assert.match(pointer, /occluderBounds=/);
+  assert.match(
+    pointer,
+    /AXUIElementGetPid\(hit, &hitPID\) == \.success, hitPID == expectedPID/,
+  );
+  assert.match(
+    pointer,
+    /AXUIElementGetPid\(window, &windowPID\) == \.success, windowPID == expectedPID/,
+  );
+  assert.match(pointer, /kAXWindowAttribute/);
   assert.doesNotMatch(
     pointer,
-    /kCGWindowName|kCGWindowOwnerName|RunLoop|usleep/,
+    /CGWindowList|passthrough|com\.apple\.dock|windowNumber\(at|RunLoop|usleep/,
   );
-  assert.ok(
-    pointer.indexOf('try refuse("Selected window is occluded') <
-      pointer.indexOf("matched = true"),
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE,
+    /CFEqual\(try pointerWindow\(point, app\.processIdentifier\), window\)/,
   );
-  assert.ok(
-    pointer.indexOf('try refuse("Selected window is occluded') <
-      pointer.indexOf("AXUIElementCopyElementAtPosition"),
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE,
+    /try binding\.fence\(\)[\s\S]*if let pointerPoint \{ try binding\.pointerFence\(pointerPoint\) \}/,
   );
 });

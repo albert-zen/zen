@@ -4242,47 +4242,31 @@ func cgId(_ app: NSRunningApplication, _ window: AXUIElement, _ bounds: CGRect) 
   }
   return id.intValue
 }
-func pointerWindow(_ point: CGPoint, _ windowId: Int, _ appElement: AXUIElement, _ passthrough: Set<Int>) throws -> AXUIElement {
-  // CGWindowList is front-to-back. Be conservative even for mouse-ignoring
-  // overlays: foreground/focused AX state alone does not identify a pointer recipient.
-  guard let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-    try refuse("Pointer window ordering is unavailable")
-  }
-  var matched = false
-  for item in entries {
-    // Only main-owned, explicitly noninteractive edge indicators are exempt.
-    // Same PID alone, window titles, alpha, and the interactive Stop card are not.
-    if let id = item[kCGWindowNumber as String] as? NSNumber,
-       passthrough.contains(id.intValue),
-       (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == getppid() { continue }
-    // Alpha and accessibility visibility are not proof that a window ignores
-    // input. Even transparent containing windows are conservatively occluders.
-    guard let raw = item[kCGWindowBounds as String] as? [String: Any],
-          let x = raw["X"] as? Double, let y = raw["Y"] as? Double,
-          let width = raw["Width"] as? Double, let height = raw["Height"] as? Double,
-          x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 0, height >= 0 else { try refuse("Pointer occlusion geometry is unavailable") }
-    if !CGRect(x: x, y: y, width: width, height: height).contains(point) { continue }
-    guard (item[kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else {
-      // Report only the first actual containing row already used by this fence.
-      // No app/window titles, screenshots, full window list, or extra discovery.
-      let occluderId = (item[kCGWindowNumber as String] as? NSNumber)?.intValue ?? -1
-      let occluderPID = (item[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
-      let occluderLayer = (item[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
-      try refuse("Selected window is occluded at the input point (selectedWindowId=" + String(windowId)
-        + ", occluderWindowId=" + String(occluderId) + ", occluderPID=" + String(occluderPID)
-        + ", occluderLayer=" + String(occluderLayer) + ", point=" + String(Double(point.x)) + "," + String(Double(point.y))
-        + ", occluderBounds=" + String(x) + "," + String(y) + "," + String(width) + "," + String(height) + ")")
-    }
-    matched = true
-    break
-  }
-  guard matched else { try refuse("Selected window is not the visible pointer recipient") }
+func pointerWindow(_ point: CGPoint, _ expectedPID: pid_t) throws -> AXUIElement {
+  // Query the system-wide AX hit, not the selected app's local subtree. Visual
+  // CG rectangles (including mouse-ignoring overlays) are not input recipients.
+  // This is accessibility-hit admission, not an atomic event-delivery receipt.
   var hit: AXUIElement?
-  guard AXUIElementCopyElementAtPosition(appElement, Float(point.x), Float(point.y), &hit) == .success,
-        let hit else { try refuse("Pointer recipient is unavailable") }
-  if attribute(hit, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String { return hit }
-  guard let window = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(window) == AXUIElementGetTypeID() else { try refuse("Pointer recipient window is ambiguous") }
-  return window as! AXUIElement
+  guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
+        let hit else { try refuse("Global accessibility pointer recipient is unavailable") }
+  var hitPID: pid_t = 0
+  guard AXUIElementGetPid(hit, &hitPID) == .success, hitPID == expectedPID else {
+    try refuse("Global accessibility pointer recipient is not the selected application")
+  }
+  let window: AXUIElement
+  if attribute(hit, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String { window = hit }
+  else {
+    guard let containing = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(containing) == AXUIElementGetTypeID() else {
+      try refuse("Global accessibility pointer recipient window is ambiguous")
+    }
+    window = containing as! AXUIElement
+  }
+  var windowPID: pid_t = 0
+  guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == expectedPID,
+        attribute(window, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String else {
+    try refuse("Global accessibility pointer recipient window is not owned by the selected application")
+  }
+  return window
 }
 func ownedRows(_ app: NSRunningApplication, _ exactId: Int? = nil) -> [[String: Any]] {
   let options: CGWindowListOption = exactId == nil ? .optionAll : .optionIncludingWindow
@@ -4432,8 +4416,8 @@ final class Binding {
     try refuse("Selected window did not acquire foreground focus (selectedPID=" + String(app.processIdentifier) + ", windowId=" + String(windowId) + ", frontmostPID=" + String(state.frontmostPID) + ", axFocusedWindow=" + state.axWindow + "); no input dispatched")
   }
   func fence() throws { try verify(); guard focused() else { try refuse("Foreground focus changed; reobserve target") } }
-  func pointerFence(_ point: CGPoint, _ passthrough: Set<Int>) throws {
-    guard let window, CFEqual(try pointerWindow(point, windowId, appElement, passthrough), window) else { try refuse("Pointer recipient is not the selected window") }
+  func pointerFence(_ point: CGPoint) throws {
+    guard let window, CFEqual(try pointerWindow(point, app.processIdentifier), window) else { try refuse("Pointer recipient is not the selected window") }
   }
   func receipt() -> [String: Any] {
     var available = false
@@ -4872,7 +4856,7 @@ while let line = readLine() {
         var pointerPoint: CGPoint?
         let passthroughIds = request["pointerPassthroughWindowIds"] as? [Int] ?? []
         guard passthroughIds.count <= 64, passthroughIds.allSatisfy({ $0 > 0 }) else { try refuse("Invalid foreground indicator identity") }
-        let passthrough = Set(passthroughIds)
+        // Legacy indicator IDs do not exempt any global AX hit from target checks.
         // Cancellation prevents new input, never suppresses an already-started
         // ordinary pair's matching up. Existing exact native fences still apply.
         func post(_ event: CGEvent?, matchingRelease: Bool = false) throws {
@@ -4880,7 +4864,7 @@ while let line = readLine() {
           guard matchingRelease || targetCancelled == 0 else { try refuse("Foreground input cancelled") }
           try binding.fence()
           try shortcutFence?()
-          if let pointerPoint { try binding.pointerFence(pointerPoint, passthrough) }
+          if let pointerPoint { try binding.pointerFence(pointerPoint) }
           guard matchingRelease || targetCancelled == 0 else { try refuse("Foreground input cancelled") }
           event.post(tap: .cghidEventTap)
           posted += 1

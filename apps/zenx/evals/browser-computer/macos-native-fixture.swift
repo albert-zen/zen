@@ -65,8 +65,13 @@ final class DragReceiver: NSView {
     start = nil
   }
 }
+final class NoninteractiveOverlay: NSWindow {
+  override var canBecomeKey: Bool { false }
+  override var canBecomeMain: Bool { false }
+}
 final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var window: NSWindow!
+  var overlay: NSWindow?
   var pressCount = 0
   let output = NSTextField(labelWithString: "Not pressed")
   @objc func pressed(_ sender: NSButton) { pressCount += 1; output.stringValue = "PASS native button pressed \(pressCount)" }
@@ -134,6 +139,20 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // launcher creates two owned apps. Neither requests self-activation; the
     // production helper must acquire the receiver from the owned distractor.
     window.makeKeyAndOrderFront(nil)
+    if CommandLine.arguments.contains("--noninteractive-overlay") {
+      // An owned visual rectangle above the complete drag pad, deliberately not
+      // an input/accessibility recipient. No helper bypass ID is provided.
+      let rectangle = window.convertToScreen(pad.convert(pad.bounds, to: nil))
+      let overlay = NoninteractiveOverlay(contentRect: rectangle, styleMask: [.borderless], backing: .buffered, defer: false)
+      overlay.title = "Owned noninteractive visual overlay"
+      overlay.isOpaque = false
+      overlay.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.15)
+      overlay.level = .floating
+      overlay.ignoresMouseEvents = true
+      overlay.setAccessibilityElement(false)
+      overlay.orderFront(nil)
+      self.overlay = overlay
+    }
     reportFocus("ready")
     func globalPoint(_ local: NSPoint) -> [String: Double] {
       let screenPoint = window.convertPoint(toScreen: pad.convert(local, to: nil))
@@ -143,6 +162,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       "windowTitle": window.title, "windowId": window.windowNumber,
       "bundlePath": Bundle.main.bundlePath,
       "activationPolicy": NSApp.activationPolicy().rawValue,
+      "noninteractiveOverlayWindowId": overlay?.windowNumber ?? 0,
+      "overlayIgnoresMouseEvents": overlay?.ignoresMouseEvents ?? false,
       "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1),
       "dragStart": globalPoint(NSPoint(x: 30, y: 25)), "dragEnd": globalPoint(NSPoint(x: 170, y: 25))]
     report(ready)
