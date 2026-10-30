@@ -1,3 +1,4 @@
+import { SideChatQuoteChooser } from "./SideChatQuoteChooser.js";
 import { chooseSideChatQuoteTarget } from "./side-chat-quote-target.js";
 import { addMessageQuote } from "./message-quote.js";
 import type { MessageQuoteReference } from "./composer-selector.js";
@@ -38,12 +39,7 @@ import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wi
 import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import {
-  Dialog,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "./ui/controls.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import { RoomHeaderContext } from "./room-header.js";
@@ -3379,7 +3375,12 @@ function AppContent() {
         )
         .map((draft, index) => ({
           id: `custom:side-chat-draft-${draft.id}`,
-          draftId: draft.id,
+          // Match renderSideChatDraft while native tab promotion is pending.
+          // A failed submission still belongs to the retryable local draft.
+          draftId:
+            draft.threadId && draft.composer.submission === null
+              ? undefined
+              : draft.id,
           threadId: draft.threadId,
           title: `${i18n.t("panels:sideChat")} ${index + 1}`,
         })),
@@ -4639,44 +4640,18 @@ function AppContent() {
 
         {sideQuoteChoice &&
         sideQuoteChoice.scope === shellNavigationScope.current ? (
-          <Dialog
-            open
-            title={i18n.t("shell:chooseSideChat")}
-            restoreFocus={() => false}
-            onOpenChange={(open) => {
-              if (!open) setSideQuoteChoice(null);
+          <SideChatQuoteChooser
+            targets={sideQuoteTargets(
+              sideQuoteChoice.parent,
+              sideQuoteChoice.roomId,
+            )}
+            onClose={() => setSideQuoteChoice(null)}
+            onChoose={(targetId) => {
+              void insertSideQuote(sideQuoteChoice, targetId).catch(
+                (error: unknown) => setRequestError(describeError(error)),
+              );
             }}
-          >
-            <div className="side-chat-quote-chooser">
-              <h2>{i18n.t("shell:chooseSideChat")}</h2>
-              {sideQuoteTargets(
-                sideQuoteChoice.parent,
-                sideQuoteChoice.roomId,
-              ).map((target) => (
-                <button
-                  type="button"
-                  key={target.id}
-                  onClick={() => {
-                    void insertSideQuote(sideQuoteChoice, target.id).catch(
-                      (error: unknown) => setRequestError(describeError(error)),
-                    );
-                  }}
-                >
-                  {target.title}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => {
-                  void insertSideQuote(sideQuoteChoice).catch(
-                    (error: unknown) => setRequestError(describeError(error)),
-                  );
-                }}
-              >
-                {i18n.t("shell:newSideChat")}
-              </button>
-            </div>
-          </Dialog>
+          />
         ) : null}
         {remoteMessageSource && (
           <RemoteMessageSourceDialog

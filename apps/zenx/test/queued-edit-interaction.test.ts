@@ -859,6 +859,11 @@ test("missing queue excerpt source keeps the editor and unsaved reference draft 
     assert.ok(editor());
     assert.equal(text().value, "尚未保存");
     assert.ok(document.querySelector(".reference-source-error"));
+    assert.equal(editor()!.querySelectorAll(".reference-token").length, 1);
+    assert.equal(
+      document.querySelector(".reference-exact-excerpt")!.textContent,
+      queueReferences[1]!.kind === "message" ? queueReferences[1]!.excerpt : "",
+    );
     assert.equal(saves, 0);
   });
 });

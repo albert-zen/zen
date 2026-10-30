@@ -5,6 +5,7 @@ import { Icon } from "./icons.js";
 import { MessageLinkContext } from "./Markdown.js";
 import {
   MessageSourceLink,
+  MessageSourceNavigationContext,
   MessageSourceViewportContext,
 } from "./message-source-navigation.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
@@ -24,6 +25,7 @@ export function ReferenceToken({
   const { t } = useTranslation("shell");
   const openLink = useContext(MessageLinkContext);
   const ownerThreadId = useContext(MessageSourceViewportContext);
+  const navigateSource = useContext(MessageSourceNavigationContext);
   const [open, setOpen] = useState(false);
   const [sourceUnavailable, setSourceUnavailable] = useState(false);
   const heading = useId();
@@ -134,6 +136,7 @@ export function ReferenceToken({
         </dl>
         {reference.kind === "thread" ||
         (reference.kind === "message" &&
+          navigateSource !== null &&
           ownerThreadId !== null &&
           ownerThreadId !== reference.threadId) ? (
           <MessageSourceLink

@@ -195,6 +195,8 @@
 }
 
 .side-chat-quote-chooser > button {
+  justify-content: flex-start;
+  white-space: normal;
   text-align: start;
   overflow-wrap: anywhere;
 }
