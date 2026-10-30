@@ -474,3 +474,112 @@ rl.on('line',line=>{
   });
   assert.deepEqual(await next, { selections: 2 });
 });
+
+for (const operation of ["click", "key", "type", "shortcut"])
+  test(`ordinary ${operation} host abort permits matching release before close, without queued input`, async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-pair-abort-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "fixture.cjs");
+    const events = path.join(directory, "events");
+    await writeFile(
+      executable,
+      `#!${process.execPath}
+const fs = require('node:fs');
+let down = false, cancelled = false;
+const record = value => fs.appendFileSync(${JSON.stringify(events)}, value+'\\n');
+process.on('SIGTERM', () => {
+  cancelled = true;
+  record('cancel');
+  setTimeout(() => {
+    if (down) { record('up'); down = false; }
+    // A late receipt must not complete cancellation before child close.
+    console.log(JSON.stringify({result:{dispatch:'posted',applicationEffect:'unverified'}}));
+    setTimeout(() => { record('close'); process.exit(0); }, 30);
+  }, 30);
+});
+require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.operation === 'select') console.log(JSON.stringify({result:{pid:process.pid}}));
+  else { record(cancelled ? 'unexpected-after-cancel' : 'down'); down = true; }
+});
+`,
+      { mode: 0o700 },
+    );
+    const transport = new NativeComputerTargetTransport(async () => executable);
+    t.after(() => transport.close());
+    const signal = new AbortController().signal;
+    await transport.request({ operation: "select" }, signal);
+    const controller = new AbortController();
+    let stopping = 0;
+    const pending = transport.request(
+      { operation },
+      controller.signal,
+      () => stopping++,
+    );
+    const rejection = assert.rejects(pending, /cancelled.*outcome unknown/);
+    const queued = assert.rejects(
+      transport.request({ operation }, signal),
+      /no input dispatched/,
+    );
+    const { readFile } = await import("node:fs/promises");
+    const deadline = Date.now() + 2_000;
+    while ((await readFile(events, "utf8").catch(() => "")) !== "down\n") {
+      assert.ok(Date.now() < deadline, "owned helper did not begin pair");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    controller.abort();
+    await rejection;
+    await queued;
+    assert.equal(stopping, 1);
+    assert.equal(await readFile(events, "utf8"), "down\ncancel\nup\nclose\n");
+  });
+
+test("ordinary foreground cancellation grace is bounded and still waits for actual close", async (t) => {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const child =
+    new EventEmitter() as import("node:child_process").ChildProcessWithoutNullStreams;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  const signals: string[] = [];
+  child.stdin.on("data", (chunk) => {
+    if (JSON.parse(chunk.toString()).operation === "select")
+      queueMicrotask(() =>
+        child.stdout.emit("data", '{"result":{"selected":true}}\n'),
+      );
+  });
+  child.kill = ((signal: string) => {
+    signals.push(signal);
+    return true;
+  }) as typeof child.kill;
+  const transport = new NativeComputerTargetTransport(
+    async () => "/synthetic",
+    (() => child) as unknown as typeof import("node:child_process").spawn,
+  );
+  const controller = new AbortController();
+  await transport.request({ operation: "select" }, controller.signal);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = transport.request({ operation: "key" }, controller.signal);
+  let settled = false;
+  const rejection = assert.rejects(pending, /outcome unknown/).then(() => {
+    settled = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort();
+  assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(1_999);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  t.mock.timers.tick(1);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  child.emit("exit", 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    settled,
+    false,
+    "neither grace expiry nor exit proves pipe closure",
+  );
+  child.emit("close", 1);
+  await rejection;
+  await transport.close();
+});

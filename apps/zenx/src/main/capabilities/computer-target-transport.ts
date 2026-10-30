@@ -22,6 +22,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
     expectsInputReceipt: boolean;
     background: boolean;
     drag: boolean;
+    foregroundPair: boolean;
     dragSettled: boolean;
     backgroundSettled: boolean;
     pairStarted: boolean;
@@ -98,6 +99,9 @@ export class NativeComputerTargetTransport implements TargetTransport {
         onStopping,
         background: isBackgroundOperation(request.operation),
         drag: request.operation === "drag",
+        foregroundPair: ["click", "key", "type", "shortcut"].includes(
+          String(request.operation),
+        ),
         dragSettled: false,
         backgroundSettled: false,
         pairStarted: false,
@@ -319,9 +323,15 @@ export class NativeComputerTargetTransport implements TargetTransport {
     // A signal request is not a close receipt. Failed kill/throw/error retains
     // the same pending owner; late replies cannot settle it or trigger replay.
     try {
-      if (this.#pending?.background || this.#pending?.drag) {
+      if (
+        this.#pending?.background ||
+        this.#pending?.drag ||
+        this.#pending?.foregroundPair
+      ) {
         // Native SIGTERM only sets a cancellation flag. The owned input path
         // attempts its release before exit; cancellation waits for actual close.
+        // Ordinary foreground pairs retain their exact native fences: this
+        // grace permits a matching up, but is not proof that it was delivered.
         child.kill("SIGTERM");
         this.#grace = setTimeout(() => {
           if (this.#pending?.background) this.#backgroundUnsafe = true;

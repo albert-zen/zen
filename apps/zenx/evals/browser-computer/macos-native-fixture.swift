@@ -48,7 +48,6 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   func windowDidResignKey(_ notification: Notification) { reportFocus("windowDidResignKey") }
   func windowDidBecomeMain(_ notification: Notification) { reportFocus("windowDidBecomeMain") }
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.accessory)
     window = NSWindow(contentRect:NSRect(x:100,y:100,width:650,height:350),styleMask:[.titled,.closable],backing:.buffered,defer:false)
     window.title = "ZenX owned native button fixture"
     window.delegate = self
@@ -59,10 +58,16 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let pad = DragReceiver(frame: NSRect(x:40,y:10,width:500,height:50))
     pad.wantsLayer = true; pad.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
     pad.setAccessibilityElement(true); pad.setAccessibilityLabel("Owned drag receiver pad")
-    pad.showResult = { [weak self] message in self?.output.stringValue = message }
+    pad.showResult = { [weak self] message in
+      self?.output.stringValue = message
+      self?.reportFocus("dragReceived")
+    }
     window.contentView!.addSubview(pad)
     window.contentView!.addSubview(button); window.contentView!.addSubview(field); window.contentView!.addSubview(output)
-    window.orderFrontRegardless()
+    // A normal key-capable window, not an accessory overlay. The acceptance
+    // launcher uses LaunchServices in the background; only the production
+    // helper requests foreground activation (never this receiver).
+    window.makeKeyAndOrderFront(nil)
     reportFocus("ready")
     func globalPoint(_ local: NSPoint) -> [String: Double] {
       let screenPoint = window.convertPoint(toScreen: pad.convert(local, to: nil))
@@ -70,10 +75,26 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     let ready: [String: Any] = ["kind": "owned-receiver-ready", "pid": Int(getpid()),
       "windowTitle": window.title, "windowId": window.windowNumber,
+      "bundlePath": Bundle.main.bundlePath,
+      "activationPolicy": NSApp.activationPolicy().rawValue,
+      "frontmostPID": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1),
       "dragStart": globalPoint(NSPoint(x: 30, y: 25)), "dragEnd": globalPoint(NSPoint(x: 170, y: 25))]
     if let data = try? JSONSerialization.data(withJSONObject: ready, options: [.sortedKeys]) {
       FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
     }
   }
 }
-let delegate=Delegate(); NSApplication.shared.delegate=delegate; NSApplication.shared.run()
+let delegate = Delegate()
+let application = NSApplication.shared
+// Configure before the launch lifecycle. An unbundled accessory process shown
+// with orderFrontRegardless is not a normal foreground application's lifecycle.
+guard application.setActivationPolicy(.regular) else { exit(3) }
+application.delegate = delegate
+// Test-owned shutdown only; no PID-based termination of another application.
+if let index = CommandLine.arguments.firstIndex(of: "--stop-file"), index + 1 < CommandLine.arguments.count {
+  let stopFile = CommandLine.arguments[index + 1]
+  Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+    if FileManager.default.fileExists(atPath: stopFile) { application.terminate(nil) }
+  }
+}
+application.run()

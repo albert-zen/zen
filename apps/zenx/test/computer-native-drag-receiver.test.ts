@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,3 +33,41 @@ test(
     assert.equal(result.status, 0, result.stderr || result.error?.message);
   },
 );
+
+// Linux-safe lifecycle contract only; it is not native activation evidence.
+test("owned receiver uses background-launched regular app lifecycle without self-activation", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const acceptance = readFileSync(
+    new URL("./computer-owned-native-acceptance.test.ts", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    fixture.indexOf("setActivationPolicy(.regular)") <
+      fixture.indexOf("application.run()"),
+  );
+  assert.match(fixture, /window\.makeKeyAndOrderFront\(nil\)/);
+  assert.doesNotMatch(
+    fixture,
+    /setActivationPolicy\(\.accessory\)|\b(?:NSApp|application)\.activate\(/,
+  );
+  assert.doesNotMatch(fixture, /window\.orderFrontRegardless\(\)/);
+  assert.match(
+    acceptance,
+    /"CFBundlePackageType"|<key>CFBundlePackageType<\/key>/,
+  );
+  assert.match(acceptance, /"-g",\s*"-n",\s*"-W"/);
+  assert.match(
+    acceptance,
+    /assert\.notEqual\(\s*ready\.frontmostPID,\s*ready\.pid/,
+  );
+  assert.match(
+    acceptance,
+    /event\.isActive === true && event\.isKeyWindow === true/,
+  );
+});

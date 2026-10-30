@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import test from "node:test";
 import {
   MAC_BOUND_TARGET_SOURCE,
@@ -34,6 +40,7 @@ test(
     };
     let transport: NativeComputerTargetTransport | undefined;
     let closeReceiver = async () => {};
+    let receiverStopped = true;
     t.after(async () => {
       await transport?.close();
       await closeReceiver();
@@ -43,11 +50,38 @@ test(
           process.env.ZENX_COMPUTER_OWNED_NATIVE_EVIDENCE,
           JSON.stringify(evidence, null, 2),
         );
-      await rm(directory, { recursive: true, force: true });
+      // Keep the stop marker and diagnostics if the owned process did not exit.
+      // Never delete its shutdown request or kill a PID claimed by stdout.
+      if (receiverStopped)
+        await rm(directory, { recursive: true, force: true });
+      assert.ok(
+        receiverStopped,
+        "owned receiver did not terminate after stop request",
+      );
     });
     evidence.stage = "compile-production-helper-and-owned-receiver";
     const helper = path.join(directory, "helper"),
-      receiver = path.join(directory, "receiver");
+      receiverBundle = path.join(directory, "OwnedReceiver.app"),
+      receiver = path.join(
+        receiverBundle,
+        "Contents",
+        "MacOS",
+        "OwnedReceiver",
+      );
+    await mkdir(path.dirname(receiver), { recursive: true });
+    await writeFile(
+      path.join(receiverBundle, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>OwnedReceiver</string>
+<key>CFBundleIdentifier</key><string>dev.zenx.owned-native-receiver</string>
+<key>CFBundleName</key><string>ZenX Owned Receiver</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSUIElement</key><false/>
+<key>LSBackgroundOnly</key><false/>
+</dict></plist>`,
+    );
     await writeFile(`${helper}.swift`, MAC_BOUND_TARGET_SOURCE);
     await writeFile(
       `${receiver}.swift`,
@@ -68,33 +102,75 @@ test(
       [`${receiver}.swift`, "-o", receiver],
       60_000,
     );
-    const child = spawn(receiver, [], { stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutPath = path.join(directory, "receiver.stdout");
+    const stderrPath = path.join(directory, "receiver.stderr");
+    const stopPath = path.join(directory, "receiver.stop");
+    await writeFile(stdoutPath, "");
+    // Launch a real registered app, explicitly without activating it. The helper
+    // must still acquire foreground focus; fixture setup cannot satisfy its guard.
+    const child = spawn(
+      "/usr/bin/open",
+      [
+        "-g",
+        "-n",
+        "-W",
+        "--stdout",
+        stdoutPath,
+        "--stderr",
+        stderrPath,
+        receiverBundle,
+        "--args",
+        "--stop-file",
+        stopPath,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
     child.stderr.resume();
-    const lines = createInterface({ input: child.stdout });
     const messages: Array<Record<string, any>> = [];
     const focusEvents: Array<Record<string, unknown>> = [];
     evidence.receiverFocusEvents = focusEvents;
-    lines.on("line", (line) => {
-      try {
-        const message = JSON.parse(line);
-        messages.push(message);
-        if (message.kind === "owned-focus-state" && focusEvents.length < 32)
-          focusEvents.push(message);
-      } catch {
-        /* fixture stdout has no authority */
+    let consumedLines = 0;
+    const collectMessages = async () => {
+      const lines = (await readFile(stdoutPath, "utf8")).split("\n");
+      // Leave any partial last line for the next read.
+      for (; consumedLines < lines.length - 1; consumedLines++) {
+        try {
+          const message = JSON.parse(lines[consumedLines]!);
+          messages.push(message);
+          if (message.kind === "owned-focus-state" && focusEvents.length < 32)
+            focusEvents.push(message);
+        } catch {
+          /* fixture stdout has no authority */
+        }
       }
-    });
+    };
     const closed = new Promise<void>((resolve) =>
       child.once("close", () => resolve()),
     );
     closeReceiver = async () => {
-      child.kill("SIGTERM");
-      await closed;
-      lines.close();
+      await writeFile(stopPath, "stop");
+      receiverStopped = await Promise.race([
+        closed.then(() => child.exitCode === 0 && child.signalCode === null),
+        new Promise<false>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5_000);
+          timer.unref();
+        }),
+      ]);
+      evidence.receiverShutdown = receiverStopped ? "exited" : "not-confirmed";
+      if (!receiverStopped) {
+        evidence.status = "failed";
+        evidence.retainedFixtureDirectory = directory;
+      }
+      if (child.exitCode === null) child.kill("SIGTERM"); // only our open waiter
+      await collectMessages();
+      evidence.receiverStderr = await readFile(stderrPath, "utf8").catch(
+        () => "",
+      );
     };
     const waitFor = async (kind: string) => {
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
+        await collectMessages();
         const value = messages.find((message) => message.kind === kind);
         if (value) return value;
         assert.equal(
@@ -108,8 +184,26 @@ test(
     };
     evidence.stage = "owned-receiver-readiness";
     const ready = await waitFor("owned-receiver-ready");
-    assert.equal(ready.pid, child.pid);
     evidence.receiver = ready;
+    assert.ok(Number.isInteger(ready.pid) && ready.pid > 0);
+    assert.equal(
+      await realpath(ready.bundlePath),
+      await realpath(receiverBundle),
+    );
+    assert.ok(
+      Number.isInteger(ready.frontmostPID) && ready.frontmostPID > 0,
+      "initial foreground application must be observable",
+    );
+    assert.equal(
+      ready.activationPolicy,
+      0,
+      "receiver must be a regular AppKit app",
+    );
+    assert.notEqual(
+      ready.frontmostPID,
+      ready.pid,
+      "background launch must leave real focus acquisition to production helper",
+    );
     transport = new NativeComputerTargetTransport(async () => helper);
     const signal = AbortSignal.timeout(25_000);
     const target = { pid: ready.pid, windowTitle: ready.windowTitle };
@@ -139,7 +233,8 @@ test(
       foregroundWindowInputAvailable: selected.foregroundWindowInputAvailable,
     };
     assert.equal(selected.windowId, ready.windowId);
-    assert.equal(selected.target.pid, child.pid);
+    assert.equal(selected.target.pid, ready.pid);
+    assert.equal(selected.target.bundleId, "dev.zenx.owned-native-receiver");
     evidence.stage = "native-drag-and-independent-receiver-readback";
     let receipt: unknown;
     try {
@@ -160,7 +255,7 @@ test(
       throw error;
     }
     const delivered = await waitFor("owned-drag-received");
-    assert.equal(delivered.pid, child.pid);
+    assert.equal(delivered.pid, ready.pid);
     assert.equal(delivered.windowId, selected.windowId);
     assert.equal(delivered.windowTitle, target.windowTitle);
     assert.equal(delivered.downReceived, true);
@@ -182,6 +277,13 @@ test(
       signal,
     );
     assert.equal(verified.windowId, selected.windowId);
+    await collectMessages();
+    assert.ok(
+      focusEvents.some(
+        (event) => event.isActive === true && event.isKeyWindow === true,
+      ),
+      "receiver independently observed actual activation and key-window ownership",
+    );
     evidence.drag = {
       posted: receipt,
       received: delivered,
@@ -218,7 +320,7 @@ emit(["kind": "owned-ax-reacquired", "windowId": selected.windowId, "pid": Int(s
     const reacquired = JSON.parse(
       await runProcess(
         reacquire,
-        [String(child.pid), ready.windowTitle],
+        [String(ready.pid), ready.windowTitle],
         10_000,
       ),
     );
@@ -232,7 +334,7 @@ emit(["kind": "owned-ax-reacquired", "windowId": selected.windowId, "pid": Int(s
       return;
     }
     assert.equal(reacquired.windowId, selected.windowId);
-    assert.equal(reacquired.pid, child.pid);
+    assert.equal(reacquired.pid, ready.pid);
     evidence.axReacquisition = reacquired;
     evidence.status = "passed";
     evidence.stage = "complete";
