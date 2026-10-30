@@ -64,7 +64,6 @@ in `../quote-clipboard/README.md`.
 Cloud DevTools was organization-disabled; the denial was not bypassed. An early fixture
 missing import/provenance was corrected in source and rebuilt before these captures.
 
-
 ## Production chooser follow-up
 
 The inline App chooser was extracted without changing routing/store ownership into
