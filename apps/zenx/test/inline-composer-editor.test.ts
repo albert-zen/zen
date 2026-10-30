@@ -333,3 +333,81 @@ test("first rich insertion inherits a pre-switch textarea snapshot as native und
     await f.close();
   }
 });
+
+function clipboardEvent(
+  f: Awaited<ReturnType<typeof fixture>>,
+  type: string,
+  values: Map<string, string>,
+) {
+  const event = new f.dom.window.Event(type, {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      getData: (kind: string) => values.get(kind) ?? "",
+      setData: (kind: string, value: string) => values.set(kind, value),
+      files: [],
+    },
+  });
+  f.view.contentDOM.dispatchEvent(event);
+  return event;
+}
+
+test("cut and paste capsule between independent main/side composers retains provenance both ways and undo", async () => {
+  const clipboard = new Map<string, string>();
+  const f = await fixture("a\uFFFCz", [{ ...message, position: 1 }]);
+  try {
+    await act(async () =>
+      f.view.dispatch({ selection: { anchor: 1, head: 2 } }),
+    );
+    await act(async () => {
+      assert.equal(clipboardEvent(f, "cut", clipboard).defaultPrevented, true);
+    });
+    assert.equal(f.text, "az");
+    assert.deepEqual(f.references, []);
+    assert.equal(clipboard.get("text/plain"), message.excerpt);
+    assert.ok(
+      [...clipboard.keys()].some((key) => key.startsWith("application/x-zenx")),
+    );
+    await act(async () => assert.equal(undo(f.view), true));
+    assert.deepEqual(f.references, [{ ...message, position: 1 }]);
+  } finally {
+    await f.close();
+  }
+  for (const threadId of ["side-thread", "main-thread"]) {
+    const dest = await fixture("keep \uFFFC draft", [{ ...file, position: 5 }]);
+    try {
+      await act(async () => dest.view.dispatch({ selection: { anchor: 7 } }));
+      await act(async () => {
+        assert.equal(
+          clipboardEvent(dest, "paste", clipboard).defaultPrevented,
+          true,
+        );
+      });
+      assert.equal(dest.text, "keep \uFFFC \uFFFCdraft");
+      assert.deepEqual(
+        dest.references,
+        [
+          { ...file, position: 5 },
+          { ...message, position: 7 },
+        ],
+        threadId,
+      );
+      await act(async () => assert.equal(undo(dest.view), true));
+      assert.equal(dest.text, "keep \uFFFC draft");
+      assert.deepEqual(dest.references, [{ ...file, position: 5 }]);
+      await act(async () => assert.equal(redo(dest.view), true));
+      assert.deepEqual(dest.references[1], { ...message, position: 7 });
+      await act(async () =>
+        dest.view.dispatch({ selection: { anchor: 7, head: 8 } }),
+      );
+      await act(async () => {
+        clipboardEvent(dest, "cut", clipboard);
+      });
+      assert.equal(clipboard.get("text/plain"), message.excerpt);
+    } finally {
+      await dest.close();
+    }
+  }
+});

@@ -186,3 +186,15 @@
     border-color: ButtonText;
   }
 }
+
+.side-chat-quote-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.side-chat-quote-chooser > button {
+  text-align: start;
+  overflow-wrap: anywhere;
+}

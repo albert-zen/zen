@@ -382,16 +382,41 @@ test("selected refs cannot mutate or retarget", () => {
 });
 
 for (const format of ["chat-completions", "responses"] as const)
-  for (const legacy of [false, true])
-    test(`persisted ${legacy ? "legacy quote" : "v3"} semantic content reaches actual ${format} adapter bytes without late wrapper or raw provenance`, async () => {
+  for (const variant of ["v3", "legacy quote", "clipboard"] as const)
+    test(`persisted ${variant} semantic content reaches actual ${format} adapter bytes without late wrapper or raw provenance`, async () => {
+      let clipboardInput = input();
+      if (variant === "clipboard") {
+        const {
+          referenceClipboard,
+          readReferenceClipboard,
+          REFERENCE_CLIPBOARD_TYPE,
+        } =
+          await import("../apps/zenx/src/renderer/src/reference-clipboard.js");
+        const copied = referenceClipboard("See \uFFFC please", [source]);
+        const pasted = readReferenceClipboard({
+          getData: (type) =>
+            type === REFERENCE_CLIPBOARD_TYPE
+              ? copied.structured
+              : type === "text/plain"
+                ? copied.plain
+                : "",
+        })!;
+        clipboardInput = {
+          ...base,
+          threadId: "synthetic-side-destination",
+          type: "user_message",
+          clientId,
+          text: referenceMessage(pasted.text, pasted.references, clientId),
+        };
+      }
       const semantic = persisted(
-        legacy
+        variant === "legacy quote"
           ? {
               ...base,
               type: "user_message",
               text: `[Message quote; thread ID: ${JSON.stringify(source.threadId)}; message ID: ${JSON.stringify(source.id)}; excerpt: ${JSON.stringify(source.excerpt)}]Follow up`,
             }
-          : input(),
+          : clipboardInput,
       );
       if (semantic.kind !== "message") throw Error("message expected");
       const compiled = compileItemList([
@@ -561,3 +586,52 @@ for (const version of ["plain", "v1", "v2"] as const) {
     );
   });
 }
+
+test("main-to-side structured clipboard rebinds source in destination model context without leaking native IDs", async () => {
+  const {
+    referenceClipboard,
+    readReferenceClipboard,
+    REFERENCE_CLIPBOARD_TYPE,
+  } = await import("../apps/zenx/src/renderer/src/reference-clipboard.js");
+  const copied = referenceClipboard("\uFFFC", [{ ...source, position: 0 }]);
+  const pasted = readReferenceClipboard({
+    getData: (type) =>
+      type === REFERENCE_CLIPBOARD_TYPE
+        ? copied.structured
+        : type === "text/plain"
+          ? copied.plain
+          : "",
+  })!;
+  for (const owner of ["side-destination", "main-destination"]) {
+    const message: UserMessageItem = {
+      ...base,
+      threadId: owner,
+      type: "user_message",
+      clientId,
+      text: referenceMessage(pasted.text, pasted.references, clientId),
+    };
+    const semantic = persisted(message);
+    if (semantic.kind !== "message") throw Error("message expected");
+    assert.equal(
+      textFromUserInput(semantic.content.parts.slice(1)),
+      `[Selected message ${JSON.stringify(source.name)}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`,
+    );
+    const bindings = compileSelectedReferenceInput(
+      message,
+      [],
+    )!.referenceBindings;
+    assert.equal(bindings[0]!.ownerThreadId, owner);
+    assert.deepEqual(
+      decodeThreadArguments(
+        "zenx_threads_read",
+        { ref: "s1" },
+        new ModelReferenceRegistry().scope(owner, bindings),
+        "epoch",
+      ),
+      { threadId: source.threadId, itemId: source.id, granularity: "item" },
+    );
+    assert.deepEqual(compileItemList([semantic]).messages, [
+      { role: "user", content: semantic.content.parts },
+    ]);
+  }
+});

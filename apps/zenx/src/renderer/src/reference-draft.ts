@@ -210,6 +210,7 @@ export function referenceMessage(
 }
 
 const SENT_REFERENCE_PREFIX = "[zenx-reference-message:v2]\n";
+export type { SentMessageQuote } from "../../../../../src/selected-reference-protocol.js";
 export { parseSentReferenceContent } from "../../../../../src/selected-reference-protocol.js";
 import { parseSentReferenceContent } from "../../../../../src/selected-reference-protocol.js";
 

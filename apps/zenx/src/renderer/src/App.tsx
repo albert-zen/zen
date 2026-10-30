@@ -1,3 +1,6 @@
+import { chooseSideChatQuoteTarget } from "./side-chat-quote-target.js";
+import { addMessageQuote } from "./message-quote.js";
+import type { MessageQuoteReference } from "./composer-selector.js";
 import {
   ShellTargetNavigationContext,
   openShellTarget,
@@ -35,7 +38,12 @@ import type { DeletedThreadSummary } from "../../../../../src/protocol/native/wi
 import { ThreadReadingStateProvider } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
+import {
+  Dialog,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "./ui/controls.js";
 import { ImZenXDraftContext, type ImZenXDraft } from "./imzenx-ui.js";
 import { RoomDraftContext } from "./room-drafts.js";
 import { RoomHeaderContext } from "./room-header.js";
@@ -3271,24 +3279,18 @@ function AppContent() {
     }
   };
 
-  const openSideChatDraft: NonNullable<
-    React.ContextType<typeof SideChatDraftContext>
-  > = async (input) => {
+  const createSideChatDraft = async (
+    input: { parentThreadId: string; model?: string; effort?: string },
+    roomId?: string,
+  ) => {
     const parent = input.parentThreadId;
-    const roomId = selectedRoom?.id;
-    const presentationOwner = roomId ? `room:${roomId}` : parent;
-    sidebarState.controller.beginPresentationIntent(
-      roomId ? { kind: "room", id: roomId } : parent,
-    );
-    // Capture the authoritative prefix and retain its read-only display projection.
-    // Only the prefix IDs go back to the Host when the first Send forks it.
     const { thread } = await window.zenx.protocol.request("zen/thread/read", {
       threadId: parent,
     });
     const lastItem = thread.items.at(-1);
     if (!lastItem)
       throw new Error(i18n.t("panels:newConversationUnidentified"));
-    const draft = sideChatDrafts.open(
+    return sideChatDrafts.open(
       parent,
       {
         itemId: lastItem.id,
@@ -3302,15 +3304,188 @@ function AppContent() {
         inheritedEffort: thread.reasoningEffort,
       },
     );
+  };
+
+  const revealSideChat = (
+    parent: string,
+    roomId: string | undefined,
+    tab: string,
+  ) => {
+    const owner = roomId ? `room:${roomId}` : parent;
+    const nativeOwner = roomId ? { kind: "room" as const, id: roomId } : parent;
+    sidebarState.controller.beginPresentationIntent(nativeOwner);
     if (roomId) {
-      void sidebarState.controller.edit({ kind: "room", id: roomId }, () => ({
+      void sidebarState.controller.edit(nativeOwner, () => ({
         open: true,
+        ...(tab.startsWith("thread:") ? { selectedTab: tab } : {}),
       }));
-    } else setBrowserPanels((current) => ({ ...current, [parent]: true }));
+    } else {
+      setBrowserPanels((current) => ({ ...current, [parent]: true }));
+      if (tab.startsWith("thread:"))
+        setPanelTabs((current) => ({ ...current, [parent]: tab }));
+    }
     setSideChatSelections((current) => ({
       ...current,
-      [presentationOwner]: `custom:side-chat-draft-${draft.id}`,
+      [owner]: tab.startsWith("custom:") ? tab : "",
     }));
+  };
+
+  const openSideChatDraft: NonNullable<
+    React.ContextType<typeof SideChatDraftContext>
+  > = async (input) => {
+    const roomId = selectedRoom?.id;
+    const scope = shellNavigationScope.current;
+    const draft = await createSideChatDraft(input, roomId);
+    if (shellNavigationScope.current === scope)
+      revealSideChat(
+        input.parentThreadId,
+        roomId,
+        `custom:side-chat-draft-${draft.id}`,
+      );
+  };
+
+  const [sideQuoteChoice, setSideQuoteChoice] = useState<{
+    quote: MessageQuoteReference;
+    parent: string;
+    roomId?: string;
+    scope: string;
+  } | null>(null);
+  const [composerFocus, setComposerFocus] = useState<{
+    composerId: string;
+    sequence: number;
+  }>();
+  const sideQuoteIntent = useRef(0);
+  const sideQuoteCreations = useRef(
+    new Map<string, ReturnType<typeof createSideChatDraft>>(),
+  );
+  useEffect(() => {
+    setSideQuoteChoice(null);
+    setComposerFocus(undefined);
+  }, [page, selectedThreadId, selectedRoom?.id]);
+
+  const sideQuoteTargets = (parent: string, roomId?: string) => {
+    const nativeOwner = roomId ? { kind: "room" as const, id: roomId } : parent;
+    const tabs = sidebarState.controller.get(nativeOwner)?.tabs ?? [];
+    return [
+      ...sideChatDrafts
+        .entries()
+        .filter(
+          (draft) =>
+            !draft.sending &&
+            !draft.creationUnconfirmed &&
+            (roomId
+              ? draft.roomId === roomId
+              : !draft.roomId && draft.parentThreadId === parent),
+        )
+        .map((draft, index) => ({
+          id: `custom:side-chat-draft-${draft.id}`,
+          draftId: draft.id,
+          threadId: draft.threadId,
+          title: `${i18n.t("panels:sideChat")} ${index + 1}`,
+        })),
+      ...tabs.flatMap((tab) => {
+        if (
+          tab.kind !== "thread" ||
+          tab.threadId === parent ||
+          archivedSummaries.some((summary) => summary.threadId === tab.threadId)
+        )
+          return [];
+        const summary = activeSummaries.find(
+          (entry) => entry.threadId === tab.threadId,
+        );
+        return [
+          {
+            id: `thread:${tab.threadId}`,
+            draftId: undefined,
+            threadId: tab.threadId,
+            title: summary
+              ? threadTitle(summary)
+              : i18n.t("shell:conversation"),
+          },
+        ];
+      }),
+    ];
+  };
+
+  const insertSideQuote = async (
+    request: NonNullable<typeof sideQuoteChoice>,
+    targetId?: string,
+  ) => {
+    const intent = ++sideQuoteIntent.current;
+    const { parent, roomId, quote, scope } = request;
+    let target = targetId
+      ? sideQuoteTargets(parent, roomId).find((entry) => entry.id === targetId)
+      : undefined;
+    // A closed target must not redirect silently or drop the pending quote.
+    if (targetId && !target) {
+      setSideQuoteChoice(request);
+      return;
+    }
+    if (!target) {
+      const owner = roomId ? `room:${roomId}` : parent;
+      let creation = sideQuoteCreations.current.get(owner);
+      if (!creation) {
+        creation = createSideChatDraft({ parentThreadId: parent }, roomId);
+        sideQuoteCreations.current.set(owner, creation);
+      }
+      try {
+        const draft = await creation;
+        target = {
+          id: `custom:side-chat-draft-${draft.id}`,
+          draftId: draft.id,
+          threadId: undefined,
+          title: i18n.t("panels:sideChat"),
+        };
+      } finally {
+        if (sideQuoteCreations.current.get(owner) === creation)
+          sideQuoteCreations.current.delete(owner);
+      }
+    }
+    const append = (state: ComposerState) =>
+      editComposer(state, addMessageQuote(state.draft.text, quote));
+    if (target.draftId) sideChatDrafts.updateComposer(target.draftId, append);
+    else if (target.threadId) updateComposer(target.threadId, append);
+    if (
+      shellNavigationScope.current !== scope ||
+      sideQuoteIntent.current !== intent
+    )
+      return;
+    setSideQuoteChoice(null);
+    revealSideChat(parent, roomId, target.id);
+    const composerId = target.draftId
+      ? `side-chat-draft-${target.draftId}`
+      : `side-composer-${target.threadId}`;
+    setComposerFocus((previous) => ({
+      composerId,
+      sequence: (previous?.sequence ?? 0) + 1,
+    }));
+  };
+
+  const addToSideChat = (quote: MessageQuoteReference) => {
+    const roomId = selectedRoom?.id;
+    const parent = roomId
+      ? quote.threadId
+      : (selectedThreadId ?? quote.threadId);
+    const request = {
+      parent,
+      roomId,
+      quote,
+      scope: shellNavigationScope.current,
+    };
+    const owner = roomId ? `room:${roomId}` : parent;
+    const selected =
+      sideChatSelectionsRef.current[owner] ||
+      sidebarState.controller.get(
+        roomId ? { kind: "room", id: roomId } : parent,
+      )?.selectedTab;
+    const targets = sideQuoteTargets(parent, roomId);
+    const target = chooseSideChatQuoteTarget(targets, selected ?? undefined);
+    if (!target && targets.length > 1) setSideQuoteChoice(request);
+    else
+      void insertSideQuote(request, target?.id).catch((error: unknown) => {
+        setSideQuoteChoice(request);
+        setRequestError(describeError(error));
+      });
   };
 
   const renderSideChatDraft = (id: string) => {
@@ -3570,6 +3745,8 @@ function AppContent() {
     <AppConversationProviders
       shellNavigation={shellNavigation}
       openSideChatDraft={openSideChatDraft}
+      addToSideChat={addToSideChat}
+      composerFocus={composerFocus}
       fork={forkMessage}
       source={openMessageSource}
       messageTarget={messageTargetRequest}
@@ -4460,6 +4637,47 @@ function AppContent() {
           </main>
         </RoomDraftContext.Provider>
 
+        {sideQuoteChoice &&
+        sideQuoteChoice.scope === shellNavigationScope.current ? (
+          <Dialog
+            open
+            title={i18n.t("shell:chooseSideChat")}
+            restoreFocus={() => false}
+            onOpenChange={(open) => {
+              if (!open) setSideQuoteChoice(null);
+            }}
+          >
+            <div className="side-chat-quote-chooser">
+              <h2>{i18n.t("shell:chooseSideChat")}</h2>
+              {sideQuoteTargets(
+                sideQuoteChoice.parent,
+                sideQuoteChoice.roomId,
+              ).map((target) => (
+                <button
+                  type="button"
+                  key={target.id}
+                  onClick={() => {
+                    void insertSideQuote(sideQuoteChoice, target.id).catch(
+                      (error: unknown) => setRequestError(describeError(error)),
+                    );
+                  }}
+                >
+                  {target.title}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  void insertSideQuote(sideQuoteChoice).catch(
+                    (error: unknown) => setRequestError(describeError(error)),
+                  );
+                }}
+              >
+                {i18n.t("shell:newSideChat")}
+              </button>
+            </div>
+          </Dialog>
+        ) : null}
         {remoteMessageSource && (
           <RemoteMessageSourceDialog
             value={remoteMessageSource}

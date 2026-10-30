@@ -1,3 +1,4 @@
+import { QuoteClipboardVisual } from "./quote-clipboard-visual.js";
 import React, { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorView } from "@codemirror/view";
@@ -145,8 +146,13 @@ export function appendSyntheticSent(
     status: "completed",
   });
 }
-const initial =
-  unified || params.has("empty")
+const initial = params.has("legacy-quote")
+  ? appendSyntheticSent(
+      base,
+      `[Message quote; thread ID: "synthetic-thread-id"; message ID: "synthetic-message-id"; excerpt: ${JSON.stringify('第一行：这是合成选段。\n第二行：保留真实换行与 "引号"。\n\n最后一行。')}]请说明这段话。`,
+      "synthetic-legacy",
+    )
+  : unified || params.has("empty")
     ? base
     : appendSyntheticSent(
         base,
@@ -531,4 +537,6 @@ function Fixture() {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<Fixture />);
+createRoot(document.getElementById("root")!).render(
+  params.has("clipboard") ? <QuoteClipboardVisual /> : <Fixture />,
+);
