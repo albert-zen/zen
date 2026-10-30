@@ -1,3 +1,4 @@
+import type { CapabilityObjectBinding } from "./model.js";
 import type { ModelEvent, ProviderToolPresentation } from "./model.js";
 import { compileItemList } from "./item-list.js";
 import {
@@ -1955,6 +1956,7 @@ export class AgentRuntime {
       name: string;
       description: string;
       pluginId?: string;
+      objectBinding?: CapabilityObjectBinding;
       fullDescription?: string;
       inputSchema?: Record<string, unknown>;
     }[],
@@ -2163,6 +2165,7 @@ interface ScheduledToolCapability {
     name: string;
     description: string;
     pluginId?: string;
+    objectBinding?: CapabilityObjectBinding;
     fullDescription?: string;
     inputSchema?: Record<string, unknown>;
   }[];

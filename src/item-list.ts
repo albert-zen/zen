@@ -435,6 +435,7 @@ export function decodeContextItem(value: unknown): ContextItem {
             "rawSource",
             "pluginId",
             "fullDescription",
+            "objectBinding",
           ],
           "tool",
         );
@@ -444,6 +445,37 @@ export function decodeContextItem(value: unknown): ContextItem {
         if (tool.pluginId !== undefined) string(tool.pluginId, "tool.pluginId");
         if (tool.fullDescription !== undefined)
           string(tool.fullDescription, "tool.fullDescription");
+        if (tool.objectBinding !== undefined) {
+          const binding = record(tool.objectBinding, "tool.objectBinding");
+          keys(
+            binding,
+            ["kind", "provider", "path", "reference"],
+            "tool.objectBinding",
+          );
+          if (binding.kind !== "browser" && binding.kind !== "computer")
+            throw new Error("Invalid objectBinding kind");
+          string(binding.provider, "objectBinding.provider", false);
+          const segment = (value: unknown): void => {
+            if (
+              typeof value !== "string" ||
+              !/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(value) ||
+              ["__proto__", "prototype", "constructor", "then"].includes(value)
+            )
+              throw new Error("Invalid objectBinding path/reference segment");
+          };
+          if (!Array.isArray(binding.path) || binding.path.length === 0)
+            throw new Error("Invalid objectBinding path");
+          binding.path.forEach(segment);
+          if (binding.reference !== undefined) {
+            const reference = record(
+              binding.reference,
+              "objectBinding.reference",
+            );
+            keys(reference, ["kind", "argument"], "objectBinding.reference");
+            segment(reference.kind);
+            segment(reference.argument);
+          }
+        }
         if (tool.rawSource !== undefined) {
           const raw = record(tool.rawSource, "rawSource");
           keys(raw, ["language", "argument"], "rawSource");

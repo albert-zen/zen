@@ -2,6 +2,8 @@
 
 ## ItemList / Trace / current product state contract
 
+- **Programmable capability objects** — Fresh `run_code` programs construct disposable Browser/Computer facades from the frozen eligible tool descriptors; each method invokes the same admitted operation as its standalone tool, with existing short-reference resolution, authorization, routing and nested Trace, while providers own tab/app/window/event state and only explicit selected outputs enter model context. Provider extensions are declared capabilities, not emulated common-denominator methods or a second execution-state domain.
+
 - **Hosted tool discovery semantics** — Completed provider-hosted discovery items are immutable model-semantic content in ItemList, compiled in observed call/output order with endpoint-scoped native replay payloads; they never grant local execution authority, and compaction selects them like other historical content. The frozen adapter’s pure tool presentation is committed with the semantic catalog before compilation, including native search presence and namespace descriptions; transport serializes that exact descriptor, while context estimates count eager declarations rather than deferred documentation.
 - **Raw tool file receipts** — Model projections expose the existing same-Host Trace JSON/text artifact path and bounded preview for shell/file inspection, not a dedicated model Trace reader; capture and source truncation facts stay explicit, and remote bytes not received by this Host are never claimed as retained.
 

@@ -416,3 +416,29 @@ test("runtime admission identity changes on same-version profile replacement, ne
     replaced.admissionId,
   );
 });
+
+test("capability objects use the exact exposed Computer provider and retire with its catalog", async () => {
+  let state: ZenXPluginCatalogState = {
+    disabled: [],
+    uninstalled: [],
+    packages: {},
+  };
+  const catalog = new ZenXPluginCatalog({
+    load: async () => structuredClone(state),
+    save: async (value) => {
+      state = structuredClone(value);
+    },
+  });
+  await catalog.initialize();
+  const computer = manifest("computer", "computer_inspect");
+  computer.provider.id = "synthetic-native-provider";
+  await catalog.install(plugin(computer), "local");
+  assert.deepEqual(catalog.hostSnapshot().definitions[0]?.objectBinding, {
+    kind: "computer",
+    provider: "synthetic-native-provider",
+    path: ["inspect"],
+    reference: { kind: "window", argument: "target" },
+  });
+  await catalog.setEnabled("computer", false);
+  assert.deepEqual(catalog.hostSnapshot().definitions, []);
+});

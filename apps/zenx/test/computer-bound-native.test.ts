@@ -46,6 +46,7 @@ enum WindowListOption { case optionOnScreenOnly, excludeDesktopElements }
 func fixtureWindowList(_ options: CGWindowListOption, _ id: CGWindowID) -> Any? {
   var row: [String: Any] = ["owner": NSNumber(value: 42), "number": NSNumber(value: 17), "layer": NSNumber(value: 0), "onscreen": true, "title": "Fixture", "bounds": ["X": -100.0, "Y": 20.0, "Width": fixtureOperation != "select" && mode == "resize" ? 401.0 : 400.0, "Height": 200.0]]
   if mode == "active-no-cg-title" || mode == "locked-no-cg-title" { row.removeValue(forKey: "title") }
+  if fixtureOperation != "select" && mode == "ax-late-wrong-cg" { row["number"] = NSNumber(value: 18) }
   if mode == "geometry-ambiguous" { var other = row; other["number"] = NSNumber(value: 18); return [row, other] }
   return [row]
 }
@@ -86,7 +87,9 @@ func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
   return nil
 }
 func windows(_ app: AXUIElement) -> [AXUIElement] {
-  if mode == "locked-no-cg-title" { return [] }
+  if mode == "locked-no-cg-title" || mode == "ax-still-missing" { return [] }
+  if mode.hasPrefix("ax-late") && fixtureOperation == "select" { return [] }
+  if mode == "ax-late-ambiguous" { return [original, replacement] }
   if mode == "same-title-ambiguous" { return [original, replacement] }
   if fixtureOperation != "select" && mode == "closed" { return [] }
   if fixtureOperation != "select" && mode == "reused-id" { return [replacement] }
@@ -232,6 +235,10 @@ test(
     assert.equal(compilation.status, 0, compilation.stderr);
     for (const mode of [
       "normal",
+      "ax-late",
+      "ax-still-missing",
+      "ax-late-ambiguous",
+      "ax-late-wrong-cg",
       "missing-launch-date",
       "active-no-cg-title",
       "no-bundle",
@@ -283,6 +290,12 @@ test(
         return JSON.parse(line.value!) as {
           result?: {
             bindingId: string;
+            foregroundWindowInputAvailable?: boolean;
+            inputCapabilities?: {
+              availabilityIsSnapshot: boolean;
+              foregroundWindow: { available: boolean; scope: string };
+              applicationKeyboard: { available: boolean; scope: string };
+            };
             target?: { pid: number; bundleId?: string };
           };
           error?: string;
@@ -310,6 +323,28 @@ test(
           continue;
         }
         assert.ok(selected.result?.bindingId, JSON.stringify(selected));
+        assert.equal(
+          selected.result.inputCapabilities?.availabilityIsSnapshot,
+          true,
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.foregroundWindow.scope,
+          "exact_window",
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.applicationKeyboard.scope,
+          "application_current_focus",
+        );
+        assert.equal(
+          selected.result.inputCapabilities?.applicationKeyboard.available,
+          true,
+        );
+        const initialAX = !mode.startsWith("ax-");
+        assert.equal(selected.result.foregroundWindowInputAvailable, initialAX);
+        assert.equal(
+          selected.result.inputCapabilities?.foregroundWindow.available,
+          initialAX,
+        );
         if (mode === "no-bundle") {
           assert.equal(selected.result.target?.pid, 42);
           assert.equal(
@@ -363,6 +398,7 @@ test(
         if (
           [
             "normal",
+            "ax-late",
             "missing-launch-date",
             "active-no-cg-title",
             "no-bundle",
@@ -410,6 +446,7 @@ test(
                 ? 2
                 : [
                       "normal",
+                      "ax-late",
                       "missing-launch-date",
                       "active-no-cg-title",
                       "no-bundle",
@@ -444,3 +481,29 @@ test(
     }
   },
 );
+
+test("missing AX reacquisition stays exact-window and precedes any foreground takeover", () => {
+  const start = MAC_BOUND_TARGET_SOURCE.indexOf(
+    "func acquireMissingAXWindow()",
+  );
+  const end = MAC_BOUND_TARGET_SOURCE.indexOf("func activate()", start);
+  assert.ok(start > 0 && end > start);
+  const acquire = MAC_BOUND_TARGET_SOURCE.slice(start, end);
+  assert.match(acquire, /guard window == nil else/);
+  assert.match(
+    acquire,
+    /AXUIElementCreateApplication\(app.processIdentifier\)/,
+  );
+  assert.match(acquire, /candidates.count == 1/);
+  assert.match(acquire, /kAXTitleAttribute[^\n]+== title/);
+  assert.match(acquire, /frame\(candidate\) == bounds/);
+  assert.match(acquire, /mapped.count == 1[^\n]+== windowId/);
+  assert.doesNotMatch(
+    acquire,
+    /kAXFocusedWindowAttribute|kAXMainWindowAttribute|app.activate|postToPid/,
+  );
+  assert.match(
+    MAC_BOUND_TARGET_SOURCE.slice(end),
+    /func activate\(\) throws \{\s*try acquireMissingAXWindow\(\)\s*try verify\(\)/,
+  );
+});

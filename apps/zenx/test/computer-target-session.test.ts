@@ -906,3 +906,54 @@ test("verified WindowServer capture uses the same owner/capture one-shot authori
     1,
   );
 });
+
+test("selection-time mode availability is disclosed without forbidding fresh native AX reacquisition", async () => {
+  const { session, transport, calls } = fixture();
+  const original = transport.request;
+  const inputCapabilities = {
+    availabilityIsSnapshot: true as const,
+    foregroundWindow: {
+      available: false,
+      scope: "exact_window" as const,
+      requires: "matched_ax_window" as const,
+    },
+    backgroundWindow: {
+      available: true,
+      scope: "exact_window" as const,
+      requires: "fresh_native_capture" as const,
+    },
+    applicationKeyboard: {
+      available: true,
+      scope: "application_current_focus" as const,
+    },
+  };
+  transport.request = async (...args) => {
+    const value = await original(...args);
+    return args[0].operation === "select"
+      ? {
+          ...(value as object),
+          foregroundWindowInputAvailable: false,
+          inputCapabilities,
+        }
+      : value;
+  };
+  const selected = await session.select("owner", { pid: 7 }, signal);
+  assert.deepEqual(selected.inputCapabilities, inputCapabilities);
+  assert.equal(selected.foregroundWindowInputAvailable, false);
+  // The native helper owns same-window AX reacquisition and final refusal. A
+  // stale selection snapshot is neither a permanent denial nor permission.
+  await session.input(
+    "owner",
+    { operation: "key", key: "enter" },
+    signal,
+    undefined,
+    selected.bindingId,
+  );
+  assert.equal(calls.at(-1)?.operation, "key");
+  assert.equal(calls.at(-1)?.bindingId, selected.bindingId);
+  assert.equal(calls.filter((call) => call.operation === "select").length, 1);
+  assert.equal(
+    calls.some((call) => call.operation === "backgroundKeyPress"),
+    false,
+  );
+});

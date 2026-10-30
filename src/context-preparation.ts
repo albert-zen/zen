@@ -107,6 +107,9 @@ export function prepareSampleContext(options: {
       filePermissionContext(options.sandbox),
     );
   const tools = options.tools.map((tool) => ({
+    ...(tool.objectBinding === undefined
+      ? {}
+      : { objectBinding: structuredClone(tool.objectBinding) }),
     name: tool.name,
     description: tool.description,
     ...(tool.pluginId === undefined ? {} : { pluginId: tool.pluginId }),

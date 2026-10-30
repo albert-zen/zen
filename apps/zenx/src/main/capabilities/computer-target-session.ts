@@ -7,6 +7,26 @@ export interface BoundComputerTarget {
   windowLocalInputAvailable?: true;
   exactWindowCaptureAvailable?: true;
   appKeyboardInputAvailable?: true;
+  /** Selection-time AX readiness, not a permission or an input-effect guarantee. */
+  foregroundWindowInputAvailable?: boolean;
+  /** Native routes are independently revalidated at dispatch; no implicit fallback. */
+  inputCapabilities?: {
+    availabilityIsSnapshot: true;
+    foregroundWindow: {
+      available: boolean;
+      scope: "exact_window";
+      requires: "matched_ax_window";
+    };
+    backgroundWindow: {
+      available: boolean;
+      scope: "exact_window";
+      requires: "fresh_native_capture";
+    };
+    applicationKeyboard: {
+      available: boolean;
+      scope: "application_current_focus";
+    };
+  };
   target: {
     pid: number;
     applicationName: string;

@@ -1,3 +1,4 @@
+import type { CapabilityObjectBinding } from "./model.js";
 import { statSync } from "node:fs";
 import { MessageChannel, type MessagePort, Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,7 @@ export interface CodeExecutionOptions {
   nested: NestedToolInvocationPort;
   tools?: readonly {
     name: string;
+    objectBinding?: CapabilityObjectBinding;
     description: string;
     pluginId?: string;
     fullDescription?: string;

@@ -4239,8 +4239,8 @@ func processBirth(_ pid: pid_t) throws -> ProcessBirth {
 final class Binding {
   let id = UUID().uuidString
   let app: NSRunningApplication
-  let appElement: AXUIElement
-  let window: AXUIElement?
+  var appElement: AXUIElement
+  var window: AXUIElement?
   let launch: Date?
   let birth: ProcessBirth
   let bounds: CGRect
@@ -4311,7 +4311,27 @@ final class Binding {
           let focused = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
     return CFEqual(focused, window)
   }
+  // A CG-only selection can acquire AX later, but never adopts the app's
+  // current/main window. The original CG identity, title and geometry remain
+  // the authority. An already-bound AX object still has strict verify semantics.
+  func acquireMissingAXWindow() throws {
+    guard window == nil else { return }
+    try verify()
+    guard try !lockedSession() else { try refuse("Foreground input requires an active console session") }
+    let freshApp = AXUIElementCreateApplication(app.processIdentifier)
+    let candidates = windows(freshApp).filter { candidate in
+      attribute(candidate, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String &&
+      attribute(candidate, kAXTitleAttribute as CFString) as? String == title && frame(candidate) == bounds
+    }
+    guard candidates.count == 1, let candidate = candidates.first else { try refuse("Selected window AX identity is still unavailable or ambiguous; no foreground takeover") }
+    let mapped = ownedRows(app).filter { liveWindow($0) && windowBounds($0) == bounds }
+    guard mapped.count == 1, (mapped[0][kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else { try refuse("Fresh AX mapping does not identify the selected CG window") }
+    appElement = freshApp
+    window = candidate
+    try verify()
+  }
   func activate() throws {
+    try acquireMissingAXWindow()
     try verify()
     guard let window, windows(appElement).contains(where: { CFEqual($0, window) }), frame(window) == bounds else { try refuse("Selected window AX identity unavailable for foreground input") }
     guard app.activate(options: [.activateIgnoringOtherApps]) else { try refuse("Could not activate selected application") }
@@ -4329,7 +4349,13 @@ final class Binding {
     if #available(macOS 14.0, *) { captureAvailable = true; available = windowLocationSetter != nil }
     var target: [String: Any] = ["pid": Int(app.processIdentifier), "applicationName": app.localizedName ?? "", "windowTitle": title]
     if let bundle = app.bundleIdentifier, !bundle.isEmpty { target["bundleId"] = bundle }
-    return ["bindingId": id, "windowId": windowId, "windowLocalInputAvailable": available, "exactWindowCaptureAvailable": captureAvailable, "appKeyboardInputAvailable": true,
+    return ["bindingId": id, "windowId": windowId, "windowLocalInputAvailable": available, "exactWindowCaptureAvailable": captureAvailable, "appKeyboardInputAvailable": true, "foregroundWindowInputAvailable": window != nil,
+      "inputCapabilities": [
+        "availabilityIsSnapshot": true,
+        "foregroundWindow": ["available": window != nil, "scope": "exact_window", "requires": "matched_ax_window"] as [String: Any],
+        "backgroundWindow": ["available": available, "scope": "exact_window", "requires": "fresh_native_capture"] as [String: Any],
+        "applicationKeyboard": ["available": true, "scope": "application_current_focus"] as [String: Any]
+      ],
       "target": target,
       "bounds": ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]]
   }

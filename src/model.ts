@@ -180,7 +180,18 @@ export interface ModelRequest {
   assertDispatchAllowed?: () => void;
 }
 
+/** Declarative run_code facade over the exact same admitted tool operation. */
+export interface CapabilityObjectBinding {
+  kind: "browser" | "computer";
+  provider: string;
+  /** Method path; provider-specific surfaces use extensions.<provider>.<method>. */
+  path: readonly string[];
+  /** Bind a short model reference; resolution and freshness remain Host-owned. */
+  reference?: { kind: string; argument: string };
+}
+
 export interface ModelTool {
+  objectBinding?: CapabilityObjectBinding;
   /** Catalog membership for lazy provider discovery; never an authorization grant. */
   pluginId?: string;
   /** Full usage detail retained for selective discovery, not eager declarations. */
