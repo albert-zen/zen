@@ -4262,7 +4262,17 @@ func pointerWindow(_ point: CGPoint, _ windowId: Int, _ appElement: AXUIElement,
           let width = raw["Width"] as? Double, let height = raw["Height"] as? Double,
           x.isFinite, y.isFinite, width.isFinite, height.isFinite, width >= 0, height >= 0 else { try refuse("Pointer occlusion geometry is unavailable") }
     if !CGRect(x: x, y: y, width: width, height: height).contains(point) { continue }
-    guard (item[kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else { try refuse("Selected window is occluded at the input point") }
+    guard (item[kCGWindowNumber as String] as? NSNumber)?.intValue == windowId else {
+      // Report only the first actual containing row already used by this fence.
+      // No app/window titles, screenshots, full window list, or extra discovery.
+      let occluderId = (item[kCGWindowNumber as String] as? NSNumber)?.intValue ?? -1
+      let occluderPID = (item[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? -1
+      let occluderLayer = (item[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+      try refuse("Selected window is occluded at the input point (selectedWindowId=" + String(windowId)
+        + ", occluderWindowId=" + String(occluderId) + ", occluderPID=" + String(occluderPID)
+        + ", occluderLayer=" + String(occluderLayer) + ", point=" + String(Double(point.x)) + "," + String(Double(point.y))
+        + ", occluderBounds=" + String(x) + "," + String(y) + "," + String(width) + "," + String(height) + ")")
+    }
     matched = true
     break
   }

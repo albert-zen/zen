@@ -61,7 +61,7 @@ func fixtureWindowList(_ options: [WindowListOption], _ id: CGWindowID) -> Any? 
     return [edge, window]
   }
   if mode == "pointer-overlay" || mode == "pointer-transparent-overlay" || mode == "scroll-overlay" || (mode == "pointer-late-overlay" && posted >= 2) {
-    var overlay = window; overlay["number"] = NSNumber(value: 18)
+    var overlay = window; overlay["number"] = NSNumber(value: 18); overlay["owner"] = NSNumber(value: 43); overlay["layer"] = NSNumber(value: 0); overlay["title"] = "Private overlay title"
     if mode == "pointer-transparent-overlay" { overlay["alpha"] = 0.0 }
     return [overlay, window]
   }
@@ -423,6 +423,20 @@ test(
           pointerPassthroughWindowIds: mode.includes("edge") ? [19] : [],
         });
         if (
+          mode === "pointer-overlay" ||
+          mode === "pointer-transparent-overlay"
+        ) {
+          assert.match(
+            result.error!,
+            /selectedWindowId=17, occluderWindowId=18, occluderPID=43, occluderLayer=0/,
+          );
+          assert.match(
+            result.error!,
+            /point=20.0,40.0, occluderBounds=-100.0,20.0,400.0,200.0/,
+          );
+          assert.doesNotMatch(result.error!, /Private overlay title/);
+        }
+        if (
           [
             "normal",
             "activation-deferred",
@@ -583,5 +597,31 @@ test("missing AX reacquisition stays exact-window and precedes any foreground ta
   assert.match(
     MAC_BOUND_TARGET_SOURCE.slice(end),
     /func activate\(\) throws \{\s*guard targetCancelled == 0[^\n]*\s*try acquireMissingAXWindow\(\)\s*try verify\(\)/,
+  );
+});
+
+test("occlusion refusal identifies only the first blocker without relaxing its fence", () => {
+  const start = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
+  const end = MAC_BOUND_TARGET_SOURCE.indexOf("func ownedRows(", start);
+  const pointer = MAC_BOUND_TARGET_SOURCE.slice(start, end);
+  assert.match(
+    pointer,
+    /guard \(item\[kCGWindowNumber as String\] as\? NSNumber\)\?\.intValue == windowId else/,
+  );
+  assert.match(pointer, /occluderWindowId=/);
+  assert.match(pointer, /occluderPID=/);
+  assert.match(pointer, /occluderLayer=/);
+  assert.match(pointer, /occluderBounds=/);
+  assert.doesNotMatch(
+    pointer,
+    /kCGWindowName|kCGWindowOwnerName|RunLoop|usleep/,
+  );
+  assert.ok(
+    pointer.indexOf('try refuse("Selected window is occluded') <
+      pointer.indexOf("matched = true"),
+  );
+  assert.ok(
+    pointer.indexOf('try refuse("Selected window is occluded') <
+      pointer.indexOf("AXUIElementCopyElementAtPosition"),
   );
 });
