@@ -134,3 +134,32 @@ test("owned acquisition starts from fresh observed distractor focus and ends at 
     /for \(const close of fixtureClosers\.reverse\(\)\) await close\(\)/,
   );
 });
+
+test("occluder identity diagnostic is exact-PID read-only and excludes private paths", () => {
+  const fixture = readFileSync(
+    new URL(
+      "../evals/browser-computer/macos-native-fixture.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const start = fixture.indexOf('if let rawPID = argument("--inspect-pid")');
+  const end = fixture.indexOf(
+    'report(["kind": "owned-receiver-starting"',
+    start,
+  );
+  const diagnostic = fixture.slice(start, end);
+  assert.ok(start > 0 && end > start);
+  assert.match(diagnostic, /NSRunningApplication\(processIdentifier: pid\)/);
+  assert.match(diagnostic, /lastPathComponent/);
+  assert.doesNotMatch(
+    diagnostic,
+    /runningApplications|localizedName|NSApplication\.shared|activate\(|terminate\(|CGWindowList|AXUIElement/,
+  );
+  assert.doesNotMatch(
+    diagnostic,
+    /identity\["(?:path|executableURL|bundleURL)"\]/,
+  );
+  assert.match(diagnostic, /later_exact_pid_read_not_lifetime_binding/);
+  assert.ok(end < fixture.indexOf("let application = NSApplication.shared"));
+});

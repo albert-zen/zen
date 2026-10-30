@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 func argument(_ name: String) -> String? {
   guard let index = CommandLine.arguments.firstIndex(of: name), index + 1 < CommandLine.arguments.count else { return nil }
@@ -15,6 +16,25 @@ let eventOutput: FileHandle = {
 func report(_ value: [String: Any]) {
   guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
   eventOutput.write(data); eventOutput.write(Data([10]))
+}
+// Failure-only identity inspection of one PID named by the production fence.
+// This branch creates no NSApplication/window and performs no activation/input.
+if let rawPID = argument("--inspect-pid") {
+  guard let pid = Int32(rawPID), pid > 0 else { exit(2) }
+  var identity: [String: Any] = ["kind": "owned-occluder-identity", "pid": Int(pid),
+    "observation": "later_exact_pid_read_not_lifetime_binding"]
+  let app = NSRunningApplication(processIdentifier: pid)
+  // A window owner need not be an AppKit application. Read the same PID's
+  // executable via libproc when NSRunningApplication cannot identify it.
+  var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
+  let pathSize = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+  let path = app?.executableURL?.path ?? (pathSize > 0 ? String(cString: buffer) : "")
+  identity["available"] = !path.isEmpty || app != nil
+  identity["bundleId"] = app?.bundleIdentifier.map { $0 as Any } ?? NSNull()
+  identity["executable"] = path.isEmpty ? NSNull() : URL(fileURLWithPath: path).lastPathComponent as Any
+  identity["locationClass"] = path.hasPrefix("/System/") ? "system" : path.hasPrefix("/Applications/") ? "applications" : "other_or_unavailable"
+  report(identity)
+  exit(0)
 }
 report(["kind": "owned-receiver-starting", "pid": Int(getpid()), "bundlePath": Bundle.main.bundlePath])
 

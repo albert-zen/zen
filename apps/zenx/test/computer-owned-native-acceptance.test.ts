@@ -353,6 +353,29 @@ test(
       );
     } catch (error) {
       evidence.failure = String(error);
+      // Identify only the exact PID already reported by the failed CG fence.
+      // Diagnostic failure cannot replace the original refusal or trigger input.
+      const occluderPID = /occluderPID=(\d+),/.exec(String(error))?.[1];
+      if (
+        occluderPID &&
+        Number(occluderPID) > 0 &&
+        Number(occluderPID) <= 2_147_483_647
+      ) {
+        try {
+          const identity = JSON.parse(
+            await runProcess(receiver, ["--inspect-pid", occluderPID], 5_000),
+          );
+          assert.equal(identity.kind, "owned-occluder-identity");
+          assert.equal(identity.pid, Number(occluderPID));
+          evidence.occluderIdentity = identity;
+        } catch {
+          evidence.occluderIdentity = {
+            pid: Number(occluderPID),
+            available: false,
+            reason: "exact_pid_identity_inspection_failed",
+          };
+        }
+      }
       throw error;
     }
     const delivered = await waitFor("owned-drag-received");
