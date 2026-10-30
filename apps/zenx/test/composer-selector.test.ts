@@ -77,3 +77,18 @@ test("reference draft round trips punctuation and projects message/title separat
   assert.equal(selectorTrigger("@src/renderer", 13)?.query, "src/renderer");
   assert.equal(selectorTrigger("@src\\renderer", 13)?.query, "src\\renderer");
 });
+
+test("copying a quote keeps exact human text and real line breaks, never transport IDs", () => {
+  const excerpt = '  第一行\n\t"second"  ';
+  assert.equal(
+    referenceText({
+      kind: "message",
+      name: "ZenX",
+      cwd: "/synthetic",
+      threadId: "synthetic-thread",
+      id: "synthetic-message",
+      excerpt,
+    }),
+    excerpt,
+  );
+});

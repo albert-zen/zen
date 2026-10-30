@@ -1,3 +1,8 @@
+import {
+  browserExtensionsFixturePath,
+  browserExtensionsFixtureBody,
+  verifyBrowserExtensions,
+} from "./browser-extensions-smoke.js";
 /**
  * Real headed, disposable-profile fixture. Never attach to a personal profile.
  * Run: node --import tsx apps/zenx/src/main/browser-parallel-input-smoke.ts
@@ -247,7 +252,7 @@ function page(kind: "user" | "agent"): string {
   return `<!doctype html><meta charset="utf-8"><title>${agent ? agentTitle : userTitle}</title>
 <style>body{margin:0;background:#f6f8fc;font:18px system-ui}input{position:absolute;left:20px;top:120px;width:250px;height:40px;font:18px system-ui}canvas{position:absolute;left:20px;top:20px;background:#acf}button{position:absolute;left:300px;top:125px}</style>
 ${agent ? '<canvas id="agent-canvas" width="200" height="60" tabindex="0"></canvas><form id="form"><input id="agent-input" aria-label="Agent input"><button>Submit</button></form>' : '<input id="user-input" aria-label="User input" autocomplete="off">'}
-<script>
+<script>window.__zenProgrammableSmoke=42;
 window.fixture={clicks:0,submissions:[],trustedKeys:0,visibilityEvents:[],focusEvents:[]};
 document.addEventListener('keydown',e=>{if(e.isTrusted)fixture.trustedKeys++});
 document.addEventListener('visibilitychange',()=>fixture.visibilityEvents.push(document.visibilityState));
@@ -938,6 +943,12 @@ async function main(): Promise<void> {
     userRpc: Rpc | undefined,
     agentRpc: Rpc | undefined;
   const server = createServer((request, response) => {
+    if (request.url?.startsWith(browserExtensionsFixturePath)) {
+      response.setHeader("content-type", "application/json");
+      response.setHeader("cache-control", "no-store");
+      response.end(browserExtensionsFixtureBody);
+      return;
+    }
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
     if (request.url?.startsWith("/input-contract")) {
@@ -1116,6 +1127,15 @@ async function main(): Promise<void> {
         throw error;
       }
     }, "initial Agent document lifecycle");
+    phase = "programmable-extensions";
+    reports.push(
+      await verifyBrowserExtensions(
+        connection.backend,
+        sessionId,
+        opened.tabId,
+        origin,
+      ),
+    );
     phase = "startup-target-window-check";
     const userWindow = await browserRpc.send("Browser.getWindowForTarget", {
       targetId: user.id,

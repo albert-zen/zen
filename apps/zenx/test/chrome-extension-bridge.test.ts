@@ -294,6 +294,8 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
             },
           };
         }
+      } else if (method === "Network.getResponseBody") {
+        result = { body: "synthetic response", base64Encoded: false };
       } else if (method === "Page.captureScreenshot") {
         // chrome.debugger rejects view captures; real attached Chrome requires
         // a compositor-surface capture, bounded to the viewport.
@@ -433,6 +435,59 @@ test("Chrome bridge routes authenticated CDP across the connected browser", asyn
         ),
         false,
       );
+      await connection.backend.extension!(
+        "thread-1",
+        "chrome-tab-42",
+        "network_start",
+        {},
+      );
+      await connection.backend.extension!(
+        "thread-1",
+        "chrome-tab-42",
+        "console_start",
+        {},
+      );
+      for (const [method, params] of [
+        [
+          "Network.responseReceived",
+          {
+            requestId: "fixture-request",
+            response: { status: 200, url: "https://example.test/fixture" },
+          },
+        ],
+        [
+          "Runtime.consoleAPICalled",
+          { type: "log", args: [{ value: "synthetic console" }] },
+        ],
+      ] as const)
+        native.send(
+          JSON.stringify({ type: "cdp-event", tabId: 42, method, params }),
+        );
+      const network = (await connection.backend.extension!(
+        "thread-1",
+        "chrome-tab-42",
+        "network_read",
+        {},
+      )) as { events: unknown[] };
+      assert.equal(network.events.length, 1);
+      const consoleEvents = (await connection.backend.extension!(
+        "thread-1",
+        "chrome-tab-42",
+        "console_read",
+        {},
+      )) as { events: unknown[] };
+      assert.equal(consoleEvents.events.length, 1);
+      assert.deepEqual(
+        await connection.backend.extension!(
+          "thread-1",
+          "chrome-tab-42",
+          "network_response",
+          { requestId: "fixture-request" },
+        ),
+        { body: "synthetic response", base64Encoded: false },
+      );
+      assert.ok(forwardedMethods.includes("Network.enable"));
+      assert.ok(forwardedMethods.includes("Network.getResponseBody"));
       native.send(
         JSON.stringify({
           type: "cdp-event",

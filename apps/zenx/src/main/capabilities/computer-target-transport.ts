@@ -21,6 +21,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
     onStopping?: () => void;
     expectsInputReceipt: boolean;
     background: boolean;
+    drag: boolean;
+    dragSettled: boolean;
     backgroundSettled: boolean;
     pairStarted: boolean;
   };
@@ -29,6 +31,7 @@ export class NativeComputerTargetTransport implements TargetTransport {
   #failure?: Error;
   #grace?: NodeJS.Timeout;
   #backgroundUnsafe = false;
+  #dragUnsafe = false;
   #exit: Promise<void> = Promise.resolve();
   constructor(
     readonly executable: () => Promise<string>,
@@ -60,6 +63,10 @@ export class NativeComputerTargetTransport implements TargetTransport {
       throw new Error(
         "Background input release is unknown; replace this provider before further background input; no input dispatched",
       );
+    if (request.operation === "drag" && this.#dragUnsafe)
+      throw new Error(
+        "Foreground drag release is unknown; replace this provider before further drag; no input dispatched",
+      );
     if (this.#closed) throw new Error("Computer target session is closed");
     if (this.#terminating) {
       if (request.operation !== "select")
@@ -90,6 +97,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
         reject,
         onStopping,
         background: isBackgroundOperation(request.operation),
+        drag: request.operation === "drag",
+        dragSettled: false,
         backgroundSettled: false,
         pairStarted: false,
         expectsInputReceipt: !["select", "verify", "capture"].includes(
@@ -144,6 +153,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
         this.#grace = undefined;
         if (this.#pending?.background && !this.#pending.backgroundSettled)
           this.#backgroundUnsafe = true;
+        if (this.#pending?.drag && !this.#pending.dragSettled)
+          this.#dragUnsafe = true;
         this.#child = undefined;
         this.#pending?.reject(
           this.#failure ??
@@ -166,7 +177,12 @@ export class NativeComputerTargetTransport implements TargetTransport {
     });
     child.stdout.on("data", (chunk) => {
       // A late receipt cannot settle cancellation before the owned child closes.
-      if (this.#terminating && !this.#pending?.background) return;
+      if (
+        this.#terminating &&
+        !this.#pending?.background &&
+        !this.#pending?.drag
+      )
+        return;
       this.#buffer += String(chunk);
       if (this.#buffer.length > 65536)
         return fail(new Error("Native target response exceeded bound"));
@@ -212,6 +228,15 @@ export class NativeComputerTargetTransport implements TargetTransport {
             pending.backgroundSettled = true;
             continue;
           }
+          if (
+            pending.drag &&
+            response?.phase === "foregroundDragSettled" &&
+            !pending.dragSettled &&
+            ["posted", "not_needed"].includes(response.release ?? "")
+          ) {
+            pending.dragSettled = true;
+            continue;
+          }
           if (response?.phase !== undefined)
             throw new Error("Invalid native target phase");
           if (
@@ -225,6 +250,8 @@ export class NativeComputerTargetTransport implements TargetTransport {
               : !("result" in response))
           )
             throw new Error("Invalid native target response");
+          if (pending.drag && !pending.dragSettled)
+            throw new Error("Native drag response lacks release settlement");
           if (pending.background && !pending.backgroundSettled)
             throw new Error(
               "Native background response lacks release settlement",
@@ -233,6 +260,9 @@ export class NativeComputerTargetTransport implements TargetTransport {
             !response.error &&
             pending.expectsInputReceipt &&
             (!isPostedComputerInputReceipt(response.result) ||
+              (pending.drag &&
+                (response.result as { release?: unknown })?.release !==
+                  "posted") ||
               (pending.background &&
                 (!pending.backgroundSettled ||
                   (response.result as { release?: unknown })?.release !==
@@ -289,12 +319,13 @@ export class NativeComputerTargetTransport implements TargetTransport {
     // A signal request is not a close receipt. Failed kill/throw/error retains
     // the same pending owner; late replies cannot settle it or trigger replay.
     try {
-      if (this.#pending?.background) {
-        // Native SIGTERM only sets a cancellation flag. Its synchronous pair's
-        // defer posts the prebuilt up, then best-effort deactivation before exit.
+      if (this.#pending?.background || this.#pending?.drag) {
+        // Native SIGTERM only sets a cancellation flag. The owned input path
+        // attempts its release before exit; cancellation waits for actual close.
         child.kill("SIGTERM");
         this.#grace = setTimeout(() => {
-          this.#backgroundUnsafe = true;
+          if (this.#pending?.background) this.#backgroundUnsafe = true;
+          if (this.#pending?.drag) this.#dragUnsafe = true;
           try {
             child.kill("SIGKILL");
           } catch {

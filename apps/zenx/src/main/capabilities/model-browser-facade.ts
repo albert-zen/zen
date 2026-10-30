@@ -1,3 +1,4 @@
+import { browserDiagnosticEventSummary } from "./browser-extensions.js";
 import type { ModelTool } from "../../../../../src/model.js";
 import type {
   ToolInvocation,
@@ -97,6 +98,11 @@ export function decodeBrowserArguments(
       "target",
       "observation",
       "cursor",
+      "world",
+      "expression",
+      "eventCursor",
+      "limit",
+      "requestId",
       "url",
       "text",
       "submit",
@@ -211,6 +217,11 @@ export function decodeBrowserArguments(
   )
     throw Error("Choose an exact connection ref from browser_connections");
   for (const key of [
+    "world",
+    "expression",
+    "eventCursor",
+    "limit",
+    "requestId",
     "url",
     "text",
     "submit",
@@ -317,6 +328,9 @@ function projectBrowserResult(
   const project = (input: unknown) => {
     const v = object(input),
       out = pick(v, [
+        "data",
+        "operations",
+        "evaluationWorld",
         "title",
         "url",
         "loading",
@@ -476,6 +490,15 @@ function projectBrowserResult(
           projectTarget,
         );
       }
+    }
+    if ((op === "network_read" || op === "console_read") && record(out.data)) {
+      const { rawEvents: _rawEvents, ...page } = object(out.data);
+      out.data = {
+        ...page,
+        ...(Array.isArray(page.events)
+          ? { events: page.events.map(browserDiagnosticEventSummary) }
+          : {}),
+      };
     }
     if (typeof v.nextCursor === "string") {
       if (!route?.tabId) throw new ProjectionUnavailable();

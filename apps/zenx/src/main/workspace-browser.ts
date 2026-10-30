@@ -1,4 +1,8 @@
 import {
+  BrowserEventBuffer,
+  type BrowserExtensionOperation,
+} from "./capabilities/browser-extensions.js";
+import {
   assertBrowserInputSnapshot,
   browserInputSnapshotScript,
   browserTargetedInputPolicy,
@@ -22,6 +26,7 @@ import {
   assertBrowserObservation,
   browserActionScript,
   browserInspectScript,
+  browserDocumentGuardScript,
   browserDomCapture,
   evaluateBrowserDocument,
   type BrowserDomInspection,
@@ -86,6 +91,8 @@ interface Tab {
   agentActionOutcomeUnknown: boolean;
   inputQuarantine?: string;
   inputInFlight?: boolean;
+  programmableInFlight?: boolean;
+  mainExecutionContexts: Map<string, { id: number; uniqueId: string }>;
   nativeDialogOpen?: boolean;
   documentVersion: number;
   navigationGeneration: number;
@@ -134,6 +141,26 @@ export function workspaceBrowserUrl(input: unknown): string {
 
 /** One Thread-bound page registry shared by the visible view and Browser tools. */
 export class WorkspaceBrowser implements ZenXBrowserBackend {
+  readonly extensionOperations: readonly BrowserExtensionOperation[] = [
+    "evaluate",
+    "network_start",
+    "network_read",
+    "network_response",
+    "console_start",
+    "console_read",
+    "content",
+  ];
+  readonly #extensionCollectors = new Map<
+    string,
+    {
+      sessionId: string;
+      tabId: string;
+      buffer: BrowserEventBuffer;
+      ready: Promise<void>;
+      lost?: string;
+      stop: () => void;
+    }
+  >();
   readonly #owners = new Map<number, Owner>();
   readonly #tabs = new Map<string, Tab>();
   readonly #closedSidebarIntents = new Set<string>();
@@ -405,16 +432,45 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       documentVersion: 0,
       navigationGeneration: 0,
       renderRevision: 0,
+      mainExecutionContexts: new Map(),
     };
     this.#tabs.set(tab.id, tab);
     view.setVisible(false);
     const web = view.webContents;
-    web.debugger.on("message", (_event, method) => {
+    web.debugger.on("message", (_event, method, params, childSessionId) => {
+      if (!childSessionId) {
+        if (method === "Runtime.executionContextsCleared")
+          tab.mainExecutionContexts.clear();
+        if (method === "Runtime.executionContextDestroyed") {
+          for (const [frameId, context] of tab.mainExecutionContexts) {
+            if (
+              context.id === params.executionContextId ||
+              context.uniqueId === params.executionContextUniqueId
+            )
+              tab.mainExecutionContexts.delete(frameId);
+          }
+        }
+        if (method === "Runtime.executionContextCreated") {
+          const context = params.context;
+          if (
+            context?.auxData?.isDefault === true &&
+            typeof context.auxData.frameId === "string" &&
+            Number.isSafeInteger(context.id) &&
+            typeof context.uniqueId === "string" &&
+            context.uniqueId.length > 0
+          )
+            tab.mainExecutionContexts.set(context.auxData.frameId, {
+              id: context.id,
+              uniqueId: context.uniqueId,
+            });
+        }
+      }
       if (method === "Page.javascriptDialogOpening")
         tab.nativeDialogOpen = true;
       if (method === "Page.javascriptDialogClosed")
         tab.nativeDialogOpen = false;
     });
+    web.debugger.on("detach", () => tab.mainExecutionContexts.clear());
     web.session.setPermissionRequestHandler(
       (_contents, _permission, callback) => callback(false),
     );
@@ -427,6 +483,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     web.on("did-stop-loading", publish);
     web.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
       if (isMainFrame) {
+        if (!_isInPlace) tab.mainExecutionContexts.clear();
         tab.documentVersion += 1;
         tab.observation = undefined;
       }
@@ -471,6 +528,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       publish();
     });
     web.on("destroyed", () => {
+      this.#stopExtensionCollectors(undefined, tab.id);
       if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
       if (this.#sidebarIntentUrls.has(tab.id))
         this.#closedSidebarIntents.add(tab.id);
@@ -1283,6 +1341,348 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     return this.#agentSummary(sessionId, tab);
   }
 
+  /** Explicit tab-scoped extensions use the same Thread/session and mutation fences. */
+  async extension(
+    sessionId: string,
+    tabId: string,
+    operation: BrowserExtensionOperation,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    signal?.throwIfAborted();
+    const tab = this.#requireAgentTab(sessionId, tabId);
+    const incarnation = this.#sessionIncarnations.get(sessionId);
+    const revision = tab.controlRevision;
+    const navigation = tab.navigationGeneration;
+    const documentVersion = tab.documentVersion;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      this.#requireAgentTab(sessionId, tabId);
+      if (this.#sessionIncarnations.get(sessionId) !== incarnation)
+        throw new Error("Browser extension session expired");
+      this.#assertControlRevision(tab, revision);
+      this.#assertAgentOperationCurrent(
+        sessionId,
+        tab,
+        navigation,
+        documentVersion,
+        operation,
+      );
+    };
+    if (operation === "evaluate") {
+      if (typeof args.expression !== "string" || args.expression.length === 0)
+        throw new Error("Browser evaluate requires an expression");
+      if (typeof args.observationId !== "string")
+        throw new Error("Browser evaluate requires a current observationId");
+      if (
+        args.world !== undefined &&
+        args.world !== "main" &&
+        args.world !== "isolated"
+      )
+        throw new Error("Browser evaluate world must be main or isolated");
+      const mainWorld = args.world === "main";
+      const expression = args.expression;
+      const observationId = args.observationId;
+      const deadline = new AbortController();
+      signal =
+        signal === undefined
+          ? deadline.signal
+          : AbortSignal.any([signal, deadline.signal]);
+      const evaluationSignal = signal;
+      let dispatched = false;
+      const pending = this.#mutate(
+        sessionId,
+        tab,
+        observationId,
+        signal,
+        async (dispatch) =>
+          this.#rendered(
+            tab,
+            async () => {
+              assertCurrent();
+              assertBrowserObservation(
+                tab.observation,
+                tab.documentVersion,
+                observationId,
+              );
+              const expectedIdentity = tab.observation.documentIdentity;
+              if (!expectedIdentity)
+                throw new Error(
+                  "Browser document identity unavailable; inspect again",
+                );
+              // Never run arbitrary code in the trusted observation world: its node registry
+              // is action authority and must remain inaccessible to programmable code.
+              await this.#evaluate(
+                tab,
+                browserDocumentGuardScript(expectedIdentity),
+                assertCurrent,
+              );
+              assertCurrent();
+              const debuggerApi = tab.view.webContents.debugger;
+              const tree = (await debuggerApi.sendCommand(
+                "Page.getFrameTree",
+              )) as {
+                frameTree?: { frame?: { id?: string } };
+              };
+              assertCurrent();
+              const frameId = tree.frameTree?.frame?.id;
+              if (!frameId)
+                throw new Error("Browser main frame is unavailable");
+              let execution:
+                { contextId: number } | { uniqueContextId: string };
+              let assertContext = () => {};
+              if (mainWorld) {
+                // The persistent listener registered when the WebContents was created
+                // retains existing contexts even when Runtime was already enabled.
+                await debuggerApi.sendCommand("Runtime.enable");
+                assertCurrent();
+                const context = tab.mainExecutionContexts.get(frameId);
+                if (!context)
+                  throw new Error(
+                    "Browser main-world execution context is unavailable; no default-world fallback is allowed",
+                  );
+                assertContext = () => {
+                  if (tab.mainExecutionContexts.get(frameId) !== context)
+                    throw new Error(
+                      "Browser main-world execution context changed; inspect again",
+                    );
+                };
+                execution = { uniqueContextId: context.uniqueId };
+              } else {
+                const world = (await debuggerApi.sendCommand(
+                  "Page.createIsolatedWorld",
+                  {
+                    frameId,
+                    worldName: "zenx-browser-programmable-v1",
+                    grantUniveralAccess: false,
+                  },
+                )) as { executionContextId?: number };
+                assertCurrent();
+                if (
+                  !Number.isSafeInteger(world.executionContextId) ||
+                  world.executionContextId! <= 0
+                )
+                  throw new Error(
+                    "Browser programmable context is unavailable",
+                  );
+                execution = { contextId: world.executionContextId! };
+              }
+              assertContext();
+              dispatch();
+              dispatched = true;
+              tab.programmableInFlight = true;
+              const result = (await debuggerApi.sendCommand(
+                "Runtime.evaluate",
+                {
+                  expression,
+                  ...execution,
+                  awaitPromise: true,
+                  returnByValue: true,
+                  timeout: 2000,
+                },
+              )) as {
+                result?: { value?: unknown; unserializableValue?: string };
+                exceptionDetails?: unknown;
+              };
+              assertCurrent();
+              assertContext();
+              if (result.exceptionDetails !== undefined)
+                throw new Error(
+                  `Browser evaluation threw: ${JSON.stringify(result.exceptionDetails)}`,
+                );
+              return {
+                world: mainWorld ? "main" : "isolated-programmable",
+                value: result.result?.value,
+                ...(result.result?.unserializableValue === undefined
+                  ? {}
+                  : { unserializableValue: result.result.unserializableValue }),
+              };
+            },
+            signal,
+          ),
+      ).finally(() => {
+        if (dispatched) tab.programmableInFlight = false;
+      });
+      // Bound only the caller's wait. Native settlement retains #mutate's in-flight
+      // bookkeeping and fences; timeout/abort cannot prove or terminate page effects.
+      return await new Promise<unknown>((resolve, reject) => {
+        let settled = false;
+        const finish = (outcome: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          evaluationSignal.removeEventListener("abort", onAbort);
+          outcome();
+        };
+        const onAbort = () =>
+          finish(() => {
+            if (dispatched) {
+              tab.agentActionOutcomeUnknown = true;
+              tab.observation = undefined;
+              this.#publish(tab.threadId);
+              reject(
+                new Error(
+                  "Browser evaluation outcome is unknown after dispatch; native evaluation is still in flight. Do not replay it automatically",
+                ),
+              );
+            } else reject(evaluationSignal.reason);
+          });
+        const timer = setTimeout(
+          () =>
+            deadline.abort(
+              new Error("Browser evaluation wait exceeded 10 seconds"),
+            ),
+          10_000,
+        );
+        evaluationSignal.addEventListener("abort", onAbort, { once: true });
+        // Both continuations remain installed after outward rejection, so late
+        // native failure is observed without retry or premature ownership release.
+        pending.then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
+        if (evaluationSignal.aborted) onAbort();
+      });
+    }
+    if (operation === "content") {
+      const html = await this.#evaluate<string>(
+        tab,
+        "document.documentElement?.outerHTML ?? ''",
+        assertCurrent,
+      );
+      assertCurrent();
+      return { html };
+    }
+    const kind = operation.startsWith("network_") ? "network" : "console";
+    const key = JSON.stringify([sessionId, tabId, kind]);
+    let collector = this.#extensionCollectors.get(key);
+    if (operation === "network_start" || operation === "console_start") {
+      if (collector === undefined) {
+        const debuggerApi = tab.view.webContents.debugger;
+        if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+        const buffer = new BrowserEventBuffer();
+        const state = {
+          sessionId,
+          tabId,
+          buffer,
+          ready: Promise.resolve(),
+          lost: undefined as string | undefined,
+          stop: () => {
+            debuggerApi.removeListener("message", onMessage);
+            debuggerApi.removeListener("detach", onDetach);
+          },
+        };
+        const onMessage = (
+          _event: unknown,
+          method: string,
+          params: Record<string, unknown>,
+          childSessionId?: string,
+        ) => {
+          if (
+            childSessionId ||
+            state.lost !== undefined ||
+            this.#sessionIncarnations.get(sessionId) !== incarnation ||
+            this.#tabs.get(tabId) !== tab
+          )
+            return;
+          if (
+            kind === "network"
+              ? [
+                  "Network.requestWillBeSent",
+                  "Network.responseReceived",
+                  "Network.loadingFinished",
+                  "Network.loadingFailed",
+                ].includes(method)
+              : [
+                  "Runtime.consoleAPICalled",
+                  "Runtime.exceptionThrown",
+                ].includes(method)
+          )
+            buffer.push(method, params);
+        };
+        const onDetach = () => {
+          state.lost =
+            "Browser debugger detached; observation history is no longer live";
+          state.stop();
+        };
+        debuggerApi.on("message", onMessage);
+        debuggerApi.on("detach", onDetach);
+        this.#extensionCollectors.set(key, state);
+        state.ready = (async () => {
+          assertCurrent();
+          await debuggerApi.sendCommand(
+            kind === "network" ? "Network.enable" : "Runtime.enable",
+            kind === "network"
+              ? {
+                  maxTotalBufferSize: 16 * 1024 * 1024,
+                  maxResourceBufferSize: 4 * 1024 * 1024,
+                }
+              : {},
+          );
+          assertCurrent();
+        })().catch((error) => {
+          state.stop();
+          void state.buffer.close().catch(() => undefined);
+          if (this.#extensionCollectors.get(key) === state)
+            this.#extensionCollectors.delete(key);
+          throw error;
+        });
+        collector = state;
+      }
+      await collector.ready;
+      assertCurrent();
+      if (collector.lost) throw new Error(collector.lost);
+      return {
+        collecting: kind,
+        history: "Since explicit start only",
+      };
+    }
+    if (collector === undefined)
+      throw new Error(
+        `Browser ${kind} collection has not been started for this session and tab`,
+      );
+    await collector.ready;
+    assertCurrent();
+    if (collector.lost) throw new Error(collector.lost);
+    if (operation === "network_response") {
+      if (
+        typeof args.requestId !== "string" ||
+        !collector.buffer.hasRequest(args.requestId)
+      )
+        throw new Error(
+          "Browser response request was not captured or has expired from this session/tab history",
+        );
+      const response = await tab.view.webContents.debugger.sendCommand(
+        "Network.getResponseBody",
+        { requestId: args.requestId },
+      );
+      assertCurrent();
+      return response;
+    }
+    if (operation !== "network_read" && operation !== "console_read")
+      throw new Error(`Unsupported Browser extension ${operation}`);
+    const page = await collector.buffer.read(
+      args.eventCursor as string | undefined,
+      args.limit as number | undefined,
+    );
+    assertCurrent();
+    if (collector.lost) throw new Error(collector.lost);
+    return page;
+  }
+
+  #stopExtensionCollectors(sessionId?: string, tabId?: string): void {
+    for (const [key, collector] of this.#extensionCollectors) {
+      if (
+        (sessionId === undefined || collector.sessionId === sessionId) &&
+        (tabId === undefined || collector.tabId === tabId)
+      ) {
+        collector.stop();
+        void collector.buffer.close().catch(() => undefined);
+        this.#extensionCollectors.delete(key);
+      }
+    }
+  }
+
   async closeTab(
     sessionId: string,
     tabId: string,
@@ -1305,12 +1705,14 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
 
   closeSession(sessionId: string): number {
     this.#requireSessionThread(sessionId);
+    this.#stopExtensionCollectors(sessionId);
     this.#sessionThreads.delete(sessionId);
     this.#sessionIncarnations.delete(sessionId);
     return 0;
   }
 
   async close(): Promise<void> {
+    this.#stopExtensionCollectors();
     this.#sessionThreads.clear();
     this.#sessionIncarnations.clear();
   }
@@ -1424,6 +1826,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     } = {},
   ): Promise<T> {
     signal?.throwIfAborted();
+    if (tab.programmableInFlight && !inputOptions.allowQuarantinedClose)
+      throw new Error(
+        "Browser programmable evaluation is still in flight; mutations remain blocked until native settlement or tab closure",
+      );
     if (
       !inputOptions.allowQuarantinedClose &&
       tab.inputQuarantine !== undefined
@@ -1651,6 +2057,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #closeTab(tab: Tab): void {
+    this.#stopExtensionCollectors(undefined, tab.id);
     this.#dependencies.releaseUnmountedView?.(tab.view);
     if (tab.owner?.active?.tab === tab) this.#hide(tab.owner);
     if (this.#sidebarIntentUrls.has(tab.id))

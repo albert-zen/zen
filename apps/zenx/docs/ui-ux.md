@@ -747,7 +747,7 @@ At normal contrast, T3 default light base/crest are #71717b/#27272a (3.09:1 lumi
 
 ## Selected-message Copy / Quote and unified references (2026-10-21 draft)
 
-Select text inside a single canonical Agent message to reveal Copy and Quote. Copy only changes the clipboard; Quote inserts an exact reference at the remembered Composer selection and focuses the same Composer. Neither starts a Turn or sends. Cross-message/control selections are rejected; IME Enter never quotes or sends.
+Select text inside a single canonical Agent message to reveal Copy, Quote and Add to side chat. Copy only changes the clipboard; Quote inserts an exact reference at the remembered Composer selection and focuses the same Composer. Neither starts a Turn or sends. Add to side chat uses the same structured message reference, preserving its exact excerpt and source identity without exposing protocol IDs. It appends to the selected side conversation (or the only available side conversation); multiple unselected targets require an explicit chooser. With no target it opens the existing renderer-local side-chat draft, not a native Thread. Existing draft text, images and references remain intact, repeated exact references are deduplicated, and the destination Composer receives focus without sending. Navigation during source loading keeps the draft in its original workspace without stealing focus; a closed chooser target is not silently replaced. Cross-message/control selections are rejected; IME Enter never quotes or sends.
 
 All existing reference types share one compact inline ReferenceToken, interleaved with prose inside the Composer, sent user bubble and queued-message editor. File, Thread/sub-agent and message/selection references preserve their exact text positions; a repeated reference can appear in several places. The same token opens full exact text and source identity, with removal only in editable drafts. Long labels have a bounded width and truncation; the non-shrinking remove button remains at the right edge. Images remain canonical image attachments rather than being silently converted into file pointers.
 
@@ -888,3 +888,9 @@ A compact disclosure above the Composer reads the existing local Shell session l
 输入已接纳或 agent 已开始工作。失联使 pending 观察变成未知，不自动重试；重新读到同一唯一
 committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消除此未决反馈；旧的同 boundary 压缩不能抹掉新的进行中或失败。显式请求身份独立于状态对象，只有同一请求且未编辑的原草稿可清空。既有设置清楚说明 agentic 开关不关闭宿主
 自动压缩，以及完成后、发送前、活动工具轮之间的不同条件；不新增开关或修改阈值策略。
+
+### Legacy quote presentation
+
+The exact leading legacy `[Message quote; ...]` transport is rendered through the same inline reference component as current quoted messages, retaining exact selected text and source navigation. Real line breaks appear in the expanded excerpt; source IDs belong in the explicit source details, not the message bubble or plain-text clipboard. Malformed or embedded illustrative text stays literal. New structured sends retain provenance independently of readable clipboard text.
+
+Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.

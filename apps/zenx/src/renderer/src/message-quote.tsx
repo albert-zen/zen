@@ -122,11 +122,13 @@ export function MessageSelectionActions({
   threadId,
   disabled,
   onQuote,
+  onAddToSideChat,
 }: {
   viewport: RefObject<HTMLDivElement | null>;
   threadId?: string;
   disabled: boolean;
   onQuote(selection: MessageSelection): void;
+  onAddToSideChat?(selection: MessageSelection): void;
 }) {
   const { t } = useTranslation("shell");
   const toolbar = useRef<HTMLDivElement>(null);
@@ -157,14 +159,15 @@ export function MessageSelectionActions({
     setCopyStatus(null);
   }
 
-  function quote() {
+  function quote(toSideChat = false) {
     const current = read();
     if (!sameSelection(active.current, current) || !current) {
       dismiss();
       return;
     }
     dismiss();
-    latestOnQuote.current({
+    const action = toSideChat ? onAddToSideChat : latestOnQuote.current;
+    action?.({
       threadId: current.threadId,
       id: current.id,
       excerpt: current.excerpt,
@@ -336,7 +339,7 @@ export function MessageSelectionActions({
       </button>
       <button
         type="button"
-        onClick={quote}
+        onClick={() => quote()}
         title={t("quoteSelectionShortcut")}
         aria-label={t("quoteSelection")}
         aria-keyshortcuts="Alt+Enter"
@@ -344,6 +347,16 @@ export function MessageSelectionActions({
         <Icon name="quote" size={14} />
         <span>{t("quoteSelection")}</span>
       </button>
+      {onAddToSideChat ? (
+        <button
+          type="button"
+          onClick={() => quote(true)}
+          aria-label={t("addToSideChat")}
+        >
+          <Icon name="users" size={14} />
+          <span>{t("addToSideChat")}</span>
+        </button>
+      ) : null}
     </div>,
     viewport.current.ownerDocument.body,
   );

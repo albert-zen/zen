@@ -194,3 +194,57 @@ test("captured foreground pointer methods require only one exact capture, not du
     );
   }
 });
+
+test("packaged provider bindings refer only to actual model-schema fields", async () => {
+  const { readFile } = await import("node:fs/promises");
+  for (const file of [
+    "zenx.plugin.json",
+    "variants/win32.zenx.plugin.json",
+    "variants/win32-strict.zenx.plugin.json",
+    "variants/peekaboo.zenx.plugin.json",
+  ]) {
+    const manifest = JSON.parse(
+      await readFile(
+        new URL(
+          `../../../packages/zenx-computer-plugin/${file}`,
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    for (const native of manifest.tools) {
+      const binding = computerObjectBinding(
+        native.name,
+        manifest.provider.id,
+        native.inputSchema,
+      );
+      if (!binding) continue;
+      assert.equal(binding.provider, manifest.provider.id);
+      const model = computerModelDefinition(native);
+      if (binding.reference) {
+        assert.equal(
+          Object.hasOwn(
+            model.inputSchema.properties,
+            binding.reference.argument,
+          ),
+          true,
+          `${file}: ${native.name} reference must exist in actual model schema`,
+        );
+      }
+    }
+    if (file !== "zenx.plugin.json") {
+      assert.equal(
+        manifest.tools.some(
+          (tool: { name: string }) => tool.name === "computer_background_type",
+        ),
+        false,
+      );
+      assert.equal(
+        manifest.tools.some(
+          (tool: { name: string }) => tool.name === "computer_ocr",
+        ),
+        false,
+      );
+    }
+  }
+});

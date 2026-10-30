@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A dedicated ephemeral ZenX browser session with bounded DOM inspection and narrow navigation and interaction tools.",
   "provider": {
     "id": "electron-dedicated-browser",
@@ -18,7 +18,7 @@
     {
       "id": "browser.tabs.read",
       "title": "Inspect browser tabs",
-      "description": "List tabs and inspect bounded visible text and interactive targets.",
+      "description": "List tabs, inspect visible text and targets, and explicitly read full page content, screenshots, network events/responses and console diagnostics.",
       "scope": "browser-session"
     },
     {
@@ -30,7 +30,7 @@
     {
       "id": "browser.interact",
       "title": "Interact with pages",
-      "description": "Click, type, or select an option in an explicitly targeted visible page element, scroll the page viewport, or dispatch bounded coordinate/key input to the observed tab.",
+      "description": "Interact with the exact observed tab through element, coordinate/key input or programmable JavaScript; JavaScript may mutate the page, submit forms or send requests.",
       "scope": "browser-session"
     }
   ],
@@ -487,6 +487,226 @@
       "permissions": ["browser.navigate"],
       "interactionMode": "background_safe",
       "capabilities": ["dedicated_profile", "session.close"]
+    },
+    {
+      "name": "browser_evaluate",
+      "description": "Evaluate a JavaScript expression in a separate page DOM isolated world. May mutate pages, submit forms or send requests; requires a fresh observation and interaction permission. Defaults to a separate isolated world; world:main selects the pinned page context to access application globals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "observationId": {
+            "type": "string"
+          },
+          "expression": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "world": {
+            "type": "string",
+            "enum": ["isolated", "main"]
+          }
+        },
+        "required": ["sessionId", "tabId", "observationId", "expression"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.interact"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_network_start",
+      "description": "Start opt-in network event collection on the exact tab attachment; survives fresh code calls, no past traffic recovery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_network_read",
+      "description": "Read bounded captured network events using eventCursor and limit (1–100). Full retained capture is in ephemeral rawPath; evicted cursors fail.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_network_response",
+      "description": "Read body and base64Encoded for an observed requestId in this exact attachment. Native response eviction is an error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId", "requestId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_console_start",
+      "description": "Start opt-in console/error collection on the exact tab attachment; survives fresh code calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_console_read",
+      "description": "Read bounded console events with eventCursor and limit (1–100), plus ephemeral full rawPath.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          },
+          "eventCursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_content",
+      "description": "Read full current top-document HTML from the exact owned tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_extensions",
+      "description": "List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "Capture the exact tab with existing fenced inspect and return PNG artifact plus fresh observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["dedicated_profile", "cdp"],
+      "maxOutputBytes": 16384
     }
   ],
   "schemaVersion": 2,

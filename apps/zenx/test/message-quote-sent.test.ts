@@ -4,7 +4,10 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { ThreadView } from "../src/renderer/src/ThreadView.js";
+import {
+  ThreadView,
+  ThreadViewActionsProvider,
+} from "../src/renderer/src/ThreadView.js";
 import { referenceMessage } from "../src/renderer/src/reference-draft.js";
 import {
   emptyComposerState,
@@ -96,6 +99,7 @@ async function withView(
     renderMissingSource(): Promise<void>;
   }) => Promise<void>,
   initialDraft = "Existing question",
+  sourceNavigator?: import("../src/renderer/src/message-source-navigation.js").MessageSourceNavigator,
 ) {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -128,43 +132,51 @@ async function withView(
   let composer = editComposer(emptyComposerState(), initialDraft);
   const sends: string[] = [];
   const root = createRoot(document.getElementById("root")!);
-  const render = () =>
+  const render = () => {
+    const view = createElement(ThreadView, {
+      thread,
+      composer,
+      approvals: [],
+      onDraftChange: (text: string) => {
+        composer = editComposer(composer, text);
+        render();
+      },
+      onInterrupt: async () => {},
+      onRespondToApproval: async () => {},
+      onSubmit: async (intent, expected) => {
+        composer = beginComposerSubmission(
+          composer,
+          intent,
+          expected,
+          () => "client-send",
+        );
+        const submission = composer.submission;
+        assert.ok(submission);
+        const draft = parseSkillDraft(submission.text);
+        const payload = referenceMessage(
+          draft.text,
+          draft.references,
+          submission.clientUserMessageId,
+        );
+        sends.push(payload);
+        thread = append(thread, payload, submission.clientUserMessageId);
+        composer = acceptComposerSubmission(
+          composer,
+          submission.clientUserMessageId,
+        );
+        render();
+      },
+    });
     root.render(
-      createElement(ThreadView, {
-        thread,
-        composer,
-        approvals: [],
-        onDraftChange: (text: string) => {
-          composer = editComposer(composer, text);
-          render();
-        },
-        onInterrupt: async () => {},
-        onRespondToApproval: async () => {},
-        onSubmit: async (intent, expected) => {
-          composer = beginComposerSubmission(
-            composer,
-            intent,
-            expected,
-            () => "client-send",
-          );
-          const submission = composer.submission;
-          assert.ok(submission);
-          const draft = parseSkillDraft(submission.text);
-          const payload = referenceMessage(
-            draft.text,
-            draft.references,
-            submission.clientUserMessageId,
-          );
-          sends.push(payload);
-          thread = append(thread, payload, submission.clientUserMessageId);
-          composer = acceptComposerSubmission(
-            composer,
-            submission.clientUserMessageId,
-          );
-          render();
-        },
-      }),
+      sourceNavigator
+        ? createElement(ThreadViewActionsProvider, {
+            source: sourceNavigator,
+            fork: async () => {},
+            children: view,
+          })
+        : view,
     );
+  };
   try {
     await act(async () => render());
     await run({
@@ -465,4 +477,131 @@ test("normal Composer input events never promote pasted draft headers or strip l
     },
     "",
   );
+});
+
+test("legacy leading quote renders exact multiline reference instead of UUID JSON in the sent bubble", async () => {
+  const payload = `[Message quote; thread ID: ${JSON.stringify(longQuote.threadId)}; message ID: ${JSON.stringify(longQuote.id)}; excerpt: ${JSON.stringify(longQuote.excerpt)}]Follow up`;
+  await withView(append(base(), payload), async () => {
+    const sent = document.querySelector('[data-sent-message-id="sent-item"]')!;
+    assert.equal(sent.querySelectorAll(".reference-token").length, 1);
+    assert.equal(
+      sent.querySelector(".reference-token-details > span")!.textContent,
+      longQuote.excerpt,
+    );
+    assert.match(sent.textContent!, /Follow up/);
+    assert.ok(!sent.textContent!.includes("thread ID:"));
+    assert.ok(!sent.textContent!.includes("\\n"));
+    await click(sent.querySelector(".reference-token-details")!);
+    assert.equal(
+      document.querySelector(".reference-exact-excerpt")!.textContent,
+      longQuote.excerpt,
+    );
+    await click(document.querySelector(".reference-open-source")!);
+    assert.equal(
+      (document.activeElement as HTMLElement).dataset.quoteItemId,
+      "source-a",
+    );
+    assert.equal(
+      (document.activeElement as HTMLElement).dataset.quoteThreadId,
+      "thread-a",
+    );
+  });
+});
+
+test("structured clipboard paste into an ordinary composer preserves existing draft and sends the source capsule", async () => {
+  const { referenceClipboard, REFERENCE_CLIPBOARD_TYPE } =
+    await import("../src/renderer/src/reference-clipboard.js");
+  const clipboard = referenceClipboard("\uFFFC", [
+    { ...longQuote, position: 0 },
+  ]);
+  await withView(base(), async ({ draft, sends }) => {
+    const textarea = document.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.focus();
+    textarea.setSelectionRange(8, 8);
+    const paste = new window.Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        getData: (type: string) =>
+          type === REFERENCE_CLIPBOARD_TYPE
+            ? clipboard.structured
+            : type === "text/plain"
+              ? clipboard.plain
+              : "",
+        files: [],
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(paste);
+    });
+    assert.equal(paste.defaultPrevented, true);
+    assert.equal(draft().text, "Existing\uFFFC question");
+    assert.deepEqual(draft().references, [{ ...longQuote, position: 8 }]);
+    const editor = document.querySelector<HTMLElement>(
+      '[contenteditable="true"]',
+    )!;
+    assert.ok(editor);
+    assert.equal(document.activeElement, editor);
+    assert.equal(sends.length, 0, "pasting never sends");
+    await act(async () =>
+      editor.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    assert.equal(sends.length, 1);
+    const sent = document.querySelector('[data-sent-message-id="sent-item"]')!;
+    assert.equal(
+      sent.querySelector(".reference-token-details > span")!.textContent,
+      longQuote.excerpt,
+    );
+    assert.ok(!sent.textContent!.includes("thread ID:"));
+  });
+});
+
+test("cross-thread sent quote source action routes exact parent/child message through existing navigator", async () => {
+  for (const sourceThreadId of ["synthetic-parent", "synthetic-child"]) {
+    const reference = {
+      ...longQuote,
+      threadId: sourceThreadId,
+      id: "exact-source-item",
+      position: 0,
+    };
+    const payload = referenceMessage("\uFFFC", [reference], "cross-client");
+    const requests: unknown[] = [];
+    await withView(
+      append(base(), payload, "cross-client"),
+      async () => {
+        const sent = document.querySelector(
+          '[data-sent-message-id="sent-item"]',
+        )!;
+        await click(sent.querySelector(".reference-token-details")!);
+        await click(document.querySelector(".reference-open-source")!);
+        assert.deepEqual(requests, [
+          {
+            target: {
+              kind: "thread",
+              id: sourceThreadId,
+              itemId: "exact-source-item",
+            },
+            ownerThreadId: "thread-a",
+            current: true,
+          },
+        ]);
+      },
+      "Existing question",
+      async (target, owner) => {
+        requests.push({
+          target,
+          ownerThreadId: owner.threadId,
+          current: owner.isCurrent(),
+        });
+      },
+    );
+  }
 });

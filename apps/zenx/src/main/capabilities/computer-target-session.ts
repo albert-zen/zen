@@ -67,6 +67,14 @@ export type BoundComputerInput =
       button: "left" | "right";
       captureId: string;
     }
+  | {
+      operation: "drag";
+      x: number;
+      y: number;
+      toX: number;
+      toY: number;
+      captureId: string;
+    }
   | { operation: "key"; key: string }
   | { operation: "type"; text: string }
   | { operation: "shortcut"; key: string; modifiers: string[] }
@@ -447,7 +455,7 @@ export class ComputerTargetSession {
       );
     }
     let operation: Record<string, unknown> = { ...action };
-    if (action.operation === "click") {
+    if (action.operation === "click" || action.operation === "drag") {
       const capture = this.#captures.get(owner);
       if (
         !capture ||
@@ -455,7 +463,7 @@ export class ComputerTargetSession {
         capture.captureId !== action.captureId
       )
         throw new Error(
-          "Click requires the current window screenshot captureId; no input dispatched",
+          "Pointer input requires the current window screenshot captureId; no input dispatched",
         );
       if (
         !Number.isFinite(action.x) ||
@@ -473,6 +481,33 @@ export class ComputerTargetSession {
           binding.bounds.y +
           (action.y * binding.bounds.height) / capture.height,
       };
+      if (action.operation === "drag") {
+        if (
+          !capture.image.expiresAt ||
+          !Number.isFinite(Date.parse(capture.image.expiresAt)) ||
+          Date.parse(capture.image.expiresAt) <= Date.now()
+        )
+          throw new Error(
+            "Drag requires an unexpired screenshot; no input dispatched",
+          );
+        if (
+          !Number.isFinite(action.toX) ||
+          !Number.isFinite(action.toY) ||
+          action.toX < 0 ||
+          action.toY < 0 ||
+          action.toX >= capture.width ||
+          action.toY >= capture.height
+        )
+          throw new Error(
+            "Drag destination is outside captured image; no input dispatched",
+          );
+        operation.toX =
+          binding.bounds.x +
+          (action.toX * binding.bounds.width) / capture.width;
+        operation.toY =
+          binding.bounds.y +
+          (action.toY * binding.bounds.height) / capture.height;
+      }
     }
     // Shared-desktop input invalidates existing and still-acquiring screenshots.
     this.invalidateCaptures();
@@ -487,7 +522,14 @@ export class ComputerTargetSession {
         signal,
         onStopping,
       );
-      if (!isPostedComputerInputReceipt(receipt))
+      if (
+        !isPostedComputerInputReceipt(receipt) ||
+        (action.operation === "drag" &&
+          (!receipt ||
+            typeof receipt !== "object" ||
+            !("release" in receipt) ||
+            receipt.release !== "posted"))
+      )
         throw new Error(
           "Native input receipt is invalid; input outcome unknown; do not retry automatically",
         );

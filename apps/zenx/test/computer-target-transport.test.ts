@@ -341,3 +341,100 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     /release is unknown.*no input dispatched/,
   );
 });
+
+for (const settled of [true, false])
+  test(`drag abort waits for release and process close; settlement=${settled}`, async (t) => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-drag-release-"),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "fixture.cjs"),
+      released = path.join(directory, "released");
+    await writeFile(
+      executable,
+      `#!${process.execPath}
+const fs = require('node:fs'); let down = false;
+process.on('SIGTERM', () => { setTimeout(() => {
+  if (down) fs.writeFileSync(${JSON.stringify(released)}, 'up');
+  if (${settled}) fs.writeSync(1, JSON.stringify({phase:'foregroundDragSettled',release:'posted'})+'\\n');
+  process.exit(0);
+}, 30); });
+require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+  const r=JSON.parse(line);
+  if (r.operation==='select') console.log(JSON.stringify({result:{pid:process.pid}}));
+  else { down=true; fs.writeFileSync(${JSON.stringify(released)},'down'); }
+});
+`,
+      { mode: 0o700 },
+    );
+    const transport = new NativeComputerTargetTransport(async () => executable);
+    t.after(() => transport.close());
+    const signal = new AbortController().signal;
+    await transport.request({ operation: "select" }, signal);
+    const controller = new AbortController();
+    const pending = transport.request({ operation: "drag" }, controller.signal);
+    const rejection = assert.rejects(pending, /outcome unknown/);
+    const { readFile } = await import("node:fs/promises");
+    const deadline = Date.now() + 2000;
+    while ((await readFile(released, "utf8").catch(() => "")) !== "down") {
+      assert.ok(Date.now() < deadline, "owned helper did not receive drag");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    controller.abort();
+    await rejection;
+    assert.equal(
+      await readFile(released, "utf8"),
+      "up",
+      "SIGTERM permits cleanup before close",
+    );
+    await transport.request({ operation: "select" }, signal);
+    if (!settled)
+      await assert.rejects(
+        transport.request({ operation: "drag" }, signal),
+        /release is unknown.*no input dispatched/,
+      );
+  });
+
+for (const release of ["posted", "unknown"])
+  test(`drag transport requires explicit known settlement (${release})`, async (t) => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zenx-drag-settle-"),
+    );
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const executable = path.join(directory, "fixture.cjs");
+    await writeFile(
+      executable,
+      `#!${process.execPath}
+require('node:readline').createInterface({input:process.stdin}).on('line', line => {
+  const r=JSON.parse(line);
+  if(r.operation==='select') console.log(JSON.stringify({result:{pid:process.pid}}));
+  else {
+    console.log(JSON.stringify({phase:'foregroundDragSettled',release:${JSON.stringify(release)}}));
+    console.log(JSON.stringify({result:{dispatch:'posted',applicationEffect:'unverified',release:${JSON.stringify(release)}}}));
+  }
+});
+`,
+      { mode: 0o700 },
+    );
+    const transport = new NativeComputerTargetTransport(async () => executable);
+    t.after(() => transport.close());
+    const signal = new AbortController().signal;
+    await transport.request({ operation: "select" }, signal);
+    if (release === "posted") {
+      assert.deepEqual(await transport.request({ operation: "drag" }, signal), {
+        dispatch: "posted",
+        applicationEffect: "unverified",
+        release: "posted",
+      });
+    } else {
+      await assert.rejects(
+        transport.request({ operation: "drag" }, signal),
+        /outcome unknown/,
+      );
+      await transport.request({ operation: "select" }, signal);
+      await assert.rejects(
+        transport.request({ operation: "drag" }, signal),
+        /release is unknown.*no input dispatched/,
+      );
+    }
+  });

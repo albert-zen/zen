@@ -113,14 +113,14 @@ final class NSWorkspace {
   static let shared = NSWorkspace()
   var runningApplications: [NSRunningApplication] { [NSRunningApplication(processIdentifier: 42)!] }
   var frontmostApplication: NSRunningApplication? {
-    if ["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1 { return NSRunningApplication(processIdentifier: 99) }
+    if (["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1) || (mode == "drag-focus-stolen" && posted >= 3) { return NSRunningApplication(processIdentifier: 99) }
     return NSRunningApplication(processIdentifier: 42)
   }
 }
 func fixtureSleep(_ value: UInt32) {}
 typealias CGKeyCode = UInt16
 enum CGMouseButton { case left, right }
-enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseUp, rightMouseDown, rightMouseUp }
+enum CGEventType: String { case mouseMoved, leftMouseDown, leftMouseDragged, leftMouseUp, rightMouseDown, rightMouseUp }
 enum CGEventTapLocation { case cghidEventTap }
 enum CGScrollEventUnit { case pixel }
 struct CGEventFlags: OptionSet {
@@ -134,12 +134,14 @@ final class CGEvent {
   var flags: CGEventFlags = []
   var label: String
   var location = CGPoint.zero
+  init?(source: Any?) { label = "pointer" }
   init?(keyboardEventSource: Any?, virtualKey: CGKeyCode, keyDown: Bool) { label = (keyDown ? "down:" : "up:") + String(virtualKey) }
   init?(mouseEventSource: Any?, mouseType: CGEventType, mouseCursorPosition: CGPoint, mouseButton: CGMouseButton) { label = mouseType.rawValue }
   init?(scrollWheelEvent2Source: Any?, units: CGScrollEventUnit, wheelCount: UInt32, wheel1: Int32, wheel2: Int32, wheel3: Int32) { label = "scroll" }
   func keyboardSetUnicodeString(stringLength: Int, unicodeString: UnsafePointer<UniChar>?) { label += ":unicode=" + String(stringLength) }
   func post(tap: CGEventTapLocation) {
     posted += 1
+    if mode == "drag-cancel" && label == "leftMouseDown" { targetCancelled = 1 }
     FileHandle.standardError.write(Data(("POST:" + label + ":flags=" + String(flags.rawValue) + "\\n").utf8))
   }
 }
@@ -235,6 +237,9 @@ test(
     assert.equal(compilation.status, 0, compilation.stderr);
     for (const mode of [
       "normal",
+      "drag-normal",
+      "drag-cancel",
+      "drag-focus-stolen",
       "ax-late",
       "ax-still-missing",
       "ax-late-ambiguous",
@@ -285,8 +290,14 @@ test(
       });
       const request = async (value: object) => {
         child.stdin.write(JSON.stringify(value) + "\n");
-        const line = await lines.next();
+        let line = await lines.next();
         assert.equal(line.done, false, stderr);
+        const first = JSON.parse(line.value!);
+        if (first.phase === "foregroundDragSettled") {
+          assert.equal(first.release, "posted");
+          line = await lines.next();
+          assert.equal(line.done, false, stderr);
+        }
         return JSON.parse(line.value!) as {
           result?: {
             bindingId: string;
@@ -374,21 +385,23 @@ test(
           });
           assert.match(foreign.error!, /binding expired/);
         }
-        const input = mode.startsWith("pointer-")
-          ? { operation: "click", x: 20, y: 40, button: "left" }
-          : mode.startsWith("scroll-")
-            ? { operation: "scroll", deltaY: 100 }
-            : mode.startsWith("typing")
-              ? { operation: "type", text: "a".repeat(15) + "😀" }
-              : mode.startsWith("shortcut") || mode.startsWith("layout-")
-                ? {
-                    operation: "shortcut",
-                    key: "a",
-                    modifiers: [
-                      mode === "shortcut-option" ? "option" : "command",
-                    ],
-                  }
-                : { operation: "key", key: "enter" };
+        const input = mode.startsWith("drag-")
+          ? { operation: "drag", x: 20, y: 40, toX: 100, toY: 100 }
+          : mode.startsWith("pointer-")
+            ? { operation: "click", x: 20, y: 40, button: "left" }
+            : mode.startsWith("scroll-")
+              ? { operation: "scroll", deltaY: 100 }
+              : mode.startsWith("typing")
+                ? { operation: "type", text: "a".repeat(15) + "😀" }
+                : mode.startsWith("shortcut") || mode.startsWith("layout-")
+                  ? {
+                      operation: "shortcut",
+                      key: "a",
+                      modifiers: [
+                        mode === "shortcut-option" ? "option" : "command",
+                      ],
+                    }
+                  : { operation: "key", key: "enter" };
         const result = await request({
           ...input,
           owner: "thread-a",
@@ -398,6 +411,7 @@ test(
         if (
           [
             "normal",
+            "drag-normal",
             "ax-late",
             "missing-launch-date",
             "active-no-cg-title",
@@ -415,6 +429,8 @@ test(
           assert.match(
             result.error!,
             [
+              "drag-cancel",
+              "drag-focus-stolen",
               "focus-stolen",
               "typing-focus-stolen",
               "layout-changed",
@@ -424,48 +440,70 @@ test(
               ? /partially dispatched; outcome unknown/
               : /no input dispatched/,
           );
-          const retry = await request({
-            operation: "key",
-            key: "enter",
-            owner: "thread-a",
-            bindingId: selected.result.bindingId,
-          });
-          assert.match(retry.error!, /binding expired/);
+          if (mode !== "drag-cancel") {
+            const retry = await request({
+              operation: "key",
+              key: "enter",
+              owner: "thread-a",
+              bindingId: selected.result.bindingId,
+            });
+            assert.match(retry.error!, /binding expired/);
+          }
         }
+        if (mode === "drag-cancel" || mode === "drag-focus-stolen")
+          assert.match(result.error!, /drag release posted/);
         child.stdin.end();
         await new Promise<void>((resolve) =>
           child.once("close", () => resolve()),
         );
         assert.equal(
           (stderr.match(/POST:/g) ?? []).length,
-          ["pointer-normal", "pointer-trusted-edge"].includes(mode)
-            ? 3
-            : mode === "scroll-normal"
-              ? 1
-              : mode === "pointer-late-overlay"
-                ? 2
-                : [
-                      "normal",
-                      "ax-late",
-                      "missing-launch-date",
-                      "active-no-cg-title",
-                      "no-bundle",
-                      "shortcut-alt",
-                      "shortcut-option",
-                    ].includes(mode)
-                  ? 2
-                  : mode === "typing"
-                    ? 4
-                    : [
-                          "focus-stolen",
-                          "typing-focus-stolen",
-                          "layout-changed",
-                          "layout-remapped",
-                        ].includes(mode)
-                      ? 1
-                      : 0,
+          mode === "drag-normal"
+            ? 19
+            : mode === "drag-cancel"
+              ? 3
+              : mode === "drag-focus-stolen"
+                ? 4
+                : ["pointer-normal", "pointer-trusted-edge"].includes(mode)
+                  ? 3
+                  : mode === "scroll-normal"
+                    ? 1
+                    : mode === "pointer-late-overlay"
+                      ? 2
+                      : [
+                            "normal",
+                            "ax-late",
+                            "missing-launch-date",
+                            "active-no-cg-title",
+                            "no-bundle",
+                            "shortcut-alt",
+                            "shortcut-option",
+                          ].includes(mode)
+                        ? 2
+                        : mode === "typing"
+                          ? 4
+                          : [
+                                "focus-stolen",
+                                "typing-focus-stolen",
+                                "layout-changed",
+                                "layout-remapped",
+                              ].includes(mode)
+                            ? 1
+                            : 0,
           `${mode}: ${stderr}`,
         );
+        if (mode.startsWith("drag-")) {
+          assert.equal((stderr.match(/POST:leftMouseDown/g) ?? []).length, 1);
+          assert.equal(
+            (stderr.match(/POST:leftMouseUp/g) ?? []).length,
+            1,
+            "release must occur once even after cancellation/focus loss",
+          );
+          assert.equal(
+            (stderr.match(/POST:leftMouseDragged/g) ?? []).length,
+            mode === "drag-normal" ? 16 : mode === "drag-focus-stolen" ? 1 : 0,
+          );
+        }
         if (mode === "typing") {
           assert.match(stderr, /unicode=15/);
           assert.match(stderr, /unicode=2/);

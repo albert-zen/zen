@@ -1,3 +1,8 @@
+import {
+  BrowserEventBuffer,
+  browserExtensionOperations,
+  type BrowserExtensionOperation,
+} from "./browser-extensions.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import {
   type CdpDiagnosticConnection,
@@ -169,6 +174,14 @@ export interface UserBrowserTargetCreation {
 }
 
 export interface UserBrowserCdpClient {
+  extensionEvents?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    operation: BrowserExtensionOperation,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
+
   observeTargetMetadata?(
     targetId: string,
     listener: (target: UserBrowserCdpTarget) => void,
@@ -201,6 +214,7 @@ export interface UserBrowserCdpClient {
     expectedDocumentIdentity?: string,
     signal?: AbortSignal,
     onDispatched?: () => void,
+    programmable?: "isolated" | "main",
   ): Promise<{ value: unknown; documentIdentity: string }>;
   targetedInput?(
     targetId: string,
@@ -1221,6 +1235,78 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     return operation;
   }
 
+  get extensionOperations(): readonly BrowserExtensionOperation[] {
+    return this.#client.extensionEvents
+      ? browserExtensionOperations
+      : ["evaluate", "content"];
+  }
+  async extension(
+    sessionId: string,
+    tabId: string,
+    operation: BrowserExtensionOperation,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    throwIfAborted(signal);
+    const { session, tab } = this.#sessionTab(sessionId, tabId);
+    if (operation === "evaluate") {
+      if (
+        args.world !== undefined &&
+        args.world !== "main" &&
+        args.world !== "isolated"
+      )
+        throw Error("Browser evaluation world must be isolated or main");
+      if (
+        typeof args.expression !== "string" ||
+        args.expression.length === 0 ||
+        args.expression.length > 100000
+      )
+        throw Error("expression must contain 1 to 100000 characters");
+      assertBrowserObservation(
+        tab.observation,
+        tab.documentVersion,
+        String(args.observationId ?? ""),
+      );
+      let value: unknown;
+      await this.#mutateObserved(
+        sessionId,
+        tabId,
+        session,
+        tab,
+        `(async () => ({ok:true,value:await (${args.expression})}))()`,
+        signal,
+        args.world === "main" ? "main" : "isolated",
+        (result) => {
+          value = result;
+        },
+      );
+      return { value };
+    }
+    return await this.#startOperation(session, tab, async () => {
+      if (operation === "content") {
+        const result = await this.#client.evaluateDocument(
+          tabId,
+          "document.documentElement.outerHTML",
+          this.#attachmentOwner(session),
+          undefined,
+          signal,
+          undefined,
+          "isolated",
+        );
+        return { html: result.value };
+      }
+      if (!this.#client.extensionEvents)
+        throw Error("Browser event collection unsupported by provider");
+      return await this.#client.extensionEvents(
+        tabId,
+        this.#attachmentOwner(session),
+        operation,
+        args,
+        signal,
+      );
+    });
+  }
+
   async scroll(
     sessionId: string,
     tabId: string,
@@ -1597,6 +1683,8 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     tab: UserBrowserTabState,
     expression: string,
     signal?: AbortSignal,
+    programmable?: "isolated" | "main",
+    receiveValue?: (value: unknown) => void,
   ): Promise<BrowserTabSummary> {
     const expectedDocumentIdentity = tab.documentIdentity;
     tab.observation = undefined;
@@ -1612,6 +1700,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           expectedDocumentIdentity,
           signal,
           () => (dispatched = true),
+          programmable,
         );
       } catch (error) {
         if (error instanceof UserBrowserDocumentChangedBeforeDispatchError)
@@ -1628,6 +1717,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       if (response?.ok !== true) {
         throw new ActionRejectedError(String(response?.reason ?? "unknown"));
       }
+      receiveValue?.(response.value);
       tab.documentVersion += 1;
       try {
         return await this.#summary(sessionId, tabId);
@@ -2187,6 +2277,95 @@ export function validateUserBrowserVersion(
 }
 
 class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
+  readonly #mainWorldContexts = new Map<
+    string,
+    Map<number, { frameId: string; id: number; uniqueId?: string }>
+  >();
+  // Attachment-local evidence of contexts predating a cross-document navigation.
+  // A replacement observed between start and commit must not be erased by commit.
+  readonly #mainWorldNavigations = new Map<string, Map<string, Set<string>>>();
+  readonly #eventBuffers = new Map<
+    string,
+    { network?: BrowserEventBuffer; console?: BrowserEventBuffer }
+  >();
+  async extensionEvents(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+    operation: BrowserExtensionOperation,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const fence = await this.#executionDocument(targetId, owner, signal);
+    this.#assertDocumentFence(fence, true);
+    let buffers = this.#eventBuffers.get(fence.sessionId);
+    if (!buffers) {
+      buffers = {};
+      this.#eventBuffers.set(fence.sessionId, buffers);
+    }
+    const kind = operation.startsWith("network_") ? "network" : "console";
+    if (operation.endsWith("_start")) {
+      if (buffers[kind]) return { started: true, alreadyStarted: true };
+      const buffer = new BrowserEventBuffer();
+      buffers[kind] = buffer;
+      try {
+        if (kind === "network")
+          await this.#send(
+            "Network.enable",
+            { maxTotalBufferSize: 8388608, maxResourceBufferSize: 2097152 },
+            fence.sessionId,
+            signal,
+            undefined,
+            undefined,
+            undefined,
+            () => this.#assertDocumentFence(fence, true),
+          );
+        this.#assertDocumentFence(fence, true);
+      } catch (error) {
+        delete buffers[kind];
+        await buffer.close();
+        throw error;
+      }
+      return {
+        started: true,
+        history: "Only events received after this explicit start are retained.",
+      };
+    }
+    const buffer = buffers[kind];
+    if (!buffer)
+      throw Error(
+        `Browser ${kind} history unavailable; start collection explicitly (old history cannot be recovered)`,
+      );
+    if (operation === "network_response") {
+      if (
+        typeof args.requestId !== "string" ||
+        !buffer.hasRequest(args.requestId)
+      )
+        throw Error(
+          "Response request was not observed in this exact attachment's retained history",
+        );
+      const result = await this.#send(
+        "Network.getResponseBody",
+        { requestId: args.requestId },
+        fence.sessionId,
+        signal,
+        undefined,
+        undefined,
+        undefined,
+        () => this.#assertDocumentFence(fence, true),
+      );
+      this.#assertDocumentFence(fence, true);
+      return result;
+    }
+    if (!operation.endsWith("_read"))
+      throw Error("Unsupported Browser event operation");
+    const result = await buffer.read(
+      typeof args.eventCursor === "string" ? args.eventCursor : undefined,
+      typeof args.limit === "number" ? args.limit : undefined,
+    );
+    this.#assertDocumentFence(fence, true);
+    return result;
+  }
+
   readonly #socket: WebSocket;
   readonly #diagnostics?: CdpDiagnosticConnection;
   readonly #httpBase: URL;
@@ -2498,6 +2677,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     expectedDocumentIdentity?: string,
     signal?: AbortSignal,
     onDispatched?: () => void,
+    programmable?: "isolated" | "main",
   ): Promise<{ value: unknown; documentIdentity: string }> {
     throwIfAborted(signal);
     const before = await this.#executionDocument(
@@ -2513,6 +2693,53 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     ) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
+    let evaluationContextId = before.executionContextId;
+    let uniqueContextId: string | undefined;
+    let assertMainContext: (() => void) | undefined;
+    if (programmable === "main") {
+      const candidates = [
+        ...(this.#mainWorldContexts.get(before.sessionId)?.values() ?? []),
+      ].filter((value) => value.frameId === before.frameId);
+      if (candidates.length !== 1)
+        throw Error(
+          "Browser main-world execution context unavailable; no unpinned fallback is permitted",
+        );
+      const context = candidates[0]!;
+      if (!context.uniqueId)
+        throw Error(
+          "Browser main-world unique context identity unsupported; no fallback is permitted",
+        );
+      evaluationContextId = context.id;
+      uniqueContextId = context.uniqueId;
+      assertMainContext = () => {
+        if (
+          this.#mainWorldContexts.get(before.sessionId)?.get(context.id) !==
+          context
+        )
+          throw new UserBrowserDocumentChangedBeforeDispatchError();
+      };
+      this.#assertDocumentFence(before, true);
+    } else if (programmable) {
+      const world = asRecord(
+        await this.#send(
+          "Page.createIsolatedWorld",
+          {
+            frameId: before.frameId,
+            worldName: "zenx-browser-programmable-v1",
+            grantUniveralAccess: false,
+          },
+          before.sessionId,
+          signal,
+          undefined,
+          undefined,
+          undefined,
+          () => this.#assertDocumentFence(before, true),
+        ),
+      );
+      if (typeof world?.executionContextId !== "number")
+        throw Error("Browser programmable execution context unavailable");
+      evaluationContextId = world.executionContextId;
+    }
     let response: Record<string, unknown> | undefined;
     let mutationResponseKnown = false;
     try {
@@ -2524,15 +2751,19 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             expression,
             awaitPromise: true,
             returnByValue: true,
-            contextId: before.executionContextId,
+            ...(uniqueContextId
+              ? { uniqueContextId }
+              : { contextId: evaluationContextId }),
+            ...(programmable ? { timeout: 2000 } : {}),
           },
           signal,
           onDispatched,
-          undefined,
+          assertMainContext,
           inspectDeadline,
         ),
       );
       mutationResponseKnown = true;
+      assertMainContext?.();
       if (response?.exceptionDetails !== undefined) {
         throw new Error("User browser CDP evaluation failed");
       }
@@ -4389,6 +4620,95 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     const method = message.method;
     const params = asRecord(message.params);
     if (typeof method !== "string" || params === undefined) return;
+    if (
+      typeof message.sessionId === "string" &&
+      this.#sessionTargets.has(message.sessionId)
+    ) {
+      const contexts = this.#mainWorldContexts.get(message.sessionId);
+      const identity = (context: { id: number; uniqueId?: string }) =>
+        context.uniqueId ?? `id:${context.id}`;
+      if (
+        method === "Page.frameStartedNavigating" &&
+        typeof params.frameId === "string" &&
+        params.navigationType !== "sameDocument"
+      ) {
+        let navigations = this.#mainWorldNavigations.get(message.sessionId);
+        if (!navigations) {
+          navigations = new Map();
+          this.#mainWorldNavigations.set(message.sessionId, navigations);
+        }
+        if (navigations.size < 256 || navigations.has(params.frameId))
+          navigations.set(
+            params.frameId,
+            new Set(
+              [...(contexts?.values() ?? [])]
+                .filter((context) => context.frameId === params.frameId)
+                .map(identity),
+            ),
+          );
+        else this.#mainWorldContexts.delete(message.sessionId);
+      } else if (
+        method === "Page.frameNavigated" ||
+        method === "Page.frameDetached"
+      ) {
+        const frameId =
+          method === "Page.frameDetached"
+            ? params.frameId
+            : asRecord(params.frame)?.id;
+        if (typeof frameId === "string") {
+          const navigations = this.#mainWorldNavigations.get(message.sessionId),
+            prior = navigations?.get(frameId);
+          for (const [id, context] of contexts ?? [])
+            if (
+              context.frameId === frameId &&
+              (method === "Page.frameDetached" ||
+                prior === undefined ||
+                prior.has(identity(context)))
+            )
+              contexts!.delete(id);
+          navigations?.delete(frameId);
+          if (navigations?.size === 0)
+            this.#mainWorldNavigations.delete(message.sessionId);
+        }
+      }
+      if (method === "Runtime.executionContextCreated") {
+        const context = asRecord(params.context),
+          aux = asRecord(context?.auxData);
+        if (
+          aux?.isDefault === true &&
+          typeof aux.frameId === "string" &&
+          typeof context?.id === "number"
+        ) {
+          let contexts = this.#mainWorldContexts.get(message.sessionId);
+          if (!contexts) {
+            contexts = new Map();
+            this.#mainWorldContexts.set(message.sessionId, contexts);
+          }
+          // Only the newest default context for a frame may be selected.
+          for (const [id, value] of contexts)
+            if (value.frameId === aux.frameId) contexts.delete(id);
+          if (contexts.size >= 256) return;
+          contexts.set(context.id, {
+            id: context.id,
+            frameId: aux.frameId,
+            ...(typeof context.uniqueId === "string"
+              ? { uniqueId: context.uniqueId }
+              : {}),
+          });
+        }
+      } else if (method === "Runtime.executionContextDestroyed") {
+        for (const [id, context] of this.#mainWorldContexts.get(
+          message.sessionId,
+        ) ?? [])
+          if (
+            id === params.executionContextId ||
+            (typeof params.executionContextUniqueId === "string" &&
+              context.uniqueId === params.executionContextUniqueId)
+          )
+            this.#mainWorldContexts.get(message.sessionId)!.delete(id);
+      } else if (method === "Runtime.executionContextsCleared")
+        this.#mainWorldContexts.delete(message.sessionId);
+    }
     if (method === "Page.screencastFrame") {
       this.#receiveScreencastFrame(message, params);
       return;
@@ -4469,6 +4789,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (typeof message.sessionId !== "string") return;
     const targetId = this.#sessionTargets.get(message.sessionId);
     if (targetId === undefined) return;
+    const buffers = this.#eventBuffers.get(message.sessionId);
+    if (method.startsWith("Network.")) buffers?.network?.push(method, params);
+    if (
+      method === "Runtime.consoleAPICalled" ||
+      method === "Runtime.exceptionThrown"
+    )
+      buffers?.console?.push(method, params);
     if (
       method === "Page.javascriptDialogOpening" ||
       method === "Page.javascriptDialogClosed"
@@ -4570,7 +4897,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         method,
         params,
         this.#targetDocuments.get(targetId)?.frameId,
-      )
+      ) ||
+      (method === "Page.frameDetached" &&
+        params.frameId === this.#targetDocuments.get(targetId)?.frameId)
     ) {
       this.#invalidateTarget(targetId, false);
     }
@@ -4619,6 +4948,14 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   ): void {
     if (epoch === undefined) return;
     const sessionId = epoch.cdpSessionId;
+    if (sessionId) {
+      const buffers = this.#eventBuffers.get(sessionId);
+      this.#eventBuffers.delete(sessionId);
+      this.#mainWorldContexts.delete(sessionId);
+      this.#mainWorldNavigations.delete(sessionId);
+      void buffers?.network?.close().catch(() => undefined);
+      void buffers?.console?.close().catch(() => undefined);
+    }
     const attaching = this.#targetAttachments.get(epoch.targetId);
     if (attaching?.epoch === epoch) attaching.invalidated = true;
     if (sessionId !== undefined) {
@@ -4743,6 +5080,13 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     if (!this.#closing && this.#attachmentClosures.size > 0) {
       this.#recordConnectionTaint(`connection failed (${error.message})`);
     }
+    for (const buffers of this.#eventBuffers.values()) {
+      void buffers.network?.close().catch(() => undefined);
+      void buffers.console?.close().catch(() => undefined);
+    }
+    this.#eventBuffers.clear();
+    this.#mainWorldContexts.clear();
+    this.#mainWorldNavigations.clear();
     this.#targetSessions.clear();
     this.#sessionTargets.clear();
     this.#targetDocuments.clear();

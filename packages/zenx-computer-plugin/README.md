@@ -291,6 +291,8 @@ ordinary tool result (including nonzero failures).
   `.keyPress({key})`, `.shortcut({key,modifiers})`, `.scroll({deltaY})`
 - Native screenshot input: `computer.capture(ref).foreground.click({x,y,button})`
   or `.background.click({x,y})`; only the latter avoids global takeover.
+  Native `.foreground.drag({x,y,toX,toY})` uses one fresh capture and a bounded
+  left-button path inside that same selected window.
 - Native local OCR: `computer.capture(ref).extensions.vision.ocr({languages})`
 - Explicit application-current-focus input:
   `computer.appCurrentFocus(bindingRef).type({text})` / `.keyPress({key})`.
@@ -300,7 +302,7 @@ Methods exist only when the provider's tool is exposed. Windows and Peekaboo do
 not acquire native macOS OCR/background input through this facade. Legacy
 foreground providers use root `computer.foreground.*` methods and retain their
 original desktop-wide scope; they are not relabeled as exact-window input.
-Unsupported paste, drag or text-selection methods are not fabricated. Right-click
+Unsupported paste or text-selection methods are not fabricated. Right-click
 uses the supported foreground click's explicit `button:"right"` argument.
 
 A new JavaScript program reconstructs its objects from the same short refs; no
@@ -332,3 +334,13 @@ mapping remains missing or ambiguous, foreground input fails without silently
 choosing the application's focused/main window. A previously retained AX object
 still uses strict native identity verification; this is not an automatic retry
 of an action or permission bypass.
+
+Foreground drag consumes the exact capture and checks the selected window,
+geometry, focus and pointer recipient along its bounded path. Cancellation stops
+further movement and attempts a mouse-up without moving the pointer; if focus has
+changed, release is best-effort and the application effect remains unknown. The
+Host waits for actual helper termination; missing release evidence blocks further
+drag in that provider instance. A release-post receipt is not proof that the
+application received it or completed a drop. Reobserve rather than replaying.
+Native receiver fixtures record drag events independently; Linux tests cannot
+establish macOS delivery or application effect.

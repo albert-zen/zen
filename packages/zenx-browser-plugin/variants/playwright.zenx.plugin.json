@@ -1,6 +1,6 @@
 {
   "id": "browser",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A cross-platform isolated Playwright CLI browser session with bounded ARIA inspection and native auto-waiting actions.",
   "provider": {
     "id": "playwright-cli",
@@ -19,7 +19,7 @@
     {
       "id": "browser.tabs.read",
       "title": "Inspect browser tabs",
-      "description": "List tabs and inspect bounded visible text and interactive targets.",
+      "description": "List tabs, inspect visible text and targets, and explicitly read full page content, screenshots, network events/responses and console diagnostics.",
       "scope": "browser-session"
     },
     {
@@ -439,6 +439,48 @@
         "browser_context",
         "session.close"
       ]
+    },
+    {
+      "name": "browser_extensions",
+      "description": "List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "isolated",
+      "capabilities": ["playwright_cli", "headless", "browser_context"],
+      "maxOutputBytes": 16384
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "Capture the exact tab with existing fenced inspect and return PNG artifact plus fresh observation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "isolated",
+      "capabilities": ["playwright_cli", "headless", "browser_context"],
+      "maxOutputBytes": 16384
     }
   ],
   "schemaVersion": 2,

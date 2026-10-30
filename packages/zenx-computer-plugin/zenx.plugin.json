@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "computer",
   "name": "Computer",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Negotiated macOS desktop operations: targeted accessibility actions where supported and explicitly labeled, cancellable foreground takeover as the reliable baseline.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -28,7 +28,8 @@
       "foreground.scroll",
       "window.ocr",
       "window.background_click",
-      "app.background_keyboard"
+      "app.background_keyboard",
+      "foreground.drag"
     ]
   },
   "permissions": [
@@ -557,6 +558,45 @@
         "required": ["deltaY", "bindingId"],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "computer_foreground_drag",
+      "description": "FOREGROUND TAKEOVER: left-button drag from x/y to toX/toY image pixels in one fresh exact-window capture. A bounded path checks the same window/focus before each event. Cancellation or focus loss stops movement and attempts mouse-up cleanup at the current pointer; cleanup can reach changed focus. Posted/release receipts do not prove application effect. Never replay uncertain input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string"
+          },
+          "captureId": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "toX": {
+            "type": "number"
+          },
+          "toY": {
+            "type": "number"
+          }
+        },
+        "required": ["bindingId", "captureId", "x", "y", "toX", "toY"],
+        "additionalProperties": false
+      },
+      "permissions": ["computer.foreground.control"],
+      "interactionMode": "foreground_required",
+      "capabilities": [
+        "foreground.drag",
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "capture_bound",
+        "target_bound"
+      ]
     },
     {
       "name": "computer_foreground_type",

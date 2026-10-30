@@ -503,6 +503,7 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
       "window.ocr",
       "window.background_click",
       "app.background_keyboard",
+      "foreground.drag",
     ],
   },
   mainDocument:
@@ -609,6 +610,32 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
             }
           : tool,
     ),
+    {
+      name: "computer_foreground_drag",
+      description:
+        "FOREGROUND TAKEOVER: left-button drag from x/y to toX/toY image pixels in one fresh exact-window capture. A bounded path checks the same window/focus before each event. Cancellation or focus loss stops movement and attempts mouse-up cleanup at the current pointer; cleanup can reach changed focus. Posted/release receipts do not prove application effect. Never replay uncertain input.",
+      inputSchema: objectSchema(
+        {
+          bindingId: stringSchema(),
+          captureId: stringSchema(),
+          x: { type: "number" },
+          y: { type: "number" },
+          toX: { type: "number" },
+          toY: { type: "number" },
+        },
+        ["bindingId", "captureId", "x", "y", "toX", "toY"],
+      ),
+      permissions: ["computer.foreground.control"],
+      interactionMode: "foreground_required",
+      capabilities: [
+        "foreground.drag",
+        "global_input",
+        "may_change_focus",
+        "cancellable",
+        "capture_bound",
+        "target_bound",
+      ],
+    },
     {
       name: "computer_foreground_type",
       description:
@@ -1444,6 +1471,45 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
           ...(this.#backend.targetSession
             ? { dispatch: "posted", applicationEffect: "unverified" }
             : {}),
+        };
+      }
+      case "computer_foreground_drag": {
+        const session = this.#backend.targetSession;
+        if (
+          !session ||
+          !this.manifest.tools.some((tool) => tool.name === toolName)
+        )
+          throw new Error("This provider does not support bound native drag");
+        const action = {
+          operation: "drag" as const,
+          captureId: requiredString(invocation.arguments, "captureId"),
+          x: requiredFiniteNumber(invocation.arguments, "x"),
+          y: requiredFiniteNumber(invocation.arguments, "y"),
+          toX: requiredFiniteNumber(invocation.arguments, "toX"),
+          toY: requiredFiniteNumber(invocation.arguments, "toY"),
+        };
+        await this.#withForegroundActivity(
+          invocation,
+          signal,
+          async (signal, onStopping) => {
+            this.#assertForegroundControlAllowed(toolName);
+            this.#presentation.invalidateAll();
+            await session.input(
+              requiredComputerOwner(invocation),
+              action,
+              signal,
+              onStopping,
+              selectedBindingId,
+              this.#foregroundActivity?.pointerPassthroughWindowIds?.() ?? [],
+            );
+          },
+        );
+        return {
+          action: "drag",
+          impact: "foreground_takeover",
+          dispatch: "posted",
+          release: "posted",
+          applicationEffect: "unverified",
         };
       }
       case "computer_foreground_key_press": {
@@ -4733,6 +4799,9 @@ var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
   var backgroundRequest = false
+  var dragRelease: String?
+  var dragRequest = false
+  var dragSettled = false
   var nativeStage = "request-decode"
   backgroundSettledForRequest = false
   var owner = ""
@@ -4741,9 +4810,10 @@ while let line = readLine() {
   do {
     guard let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = request["operation"] as? String, let requestedOwner = request["owner"] as? String, !requestedOwner.isEmpty else { try refuse("Invalid target request") }
-    nativeStage = ["select", "verify", "capture", "backgroundClick", "click", "key", "type", "shortcut", "scroll"].contains(operation) ? operation : "request-validate"
+    nativeStage = ["select", "verify", "capture", "backgroundClick", "click", "drag", "key", "type", "shortcut", "scroll"].contains(operation) ? operation : "request-validate"
+    dragRequest = operation == "drag"
     backgroundRequest = ["backgroundClick", "backgroundType", "backgroundKeyPress"].contains(operation)
-    guard ["select", "verify", "capture", "backgroundClick", "backgroundType", "backgroundKeyPress", "click", "key", "type", "shortcut", "scroll"].contains(operation) else { try refuse("Unsupported bound operation; no input dispatched") }
+    guard ["select", "verify", "capture", "backgroundClick", "backgroundType", "backgroundKeyPress", "click", "drag", "key", "type", "shortcut", "scroll"].contains(operation) else { try refuse("Unsupported bound operation; no input dispatched") }
     owner = requestedOwner
     expectedBindingId = request["bindingId"] as? String
     guard AXIsProcessTrusted() else { try refuse("macOS Accessibility permission is not granted") }
@@ -4779,6 +4849,7 @@ while let line = readLine() {
         let passthrough = Set(passthroughIds)
         func post(_ event: CGEvent?) throws {
           guard let event else { try refuse("Could not construct native input") }
+          if operation == "drag" && targetCancelled != 0 { try refuse("Foreground drag cancelled") }
           try binding.fence()
           try shortcutFence?()
           if let pointerPoint { try binding.pointerFence(pointerPoint, passthrough) }
@@ -4796,6 +4867,40 @@ while let line = readLine() {
           try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: point, mouseButton: button))
           usleep(30_000)
           try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: point, mouseButton: button))
+        case "drag":
+          guard let x = request["x"] as? Double, let y = request["y"] as? Double,
+                let toX = request["toX"] as? Double, let toY = request["toY"] as? Double,
+                [x, y, toX, toY].allSatisfy({ $0.isFinite }),
+                binding.bounds.contains(CGPoint(x: x, y: y)), binding.bounds.contains(CGPoint(x: toX, y: toY)) else { try refuse("Invalid bound drag points") }
+          var pressed = false
+          var lastPoint = CGPoint(x: x, y: y)
+          defer {
+            // Release only, never another motion or a replay. Even after focus
+            // loss/cancellation do not leave a global button held down. This
+            // cleanup is not an exact-window application-effect guarantee.
+            if pressed {
+              let point = CGEvent(source: nil)?.location ?? lastPoint
+              if let release = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) {
+                release.post(tap: .cghidEventTap); posted += 1; dragRelease = "posted"
+              } else { dragRelease = "unknown" }
+            }
+            emit(["phase": "foregroundDragSettled", "release": dragRelease ?? "not_needed"])
+            dragSettled = true
+          }
+          pointerPoint = lastPoint
+          try post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: lastPoint, mouseButton: .left))
+          try post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: lastPoint, mouseButton: .left))
+          pressed = true
+          for step in 1...16 {
+            usleep(10_000)
+            let fraction = Double(step) / 16.0
+            let point = CGPoint(x: x + (toX - x) * fraction, y: y + (toY - y) * fraction)
+            pointerPoint = point
+            try post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left))
+            lastPoint = point
+          }
+          try post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: lastPoint, mouseButton: .left))
+          pressed = false; dragRelease = "posted"
         case "key":
           guard let key = request["key"] as? String, let code = keyCodes[key] else { try refuse("Unsupported bound key") }
           try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
@@ -4837,7 +4942,9 @@ while let line = readLine() {
           try post(event)
         default: try refuse("Unsupported bound operation")
         }
-        reply = ["result": ["dispatch": "posted", "applicationEffect": "unverified"]]
+        var result: [String: Any] = ["dispatch": "posted", "applicationEffect": "unverified"]
+        if let dragRelease { result["release"] = dragRelease }
+        reply = ["result": result]
       }
       }
     }
@@ -4849,9 +4956,12 @@ while let line = readLine() {
     if backgroundRequest && !backgroundSettledForRequest {
       emit(["phase": "backgroundSettled", "release": "not_needed"])
     }
+    if dragRequest && !dragSettled {
+      emit(["phase": "foregroundDragSettled", "release": "not_needed"])
+    }
     let message = nativeTargetFailure(error, nativeStage)
     let outcome = posted == 0 ? "; no input dispatched" : "; input partially dispatched; outcome unknown; do not retry automatically"
-    reply = ["error": message + outcome]
+    reply = ["error": message + outcome + (dragRelease.map { "; drag release " + $0 } ?? "")]
   }
   if !emit(reply) { exit(1) }
   if targetCancelled != 0 { exit(0) }

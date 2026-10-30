@@ -4482,6 +4482,7 @@ test("No project creates its independent directory only on a valid first Send an
 async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
+    threadSidebar?: Window["zenx"]["threadSidebar"];
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -4624,6 +4625,7 @@ async function mountApp(
         listener: Parameters<Window["zenx"]["protocol"]["onNotification"]>[0],
       ) => options.onNotification?.(listener) ?? (() => undefined),
     },
+    threadSidebar: options.threadSidebar,
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
         options.threads === undefined ? [] : await options.threads(archived),
@@ -7154,6 +7156,205 @@ test("Side chat first Send displays inherited context and staged progress before
   }
 });
 
+test("Add to side chat targets the visible child composer during deferred sidebar promotion", async () => {
+  const creates: unknown[] = [];
+  const sends: Array<{ threadId: string }> = [];
+  const parentView = runningThread();
+  parentView.turns[0]!.status = "completed";
+  parentView.turns[0]!.items = [
+    {
+      id: "parent-request",
+      type: "userMessage",
+      content: [
+        {
+          type: "text",
+          text: "Parent request before opening",
+          text_elements: [],
+        },
+      ],
+      clientId: null,
+    },
+    {
+      id: "parent-answer",
+      type: "agentMessage",
+      text: "Inherited parent answer",
+      phase: "final_answer",
+      memoryCitation: null,
+    },
+  ];
+  const parent = resumed(parentView).thread;
+  const admission = deferred<unknown>();
+  const promotion = deferred<void>();
+  let promotionPending = false;
+  const { emptySidebarState, applySidebarPatch } =
+    await import("../src/thread-sidebar-state.js");
+  let sidebar = emptySidebarState("thread-1");
+  const childView = {
+    ...liveThread(),
+    id: "child",
+    sessionId: "child",
+    name: "Sent side chat",
+  };
+  const create = deferred<{ thread: typeof parent }>();
+  const harness = await mountThreadApp({
+    threadSidebar: {
+      read: async () => sidebar,
+      onChanged: () => () => undefined,
+      update: async ({ patch }) => {
+        if (
+          patch.tabs?.some(
+            (tab) => tab.kind === "thread" && tab.threadId === "child",
+          )
+        ) {
+          promotionPending = true;
+          await promotion.promise;
+        }
+        sidebar = {
+          ...applySidebarPatch(sidebar, patch),
+          revision: sidebar.revision + 1,
+        };
+        return { applied: true, state: sidebar };
+      },
+    },
+    plugins: {
+      get: async () => ({
+        ...workspaceLauncherSnapshot,
+        plugins: workspaceLauncherSnapshot.plugins.filter(
+          (plugin) => plugin.id === "zenx-subagents",
+        ),
+      }),
+      executeCommand: async () => ({ threads: [] }),
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume")
+        return resumed(
+          (params as { threadId: string }).threadId === "child"
+            ? childView
+            : parentView,
+        );
+      if (method === "zen/thread/read") return { thread: parent };
+      if (method === "zen/thread/create-child-configured") {
+        creates.push(params);
+        return create.promise;
+      }
+      if (method === "zen/turn/send") {
+        sends.push(params as { threadId: string });
+        return admission.promise;
+      }
+      throw new Error(`Unexpected request ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => open.click());
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>('[id^="side-chat-draft-"]'),
+    );
+    const sideSurface = composer.closest(".thread-view")!;
+    assert.match(
+      sideSurface.textContent ?? "",
+      /Parent request before opening/,
+    );
+    assert.match(sideSurface.textContent ?? "", /Inherited parent answer/);
+    assert.doesNotMatch(sideSurface.textContent ?? "", /Start a new thread/);
+    assert.equal(sideSurface.querySelector(".message-fork"), null);
+    await setTextareaValue(composer, "First real message");
+    const send = composer
+      .closest("form")!
+      .querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
+    await invokePrimarySubmit(send, 2);
+    assert.deepEqual(creates, [
+      {
+        parentThreadId: "thread-1",
+        mode: "side-chat",
+        snapshot: { itemId: parent.items.at(-1)!.id, contextItemId: null },
+      },
+    ]);
+    assert.match(
+      sideSurface.querySelector('[role="status"]')?.textContent ?? "",
+      /Creating side chat/,
+    );
+    assert.ok(
+      sideSurface.querySelector(".side-chat-context-note .mini-spinner"),
+    );
+    assert.equal(send.disabled, true);
+    assert.equal(sends.length, 0);
+    await act(async () =>
+      create.resolve({ thread: resumed(childView).thread }),
+    );
+    await waitFor(() => sends.length === 1);
+    assert.match(
+      sideSurface.querySelector(".side-chat-context-note")?.textContent ?? "",
+      /Sending your message/,
+    );
+    assert.equal(composer.value, "First real message");
+    await act(async () => admission.resolve({}));
+    await waitFor(() => promotionPending);
+    const childComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#side-composer-child"),
+    );
+    await setTextareaValue(childComposer, "Preserved child draft ");
+    const paragraph = document.querySelector(
+      '#primary-conversation-content [data-quote-item-id="parent-answer"] [data-message-quote-body] p',
+    )!;
+    assert.ok(paragraph);
+    await act(async () => {
+      childComposer.blur();
+      document.dispatchEvent(new window.Event("pointerdown"));
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      document.dispatchEvent(new window.Event("selectionchange"));
+      selection.addRange(range);
+      document.dispatchEvent(new window.Event("pointerup"));
+      document.dispatchEvent(new window.Event("selectionchange"));
+    });
+    const add = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.message-selection-actions [aria-label="Add to side chat"]',
+      ),
+    );
+    await act(async () => add.click());
+    const token = await waitFor(() =>
+      document.querySelector("#side-composer-child .reference-token"),
+    );
+    assert.match(token.textContent ?? "", /Inherited parent answer/);
+    await waitFor(() => document.activeElement?.id === "side-composer-child");
+    assert.match(
+      document.getElementById("side-composer-child")?.textContent ?? "",
+      /Preserved child draft/,
+    );
+    assert.equal(sends.length, 1, "Add never sends another turn");
+    await act(async () => promotion.resolve());
+
+    await waitFor(() =>
+      document.querySelector('[role="tab"][id*="thread:child"]'),
+    );
+    assert.ok(document.querySelector("#side-composer-child .reference-token"));
+    assert.match(
+      document.getElementById("side-composer-child")?.textContent ?? "",
+      /Preserved child draft/,
+    );
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0]?.threadId, "child");
+    assert.equal(
+      document.querySelector('[role="tab"][id*="custom:side-chat-draft-"]'),
+      null,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
 test("Side chat drafts stay with their parent across actual Sidebar navigation", async () => {
   const projects = oneProject();
   projects.projects[0]!.threadIds = ["thread-1", "thread-2"];
@@ -7661,6 +7862,297 @@ test("tool trigger destination opens actual other-thread definition in the exist
       commands.every((command) =>
         ["list", "threads", "workspaces", "sidebar_facts"].includes(command),
       ),
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Add to side chat creates only a local structured draft, preserves main input, and reuses the selected draft", async () => {
+  const calls: string[] = [];
+  const parent = runningThread();
+  parent.turns[0]!.status = "completed";
+  parent.status = { type: "idle" };
+  parent.turns[0]!.items = [
+    {
+      id: "quote-source",
+      type: "agentMessage",
+      text: "Exact selected side chat context",
+      phase: "final_answer",
+      memoryCitation: null,
+    },
+  ];
+  const harness = await mountThreadApp({
+    plugins: {
+      get: async () => ({
+        ...workspaceLauncherSnapshot,
+        plugins: workspaceLauncherSnapshot.plugins.filter(
+          (plugin) => plugin.id === "zenx-subagents",
+        ),
+      }),
+      executeCommand: async () => ({ threads: [] }),
+    },
+    request: async (method) => {
+      calls.push(method);
+      if (method === "zen/thread/resume") return resumed(parent);
+      if (method === "zen/thread/read")
+        return { thread: resumed(parent).thread };
+      throw new Error(`Unexpected request ${method}`);
+    },
+  });
+  try {
+    const main = await selectedComposer();
+    await setTextareaValue(main, "Keep my main question");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    const add = async () => {
+      await act(
+        async () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          ),
+      );
+      const paragraph = document.querySelector(
+        '#primary-conversation-content [data-quote-item-id="quote-source"] [data-message-quote-body] p',
+      )!;
+      assert.ok(paragraph);
+      await act(async () => {
+        (document.activeElement as HTMLElement)?.blur();
+        document.dispatchEvent(new window.Event("pointerdown"));
+        const range = document.createRange();
+        range.selectNodeContents(paragraph);
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        document.dispatchEvent(new window.Event("selectionchange"));
+        selection.addRange(range);
+        document.dispatchEvent(new window.Event("pointerup"));
+        document.dispatchEvent(new window.Event("selectionchange"));
+      });
+      const action = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          '.message-selection-actions [aria-label="Add to side chat"]',
+        ),
+      );
+      await act(async () => action.click());
+    };
+    await add();
+    const token = await waitFor(() =>
+      document.querySelector('[id^="side-chat-draft-"] .reference-token'),
+    );
+    assert.match(token.textContent ?? "", /Exact selected side chat context/);
+    assert.equal(main.value, "Keep my main question");
+    assert.equal(
+      document.querySelectorAll('[role="tab"][id*="custom:side-chat-draft-"]')
+        .length,
+      1,
+    );
+    await add();
+    assert.equal(
+      document.querySelectorAll('[id^="side-chat-draft-"] .reference-token')
+        .length,
+      1,
+    );
+    assert.equal(
+      calls.filter((method) => method === "zen/thread/read").length,
+      1,
+    );
+    const openSubagents = async () => {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+          .click(),
+      );
+      const choice = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".workspace-plugin-choice > button",
+        ),
+      );
+      await act(async () => choice.click());
+    };
+    await openSubagents();
+    const newSide = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>('[aria-label="New side chat"]'),
+    );
+    await act(async () => newSide.click());
+    const second = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[id^="side-chat-draft-"]',
+      ),
+    );
+    await setTextareaValue(second, "Second draft question");
+    await add();
+    await waitFor(() =>
+      document.querySelector('[id^="side-chat-draft-"] .reference-token'),
+    );
+    assert.equal(
+      document.querySelector('[role="dialog"]'),
+      null,
+      "selected target wins even with multiple side chats",
+    );
+    assert.equal(
+      document.querySelectorAll('[role="tab"][id*="custom:side-chat-draft-"]')
+        .length,
+      2,
+    );
+    await openSubagents();
+    await add();
+    const chooser = await waitFor(() =>
+      document.querySelector('[role="dialog"]'),
+    );
+    assert.match(chooser.textContent ?? "", /Choose a side chat/);
+    const first = [
+      ...chooser.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Side chat 1");
+    assert.ok(first);
+    await act(async () => first.click());
+    await waitFor(() => document.querySelector('[role="dialog"]') === null);
+    assert.equal(
+      document.querySelectorAll('[id^="side-chat-draft-"] .reference-token')
+        .length,
+      1,
+    );
+    assert.equal(
+      calls.some((method) => /send|fork|create-child/.test(method)),
+      false,
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+test("Add to side chat keeps a delayed local draft in its original workspace without navigating or focusing after departure", async () => {
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = ["thread-1", "thread-2"];
+  const parent = runningThread();
+  parent.status = { type: "idle" };
+  parent.turns[0]!.status = "completed";
+  parent.turns[0]!.items = [
+    {
+      id: "delayed-source",
+      type: "agentMessage",
+      text: "Keep this exact context",
+      phase: "final_answer",
+      memoryCitation: null,
+    },
+  ];
+  const read = deferred<{ thread: ReturnType<typeof resumed>["thread"] }>();
+  const calls: string[] = [];
+  const harness = await mountApp(projects, {
+    threads: async (archived) =>
+      archived
+        ? []
+        : [summary(false), summary(false, "thread-2", "Thread two")],
+    request: async (method, params) => {
+      calls.push(method);
+      const id = (params as { threadId: string }).threadId;
+      if (method === "zen/thread/resume")
+        return resumed(
+          id === "thread-1"
+            ? parent
+            : { ...liveThread(), id, sessionId: id, name: "Thread two" },
+        );
+      if (method === "zen/thread/read") return read.promise;
+      throw new Error(`Unexpected request ${method}`);
+    },
+  });
+  try {
+    await selectedComposer();
+    await act(async () => {
+      const paragraph = document.querySelector(
+        '#primary-conversation-content [data-quote-item-id="delayed-source"] [data-message-quote-body] p',
+      )!;
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new window.Event("selectionchange"));
+    });
+    const action = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.message-selection-actions [aria-label="Add to side chat"]',
+      ),
+    );
+    await act(async () => action.click());
+    await waitFor(() => calls.includes("zen/thread/read"));
+    await act(async () => {
+      const paragraph = document.querySelector(
+        '#primary-conversation-content [data-quote-item-id="delayed-source"] [data-message-quote-body] p',
+      )!;
+      const range = document.createRange();
+      range.setStart(paragraph.firstChild!, 0);
+      range.setEnd(paragraph.firstChild!, 4);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new window.Event("selectionchange"));
+    });
+    const again = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '.message-selection-actions [aria-label="Add to side chat"]',
+      ),
+    );
+    await act(async () => again.click());
+    assert.equal(
+      calls.filter((method) => method === "zen/thread/read").length,
+      1,
+      "pending source reads share one local draft creation",
+    );
+
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="thread-2"] .thread-row',
+        )!
+        .click(),
+    );
+    await waitFor(
+      () =>
+        document
+          .querySelector('[data-thread-id="thread-2"] .thread-row')
+          ?.getAttribute("aria-current") === "page" ||
+        document.querySelector(".thread-heading h1")?.textContent ===
+          "Thread two",
+    );
+    await act(async () => read.resolve({ thread: resumed(parent).thread }));
+    assert.equal(document.querySelector('[id^="side-chat-draft-"]'), null);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(
+          '[data-thread-id="thread-1"] .thread-row',
+        )!
+        .click(),
+    );
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Open side panel"]')
+        ?.click(),
+    );
+    const tab = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[role="tab"][id*="custom:side-chat-draft-"]',
+      ),
+    );
+    await act(async () => tab.click());
+    const token = await waitFor(() =>
+      document.querySelector('[id^="side-chat-draft-"] .reference-token'),
+    );
+    assert.match(token.textContent ?? "", /Keep this exact context/);
+    assert.equal(
+      document.querySelectorAll('[id^="side-chat-draft-"] .reference-token')
+        .length,
+      2,
+    );
+    assert.equal(
+      calls.some((method) => /send|fork|create-child/.test(method)),
+      false,
     );
   } finally {
     await unmountApp(harness);

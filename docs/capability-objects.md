@@ -19,7 +19,7 @@ const browser = capabilities.browser("workspace");
 const tab = browser.tab("r1"); // use an actual reference returned by this provider
 const result = await tab.inspect({ query: "Save" });
 if (result.exitCode !== 0) text(result);
-else text(result.structuredContent); // select only what the model needs
+else text(result.output); // or parse the returned JSON and select needed fields
 ```
 
 Names in this example exist only when the provider declares them. Different

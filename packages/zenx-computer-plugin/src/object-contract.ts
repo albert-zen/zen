@@ -60,7 +60,10 @@ export function computerObjectBinding(
   const bound =
     properties !== null &&
     typeof properties === "object" &&
-    ("bindingId" in properties || "binding" in properties);
+    ("bindingId" in properties ||
+      "binding" in properties ||
+      "captureId" in properties ||
+      "capture" in properties);
   // Legacy providers expose desktop-wide input; never label it exact-window input.
   if (!bound) return bind(["foreground", method]);
   return name === "computer_foreground_click" ||
