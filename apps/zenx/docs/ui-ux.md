@@ -888,3 +888,7 @@ A compact disclosure above the Composer reads the existing local Shell session l
 输入已接纳或 agent 已开始工作。失联使 pending 观察变成未知，不自动重试；重新读到同一唯一
 committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消除此未决反馈；旧的同 boundary 压缩不能抹掉新的进行中或失败。显式请求身份独立于状态对象，只有同一请求且未编辑的原草稿可清空。既有设置清楚说明 agentic 开关不关闭宿主
 自动压缩，以及完成后、发送前、活动工具轮之间的不同条件；不新增开关或修改阈值策略。
+
+### Legacy quote presentation
+
+The exact leading legacy `[Message quote; ...]` transport is rendered through the same inline reference component as current quoted messages, retaining exact selected text and source navigation. Real line breaks appear in the expanded excerpt; source IDs belong in the explicit source details, not the message bubble or plain-text clipboard. Malformed or embedded illustrative text stays literal. New structured sends retain provenance independently of readable clipboard text.

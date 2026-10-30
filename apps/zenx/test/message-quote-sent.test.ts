@@ -466,3 +466,23 @@ test("normal Composer input events never promote pasted draft headers or strip l
     "",
   );
 });
+
+test("legacy leading quote renders exact multiline reference instead of UUID JSON in the sent bubble", async () => {
+  const payload = `[Message quote; thread ID: ${JSON.stringify(longQuote.threadId)}; message ID: ${JSON.stringify(longQuote.id)}; excerpt: ${JSON.stringify(longQuote.excerpt)}]Follow up`;
+  await withView(append(base(), payload), async () => {
+    const sent = document.querySelector('[data-sent-message-id="sent-item"]')!;
+    assert.equal(sent.querySelectorAll(".reference-token").length, 1);
+    assert.equal(
+      sent.querySelector(".reference-token-details > span")!.textContent,
+      longQuote.excerpt,
+    );
+    assert.match(sent.textContent!, /Follow up/);
+    assert.ok(!sent.textContent!.includes("thread ID:"));
+    assert.ok(!sent.textContent!.includes("\\n"));
+    await click(sent.querySelector(".reference-token-details")!);
+    assert.equal(
+      document.querySelector(".reference-exact-excerpt")!.textContent,
+      longQuote.excerpt,
+    );
+  });
+});

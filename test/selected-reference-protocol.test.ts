@@ -39,3 +39,30 @@ test("shared v3 codec preserves the existing five-source captured Composer fixtu
     null,
   );
 });
+
+test("exact legacy leading quote is a positioned reference; malformed and literal examples stay plain", () => {
+  const excerpt = '  第一行\n\n"second" \\ path  ';
+  const raw = `[Message quote; thread ID: "synthetic-thread"; message ID: "synthetic-message"; excerpt: ${JSON.stringify(excerpt)}]`;
+  assert.deepEqual(parseSentReferenceContent(raw + "Follow up"), {
+    text: "\uFFFCFollow up",
+    references: [
+      {
+        kind: "message",
+        name: "ZenX",
+        cwd: "",
+        threadId: "synthetic-thread",
+        id: "synthetic-message",
+        excerpt,
+        position: 0,
+      },
+    ],
+  });
+  for (const text of [
+    "Example: " + raw,
+    "```\n" + raw + "\n```",
+    raw.slice(0, -1),
+    raw.replace('ID: "', 'ID:  "'),
+    raw.replace('"synthetic-thread"', '""'),
+  ])
+    assert.deepEqual(parseSentReferenceContent(text), { text, references: [] });
+});

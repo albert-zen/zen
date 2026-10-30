@@ -382,67 +382,76 @@ test("selected refs cannot mutate or retarget", () => {
 });
 
 for (const format of ["chat-completions", "responses"] as const)
-  test(`persisted semantic content reaches actual ${format} adapter bytes without late wrapper or raw provenance`, async () => {
-    const semantic = persisted(input());
-    if (semantic.kind !== "message") throw Error("message expected");
-    const compiled = compileItemList([
-      decodeContextItem(JSON.parse(JSON.stringify(semantic))),
-    ]);
-    let body: Record<string, unknown> = {};
-    const fetch: typeof globalThis.fetch = async (_url, init) => {
-      body = JSON.parse(String(init?.body));
-      const frame =
-        format === "chat-completions"
+  for (const legacy of [false, true])
+    test(`persisted ${legacy ? "legacy quote" : "v3"} semantic content reaches actual ${format} adapter bytes without late wrapper or raw provenance`, async () => {
+      const semantic = persisted(
+        legacy
           ? {
-              choices: [
-                { index: 0, delta: { content: "ok" }, finish_reason: "stop" },
-              ],
+              ...base,
+              type: "user_message",
+              text: `[Message quote; thread ID: ${JSON.stringify(source.threadId)}; message ID: ${JSON.stringify(source.id)}; excerpt: ${JSON.stringify(source.excerpt)}]Follow up`,
             }
-          : {
-              type: "response.completed",
-              response: { status: "completed", output: [] },
-            };
-      return new Response(
-        `data: ${JSON.stringify(frame)}\n\n${format === "chat-completions" ? "data: [DONE]\n\n" : ""}`,
-        { headers: { "content-type": "text/event-stream" } },
+          : input(),
       );
-    };
-    const token = `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic" } })).toString("base64url")}.signature`;
-    const adapter =
-      format === "chat-completions"
-        ? new OpenAiCompatibleModel({
-            baseUrl: "https://synthetic.invalid/v1",
-            apiKey: "synthetic",
-            fetch,
-          })
-        : new OpenAiSubscriptionModel({
-            endpoint: "https://synthetic.invalid/responses",
-            acquireAccessLease: async () => ({ accessToken: token }),
-            fetch,
-          });
-    for await (const _event of adapter.stream({
-      model: "synthetic",
-      reasoningEffort: "medium",
-      messages: compiled.messages,
-      tools: compiled.tools,
-      signal: new AbortController().signal,
-    })) {
-      /* no external requests */
-    }
-    const messages = (body.messages ?? body.input) as Array<{
-      role: string;
-      content: Array<{ text: string }> | string;
-    }>;
-    const user = messages.find((message) => message.role === "user")!;
-    const text =
-      typeof user.content === "string"
-        ? user.content
-        : user.content.map((part) => part.text).join("\n");
-    assert.equal(text, semantic.content.text);
-    assert.ok(text.includes(source.excerpt));
-    assert.ok(!text.includes(clientId));
-    assert.ok(!text.includes(source.threadId));
-  });
+      if (semantic.kind !== "message") throw Error("message expected");
+      const compiled = compileItemList([
+        decodeContextItem(JSON.parse(JSON.stringify(semantic))),
+      ]);
+      let body: Record<string, unknown> = {};
+      const fetch: typeof globalThis.fetch = async (_url, init) => {
+        body = JSON.parse(String(init?.body));
+        const frame =
+          format === "chat-completions"
+            ? {
+                choices: [
+                  { index: 0, delta: { content: "ok" }, finish_reason: "stop" },
+                ],
+              }
+            : {
+                type: "response.completed",
+                response: { status: "completed", output: [] },
+              };
+        return new Response(
+          `data: ${JSON.stringify(frame)}\n\n${format === "chat-completions" ? "data: [DONE]\n\n" : ""}`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      };
+      const token = `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic" } })).toString("base64url")}.signature`;
+      const adapter =
+        format === "chat-completions"
+          ? new OpenAiCompatibleModel({
+              baseUrl: "https://synthetic.invalid/v1",
+              apiKey: "synthetic",
+              fetch,
+            })
+          : new OpenAiSubscriptionModel({
+              endpoint: "https://synthetic.invalid/responses",
+              acquireAccessLease: async () => ({ accessToken: token }),
+              fetch,
+            });
+      for await (const _event of adapter.stream({
+        model: "synthetic",
+        reasoningEffort: "medium",
+        messages: compiled.messages,
+        tools: compiled.tools,
+        signal: new AbortController().signal,
+      })) {
+        /* no external requests */
+      }
+      const messages = (body.messages ?? body.input) as Array<{
+        role: string;
+        content: Array<{ text: string }> | string;
+      }>;
+      const user = messages.find((message) => message.role === "user")!;
+      const text =
+        typeof user.content === "string"
+          ? user.content
+          : user.content.map((part) => part.text).join("\n");
+      assert.equal(text, semantic.content.text);
+      assert.ok(text.includes(source.excerpt));
+      assert.ok(!text.includes(clientId));
+      assert.ok(!text.includes(source.threadId));
+    });
 
 test("file pointers retain necessary exact workspace/path without inventing an s reader; media stays byte-identical", () => {
   const file = {
@@ -480,3 +489,75 @@ test("file pointers retain necessary exact workspace/path without inventing an s
   assert.ok(text.includes(JSON.stringify(file.path)));
   assert.doesNotMatch(text, /s[1-9][0-9]*|zenx-reference-message:v3/);
 });
+
+const oldQuote = `[Message quote; thread ID: ${JSON.stringify(source.threadId)}; message ID: ${JSON.stringify(source.id)}; excerpt: ${JSON.stringify(source.excerpt)}]`;
+for (const version of ["plain", "v1", "v2"] as const) {
+  test(`legacy ${version} quote has exact compact model input and source resolution after replay/fork`, () => {
+    const text =
+      version === "plain"
+        ? oldQuote + "Follow up"
+        : version === "v1"
+          ? "[zenx-quoted-message:v1]\n" +
+            JSON.stringify({
+              version: 1,
+              clientId,
+              text: "Follow up",
+              quotes: [
+                {
+                  threadId: source.threadId,
+                  id: source.id,
+                  excerpt: source.excerpt,
+                },
+              ],
+            })
+          : referenceMessage(
+              "Follow up",
+              [(({ position: _position, ...reference }) => reference)(source)],
+              clientId,
+            );
+    const item: UserMessageItem = {
+      ...base,
+      type: "user_message",
+      text,
+      ...(version === "plain" ? {} : { clientId }),
+    };
+    const original = structuredClone(item);
+    const semantic = persisted(item);
+    assert.equal(semantic.kind, "message");
+    if (semantic.kind !== "message") throw Error("message expected");
+    const label = version === "v2" ? source.name : "ZenX";
+    const quote = `[Selected message ${JSON.stringify(label)}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`;
+    assert.equal(
+      textFromUserInput(semantic.content.parts.slice(1)),
+      version === "plain" ? quote + "Follow up" : "Follow up\n\n" + quote,
+    );
+    assert.deepEqual(item, original);
+    assert.ok(!semantic.content.text.includes(source.threadId));
+    assert.ok(!semantic.content.text.includes(source.id));
+    const replay = decodeContextItem(JSON.parse(JSON.stringify(semantic)));
+    assert.deepEqual(compileItemList([replay]).messages, [
+      { role: "user", content: semantic.content.parts },
+    ]);
+    const provenance = compileSelectedReferenceInput(item, [
+      replay,
+    ])!.referenceBindings;
+    assert.equal(provenance[0]!.ref, "s1");
+    const scope = new ModelReferenceRegistry().scope(base.threadId, provenance);
+    assert.deepEqual(
+      decodeThreadArguments("zenx_threads_read", { ref: "s1" }, scope, "epoch"),
+      { threadId: source.threadId, itemId: source.id, granularity: "item" },
+    );
+    assert.throws(
+      () =>
+        new ModelReferenceRegistry()
+          .scope("fork", provenance)
+          .resolve("s1", "selected-reference", "message"),
+      /unavailable/,
+    );
+    assert.equal(
+      compileSelectedReferenceInput({ ...item, threadId: "fork" }, [replay])!
+        .referenceBindings[0]!.ref,
+      "s2",
+    );
+  });
+}

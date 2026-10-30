@@ -43,11 +43,10 @@ export type {
 } from "../../../../../src/selected-reference-protocol.js";
 import type { Reference } from "../../../../../src/selected-reference-protocol.js";
 
-// JSON string quoting retains spaces, Unicode, newlines and punctuation without
-// giving display names or paths a second parser/authority in the conversation.
+// Clipboard/plain-text presentation is human-readable, not an identity transport.
+// Structured sends retain exact source identity in the versioned wire codec.
 export function referenceText(reference: Reference): string {
-  if (reference.kind === "message")
-    return `[Message quote; thread ID: ${JSON.stringify(reference.threadId)}; message ID: ${JSON.stringify(reference.id)}; excerpt: ${JSON.stringify(reference.excerpt)}]`;
+  if (reference.kind === "message") return reference.excerpt;
   return reference.kind === "file"
     ? `[File reference: ${JSON.stringify(reference.name)}; workspace: ${JSON.stringify(reference.cwd)}; relative path: ${JSON.stringify(reference.path)}]`
     : `[Thread reference: ${JSON.stringify(reference.name)}; thread ID: ${JSON.stringify(reference.id)}; workspace: ${JSON.stringify(reference.cwd)}]`;
