@@ -1,3 +1,5 @@
+import { readReferenceClipboard } from "./reference-clipboard.js";
+import type { MessageQuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import {
@@ -173,16 +175,25 @@ export type MessageForkHandler = (
 export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
+const SideChatQuoteContext = createContext<{
+  add?(quote: MessageQuoteReference): void;
+  focus?: { composerId: string; sequence: number };
+}>({});
+
 /** Shared App-owned actions for main and side conversation viewports. */
 export function ThreadViewActionsProvider({
   fork,
   source,
+  addToSideChat,
+  composerFocus,
   messageTarget,
   onMessageTargetConsumed,
   children,
 }: {
   messageTarget?: MessageTargetRequest | null;
   onMessageTargetConsumed?(requestId: number): void;
+  addToSideChat?(quote: MessageQuoteReference): void;
+  composerFocus?: { composerId: string; sequence: number };
   fork: MessageForkHandler;
   source: MessageSourceNavigator;
   children: ReactNode;
@@ -196,7 +207,11 @@ export function ThreadViewActionsProvider({
             consumed: onMessageTargetConsumed ?? (() => {}),
           }}
         >
-          {children}
+          <SideChatQuoteContext.Provider
+            value={{ add: addToSideChat, focus: composerFocus }}
+          >
+            {children}
+          </SideChatQuoteContext.Provider>
         </MessageTargetNavigationContext.Provider>
       </MessageSourceNavigationContext.Provider>
     </MessageForkContext.Provider>
@@ -696,6 +711,26 @@ function ThreadViewContent({
   const viewRef = useRef<HTMLDivElement>(null);
   const bottomZoneRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<ComposerInput>(null);
+  const pastedSelection = useRef<{ scope: string; caret: number } | null>(null);
+  useLayoutEffect(() => {
+    const pending = pastedSelection.current;
+    if (!pending) return;
+    pastedSelection.current = null;
+    if (pending.scope !== composerScope) return;
+    composerTextareaRef.current?.setSelectionRange(
+      pending.caret,
+      pending.caret,
+    );
+    composerTextareaRef.current?.focus({ preventScroll: true });
+  }, [composerScope, skillDraft.text]);
+  const sideChatQuote = useContext(SideChatQuoteContext);
+  useEffect(() => {
+    if (sideChatQuote.focus?.composerId !== composerId) return;
+    const frame = requestAnimationFrame(() => {
+      composerTextareaRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sideChatQuote.focus, composerId]);
   const plainSnapshot = useRef<{
     scope: string;
     value: string;
@@ -1463,6 +1498,28 @@ function ThreadViewContent({
         viewport={scrollRef}
         threadId={thread?.id}
         disabled={composerDisabled || submitting}
+        onAddToSideChat={
+          sideChatQuote.add && thread
+            ? (selection) => {
+                if (
+                  selection.threadId !== thread.id ||
+                  !thread.canonicalItems?.some(
+                    (item) =>
+                      item.type === "agent_message" &&
+                      item.id === selection.id &&
+                      item.threadId === thread.id,
+                  )
+                )
+                  return;
+                sideChatQuote.add?.({
+                  ...selection,
+                  kind: "message",
+                  name: "ZenX",
+                  cwd: thread.cwd,
+                });
+              }
+            : undefined
+        }
         onQuote={(selection) => {
           if (
             !thread ||
@@ -1899,6 +1956,30 @@ function ThreadViewContent({
               }}
               onPaste={(event) => {
                 if (composerDisabled || submitting) return;
+                const clipboard = readReferenceClipboard(event.clipboardData);
+                if (clipboard) {
+                  event.preventDefault();
+                  const input = event.currentTarget;
+                  const start = input.selectionStart;
+                  const end = input.selectionEnd;
+                  pastedSelection.current = {
+                    scope: composerScope,
+                    caret: start + clipboard.text.length,
+                  };
+                  onDraftChange(
+                    withSkillDraft(
+                      skillDraft.text.slice(0, start) +
+                        clipboard.text +
+                        skillDraft.text.slice(end),
+                      skillDraft.skills,
+                      clipboard.references.map((reference) => ({
+                        ...reference,
+                        position: start + reference.position!,
+                      })),
+                    ),
+                  );
+                  return;
+                }
                 const files = imageFiles(event.clipboardData.files);
                 if (files.length === 0) return;
                 event.preventDefault();

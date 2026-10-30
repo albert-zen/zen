@@ -238,3 +238,195 @@ export function parseSentReferenceV3(
   if (serializeSentReferenceV3(parts, clientId) !== text) return null;
   return { text: decodedText, references };
 }
+
+const SENT_REFERENCE_PREFIX = "[zenx-reference-message:v2]\n";
+/** Exact versioned presentation, never reference inference from ordinary text. */
+export function parseSentReferenceContent(
+  text: string,
+  clientId?: string | null,
+): { text: string; references: Reference[] } {
+  const ordinary = { text, references: [] };
+  const unbound = parseLegacyPlainMessageQuote(text);
+  if (unbound) return unbound;
+  if (!clientId) return ordinary;
+  if (text.startsWith(SENT_REFERENCE_V3_HEADER_PREFIX))
+    return parseSentReferenceV3(text, clientId) ?? ordinary;
+  if (!text.startsWith(SENT_REFERENCE_PREFIX)) {
+    const legacy = parseLegacyQuoteMessage(text, clientId);
+    return {
+      text: legacy.text,
+      references: legacy.quotes.map((quote) => ({
+        kind: "message",
+        name: "ZenX",
+        cwd: "",
+        ...quote,
+      })),
+    };
+  }
+  try {
+    const value: unknown = JSON.parse(text.slice(SENT_REFERENCE_PREFIX.length));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return ordinary;
+    const envelope = value as Record<string, unknown>;
+    if (
+      SENT_REFERENCE_PREFIX + JSON.stringify(value) !== text ||
+      Object.keys(envelope).sort().join(",") !==
+        "clientId,references,text,version" ||
+      envelope.version !== 2 ||
+      envelope.clientId !== clientId ||
+      typeof envelope.text !== "string" ||
+      !Array.isArray(envelope.references) ||
+      envelope.references.length === 0
+    )
+      return ordinary;
+    const references: Reference[] = [];
+    for (const entry of envelope.references) {
+      if (!isReference(entry)) return ordinary;
+      const record = entry as unknown as Record<string, unknown>;
+      const keys = Object.keys(record).sort().join(",");
+      const expected =
+        entry.kind === "file"
+          ? "contentMode,cwd,kind,name,path"
+          : entry.kind === "thread"
+            ? "contentMode,cwd,id,kind,name"
+            : "contentMode,cwd,excerpt,id,kind,name,threadId";
+      if (
+        keys !== expected ||
+        record.contentMode !==
+          (entry.kind === "message" ? "excerpt" : "pointer")
+      )
+        return ordinary;
+      if (
+        entry.kind === "file"
+          ? !entry.path
+          : !entry.id || (entry.kind === "message" && !entry.threadId)
+      )
+        return ordinary;
+      // Strip only the known presentation policy, never source text or identity.
+      const { contentMode: _contentMode, ...reference } = record;
+      references.push(reference as unknown as Reference);
+    }
+    return { text: envelope.text, references };
+  } catch {
+    return ordinary;
+  }
+}
+
+function isReference(value: unknown): value is Reference {
+  if (!value || typeof value !== "object") return false;
+  const reference = value as Record<string, unknown>;
+  return (
+    (reference.position === undefined ||
+      (Number.isSafeInteger(reference.position) &&
+        (reference.position as number) >= 0)) &&
+    typeof reference.name === "string" &&
+    typeof reference.cwd === "string" &&
+    ((reference.kind === "file" && typeof reference.path === "string") ||
+      (reference.kind === "thread" && typeof reference.id === "string") ||
+      (reference.kind === "message" &&
+        typeof reference.threadId === "string" &&
+        typeof reference.id === "string" &&
+        typeof reference.excerpt === "string" &&
+        reference.excerpt.trim().length > 0))
+  );
+}
+
+const SENT_QUOTE_PREFIX = "[zenx-quoted-message:v1]\n";
+export interface SentMessageQuote {
+  threadId: string;
+  id: string;
+  excerpt: string;
+}
+/** Presentation only. Invalid, unbound or future formats stay completely visible. */
+function parseLegacyQuoteMessage(
+  text: string,
+  clientId?: string | null,
+): { text: string; quotes: SentMessageQuote[] } {
+  const ordinary = { text, quotes: [] };
+  if (!clientId || !text.startsWith(SENT_QUOTE_PREFIX)) return ordinary;
+  try {
+    const value: unknown = JSON.parse(text.slice(SENT_QUOTE_PREFIX.length));
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return ordinary;
+    const envelope = value as Record<string, unknown>;
+    // Only our exact wire form opts in. JSON.parse otherwise hides duplicate
+    // keys or normalizes noncanonical text that was never emitted by this sender.
+    if (SENT_QUOTE_PREFIX + JSON.stringify(value) !== text) return ordinary;
+    if (
+      Object.keys(envelope).sort().join(",") !==
+        "clientId,quotes,text,version" ||
+      envelope.version !== 1 ||
+      envelope.clientId !== clientId ||
+      typeof envelope.text !== "string" ||
+      !Array.isArray(envelope.quotes) ||
+      envelope.quotes.length === 0
+    )
+      return ordinary;
+    const quotes: SentMessageQuote[] = [];
+    for (const entry of envelope.quotes) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry))
+        return ordinary;
+      const quote = entry as Record<string, unknown>;
+      if (
+        Object.keys(quote).sort().join(",") !== "excerpt,id,threadId" ||
+        typeof quote.threadId !== "string" ||
+        !quote.threadId ||
+        typeof quote.id !== "string" ||
+        !quote.id ||
+        typeof quote.excerpt !== "string" ||
+        !quote.excerpt.trim()
+      )
+        return ordinary;
+      quotes.push({
+        threadId: quote.threadId,
+        id: quote.id,
+        excerpt: quote.excerpt,
+      });
+    }
+    return { text: envelope.text, quotes };
+  } catch {
+    return ordinary;
+  }
+}
+
+/** Strict compatibility for the old clipboard/no-client quote formatter.
+ * Only a canonical leading quote is recognized; examples embedded in prose,
+ * malformed JSON and unknown variants remain ordinary text. This is user input,
+ * not authentication, and the original input fact is never rewritten.
+ */
+function parseLegacyPlainMessageQuote(
+  text: string,
+): { text: string; references: Reference[] } | null {
+  const string =
+    '"(?:[^"\\\\\\x00-\\x1f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*"';
+  const pattern = new RegExp(
+    `^\\[Message quote; thread ID: (${string}); message ID: (${string}); excerpt: (${string})\\]`,
+    "u",
+  );
+  const match = pattern.exec(text);
+  if (!match) return null;
+  try {
+    const [threadId, id, excerpt] = match
+      .slice(1)
+      .map((value) => JSON.parse(value) as string);
+    if (!threadId || !id || !excerpt?.trim()) return null;
+    const canonical = `[Message quote; thread ID: ${JSON.stringify(threadId)}; message ID: ${JSON.stringify(id)}; excerpt: ${JSON.stringify(excerpt)}]`;
+    if (match[0] !== canonical) return null;
+    return {
+      text: OBJECT_REPLACEMENT + text.slice(match[0].length),
+      references: [
+        {
+          kind: "message",
+          name: "ZenX",
+          cwd: "",
+          threadId,
+          id,
+          excerpt,
+          position: 0,
+        },
+      ],
+    };
+  } catch {
+    return null;
+  }
+}

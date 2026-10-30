@@ -38,6 +38,11 @@ import {
   MessageSourceNavigationContext,
   MessageSourceViewportContext,
 } from "./message-source-navigation.js";
+import {
+  REFERENCE_CLIPBOARD_TYPE,
+  referenceClipboard,
+  readReferenceClipboard,
+} from "./reference-clipboard.js";
 import { ReferenceToken } from "./ReferenceToken.js";
 
 /** The document contains one UTF-16 U+FFFC code unit for each inline chip. */
@@ -194,6 +199,46 @@ function clipboardText(state: EditorState): string {
       return [readableReferenceSelection(state, line.from, line.to)];
     })
     .join(state.lineBreak);
+}
+
+function copyReferences(
+  event: ClipboardEvent,
+  view: EditorView,
+  cut: boolean,
+): boolean {
+  const { state } = view;
+  const range = state.selection.main;
+  if (range.empty || !event.clipboardData) return false;
+  const references = state
+    .field(referencesField)
+    .filter(
+      (entry) => entry.position >= range.from && entry.position < range.to,
+    )
+    .map((entry) => ({
+      ...entry.reference,
+      position: entry.position - range.from,
+    }));
+  if (!references.length) return false;
+  const clipboard = referenceClipboard(
+    state.sliceDoc(range.from, range.to),
+    references,
+  );
+  try {
+    // Both formats must be written before a cut removes anything from the draft.
+    event.clipboardData.setData("text/plain", clipboard.plain);
+    event.clipboardData.setData(REFERENCE_CLIPBOARD_TYPE, clipboard.structured);
+  } catch {
+    event.preventDefault();
+    return true;
+  }
+  event.preventDefault();
+  if (cut && !state.readOnly)
+    view.dispatch({
+      changes: { from: range.from, to: range.to },
+      selection: { anchor: range.from },
+      userEvent: "delete.cut",
+    });
+  return true;
 }
 
 function changedRange(previous: string, next: string) {
@@ -513,9 +558,43 @@ export function InlineComposerEditor(props: InlineComposerEditorProps) {
                 currentRef.current.onKeyDown?.(event);
                 return event.defaultPrevented;
               },
-              paste(event) {
+              copy(event, editor) {
+                return copyReferences(event, editor, false);
+              },
+              cut(event, editor) {
+                return copyReferences(event, editor, true);
+              },
+              paste(event, editor) {
                 currentRef.current.onPaste?.(event);
-                return event.defaultPrevented;
+                if (event.defaultPrevented) return true;
+                const clipboard = readReferenceClipboard(event.clipboardData);
+                if (!clipboard || editor.state.readOnly) return false;
+                event.preventDefault();
+                const range = editor.state.selection.main;
+                const changes = editor.state.changes({
+                  from: range.from,
+                  to: range.to,
+                  insert: clipboard.text,
+                });
+                const references = [
+                  ...mapEntries(
+                    editor.state.field(referencesField),
+                    changes,
+                    changes.apply(editor.state.doc).toString(),
+                  ),
+                  ...clipboard.references.map((reference) => ({
+                    key: nextKey(),
+                    position: range.from + reference.position!,
+                    reference: stripPosition(reference as PositionedReference),
+                  })),
+                ].sort((a, b) => a.position - b.position);
+                editor.dispatch({
+                  changes,
+                  effects: setReferences.of(references),
+                  selection: { anchor: range.from + clipboard.text.length },
+                  userEvent: "input.paste",
+                });
+                return true;
               },
               blur() {
                 currentRef.current.onBlur?.();

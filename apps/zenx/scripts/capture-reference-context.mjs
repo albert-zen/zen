@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile, unlink, rmdir } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  writeFile,
+  unlink,
+  rmdir,
+  rm,
+} from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { ZenAppServer } from "../../../src/app-server.ts";
 import { AgentRuntime } from "../../../src/runtime.ts";
-import { InMemoryThreadJournal } from "../../../src/journal.ts";
+import { DomainThreadJournal } from "../../../src/domain-journal.ts";
+import { FileTraceStore } from "../../../src/trace.ts";
 import { InMemoryThreadMetadataStore } from "../../../src/thread-metadata.ts";
 import { InMemoryAttachmentStore } from "../../../src/attachment.ts";
 import { StaticModelCatalog } from "../../../src/model-catalog.ts";
@@ -59,20 +69,29 @@ globalThis.fetch = async () => {
 };
 const timestamp = "2026-10-21T02:00:00.000Z";
 const reports = [];
+const domainDirectories = [];
 try {
   for (const variant of ["five-references", "with-image"]) {
     for (const format of ["chat-completions", "responses"]) {
       const stem =
         variant === "five-references" ? format : `with-image.${format}`;
-      const journal = new InMemoryThreadJournal();
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "zen-reference-v2-domains-"),
+      );
+      domainDirectories.push(directory);
       const metadata = new InMemoryThreadMetadataStore();
+      const journal = new DomainThreadJournal({
+        directory: path.join(directory, "threads"),
+        trace: new FileTraceStore(path.join(directory, "trace")),
+        metadata,
+      });
       const attachments = new InMemoryAttachmentStore();
       const image = await attachments.importBytes(png1x1(), "image/png");
       let hostSequence = 0,
         runtimeSequence = 0;
       let nextHostIdentity;
       let phase = "seed";
-      let capturedRaw, capturedModelRequest;
+      let capturedRaw, capturedModelRequest, persistedUser;
       const dispatchBodies = [];
       const fakeFetch = async (_url, init) => {
         const body = String(init.body);
@@ -145,7 +164,15 @@ try {
         requestPayloadFormat: adapter.requestPayloadFormat,
         contextInstructions: adapter.contextInstructions,
         async *stream(request) {
-          if (phase === "capture")
+          if (phase === "capture") {
+            persistedUser = (await journal.readItemList(target.id)).findLast(
+              (item) => item.source.kind === "user_message",
+            );
+            assert.equal(
+              persistedUser?.kind,
+              "message",
+              "semantic user input is persisted before provider dispatch",
+            );
             capturedModelRequest = {
               model: request.model,
               reasoningEffort: request.reasoningEffort,
@@ -154,6 +181,7 @@ try {
               sessionId: request.sessionId,
               debugContext: request.debugContext,
             };
+          }
           yield* adapter.stream(request);
         },
       };
@@ -304,17 +332,10 @@ try {
       const userMessage = saved.find((item) => item.type === "user_message");
       assert.deepEqual(userMessage.content, nativeInput);
       assert.equal(userMessage.clientId, fixture.clientId);
-      const last = (captured.messages ?? captured.input).find(
-        (message) =>
-          message.role === "user" &&
-          (typeof message.content === "string"
-            ? message.content.includes(canonicalText)
-            : message.content.some((part) => part.text === canonicalText)),
+      const last = (captured.messages ?? captured.input).findLast(
+        (message) => message.role === "user",
       );
-      assert.ok(
-        last,
-        "the exact submitted user input is present, not a later Host instruction",
-      );
+      assert.ok(last, "provider receives the selected semantic user message");
       const contentParts = Array.isArray(last.content)
         ? last.content
         : [{ type: "text", text: last.content }];
@@ -324,14 +345,37 @@ try {
       const actualText = textParts.map((part) => part.text).join("\n");
       assert.equal(
         actualText,
-        `[Message received at ${userMessage.createdAt}]\n${canonicalText}`,
+        persistedUser.content.text,
+        "provider text equals semantic input persisted before dispatch, never a late wrapper",
       );
-      const compiledUser = capturedModelRequest.messages.find(
-        (message) =>
-          message.role === "user" &&
-          message.content?.some(
-            (part) => part.type === "text" && part.text === canonicalText,
-          ),
+      assert.ok(
+        actualText.startsWith(
+          `[Message received at ${userMessage.createdAt}]\n`,
+        ),
+      );
+      assert.ok(actualText.includes(fixture.fullMessage));
+      assert.ok(actualText.includes(fixture.selection));
+      assert.ok(!actualText.includes(canonicalText));
+      for (const value of [
+        fixture.clientId,
+        source.id,
+        child.id,
+        sourceMessage.id,
+        "zenx-reference-message:v2",
+      ])
+        assert.ok(
+          !actualText.includes(value),
+          `raw reference provenance excluded from model text: ${value}`,
+        );
+      const bindings = persistedUser.source.metadata.referenceBindings;
+      assert.ok(bindings.length > 0);
+      for (const binding of bindings) {
+        assert.match(binding.ref, /^s[1-9][0-9]*$/u);
+        assert.ok(actualText.includes(`; ${binding.ref};`));
+        assert.equal(binding.ownerThreadId, target.id);
+      }
+      const compiledUser = capturedModelRequest.messages.findLast(
+        (message) => message.role === "user",
       );
       assert.ok(compiledUser);
       const compiledText = compiledUser.content
@@ -390,6 +434,10 @@ try {
         ) + "\n",
       );
       await writeFile(
+        path.join(output, `${stem}.semantic-user-message.json`),
+        JSON.stringify(persistedUser, null, 2) + "\n",
+      );
+      await writeFile(
         path.join(output, `${stem}.canonical-user-message.json`),
         JSON.stringify(userMessage, null, 2) + "\n",
       );
@@ -429,12 +477,16 @@ try {
         assertions: "passed",
         originalInputUnchanged: true,
         recordedReceiptInCompilerAndWire: true,
+        persistedSemanticInputMatchesWire: true,
+        compactSourceReferences: true,
         networkRequests: 0,
       });
       await server.closeRuntimeConfiguration();
     }
   }
 } finally {
+  for (const directory of domainDirectories)
+    await rm(directory, { recursive: true, force: true });
   if (createdFile) await unlink(syntheticFile);
   await rmdir(fixture.workspace).catch((error) => {
     if (error.code !== "ENOTEMPTY") throw error;
@@ -448,9 +500,9 @@ await writeFile(
         process.env.GITHUB_SHA ?? "working-tree (see enclosing review commit)",
       timestamp,
       notes: [
-        "Actual production serialization, native input validation, Host admission, Runtime, in-memory journal and production provider adapters.",
+        "Actual production serialization, native input validation, Host admission, Runtime, durable domain journal and production provider adapters.",
         "Only external fetch and authentication are synthetic; no live provider call, credentials, source document or transcript.",
-        "Canonical journal records are read back from InMemoryThreadJournal, not OS-durable JSONL.",
+        "Original input is read back from Trace-backed canonical projection; semantic ItemList is read before provider dispatch and compared exactly with compiled and wire text.",
         "Full-message reference is an existing message snapshot assembled by fixture; no dedicated @message picker exists.",
         "Main request has exactly five references and no image. with-image.* files are a separate sixth-category comparison with complete 1x1 PNG bytes.",
         "Tool catalog is deliberately restricted to the automatically supplied wait tool: this exact run has no file/thread-reading capability, and no tool was called.",

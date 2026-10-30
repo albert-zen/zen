@@ -12,7 +12,7 @@ import {
   type ModelReferenceBinding,
 } from "./model-references.js";
 import {
-  parseSentReferenceV3,
+  parseSentReferenceContent,
   type Reference,
 } from "./selected-reference-protocol.js";
 
@@ -107,20 +107,21 @@ export function compileSelectedReferenceInput(
   item: UserMessageItem,
   previous: readonly ContextItem[],
 ): SelectedReferenceInput | undefined {
-  if (item.type !== "user_message" || !item.clientId) return undefined;
+  if (item.type !== "user_message") return undefined;
   const original = contentFromUserMessage(item);
   const textParts = original.filter((part) => part.type === "text");
   // The real Composer emits one text envelope, optionally alongside media.
   // Never concatenate independent user parts to manufacture a recognized one.
   if (textParts.length !== 1) return undefined;
-  const parsed = parseSentReferenceV3(textParts[0]!.text, item.clientId);
-  if (!parsed) return undefined;
+  const parsed = parseSentReferenceContent(textParts[0]!.text, item.clientId);
+  if (parsed.references.length === 0) return undefined;
   const sources = selectedSources(item.threadId, previous);
   let text = "";
   let cursor = 0;
   for (const reference of parsed.references) {
-    const position = reference.position!;
+    const position = reference.position ?? parsed.text.length;
     text += parsed.text.slice(cursor, position);
+    if (reference.position === undefined && text) text += "\n\n";
     const label = JSON.stringify(reference.name);
     if (reference.kind === "file") {
       // There is no native selected-file reader. Keep exact source coordinates
@@ -141,7 +142,7 @@ export function compileSelectedReferenceInput(
       else
         text += `[Selected thread ${label}; ${ref}; source time unavailable; read-only]`;
     }
-    cursor = position + 1;
+    cursor = reference.position === undefined ? position : position + 1;
   }
   text += parsed.text.slice(cursor);
   const parts: UserInputPart[] = original.map((part) =>

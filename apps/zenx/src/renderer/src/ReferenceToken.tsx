@@ -3,7 +3,11 @@ import { useTranslation } from "react-i18next";
 import type { Reference } from "./composer-selector.js";
 import { Icon } from "./icons.js";
 import { MessageLinkContext } from "./Markdown.js";
-import { MessageSourceLink } from "./message-source-navigation.js";
+import {
+  MessageSourceLink,
+  MessageSourceNavigationContext,
+  MessageSourceViewportContext,
+} from "./message-source-navigation.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
 
 /** One presentation for pointer identities and explicit excerpt snapshots. */
@@ -20,6 +24,8 @@ export function ReferenceToken({
 }) {
   const { t } = useTranslation("shell");
   const openLink = useContext(MessageLinkContext);
+  const ownerThreadId = useContext(MessageSourceViewportContext);
+  const navigateSource = useContext(MessageSourceNavigationContext);
   const [open, setOpen] = useState(false);
   const [sourceUnavailable, setSourceUnavailable] = useState(false);
   const heading = useId();
@@ -128,9 +134,22 @@ export function ReferenceToken({
             </>
           )}
         </dl>
-        {reference.kind === "thread" ? (
+        {reference.kind === "thread" ||
+        (reference.kind === "message" &&
+          navigateSource !== null &&
+          ownerThreadId !== null &&
+          ownerThreadId !== reference.threadId) ? (
           <MessageSourceLink
-            target={{ kind: "thread", id: reference.id }}
+            className="reference-open-source"
+            target={
+              reference.kind === "message"
+                ? {
+                    kind: "thread",
+                    id: reference.threadId,
+                    itemId: reference.id,
+                  }
+                : { kind: "thread", id: reference.id }
+            }
             label={t("openReferenceSource")}
           />
         ) : (

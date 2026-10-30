@@ -223,6 +223,7 @@ async function actionsHarness() {
       sourceThread?: string;
       disabled?: boolean;
       onQuote?: (selection: MessageSelection) => void;
+      onAddToSideChat?: (selection: MessageSelection) => void;
     } = {},
   ) {
     await view.render(
@@ -249,6 +250,7 @@ async function actionsHarness() {
             threadId: options.threadId ?? "thread-a",
             disabled: options.disabled ?? false,
             onQuote: options.onQuote ?? ((selection) => quotes.push(selection)),
+            onAddToSideChat: options.onAddToSideChat,
           }),
         ),
         React.createElement("textarea", {
@@ -624,4 +626,35 @@ test("quote styling keeps a compact round pill, distinct bounded expansion and a
   assert.match(css, /@media \(pointer: coarse\), \(hover: none\)/u);
   assert.match(css, /min-height: 44px;/u);
   assert.doesNotMatch(css, /border-left|border-inline-start/u);
+});
+
+test("Add to side chat hands off exact structured selection without quoting locally or sending", async () => {
+  const view = await actionsHarness();
+  const received: MessageSelection[] = [];
+  try {
+    await view.render({
+      onAddToSideChat: (selection) => received.push(selection),
+    });
+    await view.select();
+    const action = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Add to side chat"]',
+    )!;
+    assert.ok(action);
+    await act(async () => action.click());
+    assert.deepEqual(received, [
+      {
+        threadId: "thread-a",
+        id: "item-a",
+        excerpt: "  Selected text\nwith spaces  ",
+      },
+    ]);
+    assert.equal(view.quotes.length, 0);
+    assert.equal(document.querySelector(".message-selection-actions"), null);
+    assert.equal(
+      document.querySelector("textarea")?.value,
+      "Existing composer note",
+    );
+  } finally {
+    await view.cleanup();
+  }
 });

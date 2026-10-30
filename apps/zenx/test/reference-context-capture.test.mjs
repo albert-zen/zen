@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 const expected = fileURLToPath(
   new URL("../docs/reference-context/v2/", import.meta.url),
 );
-test("literal v2 references and recorded receipts survive both legal provider content shapes without network", async () => {
+test("v2 references normalize before dispatch while original input and recorded receipts survive both provider shapes", async () => {
   const output = await mkdtemp(
     path.join(os.tmpdir(), "zen-reference-capture-"),
   );
@@ -71,15 +71,42 @@ test("literal v2 references and recorded receipts survive both legal provider co
       );
       assert.equal(oldSource.text, bundle.canonicalText);
       const submitted = current[key].filter(
-        (message) =>
-          message.role === "user" &&
-          text(message).includes(bundle.canonicalText),
+        (message) => message.role === "user",
       );
       assert.equal(submitted.length, 1);
+      const semantic = JSON.parse(
+        await readFile(
+          path.join(output, `${format}.semantic-user-message.json`),
+          "utf8",
+        ),
+      );
+      assert.equal(semantic.kind, "message");
       assert.equal(
         text(submitted[0]),
-        `[Message received at ${bundle.timestamp}]\n${oldSource.text}`,
+        semantic.content.text,
+        "actual provider request matches the persisted semantic user message",
       );
+      assert.ok(
+        semantic.content.text.startsWith(
+          `[Message received at ${bundle.timestamp}]\n`,
+        ),
+      );
+      assert.ok(semantic.content.text.includes(bundle.sourceFullMessage));
+      assert.ok(semantic.content.text.includes(bundle.sourceSelection));
+      assert.ok(!semantic.content.text.includes(bundle.canonicalText));
+      for (const reference of bundle.references) {
+        if (reference.kind === "file") continue;
+        assert.ok(!semantic.content.text.includes(reference.id));
+        if (reference.kind === "message")
+          assert.ok(!semantic.content.text.includes(reference.threadId));
+      }
+      const bindings = semantic.source.metadata.referenceBindings;
+      assert.deepEqual(
+        bindings.map((binding) => binding.ref),
+        ["s1", "s2", "s3"],
+      );
+      for (const binding of bindings)
+        assert.ok(semantic.content.text.includes(`; ${binding.ref};`));
       const { [key]: _oldContext, ...priorSettings } = prior;
       const { [key]: _currentContext, ...currentSettings } = current;
       assert.deepEqual(
@@ -98,6 +125,8 @@ test("literal v2 references and recorded receipts survive both legal provider co
           item.assertions === "passed" &&
           item.originalInputUnchanged === true &&
           item.recordedReceiptInCompilerAndWire === true &&
+          item.persistedSemanticInputMatchesWire === true &&
+          item.compactSourceReferences === true &&
           item.networkRequests === 0 &&
           item.requestCount === 1,
       ),
