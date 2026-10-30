@@ -27,7 +27,7 @@ if let rawPID = argument("--inspect-pid") {
   // A window owner need not be an AppKit application. Read the same PID's
   // executable via libproc when NSRunningApplication cannot identify it.
   var buffer = [CChar](repeating: 0, count: Int(PROC_PIDPATHINFO_MAXSIZE))
-  let pathSize = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+  let pathSize = proc_pidpath(pid, &buffer, UInt32(PROC_PIDPATHINFO_MAXSIZE))
   let path = app?.executableURL?.path ?? (pathSize > 0 ? String(cString: buffer) : "")
   identity["available"] = !path.isEmpty || app != nil
   identity["bundleId"] = app?.bundleIdentifier.map { $0 as Any } ?? NSNull()
