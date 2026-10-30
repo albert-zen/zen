@@ -434,6 +434,15 @@ try {
     "hidden",
     "The operated target must remain inactive after canvas and keyboard default actions",
   );
+  // The following contract suite navigates this exact tab to /input-contract.
+  // Verify the application global while it still belongs to the /opened fixture,
+  // without injecting a replacement global or weakening pinned-context checks.
+  const programmableExtensions = await verifyBrowserExtensions(
+    backend,
+    "windows-smoke",
+    opened.tabId,
+    `http://127.0.0.1:${port}`,
+  );
   const targetedInputContracts = await runTargetedInputContractSmoke({
     backend,
     sessionId: "windows-smoke",
@@ -468,12 +477,6 @@ try {
     afterActivity.activeTargetId,
     targetsBeforeOpen.activeTargetId,
     "Registry background open/inspect must preserve the actual Chrome active tab",
-  );
-  const programmableExtensions = await verifyBrowserExtensions(
-    backend,
-    "windows-smoke",
-    opened.tabId,
-    `http://127.0.0.1:${port}`,
   );
   const detached = await backend.closeSession("windows-smoke");
   await retry(async () =>

@@ -438,3 +438,39 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
       );
     }
   });
+
+test("a later target selection cannot enter while native activation is settling", async (t) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-target-serialized-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = path.join(directory, "fixture.cjs");
+  await writeFile(
+    executable,
+    `#!${process.execPath}
+const rl=require('node:readline').createInterface({input:process.stdin});
+let settling=false, selections=0;
+rl.on('line',line=>{
+  const r=JSON.parse(line);
+  if(r.operation==='select') {
+    console.log(JSON.stringify(settling ? {error:'selection reentered pending native input'} : {result:{selections:++selections}}));
+  } else {
+    settling=true;
+    setTimeout(()=>{settling=false; console.log(JSON.stringify({result:{dispatch:'posted',applicationEffect:'unverified'}}));},40);
+  }
+});
+`,
+    { mode: 0o700 },
+  );
+  const transport = new NativeComputerTargetTransport(async () => executable);
+  t.after(() => transport.close());
+  const signal = new AbortController().signal;
+  await transport.request({ operation: "select" }, signal);
+  const input = transport.request({ operation: "key" }, signal);
+  const next = transport.request({ operation: "select" }, signal);
+  assert.deepEqual(await input, {
+    dispatch: "posted",
+    applicationEffect: "unverified",
+  });
+  assert.deepEqual(await next, { selections: 2 });
+});

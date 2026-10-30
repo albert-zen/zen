@@ -19,6 +19,7 @@ let windowLocationSetter: Int? = nil
 var fixtureOperation = ""
 let mode = ProcessInfo.processInfo.environment["FIXTURE_MODE"] ?? "normal"
 var posted = 0
+var activationSettled = false
 final class AXUIElement: NSObject {
   let id: Int
   init(_ id: Int) { self.id = id }
@@ -76,7 +77,7 @@ enum AXError { case success, failure }
 func AXIsProcessTrusted() -> Bool { true }
 func AXUIElementCreateApplication(_ pid: Int32) -> AXUIElement { appElement }
 func AXUIElementPerformAction(_ window: AXUIElement, _ action: String) -> AXError {
-  selectedWindow = mode == "wrong-window" ? replacement : window
+  selectedWindow = ["wrong-window", "activation-deferred-wrong-window"].contains(mode) ? replacement : window
   return .success
 }
 func fixtureEqual(_ a: AnyObject, _ b: AnyObject) -> Bool { a === b }
@@ -107,12 +108,16 @@ final class NSRunningApplication {
   var bundleIdentifier: String? { mode == "no-bundle" ? nil : "fixture.app" }
   var localizedName: String? { "Fixture" }
   enum ActivationOption { case activateIgnoringOtherApps }
-  func activate(options: [ActivationOption]) -> Bool { mode != "activation-failed" }
+  func activate(options: [ActivationOption]) -> Bool {
+    if mode.hasPrefix("activation-deferred") { RunLoop.main.perform { activationSettled = true; if mode == "activation-deferred-cancel" { targetCancelled = 1 } } }
+    return mode != "activation-failed"
+  }
 }
 final class NSWorkspace {
   static let shared = NSWorkspace()
   var runningApplications: [NSRunningApplication] { [NSRunningApplication(processIdentifier: 42)!] }
   var frontmostApplication: NSRunningApplication? {
+    if mode == "activation-never" || (mode.hasPrefix("activation-deferred") && !activationSettled) { return NSRunningApplication(processIdentifier: 99) }
     if (["focus-stolen", "typing-focus-stolen"].contains(mode) && posted >= 1) || (mode == "drag-focus-stolen" && posted >= 3) { return NSRunningApplication(processIdentifier: 99) }
     return NSRunningApplication(processIdentifier: 42)
   }
@@ -142,6 +147,7 @@ final class CGEvent {
   func post(tap: CGEventTapLocation) {
     posted += 1
     if mode == "drag-cancel" && label == "leftMouseDown" { targetCancelled = 1 }
+    if mode.hasSuffix("cancel-after-down") && (label == "leftMouseDown" || label.hasPrefix("down:")) { targetCancelled = 1 }
     FileHandle.standardError.write(Data(("POST:" + label + ":flags=" + String(flags.rawValue) + "\\n").utf8))
   }
 }
@@ -237,6 +243,14 @@ test(
     assert.equal(compilation.status, 0, compilation.stderr);
     for (const mode of [
       "normal",
+      "activation-deferred",
+      "activation-never",
+      "activation-deferred-wrong-window",
+      "activation-deferred-cancel",
+      "key-cancel-after-down",
+      "pointer-cancel-after-down",
+      "typing-cancel-after-down",
+      "shortcut-cancel-after-down",
       "drag-normal",
       "drag-cancel",
       "drag-focus-stolen",
@@ -411,6 +425,10 @@ test(
         if (
           [
             "normal",
+            "activation-deferred",
+            "key-cancel-after-down",
+            "pointer-cancel-after-down",
+            "shortcut-cancel-after-down",
             "drag-normal",
             "ax-late",
             "missing-launch-date",
@@ -430,6 +448,7 @@ test(
             result.error!,
             [
               "drag-cancel",
+              "typing-cancel-after-down",
               "drag-focus-stolen",
               "focus-stolen",
               "typing-focus-stolen",
@@ -440,7 +459,13 @@ test(
               ? /partially dispatched; outcome unknown/
               : /no input dispatched/,
           );
-          if (mode !== "drag-cancel") {
+          if (
+            ![
+              "drag-cancel",
+              "activation-deferred-cancel",
+              "typing-cancel-after-down",
+            ].includes(mode)
+          ) {
             const retry = await request({
               operation: "key",
               key: "enter",
@@ -464,7 +489,11 @@ test(
               ? 3
               : mode === "drag-focus-stolen"
                 ? 4
-                : ["pointer-normal", "pointer-trusted-edge"].includes(mode)
+                : [
+                      "pointer-normal",
+                      "pointer-trusted-edge",
+                      "pointer-cancel-after-down",
+                    ].includes(mode)
                   ? 3
                   : mode === "scroll-normal"
                     ? 1
@@ -472,6 +501,10 @@ test(
                       ? 2
                       : [
                             "normal",
+                            "activation-deferred",
+                            "key-cancel-after-down",
+                            "typing-cancel-after-down",
+                            "shortcut-cancel-after-down",
                             "ax-late",
                             "missing-launch-date",
                             "active-no-cg-title",
@@ -511,6 +544,13 @@ test(
         }
         if (mode === "shortcut-alt")
           assert.match(stderr, /POST:down:12:flags=1048576/);
+        if (mode.endsWith("cancel-after-down")) {
+          const downs = (stderr.match(/POST:(?:down:|leftMouseDown)/g) ?? [])
+            .length;
+          const ups = (stderr.match(/POST:(?:up:|leftMouseUp)/g) ?? []).length;
+          assert.equal(downs, 1, "cancel must stop before another pair begins");
+          assert.equal(ups, 1, "cancel must preserve the matching release");
+        }
         if (mode === "shortcut-option")
           assert.match(stderr, /POST:down:0:flags=524288/);
       } finally {
@@ -542,6 +582,6 @@ test("missing AX reacquisition stays exact-window and precedes any foreground ta
   );
   assert.match(
     MAC_BOUND_TARGET_SOURCE.slice(end),
-    /func activate\(\) throws \{\s*try acquireMissingAXWindow\(\)\s*try verify\(\)/,
+    /func activate\(\) throws \{\s*guard targetCancelled == 0[^\n]*\s*try acquireMissingAXWindow\(\)\s*try verify\(\)/,
   );
 });

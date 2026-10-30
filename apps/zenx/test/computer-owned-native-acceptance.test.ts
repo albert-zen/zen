@@ -72,9 +72,14 @@ test(
     child.stderr.resume();
     const lines = createInterface({ input: child.stdout });
     const messages: Array<Record<string, any>> = [];
+    const focusEvents: Array<Record<string, unknown>> = [];
+    evidence.receiverFocusEvents = focusEvents;
     lines.on("line", (line) => {
       try {
-        messages.push(JSON.parse(line));
+        const message = JSON.parse(line);
+        messages.push(message);
+        if (message.kind === "owned-focus-state" && focusEvents.length < 32)
+          focusEvents.push(message);
       } catch {
         /* fixture stdout has no authority */
       }
@@ -104,6 +109,7 @@ test(
     evidence.stage = "owned-receiver-readiness";
     const ready = await waitFor("owned-receiver-ready");
     assert.equal(ready.pid, child.pid);
+    evidence.receiver = ready;
     transport = new NativeComputerTargetTransport(async () => helper);
     const signal = AbortSignal.timeout(25_000);
     const target = { pid: ready.pid, windowTitle: ready.windowTitle };
@@ -127,21 +133,32 @@ test(
       t.skip(String(evidence.missingCapability));
       return;
     }
+    evidence.selection = {
+      windowId: selected.windowId,
+      target: selected.target,
+      foregroundWindowInputAvailable: selected.foregroundWindowInputAvailable,
+    };
     assert.equal(selected.windowId, ready.windowId);
     assert.equal(selected.target.pid, child.pid);
     evidence.stage = "native-drag-and-independent-receiver-readback";
-    const receipt = await transport.request(
-      {
-        operation: "drag",
-        owner: "synthetic-owned",
-        bindingId: selected.bindingId,
-        x: ready.dragStart.x,
-        y: ready.dragStart.y,
-        toX: ready.dragEnd.x,
-        toY: ready.dragEnd.y,
-      },
-      signal,
-    );
+    let receipt: unknown;
+    try {
+      receipt = await transport.request(
+        {
+          operation: "drag",
+          owner: "synthetic-owned",
+          bindingId: selected.bindingId,
+          x: ready.dragStart.x,
+          y: ready.dragStart.y,
+          toX: ready.dragEnd.x,
+          toY: ready.dragEnd.y,
+        },
+        signal,
+      );
+    } catch (error) {
+      evidence.failure = String(error);
+      throw error;
+    }
     const delivered = await waitFor("owned-drag-received");
     assert.equal(delivered.pid, child.pid);
     assert.equal(delivered.windowId, selected.windowId);

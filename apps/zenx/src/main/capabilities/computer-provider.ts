@@ -4372,10 +4372,14 @@ final class Binding {
       guard row[kCGWindowName as String] as? String == title, !title.isEmpty else { try refuse("Independent CG window title changed; reobserve") }
     }
   }
+  func focusSnapshot() -> (frontmostPID: pid_t, axWindow: String) {
+    let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
+    guard let window, let focused = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return (frontmostPID, "unavailable") }
+    return (frontmostPID, CFEqual(focused, window) ? "selected" : "other")
+  }
   func focused() -> Bool {
-    guard let window, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-          let focused = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
-    return CFEqual(focused, window)
+    let state = focusSnapshot()
+    return state.frontmostPID == app.processIdentifier && state.axWindow == "selected"
   }
   // A CG-only selection can acquire AX later, but never adopts the app's
   // current/main window. The original CG identity, title and geometry remain
@@ -4397,13 +4401,25 @@ final class Binding {
     try verify()
   }
   func activate() throws {
+    guard targetCancelled == 0 else { try refuse("Foreground input cancelled") }
     try acquireMissingAXWindow()
     try verify()
     guard let window, windows(appElement).contains(where: { CFEqual($0, window) }), frame(window) == bounds else { try refuse("Selected window AX identity unavailable for foreground input") }
     guard app.activate(options: [.activateIgnoringOtherApps]) else { try refuse("Could not activate selected application") }
     guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { try refuse("Could not raise selected window") }
-    for _ in 0..<30 { try verify(); if focused() { return }; usleep(10_000) }
-    try refuse("Selected window did not acquire foreground focus; no input dispatched")
+    // AppKit's time-varying application state updates on the main run loop.
+    // Sleeping here starves activation notifications; keep the existing 300 ms
+    // budget and exact focus predicate, but allow those notifications to settle.
+    // Requests still enter only through the synchronous readLine loop below;
+    // no stdin reader/dispatch source is registered with this run loop.
+    for _ in 0..<30 {
+      guard targetCancelled == 0 else { try refuse("Foreground input cancelled") }
+      try verify()
+      if focused() { return }
+      RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    let state = focusSnapshot()
+    try refuse("Selected window did not acquire foreground focus (selectedPID=" + String(app.processIdentifier) + ", windowId=" + String(windowId) + ", frontmostPID=" + String(state.frontmostPID) + ", axFocusedWindow=" + state.axWindow + "); no input dispatched")
   }
   func fence() throws { try verify(); guard focused() else { try refuse("Foreground focus changed; reobserve target") } }
   func pointerFence(_ point: CGPoint, _ passthrough: Set<Int>) throws {
@@ -4847,12 +4863,15 @@ while let line = readLine() {
         let passthroughIds = request["pointerPassthroughWindowIds"] as? [Int] ?? []
         guard passthroughIds.count <= 64, passthroughIds.allSatisfy({ $0 > 0 }) else { try refuse("Invalid foreground indicator identity") }
         let passthrough = Set(passthroughIds)
-        func post(_ event: CGEvent?) throws {
+        // Cancellation prevents new input, never suppresses an already-started
+        // ordinary pair's matching up. Existing exact native fences still apply.
+        func post(_ event: CGEvent?, matchingRelease: Bool = false) throws {
           guard let event else { try refuse("Could not construct native input") }
-          if operation == "drag" && targetCancelled != 0 { try refuse("Foreground drag cancelled") }
+          guard matchingRelease || targetCancelled == 0 else { try refuse("Foreground input cancelled") }
           try binding.fence()
           try shortcutFence?()
           if let pointerPoint { try binding.pointerFence(pointerPoint, passthrough) }
+          guard matchingRelease || targetCancelled == 0 else { try refuse("Foreground input cancelled") }
           event.post(tap: .cghidEventTap)
           posted += 1
         }
@@ -4866,7 +4885,7 @@ while let line = readLine() {
           try post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button))
           try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: point, mouseButton: button))
           usleep(30_000)
-          try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: point, mouseButton: button))
+          try post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: point, mouseButton: button), matchingRelease: true)
         case "drag":
           guard let x = request["x"] as? Double, let y = request["y"] as? Double,
                 let toX = request["toX"] as? Double, let toY = request["toY"] as? Double,
@@ -4905,7 +4924,7 @@ while let line = readLine() {
           guard let key = request["key"] as? String, let code = keyCodes[key] else { try refuse("Unsupported bound key") }
           try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true))
           usleep(20_000)
-          try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false))
+          try post(CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false), matchingRelease: true)
         case "type":
           guard let text = request["text"] as? String else { try refuse("Typing text is required") }
           let chunks = try unicodeChunks(text)
@@ -4916,7 +4935,7 @@ while let line = readLine() {
               units.withUnsafeBufferPointer { buffer in
                 event?.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
               }
-              try post(event)
+              try post(event, matchingRelease: !down)
               if down { usleep(5_000) }
             }
           }
@@ -4933,7 +4952,7 @@ while let line = readLine() {
           usleep(20_000)
           let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)
           up?.flags = flags
-          try post(up)
+          try post(up, matchingRelease: true)
         case "scroll":
           guard let value = request["deltaY"] as? Double, value.isFinite, abs(value) <= 10000, value.rounded() != 0 else { try refuse("Invalid scroll pixels") }
           let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -Int32(value.rounded()), wheel2: 0, wheel3: 0)
