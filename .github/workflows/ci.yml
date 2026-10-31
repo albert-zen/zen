@@ -78,6 +78,20 @@ jobs:
         with:
           path: ${{ steps.cjk-package.outputs.deb-path }}
           key: ${{ steps.cjk-package.outputs.cache-key }}
+      - name: Capture send preparation feedback (synthetic production components)
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node apps/zenx/scripts/build-send-preparation-preview.mjs "${{ runner.temp }}/zenx-send-preparation"
+          node apps/zenx/scripts/capture-send-preparation-preview.mjs "${{ runner.temp }}/zenx-send-preparation"
+      - name: Retain send preparation screenshots and elapsed-time evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-send-preparation-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-send-preparation
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
