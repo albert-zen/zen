@@ -2972,12 +2972,14 @@ test("a rejected replacement terminal append emits no invented successor complet
     listThreadIds: async () => await backing.listThreadIds(),
     read: async (threadId) => await backing.read(threadId),
   };
+  const firstSampleStarted = deferred<void>();
   let sample = 0;
   const model: ModelAdapter = {
     provider: "replacement-outcome",
     async *stream(request) {
       sample += 1;
       if (sample === 1) {
+        firstSampleStarted.resolve();
         await new Promise<void>((resolve) => {
           if (request.signal.aborted) resolve();
           else
@@ -3052,6 +3054,8 @@ test("a rejected replacement terminal append emits no invented successor complet
       "turn",
     ).id;
 
+    // Admission no longer implies model dispatch; establish the interrupted sample.
+    await within(firstSampleStarted.promise);
     rejectTerminal = true;
     await connection.receive({
       id: 3,

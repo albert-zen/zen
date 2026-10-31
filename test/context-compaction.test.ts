@@ -28,6 +28,7 @@ import type {
 } from "../src/item.js";
 import {
   InMemoryThreadJournal,
+  JsonlThreadJournal,
   ThreadJournalAppendOutcomeUnknownError,
   type ThreadJournal,
 } from "../src/journal.js";
@@ -2567,6 +2568,7 @@ test("automatically compacts exactly at 80% using the highest Provider usage sam
   const thread = await server.startThread();
   const handle = await server.startTurn(thread.id, "compact me");
   await handle.done;
+  await waitForAutomaticCompactions(server);
 
   const completed = await server.readThread(thread.id);
   assert.equal(summaryCalls, 1);
@@ -2661,6 +2663,7 @@ test("uses triggerPercent for admission and targetPercent for the compacted proj
   await (
     await server.startTurn(thread.id, "two")
   ).done;
+  await waitForAutomaticCompactions(server);
   const snapshot = await server.readThread(thread.id);
   assert.equal(snapshot.items.at(-1)?.type, "context_compaction");
   assert(
@@ -2851,7 +2854,14 @@ test("compacts an oversized completed history before admitting the next model sa
     (item) => item.type === "turn_started" && item.turnId === secondTurnId,
   );
   assert(compactionIndex >= 0);
-  assert(secondTurnIndex > compactionIndex);
+  assert(secondTurnIndex < compactionIndex);
+  assert(
+    snapshot.items
+      .slice(secondTurnIndex, compactionIndex)
+      .some(
+        (item) => item.type === "user_message" && item.turnId === secondTurnId,
+      ),
+  );
   const secondRequest = requests
     .filter((request) => !isSummaryRequest(request))
     .at(-1);
@@ -2998,7 +3008,8 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   const handle = await server.startTurn(thread.id, "one");
   await normalStarted.promise;
   releaseNormal.resolve();
-  await expectSummaryStarted(summaryStarted.promise, handle.done);
+  await handle.done;
+  await summaryStarted.promise;
   let updateSettled = false;
   const update = server
     .updateThreadSettings(thread.id, { model: "other-model" })
@@ -3010,16 +3021,19 @@ test("automatic compaction freezes admitted selection across a concurrent settin
   void handle.done.then(() => {
     handleSettled = true;
   });
-  await Promise.resolve();
-  assert.equal(handleSettled, false);
+  assert.equal((await update).modelId, "other-model");
+  await handle.done;
+  assert.equal(handleSettled, true);
   assert.equal(
     updateSettled,
-    false,
-    "the admitted auxiliary sample retains its frozen selection",
+    true,
+    "auxiliary work must not hold the settings mutation lock",
   );
+  assert.deepEqual(summarySelections, [
+    { model: "recording-model", reasoningEffort: "medium" },
+  ]);
   releaseSummary.resolve();
-  await handle.done;
-  assert.equal((await update).modelId, "other-model");
+  await waitForAutomaticCompactions(server);
 
   const snapshot = await server.readThread(thread.id);
   const compacted = snapshot.items.find(
@@ -3078,6 +3092,7 @@ test("automatic compaction resolves current model and window only when the auxil
       assert.deepEqual(normalSelections, ["recording-model"]);
       releaseNormal.resolve();
       await active.done;
+      await waitForAutomaticCompactions(server);
 
       const snapshot = await server.readThread(thread.id);
       assert.equal(snapshot.turns[0]?.status, "completed");
@@ -3140,6 +3155,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
 
   const first = await server.startTurn(thread.id, "one");
   await first.done;
+  await waitForAutomaticCompactions(server);
   let snapshot = await server.readThread(thread.id);
   assert.equal(summaryCalls, 1);
   assert.equal(snapshot.turns[0]?.status, "completed");
@@ -3153,19 +3169,19 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
   );
 
   // The measured request remains above the trigger. A new turn must not
-  // bypass admission using the smaller raw character estimate after compaction fails.
-  await assert.rejects(
-    server.startTurn(thread.id, "two"),
-    /summary provider unavailable/u,
-  );
+  // bypass model preparation using the smaller raw estimate after compaction fails.
+  // Receipt succeeds, but summary failure must terminate the accepted turn.
+  const second = await server.startTurn(thread.id, "two");
+  await second.done;
   snapshot = await server.readThread(thread.id);
   assert.equal(summaryCalls, 2);
   assert.equal(normalCalls, 1);
-  assert.equal(snapshot.turns.length, 1);
+  assert.equal(snapshot.turns.length, 2);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  assert.equal(snapshot.turns[1]?.status, "failed");
   assert.equal(
     snapshot.items.filter((item) => item.type === "turn_completed").length,
-    1,
+    2,
   );
   assert.equal(
     snapshot.items.some((item) => item.type === "context_compaction"),
@@ -3184,6 +3200,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
     read: async (threadId) => await persistenceBacking.read(threadId),
   };
   let persistenceSummaryCalls = 0;
+  let persistenceNormalCalls = 0;
   const persistenceModel: ModelAdapter = {
     provider: "recording",
     async *stream(request): AsyncIterable<ModelEvent> {
@@ -3192,6 +3209,7 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
         yield { type: "text_delta", delta: "summary" };
         return;
       }
+      persistenceNormalCalls++;
       yield { type: "text_delta", delta: "answer" };
       yield { type: "usage", inputTokens: 160, outputTokens: 1 };
     },
@@ -3203,14 +3221,33 @@ test("automatic compaction failure does not fail a completed Turn", async (t) =>
       { id: "recording-model", isDefault: true, contextWindow: 200 },
     ]),
   });
+  const persistenceEvents: AppServerEvent[] = [];
+  persistence.subscribe((event) => persistenceEvents.push(event));
   const persistenceThread = await persistence.startThread();
   const persistenceHandle = await persistence.startTurn(
     persistenceThread.id,
     "persist",
   );
+  await persistenceHandle.done;
+  await waitForAutomaticCompactions(persistence);
+  assert(
+    persistenceEvents.some(
+      (event) =>
+        event.type === "context_compaction_status" && event.phase === "unknown",
+    ),
+  );
+  const afterUnknown = await persistence.startTurn(
+    persistenceThread.id,
+    "must not dispatch",
+  );
   await assert.rejects(
-    persistenceHandle.done,
+    afterUnknown.done,
     ThreadJournalAppendOutcomeUnknownError,
+  );
+  assert.equal(
+    persistenceNormalCalls,
+    1,
+    "unknown append must prohibit another model dispatch",
   );
   assert.equal(persistenceSummaryCalls, 1);
   assert.equal(
@@ -3654,6 +3691,7 @@ test("generation, abort, invalid summary, and journal failures append no compact
     read: async (threadId) => await backing.read(threadId),
   };
   let persistenceSummaryCalls = 0;
+  let persistenceNormalCalls = 0;
   const persistenceModel = summaryModel(() => {
     persistenceSummaryCalls += 1;
   });
@@ -3661,6 +3699,8 @@ test("generation, abort, invalid summary, and journal failures append no compact
     journal: failingJournal,
     model: persistenceModel,
   });
+  const persistenceEvents: AppServerEvent[] = [];
+  persistence.subscribe((event) => persistenceEvents.push(event));
   const persistenceThread = await persistence.startThread();
   await (
     await persistence.startTurn(persistenceThread.id, "one")
@@ -4540,6 +4580,7 @@ test("active fallback does not summarize an old completed prefix superseded by a
   await (
     await server.startTurn(thread.id, "continue with an agent reset")
   ).done;
+  await waitForAutomaticCompactions(server);
   assert.equal(normal, 4);
   assert.equal(
     summaries,
@@ -4682,6 +4723,7 @@ test("Trace records each generated compaction cause, evidence, exact commit and 
         await (
           await server.startTurn(thread.id, "synthetic next input")
         ).done;
+      await waitForAutomaticCompactions(server);
       const parent = observations.events.filter(
         (event) =>
           event.threadId === thread.id &&
@@ -5334,6 +5376,24 @@ function summaryModel(onSummary?: () => void): ModelAdapter {
   };
 }
 
+/** Auxiliary completion is not the completed Turn's execution handle. */
+async function waitForAutomaticCompactions(
+  server: ZenAppServer,
+): Promise<void> {
+  const deadline = performance.now() + 5_000;
+  while (
+    server
+      .activitySnapshot()
+      .rootOperations.some(({ kind }) => kind === "compaction")
+  ) {
+    assert(
+      performance.now() < deadline,
+      "automatic compaction did not reach a terminal outcome",
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 async function expectSummaryStarted(
   started: Promise<void>,
   operation: Promise<unknown>,
@@ -5373,3 +5433,87 @@ function deferred<T>(): {
   });
   return { promise, resolve };
 }
+
+test("send admission is independent of a blocked automatic summary", async (t) => {
+  for (const cause of ["next_turn_estimate", "completed_turn_usage"] as const) {
+    await t.test(cause, async () => {
+      const summaryStarted = deferred<void>();
+      const releaseSummary = deferred<void>();
+      const directory = await mkdtemp(path.join(os.tmpdir(), "zen-send-gate-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const journal = new JsonlThreadJournal(directory);
+      let normalSamples = 0;
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          if (isSummaryRequest(request)) {
+            summaryStarted.resolve();
+            await releaseSummary.promise;
+            yield { type: "text_delta", delta: "synthetic summary" };
+            return;
+          }
+          normalSamples++;
+          yield {
+            type: "text_delta",
+            delta:
+              normalSamples === 1 && cause === "next_turn_estimate"
+                ? "synthetic history ".repeat(300)
+                : "synthetic answer",
+          };
+          if (normalSamples === 1 && cause === "completed_turn_usage")
+            yield { type: "usage", inputTokens: 800, outputTokens: 1 };
+        },
+      };
+      const server = createServer({
+        journal,
+        model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "recording-model", isDefault: true, contextWindow: 1_000 },
+        ]),
+      });
+      const thread = await server.startThread();
+      const first = await server.sendMessage(thread.id, "first", {
+        clientId: "synthetic-first",
+      });
+      if (cause === "next_turn_estimate") await first.done;
+      else await summaryStarted.promise;
+      const started = performance.now();
+      let admissionMs: number | undefined;
+      const send = server
+        .sendMessage(thread.id, "second", { clientId: "synthetic-second" })
+        .then((handle) => {
+          admissionMs = performance.now() - started;
+          return handle;
+        });
+      await summaryStarted.promise;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const items = await journal.read(thread.id);
+      const received = items.some(
+        (item) =>
+          item.type === "user_message" && item.clientId === "synthetic-second",
+      );
+      const measured = {
+        cause,
+        gateHeldMs: performance.now() - started,
+        admissionMs: admissionMs ?? null,
+        canonicalReceived: received,
+        normalSamples,
+      };
+      console.log("SEND_ADMISSION_GATE", JSON.stringify(measured));
+      releaseSummary.resolve();
+      const second = await send;
+      await Promise.all([first.done, second.done]);
+      assert.equal(
+        received,
+        true,
+        "input must be durably represented while summary is blocked",
+      );
+      assert.notEqual(measured.admissionMs, null);
+      assert.equal(
+        measured.normalSamples,
+        1,
+        "main model must not start before context preparation finishes",
+      );
+    });
+  }
+});

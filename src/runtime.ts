@@ -226,6 +226,8 @@ export interface RunTurnOptions {
   ) => Promise<boolean>;
   emit: (event: RuntimeEvent) => void;
   initialInputCommitted?: () => void;
+  /** Preparation after reliable input admission, before any main-model sample. */
+  beforeInitialSample?: () => Promise<void>;
   agenticCompactionCommitted?: () => void;
   afterToolBatch?: (usage: {
     inputTokens: number | undefined;
@@ -586,6 +588,7 @@ export class AgentRuntime {
       }
       initialInputCommitted = true;
       options.initialInputCommitted?.();
+      await options.beforeInitialSample?.();
 
       let nextSampleAttempt = 1;
       for (let round = 0; ; round += 1) {

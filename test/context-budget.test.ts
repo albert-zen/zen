@@ -73,8 +73,14 @@ function fixture(window: number, description: string, instructions = "") {
 test("tool definitions alone exhaust window before any provider or compaction request", async () => {
   const f = fixture(500, "schema documentation ".repeat(500));
   const thread = await f.server.startThread();
-  await assert.rejects(
-    f.server.startTurn(thread.id, "hello"),
+  const received = await f.server.startTurn(thread.id, "hello");
+  await received.done;
+  const failure = (await f.server.readThread(thread.id)).items.find(
+    (item) => item.type === "failure",
+  );
+  assert(failure?.type === "failure");
+  assert.match(
+    failure.message,
     /tool definitions and static model instructions exceed/i,
   );
   assert.equal(f.requests(), 0);
@@ -97,10 +103,13 @@ test("tools plus adapter static instructions exhaust the fixed budget before any
   assert(estimateModelInput([], [], staticInstructions).total < 1000);
   const f = fixture(1000, "small tool", staticInstructions);
   const thread = await f.server.startThread();
-  await assert.rejects(
-    f.server.startTurn(thread.id, "hello"),
-    /static model instructions exceed/,
+  const received = await f.server.startTurn(thread.id, "hello");
+  await received.done;
+  const failure = (await f.server.readThread(thread.id)).items.find(
+    (item) => item.type === "failure",
   );
+  assert(failure?.type === "failure");
+  assert.match(failure.message, /static model instructions exceed/);
   assert.equal(f.requests(), 0);
   assert.equal(
     (await f.server.readThread(thread.id)).items.some(

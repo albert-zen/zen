@@ -93,9 +93,11 @@ export function contextItemsFromLegacy(
           selected.referenceBindings as unknown as JsonValue;
       }
       const timestamp =
-        recordedUserTimestamps([...previous, item], formatReceiptTimestamp).get(
+        recordedUserTimestamps(
+          [...previous, item],
+          formatReceiptTimestamp,
           item.id,
-        ) ?? null;
+        ).get(item.id) ?? null;
       return message("user", [
         {
           type: "text",
