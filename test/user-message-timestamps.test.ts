@@ -359,10 +359,13 @@ test("live input, soft steer and edited queue retain their first recorded times 
     const thread = await server.startThread();
     const active = await server.startTurn(thread.id, "live", {
       clientId: "live",
+      clientTimezone: "America/New_York",
     });
     await started.promise;
     now = "2026-10-14T05:41:00Z";
-    await server.queueMessage(thread.id, "queued", "queue");
+    await server.queueMessage(thread.id, "queued", "queue", {
+      clientTimezone: "Asia/Kathmandu",
+    });
     const queued = (await server.readThread(thread.id)).items.find(
       (entry) => entry.type === "user_message_queued",
     )!;
@@ -380,6 +383,7 @@ test("live input, soft steer and edited queue retain their first recorded times 
     now = "2026-10-14T05:43:00Z";
     await server.steerTurn(thread.id, active.id, "steer", {
       clientId: "steer",
+      clientTimezone: "America/St_Johns",
     });
     now = "2026-10-14T05:44:00Z";
     await server.steerTurn(thread.id, active.id, "steer", {
@@ -399,9 +403,18 @@ test("live input, soft steer and edited queue retain their first recorded times 
       (message) => message.role === "user",
     );
     assert.deepEqual(users, [
-      humanMessage("live", timestamp),
-      humanMessage("steer", "2026-10-14T05:43:00Z"),
-      humanMessage("edited queue", "2026-10-14T05:41:00Z"),
+      humanMessage(
+        "live",
+        "2026-10-14T01:40:12.345-04:00; Client-reported timezone: America/New_York (UTC-04:00)",
+      ),
+      humanMessage(
+        "steer",
+        "2026-10-14T03:13:00.000-02:30; Client-reported timezone: America/St_Johns (UTC-02:30)",
+      ),
+      humanMessage(
+        "edited queue",
+        "2026-10-14T11:26:00.000+05:45; Client-reported timezone: Asia/Katmandu (UTC+05:45)",
+      ),
     ]);
     assert.deepEqual(
       requests.at(-1)?.filter((message) => message.role === "user"),

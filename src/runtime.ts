@@ -1,3 +1,4 @@
+import { captureReceiptTimezone } from "./message-timezone.js";
 import type { CapabilityObjectBinding } from "./model.js";
 import type { ModelEvent, ProviderToolPresentation } from "./model.js";
 import { compileItemList } from "./item-list.js";
@@ -202,6 +203,7 @@ export type RuntimeEvent =
     };
 
 export interface RunTurnOptions {
+  clientTimezone?: string;
   retryOfTurnId?: string;
   thread: Thread;
   workspaceInstructions?: WorkspaceInstructionFile[];
@@ -562,7 +564,12 @@ export class AgentRuntime {
                 turnId,
                 createdAt: this.#now(),
                 ...(message.sender === undefined
-                  ? { type: "user_message" as const }
+                  ? {
+                      type: "user_message" as const,
+                      receiptTimezone: captureReceiptTimezone(
+                        options.clientTimezone,
+                      ),
+                    }
                   : {
                       type: "thread_message" as const,
                       sender: message.sender,

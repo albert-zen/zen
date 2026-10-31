@@ -27,6 +27,8 @@ test("manual retry coalesces main/side duplicate clicks with one stable request 
       return response.promise;
     },
     () => "manual-1",
+    () => "en",
+    () => "Asia/Shanghai",
   );
   const thread = recoveryScenario("failed", "reload");
   const first = retry(thread, thread.turns[0]!.id);
@@ -39,6 +41,7 @@ test("manual retry coalesces main/side duplicate clicks with one stable request 
       expectedTurnId: thread.turns[0]!.id,
       clientUserMessageId: "manual-1",
       language: "en",
+      clientTimezone: "Asia/Shanghai",
     },
   ]);
   response.resolve({ turnId: "continuation-1" });
@@ -109,6 +112,7 @@ test("manual retry refuses historical targets and leaves canonical data unchange
 test("retry freezes localized continuation language across ambiguous acknowledgements", async () => {
   const calls: ManualTurnRetryParams[] = [];
   let language: "zh-CN" | "en" = "zh-CN";
+  let timezone = "Asia/Shanghai";
   const retry = createManualTurnRetryRequester(
     async (params) => {
       calls.push(params);
@@ -116,11 +120,17 @@ test("retry freezes localized continuation language across ambiguous acknowledge
     },
     () => "localized-1",
     () => language,
+    () => timezone,
   );
   const thread = recoveryScenario("failed", "reload");
   await assert.rejects(retry(thread, thread.turns[0]!.id), /unconfirmed/);
   language = "en";
+  timezone = "America/New_York";
   await retry(thread, thread.turns[0]!.id);
+  assert.deepEqual(
+    calls.map(({ clientTimezone }) => clientTimezone),
+    ["Asia/Shanghai", "Asia/Shanghai"],
+  );
   assert.deepEqual(
     calls.map(({ language }) => language),
     ["zh-CN", "zh-CN"],

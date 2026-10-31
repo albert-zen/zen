@@ -40,6 +40,8 @@ export const NATIVE_TURN_RETRY_METHOD = "zen/turn/retry";
 export interface NativeTurnRetryParams {
   /** Optional client-reported timing; never admission or execution authority. */
   clientObservation?: ClientSendObservation;
+  /** Device-reported IANA zone; presentation metadata, never clock authority. */
+  clientTimezone?: string;
   threadId: string;
   expectedTurnId: string;
   clientUserMessageId: string;
@@ -52,6 +54,8 @@ export interface NativeTurnRetryResult {
 export interface NativeTurnSendParams {
   /** Optional client-reported timing; never admission or execution authority. */
   clientObservation?: ClientSendObservation;
+  /** Device-reported IANA zone; presentation metadata, never clock authority. */
+  clientTimezone?: string;
   threadId: string;
   /** Omitted means soft steer active work, or start when idle. */
   mode?: "start" | "queue" | "batch-next" | "steer" | "replace";

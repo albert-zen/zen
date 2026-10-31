@@ -14,6 +14,7 @@ export interface ComposerDraft {
 
 export interface ComposerSubmission {
   clientObservation?: ClientSendObservation;
+  clientTimezone?: string;
   intent: ComposerIntent;
   expectedTurnId: string | null;
   clientUserMessageId: string;
@@ -138,12 +139,22 @@ export function composerDraftHasContent(draft: ComposerDraft): boolean {
   return draft.text.trim().length > 0 || draft.images.length > 0;
 }
 
+/** OS/browser-reported zone only; unavailable metadata is left to Host fallback. */
+export function clientTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function beginComposerSubmission(
   state: ComposerState,
   intent: ComposerIntent,
   expectedTurnId: string | null,
   createId: () => string,
   clientObservation?: ClientSendObservation,
+  timezone: () => string | undefined = clientTimeZone,
 ): ComposerState {
   if (
     state.submission?.status === "pending" ||
@@ -158,11 +169,13 @@ export function beginComposerSubmission(
     state.submission.expectedTurnId === expectedTurnId &&
     state.submission.draftRevision === state.draftRevision &&
     sameDraft(state.submission.draftAtSubmit, state.draft);
+  const clientTimezone = retry ? state.submission!.clientTimezone : timezone();
   return {
     ...state,
     confirmedAdmission: undefined,
     submission: {
       ...(clientObservation === undefined ? {} : { clientObservation }),
+      ...(clientTimezone === undefined ? {} : { clientTimezone }),
       intent,
       expectedTurnId,
       draftRevision: state.draftRevision,

@@ -163,6 +163,7 @@ const metadataKeys = new Set([
   "includeOriginalReference",
   "referenceBindings",
   "queuedAdmission",
+  "receiptTimezone",
   "onlySampleId",
   "category",
   "generatedReference",
