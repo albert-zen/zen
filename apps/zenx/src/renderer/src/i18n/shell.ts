@@ -259,6 +259,7 @@ export const en = {
 
   requested: "Requested",
   admitting: "Preparing",
+  preparingFor: "Preparing for {{duration}}",
   stopping: "Stopping…",
   stopped: "Stopped",
   awaitingToolResult: "Awaiting tool result",
@@ -1151,6 +1152,7 @@ export const zhCN = {
 
   requested: "已请求",
   admitting: "准备中",
+  preparingFor: "已准备 {{duration}}",
   stopping: "正在停止…",
   stopped: "已停止",
   awaitingToolResult: "等待工具结果",

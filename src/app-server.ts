@@ -468,9 +468,17 @@ interface GeneratedContextCompactionOptions {
   contextCompaction: ResolvedContextCompactionConfig;
   signal: AbortSignal;
   allowOpenTurns?: boolean;
+  /** This turn owns preparation, but input admission remains independently available. */
+  concurrentAdmission?: boolean;
+  concurrentAdmissionTurnId?: string;
 }
 
 export class ZenAppServer {
+  // Process-local auxiliary ownership only; recovery uses the accepted history.
+  readonly #completedTurnPreparations = new Map<
+    string,
+    { controller: AbortController; done: Promise<void> }
+  >();
   readonly #attachments: AttachmentStore;
   readonly #journal: ThreadJournal;
   readonly #runtime: AgentRuntime;
@@ -658,7 +666,15 @@ export class ZenAppServer {
     const active = [...this.#activeTurns.values()];
     for (const turn of active)
       turn.controller.abort(new DOMException("Host stopped", "AbortError"));
-    const results = await Promise.allSettled(active.map((turn) => turn.done));
+    const preparations = [...this.#completedTurnPreparations.values()];
+    for (const preparation of preparations)
+      preparation.controller.abort(
+        new DOMException("Host stopped", "AbortError"),
+      );
+    const results = await Promise.allSettled([
+      ...active.map((turn) => turn.done),
+      ...preparations.map((preparation) => preparation.done),
+    ]);
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
@@ -671,8 +687,21 @@ export class ZenAppServer {
 
   async closeRuntimeConfiguration(): Promise<void> {
     this.#acceptingRootOperations = false;
-    await this.#providerRegistry.close();
-    await this.flushThreadSummaryProjection();
+    const failures: unknown[] = [];
+    // Release resources even when joining an uncertain durable write reports failure.
+    for (const close of [
+      () => this.stopActiveTurns(),
+      () => this.#providerRegistry.close(),
+      () => this.flushThreadSummaryProjection(),
+    ]) {
+      try {
+        await close();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, "Runtime shutdown was not confirmed");
   }
 
   beginHostOperation(
@@ -1549,13 +1578,14 @@ export class ZenAppServer {
         );
       if (
         this.#activeTurns.has(threadId) ||
+        this.#completedTurnPreparations.has(threadId) ||
         this.#replacementOperations.has(threadId) ||
         this.#pendingReplacement(thread) !== undefined ||
         this.#runtime.hasActiveToolTasks(threadId)
       )
         throw new AppServerError(
           "thread_busy",
-          "Wait for the running turn and tools to finish before deleting this Thread",
+          "Wait for the running turn, context preparation and tools to finish before deleting this Thread",
         );
       const item: CanonicalItem = {
         type: "thread_deleted",
@@ -3214,10 +3244,13 @@ export class ZenAppServer {
         );
       }
       const thread = await this.#requireThread(threadId);
-      if (this.#activeTurns.has(threadId)) {
+      if (
+        this.#activeTurns.has(threadId) ||
+        this.#completedTurnPreparations.has(threadId)
+      ) {
         throw new AppServerError(
           "thread_busy",
-          `Thread ${threadId} already has a running turn`,
+          `Thread ${threadId} already has a running turn or context preparation`,
         );
       }
 
@@ -3609,23 +3642,6 @@ export class ZenAppServer {
           );
         }
         await this.#validateInput(input, resolved.model.inputModalities);
-        await this.#compactBeforeTurnIfNeeded({
-          ...(workspaceInstructions === undefined
-            ? {}
-            : { workspaceInstructions }),
-          thread,
-          turnId,
-          input,
-          ...(options.clientTimezone === undefined
-            ? {}
-            : { clientTimezone: options.clientTimezone }),
-          ...(internal.initialMessages === undefined
-            ? {}
-            : { initialMessages: internal.initialMessages }),
-          resolved,
-          contextCompaction: admitted.configuration.contextCompaction,
-          signal: controller.signal,
-        });
       } catch (error) {
         resolved.release();
         admitted.operation.release();
@@ -4017,6 +4033,27 @@ export class ZenAppServer {
                   if (active?.turnId === turnId)
                     active.initialInputCommitted = true;
                   ready.resolve();
+                },
+                beforeInitialSample: async () => {
+                  // Let the durable receipt/ACK leave this process before synchronous
+                  // context compilation. Summary generation must not own ingress.
+                  await new Promise<void>((resolve) => setImmediate(resolve));
+                  const preparation =
+                    this.#completedTurnPreparations.get(threadId);
+                  if (preparation !== undefined)
+                    await this.#awaitContextPreparation(
+                      preparation.done,
+                      controller.signal,
+                    );
+                  controller.signal.throwIfAborted();
+                  this.#assertCurrentThreadAuthority(thread);
+                  await this.#compactBeforeInitialSampleIfNeeded({
+                    thread,
+                    turnId,
+                    resolved,
+                    contextCompaction: admitted.configuration.contextCompaction,
+                    signal: controller.signal,
+                  });
                 },
                 agenticCompactionCommitted: () => {
                   highestInputTokens = undefined;
@@ -4842,32 +4879,106 @@ export class ZenAppServer {
         status: "completed",
       };
       await this.#commit(thread, completed);
-      if (automaticCompaction.highestInputTokens() === undefined) return true;
-      try {
-        const resolved = this.#providerRegistry.acquire(
-          thread.effectiveConfiguration(),
-        );
+      if (automaticCompaction.highestInputTokens() !== undefined) {
+        // The completed Turn is final; auxiliary preparation has its own lifetime
+        // and cannot retain ingress or the predecessor execution handle.
         try {
-          await this.#compactCompletedTurnAutomatically({
+          this.#startCompletedTurnPreparation(
             thread,
             completed,
-            ...automaticCompaction,
-            resolved,
-            contextCompaction: this.#runtimeConfiguration.contextCompaction,
-          });
-        } finally {
-          resolved.release();
+            automaticCompaction.highestInputTokens(),
+          );
+        } catch (error) {
+          // Auxiliary admission failure cannot retroactively fail a completed Turn.
+          console.warn(`Could not prepare completed Turn ${turnId}`, error);
         }
-      } catch (error) {
-        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
-          throw error;
-        }
-        console.warn(
-          `Could not automatically compact completed Turn ${turnId}`,
-          error,
-        );
       }
       return true;
+    });
+  }
+
+  #startCompletedTurnPreparation(
+    thread: Thread,
+    completed: TurnCompletedItem,
+    inputTokens: number | undefined,
+  ): void {
+    // Do not create a transient busy owner when no eager summary is eligible.
+    // Resolution is read-only; the actual operation acquires its sole lease below.
+    const selected = this.#requireSelection(thread.effectiveConfiguration());
+    const contextWindow = selected.model.contextWindow;
+    if (
+      inputTokens === undefined ||
+      contextWindow === null ||
+      inputTokens <
+        automaticCompactionThreshold(
+          contextWindow,
+          this.#runtimeConfiguration.contextCompaction.triggerPercent,
+        )
+    )
+      return;
+    if (this.#completedTurnPreparations.has(thread.id))
+      throw new AppServerError(
+        "thread_busy",
+        "Context preparation already owns this Thread",
+      );
+    const admitted = this.#admitProviderOperation(
+      "compaction",
+      `thread:${thread.id}`,
+      thread.effectiveConfiguration(),
+    );
+    const controller = new AbortController();
+    const owner = { controller, done: Promise.resolve() };
+    let outcomeUnknown = false;
+    owner.done = (async () => {
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        controller.signal.throwIfAborted();
+        await this.#compactCompletedTurnAutomatically({
+          thread,
+          completed,
+          resolved: admitted.provider,
+          contextCompaction: admitted.configuration.contextCompaction,
+          highestInputTokens: () => inputTokens,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        // Unknown persistence remains an authority failure, never a retry hint.
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+          outcomeUnknown = true;
+          throw error;
+        }
+        if (!controller.signal.aborted)
+          console.warn(
+            `Could not automatically compact completed Turn ${completed.turnId}`,
+            error,
+          );
+      } finally {
+        admitted.provider.release();
+        admitted.operation.release();
+        if (
+          !outcomeUnknown &&
+          this.#completedTurnPreparations.get(thread.id) === owner
+        )
+          this.#completedTurnPreparations.delete(thread.id);
+      }
+    })();
+    this.#completedTurnPreparations.set(thread.id, owner);
+    // A later input or shutdown observes this same promise; this observer only
+    // prevents an unhandled rejection while the journal has invalidated authority.
+    void owner.done.catch(() => undefined);
+  }
+
+  async #awaitContextPreparation(
+    done: Promise<void>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      void done
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", aborted));
     });
   }
 
@@ -4893,9 +5004,9 @@ export class ZenAppServer {
       return;
     }
 
-    let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+    let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
     try {
-      boundary = latestEligibleCompactionBoundary(options.thread.items);
+      boundary = latestCompletedCompactionBoundary(options.thread.items);
     } catch (error) {
       throw new AppServerError(
         "automatic_compaction_failed",
@@ -4919,6 +5030,8 @@ export class ZenAppServer {
       await this.#appendContextCompaction({
         thread: options.thread,
         boundary,
+        allowOpenTurns: true,
+        concurrentAdmission: true,
         initiator: "automatic",
         trigger: {
           reason: "completed_turn_usage",
@@ -4947,73 +5060,17 @@ export class ZenAppServer {
     }
   }
 
-  async #compactBeforeTurnIfNeeded(options: {
-    clientTimezone?: string;
-    workspaceInstructions?: WorkspaceInstructionFile[];
+  async #compactBeforeInitialSampleIfNeeded(options: {
     thread: Thread;
     turnId: string;
-    input: UserInput;
-    initialMessages?: readonly InitialInputMessage[];
     resolved: ResolvedProviderSelection;
     contextCompaction: ResolvedContextCompactionConfig;
     signal: AbortSignal;
   }): Promise<void> {
     const contextWindow = options.resolved.model.contextWindow;
     if (contextWindow === null) return;
-    const previewItems: CanonicalItem[] = [
-      ...options.thread.items,
-      {
-        ...(options.workspaceInstructions === undefined
-          ? {}
-          : { workspaceInstructions: options.workspaceInstructions }),
-        id: `${options.turnId}:context-preview-started`,
-        threadId: options.thread.id,
-        turnId: options.turnId,
-        createdAt: this.#now(),
-        type: "turn_started",
-        selection: options.resolved.selection,
-      },
-      ...(
-        options.initialMessages ?? [
-          { input: options.input, clientId: "context-preview" },
-        ]
-      ).map((message, index): CanonicalItem =>
-        message.hostInput !== undefined
-          ? {
-              id: `${options.turnId}:context-preview-input:${index}`,
-              threadId: options.thread.id,
-              turnId: options.turnId,
-              createdAt: this.#now(),
-              type: "host_message",
-              sender: "host",
-              mode: "start",
-              ...message.hostInput,
-            }
-          : {
-              id: `${options.turnId}:context-preview-input:${index}`,
-              threadId: options.thread.id,
-              turnId: options.turnId,
-              createdAt: this.#now(),
-              ...(message.sender === undefined
-                ? {
-                    type: "user_message" as const,
-                    receiptTimezone: captureReceiptTimezone(
-                      options.clientTimezone,
-                    ),
-                  }
-                : {
-                    type: "thread_message" as const,
-                    sender: message.sender,
-                    clientId: message.clientId,
-                    mode: message.mode ?? "batch-next",
-                    messageType: message.messageType ?? "guidance",
-                  }),
-              content: message.input,
-            },
-      ),
-    ];
     const estimate = this.#estimateContext(
-      previewItems,
+      options.thread.items,
       options.resolved,
       options.contextCompaction,
     );
@@ -5037,9 +5094,9 @@ export class ZenAppServer {
       return;
     }
 
-    let boundary: ReturnType<typeof latestEligibleCompactionBoundary>;
+    let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
     try {
-      boundary = latestEligibleCompactionBoundary(options.thread.items);
+      boundary = latestCompletedCompactionBoundary(options.thread.items);
     } catch {
       return;
     }
@@ -5052,6 +5109,9 @@ export class ZenAppServer {
     await this.#appendContextCompaction({
       thread: options.thread,
       boundary,
+      allowOpenTurns: true,
+      concurrentAdmission: true,
+      concurrentAdmissionTurnId: options.turnId,
       initiator: "automatic",
       trigger: {
         reason: "next_turn_estimate",
@@ -5074,6 +5134,7 @@ export class ZenAppServer {
     messages: ModelMessage[],
     signal: AbortSignal,
     operationId: string,
+    concurrentAdmission = false,
   ) {
     const assertDispatchAllowed = () => {
       this.#assertCurrentThreadAuthority(thread);
@@ -5123,7 +5184,14 @@ export class ZenAppServer {
         metadata: { ...item.source.metadata, onlySampleId: sampleId },
       },
     }));
-    for (const item of inputs) await this.#commitContext(thread, item);
+    for (const item of inputs) {
+      if (concurrentAdmission)
+        await this.#withThreadMutation(thread.id, async () => {
+          assertDispatchAllowed();
+          await this.#commitContext(thread, item);
+        });
+      else await this.#commitContext(thread, item);
+    }
     const compiled = compileItemList(inputs, {
       sampleId,
       selection: selection.selection,
@@ -5283,6 +5351,7 @@ export class ZenAppServer {
           messages,
           options.signal,
           operationId,
+          options.concurrentAdmission === true,
         ),
     });
     const contextWindow = options.selection.model.contextWindow;
@@ -5311,90 +5380,112 @@ export class ZenAppServer {
     const workspaceInstructions = await loadWorkspaceInstructions(
       options.thread.effectiveConfiguration().cwd,
     );
-    options.signal.throwIfAborted();
-    const item: ContextCompactionItem = {
-      id: this.#id(),
-      threadId: options.thread.id,
-      createdAt: this.#now(),
-      type: "context_compaction",
-      provenance: "provider_generated",
-      initiator: options.initiator,
-      workspaceInstructions,
-      coveredThroughItemId: options.boundary.item.id,
-      summary: summary.text,
-      retainedItemIds: [],
-      includeOriginalReference:
-        options.includeOriginalReference ??
-        options.contextCompaction.includeOriginalReference,
-      providerProfileId: options.selection.selection.providerProfileId,
-      modelId: options.selection.selection.modelId,
-      reasoningEffort: options.selection.selection.reasoningEffort,
-      algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
-      tokenUsage: summary.tokenUsage,
-    };
-    let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
-    try {
-      boundedBoundary = boundedCompactionBoundary(options.thread.items, {
-        // Standalone instructions and the uncompacted suffix stay visible;
-        // budget the actual proposed projection, not retained Items alone.
-        retainedTokenBudget: targetTokenBudget,
-        estimateRetainedTokens: (retainedItems) =>
-          this.#estimateContext(
-            [
-              ...options.thread.items,
-              {
-                ...item,
-                retainedItemIds: retainedItems.map((retained) => retained.id),
-              },
-            ],
-            options.selection,
-            options.contextCompaction,
-          ).total,
-        retention: options.contextCompaction.retention,
-        ...(options.allowOpenTurns === undefined
-          ? {}
-          : { allowOpenTurns: options.allowOpenTurns }),
-      });
-    } catch (error) {
-      throw new AppServerError(
-        "compaction_budget_exceeded",
-        `Context compaction retained Items exceed the ${String(targetTokenBudget)} token target: ${describeCompactionError(error, "bounded projection unavailable")}`,
-      );
-    }
-    if (boundedBoundary?.item.id !== options.boundary.item.id) {
-      throw new AppServerError(
-        "compaction_boundary_changed",
-        "Context compaction boundary changed during generation",
-      );
-    }
-    item.retainedItemIds = boundedBoundary.retainedItemIds;
-    const projectedTokens = this.#estimateContext(
-      [...options.thread.items, item],
-      options.selection,
-      options.contextCompaction,
-    ).total;
-    if (projectedTokens > targetTokenBudget) {
-      throw new AppServerError(
-        "compaction_budget_exceeded",
-        `Context compaction projection exceeds the ${String(targetTokenBudget)} token target`,
-      );
-    }
-    try {
-      await this.#commit(options.thread, item);
-      this.#emit({ type: "item_completed", item });
-    } catch (error) {
-      if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
-        throw error;
+    const commit = async (): Promise<ContextCompactionItem> => {
+      options.signal.throwIfAborted();
+      if (options.concurrentAdmission === true) {
+        this.#assertCurrentThreadAuthority(options.thread);
+        if (
+          options.concurrentAdmissionTurnId !== undefined &&
+          this.#activeTurns.get(options.thread.id)?.turnId !==
+            options.concurrentAdmissionTurnId
+        )
+          throw new AppServerError(
+            "turn_not_running",
+            "Context preparation no longer owns the active Turn",
+          );
+        if (!compactionBoundaryAdvances(options.thread.items, options.boundary))
+          throw new AppServerError(
+            "compaction_boundary_changed",
+            "Context selection changed during preparation",
+          );
       }
-      throw new AppServerError(
-        "compaction_persistence_failed",
-        describeCompactionError(
-          error,
-          "Context compaction could not be appended to the Thread journal",
-        ),
-      );
-    }
-    return item;
+      const item: ContextCompactionItem = {
+        id: this.#id(),
+        threadId: options.thread.id,
+        createdAt: this.#now(),
+        type: "context_compaction",
+        provenance: "provider_generated",
+        initiator: options.initiator,
+        workspaceInstructions,
+        coveredThroughItemId: options.boundary.item.id,
+        summary: summary.text,
+        retainedItemIds: [],
+        includeOriginalReference:
+          options.includeOriginalReference ??
+          options.contextCompaction.includeOriginalReference,
+        providerProfileId: options.selection.selection.providerProfileId,
+        modelId: options.selection.selection.modelId,
+        reasoningEffort: options.selection.selection.reasoningEffort,
+        algorithmVersion: CONTEXT_COMPACTION_ALGORITHM_VERSION,
+        tokenUsage: summary.tokenUsage,
+      };
+      let boundedBoundary: ReturnType<typeof boundedCompactionBoundary>;
+      try {
+        boundedBoundary = boundedCompactionBoundary(options.thread.items, {
+          // Standalone instructions and the uncompacted suffix stay visible;
+          // budget the actual proposed projection, not retained Items alone.
+          retainedTokenBudget: targetTokenBudget,
+          estimateRetainedTokens: (retainedItems) =>
+            this.#estimateContext(
+              [
+                ...options.thread.items,
+                {
+                  ...item,
+                  retainedItemIds: retainedItems.map((retained) => retained.id),
+                },
+              ],
+              options.selection,
+              options.contextCompaction,
+            ).total,
+          retention: options.contextCompaction.retention,
+          ...(options.allowOpenTurns === undefined
+            ? {}
+            : { allowOpenTurns: options.allowOpenTurns }),
+        });
+      } catch (error) {
+        throw new AppServerError(
+          "compaction_budget_exceeded",
+          `Context compaction retained Items exceed the ${String(targetTokenBudget)} token target: ${describeCompactionError(error, "bounded projection unavailable")}`,
+        );
+      }
+      if (boundedBoundary?.item.id !== options.boundary.item.id) {
+        throw new AppServerError(
+          "compaction_boundary_changed",
+          "Context compaction boundary changed during generation",
+        );
+      }
+      item.retainedItemIds = boundedBoundary.retainedItemIds;
+      const projectedTokens = this.#estimateContext(
+        [...options.thread.items, item],
+        options.selection,
+        options.contextCompaction,
+      ).total;
+      if (projectedTokens > targetTokenBudget) {
+        throw new AppServerError(
+          "compaction_budget_exceeded",
+          `Context compaction projection exceeds the ${String(targetTokenBudget)} token target`,
+        );
+      }
+      try {
+        await this.#commit(options.thread, item);
+        this.#emit({ type: "item_completed", item });
+      } catch (error) {
+        if (error instanceof ThreadJournalAppendOutcomeUnknownError) {
+          throw error;
+        }
+        throw new AppServerError(
+          "compaction_persistence_failed",
+          describeCompactionError(
+            error,
+            "Context compaction could not be appended to the Thread journal",
+          ),
+        );
+      }
+      return item;
+    };
+    return options.concurrentAdmission !== true
+      ? await commit()
+      : await this.#withThreadMutation(options.thread.id, commit);
   }
 
   #pendingReplacement(

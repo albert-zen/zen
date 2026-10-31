@@ -1440,6 +1440,10 @@ function ThreadViewContent({
                         index={row.index}
                         key={JSON.stringify([thread?.id, row.turn.id])}
                         turn={row.turn}
+                        compactionPending={
+                          row.turn.id === runningTurn?.id &&
+                          composer.compaction?.status === "pending"
+                        }
                         contextPreview={
                           thread === null && contextPreview !== undefined
                         }
@@ -2394,6 +2398,7 @@ function ContextCompactionProgress({
 }
 
 function RunningTurnLabel({
+  preparing,
   startedAt,
   activity,
   stopping,
@@ -2401,6 +2406,7 @@ function RunningTurnLabel({
   compact,
   recovery,
 }: {
+  preparing: boolean;
   recovery: Turn["liveRecovery"];
   startedAt: number | null;
   activity: TraceActivity;
@@ -2419,7 +2425,7 @@ function RunningTurnLabel({
       ? "approval"
       : recovery
         ? "recovering"
-        : activity.phase === "idle" && startedAt === null
+        : preparing || (activity.phase === "idle" && startedAt === null)
           ? "admitting"
           : activity.phase;
   const label =
@@ -2429,11 +2435,13 @@ function RunningTurnLabel({
         ? i18n.t("shell:approvalRequired")
         : phase === "recovering"
           ? i18n.t("shell:recoveringTask")
-          : phase === "thinking" || phase === "idle"
-            ? i18n.t("shell:working")
-            : phase === "requested"
-              ? i18n.t("shell:awaitingToolResult")
-              : commandPhaseLabel(phase);
+          : phase === "admitting"
+            ? i18n.t("shell:admitting")
+            : phase === "thinking" || phase === "idle"
+              ? i18n.t("shell:working")
+              : phase === "requested"
+                ? i18n.t("shell:awaitingToolResult")
+                : commandPhaseLabel(phase);
   return (
     <div
       className="turn-running-label"
@@ -2457,9 +2465,12 @@ function RunningTurnLabel({
           )
         ) : (
           <span className="turn-duration">
-            {i18n.t("shell:workingFor", {
-              duration: formatDuration(now - startedAt * 1000),
-            })}
+            {i18n.t(
+              phase === "admitting" ? "shell:preparingFor" : "shell:workingFor",
+              {
+                duration: formatDuration(now - startedAt * 1000),
+              },
+            )}
           </span>
         )}
       </span>
@@ -2503,6 +2514,7 @@ function isNestedTranscriptScroll(
 
 function TurnBlock({
   turn,
+  compactionPending,
   endItemId,
   stopping,
   approvals,
@@ -2519,6 +2531,7 @@ function TurnBlock({
   failureDetail,
 }: {
   turn: Turn;
+  compactionPending: boolean;
   endItemId?: string | undefined;
   stopping: boolean;
   approvals: readonly ApprovalCardState[];
@@ -2658,6 +2671,16 @@ function TurnBlock({
       ) : (
         <RunningTurnLabel
           recovery={turn.liveRecovery}
+          // Input admission can precede context preparation. Only an observed
+          // pending compaction, before runtime output, claims Preparing.
+          preparing={
+            compactionPending &&
+            turn.items.every((item) =>
+              ["userMessage", "threadMessage", "hostMessage"].includes(
+                item.type,
+              ),
+            )
+          }
           // turn_started is durable before the initial message is committed.
           // Keep that preparation visible without claiming elapsed agent work
           // ahead of the actual input (or an already-observed runtime item).

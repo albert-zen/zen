@@ -430,9 +430,21 @@ export function recordedUserTimestamps(
   items: readonly CanonicalItem[],
   format: (timestamp: string, zone?: ReceiptTimezone) => string = (timestamp) =>
     timestamp,
+  onlyUserMessageId?: string,
 ): Map<string, string | null> {
   const admissions = new Map<string, string | null>();
   const timestamps = new Map<string, string | null>();
+  // Append projection needs one receipt, not Intl formatting of the entire
+  // history. Keep the same canonical admission/import rules for both callers.
+  const target =
+    onlyUserMessageId === undefined
+      ? undefined
+      : items.findLast(
+          (item) =>
+            item.type === "user_message" && item.id === onlyUserMessageId,
+        );
+  if (onlyUserMessageId !== undefined && target === undefined)
+    return timestamps;
   const importedFrom =
     items[0]?.type === "thread_metadata" ? items[0].importedFrom : undefined;
   // Replacement histories stamp carried input at the checkpoint. Older imports
@@ -461,6 +473,8 @@ export function recordedUserTimestamps(
         ? undefined
         : `${item.threadId}\0${item.clientId}`;
     if (item.type === "user_message") {
+      if (onlyUserMessageId !== undefined && item.id !== onlyUserMessageId)
+        continue;
       timestamps.set(
         item.id,
         index <= unknownImportedThrough
@@ -469,7 +483,14 @@ export function recordedUserTimestamps(
             ? admissions.get(key)!
             : formattedTimestamp(item.createdAt, item.receiptTimezone, format),
       );
-    } else if (key !== undefined && !admissions.has(key)) {
+    } else if (
+      key !== undefined &&
+      !admissions.has(key) &&
+      (target === undefined ||
+        ("clientId" in target &&
+          target.clientId === item.clientId &&
+          target.threadId === item.threadId))
+    ) {
       admissions.set(
         key,
         formattedTimestamp(item.createdAt, item.receiptTimezone, format),

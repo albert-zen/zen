@@ -3581,6 +3581,68 @@ test("tool details disclose full input independently of scrollable output", asyn
   });
 });
 
+test("admitted input reports observed preparation without resetting total duration", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 22_000 });
+  await withDom(async (root) => {
+    const show = async (
+      items: ThreadItem[],
+      status?: "pending" | "succeeded" | "failed",
+    ) => {
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            approvals: [],
+            composer: {
+              ...emptyComposerState(),
+              ...(status
+                ? {
+                    compaction: {
+                      status,
+                      message: "Synthetic compaction feedback",
+                    },
+                  }
+                : {}),
+            },
+            thread: thread([turnWithItems("inProgress", items)]),
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+    };
+    const label = () =>
+      requiredElement(".turn-running-label .turn-work-label").textContent;
+    await show([], "pending");
+    assert.equal(label(), "Preparing");
+    assert.equal(document.querySelector(".turn-duration"), null);
+    const input = [user("Durably admitted input")];
+    // No pending observation: do not guess whether the model is sampling.
+    await show(input);
+    assert.equal(label(), "Working for 12s");
+    await show(input, "pending");
+    assert.equal(label(), "Preparing for 12s");
+    assert.equal(
+      requiredElement(".turn-running-label [role=status]").textContent,
+      "Preparing",
+    );
+    assert.match(
+      document.querySelector(".context-compaction-progress")?.textContent ?? "",
+      /Synthetic compaction feedback/u,
+    );
+    await act(async () => t.mock.timers.tick(2_000));
+    assert.equal(label(), "Preparing for 14s");
+    // Runtime evidence / an active steer must not relabel existing work.
+    await show([...input, reasoning("Actual runtime output")], "pending");
+    assert.equal(label(), "Working for 14s");
+    for (const status of ["succeeded", "failed"] as const) {
+      await show(input, status);
+      assert.equal(label(), "Working for 14s");
+    }
+  });
+});
+
 test("running and completed durations share second, minute and hour formatting", async (t) => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 10_000 });
   // Elapsed work belongs to admitted input; an empty initial Turn is Preparing.

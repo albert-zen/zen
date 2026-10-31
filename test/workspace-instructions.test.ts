@@ -438,6 +438,16 @@ test("automatic compaction rereads rules after generating its summary", async ()
     await (
       await server.startTurn(thread.id, "first")
     ).done;
+    // Turn completion no longer waits for independently owned eager preparation.
+    const deadline = performance.now() + 5_000;
+    while (
+      server
+        .activitySnapshot()
+        .rootOperations.some((operation) => operation.kind === "compaction")
+    ) {
+      assert(performance.now() < deadline, "automatic preparation must settle");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     const items = (await server.readThread(thread.id)).items;
     assert.equal(samples, 2);
     assert.deepEqual(

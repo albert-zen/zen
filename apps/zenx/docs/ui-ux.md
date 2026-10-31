@@ -867,7 +867,11 @@ identity confirms acceptance; later edits cannot be cleared by an old reply.
 A live `turn_started` can precede durable initial input. An empty running Turn
 therefore shows **Preparing**, without elapsed agent-work time or an invented
 user bubble. Once admitted input (or actual runtime content on a restored view)
-is present, the existing canonical start timestamp supplies the work duration.
+is present, the existing canonical start timestamp supplies the total duration.
+When native compaction feedback is pending and the Turn still contains only
+input, show **Preparing for** that same elapsed duration; once the observation
+settles or runtime output arrives, retain the same clock rather than resetting
+it. Without a preparation observation, do not infer a precise model phase.
 An active Turn continues its existing duration while a steer is pending. No
 canonical timestamps, Trace observations or runtime ordering are rewritten to
 make the interface appear faster.
