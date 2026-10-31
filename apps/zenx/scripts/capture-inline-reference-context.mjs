@@ -279,6 +279,7 @@ try {
       await (
         await server.sendMessage(threadA.id, "记录当前验收结论。", {
           clientId: "synthetic-v3-seed-thread-a",
+          clientTimezone: "UTC",
         })
       ).done;
       const messageA = (await journal.read(threadA.id)).find(
@@ -297,6 +298,7 @@ try {
       await (
         await server.sendMessage(subagentB.id, "补充执行状态。", {
           clientId: "synthetic-v3-seed-subagent-b",
+          clientTimezone: "UTC",
         })
       ).done;
       const messageB = (await journal.read(subagentB.id)).find(
@@ -377,7 +379,10 @@ try {
         server,
       );
       await (
-        await server.sendMessage(target.id, nativeInput, { clientId })
+        await server.sendMessage(target.id, nativeInput, {
+          clientId,
+          clientTimezone: "UTC",
+        })
       ).done;
       assert.ok(capturedRaw, "fake provider saw the actual v3 user request");
       const saved = await journal.read(target.id);

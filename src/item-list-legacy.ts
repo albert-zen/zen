@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "./message-timezone.js";
 import { TOOL_TASK_CONTENT_TYPE } from "./tool-task-content.js";
 /** Explicit legacy boundary: these mixed Items are never written to the semantic store. */
 import {
@@ -27,6 +28,7 @@ import {
 
 const carried = [
   "clientId",
+  "receiptTimezone",
   "deliveryAfter",
   "mode",
   "messageType",
@@ -91,7 +93,9 @@ export function contextItemsFromLegacy(
           selected.referenceBindings as unknown as JsonValue;
       }
       const timestamp =
-        recordedUserTimestamps([...previous, item]).get(item.id) ?? null;
+        recordedUserTimestamps([...previous, item], formatReceiptTimestamp).get(
+          item.id,
+        ) ?? null;
       return message("user", [
         {
           type: "text",

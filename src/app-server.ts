@@ -1,3 +1,4 @@
+import { captureReceiptTimezone } from "./message-timezone.js";
 import {
   observeTraceSpan,
   recordTraceObservation,
@@ -288,12 +289,14 @@ export interface CreateChildThreadInput {
 }
 
 export interface SteerTurnOptions {
+  clientTimezone?: string;
   requestApproval?: ApprovalHandler;
   clientId?: string;
   requireUnarchived?: boolean;
 }
 
 export interface ReplaceTurnOptions {
+  clientTimezone?: string;
   clientId: string;
   requestApproval?: ApprovalHandler;
   requireUnarchived?: boolean;
@@ -2268,6 +2271,7 @@ export class ZenAppServer {
     clientId: string,
     options: {
       requestApproval?: ApprovalHandler;
+      clientTimezone?: string;
       deliveryMode?: "batch-next";
       requireUnarchived?: boolean;
       /** Defaults to waiting for first Turn admission, never Turn completion. */
@@ -2347,6 +2351,7 @@ export class ZenAppServer {
         const item: QueuedUserMessageItem = {
           id: this.#id(),
           type: "user_message_queued",
+          receiptTimezone: captureReceiptTimezone(options.clientTimezone),
           threadId,
           createdAt: this.#now(),
           clientId,
@@ -3149,6 +3154,7 @@ export class ZenAppServer {
     input: RequestedUserInput,
     options: {
       clientId?: string;
+      clientTimezone?: string;
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
@@ -3169,7 +3175,11 @@ export class ZenAppServer {
     threadId: string,
     expectedTurnId: string,
     language: "zh-CN" | "en",
-    options: { clientId: string; requestApproval?: ApprovalHandler },
+    options: {
+      clientId: string;
+      clientTimezone?: string;
+      requestApproval?: ApprovalHandler;
+    },
   ): Promise<TurnHandle> {
     if (
       !expectedTurnId ||
@@ -3299,6 +3309,7 @@ export class ZenAppServer {
     requestedInput: RequestedUserInput,
     options: {
       clientId?: string;
+      clientTimezone?: string;
       selection?: ProviderSelectionInput;
       model?: string;
       requestApproval?: ApprovalHandler;
@@ -3605,6 +3616,9 @@ export class ZenAppServer {
           thread,
           turnId,
           input,
+          ...(options.clientTimezone === undefined
+            ? {}
+            : { clientTimezone: options.clientTimezone }),
           ...(internal.initialMessages === undefined
             ? {}
             : { initialMessages: internal.initialMessages }),
@@ -3635,6 +3649,9 @@ export class ZenAppServer {
                 thread,
                 turnId,
                 input,
+                ...(options.clientTimezone === undefined
+                  ? {}
+                  : { clientTimezone: options.clientTimezone }),
                 ...(internal.initialMessages === undefined
                   ? {}
                   : { initialMessages: internal.initialMessages }),
@@ -4283,6 +4300,11 @@ export class ZenAppServer {
           successorTurnId: this.#id(),
           createdAt: this.#now(),
           type: "turn_replacement_requested",
+          ...(sender === undefined
+            ? {
+                receiptTimezone: captureReceiptTimezone(options.clientTimezone),
+              }
+            : {}),
           ...(sender === undefined ? {} : { sender }),
           input,
           clientId: options.clientId,
@@ -4462,6 +4484,7 @@ export class ZenAppServer {
         turnId: expectedTurnId,
         createdAt: this.#now(),
         type: "user_message",
+        receiptTimezone: captureReceiptTimezone(options.clientTimezone),
         content: input,
         ...(options.clientId === undefined
           ? {}
@@ -4925,6 +4948,7 @@ export class ZenAppServer {
   }
 
   async #compactBeforeTurnIfNeeded(options: {
+    clientTimezone?: string;
     workspaceInstructions?: WorkspaceInstructionFile[];
     thread: Thread;
     turnId: string;
@@ -4971,7 +4995,12 @@ export class ZenAppServer {
               turnId: options.turnId,
               createdAt: this.#now(),
               ...(message.sender === undefined
-                ? { type: "user_message" as const }
+                ? {
+                    type: "user_message" as const,
+                    receiptTimezone: captureReceiptTimezone(
+                      options.clientTimezone,
+                    ),
+                  }
                 : {
                     type: "thread_message" as const,
                     sender: message.sender,

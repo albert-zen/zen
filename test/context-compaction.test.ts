@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import os from "node:os";
@@ -582,7 +583,10 @@ test("repeated coarse resets can retain already-visible user context without dup
     {
       role: "user",
       content: [
-        { type: "text", text: `[Message received at ${user.createdAt}]` },
+        {
+          type: "text",
+          text: `[Message received at ${formatReceiptTimestamp(user.createdAt, user.receiptTimezone)}]`,
+        },
         { type: "text", text: "retain this original input" },
       ],
     },
@@ -921,7 +925,9 @@ test("agentic compaction preserves user steering unseen by its model sample", as
 
   const snapshot = await server.readThread(thread.id);
   const users = snapshot.items.filter((item) => item.type === "user_message");
-  const userTimestamps = users.map((item) => item.createdAt);
+  const userTimestamps = users.map((item) =>
+    formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+  );
   assert(requests[1] !== undefined);
   assertNoCompactionReferenceDeclaration(requests[1], snapshot.itemList);
   assert.equal(samples, 2);
@@ -1899,7 +1905,9 @@ test("manually compacts long history without changing the complete transcript", 
   assert(postCompactionRequest !== undefined);
   const userTimestamps = (await server.readThread(thread.id)).items
     .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
+    .map((item) =>
+      formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+    );
   assert.deepEqual(postCompactionRequest.messages, [
     {
       role: "user",

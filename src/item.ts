@@ -1,3 +1,4 @@
+import { normalizeTimeZone, type ReceiptTimezone } from "./message-timezone.js";
 import {
   validateModelReferenceBindings,
   type ModelReferenceBinding,
@@ -218,6 +219,7 @@ export interface TurnAbortedItem extends ItemBase {
 }
 
 interface TurnReplacementRequestedItemBase extends ItemBase {
+  receiptTimezone?: ReceiptTimezone;
   type: "turn_replacement_requested";
   sender?: ThreadMessageSender;
   turnId: string;
@@ -265,6 +267,7 @@ export type UserInputPart =
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
+  receiptTimezone?: ReceiptTimezone;
   type: "user_message";
   turnId: string;
   clientId?: string;
@@ -606,6 +609,7 @@ export type ContextCompactionItem =
   ProviderGeneratedContextCompactionItem | AgenticContextCompactionItem;
 
 export interface QueuedUserMessageItem extends ItemBase {
+  receiptTimezone?: ReceiptTimezone;
   type: "user_message_queued";
   clientId: string;
   input: UserInput;
@@ -772,6 +776,27 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
         }
       }
     }
+  }
+
+  if (item.receiptTimezone !== undefined) {
+    if (
+      ![
+        "user_message",
+        "user_message_queued",
+        "turn_replacement_requested",
+      ].includes(type)
+    )
+      throw new Error("receiptTimezone requires human admission");
+    const zone = requireRecord(item.receiptTimezone, "receiptTimezone");
+    if (normalizeTimeZone(zone.timeZone) === undefined)
+      throw new Error("receiptTimezone.timeZone must be an IANA timezone");
+    requireEnum(
+      zone.source,
+      ["client", "host", "utc-fallback"],
+      "receiptTimezone.source",
+    );
+    if (zone.source === "utc-fallback" && zone.timeZone !== "UTC")
+      throw new Error("UTC fallback must use UTC");
   }
 
   switch (type) {

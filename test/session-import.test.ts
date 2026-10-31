@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCodexRollout } from "../src/protocol/codex/rollout-import.js";
@@ -783,9 +784,13 @@ test("imported timestamps distinguish original records from synthetic checkpoint
         await restored.startTurn(partial.id, "local after partial fork")
       ).done;
       const partialSnapshot = await restored.readThread(partial.id);
-      const partialLocalTime = partialSnapshot.items.findLast(
+      const partialLocal = partialSnapshot.items.findLast(
         (entry) => entry.type === "user_message",
-      )!.createdAt;
+      )!;
+      const partialLocalTime = formatReceiptTimestamp(
+        partialLocal.createdAt,
+        partialLocal.receiptTimezone,
+      );
       assert.deepEqual(timestamps(partialSnapshot.itemList!), [
         null,
         partialLocalTime,
@@ -808,9 +813,13 @@ test("imported timestamps distinguish original records from synthetic checkpoint
       await restored.startTurn(imported.thread.id, "new local input")
     ).done;
     const snapshot = await restored.readThread(imported.thread.id);
-    const localTime = snapshot.items.findLast(
+    const local = snapshot.items.findLast(
       (entry) => entry.type === "user_message",
-    )!.createdAt;
+    )!;
+    const localTime = formatReceiptTimestamp(
+      local.createdAt,
+      local.receiptTimezone,
+    );
     assert.deepEqual(timestamps(snapshot.itemList!), [...expected, localTime]);
     const fork = await restored.forkThread({
       sourceThreadId: imported.thread.id,

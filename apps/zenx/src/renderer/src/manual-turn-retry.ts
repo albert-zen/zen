@@ -1,3 +1,4 @@
+import { clientTimeZone } from "./composer-state.js";
 import {
   observeSendActivation,
   reportSendActivation,
@@ -18,6 +19,7 @@ export function createManualTurnRetryRequester(
   id: () => string = () => crypto.randomUUID(),
   language: () => "zh-CN" | "en" = () =>
     (i18n.resolvedLanguage ?? i18n.language).startsWith("zh") ? "zh-CN" : "en",
+  timezone: () => string | undefined = clientTimeZone,
 ) {
   const requests = new Map<
     string,
@@ -43,12 +45,14 @@ export function createManualTurnRetryRequester(
         new Error(i18n.t("shell:manualRetryNoLongerAvailable")),
       );
     if (request === undefined) {
+      const clientTimezone = timezone();
       request = {
         params: {
           threadId: thread.id,
           expectedTurnId,
           clientUserMessageId: id(),
           language: language(),
+          ...(clientTimezone === undefined ? {} : { clientTimezone }),
         },
         accepted: false,
       };

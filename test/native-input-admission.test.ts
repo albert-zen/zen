@@ -1094,3 +1094,41 @@ test("queued and cancelled input receipts create no pretend sample or execution 
     client.close();
   }
 });
+
+test("native human send captures validated client timezone and ignores malformed metadata", async () => {
+  const server = createServer();
+  const client = connect(server);
+  try {
+    await client.rpc("zen/initialize");
+    for (const clientTimezone of [
+      "Asia/Shanghai",
+      "Not/A_Zone",
+      { injected: "text" },
+    ]) {
+      const thread = await server.startThread();
+      const finished = event(server, "turn_completed");
+      result(
+        await client.rpc("zen/turn/send", {
+          ...send(thread.id, "timezone", text("hello"), "start"),
+          clientTimezone,
+        }),
+      );
+      await bounded(finished);
+      const message = (await server.readThread(thread.id)).items.find(
+        (item) => item.type === "user_message",
+      );
+      assert(message?.type === "user_message");
+      if (clientTimezone === "Asia/Shanghai") {
+        assert.deepEqual(message.receiptTimezone, {
+          timeZone: "Asia/Shanghai",
+          source: "client",
+        });
+      } else {
+        assert.notEqual(message.receiptTimezone?.source, "client");
+        assert(message.receiptTimezone);
+      }
+    }
+  } finally {
+    client.close();
+  }
+});

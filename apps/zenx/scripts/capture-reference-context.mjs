@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { formatReceiptTimestamp } from "../../../src/message-timezone.ts";
 import {
   mkdir,
   mkdtemp,
@@ -237,6 +238,7 @@ try {
       nextHostIdentity = "synthetic-host-5";
       await (
         await server.sendMessage(source.id, fixture.sourcePrompt, {
+          clientTimezone: "UTC",
           clientId: "synthetic-source-submission",
         })
       ).done;
@@ -305,6 +307,8 @@ try {
         "start",
         null,
         () => fixture.clientId,
+        undefined,
+        () => "UTC",
       ).submission;
       const parsed = parseSkillDraft(submission.text);
       const canonicalText = referenceMessage(
@@ -325,6 +329,7 @@ try {
       await (
         await server.sendMessage(target.id, nativeInput, {
           clientId: submission.clientUserMessageId,
+          clientTimezone: submission.clientTimezone,
         })
       ).done;
       const captured = JSON.parse(capturedRaw);
@@ -350,7 +355,7 @@ try {
       );
       assert.ok(
         actualText.startsWith(
-          `[Message received at ${userMessage.createdAt}]\n`,
+          `[Message received at ${formatReceiptTimestamp(userMessage.createdAt, userMessage.receiptTimezone)}]\n`,
         ),
       );
       assert.ok(actualText.includes(fixture.fullMessage));

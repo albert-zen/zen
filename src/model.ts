@@ -1,3 +1,4 @@
+import { type ReceiptTimezone } from "./message-timezone.js";
 import type { ToolDiscoveryContent } from "./item.js";
 import type { OpaqueReasoningReplayProvenance } from "./item.js";
 import type { ModelTransportObservation } from "./model/transport-types.js";
@@ -427,6 +428,8 @@ function compileConversationMessages(
 /** Resolve admission facts before compaction filters out their queue anchors. */
 export function recordedUserTimestamps(
   items: readonly CanonicalItem[],
+  format: (timestamp: string, zone?: ReceiptTimezone) => string = (timestamp) =>
+    timestamp,
 ): Map<string, string | null> {
   const admissions = new Map<string, string | null>();
   const timestamps = new Map<string, string | null>();
@@ -464,13 +467,25 @@ export function recordedUserTimestamps(
           ? null
           : key !== undefined && admissions.has(key)
             ? admissions.get(key)!
-            : recordedTimestamp(item.createdAt),
+            : formattedTimestamp(item.createdAt, item.receiptTimezone, format),
       );
     } else if (key !== undefined && !admissions.has(key)) {
-      admissions.set(key, recordedTimestamp(item.createdAt));
+      admissions.set(
+        key,
+        formattedTimestamp(item.createdAt, item.receiptTimezone, format),
+      );
     }
   }
   return timestamps;
+}
+
+function formattedTimestamp(
+  value: string,
+  zone: ReceiptTimezone | undefined,
+  format: (timestamp: string, zone?: ReceiptTimezone) => string,
+): string | null {
+  const timestamp = recordedTimestamp(value);
+  return timestamp === null ? null : format(timestamp, zone);
 }
 
 function recordedTimestamp(value: string | undefined): string | null {

@@ -266,8 +266,16 @@ test("maps idle, active, and replacement submissions without a queue", () => {
   let ids = 0;
   const createId = () => `message-${++ids}`;
   const idle = editComposer(emptyComposerState(), "first");
-  const start = beginComposerSubmission(idle, "start", null, createId);
+  const start = beginComposerSubmission(
+    idle,
+    "start",
+    null,
+    createId,
+    undefined,
+    () => "Asia/Shanghai",
+  );
   assert.deepEqual(start.submission, {
+    clientTimezone: "Asia/Shanghai",
     intent: "start",
     expectedTurnId: null,
     clientUserMessageId: "message-1",
@@ -425,4 +433,59 @@ test("send acknowledgement preserves compaction observation fences and independe
   assert.equal(accepted.compactionObservation, state.compactionObservation);
   assert.equal(accepted.compactionRequest, state.compactionRequest);
   assert.equal(accepted.compaction, state.compaction);
+});
+
+test("captures client timezone once per submission, not again on transport retry", () => {
+  let timezone = "Asia/Shanghai";
+  const zone = () => timezone;
+  const initial = beginComposerSubmission(
+    editComposer(emptyComposerState(), "hello"),
+    "start",
+    null,
+    () => "first",
+    undefined,
+    zone,
+  );
+  assert.equal(initial.submission?.clientTimezone, "Asia/Shanghai");
+  timezone = "America/New_York";
+  const failed = failComposerSubmission(initial, "first", "transport failed");
+  const retry = beginComposerSubmission(
+    failed,
+    "start",
+    null,
+    () => "unused",
+    undefined,
+    zone,
+  );
+  assert.equal(retry.submission?.clientTimezone, "Asia/Shanghai");
+  const next = beginComposerSubmission(
+    editComposer(failed, "different message"),
+    "start",
+    null,
+    () => "second",
+    undefined,
+    zone,
+  );
+  assert.equal(next.submission?.clientTimezone, "America/New_York");
+});
+
+test("missing client timezone stays missing on transport retries", () => {
+  const initial = beginComposerSubmission(
+    editComposer(emptyComposerState(), "hello"),
+    "start",
+    null,
+    () => "missing-zone",
+    undefined,
+    () => undefined,
+  );
+  assert.equal(Object.hasOwn(initial.submission!, "clientTimezone"), false);
+  const retry = beginComposerSubmission(
+    failComposerSubmission(initial, "missing-zone", "transport failed"),
+    "start",
+    null,
+    () => "unused",
+    undefined,
+    () => "Asia/Shanghai",
+  );
+  assert.equal(Object.hasOwn(retry.submission!, "clientTimezone"), false);
 });

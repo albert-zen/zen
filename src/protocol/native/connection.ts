@@ -1,3 +1,4 @@
+import { normalizeTimeZone } from "../../message-timezone.js";
 import { randomUUID } from "node:crypto";
 import { traceClock } from "../../trace.js";
 import { parseClientSendObservation } from "../../client-observation.js";
@@ -943,6 +944,7 @@ export class NativeConnection {
                 "clientUserMessageId",
                 "language",
                 "clientObservation",
+                "clientTimezone",
               ].includes(key),
           )
         )
@@ -950,12 +952,14 @@ export class NativeConnection {
             "invalid_request",
             "Retry requires exact thread, terminal Turn, client message identity and language",
           );
+        const clientTimezone = normalizeTimeZone(params.clientTimezone);
         const turn = await this.#appServer.retryTurn(
           params.threadId,
           params.expectedTurnId,
           params.language,
           {
             clientId: params.clientUserMessageId,
+            ...(clientTimezone === undefined ? {} : { clientTimezone }),
             ...(this.#requestApproval === undefined
               ? {}
               : { requestApproval: this.#requestApproval }),
@@ -1020,8 +1024,10 @@ export class NativeConnection {
             "requireUnarchived must be a boolean",
           );
         const input = await prepareNativeInput(params.input, this.#appServer);
+        const clientTimezone = normalizeTimeZone(params.clientTimezone);
         const options = {
           clientId: params.clientUserMessageId,
+          ...(clientTimezone === undefined ? {} : { clientTimezone }),
           ...(message.method === NATIVE_TURN_SEND_UNARCHIVED_METHOD
             ? { requireUnarchived: true }
             : params.requireUnarchived === undefined

@@ -2104,6 +2104,9 @@ function AppContent() {
           ? {}
           : { mode: submission.intent }),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientTimezone === undefined
+          ? {}
+          : { clientTimezone: submission.clientTimezone }),
         ...(submission.clientObservation === undefined
           ? {}
           : { clientObservation: submission.clientObservation }),
@@ -2135,6 +2138,9 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientTimezone === undefined
+          ? {}
+          : { clientTimezone: submission.clientTimezone }),
         ...(submission.clientObservation === undefined
           ? {}
           : { clientObservation: submission.clientObservation }),
@@ -2155,6 +2161,9 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientTimezone === undefined
+          ? {}
+          : { clientTimezone: submission.clientTimezone }),
         ...(submission.clientObservation === undefined
           ? {}
           : { clientObservation: submission.clientObservation }),
@@ -2175,6 +2184,9 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientTimezone === undefined
+          ? {}
+          : { clientTimezone: submission.clientTimezone }),
         ...(submission.clientObservation === undefined
           ? {}
           : { clientObservation: submission.clientObservation }),
@@ -2200,6 +2212,9 @@ function AppContent() {
                 })(),
         ),
         clientUserMessageId: submission.clientUserMessageId,
+        ...(submission.clientTimezone === undefined
+          ? {}
+          : { clientTimezone: submission.clientTimezone }),
         ...(submission.clientObservation === undefined
           ? {}
           : { clientObservation: submission.clientObservation }),

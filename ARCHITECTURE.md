@@ -1645,3 +1645,13 @@ Browser programmable evaluation defaults to a separate DOM isolated world; expli
 The selected-reference input codec is shared by model-semantic admission and renderer presentation: bound v1/v2/v3 envelopes and the exact leading legacy plaintext quote formatter reuse existing selected-source provenance and read-only `sN` references, never a second alias store. Clipboard quote text is the exact excerpt with real line breaks, not a serialized source identity. Ordinary lookalikes and embedded examples remain literal; existing committed semantic history is not rewritten.
 
 Composer cut/copy publishes a human-readable `text/plain` excerpt plus versioned custom clipboard metadata using the existing reference wire codec; paste restores source identities only from canonical metadata that agrees with the plaintext. Clipboard content remains untrusted user input, grants no source access, and a destination send compiles its own read-only short references. This ephemeral transport has no durable clipboard/alias store.
+
+### Human receipt timezone
+
+New human admission facts capture optional `receiptTimezone` display context: a
+validated client-reported IANA zone, otherwise the Host OS zone, otherwise an
+explicit UTC fallback. It is not an identity/authorization or client-clock claim.
+The semantic compiler freezes the receipt's local time, IANA name, instant-specific
+UTC offset and source in message content. Queue/replacement lineage uses the first
+admission's time and zone. Existing records without this context keep their exact
+recorded timestamp; replay never consults the current zone or clock.

@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -3132,7 +3133,10 @@ test("CLI executes one full local protocol turn", async () => {
       assert(input?.type === "user_message");
       assert.deepEqual(input.content, [{ type: "text", text: prompt }]);
       assert.deepEqual(user.content.parts, [
-        { type: "text", text: `[Message received at ${input.createdAt}]` },
+        {
+          type: "text",
+          text: `[Message received at ${formatReceiptTimestamp(input.createdAt, input.receiptTimezone)}]`,
+        },
         { type: "text", text: prompt },
       ]);
       assert.equal(stdout, `Echo: ${user.content.text}\n`);
