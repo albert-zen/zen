@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -119,12 +120,13 @@ test("forked history keeps image payloads replayable and authorized", async () =
   await (
     await server.startTurn(fork.id, "what did I attach?")
   ).done;
+  const forkUser = fork.items.find((item) => item.type === "user_message")!;
   assert.deepEqual(requests[1]?.[0], {
     role: "user",
     content: [
       {
         type: "text",
-        text: `[Message received at ${fork.items.find((item) => item.type === "user_message")!.createdAt}]`,
+        text: `[Message received at ${formatReceiptTimestamp(forkUser.createdAt, forkUser.receiptTimezone)}]`,
       },
       { type: "text", text: "remember this image" },
       { type: "image", attachment: image },
@@ -205,7 +207,9 @@ test("fork copies a replayable prefix and both Threads continue independently", 
   ).done;
   const userTimestamps = (await server.readThread(fork.id)).items
     .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
+    .map((item) =>
+      formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+    );
   assert.deepEqual(requests[1], [
     {
       role: "user",
@@ -501,13 +505,19 @@ test("exact-item fork copies only the selected message prefix across rename and 
   await (
     await server.startTurn(fork.id, "explicit fork question")
   ).done;
+  const originalUser = before.items.find(
+    (item) => item.type === "user_message",
+  )!;
+  const forkUser = (await server.readThread(fork.id)).items.findLast(
+    (item) => item.type === "user_message",
+  )!;
   assert.deepEqual(requests.at(-1), [
     {
       role: "user",
       content: [
         {
           type: "text",
-          text: `[Message received at ${before.items.find((item) => item.type === "user_message")!.createdAt}]`,
+          text: `[Message received at ${formatReceiptTimestamp(originalUser.createdAt, originalUser.receiptTimezone)}]`,
         },
         { type: "text", text: "original question" },
       ],
@@ -518,7 +528,7 @@ test("exact-item fork copies only the selected message prefix across rename and 
       content: [
         {
           type: "text",
-          text: `[Message received at ${(await server.readThread(fork.id)).items.findLast((item) => item.type === "user_message")!.createdAt}]`,
+          text: `[Message received at ${formatReceiptTimestamp(forkUser.createdAt, forkUser.receiptTimezone)}]`,
         },
         { type: "text", text: "explicit fork question" },
       ],

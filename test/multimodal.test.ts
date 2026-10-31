@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import { DomainThreadJournal } from "../src/domain-journal.js";
 import { FileTraceStore } from "../src/trace.js";
 import { compileItemList } from "../src/item-list.js";
@@ -292,7 +293,7 @@ test("runs typed image input through AttachmentRef to provider and replays it af
       [
         {
           type: "text",
-          text: `[Message received at ${firstUser.createdAt}]`,
+          text: `[Message received at ${formatReceiptTimestamp(firstUser.createdAt, firstUser.receiptTimezone)}]`,
         },
         { type: "text", text: "describe this" },
         {
@@ -739,12 +740,15 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     const beforeRestart = await first.readThread(thread.id);
     assert(beforeRestart.itemList);
     const projectedBefore = compileItemList(beforeRestart.itemList).messages;
+    const retainedUser = beforeRestart.items.find(
+      (item) => item.type === "user_message",
+    )!;
     assert.deepEqual(projectedBefore[1], {
       role: "user",
       content: [
         {
           type: "text",
-          text: `[Message received at ${beforeRestart.items.find((item) => item.type === "user_message")?.createdAt}]`,
+          text: `[Message received at ${formatReceiptTimestamp(retainedUser.createdAt, retainedUser.receiptTimezone)}]`,
         },
         { type: "text", text: "remember this image" },
         { type: "image", attachment: ref },
@@ -789,6 +793,9 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
     await (
       await restarted.startTurn(thread.id, "continue")
     ).done;
+    const continuedUser = (
+      await restarted.readThread(thread.id)
+    ).items.findLast((item) => item.type === "user_message")!;
     assert.deepEqual(requests.at(-1), [
       ...projectedBefore,
       {
@@ -796,7 +803,7 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
         content: [
           {
             type: "text",
-            text: `[Message received at ${(await restarted.readThread(thread.id)).items.findLast((item) => item.type === "user_message")?.createdAt}]`,
+            text: `[Message received at ${formatReceiptTimestamp(continuedUser.createdAt, continuedUser.receiptTimezone)}]`,
           },
           { type: "text", text: "continue" },
         ],

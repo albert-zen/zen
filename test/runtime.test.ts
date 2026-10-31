@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import { ModelRequestDebugStore } from "../apps/cli/src/model-request-debug.js";
 import type { RuntimeTrace } from "../src/trace.js";
 import assert from "node:assert/strict";
@@ -552,7 +553,9 @@ test("derives each turn model from append-only configuration changes", async () 
   assert.deepEqual(requestedModels, ["model-one", "model-two"]);
   const userTimestamps = (await server.readThread(thread.id)).items
     .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
+    .map((item) =>
+      formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+    );
   assert.deepEqual(requestedMessages[1], [
     {
       role: "user",
@@ -1440,9 +1443,12 @@ test("runs a deterministic in-memory turn from append-only items", async () => {
   );
   assert.equal(snapshot.turns.length, 1);
   assert.equal(snapshot.turns[0]?.status, "completed");
+  const userMessage = snapshot.items.find(
+    (item) => item.type === "user_message",
+  )!;
   assert.equal(
     snapshot.items.find((item) => item.type === "agent_message")?.text,
-    `Echo: [Message received at ${snapshot.items.find((item) => item.type === "user_message")!.createdAt}]\nhello`,
+    `Echo: [Message received at ${formatReceiptTimestamp(userMessage.createdAt, userMessage.receiptTimezone)}]\nhello`,
   );
   assert(events.some((event) => event.type === "item_delta"));
   assert.equal(events.at(-1)?.type, "turn_completed");
@@ -3495,7 +3501,9 @@ test("soft steer stays in one Turn and forces a new sample after streamed output
   assert.equal(requests.length, 2);
   const userTimestamps = (await server.readThread(thread.id)).items
     .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
+    .map((item) =>
+      formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+    );
   assert.deepEqual(requests[1], [
     {
       role: "user",
@@ -3606,7 +3614,9 @@ test("soft steer waits behind a tool result and does not cancel approval", async
   assert.equal(requests.length, 2);
   const userTimestamps = (await server.readThread(thread.id)).items
     .filter((item) => item.type === "user_message")
-    .map((item) => item.createdAt);
+    .map((item) =>
+      formatReceiptTimestamp(item.createdAt, item.receiptTimezone),
+    );
   assert.deepEqual(requests[1], [
     {
       role: "user",
@@ -4119,7 +4129,10 @@ test("opted-in queued messages share one next Turn without losing canonical iden
     queued.map((item) => ({
       role: "user",
       content: [
-        { type: "text", text: `[Message received at ${item.createdAt}]` },
+        {
+          type: "text",
+          text: `[Message received at ${formatReceiptTimestamp(item.createdAt, item.receiptTimezone)}]`,
+        },
         ...item.input,
       ],
     })),

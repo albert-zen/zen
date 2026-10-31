@@ -1,3 +1,4 @@
+import { normalizeTimeZone } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CanonicalItem } from "../src/item.js";
@@ -413,7 +414,7 @@ test("live input, soft steer and edited queue retain their first recorded times 
       ),
       humanMessage(
         "edited queue",
-        "2026-10-14T11:26:00.000+05:45; Client-reported timezone: Asia/Katmandu (UTC+05:45)",
+        `2026-10-14T11:26:00.000+05:45; Client-reported timezone: ${normalizeTimeZone("Asia/Kathmandu")} (UTC+05:45)`,
       ),
     ]);
     assert.deepEqual(
