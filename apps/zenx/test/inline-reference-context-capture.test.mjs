@@ -51,17 +51,26 @@ test("five original inline references persist as compact semantic input at both 
       path.join(expected, "model-user-message.txt"),
       "utf8",
     );
-    assert.equal(actualUserMessage, documentedUserMessage);
+    // Keep the original capture intact; assert both receipt generations exactly,
+    // then require the complete reference body to remain byte-identical.
+    const [historicalReceipt, ...historicalBody] =
+      documentedUserMessage.split("\n");
+    const [currentReceipt, ...currentBody] = actualUserMessage.split("\n");
+    assert.equal(
+      historicalReceipt,
+      "[Message received at 2026-10-21T03:00:00.000Z]",
+    );
+    assert.equal(
+      currentReceipt,
+      "[Message received at 2026-10-21T03:00:00.000+00:00; Client-reported timezone: UTC (UTC+00:00)]",
+    );
+    assert.deepEqual(currentBody, historicalBody);
     assert.equal(
       await readFile(path.join(output, "fixture-metadata.json"), "utf8"),
       await readFile(path.join(expected, "fixture-metadata.json"), "utf8"),
       "the original generated v3 fixture remains byte-identical",
     );
     assert.notEqual(actualUserMessage.trimEnd(), fixture.payload);
-    assert.match(
-      actualUserMessage,
-      /^\[Message received at 2026-10-21T03:00:00.000Z\]\n/,
-    );
     assert.doesNotMatch(
       actualUserMessage,
       /zenx-reference-message:v3|synthetic-v3-host-[0-9]|synthetic-v3-runtime-[0-9]|synthetic-inline-reference-v3-submission/,

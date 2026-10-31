@@ -1,3 +1,4 @@
+import { formatReceiptTimestamp } from "../../../src/message-timezone.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -736,7 +737,7 @@ test(
             content: [
               {
                 type: "text",
-                text: `[Message received at ${queued.createdAt}]`,
+                text: `[Message received at ${formatReceiptTimestamp(queued.createdAt, queued.receiptTimezone)}]`,
               },
               ...queued.input,
             ],

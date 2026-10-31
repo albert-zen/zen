@@ -30,11 +30,23 @@ test("v2 references normalize before dispatch while original input and recorded 
       "chat-completions.canonical-user-message.json",
       "responses.canonical-user-message.json",
     ]) {
-      assert.deepEqual(
-        JSON.parse(await readFile(path.join(output, file), "utf8")),
-        JSON.parse(await readFile(path.join(expected, file), "utf8")),
-        file,
+      const current = JSON.parse(
+        await readFile(path.join(output, file), "utf8"),
       );
+      const historical = JSON.parse(
+        await readFile(path.join(expected, file), "utf8"),
+      );
+      if (file.endsWith(".canonical-user-message.json")) {
+        // Preserve historical evidence; new admissions add only timezone provenance.
+        const { receiptTimezone, ...originalFacts } = current;
+        assert.deepEqual(receiptTimezone, {
+          timeZone: "UTC",
+          source: "client",
+        });
+        assert.deepEqual(originalFacts, historical, file);
+      } else {
+        assert.deepEqual(current, historical, file);
+      }
     }
     const bundle = JSON.parse(
       await readFile(path.join(output, "fixture-bundle.json"), "utf8"),
@@ -88,7 +100,7 @@ test("v2 references normalize before dispatch while original input and recorded 
       );
       assert.ok(
         semantic.content.text.startsWith(
-          `[Message received at ${bundle.timestamp}]\n`,
+          `[Message received at ${bundle.timestamp.replace(/Z$/, "+00:00")}; Client-reported timezone: UTC (UTC+00:00)]\n`,
         ),
       );
       assert.ok(semantic.content.text.includes(bundle.sourceFullMessage));
