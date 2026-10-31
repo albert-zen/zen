@@ -15,14 +15,19 @@ await withPreviewBrowser(
       mobile: false,
     });
     for (const theme of ["light", "dark"]) {
-      await send("Page.navigate", {
-        url: `${url}/send-preparation-preview.html?theme=${theme}`,
-      });
+      const sceneUrl = `${url}/send-preparation-preview.html?theme=${theme}`;
+      await send("Page.navigate", { url: sceneUrl });
+      // CDP navigation can return while the previous document is still live.
+      // Its existing Turn must not satisfy readiness for this new theme.
+      const sceneReady = () =>
+        evaluate(
+          `location.href === ${JSON.stringify(sceneUrl)} && document.documentElement.dataset.appearance === ${JSON.stringify(theme)} && document.querySelector('.turn-running-label .turn-work-label')?.textContent === 'Preparing for 12s'`,
+        );
       for (let i = 0; i < 100; i++) {
-        if (await evaluate("!!document.querySelector('.turn-running-label')"))
-          break;
+        if (await sceneReady()) break;
         await delay(50);
       }
+      assert.equal(await sceneReady(), true, `${theme}: new scene is ready`);
       await evaluate("document.fonts.ready");
       const label = () =>
         evaluate(
