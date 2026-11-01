@@ -271,7 +271,11 @@ export class ZenXTriggerService {
       }
     | undefined;
   readonly #programs: TriggerProgramRunner;
-  readonly #listeners = new Set<(snapshot: TriggerSnapshot) => void>();
+  // Process-local invalidation only; never a durable or remote client watermark.
+  #notificationRevision = 0;
+  readonly #listeners = new Set<
+    (snapshot: TriggerSnapshot, revision: number) => void
+  >();
   readonly #now: () => number;
   readonly #schedule: (callback: () => void, delayMs: number) => unknown;
   readonly #cancelScheduled: (handle: unknown) => void;
@@ -1126,6 +1130,9 @@ export class ZenXTriggerService {
         members: [],
         messages: [],
         messageCount: room.messageCount ?? room.messages.length,
+        ...(room.assistant === undefined
+          ? {}
+          : { assistant: structuredClone(room.assistant) }),
       })),
     };
   }
@@ -1335,7 +1342,9 @@ export class ZenXTriggerService {
     };
   }
 
-  onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
+  onChange(
+    listener: (snapshot: TriggerSnapshot, revision: number) => void,
+  ): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -3690,10 +3699,12 @@ export class ZenXTriggerService {
   }
 
   #notify(): void {
+    const revision = ++this.#notificationRevision;
     for (const listener of this.#listeners) {
       try {
         listener(
           this.#store.roomHistory ? this.snapshotSummaries() : this.snapshot(),
+          revision,
         );
       } catch (error) {
         console.warn(

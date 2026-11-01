@@ -525,7 +525,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
-  onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
+  onChange(
+    listener: (snapshot: TriggerSnapshot, revision: number) => void,
+  ): () => void {
     return this.#service.onChange(listener);
   }
   triggersAvailable(): boolean {
@@ -675,6 +677,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Workspace directory changed; review its actual location again",
       );
+    this.#assertStorageReadable();
     onStart?.();
     const result = await this.#startThread(current);
     const sandboxType =
@@ -1040,6 +1043,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
 
   #requireAssistantSetup(): void {
+    this.#assertStorageReadable();
     if (
       !this.#serviceRunning ||
       !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||

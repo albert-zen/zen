@@ -511,3 +511,133 @@ test("completed-turn origin index suppresses duplicate reply after original leav
     await f.cleanup();
   }
 });
+
+test("assistant invalidations carry only bounded identity and changing total count for remote readers", async () => {
+  const f = await setup();
+  try {
+    const room = await f.service.createAssistantRoom({
+      name: "Synthetic assistant",
+      members: [{ name: "Bot", threadId: "assistant-thread" }],
+    });
+    const counts: number[] = [];
+    f.service.onChange((snapshot) => {
+      const invalidation = snapshot.rooms.find(
+        (candidate) => candidate.id === room.id,
+      )!;
+      assert.equal(invalidation.assistant?.threadId, "assistant-thread");
+      assert.equal(
+        invalidation.assistant?.triggerId,
+        room.assistant?.triggerId,
+      );
+      assert.equal(invalidation.assistantWorkspace, undefined);
+      assert.deepEqual(invalidation.messages, []);
+      assert.equal(invalidation.operations, undefined);
+      assert.equal(JSON.stringify(snapshot).includes("PRIVATE BODY"), false);
+      counts.push(invalidation.messageCount!);
+    });
+    await f.service.postAgentRoomMessage(room.id, "PRIVATE BODY one");
+    await f.service.postAgentRoomMessage(room.id, "PRIVATE BODY two");
+    assert.deepEqual(counts, [1, 2]);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test(
+  "Host invalidations advance for same-count mutations and restart publishes a fresh snapshot, not a remote watermark",
+  { timeout: 10000 },
+  async () => {
+    const f = await setup();
+    let restarted: ZenXTriggerService | undefined;
+    try {
+      const room = await f.service.createAssistantRoom({
+        name: "Synthetic assistant",
+        members: [{ name: "Bot", threadId: "assistant-thread" }],
+      });
+      const seen: Array<{ snapshot: TriggerSnapshot; revision: number }> = [];
+      f.service.onChange((snapshot, revision) =>
+        seen.push({ snapshot, revision }),
+      );
+      await f.service.postAgentRoomMessage(room.id, "PRIVATE BODY");
+      const message = (await f.service.readRoomPage(room.id, 0)).messages[0]!;
+      const beforeReaction = seen.at(-1)!.revision;
+      await f.service.setRoomReaction(room.id, message.id, null, "👀");
+      assert(seen.at(-1)!.revision > beforeReaction);
+      assert.equal(seen.at(-1)!.snapshot.rooms[0]!.messageCount, 1);
+      const beforeMode = seen.at(-1)!.revision;
+      await f.service.setAssistantDeliveryMode(room.id, "queue");
+      assert(seen.at(-1)!.revision > beforeMode);
+      assert.equal(
+        seen.at(-1)!.snapshot.rooms[0]!.assistant?.deliveryMode,
+        "queue",
+      );
+      const operationId = `${room.operationEpoch}:${randomUUID()}`;
+      await f.service.prepareRoomMessage(
+        room.id,
+        operationId,
+        "PRIVATE BODY human",
+      );
+      await f.service.postPreparedRoomMessage(
+        room.id,
+        operationId,
+        "PRIVATE BODY human",
+      );
+      const beforeAck = seen.at(-1)!.revision;
+      await f.service.acknowledgeRoomOperation(room.id, operationId);
+      assert(seen.at(-1)!.revision > beforeAck);
+      assert.equal(seen.at(-1)!.snapshot.rooms[0]!.messageCount, 2);
+      assert.equal(
+        f.service
+          .snapshot()
+          .rooms[0]!.operations!.find(
+            (operation) => operation.id === operationId,
+          )!.acknowledged,
+        true,
+      );
+      const beforeRead = seen.length;
+      await f.service.readRoomPage(room.id, 0);
+      f.service.snapshotSummaries();
+      assert.equal(
+        seen.length,
+        beforeRead,
+        "reads must not cause notification loops",
+      );
+      for (let i = 1; i < seen.length; i++)
+        assert(seen[i]!.revision > seen[i - 1]!.revision);
+      for (const { snapshot } of seen) {
+        assert.equal(JSON.stringify(snapshot).includes("PRIVATE BODY"), false);
+        assert.deepEqual(snapshot.rooms[0]!.messages, []);
+        assert.equal(snapshot.rooms[0]!.operations, undefined);
+      }
+      await f.service.close();
+      restarted = new ZenXTriggerService(f.manager, f.store);
+      const initial: Array<{ snapshot: TriggerSnapshot; revision: number }> =
+        [];
+      restarted.onChange((snapshot, revision) =>
+        initial.push({ snapshot, revision }),
+      );
+      await restarted.start();
+      assert.equal(
+        initial[0]!.revision,
+        1,
+        "new Host starts a new local notification lifetime",
+      );
+      assert.equal(initial[0]!.snapshot.rooms[0]!.messageCount, 2);
+      assert.equal(
+        initial[0]!.snapshot.rooms[0]!.assistant?.deliveryMode,
+        "queue",
+      );
+      assert.equal(
+        restarted
+          .snapshot()
+          .rooms[0]!.operations!.find(
+            (operation) => operation.id === operationId,
+          )!.acknowledged,
+        true,
+      );
+    } finally {
+      await restarted?.close();
+      await f.cleanup();
+    }
+  },
+);
