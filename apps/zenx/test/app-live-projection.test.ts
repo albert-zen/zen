@@ -1350,11 +1350,16 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
       "thread-1:second.md",
     ]);
     await selectThread("Thread two");
-    await selectThread("Thread one");
     assert.equal(reads.length, 3);
     await clickLink(0);
+    assert.equal(reads.at(-1), "thread-2:first.md");
+    await clickLink(1);
+    assert.equal(reads.at(-1), "thread-2:second.md");
+    await selectThread("Thread one");
+    assert.equal(reads.length, 5);
+    await clickLink(0);
     assert.equal(reads.at(-1), "thread-1:first.md");
-    assert.equal(reads.length, 4);
+    assert.equal(reads.length, 6);
   } finally {
     await harness.unmount();
   }
