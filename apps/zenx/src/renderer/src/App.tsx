@@ -16,7 +16,11 @@ import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
-import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
+import {
+  sidebarTabId,
+  sidebarTabFromId,
+  sidebarOwnerKey,
+} from "../../thread-sidebar-state.js";
 import { useThreadSidebar } from "./use-thread-sidebar.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { type MessageSourceNavigator } from "./message-source-navigation.js";
@@ -874,6 +878,22 @@ function AppContent() {
     (attachment: AttachmentRef) =>
       window.zenx.imageAttachments.read(attachment),
     [],
+  );
+
+  // Read live presentation through the stable controller, not the render-local
+  // setBrowserPanels adapter; repeated clicks must not write redundant opens.
+  const messageLinkSidebar = sidebarState.controller;
+  const openMessageLink = useCallback(
+    (threadId: string, target: { kind: "file" | "browser"; value: string }) => {
+      setMessageLinkRequest({
+        ...target,
+        id: ++messageLinkSequence.current,
+        threadId,
+      });
+      if (!messageLinkSidebar.snapshot()[sidebarOwnerKey(threadId)]?.open)
+        void messageLinkSidebar.edit(threadId, () => ({ open: true }));
+    },
+    [messageLinkSidebar],
   );
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
@@ -4164,17 +4184,7 @@ function AppContent() {
                     />
                   ) : null
                 }
-                onOpenMessageLink={(threadId, target) => {
-                  setMessageLinkRequest({
-                    ...target,
-                    id: ++messageLinkSequence.current,
-                    threadId,
-                  });
-                  setBrowserPanels((current) => ({
-                    ...current,
-                    [threadId]: true,
-                  }));
-                }}
+                onOpenMessageLink={openMessageLink}
                 composerSendMode={composerSendMode}
                 onComposerSendModeChange={changeComposerSendMode}
                 onCancelQueued={cancelQueued}
@@ -5090,6 +5100,14 @@ function AgentSurface({
   threadError: string | null;
   threadLoading: boolean;
 }) {
+  const messageLinkThreadId = threadDetail?.id;
+  const openThreadMessageLink = useCallback(
+    (target: { kind: "file" | "browser"; value: string }) => {
+      if (messageLinkThreadId !== undefined)
+        onOpenMessageLink(messageLinkThreadId, target);
+    },
+    [onOpenMessageLink, messageLinkThreadId],
+  );
   const draftSettings =
     newThreadDraft?.settings ?? defaultDraftSettings(models);
   const draftProject =
@@ -5259,9 +5277,7 @@ function AgentSurface({
             onExitDebug={onExitDebug}
             composerSendMode={composerSendMode}
             onComposerSendModeChange={onComposerSendModeChange}
-            onOpenMessageLink={(target) => {
-              onOpenMessageLink(threadDetail.id, target);
-            }}
+            onOpenMessageLink={openThreadMessageLink}
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
             }

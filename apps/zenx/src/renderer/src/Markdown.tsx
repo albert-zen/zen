@@ -4,6 +4,7 @@ import {
   Children,
   createContext,
   isValidElement,
+  memo,
   useContext,
   useState,
   type ReactNode,
@@ -40,7 +41,9 @@ export interface MarkdownInlineToken {
   node: ReactNode;
   copyText: string;
 }
-export function Markdown({
+// Skip unchanged message bodies, while React context and locale subscriptions
+// still invalidate links/translations. Default equality includes every prop.
+export const Markdown = memo(function Markdown({
   text,
   inlineTokens = [],
 }: {
@@ -298,7 +301,7 @@ export function Markdown({
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 const markdownComponents: Components = {
   a: messageAnchor(null),
