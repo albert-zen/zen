@@ -19,9 +19,10 @@ await withPreviewBrowser(
       await send("Page.navigate", { url: sceneUrl });
       // CDP navigation can return while the previous document is still live.
       // Its existing Turn must not satisfy readiness for this new theme.
+      // The new document can also exist before its root element is available.
       const sceneReady = () =>
         evaluate(
-          `location.href === ${JSON.stringify(sceneUrl)} && document.documentElement.dataset.appearance === ${JSON.stringify(theme)} && document.querySelector('.turn-running-label .turn-work-label')?.textContent === 'Preparing for 12s'`,
+          `location.href === ${JSON.stringify(sceneUrl)} && document.documentElement?.dataset.appearance === ${JSON.stringify(theme)} && document.querySelector('.turn-running-label .turn-work-label')?.textContent === 'Preparing for 12s'`,
         );
       for (let i = 0; i < 100; i++) {
         if (await sceneReady()) break;
