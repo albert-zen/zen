@@ -139,3 +139,28 @@ test("global New thread excludes its hit target from the overlapping native capt
     "ordinary window dragging outside interactive controls remains available",
   );
 });
+
+test("macOS expanded workspace hides the complete padded conversation surface, not just its title", async () => {
+  const [styles, preview] = await Promise.all([
+    readFile(new URL("styles.css", rendererRoot), "utf8"),
+    readFile(
+      new URL("../scripts/titlebar-safe-area-preview.tsx", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(
+    styles,
+    /:root\[data-platform="darwin"\]\s*\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\)\s*\.window-titlebar-session\s*\{\s*visibility:\s*hidden;/su,
+    "the obsolete session surface must not paint or receive hits over full-width workspace tabs",
+  );
+  assert.doesNotMatch(
+    styles,
+    /:root\[data-platform="darwin"\]\s*\.app-shell:has\(\.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\)\s*\.thread-heading\s*\{/su,
+    "hiding only the title leaves the padded header surface visible",
+  );
+  assert.match(
+    preview,
+    /className="workspace-header"\s*>\s*<div className="workspace-heading-row">\s*<div className="thread-heading">/su,
+    "the browser fixture must include the real padded ConversationTitleBar wrappers",
+  );
+});

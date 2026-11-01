@@ -173,8 +173,12 @@ function Preview() {
         onToggleInbox={() => {}}
         onToggleSidebar={() => setCollapsed((value) => !value)}
       >
-        <div className="thread-heading">
-          <span>Synthetic conversation</span>
+        <div className="workspace-header">
+          <div className="workspace-heading-row">
+            <div className="thread-heading">
+              <span>Synthetic conversation</span>
+            </div>
+          </div>
         </div>
       </WindowTitleBar>
       {platform === "darwin" && (
