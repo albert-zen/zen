@@ -2,17 +2,18 @@
 
 ## Status and scope
 
-The first checkpoint removes the destructive 256-message retention/validation
+The implementation removes the destructive 256-message retention/validation
 rule and the renderer's total-history cap. Initial display remains four messages;
-explicit earlier-history expansion remains sixteen. This does **not** yet remove
-the generic plugin storage's 1 MiB quota or whole-snapshot write costs. Previously
-truncated messages cannot be reconstructed from the remaining snapshot.
+explicit earlier-history expansion remains sixteen. Shared automation now uses
+the journal below instead of the generic plugin storage's 1 MiB snapshot quota;
+other plugins retain that quota. Previously truncated messages cannot be
+reconstructed from the remaining snapshot.
 
-The next checkpoints implement the design below. This document is a contract and
-implementation plan, not a claim that migration, integration, fault tests or
-cross-platform/UI acceptance have already passed. Code reconstructed after the
-workspace loss receives new commits and fresh validation; old results and hashes
-are not evidence for the new tree.
+Core, migration, service, renderer and Host lifecycle wiring have been reconstructed
+and locally checked in stages. This is not a claim that cross-platform or real UI
+acceptance has passed: those remain required gates below. Code reconstructed after
+the workspace loss receives new commits and fresh validation; old results and
+hashes are not evidence for the new tree.
 
 ## One authority, confined to shared automation
 
@@ -101,6 +102,13 @@ Page snapshots bind Room and generation plus legal committed frame boundaries,
 message count and reaction revision. Reactions applied after a snapshot cannot be
 overwritten by a stale page. No new public jump feature is introduced.
 
+Notifications are body-free invalidations with bounded assistant identity. A
+service-instance revision distinguishes same-count reaction, acknowledgement and
+assistant changes for the Host's local subscription; it is neither a durable
+receipt nor a remote watermark. Remote notifications do not carry this revision.
+Each Host bootstrap creates a fresh subscription map and startup publishes the
+current snapshot. Read-only page/list requests do not publish invalidations.
+
 ## Forward-only migration and lifecycle
 
 Before overwriting any authoritative legacy metadata, preserve, verify and sync
@@ -114,8 +122,8 @@ Check migration artifacts and forward markers **before** any legacy/bootstrap
 initialization: missing shared marker plus an existing forward marker must not
 create empty v1 state and bypass recovery checks. Selected history missing or
 invalid must fail explicitly; never choose legacy data as a fallback. Old v1
-writers must refuse version-2 storage. Retry a rolled-back unselected import only when both original v1 namespaces
-remain authoritative. A v1 shared container paired with a v2 forward marker is
+writers must refuse version-2 storage. Retry a rolled-back unselected import only
+when both original v1 namespaces remain authoritative. A v1 shared container paired with a v2 forward marker is
 ambiguous (the shared marker may have been rolled back after new history was
 accepted): refuse without rewriting any files rather than reimporting its backup.
 The automatic recovery contract does not cover manually rolling both namespaces
