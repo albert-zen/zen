@@ -21,7 +21,7 @@ const directory = path.resolve(process.argv[2]);
 const version = process.argv[3];
 const expected = {
   before: "c6f4592e15c6abbc5db890a86ceef0865f70681e",
-  current: "4ed8fb0f2294d234a10cf293b67335f72d2bb332",
+  current: "dd25fe08cffd4d77421e8349ded2a150e106f74c",
 }[version];
 assert.ok(expected);
 assert.equal(
@@ -78,6 +78,10 @@ await writeFile(
     {
       version,
       sourceCommit: expected,
+      comparisonRole:
+        version === "current"
+          ? "fixed-product-candidate"
+          : "unmodified-before-primary-control",
       platform: process.platform,
       hashes,
       scope:

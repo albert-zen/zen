@@ -150,7 +150,7 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
-const measure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},desc=e=>{const s=getComputedStyle(e);return {tag:e.tagName,id:e.id,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),visibility:s.visibility,zIndex:s.zIndex}},rail=document.querySelector('.auxiliary-heading [role=tablist]'),rr=rect(rail);return {time:performance.now(),motion:{reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,railTransition:rail?{property:getComputedStyle(rail).transitionProperty,duration:getComputedStyle(rail).transitionDuration}:null,panelTransition:document.querySelector('.auxiliary-panel')?{property:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionProperty,duration:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionDuration}:null,titlebarTransition:document.querySelector('.window-titlebar')?{property:getComputedStyle(document.querySelector('.window-titlebar')).transitionProperty,duration:getComputedStyle(document.querySelector('.window-titlebar')).transitionDuration}:null},sidebarCollapsed:document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),shell:rect(document.querySelector('.app-shell')),panel:rect(document.querySelector('.auxiliary-panel')),url:location.href,platform:document.documentElement.dataset.platform,expanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,rail:rr,scrollLeft:rail?.scrollLeft,scrollWidth:rail?.scrollWidth,clientWidth:rail?.clientWidth,tabs:[...document.querySelectorAll('.workspace-content-tab')].map(e=>{const tab=e.querySelector('[role=tab]'),icon=rect(tab.querySelector('svg')),hit=document.elementFromPoint(icon.left+icon.width/2,icon.top+icon.height/2);return {id:e.dataset.tabId,bounds:rect(e),icon,iconInsideRail:icon.left>=rr.left&&icon.right<=rr.right,hitInTab:tab.contains(hit),hitStack:document.elementsFromPoint(icon.left+icon.width/2,icon.top+icon.height/2).slice(0,7).map(desc)}}),chrome:['.window-titlebar','.window-titlebar-session'].map(s=>{const e=document.querySelector(s);return {selector:s,...(e?desc(e):{})}})}})()`;
+const measure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},desc=e=>{const s=getComputedStyle(e);return {tag:e.tagName,id:e.id,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),visibility:s.visibility,zIndex:s.zIndex}},rail=document.querySelector('.auxiliary-heading [role=tablist]'),rr=rect(rail);return {time:performance.now(),motion:{reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,railTransition:rail?{property:getComputedStyle(rail).transitionProperty,duration:getComputedStyle(rail).transitionDuration}:null,panelTransition:document.querySelector('.auxiliary-panel')?{property:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionProperty,duration:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionDuration}:null,titlebarTransition:document.querySelector('.window-titlebar')?{property:getComputedStyle(document.querySelector('.window-titlebar')).transitionProperty,duration:getComputedStyle(document.querySelector('.window-titlebar')).transitionDuration}:null},sidebarCollapsed:document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),shell:rect(document.querySelector('.app-shell')),panel:rect(document.querySelector('.auxiliary-panel')),url:location.href,platform:document.documentElement.dataset.platform,expanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,rail:rr,scrollLeft:rail?.scrollLeft,scrollWidth:rail?.scrollWidth,clientWidth:rail?.clientWidth,tabs:[...document.querySelectorAll('.workspace-content-tab')].map(e=>{const tab=e.querySelector('[role=tab]'),icon=rect(tab.querySelector('svg')),hit=document.elementFromPoint(icon.left+icon.width/2,icon.top+icon.height/2);return {id:e.dataset.tabId,bounds:rect(e),icon,iconInsideRail:icon.left>=rr.left&&icon.right<=rr.right,hitInTab:tab.contains(hit),iconHitPoints:[[icon.left+icon.width/2,icon.top+icon.height/2],[icon.left+0.5,icon.top+0.5],[icon.right-0.5,icon.top+0.5],[icon.left+0.5,icon.bottom-0.5],[icon.right-0.5,icon.bottom-0.5]].map(([x,y])=>tab.contains(document.elementFromPoint(x,y))),hitStack:document.elementsFromPoint(icon.left+icon.width/2,icon.top+icon.height/2).slice(0,7).map(desc)}}),nativeSidebarToggle:(()=>{const e=document.querySelector('.sidebar-collapse-button');if(!e)return null;const r=rect(e);return {bounds:r,visibility:getComputedStyle(e).visibility,hit:e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))}})(),chrome:['.window-titlebar','.window-titlebar-session','.window-titlebar-session > .workspace-header'].map(s=>{const e=document.querySelector(s);return {selector:s,...(e?desc(e):{})}})}})()`;
 const networkReady = app.whenReady().then(() => {
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     let allowed = false;
@@ -167,6 +167,58 @@ const networkReady = app.whenReady().then(() => {
     callback({ cancel: !allowed });
   });
 });
+function assertExpandedTitleSurface(state) {
+  assert.equal(
+    state.tabs[0]?.id,
+    "primary-conversation",
+    "Current full App includes its leading conversation Tab",
+  );
+  assert.ok(
+    state.tabs.some((tab) => tab.id.includes("zenx-subagents")),
+    "Actual Subagents resource remains in the same strip",
+  );
+  for (const tab of state.tabs) {
+    assert.equal(
+      tab.iconInsideRail,
+      true,
+      `Whole icon stays inside rail: ${tab.id}`,
+    );
+    assert.equal(tab.hitInTab, true, `Icon center is not covered: ${tab.id}`);
+    assert.ok(
+      tab.iconHitPoints?.every(Boolean),
+      `No icon corner is covered: ${tab.id}`,
+    );
+  }
+  const session = state.chrome.find(
+    (c) => c.selector === ".window-titlebar-session",
+  );
+  assert.equal(
+    session?.visibility,
+    "hidden",
+    "Obsolete session surface is hidden",
+  );
+  assert.ok(
+    session.bounds.width <= 0.5,
+    "Expanded session track has no workspace width",
+  );
+  assert.equal(
+    state.chrome.find(
+      (c) => c.selector === ".window-titlebar-session > .workspace-header",
+    )?.visibility,
+    "hidden",
+    "Padded workspace-header inherits the hidden session surface",
+  );
+  assert.equal(
+    state.nativeSidebarToggle?.visibility,
+    "visible",
+    "Native sidebar control remains visible",
+  );
+  assert.equal(
+    state.nativeSidebarToggle?.hit,
+    true,
+    "Native sidebar control remains hittable",
+  );
+}
 async function run() {
   await networkReady;
   await until(async () => {
@@ -338,7 +390,41 @@ async function run() {
     assert.equal(item.settled.expanded, "true");
     assert.equal(item.settled.platform, process.platform);
     assert.equal(item.settled.tabs.length, version === "current" ? 2 : 1);
+    if (version === "current") assertExpandedTitleSurface(item.settled);
   }
+  await click(
+    "document.querySelector('.auxiliary-heading > button[aria-pressed=\"true\"]')",
+    "Restore pane after expanded acceptance",
+  );
+  await until(
+    async () =>
+      await evaluate(
+        "document.querySelector('.auxiliary-panel')?.dataset.expanded === 'false'",
+      ),
+    "Final pane restore committed",
+  );
+  await pause(350);
+  result.restored = await evaluate(measure);
+  await screenshot(`${version}-full-app-restored.png`);
+  assert.equal(
+    result.restored.chrome.find(
+      (c) => c.selector === ".window-titlebar-session",
+    )?.visibility,
+    "visible",
+    "Conversation session returns after restore",
+  );
+  assert.equal(
+    result.restored.chrome.find(
+      (c) => c.selector === ".window-titlebar-session > .workspace-header",
+    )?.visibility,
+    "visible",
+    "Conversation header returns after restore",
+  );
+  assert.equal(
+    result.restored.nativeSidebarToggle?.hit,
+    true,
+    "Sidebar control remains usable after restore",
+  );
   const read = await evaluate(
     `window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(started.thread.id)},includeTurns:true})`,
   );
