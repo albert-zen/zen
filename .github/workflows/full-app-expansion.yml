@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - version: current
-            source: 7e017e65e1f2d47ddd9afe6e1d43c7c20312face
+            source: e15f8c086d9cd42bbd04dd02fc2b2cfcd6646324
     steps:
       - uses: actions/checkout@v4
         with:

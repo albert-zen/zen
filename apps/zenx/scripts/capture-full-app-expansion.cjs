@@ -249,7 +249,7 @@ async function withMotionPreference(webContents, preference, action, receipt) {
     }
   }
 }
-const dragMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},describe=e=>{const s=getComputedStyle(e);return {tag:e.tagName,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),background:s.backgroundColor,zIndex:s.zIndex,visibility:s.visibility}},panel=document.querySelector('.auxiliary-panel'),p=rect(panel),title=document.querySelector('.window-titlebar'),t=rect(title),header=document.querySelector('.window-titlebar-session > .workspace-header'),h=rect(header),rail=document.querySelector('.auxiliary-heading [role=tablist]');return {time:performance.now(),panel:p,titlebar:t,session:rect(document.querySelector('.window-titlebar-session')),workspaceHeader:h,resizer:rect(document.querySelector('.browser-panel-resizer')),requestedWidth:Number(document.querySelector('.browser-panel-resizer').getAttribute('aria-valuenow')),reportedWidth:getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'),titlebarOverlap:t.right-p.left,headerOverlap:h?h.right-p.left:null,railScrollLeft:rail.scrollLeft,expanded:panel.dataset.expanded,reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,panelTransition:{property:getComputedStyle(panel).transitionProperty,duration:getComputedStyle(panel).transitionDuration},titlebarTransition:{property:getComputedStyle(title).transitionProperty,duration:getComputedStyle(title).transitionDuration},dividerHits:[20,Math.min(innerHeight-20,100)].map(y=>({point:{x:p.left+1,y},stack:document.elementsFromPoint(p.left+1,y).slice(0,6).map(describe)}))}})()`;
+const dragMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},describe=e=>{const s=getComputedStyle(e);return {tag:e.tagName,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),background:s.backgroundColor,zIndex:s.zIndex,visibility:s.visibility}},panel=document.querySelector('.auxiliary-panel'),p=rect(panel),title=document.querySelector('.window-titlebar'),t=rect(title),header=document.querySelector('.window-titlebar-session > .workspace-header'),h=rect(header),rail=document.querySelector('.auxiliary-heading [role=tablist]');return {time:performance.now(),panel:p,titlebar:t,session:rect(document.querySelector('.window-titlebar-session')),workspaceHeader:h,resizer:rect(document.querySelector('.browser-panel-resizer')),requestedWidth:Number(document.querySelector('.browser-panel-resizer').getAttribute('aria-valuenow')),reportedWidth:getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'),titlebarOverlap:t.right-p.left,headerOverlap:h?h.right-p.left:null,railScrollLeft:rail.scrollLeft,expanded:panel.dataset.expanded,resizing:panel.dataset.resizing,reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,panelTransition:{property:getComputedStyle(panel).transitionProperty,duration:getComputedStyle(panel).transitionDuration},titlebarTransition:{property:getComputedStyle(title).transitionProperty,duration:getComputedStyle(title).transitionDuration},dividerHits:[20,Math.min(innerHeight-20,100)].map(y=>({point:{x:p.left+1,y},stack:document.elementsFromPoint(p.left+1,y).slice(0,6).map(describe)}))}})()`;
 async function nativeWidthDrag(targetWidth, label) {
   const item = { label, targetWidth, inputs: [] };
   result.widthDrags.push(item);
@@ -367,6 +367,86 @@ async function captureNormalPaneDrags() {
   );
   assert.equal(restored.requestedWidth, width, "Original pane width restored");
   result.dragMotion.restored = restored;
+  for (const item of result.widthDrags) assertSynchronizedDrag(item);
+}
+
+function assertStableSidebar(before, after) {
+  assert.ok(
+    before.scroll.gutter > 0,
+    "Classic scrollbar space is reserved before the first Thread",
+  );
+  for (const key of ["clientWidth", "offsetWidth", "gutter"])
+    assert.ok(
+      Math.abs(before.scroll[key] - after.scroll[key]) <= 1,
+      `First Thread preserves sidebar scroll ${key}`,
+    );
+  for (const key of [
+    "sidebar",
+    "header",
+    "footer",
+    "newThreadIcon",
+    "viewActions",
+    "viewActionIcon",
+    "settingsIcon",
+  ]) {
+    assert.ok(
+      before[key] && after[key],
+      `Measured ${key} exists in both states`,
+    );
+    for (const field of ["left", "right", "width"])
+      assert.ok(
+        Math.abs(before[key][field] - after[key][field]) <= 1,
+        `First Thread preserves ${key}.${field}`,
+      );
+  }
+  for (const key of ["newThreadIcon", "viewActionIcon", "settingsIcon"])
+    assert.equal(
+      before[key].height,
+      after[key].height,
+      `${key} intrinsic height is unchanged`,
+    );
+}
+function assertSynchronizedDrag(item) {
+  assert.ok(item.frames.length > 0, "Real drag frames were sampled");
+  for (const frame of item.frames) {
+    assert.ok(
+      Math.abs(frame.titlebarOverlap) <= 1,
+      `${item.label}: titlebar follows actual panel boundary (${frame.titlebarOverlap}px)`,
+    );
+    assert.ok(
+      Math.abs(frame.headerOverlap) <= 1,
+      `${item.label}: workspace header follows actual panel boundary (${frame.headerOverlap}px)`,
+    );
+    assert.equal(
+      frame.dividerHits[0].stack[0].className,
+      "browser-panel-resizer",
+      `${item.label}: title-row divider is not covered by conversation chrome`,
+    );
+    assert.ok(
+      frame.titlebarTransition.duration
+        .split(",")
+        .every((value) => Number.parseFloat(value) === 0),
+      "Following titlebar has no second width tween",
+    );
+    if (frame.resizing === "true")
+      assert.ok(
+        !frame.panelTransition.property
+          .split(",")
+          .some((value) =>
+            ["all", "width", "min-width", "flex-basis"].includes(value.trim()),
+          ),
+        "Only active resize geometry skips the panel tween",
+      );
+  }
+  assert.ok(
+    item.frames.some((frame) => frame.resizing === "true"),
+    "Actual native pointer capture activated resizing",
+  );
+  assert.equal(
+    item.settled.resizing,
+    "false",
+    "Pointer release ends resize mode",
+  );
 }
 
 async function run() {
@@ -476,6 +556,10 @@ async function run() {
       "Actual empty Room section collapsed before baseline; no CSS, width, or scrollbar override",
   };
   await screenshot(`${version}-sidebar-first-thread-room-collapsed.png`);
+  assertStableSidebar(
+    result.sidebarBeforeThread,
+    result.sidebarAfterThreadBeforeScroll,
+  );
   await revealThreadWithSidebarWheel(threadTarget);
   await click(threadTarget, "Select created idle Thread");
   await click(
