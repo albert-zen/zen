@@ -2,7 +2,6 @@ export const MAX_TRIGGER_COUNT = 256;
 export const MAX_HISTORY_COUNT = 256;
 export const MAX_ROOM_COUNT = 128;
 export const MAX_ROOM_MEMBERS = 64;
-export const MAX_ROOM_MESSAGES = 256;
 export const MAX_ROOM_OPERATIONS = 128;
 export const MAX_ASSISTANT_MATTERS = 64;
 export const MAX_ASSISTANT_MEMORY = 64;

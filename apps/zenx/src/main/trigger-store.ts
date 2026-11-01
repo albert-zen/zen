@@ -35,7 +35,6 @@ import {
   MAX_REASON_BYTES,
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
-  MAX_ROOM_MESSAGES,
   MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
@@ -854,7 +853,7 @@ function isRoom(value: unknown): value is ZenXRoom {
     !string(room["id"], MAX_ID_BYTES) ||
     !string(room["name"], MAX_ROOM_NAME_BYTES) ||
     !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
-    !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
+    !arrayOf(room["messages"], isRoomMessage) ||
     (room["operationEpoch"] !== undefined &&
       !string(room["operationEpoch"], MAX_ID_BYTES)) ||
     (room["operations"] !== undefined &&

@@ -38,7 +38,6 @@ import {
   MAX_REASON_BYTES,
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
-  MAX_ROOM_MESSAGES,
   MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
@@ -3946,7 +3945,6 @@ function retainSnapshot(snapshot: TriggerSnapshot): void {
       );
     if ((room.operations?.length ?? 0) > MAX_ROOM_OPERATIONS)
       throw new Error("Unresolved Room operation limit reached");
-    room.messages = room.messages.slice(-MAX_ROOM_MESSAGES);
   }
 }
 
