@@ -1303,7 +1303,33 @@ test("deletion invalidates a selected Thread's pending resume and does not reope
 
 test("App message requests survive acknowledgements, repeated clicks, and Thread remounts", async () => {
   const reads: string[] = [];
+  const states = new Map<string, ThreadSidebarState>();
+  const writes: ThreadSidebarPatch[] = [];
+  const listeners = new Set<(state: ThreadSidebarState) => void>();
+  const sidebarApi: ThreadSidebarApi = {
+    read: async (owner) =>
+      states.get(typeof owner === "string" ? owner : owner.id) ??
+      emptySidebarState(owner),
+    onChanged: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    update: async ({ owner, expectedRevision, patch }) => {
+      const current = states.get(owner.id) ?? emptySidebarState(owner);
+      assert.equal(expectedRevision, current.revision);
+      const state = applySidebarPatch(current, patch);
+      states.set(owner.id, state);
+      writes.push(patch);
+      for (const listener of listeners) listener(state);
+      return { applied: true, state };
+    },
+  };
+  const openWrites = () =>
+    writes.filter(
+      (patch) => Object.keys(patch).length === 1 && patch.open === true,
+    ).length;
   const harness = await mountApp({
+    sidebarApi,
     request: async (method, params) => {
       if (method === "zen/thread/resume") {
         const id = (params as { threadId: string }).threadId;
@@ -1342,8 +1368,15 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
   try {
     await selectThread("Thread one");
     await clickLink(0);
+    const afterOpen = openWrites();
+    assert.equal(afterOpen, 1);
     await clickLink(1);
     await clickLink(1);
+    assert.equal(
+      openWrites(),
+      afterOpen,
+      "already-open sidebar does not write redundant opens",
+    );
     assert.deepEqual(reads, [
       "thread-1:first.md",
       "thread-1:second.md",
@@ -1360,6 +1393,17 @@ test("App message requests survive acknowledgements, repeated clicks, and Thread
     await clickLink(0);
     assert.equal(reads.at(-1), "thread-1:first.md");
     assert.equal(reads.length, 6);
+    // A later close must be observed by the same stable link callback.
+    const current = states.get("thread-1")!;
+    await act(async () => {
+      const closed = applySidebarPatch(current, { open: false });
+      states.set("thread-1", closed);
+      for (const listener of listeners) listener(closed);
+    });
+    const beforeReopen = openWrites();
+    await clickLink(0);
+    assert.equal(openWrites(), beforeReopen + 1);
+    assert.equal(reads.at(-1), "thread-1:first.md");
   } finally {
     await harness.unmount();
   }

@@ -16,7 +16,11 @@ import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
 import { unwrapCompactionIpcReply } from "../../preload/compaction-ipc.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
-import { sidebarTabId, sidebarTabFromId } from "../../thread-sidebar-state.js";
+import {
+  sidebarTabId,
+  sidebarTabFromId,
+  sidebarOwnerKey,
+} from "../../thread-sidebar-state.js";
 import { useThreadSidebar } from "./use-thread-sidebar.js";
 import { requestManualTurnRetry } from "./manual-turn-retry.js";
 import { type MessageSourceNavigator } from "./message-source-navigation.js";
@@ -876,7 +880,9 @@ function AppContent() {
     [],
   );
 
-  // Keep the link context stable across text deltas, not across owner changes.
+  // Read live presentation through the stable controller, not the render-local
+  // setBrowserPanels adapter; repeated clicks must not write redundant opens.
+  const messageLinkSidebar = sidebarState.controller;
   const openMessageLink = useCallback(
     (threadId: string, target: { kind: "file" | "browser"; value: string }) => {
       setMessageLinkRequest({
@@ -884,9 +890,10 @@ function AppContent() {
         id: ++messageLinkSequence.current,
         threadId,
       });
-      setBrowserPanels((current) => ({ ...current, [threadId]: true }));
+      if (!messageLinkSidebar.snapshot()[sidebarOwnerKey(threadId)]?.open)
+        void messageLinkSidebar.edit(threadId, () => ({ open: true }));
     },
-    [],
+    [messageLinkSidebar],
   );
 
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
