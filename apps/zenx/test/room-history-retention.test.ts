@@ -31,7 +31,7 @@ test(
       const original = service.snapshot().rooms[0]!.messages;
       assert.equal(original.length, 320);
       assert.equal(new Set(original.map((message) => message.id)).size, 320);
-      await service.addRoomReaction(room.id, original[0]!.id, "observer", "👀");
+      await service.setRoomReaction(room.id, original[0]!.id, "observer", "👀");
       await service.close();
       const persisted = await store.read();
       assert.equal(persisted.rooms[0]!.messages.length, 320);
