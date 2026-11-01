@@ -53,6 +53,7 @@ import { isCompactCommand } from "./compact-command.js";
 import { createPortal } from "react-dom";
 import {
   createContext,
+  memo,
   useEffect,
   useContext,
   useCallback,
@@ -336,6 +337,13 @@ interface ThreadViewProps {
   ): Promise<void>;
 }
 
+const EMPTY_APPROVALS: readonly ApprovalCardState[] = [];
+const EMPTY_WAKEUPS: readonly TriggerHistoryEntry[] = [];
+const EMPTY_ATTACHMENTS: ZenXThreadAttachmentProjection = {};
+const unavailableImageReader = async (): Promise<Uint8Array> => {
+  throw new Error(i18n.t("shell:imageReaderUnavailable"));
+};
+
 export function ThreadView(props: ThreadViewProps) {
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
@@ -385,19 +393,22 @@ export function ThreadView(props: ThreadViewProps) {
       mounted.current = false;
     };
   }, []);
-  const forkContext =
-    forkSource === null
-      ? null
-      : {
-          ...forkSource,
-          // A Turn finishing may fold or remount its message controls. Only leaving
-          // the source viewport or losing the canonical Item invalidates ownership.
-          isCurrent: (itemId: string) =>
-            mounted.current &&
-            !debuggingRef.current &&
-            forkSourceRef.current?.threadId === forkSource.threadId &&
-            forkSourceRef.current.items.has(itemId),
-        };
+  const forkContext = useMemo(
+    () =>
+      forkSource === null
+        ? null
+        : {
+            ...forkSource,
+            // A Turn finishing may fold or remount its message controls. Only leaving
+            // the source viewport or losing the canonical Item invalidates ownership.
+            isCurrent: (itemId: string) =>
+              mounted.current &&
+              !debuggingRef.current &&
+              forkSourceRef.current?.threadId === forkSource.threadId &&
+              forkSourceRef.current.items.has(itemId),
+          },
+    [forkSource],
+  );
   // Native history and its image placeholders commit together, even while a
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
@@ -478,9 +489,9 @@ function ThreadViewContent({
   selectedReasoningEffort = null,
   switchingModel = false,
   thread,
-  threadAttachments = {},
+  threadAttachments = EMPTY_ATTACHMENTS,
   threadUsage,
-  wakeups = [],
+  wakeups: suppliedWakeups = EMPTY_WAKEUPS,
   watching = false,
   workflowCommands = [],
   pluginSnapshot = null,
@@ -489,9 +500,7 @@ function ThreadViewContent({
   onImportImages = async () => undefined,
   onPickImages = async () => undefined,
   onRemoveImage = () => undefined,
-  onReadAttachment = async () => {
-    throw new Error(i18n.t("shell:imageReaderUnavailable"));
-  },
+  onReadAttachment = unavailableImageReader,
   onInterrupt,
   onCompact,
   onDismissCompaction,
@@ -503,6 +512,8 @@ function ThreadViewContent({
 }: ThreadViewProps) {
   useTranslation("shell");
   const readingState = useContext(ThreadReadingContext)!;
+  const wakeups =
+    suppliedWakeups.length === 0 ? EMPTY_WAKEUPS : suppliedWakeups;
   const queueFailure =
     suppliedQueueFailure &&
     thread?.queuedMessages?.some(
@@ -635,6 +646,11 @@ function ThreadViewContent({
     trigger: HTMLButtonElement;
     queueOwner?: { threadId: string; queuedItemId: string; clientId: string };
   } | null>(null);
+  const onOpenImage = useCallback(
+    (attachment: AttachmentRef, name: string, trigger: HTMLButtonElement) =>
+      setPreview({ attachment, name, trigger }),
+    [],
+  );
   const queuedImages = useMemo(
     () => projectQueuedImages(thread),
     [thread?.canonicalItems, thread?.queuedMessages],
@@ -793,6 +809,15 @@ function ThreadViewContent({
     setInterruptError(null);
   }, [runKey]);
   const displayedThread = thread ?? contextPreview;
+  const imageContext = useMemo(
+    () => ({
+      cwd: displayedThread?.cwd,
+      attachments: threadAttachments,
+      read: onReadAttachment,
+      open: onOpenImage,
+    }),
+    [displayedThread?.cwd, threadAttachments, onReadAttachment, onOpenImage],
+  );
   const turns = displayedThread?.turns ?? [];
   const contextCompactions = useMemo(
     () => projectContextCompactions(displayedThread?.canonicalItems),
@@ -807,9 +832,21 @@ function ThreadViewContent({
       ),
     [contextCompactions, displayedThread?.canonicalItems, turns],
   );
-  const pendingApprovals = approvals.filter(
-    (approval) => approval.params.threadId === thread?.id,
+  const pendingApprovals = useMemo(
+    () =>
+      approvals.filter((approval) => approval.params.threadId === thread?.id),
+    [approvals, thread?.id],
   );
+  const approvalsByTurn = useMemo(() => {
+    const grouped = new Map<string, ApprovalCardState[]>();
+    for (const approval of pendingApprovals) {
+      const turnId = approval.params.turnId;
+      const entries = grouped.get(turnId);
+      if (entries) entries.push(approval);
+      else grouped.set(turnId, [approval]);
+    }
+    return grouped;
+  }, [pendingApprovals]);
   const compactRequested = isCompactCommand(composer.draft.text);
   const submitting =
     composer.submission?.status === "pending" ||
@@ -1414,15 +1451,7 @@ function ThreadViewContent({
         }}
       >
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          <ThreadImagesContext.Provider
-            value={{
-              cwd: displayedThread?.cwd,
-              attachments: threadAttachments,
-              read: onReadAttachment,
-              open: (attachment, name, trigger) =>
-                setPreview({ attachment, name, trigger }),
-            }}
-          >
+          <ThreadImagesContext.Provider value={imageContext}>
             <div className="messages-inner">
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
@@ -1455,9 +1484,9 @@ function ThreadViewContent({
                         stopping={
                           interrupting && row.turn.id === runningTurn?.id
                         }
-                        approvals={pendingApprovals.filter(
-                          (approval) => approval.params.turnId === row.turn.id,
-                        )}
+                        approvals={
+                          approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS
+                        }
                         confirmedStopped={
                           thread?.canonicalItems?.some(
                             (item) =>
@@ -1476,9 +1505,7 @@ function ThreadViewContent({
                         usage={threadUsage?.turns[row.turn.id]}
                         wakeups={wakeups}
                         attachments={threadAttachments}
-                        onOpenImage={(attachment, name, trigger) =>
-                          setPreview({ attachment, name, trigger })
-                        }
+                        onOpenImage={onOpenImage}
                         onReadAttachment={onReadAttachment}
                         pluginSnapshot={pluginSnapshot}
                         pluginUiRegistry={pluginUiRegistry}
@@ -2512,7 +2539,7 @@ function isNestedTranscriptScroll(
   return false;
 }
 
-function TurnBlock({
+const TurnBlock = memo(function TurnBlock({
   turn,
   compactionPending,
   endItemId,
@@ -2787,7 +2814,7 @@ function TurnBlock({
       )}
     </section>
   );
-}
+});
 
 /** Retry metadata stays compact; technical errors are available on demand. */
 function TurnFailureOutcome({
