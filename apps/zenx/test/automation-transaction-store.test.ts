@@ -592,7 +592,10 @@ for (const method of ["message", "page"] as const)
         await pause.entered();
         Object.assign(pinned, store.roomSnapshot("room"));
         pause.release();
-        const result = await deadline(pending, "snapshot result");
+        const result = await deadline<Awaited<typeof pending>>(
+          pending,
+          "snapshot result",
+        );
         assert(result);
         assert.deepEqual(result.snapshot, original);
         assert.equal(
