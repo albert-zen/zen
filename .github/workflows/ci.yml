@@ -301,6 +301,29 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # TEMPORARY PR #598 acceptance only. Remove after reviewing the artifacts,
+      # before merge; recurring Room regressions use the existing test suites.
+      - name: Capture Room history once for PR 598
+        id: room-history-once
+        if: ${{ success() && github.event.pull_request.number == 598 && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node --import tsx apps/zenx/scripts/generate-room-history-fixture.ts "${{ runner.temp }}/room-history-once-raw"
+          node apps/zenx/scripts/build-room-history-preview.mjs "${{ runner.temp }}/room-history-once-raw"
+          node apps/zenx/scripts/capture-room-history-preview.mjs "${{ runner.temp }}/room-history-once-raw"
+      - name: Collect safe one-time Room evidence
+        if: ${{ always() && github.event.pull_request.number == 598 && (steps.room-history-once.outcome == 'success' || steps.room-history-once.outcome == 'failure') }}
+        timeout-minutes: 1
+        run: node apps/zenx/scripts/collect-room-history-evidence.mjs "${{ runner.temp }}/room-history-once-raw" "${{ runner.temp }}/room-history-once-safe" "${{ github.sha }}"
+      - name: Retain only synthetic Room screenshots and source receipt
+        if: ${{ always() && github.event.pull_request.number == 598 && (steps.room-history-once.outcome == 'success' || steps.room-history-once.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-history-once-${{ github.sha }}
+          path: ${{ runner.temp }}/room-history-once-safe
+          if-no-files-found: error
+          retention-days: 14
+
   zenx-capability-smoke:
     name: ZenX packaged capability smoke
     runs-on: macos-latest
