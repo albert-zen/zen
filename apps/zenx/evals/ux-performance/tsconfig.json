@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.web.json",
+  "include": ["fixture.tsx", "../../src/renderer/src/env.d.ts"]
+}
