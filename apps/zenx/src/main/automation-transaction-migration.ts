@@ -42,7 +42,7 @@ interface Backup {
   version: 1;
   sharedRaw: string | null;
   roomRaw: string | null;
-  /** Original v1 Room source retained through a forward-only interrupted import. */
+  /** Original v1 Room source retained for explicit recovery, never automatic fallback. */
   legacyRoomRaw: string | null;
 }
 export type AutomationMigrationPhase =
@@ -258,6 +258,10 @@ export async function openAutomationTransactionStorage(
     throw Error(
       "Shared automation marker is missing; refusing empty legacy bootstrap",
     );
+  if (sharedContainer?.version !== 2 && roomContainer?.version === 2)
+    throw Error(
+      "Automation markers disagree; refusing to replace existing journal history from legacy data",
+    );
   let closed = false;
   let shared: JsonPluginStorage | undefined;
   let rooms: JsonPluginStorage | undefined;
@@ -277,10 +281,32 @@ export async function openAutomationTransactionStorage(
   const openSelected = async (selected: Marker) => {
     shared = await JsonPluginStorage.open(storageOptions(OWNER));
     rooms = await JsonPluginStorage.open(storageOptions(PEER));
-    journal = await AutomationTransactionStore.open(
+    const verifySelected = async () => {
+      const owner = marker(await shared!.get(), false);
+      const peer = marker(await rooms!.get(), true);
+      for (const current of [owner, peer]) {
+        if (
+          current.generation !== selected.generation ||
+          current.backup !== selected.backup ||
+          current.backupSha256 !== selected.backupSha256
+        )
+          throw Error(
+            "Automation markers changed while opening selected history",
+          );
+      }
+    };
+    await verifySelected();
+    const opened = await AutomationTransactionStore.open(
       { directory, assertWriterLease },
       selected.generation,
     );
+    try {
+      await verifySelected();
+    } catch (error) {
+      await opened.close();
+      throw error;
+    }
+    journal = opened;
   };
   if (sharedContainer?.version === 2) {
     const selected = marker(sharedContainer.value, false);
@@ -361,17 +387,9 @@ export async function openAutomationTransactionStorage(
                 ],
               });
               if (!selected) {
-                // A crash may leave a durable forward marker while shared v1 remains
-                // authoritative. Recover only its verified original Room source.
-                const forward = marker(await roomPrepared.storage.get(), true);
-                const backup = await loadBackup(directory, forward);
-                const legacyRaw = backup.legacyRoomRaw ?? backup.roomRaw;
-                const legacy =
-                  legacyRaw === null
-                    ? { rooms: fallback.rooms }
-                    : decode(legacyRaw).value;
-                const nextForward = await build(legacy, legacyRaw);
-                await roomPrepared.storage.set(nextForward);
+                throw Error(
+                  "Automation forward marker changed while acquiring migration gates",
+                );
               }
               await options.onPhase?.("forward-written");
               return selected! as unknown as Record<string, unknown>;
@@ -379,6 +397,14 @@ export async function openAutomationTransactionStorage(
           },
         ],
       });
+      if (!selected || !roomPrepared) {
+        // The shared namespace became v2 after preflight; its migration callback
+        // did not run. Do not infer that this call selected any generation.
+        await sharedPrepared.rollback();
+        throw Error(
+          "Automation shared marker changed while acquiring migration gates",
+        );
+      }
       // Both marker writes were synced. Publishing releases only existing gates;
       // it neither dispatches a wakeup nor acknowledges a historical operation.
       sharedPrepared.publish();

@@ -91,8 +91,11 @@ Check migration artifacts and forward markers **before** any legacy/bootstrap
 initialization: missing shared marker plus an existing forward marker must not
 create empty v1 state and bypass recovery checks. Selected history missing or
 invalid must fail explicitly; never choose legacy data as a fallback. Old v1
-writers must refuse version-2 storage. Retry an interrupted unselected import only
-from the still-authoritative legacy source, with no automatic replay of effects.
+writers must refuse version-2 storage. Retry a rolled-back unselected import only when both original v1 namespaces
+remain authoritative. A v1 shared container paired with a v2 forward marker is
+ambiguous (the shared marker may have been rolled back after new history was
+accepted): refuse without rewriting any files rather than reimporting its backup.
+There is no automatic replay of effects.
 
 Deleting one plugin cannot delete the peer's journal or pretend that an empty
 append physically erases data. Until a separately reviewed physical-deletion

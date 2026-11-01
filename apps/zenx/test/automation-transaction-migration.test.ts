@@ -113,7 +113,7 @@ async function fixture(
       pluginId: "zenx-triggers",
       root,
       version: 1,
-      initialValue: source,
+      initialValue: { ...source },
       fileSystem,
     });
     const rooms = await JsonPluginStorage.open({
@@ -167,7 +167,7 @@ check(
         ...f.options,
         onPhase: async (phase) => {
           if (phase === "both-gated") {
-            await assert.rejects(f.shared.set(f.source), /replacement/);
+            await assert.rejects(f.shared.set({ ...f.source }), /replacement/);
             await assert.rejects(f.rooms.set({ rooms: [] }), /replacement/);
           }
           if (phase === "backup-durable") {
@@ -233,7 +233,7 @@ check(
       }),
       /downgrade/,
     );
-    await assert.rejects(f.shared.set(f.source), /version|generation/);
+    await assert.rejects(f.shared.set({ ...f.source }), /version|generation/);
     const meta = result.journal.metadata();
     for (let i = 320; i < 400; i++) {
       meta.rooms[0]!.messageCount++;
@@ -285,5 +285,284 @@ check(
     assert.equal(result.journal.metadata().rooms[0]!.messageCount, 0);
     assert.equal(JSON.parse(await readFile(f.sharedFile, "utf8")).version, 2);
     assert.equal(JSON.parse(await readFile(f.roomFile, "utf8")).version, 2);
+  },
+);
+
+for (const phase of [
+  "both-gated",
+  "backup-durable",
+  "imported",
+  "forward-written",
+  "selected",
+] as const)
+  check(
+    `interruption at ${phase} never returns success and explicit reopen preserves original facts`,
+    async (f) => {
+      await assert.rejects(
+        openAutomationTransactionStorage({
+          ...f.options,
+          onPhase: async (observed) => {
+            if (observed === phase) throw Error(`synthetic ${phase}`);
+          },
+        }),
+        new RegExp(`synthetic ${phase}`),
+      );
+      if (phase !== "selected") {
+        assert.equal(await readFile(f.sharedFile, "utf8"), f.sharedRaw);
+        assert.equal(await readFile(f.roomFile, "utf8"), f.roomRaw);
+        assert.deepEqual(await f.shared.get(), f.source);
+        assert.equal(f.shared.replacementPending, false);
+        assert.equal(f.rooms.replacementPending, false);
+      } else {
+        assert.equal(
+          JSON.parse(await readFile(f.sharedFile, "utf8")).version,
+          2,
+        );
+        assert.equal(JSON.parse(await readFile(f.roomFile, "utf8")).version, 2);
+      }
+      const result = f.keep(await openAutomationTransactionStorage(f.options));
+      assert.deepEqual(await history(result), f.source.rooms[0]!.messages);
+      assert.equal("sync" in result.journal.position, false);
+    },
+  );
+for (const damage of [
+  "missing-shared",
+  "missing-forward",
+  "missing-journal",
+  "corrupt-journal",
+  "corrupt-backup",
+  "future-marker",
+] as const)
+  check(
+    `${damage} after cutover never selects fallback or fabricates empty state`,
+    async (f) => {
+      const result = f.keep(await openAutomationTransactionStorage(f.options));
+      const generation = result.journal.generation;
+      const marker = JSON.parse(await readFile(f.sharedFile, "utf8")).value;
+      await result.close();
+      if (damage === "missing-shared") await unlink(f.sharedFile);
+      else if (damage === "missing-forward") await unlink(f.roomFile);
+      else if (damage === "missing-journal")
+        await unlink(path.join(f.directory, `automation-${generation}.jsonl`));
+      else if (damage === "corrupt-journal")
+        await writeFile(
+          path.join(f.directory, `automation-${generation}.jsonl`),
+          "broken\n",
+        );
+      else if (damage === "corrupt-backup")
+        await writeFile(path.join(f.directory, marker.backup), "broken backup");
+      else
+        await writeFile(
+          f.sharedFile,
+          JSON.stringify({ version: 3, value: marker }),
+        );
+      const sharedBefore = await readFile(f.sharedFile, "utf8").catch(
+        () => null,
+      );
+      const roomBefore = await readFile(f.roomFile, "utf8").catch(() => null);
+      let loads = 0;
+      await assert.rejects(
+        openAutomationTransactionStorage({
+          ...f.options,
+          loadLegacy: async () => {
+            loads++;
+            return snapshot(0);
+          },
+        }),
+      );
+      assert.equal(loads, 0);
+      assert.equal(
+        await readFile(f.sharedFile, "utf8").catch(() => null),
+        sharedBefore,
+      );
+      assert.equal(
+        await readFile(f.roomFile, "utf8").catch(() => null),
+        roomBefore,
+      );
+    },
+  );
+for (const appended of [false, true])
+  check(
+    `rolled-back shared marker with forward v2 refuses recovery without changing any bytes (new message=${appended})`,
+    async (f) => {
+      const raw = await readFile(f.sharedFile, "utf8");
+      const result = f.keep(await openAutomationTransactionStorage(f.options));
+      if (appended) {
+        const metadata = result.journal.metadata();
+        metadata.rooms[0]!.messageCount++;
+        await result.journal.append({
+          metadata,
+          roomEvents: [
+            {
+              type: "message",
+              message: {
+                id: "accepted-after-cutover",
+                roomId: "room",
+                kind: "human",
+                author: "You",
+                text: "Accepted new message must remain reachable",
+                createdAt: 100,
+                originThreadId: null,
+                originTurnId: null,
+              },
+            },
+          ],
+        });
+      }
+      await result.close();
+      await writeFile(f.sharedFile, raw);
+      const filenames = [
+        f.sharedFile,
+        f.roomFile,
+        ...(await readdir(f.directory)).map((name) =>
+          path.join(f.directory, name),
+        ),
+      ];
+      const before = await Promise.all(
+        filenames.map((filename) => readFile(filename)),
+      );
+      let loads = 0;
+      await assert.rejects(
+        openAutomationTransactionStorage({
+          ...f.options,
+          loadLegacy: async () => {
+            loads++;
+            return snapshot(0);
+          },
+        }),
+        /markers disagree/,
+      );
+      assert.equal(loads, 0);
+      assert.deepEqual(
+        await Promise.all(filenames.map((filename) => readFile(filename))),
+        before,
+      );
+      assert.equal((await readdir(f.directory)).length, filenames.length - 2);
+    },
+  );
+check(
+  "missing shared marker plus own history artifact refuses bootstrap even without peer marker",
+  async (f) => {
+    let result = f.keep(await openAutomationTransactionStorage(f.options));
+    await result.close();
+    await unlink(f.sharedFile);
+    await unlink(f.roomFile);
+    let loads = 0;
+    await assert.rejects(
+      openAutomationTransactionStorage({
+        ...f.options,
+        loadLegacy: async () => {
+          loads++;
+          return snapshot(0);
+        },
+      }),
+      /missing.*refusing/,
+    );
+    assert.equal(loads, 0);
+    await assert.rejects(readFile(f.sharedFile), /ENOENT/);
+    await assert.rejects(readFile(f.roomFile), /ENOENT/);
+  },
+);
+for (const fault of [
+  "before-rename",
+  "after-rename",
+  "directory-sync",
+] as const)
+  test(
+    `custom FS ${fault} returns no ACK and restores both v1 sources before explicit retry`,
+    { timeout: 30_000 },
+    async () => {
+      let armed = false,
+        failed = false;
+      const fs: PluginStorageFileSystem = {
+        readFile,
+        mkdir,
+        writeFile,
+        unlink,
+        openFile: open,
+        rename: async (source, destination) => {
+          if (
+            armed &&
+            !failed &&
+            fault !== "directory-sync" &&
+            destination.endsWith(path.join("zenx-triggers", "storage.json")) &&
+            JSON.parse(await readFile(source, "utf8")).version === 2
+          ) {
+            failed = true;
+            if (fault === "after-rename") await rename(source, destination);
+            throw Error(`synthetic ${fault}`);
+          }
+          await rename(source, destination);
+        },
+        syncDirectory: async (directory) => {
+          if (
+            armed &&
+            !failed &&
+            fault === "directory-sync" &&
+            directory.endsWith("zenx-triggers")
+          ) {
+            failed = true;
+            throw Error("synthetic directory-sync");
+          }
+          await syncDirectory(directory);
+        },
+      };
+      await fixture(
+        async (f) => {
+          armed = true;
+          await assert.rejects(openAutomationTransactionStorage(f.options));
+          assert(failed);
+          assert.equal(await readFile(f.sharedFile, "utf8"), f.sharedRaw);
+          assert.equal(await readFile(f.roomFile, "utf8"), f.roomRaw);
+          assert.deepEqual(await f.shared.get(), f.source);
+          const result = f.keep(
+            await openAutomationTransactionStorage(f.options),
+          );
+          assert.deepEqual(await history(result), f.source.rooms[0]!.messages);
+        },
+        12,
+        fs,
+      );
+    },
+  );
+test(
+  "custom FS rollback barrier failure retains gates and cannot treat visible v1 bytes as success",
+  { timeout: 30_000 },
+  async () => {
+    let armed = false;
+    const fs: PluginStorageFileSystem = {
+      readFile,
+      mkdir,
+      writeFile,
+      rename,
+      unlink,
+      openFile: open,
+      syncDirectory: async (directory) => {
+        if (armed && directory.endsWith("zenx-triggers"))
+          throw Error("synthetic unconfirmed barrier");
+        await syncDirectory(directory);
+      },
+    };
+    await fixture(
+      async (f) => {
+        armed = true;
+        await assert.rejects(
+          openAutomationTransactionStorage(f.options),
+          /rollback|unconfirmed/,
+        );
+        assert(f.shared.replacementPending);
+        await assert.rejects(f.shared.get(), /replacement|unknown/);
+        await assert.rejects(
+          f.shared.set({ ...f.source }),
+          /replacement|unknown/,
+        );
+        assert.equal(
+          JSON.parse(await readFile(f.sharedFile, "utf8")).version,
+          1,
+        );
+      },
+      12,
+      fs,
+    );
   },
 );
