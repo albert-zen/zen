@@ -1,4 +1,4 @@
-name: One-time native macOS full App internal expansion capture
+name: Bounded native macOS remaining layout diagnostics
 on:
   push:
     branches: ["diagnostic/pane-expansion-comparison-20261101"]
@@ -16,10 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: before
-            source: c6f4592e15c6abbc5db890a86ceef0865f70681e
           - version: current
-            source: dd25fe08cffd4d77421e8349ded2a150e106f74c
+            source: 7e017e65e1f2d47ddd9afe6e1d43c7c20312face
     steps:
       - uses: actions/checkout@v4
         with:

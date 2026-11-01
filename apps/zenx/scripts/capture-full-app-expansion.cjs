@@ -143,7 +143,7 @@ async function revealThreadWithSidebarWheel(expression) {
     "Created Thread was not fully visible after six bounded left-sidebar vertical wheel steps",
   );
 }
-const sidebarMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},scroll=document.querySelector('.sidebar-scroll');return {sidebar:rect(document.querySelector('.sidebar')),scroll:scroll?{bounds:rect(scroll),offsetWidth:scroll.offsetWidth,clientWidth:scroll.clientWidth,scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight,scrollTop:scroll.scrollTop,scrollLeft:scroll.scrollLeft}:null,header:rect(document.querySelector('.sidebar-header')),footer:rect(document.querySelector('.sidebar-footer')),newThreadIcon:rect(document.querySelector('.new-thread-action svg')),viewActions:rect(document.querySelector('.sidebar-view-actions')),viewActionIcon:rect(document.querySelector('.sidebar-view-actions svg')),settingsIcon:rect(document.querySelector('.settings-nav-row svg')),viewport:{width:innerWidth,height:innerHeight,devicePixelRatio}}})()`;
+const sidebarMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},scroll=document.querySelector('.sidebar-scroll');return {sidebar:rect(document.querySelector('.sidebar')),scroll:scroll?{bounds:rect(scroll),offsetWidth:scroll.offsetWidth,clientWidth:scroll.clientWidth,scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight,scrollTop:scroll.scrollTop,scrollLeft:scroll.scrollLeft,slack:scroll.clientHeight-scroll.scrollHeight,gutter:scroll.offsetWidth-scroll.clientWidth,borderLeft:getComputedStyle(scroll).borderLeftWidth,borderRight:getComputedStyle(scroll).borderRightWidth,scrollbarWidth:getComputedStyle(scroll).scrollbarWidth,scrollbarGutter:getComputedStyle(scroll).scrollbarGutter}:null,sections:[...document.querySelectorAll('.sidebar button[aria-controls]')].filter(e=>e.hasAttribute('aria-expanded')).map(e=>({controls:e.getAttribute('aria-controls'),expanded:e.getAttribute('aria-expanded'),bounds:rect(e)})),header:rect(document.querySelector('.sidebar-header')),footer:rect(document.querySelector('.sidebar-footer')),newThreadIcon:rect(document.querySelector('.new-thread-action svg')),viewActions:rect(document.querySelector('.sidebar-view-actions')),viewActionIcon:rect(document.querySelector('.sidebar-view-actions svg')),settingsIcon:rect(document.querySelector('.settings-nav-row svg')),viewport:{width:innerWidth,height:innerHeight,devicePixelRatio}}})()`;
 async function screenshot(name) {
   await fs.writeFile(
     path.join(directory, name),
@@ -219,6 +219,156 @@ function assertExpandedTitleSurface(state) {
     "Native sidebar control remains hittable",
   );
 }
+// Scoped to the already-running, owned App renderer; never navigates or changes OS settings.
+async function withMotionPreference(webContents, preference, action, receipt) {
+  assert.equal(
+    webContents.debugger.isAttached(),
+    false,
+    "Do not disturb another debugger owner",
+  );
+  let attached = false;
+  try {
+    webContents.debugger.attach("1.3");
+    attached = true;
+    await webContents.debugger.sendCommand("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: preference }],
+    });
+    receipt.applied = true;
+    return await action();
+  } finally {
+    if (attached) {
+      try {
+        await webContents.debugger.sendCommand("Emulation.setEmulatedMedia", {
+          features: [],
+        });
+        receipt.restored = true;
+      } finally {
+        webContents.debugger.detach();
+        receipt.detached = true;
+      }
+    }
+  }
+}
+const dragMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},describe=e=>{const s=getComputedStyle(e);return {tag:e.tagName,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),background:s.backgroundColor,zIndex:s.zIndex,visibility:s.visibility}},panel=document.querySelector('.auxiliary-panel'),p=rect(panel),title=document.querySelector('.window-titlebar'),t=rect(title),header=document.querySelector('.window-titlebar-session > .workspace-header'),h=rect(header),rail=document.querySelector('.auxiliary-heading [role=tablist]');return {time:performance.now(),panel:p,titlebar:t,session:rect(document.querySelector('.window-titlebar-session')),workspaceHeader:h,resizer:rect(document.querySelector('.browser-panel-resizer')),requestedWidth:Number(document.querySelector('.browser-panel-resizer').getAttribute('aria-valuenow')),reportedWidth:getComputedStyle(document.querySelector('.app-shell')).getPropertyValue('--workspace-panel-width'),titlebarOverlap:t.right-p.left,headerOverlap:h?h.right-p.left:null,railScrollLeft:rail.scrollLeft,expanded:panel.dataset.expanded,reducedMotion:matchMedia('(prefers-reduced-motion: reduce)').matches,panelTransition:{property:getComputedStyle(panel).transitionProperty,duration:getComputedStyle(panel).transitionDuration},titlebarTransition:{property:getComputedStyle(title).transitionProperty,duration:getComputedStyle(title).transitionDuration},dividerHits:[20,Math.min(innerHeight-20,100)].map(y=>({point:{x:p.left+1,y},stack:document.elementsFromPoint(p.left+1,y).slice(0,6).map(describe)}))}})()`;
+async function nativeWidthDrag(targetWidth, label) {
+  const item = { label, targetWidth, inputs: [] };
+  result.widthDrags.push(item);
+  item.before = await evaluate(dragMeasure);
+  assert.equal(item.before.expanded, "false");
+  assert.ok(targetWidth >= 360 && targetWidth <= 780);
+  const p = await evaluate(
+    `(()=>{const e=document.querySelector('.browser-panel-resizer'),r=e.getBoundingClientRect(),x=Math.round(r.left+r.width/2),y=Math.round(Math.min(r.bottom-20,Math.max(r.top+20,200)));if(!e.contains(document.elementFromPoint(x,y)))throw Error('Normal pane resizer is obscured');return {x,y}})()`,
+  );
+  window.show();
+  window.focus();
+  window.webContents.focus();
+  await until(
+    async () => window.isFocused() && window.webContents.isFocused(),
+    "Owned window focus before native resize",
+  );
+  const endX = Math.round(item.before.panel.right - targetWidth);
+  await evaluate(
+    `(()=>{const recording={active:true,frames:[]};window.__widthDrag=recording;const tick=()=>{recording.frames.push(${dragMeasure});if(recording.active)requestAnimationFrame(tick)};requestAnimationFrame(tick)})()`,
+  );
+  try {
+    window.webContents.sendInputEvent({ type: "mouseMove", ...p });
+    window.webContents.sendInputEvent({
+      type: "mouseDown",
+      button: "left",
+      clickCount: 1,
+      ...p,
+    });
+    try {
+      for (let i = 1; i <= 12; i++) {
+        const point = { x: Math.round(p.x + ((endX - p.x) * i) / 12), y: p.y };
+        window.webContents.sendInputEvent({
+          type: "mouseMove",
+          button: "left",
+          modifiers: ["leftButtonDown"],
+          ...point,
+        });
+        item.inputs.push({
+          ...point,
+          time: await evaluate("performance.now()"),
+        });
+        if (i === 6) await screenshot(`${version}-drag-${label}-moving.png`);
+        await pause(16);
+      }
+    } finally {
+      window.webContents.sendInputEvent({
+        type: "mouseUp",
+        button: "left",
+        clickCount: 1,
+        x: endX,
+        y: p.y,
+      });
+      item.mouseUpTime = await evaluate("performance.now()");
+    }
+    await pause(650);
+    item.settled = await evaluate(dragMeasure);
+    assert.equal(
+      item.settled.requestedWidth,
+      targetWidth,
+      "Actual pointer drag reached requested width",
+    );
+    assert.equal(
+      item.settled.railScrollLeft,
+      item.before.railScrollLeft,
+      "No Tab rail scrolling during width drag",
+    );
+    await screenshot(`${version}-drag-${label}-settled.png`);
+  } catch (error) {
+    item.failure = String(error.stack || error);
+    throw error;
+  } finally {
+    try {
+      item.frames = await evaluate(
+        "(()=>{window.__widthDrag.active=false;return window.__widthDrag.frames})()",
+      );
+    } catch (error) {
+      item.frameStopError = String(error);
+      if (!item.failure) throw error;
+    }
+  }
+}
+async function captureNormalPaneDrags() {
+  result.widthDrags = [];
+  await pause(500);
+  const initial = await evaluate(dragMeasure);
+  result.dragMotion = {
+    default: initial.reducedMotion,
+    override: { requested: "no-preference" },
+  };
+  const width = initial.requestedWidth;
+  const outward = width <= 650 ? width + 120 : width - 120;
+  await nativeWidthDrag(outward, "default-outward");
+  await nativeWidthDrag(width, "default-return");
+  await withMotionPreference(
+    window.webContents,
+    "no-preference",
+    async () => {
+      const state = await evaluate(dragMeasure);
+      assert.equal(
+        state.reducedMotion,
+        false,
+        "Owned renderer media override took effect",
+      );
+      result.dragMotion.overridden = state;
+      await nativeWidthDrag(outward, "no-preference-outward");
+      await nativeWidthDrag(width, "no-preference-return");
+    },
+    result.dragMotion.override,
+  );
+  const restored = await evaluate(dragMeasure);
+  assert.equal(
+    restored.reducedMotion,
+    initial.reducedMotion,
+    "Original motion media restored",
+  );
+  assert.equal(restored.requestedWidth, width, "Original pane width restored");
+  result.dragMotion.restored = restored;
+}
+
 async function run() {
   await networkReady;
   await until(async () => {
@@ -269,7 +419,28 @@ async function run() {
     bounds: window.getBounds(),
     contentBounds: window.getContentBounds(),
   };
+  result.sidebarInitial = await evaluate(sidebarMeasure);
+  await until(
+    async () =>
+      await evaluate(
+        "Boolean(document.querySelector('#sidebar-room-conversations .room-conversation-empty')) && !document.querySelector('#sidebar-room-conversations .room-conversation-row')",
+      ),
+    "Empty Room section ready",
+  );
+  await click(
+    'document.querySelector(\'button[aria-controls="sidebar-room-conversations"][aria-expanded="true"]\')',
+    "Collapse empty Room section through actual UI",
+  );
+  await until(
+    async () =>
+      await evaluate(
+        "document.querySelector('button[aria-controls=\"sidebar-room-conversations\"]')?.getAttribute('aria-expanded') === 'false' && document.querySelector('#sidebar-room-conversations')?.hidden === true",
+      ),
+    "Room section collapse committed",
+  );
+  await pause(350);
   result.sidebarBeforeThread = await evaluate(sidebarMeasure);
+  await screenshot(`${version}-sidebar-empty-room-collapsed.png`);
   const started = await evaluate(
     `window.zenx.protocol.request('thread/start',{cwd:${JSON.stringify(path.join(temporary, "workspace"))}})`,
   );
@@ -285,7 +456,26 @@ async function run() {
       ),
     "Created Thread row ready after list load",
   );
+  await pause(350);
   result.sidebarAfterThreadBeforeScroll = await evaluate(sidebarMeasure);
+  const emptyScroll = result.sidebarBeforeThread.scroll;
+  const firstScroll = result.sidebarAfterThreadBeforeScroll.scroll;
+  result.sidebarThreshold = {
+    crossed:
+      emptyScroll.scrollHeight <= emptyScroll.clientHeight &&
+      firstScroll.scrollHeight > firstScroll.clientHeight,
+    emptySlack: emptyScroll.slack,
+    firstSlack: firstScroll.slack,
+    gutterDelta: firstScroll.gutter - emptyScroll.gutter,
+    status:
+      emptyScroll.scrollHeight <= emptyScroll.clientHeight &&
+      firstScroll.scrollHeight > firstScroll.clientHeight
+        ? "Observed first-Thread overflow threshold crossing; inspect geometry and pixels"
+        : "Inconclusive: this native viewport did not cross the first-Thread overflow threshold",
+    preparation:
+      "Actual empty Room section collapsed before baseline; no CSS, width, or scrollbar override",
+  };
+  await screenshot(`${version}-sidebar-first-thread-room-collapsed.png`);
   await revealThreadWithSidebarWheel(threadTarget);
   await click(threadTarget, "Select created idle Thread");
   await click(
@@ -317,6 +507,7 @@ async function run() {
   result.steps.push(
     "Verified real bundled Subagents body, not unavailable placeholder",
   );
+  await captureNormalPaneDrags();
   result.cases = [];
   for (const sidebarState of ["open", "collapsed"]) {
     if (

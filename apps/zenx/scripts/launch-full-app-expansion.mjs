@@ -21,7 +21,7 @@ const directory = path.resolve(process.argv[2]);
 const version = process.argv[3];
 const expected = {
   before: "c6f4592e15c6abbc5db890a86ceef0865f70681e",
-  current: "dd25fe08cffd4d77421e8349ded2a150e106f74c",
+  current: "7e017e65e1f2d47ddd9afe6e1d43c7c20312face",
 }[version];
 assert.ok(expected);
 assert.equal(
