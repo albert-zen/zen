@@ -1,0 +1,63 @@
+name: One-time real App internal expansion capture
+on:
+  push:
+    branches: ["diagnostic/pane-expansion-comparison-20261101"]
+    paths:
+      - .github/workflows/full-app-expansion.yml
+      - apps/zenx/scripts/launch-full-app-expansion.mjs
+      - apps/zenx/scripts/capture-full-app-expansion.cjs
+permissions:
+  contents: read
+jobs:
+  full-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: before
+            source: c6f4592e15c6abbc5db890a86ceef0865f70681e
+          - version: current
+            source: 4ed8fb0f2294d234a10cf293b67335f72d2bb332
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: diagnostic
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install exact locked dependencies and Electron
+        working-directory: source
+        timeout-minutes: 5
+        run: npm ci
+      - name: Build unmodified production main, preload, renderer and bundled plugins
+        working-directory: source
+        timeout-minutes: 7
+        run: |
+          npm run build --workspace @zen/zenx
+          cp ../diagnostic/apps/zenx/scripts/{launch-full-app-expansion.mjs,capture-full-app-expansion.cjs} apps/zenx/scripts/
+          git diff --exit-code -- apps/zenx/src apps/zenx/electron.vite.config.ts
+      - name: Own isolated real App with fake Host; no Turn or external credentials
+        working-directory: source
+        timeout-minutes: 4
+        run: |
+          command -v xvfb-run
+          xvfb-run -a node apps/zenx/scripts/launch-full-app-expansion.mjs '${{ runner.temp }}/full-app-expansion' '${{ matrix.version }}'
+      - name: Retain only synthetic screenshots and explicitly selected measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-app-expansion-${{ matrix.version }}-${{ matrix.source }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/full-app-expansion/*.png
+            ${{ runner.temp }}/full-app-expansion/full-app-measurements.json
+            ${{ runner.temp }}/full-app-expansion/full-app-source.json
