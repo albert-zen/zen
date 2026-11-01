@@ -10,6 +10,7 @@ import { ShellThreadPanel } from "./shell-thread-panel.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
 import React, {
+  useCallback,
   useEffect,
   useContext,
   useLayoutEffect,
@@ -206,6 +207,28 @@ export function AuxiliaryPanel({
   const setOrder = onTabsChange ?? setLocalTabs;
   const theme = useAppearance();
   const [width, setWidth] = useState(520);
+  const [resizing, setResizing] = useState(false);
+  const resizeCapture = useRef<{
+    element: HTMLDivElement;
+    pointerId: number;
+  } | null>(null);
+  const finishResize = useCallback(() => {
+    const capture = resizeCapture.current;
+    resizeCapture.current = null;
+    setResizing(false);
+    if (capture?.element.hasPointerCapture(capture.pointerId))
+      capture.element.releasePointerCapture(capture.pointerId);
+  }, []);
+  const finishPointerResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (resizeCapture.current?.pointerId === event.pointerId) finishResize();
+  };
+  useEffect(() => {
+    window.addEventListener("blur", finishResize);
+    return () => {
+      window.removeEventListener("blur", finishResize);
+      finishResize();
+    };
+  }, [finishResize]);
   const panel = useRef<HTMLElement>(null);
   const tabRail = useRef<HTMLDivElement>(null);
   const pointerDrag = useRef<{
@@ -257,6 +280,16 @@ export function AuxiliaryPanel({
     setExpandedState(expandedByConversation.get(expandedKey) ?? false);
   }, [expandedKey]);
   const expanded = presentationState?.fullscreen ?? localExpanded;
+  // Synchronous interactive layout read: requested width can be CSS-clamped.
+  // Keep this separate from the passive observer so pointer moves never run its
+  // cleanup (which publishes zero), and report the real boundary before paint.
+  useLayoutEffect(() => {
+    if (panel.current && onWidthChange)
+      onWidthChange(open ? panel.current.getBoundingClientRect().width : 0);
+  }, [open, width, resizing, expanded, onWidthChange]);
+  useEffect(() => {
+    if (!open || expanded) finishResize();
+  }, [open, expanded, finishResize]);
   const [primarySelection, setPrimarySelection] = useState<{
     owner: string;
     resourceTab: string | undefined;
@@ -1228,6 +1261,7 @@ export function AuxiliaryPanel({
       data-open={open === true}
       inert={!open}
       data-expanded={expanded}
+      data-resizing={resizing}
       data-primary-active={primaryActive && !showChooser}
       aria-label={i18n.t("panels:sidePanelFor", { title })}
       style={{ "--auxiliary-width": `${width}px` } as React.CSSProperties}
@@ -1281,11 +1315,20 @@ export function AuxiliaryPanel({
             );
           }
         }}
-        onPointerDown={(event) =>
-          event.currentTarget.setPointerCapture(event.pointerId)
-        }
+        onPointerDown={(event) => {
+          if (event.button !== 0 || resizeCapture.current) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          resizeCapture.current = {
+            element: event.currentTarget,
+            pointerId: event.pointerId,
+          };
+          setResizing(true);
+        }}
         onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId))
+          if (
+            resizeCapture.current?.pointerId === event.pointerId &&
+            event.currentTarget.hasPointerCapture(event.pointerId)
+          )
             setWidth(
               Math.max(
                 360,
@@ -1297,10 +1340,9 @@ export function AuxiliaryPanel({
               ),
             );
         }}
-        onPointerUp={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId))
-            event.currentTarget.releasePointerCapture(event.pointerId);
-        }}
+        onPointerUp={finishPointerResize}
+        onPointerCancel={finishPointerResize}
+        onLostPointerCapture={finishPointerResize}
       />
       <header className="auxiliary-heading">
         <div className="workspace-tab-rail">
