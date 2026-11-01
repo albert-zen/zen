@@ -29,9 +29,6 @@ const UUID =
   "[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}";
 const GENERATION = new RegExp(`^${UUID}$`);
 const BACKUP = new RegExp(`^legacy-${UUID}\\.json$`);
-const ARTIFACT = new RegExp(
-  `^(automation-${UUID}\\.jsonl|legacy-${UUID}\\.json)$`,
-);
 interface Marker {
   format: "zenx-automation-journal" | "zenx-automation-forward";
   generation: string;
@@ -118,15 +115,70 @@ async function optionalRaw(
 export async function hasAutomationHistoryArtifacts(
   storageRoot: string,
 ): Promise<boolean> {
-  try {
-    return (
-      await readdir(path.join(storageRoot, OWNER, "automation-history"))
-    ).some((name) => ARTIFACT.test(name));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
+  for (const pluginId of [OWNER, PEER]) {
+    try {
+      if (
+        (await readdir(path.join(storageRoot, pluginId, "automation-history")))
+          .length > 0
+      )
+        return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return false;
+}
+
+/** Read-only admission guard. Never initializes metadata or scans all message bodies. */
+export async function assertAutomationStorageMarkers(
+  storageRoot: string,
+): Promise<void> {
+  const root = path.resolve(storageRoot);
+  const sharedRaw = await optionalRaw(path.join(root, OWNER, "storage.json"));
+  const roomRaw = await optionalRaw(path.join(root, PEER, "storage.json"));
+  if (sharedRaw === undefined || roomRaw === undefined)
+    throw Error("Host-managed automation markers are missing");
+  const owner = decode(sharedRaw),
+    peer = decode(roomRaw);
+  if (owner.version !== 2 || peer.version !== 2)
+    throw Error("Host-managed automation storage requires version 2 markers");
+  const selected = marker(owner.value, false),
+    forward = marker(peer.value, true);
+  if (
+    selected.generation !== forward.generation ||
+    selected.backup !== forward.backup ||
+    selected.backupSha256 !== forward.backupSha256
+  )
+    throw Error("Automation markers select different generations");
+  const directory = path.join(root, OWNER, "automation-history");
+  await loadBackup(directory, selected);
+  await assertOwnedFile(
+    path.join(directory, `automation-${selected.generation}.jsonl`),
+  );
+}
+
+/** Independent deletion cannot erase the shared journal, its peer or retained backups. */
+export async function assertAutomationDataDeletable(
+  storageRoot: string,
+): Promise<void> {
+  const reason =
+    "Rooms and Triggers share history or recovery data; independent Delete data cannot safely erase it";
+  if (await hasAutomationHistoryArtifacts(storageRoot)) throw Error(reason);
+  for (const pluginId of [OWNER, PEER]) {
+    const raw = await optionalRaw(
+      path.join(storageRoot, pluginId, "storage.json"),
+    );
+    if (raw === undefined) continue;
+    let container: Container;
+    try {
+      container = decode(raw);
+    } catch (error) {
+      throw new Error(reason, { cause: error });
+    }
+    if (container.version !== 1) throw Error(reason);
   }
 }
+
 async function loadBackup(
   directory: string,
   selected: Marker,

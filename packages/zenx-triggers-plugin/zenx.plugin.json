@@ -1,6 +1,7 @@
 {
   "id": "zenx-triggers",
-  "version": "1.0.1",
+  "version": "1.0.2",
+  "storageVersion": 2,
   "description": "Schedule and inspect ZenX Triggers.",
   "provider": {
     "id": "zenx-automation-service",

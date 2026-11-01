@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "zenx-rooms",
   "name": "Rooms",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Manage shared ZenX Room collaboration.",
   "compatibility": {
     "zenx": ">=0.1.0 <0.2.0"
@@ -12,7 +12,7 @@
     "entry": "./dist/runtime.js"
   },
   "mainDocument": "Use Rooms for shared communication. PAW workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads.",
-  "storageVersion": 1,
+  "storageVersion": 2,
   "provider": {
     "id": "zenx-automation-service",
     "platforms": ["*"],
@@ -387,6 +387,24 @@
           "cursor": {
             "type": "integer",
             "minimum": 0
+          },
+          "snapshot": {
+            "type": "object",
+            "properties": {
+              "generation": { "type": "string", "maxLength": 36 },
+              "revision": { "type": "integer", "minimum": 0 },
+              "hash": { "type": "string", "maxLength": 64 },
+              "roomId": { "type": "string", "maxLength": 512 },
+              "messageCount": { "type": "integer", "minimum": 0 }
+            },
+            "required": [
+              "generation",
+              "revision",
+              "hash",
+              "roomId",
+              "messageCount"
+            ],
+            "additionalProperties": false
           }
         },
         "required": ["roomId"],

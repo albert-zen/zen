@@ -577,7 +577,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
   #runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   readonly manifest: ZenXPluginManifestV2;
   readonly storage = {
-    version: 1,
+    version: 2,
     initialValue: { triggers: [], history: [] },
   } as const;
 
@@ -586,7 +586,7 @@ export class ZenXTriggersCapabilityPackage implements ZenXCapabilityPackage {
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_TRIGGERS_CAPABILITY_ID,
-      version: "1.0.1",
+      version: "1.0.2",
       displayName: "Triggers",
       description: "Schedule and inspect ZenX Triggers.",
       toolPrefix: "zenx_triggers_",
@@ -645,13 +645,14 @@ export class ZenXRoomsCapabilityPackage implements ZenXCapabilityPackage {
   readonly #port: ZenXAutomationControlPort;
   #runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   readonly manifest: ZenXPluginManifestV2;
-  readonly storage = { version: 1, initialValue: { rooms: [] } } as const;
+  readonly storage = { version: 2, initialValue: { rooms: [] } } as const;
 
   constructor(port: ZenXAutomationControlPort) {
     this.#port = port;
     this.#delegate = new ZenXAutomationControlCapabilityPackage(port);
     this.manifest = automationPluginManifest(this.#delegate.manifest, {
       id: ZENX_ROOMS_CAPABILITY_ID,
+      version: "1.0.9",
       displayName: "Rooms",
       description: "Manage shared ZenX Room collaboration.",
       toolPrefix: "zenx_rooms_",
@@ -740,6 +741,7 @@ function automationPluginManifest(
   return {
     ...structuredClone(capability),
     schemaVersion: 2,
+    storageVersion: 2,
     id: plugin.id,
     version: plugin.version ?? source.version,
     name: plugin.displayName,

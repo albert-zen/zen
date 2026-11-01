@@ -14,7 +14,7 @@ export interface TriggersTrustedService {
 export function createZenXTrustedPlugin(service: TriggersTrustedService) {
   return {
     storage: {
-      version: 1 as const,
+      version: 2 as const,
       initialValue: { triggers: [], history: [] },
     },
     start: async (sdk: ZenXPluginHostSdkV1) => await service.start?.(sdk),
