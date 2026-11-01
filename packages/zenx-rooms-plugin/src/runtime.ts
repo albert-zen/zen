@@ -37,7 +37,21 @@ export interface RoomOperation {
   mentions: Array<{ name: string; threadId: string; triggerIds: string[] }>;
 }
 
+export interface RoomHistorySnapshot {
+  generation: string;
+  revision: number;
+  hash: string;
+  roomId: string;
+  messageCount: number;
+}
+export interface RoomHistoryPage {
+  messages: RoomMessage[];
+  nextCursor: number | null;
+  snapshot?: RoomHistorySnapshot;
+  reactionRevisions?: Record<string, number>;
+}
 export interface Room {
+  messageCount?: number;
   assistant?: {
     threadId: string;
     triggerId: string;
@@ -111,6 +125,28 @@ export interface CreateAssistantRoomInput {
 }
 
 export interface ZenXRoomsTrustedService {
+  snapshotPreviews?(): ReturnType<ZenXRoomsTrustedService["snapshot"]>;
+  readRoomPage?(
+    roomId: string,
+    cursor?: number,
+    snapshot?: RoomHistorySnapshot,
+  ): Promise<RoomHistoryPage>;
+  readRoomMessage?(
+    roomId: string,
+    messageId: string,
+    snapshot?: RoomHistorySnapshot,
+  ): Promise<{
+    message: RoomMessage;
+    ordinal: number;
+    reactionRevision: number;
+    snapshot?: RoomHistorySnapshot;
+  } | null>;
+  roomMessageReadProjection?(
+    roomId: string,
+    readCursor: unknown,
+    readSince: unknown,
+  ): ReturnType<typeof roomMessageReadProjection> | undefined;
+  roomOperations?(roomId: string): RoomOperation[];
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
@@ -202,7 +238,7 @@ export interface ZenXTrustedPluginInvocation {
 
 export interface ZenXTrustedPluginRuntime {
   readonly storage: {
-    readonly version: 1;
+    readonly version: 2;
     readonly initialValue: { readonly rooms: readonly never[] };
   };
   start(sdk: ZenXPluginHostSdkV1): Promise<void>;
@@ -218,7 +254,7 @@ export function createZenXTrustedPlugin(
 ): ZenXTrustedPluginRuntime {
   let runtimeSdk: ZenXPluginHostSdkV1 | undefined;
   return {
-    storage: { version: 1, initialValue: { rooms: [] } },
+    storage: { version: 2, initialValue: { rooms: [] } },
     start: async (sdk) => {
       await service.startPlugin?.(PLUGIN_ID, sdk);
       runtimeSdk = sdk;
@@ -260,7 +296,7 @@ export function createZenXTrustedPlugin(
           });
         }
         case "zenx_rooms_list": {
-          const state = service.snapshot();
+          const state = service.snapshotPreviews?.() ?? service.snapshot();
           const cursor = Number(args["cursor"] ?? 0);
           if (!Number.isSafeInteger(cursor) || cursor < 0)
             throw new Error("Invalid Room list cursor");
@@ -269,9 +305,10 @@ export function createZenXTrustedPlugin(
             nextCursor: cursor + 1 < state.rooms.length ? cursor + 1 : null,
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
-              messageCount: room.messages.length,
-              ...roomMessageReadProjection(
-                room.messages,
+              messageCount: room.messageCount ?? room.messages.length,
+              ...readProjection(
+                service,
+                room,
                 record(args["readCursors"])?.[room.id],
                 args["readSince"],
               ),
@@ -350,6 +387,17 @@ export function createZenXTrustedPlugin(
           const cursor = Number(args["cursor"] ?? 0);
           if (!Number.isSafeInteger(cursor) || cursor < 0)
             throw new Error("Invalid Room message cursor");
+          const snapshot =
+            args["snapshot"] === undefined
+              ? undefined
+              : historySnapshot(args["snapshot"], roomId);
+          if (service.readRoomPage)
+            return {
+              roomId,
+              ...(await service.readRoomPage(roomId, cursor, snapshot)),
+            };
+          if (snapshot)
+            throw Error("Stable Room history snapshots unavailable");
           const room = service
             .snapshot()
             .rooms.find((entry) => entry.id === roomId);
@@ -377,11 +425,16 @@ export function createZenXTrustedPlugin(
           const cursor = Number(args["cursor"] ?? 0);
           if (!Number.isSafeInteger(cursor) || cursor < 0)
             throw new Error("Invalid Room operation cursor");
-          const room = service
-            .snapshot()
-            .rooms.find((entry) => entry.id === roomId);
-          if (!room) throw new Error("Room was not found");
-          const pending = (room.operations ?? []).filter(
+          const operations = service.roomOperations
+            ? service.roomOperations(roomId)
+            : (() => {
+                const room = service
+                  .snapshot()
+                  .rooms.find((entry) => entry.id === roomId);
+                if (!room) throw Error("Room was not found");
+                return room.operations ?? [];
+              })();
+          const pending = operations.filter(
             (operation) => !operation.acknowledged,
           );
           const page = pending.slice(cursor, cursor + 8).map((operation) => ({
@@ -766,4 +819,40 @@ function record(value: unknown): Readonly<Record<string, unknown>> | null {
 function fields(args: Readonly<Record<string, unknown>>, allowed: string[]) {
   if (Object.keys(args).some((key) => !allowed.includes(key)))
     throw Error("Unknown PAW workspace input field");
+}
+
+function readProjection(
+  service: ZenXRoomsTrustedService,
+  room: Room,
+  cursor: unknown,
+  since: unknown,
+) {
+  const indexed = service.roomMessageReadProjection?.(room.id, cursor, since);
+  if (indexed !== undefined) return indexed;
+  if (
+    room.messageCount !== undefined &&
+    room.messageCount !== room.messages.length
+  )
+    throw Error("Full Room history read projection unavailable");
+  return roomMessageReadProjection(room.messages, cursor, since);
+}
+function historySnapshot(value: unknown, roomId: string): RoomHistorySnapshot {
+  const input = record(value);
+  if (
+    !input ||
+    Object.keys(input).length !== 5 ||
+    input["roomId"] !== roomId ||
+    typeof input["generation"] !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+      input["generation"],
+    ) ||
+    typeof input["hash"] !== "string" ||
+    !/^[a-f0-9]{64}$/.test(input["hash"]) ||
+    !Number.isSafeInteger(input["revision"]) ||
+    Number(input["revision"]) < 0 ||
+    !Number.isSafeInteger(input["messageCount"]) ||
+    Number(input["messageCount"]) < 0
+  )
+    throw Error("Invalid Room history snapshot");
+  return { ...input } as unknown as RoomHistorySnapshot;
 }

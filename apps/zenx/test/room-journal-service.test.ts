@@ -386,7 +386,8 @@ test("journal notifications are body-free invalidations; explicit previews trim 
     await f.service.prepareRoomMessage(
       room.id,
       `${room.operationEpoch}:${randomUUID()}`,
-      "PRIVATE OPERATION",
+      "PRIVATE OPERATION ".repeat(30),
+      first.id,
     );
     assert.deepEqual(notified, {
       triggers: [],
@@ -407,8 +408,20 @@ test("journal notifications are body-free invalidations; explicit previews trim 
     assert.equal(preview.messages[0]!.text, "🙂".repeat(120));
     assert.equal(preview.messages[0]!.replyTo, undefined);
     assert.equal(preview.messages[0]!.reactions, undefined);
-    assert.equal(preview.operations, undefined);
-    assert.equal(preview.assistantWorkspace, undefined);
+    assert.equal(preview.operations.length, 1);
+    assert.equal(preview.operations[0]!.text, "");
+    assert.equal("replyTo" in preview.operations[0]!, false);
+    assert.equal("assistantWorkspace" in preview, false);
+    const operationPreview = f.service.roomOperations(room.id)[0]!;
+    assert.equal(
+      operationPreview.text,
+      "PRIVATE OPERATION ".repeat(30).slice(0, 120),
+    );
+    assert.equal(operationPreview.replyTo, undefined);
+    assert.equal(
+      f.service.snapshot().rooms[0]!.operations![0]!.text,
+      "PRIVATE OPERATION ".repeat(30).trim(),
+    );
     preview.messages[0]!.text = "consumer mutation";
     preview.members[0]!.name = "consumer mutation";
     assert.equal(

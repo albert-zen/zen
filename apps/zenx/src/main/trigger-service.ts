@@ -1131,10 +1131,22 @@ export class ZenXTriggerService {
   }
 
   /** Explicit list projection: trim before cloning and omit receipt/notebook bodies. */
-  snapshotPreviews(): TriggerSnapshot {
+  snapshotPreviews() {
     return structuredClone({
-      triggers: [],
-      history: [],
+      triggers: this.#snapshot.triggers.map(
+        ({ id, kind, threadId, active, room }) => ({
+          id,
+          kind,
+          threadId,
+          active,
+          room,
+        }),
+      ),
+      history: this.#snapshot.history.map(({ id, status, error }) => ({
+        id,
+        status,
+        error,
+      })),
       rooms: this.#snapshot.rooms.map((room) => {
         const last = room.messages.at(-1);
         const preview: RoomMessage[] = [];
@@ -1162,6 +1174,14 @@ export class ZenXTriggerService {
           createdAt: room.createdAt,
           members: room.members,
           messages: preview,
+          operations: (room.operations ?? []).map(
+            ({
+              text: _text,
+              replyTo: _replyTo,
+              mentions: _mentions,
+              ...operation
+            }) => ({ ...operation, text: "", mentions: [] }),
+          ),
           messageCount: room.messageCount ?? room.messages.length,
           ...(room.operationEpoch === undefined
             ? {}
@@ -1172,6 +1192,25 @@ export class ZenXTriggerService {
         };
       }),
     });
+  }
+
+  /** Target one Room for operation-list previews; explicit operation reads remain complete. */
+  roomOperations(roomId: string): RoomSendOperation[] {
+    const room = this.#snapshot.rooms.find((entry) => entry.id === roomId);
+    if (!room) throw Error("Room was not found");
+    return structuredClone(
+      (room.operations ?? []).map(
+        ({ text, replyTo: _replyTo, ...operation }) => {
+          let preview = "";
+          let length = 0;
+          for (const character of text) {
+            if (length++ === 120) break;
+            preview += character;
+          }
+          return { ...operation, text: preview };
+        },
+      ),
+    );
   }
 
   roomMessageReadProjection(

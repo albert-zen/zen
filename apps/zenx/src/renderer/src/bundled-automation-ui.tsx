@@ -24,7 +24,11 @@ import {
   handleComposerSuggestionKey,
 } from "./ComposerSuggestions.js";
 import { useRoomComposerSelector } from "./use-room-composer-selector.js";
-import { readRoomHistory, type RoomHistoryPage } from "./room-history.js";
+import {
+  readRoomHistory,
+  mergeRoomHistoryReactions,
+  type RoomHistoryPage,
+} from "./room-history.js";
 import { DirectoryPicker } from "./DirectoryPicker.js";
 import { PluginRequirementsPreview } from "./PluginRequirementsPreview.js";
 import { PAW_PLUGIN_REQUIREMENTS } from "../../assistant-preset-requirements.js";
@@ -1791,15 +1795,16 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
   const [sendingRooms, setSendingRooms] = useState<Record<string, boolean>>({});
   const selectedRef = useRef<string | null>(initialRoomId);
   const historyCache = useRef<
-    Record<
-      string,
-      {
-        messages: ZenXRoom["messages"];
-        count: number;
-        nextCursor: number | null;
-      }
-    >
+    Record<string, RoomHistoryPage & { count: number }>
   >({});
+  const reactionReceiptEpoch = useRef(0);
+  const reactionReceiptEpochs = useRef(new Map<string, Map<string, number>>());
+  const newerReactionReceipts = (roomId: string, epoch: number) =>
+    new Set(
+      [...(reactionReceiptEpochs.current.get(roomId) ?? [])]
+        .filter(([, value]) => value > epoch)
+        .map(([id]) => id),
+    );
   const [loadingOlder, setLoadingOlder] = useState(false);
   const olderRequest = useRef<{ roomId: string } | null>(null);
   const refreshAfterOlder = useRef(false);
@@ -2033,11 +2038,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       selectedRef.current = target?.id ?? null;
     if (target?.messageCount !== undefined) {
       const cached = historyCache.current[target.id];
-      const page = await readRoomHistory(
-        async (cursor) =>
+      const receiptEpoch = reactionReceiptEpoch.current;
+      let page = await readRoomHistory(
+        async (cursor, snapshot) =>
           (await sdk.commands.execute("messages", {
             roomId: target.id,
             cursor,
+            ...(snapshot ? { snapshot } : {}),
           })) as RoomHistoryPage,
         {
           oldestMessageId: cached?.messages[0]?.id,
@@ -2050,6 +2057,12 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         },
       );
       if (!page) return;
+      page = mergeRoomHistoryReactions(
+        page,
+        historyCache.current[target.id],
+        newerReactionReceipts(target.id, receiptEpoch),
+      );
+      target.messageCount = page.snapshot?.messageCount ?? target.messageCount;
       historyCache.current[target.id] = {
         ...page,
         count: target.messageCount,
@@ -2484,11 +2497,13 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
     setHistoryErrors((errors) => ({ ...errors, [roomId]: "" }));
     ++refreshSequence.current;
     try {
-      const page = await readRoomHistory(
-        async (cursor) =>
+      const receiptEpoch = reactionReceiptEpoch.current;
+      let page = await readRoomHistory(
+        async (cursor, snapshot) =>
           (await sdk.commands.execute("messages", {
             roomId,
             cursor,
+            ...(snapshot ? { snapshot } : {}),
           })) as RoomHistoryPage,
         {
           oldestMessageId: cached.messages[0]?.id,
@@ -2499,12 +2514,27 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
         },
       );
       if (!page || !current()) return;
-      historyCache.current[roomId] = { ...page, count: cached.count };
+      page = mergeRoomHistoryReactions(
+        page,
+        historyCache.current[roomId],
+        newerReactionReceipts(roomId, receiptEpoch),
+      );
+      historyCache.current[roomId] = {
+        ...page,
+        count: page.snapshot?.messageCount ?? cached.count,
+      };
       preserveFeedAnchor(roomId);
       setData((data) => ({
         ...data,
         rooms: data.rooms.map((entry) =>
-          entry.id === roomId ? { ...entry, ...page } : entry,
+          entry.id === roomId
+            ? {
+                ...entry,
+                ...page,
+                messageCount:
+                  page!.snapshot?.messageCount ?? entry.messageCount,
+              }
+            : entry,
         ),
       }));
     } catch (reason) {
@@ -2555,6 +2585,10 @@ export function RoomsPage({ sdk }: PluginUiSurfaceProps) {
       })) as { message: ZenXRoom["messages"][number] };
       if (result.message?.id !== messageId || result.message.roomId !== roomId)
         throw new Error(i18n.t("panels:reactionReceiptIdentityMismatch"));
+      let receipts = reactionReceiptEpochs.current.get(roomId);
+      if (!receipts)
+        reactionReceiptEpochs.current.set(roomId, (receipts = new Map()));
+      receipts.set(messageId, ++reactionReceiptEpoch.current);
       const cached = historyCache.current[roomId];
       if (cached)
         cached.messages = cached.messages.map((message) =>
