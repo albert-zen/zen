@@ -34,7 +34,7 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 // Catch renderer exceptions before Electron replaces them with an opaque IPC rejection.
 // JSON-normalize successes too: only plain data crosses this diagnostic boundary.
 function diagnosticEvaluation(expression) {
-  return `(async()=>{try{const value=await (${expression});return {ok:true,value:JSON.parse(JSON.stringify(value??null))}}catch(error){return {ok:false,error:{message:String(error?.message??error).slice(0,4000),stack:String(error?.stack??'').slice(0,4000)}}}})()`;
+  return `(async()=>{try{const value=await (${expression});return {ok:true,value:JSON.parse(JSON.stringify(value??null,(_key,item)=>{if(typeof Node!=='undefined'&&item instanceof Node)throw Error('Diagnostic returned a DOM node; return a boolean or plain measurement');if(typeof item==='function'||typeof item==='symbol'||typeof item==='bigint')throw Error('Diagnostic returned a non-serializable value');return item}))}}catch(error){return {ok:false,error:{message:String(error?.message??error).slice(0,4000),stack:String(error?.stack??'').slice(0,4000)}}}})()`;
 }
 const evaluate = async (expression) => {
   const reply = await window.webContents.executeJavaScript(
@@ -248,7 +248,7 @@ async function run() {
     async () =>
       Boolean(
         await evaluate(
-          "document.querySelector('.workspace-content-tab[data-tab-id*=\"zenx-subagents\"]')",
+          "Boolean(document.querySelector('.workspace-content-tab[data-tab-id*=\"zenx-subagents\"]'))",
         ),
       ),
     "Subagents resource tab",
@@ -257,7 +257,7 @@ async function run() {
     async () =>
       Boolean(
         await evaluate(
-          "document.querySelector('.auxiliary-plugin[data-plugin-surface=\"zenx-subagents:subagents-panel\"] .subagents-panel')",
+          "Boolean(document.querySelector('.auxiliary-plugin[data-plugin-surface=\"zenx-subagents:subagents-panel\"] .subagents-panel'))",
         ),
       ),
     "Actual trusted Subagents body mounted",
