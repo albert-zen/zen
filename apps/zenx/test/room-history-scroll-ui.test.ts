@@ -437,3 +437,42 @@ test("a history error arriving after Room navigation is discarded", async () => 
     await s.close();
   }
 });
+
+test(
+  "observing the 256 boundary is read-only; an extra top scroll legitimately loads another 16",
+  { timeout: 30000 },
+  async () => {
+    const s = await setup(320);
+    try {
+      for (let step = 0; step < 16; step++) {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".room-load-earlier")!
+            .click(),
+        );
+        assert.equal(s.ids().length, 4 + (step + 1) * 16);
+      }
+      const expected = Array.from({ length: 260 }, (_, i) => `first-${60 + i}`);
+      assert.deepEqual(s.ids(), expected);
+      assert.equal(new Set(s.ids()).size, 260);
+      const requests = s.calls.length;
+      const top = s.feed().scrollTop;
+      // A snapshot/idle observation must not introduce another input gesture.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      assert.deepEqual(s.ids(), expected);
+      assert.equal(s.calls.length, requests);
+      assert.equal(s.feed().scrollTop, top);
+      await s.scroll(0);
+      assert.deepEqual(
+        s.ids(),
+        Array.from({ length: 276 }, (_, i) => `first-${44 + i}`),
+      );
+      assert.equal(new Set(s.ids()).size, 276);
+      assert(s.calls.length > requests);
+    } finally {
+      await s.close();
+    }
+  },
+);

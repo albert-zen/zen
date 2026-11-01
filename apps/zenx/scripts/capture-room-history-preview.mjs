@@ -308,10 +308,8 @@ try {
       "document.querySelectorAll('[data-room-message-id]').length",
     );
     if (!crossed && count > 256) {
-      await evaluate(
-        "document.querySelector('.rooms-chat-feed').scrollTop = 0",
-      );
-      await delay(300);
+      // Observe the completed user action. Scrolling to the top here is another
+      // history-loading gesture, not a neutral screenshot positioning step.
       await verify("cross-256", count);
       crossed = true;
     }
