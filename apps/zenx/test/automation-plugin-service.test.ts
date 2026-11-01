@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import type { AutomationTransaction } from "../src/main/automation-transaction-store.js";
 import {
   mkdir,
   mkdtemp,
@@ -26,6 +28,36 @@ import type {
   ServerNotificationParams,
   Turn,
 } from "../src/protocol-client/index.js";
+
+/** Inspect small synthetic fixtures directly, before close can commit anything. */
+async function committedTransaction(
+  directory: string,
+): Promise<AutomationTransaction> {
+  const namespace = path.join(directory, "plugin-data", "zenx-triggers");
+  const marker = JSON.parse(
+    await readFile(path.join(namespace, "storage.json"), "utf8"),
+  );
+  assert.equal(marker.version, 2);
+  const bytes = await readFile(
+    path.join(
+      namespace,
+      "automation-history",
+      `automation-${marker.value.generation}.jsonl`,
+    ),
+    "utf8",
+  );
+  assert(
+    bytes.endsWith("\n"),
+    "successful mutation must leave a complete frame",
+  );
+  const frame = JSON.parse(bytes.trimEnd().split("\n").at(-1)!);
+  assert.equal(frame.record.generation, marker.value.generation);
+  assert.equal(
+    frame.sha256,
+    createHash("sha256").update(JSON.stringify(frame.record)).digest("hex"),
+  );
+  return frame.record;
+}
 
 const idlePort = {
   request: async () => ({}) as never,
@@ -199,6 +231,13 @@ test("ordinary journal mutations do not rewrite Room projection markers and pers
       prompt: "committed",
       runAt: Date.now() + 60_000,
     });
+    assert.equal(
+      (await committedTransaction(directory)).metadata.triggers.find(
+        (trigger) => trigger.id === created.id,
+      )?.id,
+      created.id,
+      "create must be on disk before its return, without a later mutation or close",
+    );
     const room = await service.createRoom({
       name: "Persisted Room",
       members: [{ name: "Member", threadId: "target" }],
@@ -206,6 +245,21 @@ test("ordinary journal mutations do not rewrite Room projection markers and pers
     await service.postAgentRoomMessage(
       room.id,
       "Persisted without projection write",
+    );
+    const committed = await committedTransaction(directory);
+    assert.equal(
+      committed.metadata.triggers.find((trigger) => trigger.id === created.id)
+        ?.id,
+      created.id,
+    );
+    assert(
+      committed.roomEvents.some(
+        (event) =>
+          event.type === "message" &&
+          event.message.roomId === room.id &&
+          event.message.text === "Persisted without projection write",
+      ),
+      "message body must be on disk before return, without close",
     );
     const message = (await service.readRoomPage(room.id)).messages[0]!;
     assert.equal(service.snapshot().triggers[0]?.id, created.id);
@@ -725,6 +779,13 @@ test("overlapping enabled Trigger runtime generations keep durable wakeup admiss
       prompt: "Fake local wakeup",
       runAt: Date.now() + 60_000,
     });
+    assert.equal(
+      (await committedTransaction(directory)).metadata.triggers.find(
+        (trigger) => trigger.id === created.id,
+      )?.id,
+      created.id,
+      "retained runtime must commit its definition before returning, without close",
+    );
     assert.equal(
       service.snapshot().triggers.find((trigger) => trigger.id === created.id)
         ?.id,
