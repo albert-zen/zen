@@ -1,0 +1,64 @@
+{
+  "status": "native-fixed-capture-independently-accepted",
+  "productPR": 601,
+  "reproduction": {
+    "sourceCommit": "4ed8fb0f2294d234a10cf293b67335f72d2bb332",
+    "runId": 41333129609,
+    "artifactId": 13094295572,
+    "platform": "darwin",
+    "contentSize": {
+      "width": 1280,
+      "height": 677
+    },
+    "reducedMotion": true,
+    "railScrollLeft": 0,
+    "occluder": ".workspace-header",
+    "occluderWidthPx": 36
+  },
+  "fixed": {
+    "sourceCommit": "dd25fe08cffd4d77421e8349ded2a150e106f74c",
+    "diagnosticHead": "84e17f5c51e11ba2c6cc7456e69ab3175df03464",
+    "runId": 41334004336,
+    "artifactId": 13094302363,
+    "platform": "darwin",
+    "contentSize": {
+      "width": 1280,
+      "height": 677
+    },
+    "reducedMotion": true,
+    "comparisonRole": "fixed-product-candidate"
+  },
+  "files": {
+    "fixed-collapsed.png": "6e5608d7c66f292dd179629f97feacfc69ef3fbe6025af2e06f64baca66bf55b",
+    "fixed-open.png": "6dcee6272ff5c6811e2298c551a278431ecf1a1c18d3bd145e3cdd4d715dae57",
+    "current-repro-collapsed.png": "5bbde937b7ab2ac1f1a553889d6c26a81e94d83ce43d44634092c57453092f73",
+    "current-repro-open.png": "609836f3375cbf975112f7fed0e1a1be8e2463f6ef4658f4ef0204495479d4cd"
+  },
+  "scope": "Native macOS Electron production main/preload/renderer, isolated local fake Host. Thread initialized through protocol thread/start, then real UI opens Subagents and internal pane maximize. Left sidebar may be vertically scrolled to select the Thread; right Tab rail never manually scrolled. Not the user installation. No Turn, user data, credentials or profiles included.",
+  "acceptance": {
+    "visualImagesReviewed": [
+      "fixed-open.png",
+      "fixed-collapsed.png",
+      "current-full-app-restored.png (in source artifact)"
+    ],
+    "states": [
+      "left-sidebar-open",
+      "left-sidebar-collapsed"
+    ],
+    "mainAndResourceIcons": {
+      "insideRail": true,
+      "centerAndFourCornersHitTab": true
+    },
+    "sessionAndHeaderHiddenWhenExpanded": true,
+    "nativeSidebarToggleVisibleAndHittable": true,
+    "restoreSessionAndHeaderVisible": true,
+    "railScrollLeft": 0,
+    "targetTurnCount": 0,
+    "chromiumSandbox": true,
+    "contextIsolation": true,
+    "nodeIntegration": false,
+    "childCloseObserved": true,
+    "exitCode": 0,
+    "animationQualityClaimed": false
+  }
+}
