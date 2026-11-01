@@ -31,22 +31,46 @@ const result = {
 };
 let window;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const evaluate = (expression) =>
-  window.webContents.executeJavaScript(expression, true);
+// Catch renderer exceptions before Electron replaces them with an opaque IPC rejection.
+// JSON-normalize successes too: only plain data crosses this diagnostic boundary.
+function diagnosticEvaluation(expression) {
+  return `(async()=>{try{const value=await (${expression});return {ok:true,value:JSON.parse(JSON.stringify(value??null))}}catch(error){return {ok:false,error:{message:String(error?.message??error).slice(0,4000),stack:String(error?.stack??'').slice(0,4000)}}}})()`;
+}
+const evaluate = async (expression) => {
+  const reply = await window.webContents.executeJavaScript(
+    diagnosticEvaluation(expression),
+    true,
+  );
+  if (!reply.ok) {
+    const failure = {
+      operation:
+        result.pendingOperation ?? result.waitingFor ?? "read-only diagnostic",
+      ...reply.error,
+    };
+    (result.rendererErrors ??= []).push(failure);
+    throw new Error("Renderer diagnostic failed: " + JSON.stringify(failure));
+  }
+  return reply.value;
+};
 async function until(check, label) {
+  result.waitingFor = label;
   for (let i = 0; i < 400; i++) {
-    if (await check()) return;
+    if (await check()) {
+      delete result.waitingFor;
+      return;
+    }
     await pause(100);
   }
   throw Error("Timed out: " + label);
 }
 async function click(expression, label) {
+  result.pendingOperation = label;
   await until(
     async () => Boolean(await evaluate(`Boolean(${expression})`)),
     label,
   );
   const p = await evaluate(
-    `(()=>{const e=${expression},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured target: '+${JSON.stringify(label)});return {x:Math.round(x),y:Math.round(y)}})()`,
+    `(()=>{const e=${expression},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y))){const describe=n=>{const b=n.getBoundingClientRect(),s=getComputedStyle(n);return {tag:n.tagName,id:n.id,className:typeof n.className==='string'?n.className:n.className.baseVal,bounds:{left:b.left,top:b.top,width:b.width,height:b.height},zIndex:s.zIndex,visibility:s.visibility,pointerEvents:s.pointerEvents}};throw Error('Obscured target: '+${JSON.stringify(label)}+' '+JSON.stringify({target:describe(e),point:{x,y},hitStack:document.elementsFromPoint(x,y).slice(0,5).map(describe)}))}return {x:Math.round(x),y:Math.round(y)}})()`,
   );
   window.show();
   window.focus();
@@ -68,6 +92,7 @@ async function click(expression, label) {
     ...p,
   });
   result.steps.push(label);
+  delete result.pendingOperation;
 }
 async function screenshot(name) {
   await fs.writeFile(
