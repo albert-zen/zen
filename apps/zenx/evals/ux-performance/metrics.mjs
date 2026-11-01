@@ -15,8 +15,10 @@ export function summarize(samples) {
       throw new Error("Invalid sample timing metadata");
     for (const task of sample.longtasks)
       if (
-        !Number.isFinite(task.start) || task.start < 0 ||
-        !Number.isFinite(task.duration) || task.duration < 0
+        !Number.isFinite(task.start) ||
+        task.start < 0 ||
+        !Number.isFinite(task.duration) ||
+        task.duration < 0
       )
         throw new Error("Invalid long task");
     for (const key of ["markdown", "thread", "commits"])
@@ -29,7 +31,8 @@ export function summarize(samples) {
   return {
     n: samples.length,
     p50Ms: sorted[Math.floor(sorted.length * 0.5)],
-    p95Ms: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))],
+    p95Ms:
+      sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))],
     samples,
   };
 }
@@ -70,11 +73,17 @@ export function instrument(code, id) {
 }
 
 /** Reject no-op, dropped/duplicate deltas, stale DOM or absent React work. */
-export function verifyTranscriptUpdates(before, after, samples, expectedDeltas) {
+export function verifyTranscriptUpdates(
+  before,
+  after,
+  samples,
+  expectedDeltas,
+) {
   if (
     typeof before.lastText !== "string" ||
     typeof before.renderedLastText !== "string" ||
-    !Number.isInteger(expectedDeltas) || expectedDeltas < 1 ||
+    !Number.isInteger(expectedDeltas) ||
+    expectedDeltas < 1 ||
     samples.length !== expectedDeltas
   )
     throw new Error("Invalid transcript update boundary");
@@ -88,8 +97,13 @@ export function verifyTranscriptUpdates(before, after, samples, expectedDeltas) 
       sample.transcript?.renderedLastText !== renderedLastText ||
       !["thread", "markdown", "commits"].every((key) => sample.counts[key] > 0)
     )
-      throw new Error("Transcript delta did not update exact projected text, rendered text and React work");
+      throw new Error(
+        "Transcript delta did not update exact projected text, rendered text and React work",
+      );
   }
-  if (after.lastText !== lastText || after.renderedLastText !== renderedLastText)
+  if (
+    after.lastText !== lastText ||
+    after.renderedLastText !== renderedLastText
+  )
     throw new Error("Final transcript delta state mismatch");
 }
