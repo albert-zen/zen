@@ -1120,7 +1120,7 @@ function isRoomMember(value: unknown): value is RoomMember {
   );
 }
 
-function isRoomMessage(value: unknown): value is RoomMessage {
+export function isRoomMessage(value: unknown): value is RoomMessage {
   const message = record(value);
   return (
     message !== null &&
@@ -1234,7 +1234,7 @@ function isRoomQuote(value: unknown): boolean {
     string(quote["text"], 1000)
   );
 }
-function isRoomReactions(value: unknown): boolean {
+export function isRoomReactions(value: unknown): boolean {
   if (!Array.isArray(value) || value.length > MAX_ROOM_MEMBERS + 1)
     return false;
   const actors = new Set<string>();

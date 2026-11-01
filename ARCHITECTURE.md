@@ -1362,6 +1362,8 @@ Room delivered receipts derive from committed Room messages; read receipts deriv
 
 Room quotes are immutable bounded snapshots of a same-Room message captured with the prepared send operation; operation identity binds both text and quote target. Reactions are Room-domain annotations with one chosen emoji per Host-derived actor; setting the same reaction is idempotent, and reactions never wake an Agent. Both use the existing serialized Room storage, with optional fields for older profiles.
 
+Planned Room history storage: `AutomationTransactionStore` is a single checksummed append-only authority for existing shared Trigger/Room product state, committing bounded metadata and Room/body/reaction facts together; its offset index and SDK markers are projections, not a new event domain or scheduler (see `apps/zenx/docs/design/room-history-storage.md`).
+
 ### IMZen v1 consumer composition
 
 IMZen uses the SDK's public `Gateway` with a coherent `SQLiteGatewayStore`, a
