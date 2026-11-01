@@ -1,4 +1,4 @@
-name: One-time real App internal expansion capture
+name: One-time native macOS full App internal expansion capture
 on:
   push:
     branches: ["diagnostic/pane-expansion-comparison-20261101"]
@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   full-app:
-    runs-on: windows-latest
+    runs-on: macos-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -42,9 +42,7 @@ jobs:
         timeout-minutes: 7
         run: |
           npm run build --workspace @zen/zenx
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item ../diagnostic/apps/zenx/scripts/launch-full-app-expansion.mjs apps/zenx/scripts/
-          Copy-Item ../diagnostic/apps/zenx/scripts/capture-full-app-expansion.cjs apps/zenx/scripts/
+          cp ../diagnostic/apps/zenx/scripts/{launch-full-app-expansion.mjs,capture-full-app-expansion.cjs} apps/zenx/scripts/
           git diff --exit-code -- apps/zenx/src apps/zenx/electron.vite.config.ts
       - name: Own isolated real App with fake Host; no Turn or external credentials
         working-directory: source
@@ -55,7 +53,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-app-expansion-${{ matrix.version }}-${{ matrix.source }}
+          name: full-app-expansion-macos-${{ matrix.version }}-${{ matrix.source }}
           retention-days: 7
           if-no-files-found: warn
           path: |

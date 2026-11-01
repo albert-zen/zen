@@ -4,7 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, session } = require("electron");
-assert.equal(process.platform, "win32");
+assert.ok(["win32", "darwin"].includes(process.platform));
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(process.versions.electron);
 assert.ok(
@@ -51,6 +51,10 @@ async function click(expression, label) {
   window.show();
   window.focus();
   window.webContents.focus();
+  await until(
+    async () => window.isFocused() && window.webContents.isFocused(),
+    "Owned native window and renderer focus",
+  );
   window.webContents.sendInputEvent({
     type: "mouseDown",
     button: "left",
@@ -71,7 +75,7 @@ async function screenshot(name) {
     (await window.webContents.capturePage()).toPNG(),
   );
 }
-const measure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},desc=e=>{const s=getComputedStyle(e);return {tag:e.tagName,id:e.id,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),visibility:s.visibility,zIndex:s.zIndex}},rail=document.querySelector('.auxiliary-heading [role=tablist]'),rr=rect(rail);return {time:performance.now(),url:location.href,platform:document.documentElement.dataset.platform,expanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,rail:rr,scrollLeft:rail?.scrollLeft,scrollWidth:rail?.scrollWidth,clientWidth:rail?.clientWidth,tabs:[...document.querySelectorAll('.workspace-content-tab')].map(e=>{const tab=e.querySelector('[role=tab]'),icon=rect(tab.querySelector('svg')),hit=document.elementFromPoint(icon.left+icon.width/2,icon.top+icon.height/2);return {id:e.dataset.tabId,bounds:rect(e),icon,iconInsideRail:icon.left>=rr.left&&icon.right<=rr.right,hitInTab:tab.contains(hit),hitStack:document.elementsFromPoint(icon.left+icon.width/2,icon.top+icon.height/2).slice(0,7).map(desc)}}),chrome:['.window-titlebar','.window-titlebar-session'].map(s=>{const e=document.querySelector(s);return {selector:s,...(e?desc(e):{})}})}})()`;
+const measure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},desc=e=>{const s=getComputedStyle(e);return {tag:e.tagName,id:e.id,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),visibility:s.visibility,zIndex:s.zIndex}},rail=document.querySelector('.auxiliary-heading [role=tablist]'),rr=rect(rail);return {time:performance.now(),motion:{reduced:matchMedia('(prefers-reduced-motion: reduce)').matches,railTransition:rail?{property:getComputedStyle(rail).transitionProperty,duration:getComputedStyle(rail).transitionDuration}:null,panelTransition:document.querySelector('.auxiliary-panel')?{property:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionProperty,duration:getComputedStyle(document.querySelector('.auxiliary-panel')).transitionDuration}:null,titlebarTransition:document.querySelector('.window-titlebar')?{property:getComputedStyle(document.querySelector('.window-titlebar')).transitionProperty,duration:getComputedStyle(document.querySelector('.window-titlebar')).transitionDuration}:null},sidebarCollapsed:document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),shell:rect(document.querySelector('.app-shell')),panel:rect(document.querySelector('.auxiliary-panel')),url:location.href,platform:document.documentElement.dataset.platform,expanded:document.querySelector('.auxiliary-panel')?.dataset.expanded,rail:rr,scrollLeft:rail?.scrollLeft,scrollWidth:rail?.scrollWidth,clientWidth:rail?.clientWidth,tabs:[...document.querySelectorAll('.workspace-content-tab')].map(e=>{const tab=e.querySelector('[role=tab]'),icon=rect(tab.querySelector('svg')),hit=document.elementFromPoint(icon.left+icon.width/2,icon.top+icon.height/2);return {id:e.dataset.tabId,bounds:rect(e),icon,iconInsideRail:icon.left>=rr.left&&icon.right<=rr.right,hitInTab:tab.contains(hit),hitStack:document.elementsFromPoint(icon.left+icon.width/2,icon.top+icon.height/2).slice(0,7).map(desc)}}),chrome:['.window-titlebar','.window-titlebar-session'].map(s=>{const e=document.querySelector(s);return {selector:s,...(e?desc(e):{})}})}})()`;
 const networkReady = app.whenReady().then(() => {
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     let allowed = false;
@@ -166,41 +170,80 @@ async function run() {
   result.steps.push(
     "Verified real bundled Subagents body, not unavailable placeholder",
   );
-  await pause(350);
-  result.before = await evaluate(measure);
-  assert.equal(result.before.expanded, "false");
-  assert.equal(result.before.tabs.length, 1);
-  await screenshot(`${version}-full-app-before.png`);
-  await evaluate(
-    `(()=>{window.__fullAppFrames=[];window.__fullAppStart=performance.now();const tick=()=>{window.__fullAppFrames.push(${measure});if(performance.now()-window.__fullAppStart<900)requestAnimationFrame(tick)};requestAnimationFrame(tick)})()`,
-  );
-  await click(
-    "document.querySelector('.auxiliary-heading > button[aria-pressed=\"false\"]')",
-    "Click right-pane internal maximize",
-  );
-  result.transition = [];
-  for (const targetMs of [0, 70, 160]) {
-    const elapsed = await evaluate("performance.now()-window.__fullAppStart");
-    if (elapsed < targetMs) await pause(targetMs - elapsed);
-    const sample = await evaluate(measure);
-    const file = `${version}-full-app-transition-${targetMs}.png`;
-    await screenshot(file);
-    result.transition.push({
-      file,
-      targetMs,
-      sample,
-      captureFinishedElapsedMs: await evaluate(
-        "performance.now()-window.__fullAppStart",
-      ),
-    });
+  result.cases = [];
+  for (const sidebarState of ["open", "collapsed"]) {
+    if (
+      await evaluate(
+        "document.querySelector('.auxiliary-panel')?.dataset.expanded === 'true'",
+      )
+    ) {
+      await click(
+        "document.querySelector('.auxiliary-heading > button[aria-pressed=\"true\"]')",
+        "Restore right pane before next sidebar case",
+      );
+      await until(
+        async () =>
+          await evaluate(
+            "document.querySelector('.auxiliary-panel')?.dataset.expanded === 'false'",
+          ),
+        "Right pane restored",
+      );
+    }
+    const collapsed = await evaluate(
+      "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+    );
+    if (collapsed !== (sidebarState === "collapsed")) {
+      await click(
+        "document.querySelector('.sidebar-collapse-button')",
+        "Set left sidebar " + sidebarState,
+      );
+      await until(
+        async () =>
+          (await evaluate(
+            "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+          )) ===
+          (sidebarState === "collapsed"),
+        "Left sidebar state committed",
+      );
+    }
+    const item = { sidebarState };
+    result.cases.push(item);
+    await pause(350);
+    item.before = await evaluate(measure);
+    assert.equal(item.before.expanded, "false");
+    assert.equal(item.before.tabs.length, 1);
+    await screenshot(`${version}-full-app-${sidebarState}-before.png`);
+    await evaluate(
+      `(()=>{window.__fullAppFrames=[];window.__fullAppStart=performance.now();const tick=()=>{window.__fullAppFrames.push(${measure});if(performance.now()-window.__fullAppStart<900)requestAnimationFrame(tick)};requestAnimationFrame(tick)})()`,
+    );
+    await click(
+      "document.querySelector('.auxiliary-heading > button[aria-pressed=\"false\"]')",
+      "Click right-pane internal maximize",
+    );
+    item.transition = [];
+    for (const targetMs of [0, 70, 160]) {
+      const elapsed = await evaluate("performance.now()-window.__fullAppStart");
+      if (elapsed < targetMs) await pause(targetMs - elapsed);
+      const sample = await evaluate(measure);
+      const file = `${version}-full-app-${sidebarState}-transition-${targetMs}.png`;
+      await screenshot(file);
+      item.transition.push({
+        file,
+        targetMs,
+        sample,
+        captureFinishedElapsedMs: await evaluate(
+          "performance.now()-window.__fullAppStart",
+        ),
+      });
+    }
+    await pause(950);
+    item.settled = await evaluate(measure);
+    item.frames = await evaluate("window.__fullAppFrames");
+    await screenshot(`${version}-full-app-${sidebarState}-settled.png`);
+    assert.equal(item.settled.expanded, "true");
+    assert.equal(item.settled.platform, process.platform);
+    assert.equal(item.settled.tabs.length, version === "current" ? 2 : 1);
   }
-  await pause(950);
-  result.settled = await evaluate(measure);
-  result.frames = await evaluate("window.__fullAppFrames");
-  await screenshot(`${version}-full-app-settled.png`);
-  assert.equal(result.settled.expanded, "true");
-  assert.equal(result.settled.platform, "win32");
-  assert.equal(result.settled.tabs.length, version === "current" ? 2 : 1);
   const read = await evaluate(
     `window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(started.thread.id)},includeTurns:true})`,
   );

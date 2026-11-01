@@ -1,4 +1,4 @@
-/** Launch only the owned synthetic Electron App on disposable Windows CI. */
+/** Launch only the owned synthetic Electron App on disposable native CI. */
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import {
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import electron from "electron";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
-assert.equal(process.platform, "win32");
+assert.ok(["win32", "darwin"].includes(process.platform));
 const directory = path.resolve(process.argv[2]);
 const version = process.argv[3];
 const expected = {
@@ -78,9 +78,10 @@ await writeFile(
     {
       version,
       sourceCommit: expected,
+      platform: process.platform,
       hashes,
       scope:
-        "Actual production main/preload/renderer and fake local Host. Idle Thread initialized through real protocol, NOT UI first-Send creation. Actual UI selects thread, opens Subagents and maximizes pane. Windows Electron only.",
+        "Actual production main/preload/renderer and fake local Host. Idle Thread initialized through real protocol, NOT UI first-Send creation. Actual UI selects thread, opens Subagents and maximizes pane. Native Electron platform recorded separately; no CSS platform emulation.",
     },
     null,
     2,
@@ -101,19 +102,25 @@ const environment = Object.fromEntries(
 );
 Object.assign(environment, {
   HOME: home,
-  USERPROFILE: home,
-  USER_HOME: home,
-  HOMEDRIVE: path.parse(home).root.slice(0, 2),
-  HOMEPATH: home.slice(2),
-  APPDATA: path.join(home, "AppData", "Roaming"),
-  LOCALAPPDATA: path.join(home, "AppData", "Local"),
+  ...(process.platform === "win32"
+    ? {
+        USERPROFILE: home,
+        USER_HOME: home,
+        HOMEDRIVE: path.parse(home).root.slice(0, 2),
+        HOMEPATH: home.slice(2),
+        APPDATA: path.join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: path.join(home, "AppData", "Local"),
+      }
+    : {}),
   XDG_CONFIG_HOME: path.join(home, ".config"),
   XDG_CACHE_HOME: path.join(home, ".cache"),
   ZENX_DATA_DIR: data,
   GITHUB_ACTIONS: "true",
 });
-await mkdir(environment.APPDATA, { recursive: true });
-await mkdir(environment.LOCALAPPDATA, { recursive: true });
+if (process.platform === "win32") {
+  await mkdir(environment.APPDATA, { recursive: true });
+  await mkdir(environment.LOCALAPPDATA, { recursive: true });
+}
 const child = spawn(
   electron,
   [
@@ -123,7 +130,11 @@ const child = spawn(
     temporary,
     `--user-data-dir=${profile}`,
   ],
-  { env: environment, stdio: ["ignore", "inherit", "inherit"] },
+  {
+    env: environment,
+    stdio: ["ignore", "inherit", "inherit"],
+    detached: process.platform === "darwin",
+  },
 );
 // The generic helper kills only the parent; Windows must terminate the owned tree on timeout.
 async function waitOwnedWindowsTree(child, timeoutMs) {
@@ -183,13 +194,74 @@ async function waitOwnedWindowsTree(child, timeoutMs) {
     clearTimeout(timer);
   }
 }
+// macOS child owns a new POSIX process group (detached:true above).
+// Never target another process name/session or weaken Chromium's sandbox.
+async function waitOwnedPosixGroup(child, timeoutMs) {
+  const terminal = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code));
+  });
+  const within = async (ms) => {
+    let deadline;
+    try {
+      return await Promise.race([
+        terminal,
+        new Promise((_, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error("Owned POSIX group exit timeout")),
+            ms,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(deadline);
+    }
+  };
+  const signalGroup = (signal) => {
+    if (child.pid === undefined) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  };
+  try {
+    return await within(timeoutMs);
+  } catch (error) {
+    if (
+      child.pid === undefined ||
+      child.exitCode !== null ||
+      child.signalCode !== null
+    )
+      throw error;
+    signalGroup("SIGTERM");
+    try {
+      await within(5000);
+    } catch {
+      signalGroup("SIGKILL");
+      await within(5000);
+    }
+    // Parent close alone does not prove the group's remaining descendants exited.
+    if (child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, 0);
+        signalGroup("SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
+    throw error;
+  }
+}
 let cleanupSafe = false;
 let observedClose;
 child.once("close", (code, signal) => {
   observedClose = { code, signal };
 });
 try {
-  const code = await waitOwnedWindowsTree(child, 180000);
+  const code = await (
+    process.platform === "win32" ? waitOwnedWindowsTree : waitOwnedPosixGroup
+  )(child, 180000);
   assert.equal(code, 0, "Owned full App diagnostic must pass");
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
