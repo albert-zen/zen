@@ -163,6 +163,7 @@ const OUTCOME_KEYS = [
   "error",
 ] as const;
 const ROOM_KEYS = [
+  "messageCount",
   "assistant",
   "assistantWorkspace",
   "id",
@@ -483,6 +484,9 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       name: member.name,
       threadId: member.threadId,
     })),
+    ...(room.messageCount === undefined
+      ? {}
+      : { messageCount: room.messageCount }),
     messages: room.messages.map((message) => ({
       ...(message.replyTo === undefined
         ? {}
@@ -854,6 +858,10 @@ function isRoom(value: unknown): value is ZenXRoom {
     !string(room["name"], MAX_ROOM_NAME_BYTES) ||
     !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
     !arrayOf(room["messages"], isRoomMessage) ||
+    (room["messageCount"] !== undefined &&
+      (!Number.isSafeInteger(room["messageCount"]) ||
+        (room["messageCount"] as number) <
+          (room["messages"] as unknown[]).length)) ||
     (room["operationEpoch"] !== undefined &&
       !string(room["operationEpoch"], MAX_ID_BYTES)) ||
     (room["operations"] !== undefined &&
