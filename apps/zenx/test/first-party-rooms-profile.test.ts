@@ -158,7 +158,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.8/u,
+      /already version 1\.0\.9/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
