@@ -24,6 +24,7 @@ import {
   type AutomationTransactionOptions,
 } from "../src/main/automation-transaction-store.js";
 import { MAX_ROOM_OPERATIONS } from "../src/main/trigger-limits.js";
+import { canonicalTriggerSnapshot } from "../src/main/trigger-store.js";
 import type { RoomMessage } from "../src/main/trigger-types.js";
 
 // Freshly rebuilt synthetic regressions, not recovered test-result evidence.
@@ -1022,5 +1023,240 @@ check(
       pause.release();
       await deadline(settled, "body cleanup");
     }
+  },
+);
+
+check(
+  "append detaches metadata and message inputs before awaiting, and returned metadata is isolated",
+  async ({ options, keep }) => {
+    const store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    const input = { metadata: metadata(1), roomEvents: [event(0)] };
+    const pending = store.append(input);
+    input.metadata.rooms[0]!.name = "Caller-mutated name";
+    input.metadata.rooms[0]!.members[0]!.name = "Caller-mutated member";
+    const inputEvent = input.roomEvents[0]!;
+    assert.equal(inputEvent.type, "message");
+    if (inputEvent.type !== "message") throw Error("Expected message fixture");
+    inputEvent.message.text = "Caller-mutated body";
+    await pending;
+    assert.equal(store.metadata().rooms[0]!.name, "Synthetic");
+    assert.equal(store.metadata().rooms[0]!.members[0]!.name, "Bot");
+    assert.equal(
+      (await store.readRoomMessage("room", "m0"))!.message.text,
+      "Synthetic 0",
+    );
+    const returned = store.metadata();
+    returned.rooms[0]!.name = "Returned-clone mutation";
+    returned.rooms[0]!.members.splice(0);
+    assert.equal(store.metadata().rooms[0]!.name, "Synthetic");
+    assert.deepEqual(store.metadata().rooms[0]!.members, [
+      { name: "Bot", threadId: "thread" },
+    ]);
+  },
+);
+
+check(
+  "room rename and member changes retain old message facts but deletion invalidates old read snapshots",
+  async ({ options, keep }) => {
+    const store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    await store.append({ metadata: metadata(1), roomEvents: [event(0)] });
+    const prior = store.roomSnapshot("room");
+    const changed = metadata(1);
+    changed.rooms[0]!.name = "Renamed synthetic room";
+    changed.rooms[0]!.members = [
+      { name: "Replacement", threadId: "replacement-thread" },
+    ];
+    await store.append({ metadata: changed, roomEvents: [] });
+    assert.deepEqual(store.metadata(), changed);
+    assert.deepEqual(
+      (await store.readRoomMessage("room", "m0", prior))!.message,
+      message(0),
+    );
+    await store.append({
+      metadata: { triggers: [], history: [], rooms: [] },
+      roomEvents: [],
+    });
+    assert.throws(() => store.roomSnapshot("room"), /not found/);
+    await assert.rejects(
+      store.readRoomPage("room", 0, prior),
+      /snapshot|identity|boundary/i,
+    );
+    await assert.rejects(
+      store.readRoomMessage("room", "m0", prior),
+      /snapshot|identity|boundary/i,
+    );
+    assert.throws(
+      () => store.hasRoomOrigin("room", "thread", "turn-0"),
+      /not found/,
+    );
+    await assert.rejects(
+      store.append({ metadata: metadata(1), roomEvents: [] }),
+      /cannot be reused/,
+    );
+  },
+);
+
+check(
+  "empty reaction update clears current reactions while pinned revisions survive reopening",
+  async ({ options, keep }) => {
+    let store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    await store.append({ metadata: metadata(1), roomEvents: [event(0)] });
+    const beforeReaction = store.roomSnapshot("room");
+    await store.append({ metadata: metadata(1), roomEvents: [reaction] });
+    const withReaction = store.roomSnapshot("room");
+    await store.append({
+      metadata: metadata(1),
+      roomEvents: [{ ...reaction, reactions: [] }],
+    });
+    const cleared = store.roomSnapshot("room");
+    assert.equal(
+      (await store.readRoomMessage("room", "m0"))!.message.reactions,
+      undefined,
+    );
+    const generation = store.generation;
+    await store.close();
+    store = keep(await AutomationTransactionStore.open(options, generation));
+    assert.equal(
+      (await store.readRoomMessage("room", "m0", beforeReaction))!.message
+        .reactions,
+      undefined,
+    );
+    const pinned = (await store.readRoomMessage("room", "m0", withReaction))!;
+    assert.deepEqual(pinned.message.reactions, reaction.reactions);
+    assert.equal(pinned.reactionRevision, withReaction.revision);
+    const current = (await store.readRoomMessage("room", "m0", cleared))!;
+    assert.equal(current.message.reactions, undefined);
+    assert.equal(current.reactionRevision, cleared.revision);
+    assert.deepEqual(
+      (await store.readRoomPage("room", 0, withReaction)).messages.map(
+        (m) => m.id,
+      ),
+      ["m0"],
+    );
+  },
+);
+
+check(
+  "otherwise valid aggregate metadata over quota rejects before I/O and leaves the writer usable",
+  async ({ options, keep, probe }) => {
+    const store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    const large: AutomationMetadata = {
+      triggers: [],
+      history: [],
+      rooms: Array.from({ length: 50 }, (_, room) => ({
+        id: `aggregate-room-${room}`,
+        name: "Synthetic aggregate",
+        createdAt: 0,
+        messageCount: 0,
+        members: Array.from({ length: 64 }, (_, member) => ({
+          name: `Member-${member}-` + "n".repeat(110),
+          threadId: `thread-${member}-` + "t".repeat(490),
+        })),
+      })),
+    };
+    // Prove this exceeds the aggregate byte quota, not an individual field/shape limit.
+    const canonical = canonicalTriggerSnapshot({
+      triggers: [],
+      history: [],
+      rooms: large.rooms.map(({ messageCount: _, ...room }) => ({
+        ...room,
+        messages: [],
+      })),
+    });
+    assert.equal(canonical.rooms.length, 50);
+    assert(canonical.rooms.every((room) => room.members.length === 64));
+    assert(Buffer.byteLength(JSON.stringify(large)) > 1024 * 1024);
+    const writes = probe.writes;
+    await assert.rejects(
+      store.append({ metadata: large, roomEvents: [] }),
+      /byte limit/,
+    );
+    assert.equal(probe.writes, writes);
+    await store.append({ metadata: metadata(1), roomEvents: [event(0)] });
+    assert.equal(store.metadata().rooms[0]!.messageCount, 1);
+  },
+);
+
+check(
+  "large import frame incurs one explicit internal frame read while returning only a bounded page",
+  async ({ options, keep, probe }) => {
+    const store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    await store.append({
+      metadata: metadata(200),
+      roomEvents: Array.from({ length: 200 }, (_, id) =>
+        event(id, "x".repeat(8000)),
+      ),
+    });
+    probe.reads = 0;
+    probe.readBytes = 0;
+    const page = await store.readRoomPage("room");
+    assert.deepEqual(
+      page.messages.map((m) => m.id),
+      ["m196", "m197", "m198", "m199"],
+    );
+    assert.equal(
+      probe.reads,
+      1,
+      "same-frame page reads the targeted transaction once",
+    );
+    assert(
+      probe.readBytes > 1024 * 1024,
+      "a large import transaction still incurs whole-frame internal read overhead",
+    );
+    assert(
+      probe.readBytes < 2 * 1024 * 1024,
+      "this fixture reads its transaction, not unrelated history",
+    );
+    assert(
+      Buffer.byteLength(JSON.stringify(page)) < 40_000,
+      "bounded response size does not imply bounded four-body internal I/O",
+    );
+  },
+);
+
+check(
+  "short append writes only its transaction and origin index survives reopening beyond 256 messages",
+  async ({ options, keep, probe, file }) => {
+    let store = keep(
+      await AutomationTransactionStore.create(options, metadata()),
+    );
+    await store.append({
+      metadata: metadata(320),
+      roomEvents: Array.from({ length: 320 }, (_, id) =>
+        event(id, "x".repeat(5000)),
+      ),
+    });
+    const generation = store.generation;
+    await store.close();
+    store = keep(await AutomationTransactionStore.open(options, generation));
+    probe.readBytes = 0;
+    assert.equal(store.hasRoomOrigin("room", "thread", "turn-0"), true);
+    assert.equal(store.hasRoomOrigin("room", "thread", "turn-319"), true);
+    assert.equal(store.hasRoomOrigin("room", "thread", "not-recorded"), false);
+    assert.equal(
+      probe.readBytes,
+      0,
+      "origin queries use the reconstructed index",
+    );
+    const before = (await stat(file(store))).size;
+    probe.writeBytes = 0;
+    await store.append({ metadata: metadata(321), roomEvents: [event(320)] });
+    assert.equal(probe.readBytes, 0, "append does not scan historical bodies");
+    assert(
+      probe.writeBytes > 0 && probe.writeBytes < 1500,
+      "a short send writes bounded metadata and its one new message",
+    );
+    assert.equal((await stat(file(store))).size - before, probe.writeBytes);
+    assert.equal(store.hasRoomOrigin("room", "thread", "turn-320"), true);
   },
 );
