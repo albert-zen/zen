@@ -24,7 +24,7 @@ const pnpmCliPath = fileURLToPath(
   new URL("../../../node_modules/pnpm/bin/pnpm.cjs", import.meta.url),
 );
 
-test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without losing stored content", async () => {
+test("real bundled profile upgrades Triggers 1.0.0 to 1.0.2 narrow facts without losing stored content", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-triggers-projection-upgrade-"),
   );
@@ -45,9 +45,10 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without
   const oldRoot = path.join(oldDirectory, "package");
   const oldManifestFile = path.join(oldRoot, "zenx.plugin.json");
   const oldPackageFile = path.join(oldRoot, "package.json");
-  // The runtime and storage contract are byte-identical across this additive
-  // release. Restore exactly the 1.0.0 declared tool surface for the old fixture.
+  // Synthetic older tool surface on the current v2 Host-managed storage
+  // contract. This is not a historical v1 runtime admission fixture.
   const oldManifest = JSON.parse(await readFile(oldManifestFile, "utf8"));
+  assert.equal(oldManifest.storageVersion, 2);
   oldManifest.version = "1.0.0";
   oldManifest.tools = oldManifest.tools.filter(
     (tool: { name: string }) => tool.name !== "zenx_triggers_sidebar_facts",
@@ -181,9 +182,24 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without
       "list",
     );
     const storedBefore = JSON.parse(await readFile(storageFile, "utf8"));
+    assert.equal(storedBefore.version, 2);
+    assert.equal(storedBefore.value.format, "zenx-automation-journal");
+    assert.doesNotMatch(JSON.stringify(storedBefore), /PRIVATE_/);
+    const assertStoredContent = () => {
+      const snapshot = domain.snapshot();
+      assert.equal(snapshot.triggers[0]?.prompt, "PRIVATE_PROMPT");
+      assert.equal(
+        snapshot.triggers[0]?.program?.action?.command,
+        "PRIVATE_PROGRAM",
+      );
+      assert.equal(snapshot.history[0]?.prompt, "PRIVATE_HISTORY");
+      assert.equal(snapshot.rooms[0]?.messages[0]?.text, "PRIVATE_ROOM");
+    };
+    assertStoredContent();
     await installZenXBundledPluginsAtStartup(capabilities, resourcesDirectory);
-    assert.equal(triggerSummary().version, "1.0.1");
-    assert.equal(triggerSummary().profileSource?.packageVersion, "1.0.1");
+    assert.equal(triggerSummary().version, "1.0.2");
+    assertStoredContent();
+    assert.equal(triggerSummary().profileSource?.packageVersion, "1.0.2");
     assert.notEqual(triggerSummary().admissionId, oldAdmission);
     assert.ok(
       capabilities
@@ -245,6 +261,7 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without
       expected,
     );
     await capabilities.close();
+    await domain.close();
     domain = await createBundledAutomationPluginService({
       userDataDirectory,
       appServer,
@@ -252,7 +269,8 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without
     hostPackage = new ZenXTriggersCapabilityPackage(domain);
     capabilities = new ZenXCapabilityService(options);
     await capabilities.initialize();
-    assert.equal(triggerSummary().version, "1.0.1");
+    assert.equal(triggerSummary().version, "1.0.2");
+    assertStoredContent();
     assert.deepEqual(
       await capabilities.executePluginCommand("zenx-triggers", "sidebar-facts"),
       expected,
@@ -267,6 +285,7 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.1 narrow facts without
     );
   } finally {
     await capabilities.close();
+    await domain.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

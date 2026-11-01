@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { windowsStrictUiaCapabilityManifest } from "../src/main/capabilities/windows-strict-uia-provider.js";
 import { boundComputerCapabilityManifest } from "../src/main/capabilities/computer-provider.js";
 import { windowsComputerCapabilityManifest } from "../src/main/capabilities/windows-computer-provider.js";
+import { openAutomationTransactionStorage } from "../src/main/automation-transaction-migration.js";
 import { ZenXCapabilityService } from "../src/main/capability-service.js";
 import { ZenXTriggersCapabilityPackage } from "../src/main/capabilities/automation-control-package.js";
 import type { ZenXAutomationControlPort } from "../src/main/capabilities/automation-control-package.js";
@@ -272,6 +273,7 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
   const selfPort = new MutableAppServerRequestPort();
   await selfPort.attach({ request: async () => ({ data: [] }) as never });
   const self = new ZenXSelfControlCapabilityPackage({ appServer: selfPort });
+  await prepareAutomationMarkers(userData);
   const triggers = new ZenXTriggersCapabilityPackage(automationPort());
   const liveCallbacks: Array<(event: BrowserLiveObservationEvent) => void> = [];
   const computerLiveCallbacks: Array<(event: any) => void> = [];
@@ -682,7 +684,12 @@ test("remaining first-party tarballs install, invoke, cycle lifecycle, and resta
           .plugins.find((plugin) => plugin.id === pluginId)?.lifecycle,
         "uninstalled",
       );
-      await service.deletePluginData(pluginId);
+      if (pluginId === "zenx-triggers")
+        await assert.rejects(
+          service.deletePluginData(pluginId),
+          /share history|independent Delete data/,
+        );
+      else await service.deletePluginData(pluginId);
       await service.reinstall(pluginId);
       assert.equal(
         service
@@ -973,6 +980,7 @@ test("restart keeps a committed Browser backend isolated from a different curren
           environment.ZENX_BROWSER_MODE = direction.selectedMode;
           const committed = trackedBrowserBackend("committed-restart");
           const candidate = trackedBrowserBackend("selected-candidate");
+          let failNextAdmission = false;
           const restarted = selectorBrowserService({
             userData,
             resources,
@@ -986,8 +994,11 @@ test("restart keeps a committed Browser backend isolated from a different curren
               direction.selectedMode === "isolated"
                 ? candidate.backend
                 : committed.backend,
-            failBrowserLoadAt:
-              outcome === "runtime-admission-failure" ? 2 : undefined,
+            failBrowserAdmission: () => {
+              const fail = failNextAdmission;
+              failNextAdmission = false;
+              return fail;
+            },
           });
           try {
             await restarted.initialize();
@@ -1005,11 +1016,18 @@ test("restart keeps a committed Browser backend isolated from a different curren
             if (outcome !== "success") {
               const diagnosticsBeforeSync = restarted.diagnostics();
               if (outcome === "catalog-failure") store.failNextSave();
+              if (outcome === "runtime-admission-failure")
+                failNextAdmission = true;
               await assert.rejects(
                 restarted.syncProfileManagedProviderVariants(),
                 outcome === "catalog-failure"
                   ? /fixture Catalog save failure/u
                   : /fixture Browser runtime admission failure/u,
+              );
+              assert.equal(
+                failNextAdmission,
+                false,
+                "candidate fault gate was consumed",
               );
               const diagnosticsAfterSync = restarted.diagnostics();
               assert.equal(
@@ -1069,7 +1087,7 @@ test("remaining first-party packages adopt every legacy Catalog lifecycle throug
         const userData = path.join(root, lifecycle);
         await seedPreProfileFirstPartyCatalog(userData, lifecycle);
 
-        const adopted = firstPartyService(userData, resources);
+        const adopted = await firstPartyService(userData, resources);
         try {
           await adopted.initialize();
           for (const definition of remainingDefinitions) {
@@ -1273,10 +1291,11 @@ test("CapabilityService close attempts browser and computer owners after one rej
   }
 });
 
-function firstPartyService(
+async function firstPartyService(
   userDataDirectory: string,
   resourcesDirectory: string,
-): ZenXCapabilityService {
+): Promise<ZenXCapabilityService> {
+  await prepareAutomationMarkers(userDataDirectory);
   const self = new ZenXSelfControlCapabilityPackage({
     appServer: attachedSelfControlPort(),
   });
@@ -1310,10 +1329,9 @@ function selectorBrowserService(options: {
   environment: NodeJS.ProcessEnv;
   connectorBackend: ZenXBrowserBackend;
   electronBrowserFactory?: () => ZenXBrowserBackend;
-  failBrowserLoadAt?: number;
+  failBrowserAdmission?: () => boolean;
 }): ZenXCapabilityService {
   let service!: ZenXCapabilityService;
-  let browserLoadCount = 0;
   const browserLoader = createDelegatingFirstPartyProfileLoader(() =>
     service.browserProfilePackage(),
   );
@@ -1334,8 +1352,7 @@ function selectorBrowserService(options: {
     },
     trustedProfileLoaders: {
       browser: (module) => {
-        browserLoadCount += 1;
-        if (browserLoadCount === options.failBrowserLoadAt) {
+        if (options.failBrowserAdmission?.()) {
           throw new Error("fixture Browser runtime admission failure");
         }
         return browserLoader(module);
@@ -1590,4 +1607,16 @@ function automationPort(): ZenXAutomationControlPort {
     removeRoomMember: unsupported,
     postAgentRoomMessage: unsupported,
   } as ZenXAutomationControlPort;
+}
+
+// Synthetic control port remains intentionally isolated from model work, but
+// admission still uses the same genuine Host-owned marker bootstrap as production.
+async function prepareAutomationMarkers(
+  userDataDirectory: string,
+): Promise<void> {
+  const storage = await openAutomationTransactionStorage({
+    storageRoot: path.join(userDataDirectory, "plugin-data"),
+    loadLegacy: async () => ({ rooms: [], triggers: [], history: [] }),
+  });
+  await storage.close();
 }

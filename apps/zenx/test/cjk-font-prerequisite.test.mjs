@@ -297,8 +297,9 @@ test("workflow prepares fonts before every capture and never caches apt state", 
     .split("  zenx:\n")[1]
     .split("  zenx-capability-smoke:\n")[0];
   // Preserve the existing 20-minute workload budget plus only the bounded
-  // six-minute normal/expanded tab acceptance added by this workflow.
-  assert.ok(zenx.includes("timeout-minutes: 26"));
+  // six-minute normal/expanded tab acceptance and bounded Room capture (3m)
+  // plus allowlisted evidence collection (1m). Font work is reused, not repeated.
+  assert.ok(zenx.includes("timeout-minutes: 30"));
   const tabCapture = zenx
     .split("      - ")
     .find((step) =>
@@ -307,6 +308,41 @@ test("workflow prepares fonts before every capture and never caches apt state", 
       ),
     );
   assert.ok(tabCapture?.includes("timeout-minutes: 6"));
+  const roomCapture = zenx
+    .split("      - ")
+    .find((step) =>
+      step.startsWith(
+        "name: Capture real persisted Room history with production RoomsPage",
+      ),
+    );
+  assert.ok(roomCapture?.includes("timeout-minutes: 3"));
+  assert.ok(roomCapture?.includes("steps.zenx-fonts.outcome == 'success'"));
+  assert.ok(
+    zenx.indexOf("id: zenx-fonts") <
+      zenx.indexOf("capture-room-history-preview.mjs"),
+  );
+  assert.ok(
+    roomCapture.indexOf("generate-room-history-fixture.ts") <
+      roomCapture.indexOf("build-room-history-preview.mjs"),
+  );
+  assert.ok(
+    roomCapture.indexOf("build-room-history-preview.mjs") <
+      roomCapture.indexOf("capture-room-history-preview.mjs"),
+  );
+  const roomCollection = zenx
+    .split("      - ")
+    .find((step) =>
+      step.startsWith(
+        "name: Collect only safe synthetic Room acceptance evidence",
+      ),
+    );
+  assert.ok(roomCollection?.includes("timeout-minutes: 1"));
+  assert.ok(roomCollection?.includes("always()"));
+  assert.ok(
+    zenx.indexOf("capture-room-history-preview.mjs") <
+      zenx.indexOf("collect-room-history-evidence.mjs"),
+  );
+
   assert.ok(
     zenx.indexOf("id: zenx-fonts") <
       zenx.indexOf("capture-titlebar-safe-area-preview.mjs"),
@@ -322,6 +358,7 @@ test("workflow prepares fonts before every capture and never caches apt state", 
     "capture-trigger-message-preview.mjs",
     "capture-file-sidebar-preview.mjs",
     "capture-settings-audit-preview.mjs",
+    "capture-room-history-preview.mjs",
   ]) {
     const code = readFileSync(
       new URL(`../scripts/${script}`, import.meta.url),

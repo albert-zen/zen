@@ -57,7 +57,7 @@ document.documentElement.dataset.appearance = "dark";
 document.documentElement.dataset.themePreset = "graphite";
 const style = document.createElement("style");
 style.textContent =
-  "body{margin:0;height:100vh}#root{height:100%;display:flex;min-width:0}#root>.rooms-page{flex:1;min-height:0}";
+  "body{margin:0;height:100vh}#root{height:100%;display:flex;min-width:0}#root>.rooms-chat{flex:1;min-height:0}";
 document.head.append(style);
 getLanguageController().receivePreference("en");
 void i18n

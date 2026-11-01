@@ -49,9 +49,9 @@ const expected = [
   ["@zenx/computer-plugin", "zenx-computer-plugin-peekaboo-1.5.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-1.5.0.tgz"],
   ["@zenx/computer-plugin", "zenx-computer-plugin-win32-strict-1.5.0.tgz"],
-  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.8.tgz"],
+  ["@zenx/rooms-plugin", "zenx-rooms-plugin-1.0.9.tgz"],
   ["@zenx/self-control-plugin", "zenx-self-control-plugin-1.1.0.tgz"],
-  ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.1.tgz"],
+  ["@zenx/triggers-plugin", "zenx-triggers-plugin-1.0.2.tgz"],
 ];
 
 const providerVariants = new Map([
@@ -426,7 +426,7 @@ test("direct packaging establishes the plugin SDK clean-output prerequisite", as
 
     const tarball = await packZenXRoomsPlugin({ outputDirectory: output });
 
-    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.8.tgz");
+    assert.equal(path.basename(tarball), "zenx-rooms-plugin-1.0.9.tgz");
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }

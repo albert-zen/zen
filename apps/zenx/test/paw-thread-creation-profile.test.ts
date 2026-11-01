@@ -28,7 +28,7 @@ test(
     const resources = path.join(root, "resources");
     await mkdir(workspace);
     await mkdir(path.join(resources, "plugins"), { recursive: true });
-    for (const file of [ZENX_ROOMS_TARBALL, "zenx-triggers-plugin-1.0.1.tgz"])
+    for (const file of [ZENX_ROOMS_TARBALL, "zenx-triggers-plugin-1.0.2.tgz"])
       await copyFile(
         path.resolve("resources/plugins", file),
         path.join(resources, "plugins", file),
@@ -50,9 +50,12 @@ test(
       startupTimeoutMs: 10_000,
     });
     let capabilities: ZenXCapabilityService | undefined;
+    let domain:
+      | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
+      | undefined;
     try {
       await manager.start();
-      const domain = await createBundledAutomationPluginService({
+      domain = await createBundledAutomationPluginService({
         userDataDirectory: path.join(root, "profile"),
         appServer: {
           request: (method, params) => manager.request(method, params),
@@ -100,7 +103,7 @@ test(
         pnpmCliPath: path.resolve("../../node_modules/pnpm/bin/pnpm.cjs"),
         bundledProvidersOnly: true,
         trustedProfileLoaders: {
-          "zenx-rooms": createZenXRoomsProfileLoader(() => domain),
+          "zenx-rooms": createZenXRoomsProfileLoader(() => domain!),
           "zenx-triggers": createDelegatingFirstPartyProfileLoader(
             () => triggers,
           ),
@@ -155,6 +158,7 @@ test(
       assert.equal(domain.snapshot().rooms.length, 1);
     } finally {
       await capabilities?.close();
+      await domain?.close();
       await manager.stop();
       await rm(root, { recursive: true, force: true });
     }

@@ -21,8 +21,8 @@ test(
     const resources = path.join(root, "resources");
     await mkdir(path.join(resources, "plugins"), { recursive: true });
     await copyFile(
-      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.1.tgz"),
-      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.1.tgz"),
+      path.resolve("resources/plugins/zenx-triggers-plugin-1.0.2.tgz"),
+      path.join(resources, "plugins", "zenx-triggers-plugin-1.0.2.tgz"),
     );
     const projection = new ZenXProjectProjection();
     await projection.updateConfiguration([process.cwd()], process.cwd());
@@ -41,14 +41,14 @@ test(
       startupTimeoutMs: 10000,
     });
     let service: ZenXCapabilityService | undefined;
+    let domain:
+      | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
+      | undefined;
     try {
       await manager.start();
       const existing = await manager.request("thread/start", {
         cwd: process.cwd(),
       });
-      let domain: Awaited<
-        ReturnType<typeof createBundledAutomationPluginService>
-      >;
       let pkg: ZenXTriggersCapabilityPackage;
       service = new ZenXCapabilityService({
         userDataDirectory: userData,
@@ -344,6 +344,7 @@ test(
         runAt: Date.now() + 500,
       })) as { id: string };
       await service.close();
+      await domain.close();
       service = undefined;
       await manager.stop();
       await sleep(850);
@@ -434,6 +435,7 @@ test(
       await command("delete", { triggerId: offline.id });
     } finally {
       await service?.close();
+      await domain?.close();
       await manager.stop();
       if (process.env.ZENX_QA_KEEP_PROFILE) {
         console.log("retained QA profile", root);
