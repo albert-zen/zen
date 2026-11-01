@@ -94,6 +94,56 @@ async function click(expression, label) {
   result.steps.push(label);
   delete result.pendingOperation;
 }
+// Electron wheel delta sign is opposite to DOM deltaY (existing native capture contract).
+function sidebarWheelDelta(row, viewport) {
+  if (row.top >= viewport.top + 4 && row.bottom <= viewport.bottom - 4)
+    return 0;
+  if (row.bottom > viewport.bottom - 4)
+    return -Math.ceil(
+      Math.min(360, Math.max(80, row.bottom - viewport.bottom + 16)),
+    );
+  return Math.ceil(Math.min(360, Math.max(80, viewport.top - row.top + 16)));
+}
+async function revealThreadWithSidebarWheel(expression) {
+  result.sidebarSelectionScroll = [];
+  window.show();
+  window.focus();
+  window.webContents.focus();
+  await until(
+    async () => window.isFocused() && window.webContents.isFocused(),
+    "Owned window focus for sidebar selection",
+  );
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const state = await evaluate(
+      `(()=>{const row=${expression},scroller=row?.closest('.sidebar-scroll');if(!row||!scroller)throw Error('Thread row is not in the left sidebar scroller');const r=row.getBoundingClientRect(),v=scroller.getBoundingClientRect(),footer=document.querySelector('.sidebar-footer')?.getBoundingClientRect(),viewport={left:v.left,right:v.right,top:Math.max(0,v.top),bottom:Math.min(innerHeight,v.bottom,footer?.top??innerHeight)},x=Math.round((viewport.left+viewport.right)/2),y=Math.round((viewport.top+viewport.bottom)/2);if(!scroller.contains(document.elementFromPoint(x,y)))throw Error('Left sidebar wheel point is obscured');return {row:{top:r.top,bottom:r.bottom},viewport,point:{x,y},scrollTop:scroller.scrollTop,scrollLeft:scroller.scrollLeft}})()`,
+    );
+    const deltaY = sidebarWheelDelta(state.row, state.viewport);
+    if (deltaY === 0) return;
+    result.sidebarSelectionScroll.push({
+      attempt,
+      ...state,
+      deltaX: 0,
+      deltaY,
+    });
+    window.webContents.sendInputEvent({ type: "mouseMove", ...state.point });
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...state.point,
+      deltaX: 0,
+      deltaY,
+      canScroll: true,
+      hasPreciseScrollingDeltas: true,
+    });
+    result.steps.push(
+      "Diagnostic preparation: native vertical wheel in LEFT sidebar only",
+    );
+    await pause(300);
+  }
+  throw Error(
+    "Created Thread was not fully visible after six bounded left-sidebar vertical wheel steps",
+  );
+}
+const sidebarMeasure = `(()=>{const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}},scroll=document.querySelector('.sidebar-scroll');return {sidebar:rect(document.querySelector('.sidebar')),scroll:scroll?{bounds:rect(scroll),offsetWidth:scroll.offsetWidth,clientWidth:scroll.clientWidth,scrollHeight:scroll.scrollHeight,clientHeight:scroll.clientHeight,scrollTop:scroll.scrollTop,scrollLeft:scroll.scrollLeft}:null,header:rect(document.querySelector('.sidebar-header')),footer:rect(document.querySelector('.sidebar-footer')),newThreadIcon:rect(document.querySelector('.new-thread-action svg')),viewActions:rect(document.querySelector('.sidebar-view-actions')),viewActionIcon:rect(document.querySelector('.sidebar-view-actions svg')),settingsIcon:rect(document.querySelector('.settings-nav-row svg')),viewport:{width:innerWidth,height:innerHeight,devicePixelRatio}}})()`;
 async function screenshot(name) {
   await fs.writeFile(
     path.join(directory, name),
@@ -155,6 +205,19 @@ async function run() {
       ),
     "local fake Host ready",
   );
+  await until(
+    async () =>
+      await evaluate(
+        "Boolean(document.querySelector('.sidebar-scroll')) && !document.querySelector('.sidebar-scroll > .sidebar-empty[role=status]')",
+      ),
+    "Initial active Thread list finished loading",
+  );
+  result.nativeWindow = {
+    requestedSize: { width: 1280, height: 820 },
+    bounds: window.getBounds(),
+    contentBounds: window.getContentBounds(),
+  };
+  result.sidebarBeforeThread = await evaluate(sidebarMeasure);
   const started = await evaluate(
     `window.zenx.protocol.request('thread/start',{cwd:${JSON.stringify(path.join(temporary, "workspace"))}})`,
   );
@@ -162,10 +225,17 @@ async function run() {
   result.steps.push(
     "Real protocol thread/start only; synthetic idle Thread initialized",
   );
-  await click(
-    `document.querySelector(${JSON.stringify(".thread-row-shell[data-thread-id=" + JSON.stringify(started.thread.id) + "] > button.thread-row")})`,
-    "Select created idle Thread",
+  const threadTarget = `document.querySelector(${JSON.stringify(".thread-row-shell[data-thread-id=" + JSON.stringify(started.thread.id) + "] > button.thread-row")})`;
+  await until(
+    async () =>
+      await evaluate(
+        `Boolean(${threadTarget}) && !document.querySelector('.sidebar-scroll > .sidebar-empty[role=status]')`,
+      ),
+    "Created Thread row ready after list load",
   );
+  result.sidebarAfterThreadBeforeScroll = await evaluate(sidebarMeasure);
+  await revealThreadWithSidebarWheel(threadTarget);
+  await click(threadTarget, "Select created idle Thread");
   await click(
     "document.querySelector('#thread-browser-toggle:not(:disabled)')",
     "Open right workspace",
