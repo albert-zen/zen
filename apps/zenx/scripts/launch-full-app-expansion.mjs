@@ -34,7 +34,7 @@ const profile = path.join(temporary, "profile"),
   data = path.join(temporary, "zen-data"),
   home = path.join(temporary, "home"),
   workspace = path.join(temporary, "workspace");
-for (const d of [profile, data, home, workspace])
+for (const d of [profile, data, home, workspace, path.join(home, "Documents")])
   await mkdir(d, { recursive: true, mode: 0o700 });
 await writeFile(
   path.join(profile, "host-profile.json"),
@@ -184,6 +184,10 @@ async function waitOwnedWindowsTree(child, timeoutMs) {
   }
 }
 let cleanupSafe = false;
+let observedClose;
+child.once("close", (code, signal) => {
+  observedClose = { code, signal };
+});
 try {
   const code = await waitOwnedWindowsTree(child, 180000);
   assert.equal(code, 0, "Owned full App diagnostic must pass");
@@ -193,9 +197,27 @@ try {
   assert.equal(result.ok, true);
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
+  await writeFile(
+    path.join(directory, "full-app-lifecycle.json"),
+    JSON.stringify(
+      {
+        childCloseObserved: observedClose !== undefined,
+        exitCode: observedClose?.code ?? null,
+        signal: observedClose?.signal ?? null,
+        captureValidated: cleanupSafe,
+        privateFixturePolicy: cleanupSafe
+          ? "remove after validated normal close"
+          : "retained conservatively; not uploaded",
+      },
+      null,
+      2,
+    ),
+  );
   if (cleanupSafe) await rm(temporary, { recursive: true, force: true });
   else
     console.error(
-      "Owned diagnostic process exit unconfirmed; private fixture retained, not uploaded",
+      observedClose !== undefined
+        ? `Owned Electron close confirmed (${JSON.stringify(observedClose)}); capture validation failed; private fixture retained conservatively, not uploaded`
+        : "Owned diagnostic process exit unconfirmed; private fixture retained, not uploaded",
     );
 }

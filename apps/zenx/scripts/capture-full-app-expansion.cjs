@@ -16,6 +16,9 @@ const [directory, version, temporary] = process.argv.slice(2, 5);
 assert.ok(directory && temporary && ["before", "current"].includes(version));
 app.setPath("userData", path.join(temporary, "profile"));
 app.setPath("home", path.join(temporary, "home"));
+// The private Windows profile has no OS-registered Documents known folder.
+// Point only this owned Electron app at the directory created by its launcher.
+app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
   version,

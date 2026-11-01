@@ -62,3 +62,4 @@ jobs:
             ${{ runner.temp }}/full-app-expansion/*.png
             ${{ runner.temp }}/full-app-expansion/full-app-measurements.json
             ${{ runner.temp }}/full-app-expansion/full-app-source.json
+            ${{ runner.temp }}/full-app-expansion/full-app-lifecycle.json
