@@ -117,10 +117,14 @@ export function readThreadHistory(
       options.maxItemsPerTurn,
       Math.max(1, Math.floor(100 / options.maxTurns)),
     );
-    const page = turns.slice(start, end).map((started) => {
-      const turnItems = snapshot.filter(
-        (item) => item.turnId === started.turnId,
-      );
+    const selectedTurns = turns.slice(start, end);
+    // Group only this page in canonical order, without rescanning the snapshot
+    // for each turn or retaining an index beyond this read.
+    const selectedItems = new Map<string | undefined, CanonicalItem[]>();
+    for (const started of selectedTurns) selectedItems.set(started.turnId, []);
+    for (const item of snapshot) selectedItems.get(item.turnId)?.push(item);
+    const page = selectedTurns.map((started) => {
+      const turnItems = selectedItems.get(started.turnId)!;
       const terminal = turnItems.findLast(
         (item) =>
           item.type === "turn_completed" || item.type === "turn_aborted",
