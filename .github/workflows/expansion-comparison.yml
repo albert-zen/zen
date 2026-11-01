@@ -1,0 +1,62 @@
+name: One-time internal pane expansion comparison
+on:
+  push:
+    branches: ["diagnostic/pane-expansion-comparison-20261101"]
+    paths:
+      - .github/workflows/expansion-comparison.yml
+      - apps/zenx/scripts/prepare-expansion-comparison.mjs
+      - apps/zenx/scripts/capture-expansion-comparison.mjs
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: before
+            source: c6f4592e15c6abbc5db890a86ceef0865f70681e
+          - version: current
+            source: 4ed8fb0f2294d234a10cf293b67335f72d2bb332
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: diagnostic
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install locked official dependencies without package scripts
+        working-directory: source
+        run: npm ci --ignore-scripts
+      - name: Prepare source-matched synthetic component fixture
+        working-directory: source
+        run: |
+          cp ../diagnostic/apps/zenx/scripts/{prepare,capture}-expansion-comparison.mjs apps/zenx/scripts/
+          node apps/zenx/scripts/prepare-expansion-comparison.mjs '${{ matrix.version }}' '${{ runner.temp }}/expansion'
+          node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs '${{ runner.temp }}/expansion'
+          git diff -- apps/zenx/scripts/titlebar-safe-area-preview.tsx > '${{ runner.temp }}/expansion/fixture-adapter.diff'
+          git diff --exit-code -- apps/zenx/src packages src
+      - name: Capture real mouse expansion with frame geometry and screenshots
+        working-directory: source
+        run: node apps/zenx/scripts/capture-expansion-comparison.mjs '${{ runner.temp }}/expansion' '${{ matrix.version }}'
+      - name: Retain only synthetic screenshot and measurement evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pane-expansion-${{ matrix.version }}-${{ matrix.source }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/expansion/*.png
+            ${{ runner.temp }}/expansion/measurements.json
+            ${{ runner.temp }}/expansion/source.json
+            ${{ runner.temp }}/expansion/comparison-source.json
+            ${{ runner.temp }}/expansion/fixture-adapter.diff
