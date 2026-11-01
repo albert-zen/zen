@@ -4,7 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, session } = require("electron");
-assert.equal(process.platform, "linux");
+assert.equal(process.platform, "win32");
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(process.versions.electron);
 assert.ok(
@@ -43,7 +43,7 @@ async function click(expression, label) {
     label,
   );
   const p = await evaluate(
-    `(()=>{const e=${expression},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured target: '+${JSON.stringify(label)});return {x,y}})()`,
+    `(()=>{const e=${expression},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured target: '+${JSON.stringify(label)});return {x:Math.round(x),y:Math.round(y)}})()`,
   );
   window.show();
   window.focus();
@@ -196,7 +196,7 @@ async function run() {
   result.frames = await evaluate("window.__fullAppFrames");
   await screenshot(`${version}-full-app-settled.png`);
   assert.equal(result.settled.expanded, "true");
-  assert.equal(result.settled.platform, "linux");
+  assert.equal(result.settled.platform, "win32");
   assert.equal(result.settled.tabs.length, version === "current" ? 2 : 1);
   const read = await evaluate(
     `window.zenx.protocol.request('thread/read',{threadId:${JSON.stringify(started.thread.id)},includeTurns:true})`,

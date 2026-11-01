@@ -1,4 +1,4 @@
-/** Launch only the owned synthetic Electron App on disposable Linux CI. */
+/** Launch only the owned synthetic Electron App on disposable Windows CI. */
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import {
@@ -14,9 +14,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
-import { waitForSmokeProcess } from "./workspace-browser-persistence-smoke.mjs";
+
 assert.equal(process.env.GITHUB_ACTIONS, "true");
-assert.equal(process.platform, "linux");
+assert.equal(process.platform, "win32");
 const directory = path.resolve(process.argv[2]);
 const version = process.argv[3];
 const expected = {
@@ -80,7 +80,7 @@ await writeFile(
       sourceCommit: expected,
       hashes,
       scope:
-        "Actual production main/preload/renderer and fake local Host. Idle Thread initialized through real protocol, NOT UI first-Send creation. Actual UI selects thread, opens Subagents and maximizes pane. Linux Electron only.",
+        "Actual production main/preload/renderer and fake local Host. Idle Thread initialized through real protocol, NOT UI first-Send creation. Actual UI selects thread, opens Subagents and maximizes pane. Windows Electron only.",
     },
     null,
     2,
@@ -90,19 +90,30 @@ await writeFile(
 const environment = Object.fromEntries(
   Object.entries(process.env).filter(
     ([key]) =>
-      key === "XAUTHORITY" || // Owned Xvfb cookie, required for this isolated display.
-      !/(OPENAI|ANTHROPIC|GEMINI|GOOGLE_API|AZURE|CODEX|AUTH|TOKEN|SECRET|PASSWORD|ZENX_|ELECTRON_RUN_AS_NODE|ELECTRON_RENDERER_URL|ELECTRON_EXTRA_LAUNCH_ARGS|NODE_OPTIONS)/i.test(
+      !/^(HOME|USERPROFILE|USER_HOME|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|XDG_CONFIG_HOME|XDG_CACHE_HOME)$/i.test(
         key,
-      ),
+      ) &&
+      (key === "XAUTHORITY" || // Owned Xvfb cookie, required for this isolated display.
+        !/(OPENAI|ANTHROPIC|GEMINI|GOOGLE_API|AZURE|CODEX|AUTH|TOKEN|SECRET|PASSWORD|ZENX_|ELECTRON_RUN_AS_NODE|ELECTRON_RENDERER_URL|ELECTRON_EXTRA_LAUNCH_ARGS|NODE_OPTIONS)/i.test(
+          key,
+        )),
   ),
 );
 Object.assign(environment, {
   HOME: home,
+  USERPROFILE: home,
+  USER_HOME: home,
+  HOMEDRIVE: path.parse(home).root.slice(0, 2),
+  HOMEPATH: home.slice(2),
+  APPDATA: path.join(home, "AppData", "Roaming"),
+  LOCALAPPDATA: path.join(home, "AppData", "Local"),
   XDG_CONFIG_HOME: path.join(home, ".config"),
   XDG_CACHE_HOME: path.join(home, ".cache"),
   ZENX_DATA_DIR: data,
   GITHUB_ACTIONS: "true",
 });
+await mkdir(environment.APPDATA, { recursive: true });
+await mkdir(environment.LOCALAPPDATA, { recursive: true });
 const child = spawn(
   electron,
   [
@@ -114,17 +125,73 @@ const child = spawn(
   ],
   { env: environment, stdio: ["ignore", "inherit", "inherit"] },
 );
-let cleanupSafe = true;
-try {
-  const code = await waitForSmokeProcess(child, 180000).catch((error) => {
-    cleanupSafe = error.reaped !== false;
-    throw error;
+// The generic helper kills only the parent; Windows must terminate the owned tree on timeout.
+async function waitOwnedWindowsTree(child, timeoutMs) {
+  let closed = false;
+  const terminal = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => {
+      closed = true;
+      resolve(code);
+    });
   });
+  let timer;
+  try {
+    return await Promise.race([
+      terminal,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Owned Electron diagnostic timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch (error) {
+    if (
+      !closed &&
+      child.exitCode === null &&
+      child.signalCode === null &&
+      child.pid !== undefined
+    ) {
+      // PID is from our still-live ChildProcess, never process-name-wide termination.
+      execFileSync(
+        path.join(
+          process.env.SystemRoot ?? process.env.SYSTEMROOT,
+          "System32",
+          "taskkill.exe",
+        ),
+        ["/PID", String(child.pid), "/T", "/F"],
+        { timeout: 5000, windowsHide: true, stdio: "ignore" },
+      );
+      let closeTimer;
+      try {
+        await Promise.race([
+          terminal,
+          new Promise((_, reject) => {
+            closeTimer = setTimeout(
+              () => reject(new Error("Owned tree exit unconfirmed")),
+              5000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(closeTimer);
+      }
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+let cleanupSafe = false;
+try {
+  const code = await waitOwnedWindowsTree(child, 180000);
   assert.equal(code, 0, "Owned full App diagnostic must pass");
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
   assert.equal(result.ok, true);
+  cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
   if (cleanupSafe) await rm(temporary, { recursive: true, force: true });
   else

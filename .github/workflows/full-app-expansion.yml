@@ -10,7 +10,7 @@ permissions:
   contents: read
 jobs:
   full-app:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -42,14 +42,15 @@ jobs:
         timeout-minutes: 7
         run: |
           npm run build --workspace @zen/zenx
-          cp ../diagnostic/apps/zenx/scripts/{launch-full-app-expansion.mjs,capture-full-app-expansion.cjs} apps/zenx/scripts/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item ../diagnostic/apps/zenx/scripts/launch-full-app-expansion.mjs apps/zenx/scripts/
+          Copy-Item ../diagnostic/apps/zenx/scripts/capture-full-app-expansion.cjs apps/zenx/scripts/
           git diff --exit-code -- apps/zenx/src apps/zenx/electron.vite.config.ts
       - name: Own isolated real App with fake Host; no Turn or external credentials
         working-directory: source
         timeout-minutes: 4
         run: |
-          command -v xvfb-run
-          xvfb-run -a node apps/zenx/scripts/launch-full-app-expansion.mjs '${{ runner.temp }}/full-app-expansion' '${{ matrix.version }}'
+          node apps/zenx/scripts/launch-full-app-expansion.mjs '${{ runner.temp }}/full-app-expansion' '${{ matrix.version }}'
       - name: Retain only synthetic screenshots and explicitly selected measurements
         if: always()
         uses: actions/upload-artifact@v4
