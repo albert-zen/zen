@@ -488,3 +488,17 @@ test("fullscreen macOS titlebar follows the real Sidebar column rather than dela
       desktop.indexOf("@media (min-width: 721px) and (max-width: 1099px)"),
   );
 });
+
+test("Sidebar reserves native scrollbar space before the first Thread overflows", async () => {
+  const styles = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  const rule = styles.match(/\.sidebar-scroll\s*\{([^}]+)\}/u)?.[1];
+  assert.ok(rule, "the middle Sidebar scroll region has its own layout rule");
+  assert.match(rule, /scrollbar-gutter:\s*stable;/u);
+  assert.match(rule, /overflow-y:\s*auto;/u);
+  assert.match(rule, /scrollbar-width:\s*thin;/u);
+  assert.match(rule, /padding:\s*0 8px 18px;/u);
+  assert.doesNotMatch(rule, /(?:^|[;\s])(?:width|min-width|max-width):/u);
+});

@@ -812,6 +812,7 @@ button:disabled {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--border-control) transparent;
@@ -8270,6 +8271,8 @@ button:disabled {
     width: calc(100% - var(--workspace-panel-width, 0px));
     min-width: var(--native-leading-safe-area);
     padding-right: 0;
+    /* Follow the measured panel boundary, not a second delayed width tween. */
+    transition: none;
   }
   /* Fullscreen starts at the actual animated Sidebar grid boundary. Never
      let a delayed ResizeObserver width leave the z-index 50 titlebar covering
@@ -9120,6 +9123,10 @@ button:disabled {
     border-color var(--motion-layout) var(--ease-standard),
     opacity var(--motion-layout) var(--ease-standard),
     translate var(--motion-layout) var(--ease-standard);
+}
+.auxiliary-panel[data-resizing="true"] {
+  /* Pointer-driven geometry must follow the pointer; non-geometric motion stays. */
+  transition-property: border-color, opacity, translate;
 }
 .auxiliary-panel[data-open="false"] {
   opacity: 0;
