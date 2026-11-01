@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
@@ -80,6 +82,46 @@ test("Room evidence allowlists synthetic outputs and fails closed without exact 
         "private",
       ),
       false,
+    );
+    const environment = { ...process.env };
+    delete environment.GITHUB_ACTIONS;
+    delete environment.GITHUB_SHA;
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL(
+            "../scripts/collect-room-history-evidence.mjs",
+            import.meta.url,
+          ),
+        ),
+        input,
+        output,
+        commit,
+      ],
+      { env: environment },
+    );
+    assert.equal(
+      JSON.parse(await readFile(path.join(output, "acceptance.json"), "utf8"))
+        .acceptancePassed,
+      true,
+    );
+    assert.throws(() =>
+      execFileSync(
+        process.execPath,
+        [
+          fileURLToPath(
+            new URL(
+              "../scripts/collect-room-history-evidence.mjs",
+              import.meta.url,
+            ),
+          ),
+          input,
+          output,
+          "b".repeat(40),
+        ],
+        { env: environment, stdio: "pipe" },
+      ),
     );
     await unlink(path.join(input, "source.json"));
     assert.equal(

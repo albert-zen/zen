@@ -149,3 +149,36 @@ Run native file/journal/migration tests on Linux, Windows and macOS. UI acceptan
 requires SHA-matched real screenshots with synthetic-data boundaries: initial
 four messages, crossing 256 via Load earlier, oldest and latest after loading all.
 CI evidence must omit raw logs, local paths, credentials and real user data.
+
+### Minimal recurring checks and one-time UI evidence
+
+The existing Linux `check:observed` already includes the storage, migration,
+service and renderer tests. The existing Windows and macOS jobs run just the
+store, migration and real factory suites after their existing SDK/Core build.
+No second Linux test step, new job, dependency installation, screenshot upload
+or job-timeout increase is needed for this change.
+
+These checks establish retained IDs/order across restart, history beyond 256 and
+1 MiB, bounded page/read/write behavior, and fail-closed mutation/migration. They
+are correctness and I/O-work regressions, not a throughput or user-latency
+benchmark. Native power-loss guarantees are not inferred from passing them.
+
+For this UI change, capture once from the exact reviewed checkout with existing
+Linux Chromium and CJK fonts, using only generated data:
+
+```sh
+npm run build --workspace @zenx/plugin-sdk
+node --import tsx apps/zenx/scripts/generate-room-history-fixture.ts /tmp/room-history-raw
+node apps/zenx/scripts/build-room-history-preview.mjs /tmp/room-history-raw
+node apps/zenx/scripts/capture-room-history-preview.mjs /tmp/room-history-raw --local-synthetic
+node apps/zenx/scripts/collect-room-history-evidence.mjs /tmp/room-history-raw /tmp/room-history-safe "$(git rev-parse HEAD)"
+```
+
+The four screenshots show initial four messages, crossing 256, and both ends of
+all 320 messages. Assertions check IDs, text, order, duplicates and idle scroll
+stability. This is a production component fed responses verified against real
+synthetic storage, not a native Electron end-to-end or timing measurement. Publish
+only the safe directory after reviewing its SHA-bound receipt; raw browser and
+lifecycle diagnostics remain local. If browser sandboxing or fonts are blocked,
+report the failed acceptance rather than weakening the checks. Repeat this
+one-time capture when history interaction/layout changes, not on unrelated PRs.

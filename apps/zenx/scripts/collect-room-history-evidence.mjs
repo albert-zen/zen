@@ -124,7 +124,7 @@ if (
   const receipt = await collectRoomHistoryEvidence(
     path.resolve(process.argv[2]),
     path.resolve(process.argv[3]),
-    process.env.GITHUB_SHA,
+    process.argv[4] ?? process.env.GITHUB_SHA,
   );
   if (!receipt.acceptancePassed) process.exitCode = 1;
 }

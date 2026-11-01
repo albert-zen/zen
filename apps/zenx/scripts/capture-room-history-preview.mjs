@@ -1,4 +1,4 @@
-/** Uses the existing Ubuntu CI Chrome, never a user profile or downloaded browser. */
+/** Uses existing Linux Chrome with a fresh synthetic profile, locally or in CI. */
 import assert from "node:assert/strict";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,12 +9,20 @@ import path from "node:path";
 import { once } from "node:events";
 import { observePreviewChrome } from "./preview-browser-lifecycle.mjs";
 
-assert.equal(
-  process.env.GITHUB_ACTIONS,
-  "true",
-  "This capture runs only in GitHub Actions; open the HTML manually elsewhere.",
+const localSynthetic = process.argv[3] === "--local-synthetic";
+assert.ok(
+  process.argv[3] === undefined || localSynthetic,
+  "Only --local-synthetic is accepted as an optional capture mode.",
 );
-assert.equal(process.platform, "linux", "This fixture targets Ubuntu CI.");
+assert.ok(
+  process.env.GITHUB_ACTIONS === "true" || localSynthetic,
+  "Outside CI, explicitly opt into isolated capture with --local-synthetic.",
+);
+assert.equal(
+  process.platform,
+  "linux",
+  "This synthetic capture targets Linux.",
+);
 const directory = path.resolve(process.argv[2] ?? ".room-history-preview");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evidence = {
