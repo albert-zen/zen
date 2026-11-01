@@ -95,7 +95,9 @@ writers must refuse version-2 storage. Retry a rolled-back unselected import onl
 remain authoritative. A v1 shared container paired with a v2 forward marker is
 ambiguous (the shared marker may have been rolled back after new history was
 accepted): refuse without rewriting any files rather than reimporting its backup.
-There is no automatic replay of effects.
+The automatic recovery contract does not cover manually rolling both namespaces
+back to old v1 copies after cutover; that requires explicit recovery of the retained
+journal files. There is no automatic replay of effects.
 
 Deleting one plugin cannot delete the peer's journal or pretend that an empty
 append physically erases data. Until a separately reviewed physical-deletion

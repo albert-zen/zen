@@ -566,3 +566,94 @@ test(
     );
   },
 );
+
+check(
+  "a migration whose v1 preflight became stale cannot replace another selected generation",
+  async (f) => {
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredGate = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const releaseGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const bounded = async <T>(work: Promise<T>) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(Error("Migration gate deadline")),
+              3000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const stale = openAutomationTransactionStorage({
+      ...f.options,
+      loadLegacy: async () => {
+        entered();
+        await releaseGate;
+        return snapshot(0);
+      },
+    });
+    void stale.catch(() => {});
+    try {
+      await bounded(enteredGate);
+      const selected = f.keep(
+        await openAutomationTransactionStorage(f.options),
+      );
+      const metadata = selected.journal.metadata();
+      metadata.rooms[0]!.messageCount++;
+      await selected.journal.append({
+        metadata,
+        roomEvents: [
+          {
+            type: "message",
+            message: {
+              id: "new-after-selection",
+              roomId: "room",
+              kind: "human",
+              author: "You",
+              text: "Preserve accepted new data",
+              createdAt: 1,
+              originThreadId: null,
+              originTurnId: null,
+            },
+          },
+        ],
+      });
+      const filenames = [
+        f.sharedFile,
+        f.roomFile,
+        ...(await readdir(f.directory)).map((name) =>
+          path.join(f.directory, name),
+        ),
+      ];
+      const before = await Promise.all(
+        filenames.map((filename) => readFile(filename)),
+      );
+      release();
+      await assert.rejects(bounded(stale), /shared marker changed/);
+      assert.deepEqual(
+        await Promise.all(filenames.map((filename) => readFile(filename))),
+        before,
+      );
+      assert.equal((await readdir(f.directory)).length, filenames.length - 2);
+      assert.equal(
+        (await selected.journal.readRoomMessage("room", "new-after-selection"))
+          ?.message.text,
+        "Preserve accepted new data",
+      );
+    } finally {
+      release();
+      const unexpected = await bounded(stale).catch(() => undefined);
+      await unexpected?.close();
+    }
+  },
+);
