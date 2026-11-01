@@ -876,6 +876,19 @@ function AppContent() {
     [],
   );
 
+  // Keep the link context stable across text deltas, not across owner changes.
+  const openMessageLink = useCallback(
+    (threadId: string, target: { kind: "file" | "browser"; value: string }) => {
+      setMessageLinkRequest({
+        ...target,
+        id: ++messageLinkSequence.current,
+        threadId,
+      });
+      setBrowserPanels((current) => ({ ...current, [threadId]: true }));
+    },
+    [],
+  );
+
   const confirmPinnedThreadIds = (threadIds: readonly string[]) => {
     const confirmed = [...threadIds];
     pinnedThreadIdsRef.current = confirmed;
@@ -4164,17 +4177,7 @@ function AppContent() {
                     />
                   ) : null
                 }
-                onOpenMessageLink={(threadId, target) => {
-                  setMessageLinkRequest({
-                    ...target,
-                    id: ++messageLinkSequence.current,
-                    threadId,
-                  });
-                  setBrowserPanels((current) => ({
-                    ...current,
-                    [threadId]: true,
-                  }));
-                }}
+                onOpenMessageLink={openMessageLink}
                 composerSendMode={composerSendMode}
                 onComposerSendModeChange={changeComposerSendMode}
                 onCancelQueued={cancelQueued}
@@ -5090,6 +5093,14 @@ function AgentSurface({
   threadError: string | null;
   threadLoading: boolean;
 }) {
+  const messageLinkThreadId = threadDetail?.id;
+  const openThreadMessageLink = useCallback(
+    (target: { kind: "file" | "browser"; value: string }) => {
+      if (messageLinkThreadId !== undefined)
+        onOpenMessageLink(messageLinkThreadId, target);
+    },
+    [onOpenMessageLink, messageLinkThreadId],
+  );
   const draftSettings =
     newThreadDraft?.settings ?? defaultDraftSettings(models);
   const draftProject =
@@ -5259,9 +5270,7 @@ function AgentSurface({
             onExitDebug={onExitDebug}
             composerSendMode={composerSendMode}
             onComposerSendModeChange={onComposerSendModeChange}
-            onOpenMessageLink={(target) => {
-              onOpenMessageLink(threadDetail.id, target);
-            }}
+            onOpenMessageLink={openThreadMessageLink}
             onCancelQueued={(targets) =>
               onCancelQueued(threadDetail.id, targets)
             }
