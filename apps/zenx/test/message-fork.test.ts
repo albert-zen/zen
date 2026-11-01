@@ -297,3 +297,32 @@ for (const status of [
     });
   });
 }
+
+test("unchanged memoized Turn uses the latest fork callback and canonical owner", async () => {
+  await mount(async (render) => {
+    const thread = fixture();
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    await render(thread, async (target) => {
+      first.push(target);
+    });
+    await revealHistory();
+    const button = buttons()[0]!;
+    await render(thread, async (target, owner) => {
+      assert.equal(owner.isCurrent(), true);
+      second.push(target);
+    });
+    assert.equal(buttons()[0], button);
+    await act(async () => button.click());
+    assert.deepEqual(first, []);
+    assert.deepEqual(second, [
+      { sourceThreadId: "source-thread", itemId: "message-b" },
+    ]);
+    await render({ ...thread, canonicalItems: [] }, async () => {});
+    assert.equal(
+      buttons().length,
+      0,
+      "canonical removal invalidates the unchanged Turn's fork boundary immediately",
+    );
+  });
+});

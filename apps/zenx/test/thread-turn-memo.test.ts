@@ -128,3 +128,77 @@ test("streaming skips historical Turn bodies while changed props and contexts re
     }
   });
 });
+
+test("same Turn receives replacement attachment readers and cwd image context", async () => {
+  await withRuntimeDom(async (h) => {
+    const attachment = {
+      type: "attachment" as const,
+      sha256: "e".repeat(64),
+      mediaType: "image/png" as const,
+      byteLength: 1,
+      width: 1,
+      height: 1,
+    };
+    const thread = runtimeThread(
+      [
+        {
+          type: "userMessage",
+          id: "image-input",
+          clientId: null,
+          content: [{ type: "text", text: "Image", text_elements: [] }],
+        },
+        runtimeMessage("image-answer", "![local](example.png)"),
+      ],
+      "completed",
+    );
+    // No canonical snapshot: exercise the supplied media projection, without
+    // weakening canonical snapshot authority tested by thread-reading-state.
+    thread.canonicalItems = undefined;
+    const localReads: (string | undefined)[] = [];
+    Object.assign(window, {
+      zenx: {
+        imageAttachments: {
+          readLocal: async (_source: string, cwd: string | undefined) => {
+            localReads.push(cwd);
+            return { bytes: new Uint8Array([1]), mediaType: "image/png" };
+          },
+        },
+      },
+    });
+    const threadAttachments = { "image-input": [attachment] };
+    const readers: string[] = [];
+    const firstReader = async () => {
+      readers.push("first");
+      throw new Error("First reader unavailable");
+    };
+    const secondReader = async () => {
+      readers.push("second");
+      return new Uint8Array([1]);
+    };
+    await h.render(thread, {
+      threadAttachments,
+      onReadAttachment: firstReader,
+    });
+    const section = document.querySelector(".turn");
+    assert.deepEqual(readers, ["first"]);
+    assert.deepEqual(localReads, [thread.cwd]);
+    await h.render(thread, {
+      threadAttachments,
+      onReadAttachment: secondReader,
+    });
+    assert.deepEqual(readers, ["first", "second"]);
+    assert.equal(document.querySelector(".turn"), section);
+    await h.render(
+      { ...thread, cwd: "/workspace/other" },
+      { threadAttachments, onReadAttachment: secondReader },
+    );
+    assert.deepEqual(localReads, [thread.cwd, "/workspace/other"]);
+    assert.equal(document.querySelector(".turn"), section);
+    assert.equal(document.querySelectorAll(".markdown-image").length, 1);
+    await h.click(".message-images .image-thumbnail");
+    assert.ok(
+      document.querySelector('[role="dialog"]'),
+      "stable open callback still opens the selected image",
+    );
+  });
+});
