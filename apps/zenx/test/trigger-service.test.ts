@@ -862,7 +862,7 @@ test("Unicode program output and errors are bounded without replacement characte
   }
 });
 
-test("canonical Trigger history and Room messages use bounded retention", async () => {
+test("Trigger audit retention stays bounded while Room messages remain intact", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-retention-"));
   const manager = new ControlledManager();
   const triggers = new ZenXTriggerService(
@@ -901,7 +901,8 @@ test("canonical Trigger history and Room messages use bounded retention", async 
         `message-${String(index)}`,
       );
     const roomSnapshot = triggers.snapshot();
-    assert.equal(roomSnapshot.rooms[0]?.messages.length, 256);
+    assert.equal(roomSnapshot.rooms[0]?.messages.length, 300);
+    assert.equal(roomSnapshot.rooms[0]?.messages[0]?.text, "message-0");
     assert.equal(roomSnapshot.rooms[0]?.messages.at(-1)?.text, "message-299");
   } finally {
     await triggers.stop();
