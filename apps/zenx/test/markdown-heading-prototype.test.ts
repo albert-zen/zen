@@ -48,12 +48,14 @@ function candidate(
   return (
     '<div class="markdown-body">' +
     chunks
-      .map((chunk) =>
-        original(chunk, inlineTokens, links).slice(
-          '<div class="markdown-body">'.length,
-          -6,
-        ),
-      )
+      .map((chunk) => {
+        const html = original(chunk, inlineTokens, links);
+        const opening = '<div class="markdown-body">';
+        assert.ok(html.startsWith(opening) && html.endsWith("</div>"));
+        // Remove exactly the outer production wrapper; no DOM/text/whitespace
+        // normalization, including within fenced code or nested structures.
+        return html.slice(opening.length, -6);
+      })
       .join("\n") +
     "</div>"
   );
@@ -160,7 +162,7 @@ test("CPU experiment compares initial rendering, not browser latency", () => {
       }
     }
     const median = (xs: number[]) =>
-      xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+      [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
     console.log(
       JSON.stringify({
         scope: "Node SSR CPU only; no React update/browser claim",
@@ -168,6 +170,57 @@ test("CPU experiment compares initial rendering, not browser latency", () => {
         sections,
         originalMedianMs: median(samples.original),
         candidateMedianMs: median(samples.candidate),
+        samplesMs: samples,
+      }),
+    );
+  }
+});
+
+// Predicted source work only: mirrors default per-child text equality, not
+// measured parser invocations or an implementation retaining stream history.
+test("deterministic source-work prediction exposes unsupported paragraph case", () => {
+  for (const [name, initial] of Object.entries({
+    sections:
+      Array.from(
+        { length: 417 },
+        (_, i) => `## Section ${i}\n\nProse.\n\n`,
+      ).join("") + "Tail",
+    blankTailFallback: Array.from(
+      { length: 417 },
+      (_, i) => `## Section ${i}\n\nProse.\n\n`,
+    ).join(""),
+    paragraph: "prose ".repeat(8500),
+    fenced: "# Heading\n\n```text\n" + "code ".repeat(10000),
+  })) {
+    let source = initial;
+    let previous = headingChunks(source);
+    let wholeCharacters = 0;
+    let changedCharacters = 0;
+    for (let delta = 0; delta < 30; delta++) {
+      source += " delta";
+      const current = headingChunks(source);
+      wholeCharacters += source.length;
+      changedCharacters += current.reduce(
+        (sum, chunk, i) => sum + (chunk === previous[i] ? 0 : chunk.length),
+        0,
+      );
+      previous = current;
+    }
+    if (name === "sections")
+      assert.equal(
+        changedCharacters,
+        30 * headingChunks(initial).at(-1)!.length + 6 * 465,
+      );
+    else assert.equal(changedCharacters, wholeCharacters);
+    assert.equal(headingChunks(initial).join(""), initial);
+    console.log(
+      JSON.stringify({
+        scope: "predicted source work, NOT measured parser/browser time",
+        name,
+        initialCharacters: initial.length,
+        initialProcessors: headingChunks(initial).length,
+        wholeCharacters,
+        changedCharacters,
       }),
     );
   }

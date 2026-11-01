@@ -77,3 +77,29 @@ A product candidate would still need live context/locale, replacement,
 truncation, snapshot and stream-end tests plus hosted unchanged-baseline and
 candidate browser measurements. Do not adopt this experiment on parse-character
 counts alone: hundreds of fresh processors may materially worsen initial mount.
+
+**Decision (2026-11-01): defer this per-section product change.** Two local
+single-root Node SSR runs (seven alternating samples each) showed material
+initial-render regression across all three sizes. Median original → segmented
+milliseconds were 5.26 → 10.74 and 4.46 → 11.29 for 8 sections;
+37.04 → 87.82 and 35.94 → 78.34 for 64 sections;
+237.69 → 464.98 and 225.59 → 498.29 for 417 sections (52,849 characters).
+These are synthetic development-mode Node measurements, not browser results;
+the first exploratory multi-root numbers are deliberately not used for this
+decision. The exact-prefix semantic matrix passed in both runs. The single-root
+candidate still has extra section wrapper elements, so this is a conservative
+feasibility rejection, not proof about every possible implementation.
+
+The deterministic source-work test reports predicted changed-section character
+counts for 30 appended deltas, alongside initial processor counts; paragraph
+and fenced sources get no reduction. This accounting cannot override the
+observed initial CPU cost. No production patch, mutable-stream tests, browser
+candidate measurement, or merge acceptance is claimed. Further implementation
+is stopped rather than adding a global cache or another history representation.
+
+A guard-sensitive counterexample is preserved in that work test: appending
+` delta` to a heading document ending in a blank line creates a nonblank
+indented line, disabling segmentation for the entire source. It receives no
+predicted update reduction. Only the separately labeled ordinary prose-tail
+case qualifies for changed-tail-only arithmetic; the guard is not relaxed to
+improve the count. Production HTML equivalence is unaffected by this fallback.
