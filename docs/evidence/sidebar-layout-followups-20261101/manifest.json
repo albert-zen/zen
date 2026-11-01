@@ -1,0 +1,208 @@
+{
+  "status": "independently-native-accepted",
+  "productPR": 602,
+  "platform": "darwin",
+  "before": {
+    "source": "7e017e65e1f2d47ddd9afe6e1d43c7c20312face",
+    "runId": 41335485967,
+    "artifactId": 13094649235,
+    "results": {
+      "sidebarThreshold": {
+        "crossed": true,
+        "emptySlack": 0,
+        "firstSlack": -54,
+        "gutterDelta": 11,
+        "status": "Observed first-Thread overflow threshold crossing; inspect geometry and pixels",
+        "preparation": "Actual empty Room section collapsed before baseline; no CSS, width, or scrollbar override"
+      },
+      "sidebar": [
+        {
+          "state": "sidebarBeforeThread",
+          "outerWidth": 264,
+          "clientWidth": 264,
+          "gutter": 0,
+          "actionIconX": 147.96875
+        },
+        {
+          "state": "sidebarAfterThreadBeforeScroll",
+          "outerWidth": 264,
+          "clientWidth": 253,
+          "gutter": 11,
+          "actionIconX": 136.96875
+        }
+      ],
+      "drags": [
+        {
+          "label": "default-outward",
+          "frameCount": 55,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 10,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 10,
+          "requestedWidth": 640,
+          "actualWidth": 558.796875,
+          "reportedWidth": "558.796875px"
+        },
+        {
+          "label": "default-return",
+          "frameCount": 61,
+          "titleOverlapMin": -7,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": -7,
+          "headerOverlapMax": 0,
+          "requestedWidth": 520,
+          "actualWidth": 520,
+          "reportedWidth": "520px"
+        },
+        {
+          "label": "no-preference-outward",
+          "frameCount": 59,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 35.640625,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 35.640625,
+          "requestedWidth": 640,
+          "actualWidth": 558.796875,
+          "reportedWidth": "558.796875px"
+        },
+        {
+          "label": "no-preference-return",
+          "frameCount": 59,
+          "titleOverlapMin": -27.4375,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": -27.4375,
+          "headerOverlapMax": 0,
+          "requestedWidth": 520,
+          "actualWidth": 520,
+          "reportedWidth": "520px"
+        }
+      ],
+      "mediaOverride": {
+        "requested": "no-preference",
+        "applied": true,
+        "restored": true,
+        "detached": true
+      },
+      "defaultReducedMotion": true,
+      "targetTurnCount": 0,
+      "runtimePreferences": {
+        "sandbox": true,
+        "contextIsolation": true,
+        "nodeIntegration": false
+      },
+      "lifecycle": {
+        "childCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "captureValidated": true,
+        "privateFixturePolicy": "remove after validated normal close"
+      }
+    }
+  },
+  "after": {
+    "source": "e15f8c086d9cd42bbd04dd02fc2b2cfcd6646324",
+    "runId": 41337075042,
+    "artifactId": 13095702516,
+    "results": {
+      "sidebarThreshold": {
+        "crossed": true,
+        "emptySlack": 0,
+        "firstSlack": -54,
+        "gutterDelta": 0,
+        "status": "Observed first-Thread overflow threshold crossing; inspect geometry and pixels",
+        "preparation": "Actual empty Room section collapsed before baseline; no CSS, width, or scrollbar override"
+      },
+      "sidebar": [
+        {
+          "state": "sidebarBeforeThread",
+          "outerWidth": 264,
+          "clientWidth": 253,
+          "gutter": 11,
+          "actionIconX": 136.96875
+        },
+        {
+          "state": "sidebarAfterThreadBeforeScroll",
+          "outerWidth": 264,
+          "clientWidth": 253,
+          "gutter": 11,
+          "actionIconX": 136.96875
+        }
+      ],
+      "drags": [
+        {
+          "label": "default-outward",
+          "frameCount": 54,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 0,
+          "requestedWidth": 640,
+          "actualWidth": 558.796875,
+          "reportedWidth": "558.796875px"
+        },
+        {
+          "label": "default-return",
+          "frameCount": 49,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 0,
+          "requestedWidth": 520,
+          "actualWidth": 520,
+          "reportedWidth": "520px"
+        },
+        {
+          "label": "no-preference-outward",
+          "frameCount": 52,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 0,
+          "requestedWidth": 640,
+          "actualWidth": 558.796875,
+          "reportedWidth": "558.796875px"
+        },
+        {
+          "label": "no-preference-return",
+          "frameCount": 65,
+          "titleOverlapMin": 0,
+          "titleOverlapMax": 0,
+          "headerOverlapMin": 0,
+          "headerOverlapMax": 0,
+          "requestedWidth": 520,
+          "actualWidth": 520,
+          "reportedWidth": "520px"
+        }
+      ],
+      "mediaOverride": {
+        "requested": "no-preference",
+        "applied": true,
+        "restored": true,
+        "detached": true
+      },
+      "defaultReducedMotion": true,
+      "targetTurnCount": 0,
+      "runtimePreferences": {
+        "sandbox": true,
+        "contextIsolation": true,
+        "nodeIntegration": false
+      },
+      "lifecycle": {
+        "childCloseObserved": true,
+        "exitCode": 0,
+        "signal": null,
+        "captureValidated": true,
+        "privateFixturePolicy": "remove after validated normal close"
+      }
+    }
+  },
+  "sha256": {
+    "before-sidebar-empty.png": "4baa8b95973059500c08e4bbcccfa8d2298b522bc9881c55fe4a306c18d02bfc",
+    "before-sidebar-first-thread.png": "0b22685baeaad0b4a67a7e4ef36a9bdab6b2c018cb969fa89d0adfea9feaeacb",
+    "after-sidebar-empty.png": "84da06539de5fcd7d22a507299ef2a9ded9ee7ba9a22b2dba6c5ed897d0cd905",
+    "after-sidebar-first-thread.png": "0b22685baeaad0b4a67a7e4ef36a9bdab6b2c018cb969fa89d0adfea9feaeacb",
+    "before-drag-moving.png": "ec480fb4e1a0b85c2f8cbf48217c32683268137c017e1514cf910505f515b87d",
+    "after-drag-moving.png": "1a95c7125e60144652155292dd0efbdd322b7198de1ecca3ad6215204be315c5"
+  },
+  "scope": "Isolated native macOS production App; fake local Host, real protocol idle Thread initialization, actual UI interactions. No user installation/profile/credentials/raw logs. Motion no-preference override scoped to owned renderer, restored and detached. Instrumented drag samples are not a general performance benchmark."
+}
