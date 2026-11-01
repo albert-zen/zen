@@ -4,6 +4,11 @@ import path from "node:path";
 import { delay, withPreviewBrowser } from "./expansion-preview-browser.mjs";
 const directory = path.resolve(process.argv[2]);
 const version = process.argv[3];
+// Page.navigate may return while the previous document or an empty new document is current.
+function readinessExpression(expectedUrl) {
+  return `location.href === ${JSON.stringify(expectedUrl)} && document.body?.dataset.previewReady === "true" && Boolean(document.querySelector('.auxiliary-panel[data-open="true"][data-expanded="false"] .auxiliary-heading [role="tablist"]'))`;
+}
+
 const measure = `(() => {
  const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
  const describe=e=>{if(!e)return null;const s=getComputedStyle(e);return {tag:e.tagName,id:e.id,className:typeof e.className==='string'?e.className:e.className.baseVal,bounds:rect(e),visibility:s.visibility,display:s.display,zIndex:s.zIndex,pointerEvents:s.pointerEvents,overflowX:s.overflowX}};
@@ -42,10 +47,9 @@ await withPreviewBrowser(
         deviceScaleFactor: 1,
         mobile: false,
       });
-      await send("Page.navigate", {
-        url: `${url}/titlebar-safe-area.html?platform=${c.platform}&subject=plugin&resources=${c.resources}&state=durable&sidebar=open&lang=en`,
-      });
-      await wait('document.body.dataset.previewReady === "true"');
+      const targetUrl = `${url}/titlebar-safe-area.html?platform=${c.platform}&subject=plugin&resources=${c.resources}&state=durable&sidebar=open&lang=en`;
+      await send("Page.navigate", { url: targetUrl });
+      await wait(readinessExpression(targetUrl));
       await delay(350);
       const before = await evaluate(measure);
       assert.equal(before.expanded, "false");
