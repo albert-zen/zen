@@ -45,3 +45,35 @@ CI has no noisy millisecond gate. It validates behavior and deterministic metric
 ## Validation status
 
 Each rebuilt checkpoint requires fresh contract tests, fixture typecheck, production build and functional smoke. Real Chromium measurement remains separately gated on a successful authorized runner. A production build or jsdom pass is never reported as browser performance acceptance. See the accompanying PR for exact tested SHA and stage outcomes.
+
+## Unshipped heading-segmentation experiment
+
+`test/markdown-heading-prototype.test.ts` is a test-only feasibility check, not
+an enabled Markdown fast path. From `apps/zenx`, run:
+
+```sh
+node --import tsx --test test/markdown-heading-prototype.test.ts
+```
+
+It compares every UTF-16 prefix of synthetic headings, prose, lists, tables,
+nested blocks, fences, late references, multiline constructs, footnotes, HTML,
+math, Unicode, CRLF, unsafe URLs and local-file links against the **unchanged
+production Markdown renderer**, both with and without message-link context.
+Inline-token inputs always retain the whole source. The proposed split is
+only immediately before a column-zero ATX heading following a blank line;
+fences, indentation, blockquotes, `<`, CR, `$`, line-leading `[` and inline
+tokens conservatively disable all splitting. No prefix history or global cache
+is used. A literal newline joins rendered sections, preserving the renderer's
+inter-block text nodes; code whitespace is compared exactly, never normalized.
+
+The same test prints seven alternating Node SSR CPU samples summarized by
+median for 8, 64 and 417 sections. Both timed alternatives use a single SSR
+root; the candidate mounts a full production pipeline per section and retains
+its extra wrapper elements. This isolates an initial-render feasibility risk,
+not a production DOM implementation or browser benchmark. Timings have no CI
+threshold and do not demonstrate update/memoization benefit. No callbacks,
+context subscriptions, token equality or security policies are replaced.
+A product candidate would still need live context/locale, replacement,
+truncation, snapshot and stream-end tests plus hosted unchanged-baseline and
+candidate browser measurements. Do not adopt this experiment on parse-character
+counts alone: hundreds of fresh processors may materially worsen initial mount.
