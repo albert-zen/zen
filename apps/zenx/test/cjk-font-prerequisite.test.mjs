@@ -296,8 +296,8 @@ test("workflow prepares fonts before every capture and never caches apt state", 
   const zenx = workflow
     .split("  zenx:\n")[1]
     .split("  zenx-capability-smoke:\n")[0];
-  // Preserve the existing 20-minute workload budget plus only the bounded
-  // six-minute normal/expanded tab acceptance added by this workflow.
+  // Keep the existing workload budget. Room screenshots are one-time evidence,
+  // not an additional capture on every unrelated change.
   assert.ok(zenx.includes("timeout-minutes: 26"));
   const tabCapture = zenx
     .split("      - ")
@@ -307,6 +307,7 @@ test("workflow prepares fonts before every capture and never caches apt state", 
       ),
     );
   assert.ok(tabCapture?.includes("timeout-minutes: 6"));
+
   assert.ok(
     zenx.indexOf("id: zenx-fonts") <
       zenx.indexOf("capture-titlebar-safe-area-preview.mjs"),
@@ -322,6 +323,7 @@ test("workflow prepares fonts before every capture and never caches apt state", 
     "capture-trigger-message-preview.mjs",
     "capture-file-sidebar-preview.mjs",
     "capture-settings-audit-preview.mjs",
+    "capture-room-history-preview.mjs",
   ]) {
     const code = readFileSync(
       new URL(`../scripts/${script}`, import.meta.url),

@@ -66,6 +66,10 @@ import {
   JsonPluginStorage,
 } from "./plugin-host-sdk.js";
 import { clearBundledAutomationRoomsData } from "./automation-plugin-service.js";
+import {
+  assertAutomationStorageMarkers,
+  assertAutomationDataDeletable,
+} from "./automation-transaction-migration.js";
 import type { AppServerRequestPort } from "./capabilities/self-control-package.js";
 import type { ZenXProjectProjection } from "./project-projection.js";
 import {
@@ -236,12 +240,30 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
           hostSdkFor: async (registration) => {
             const manifest = registration.package.manifest;
             const storage = registration.package.storage;
+            const automation = isAutomationPlugin(manifest.id);
+            const storageRoot = path.join(
+              options.userDataDirectory,
+              "plugin-data",
+            );
+            if (automation) {
+              if (
+                manifest.storageVersion !== 2 ||
+                (storage !== undefined && storage.version !== 2)
+              )
+                throw new Error(
+                  "Automation plugins require Host-managed storage version 2",
+                );
+              await assertAutomationStorageMarkers(storageRoot);
+            }
             const preparedStorage = await JsonPluginStorage.prepare({
               pluginId: manifest.id,
-              root: path.join(options.userDataDirectory, "plugin-data"),
-              version: storage?.version ?? manifest.storageVersion ?? 1,
-              migrations: storage?.migrations,
-              initialValue: storage?.initialValue,
+              root: storageRoot,
+              version: automation
+                ? 2
+                : (storage?.version ?? manifest.storageVersion ?? 1),
+              migrations: automation ? undefined : storage?.migrations,
+              initialValue: automation ? undefined : storage?.initialValue,
+              syncWrites: automation,
             });
             let sdk;
             try {
@@ -254,8 +276,9 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
                 ),
                 storageVersion:
                   storage?.version ?? manifest.storageVersion ?? 1,
-                migrations: storage?.migrations,
-                initialStorage: storage?.initialValue,
+                migrations: automation ? undefined : storage?.migrations,
+                initialStorage: automation ? undefined : storage?.initialValue,
+                storageReadOnly: automation,
                 queryProjects: async () => await this.#queryProjects(),
                 appServer:
                   this.#appServerPort ?? unavailablePluginAppServerPort,
@@ -1458,6 +1481,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
 
   async deletePluginData(pluginId: string): Promise<void> {
     await this.#serializeServiceMutation(async () => {
+      if (isAutomationPlugin(pluginId))
+        await assertAutomationDataDeletable(
+          path.join(this.#userDataDirectory, "plugin-data"),
+        );
       await this.#registry.deleteData(pluginId);
       if (pluginId === "zenx-rooms")
         await clearBundledAutomationRoomsData(this.#userDataDirectory);
@@ -1884,3 +1911,7 @@ const unavailablePluginAppServerPort: PluginHostAppServerPort = {
     throw new Error("Plugin AppServer actions are not attached");
   },
 };
+
+function isAutomationPlugin(pluginId: string): boolean {
+  return pluginId === "zenx-triggers" || pluginId === "zenx-rooms";
+}

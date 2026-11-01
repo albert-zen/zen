@@ -1,6 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
+import { writeJournalPayload } from "../../../../src/journal-write.js";
+import { syncDirectory } from "../../../../src/storage-files.js";
 
 import type { CanonicalItem, UserInput } from "../../../../src/item.js";
 import type { ZenXProjectProjectionEntry } from "./project-projection.js";
@@ -192,6 +202,8 @@ export interface CreateZenXPluginHostSdkOptions {
   appServer: PluginHostAppServerPort;
   ui?: PluginHostUiPort;
   storage?: JsonPluginStorage;
+  /** Host-owned format markers may be read, never rewritten by a plugin. */
+  storageReadOnly?: boolean;
 }
 
 export async function createZenXPluginHostSdk(
@@ -208,7 +220,7 @@ export async function createZenXPluginHostSdk(
       bindGeneration: true,
     }));
   const ui = options.ui ?? unavailableUiPort;
-  return Object.freeze({
+  const sdk = Object.freeze({
     version: ZENX_PLUGIN_HOST_SDK_VERSION,
     pluginId: options.pluginId,
     query: Object.freeze({
@@ -253,9 +265,41 @@ export async function createZenXPluginHostSdk(
     storage: Object.freeze({
       version: storage.version,
       get: async () => await storage.get(),
-      set: async (value: PluginStorageValue) => await storage.set(value),
+      set: async (value: PluginStorageValue) => {
+        if (options.storageReadOnly)
+          throw new Error(
+            "Host-managed storage is read-only; use the automation service",
+          );
+        await storage.set(value);
+      },
     }),
   });
+  hostStorageFacades.set(sdk.storage, storage);
+  return sdk;
+}
+
+export interface PluginStorageLease {
+  readonly filename: string;
+  readonly version: number;
+  readonly value: PluginStorageValue;
+  assertCurrent(): void;
+}
+
+const hostStorageFacades = new WeakMap<object, JsonPluginStorage>();
+const runStorageLease = Symbol("Host storage lease");
+
+/** Host-only queue lease; never exposed on the plugin SDK facade. */
+export async function withPluginStorageLease<T>(
+  handle: JsonPluginStorage | ZenXPluginHostSdkV1["storage"],
+  callback: (lease: PluginStorageLease) => Promise<T>,
+): Promise<T> {
+  const storage =
+    handle instanceof JsonPluginStorage
+      ? handle
+      : hostStorageFacades.get(handle);
+  if (!storage)
+    throw new Error("Storage lease requires a Host-created storage handle");
+  return await storage[runStorageLease](callback);
 }
 
 interface StoredPluginData {
@@ -276,6 +320,9 @@ export interface PluginStorageFileSystem {
   ): Promise<unknown>;
   rename(source: string, destination: string): Promise<void>;
   unlink(filename: string): Promise<void>;
+  /** Required together only for opt-in synced marker writes. */
+  openFile?: typeof open;
+  syncDirectory?: typeof syncDirectory;
 }
 
 const nodeStorageFileSystem: PluginStorageFileSystem = {
@@ -284,6 +331,8 @@ const nodeStorageFileSystem: PluginStorageFileSystem = {
   writeFile,
   rename,
   unlink,
+  openFile: open,
+  syncDirectory,
 };
 
 interface StorageAuthority {
@@ -292,6 +341,7 @@ interface StorageAuthority {
   generation: symbol;
   staging?: symbol;
   replacementListeners: Set<() => void>;
+  writeOutcomeUnknown?: Error;
 }
 
 // Host process owns one namespace queue. Weak values do not retain dead test or
@@ -327,10 +377,18 @@ function notifyStorageReplacement(authority: StorageAuthority): void {
     }
   }
 }
+const storageLeaseScope = new AsyncLocalStorage<
+  ReadonlyMap<StorageAuthority, { active: boolean }>
+>();
+
 function queueStorage<T>(
   authority: StorageAuthority,
   operation: () => Promise<T>,
 ): Promise<T> {
+  if (storageLeaseScope.getStore()?.get(authority)?.active)
+    return Promise.reject(
+      new Error("Storage lease callback cannot reenter the same namespace"),
+    );
   const result = authority.tail.then(operation);
   authority.tail = result.then(
     () => undefined,
@@ -346,6 +404,8 @@ interface OpenPluginStorageOptions {
   initialValue?: PluginStorageValue;
   fileSystem?: PluginStorageFileSystem;
   bindGeneration?: boolean;
+  /** File sync + repository platform directory-sync contract; default unchanged. */
+  syncWrites?: boolean;
 }
 
 export class JsonPluginStorage {
@@ -355,6 +415,7 @@ export class JsonPluginStorage {
   readonly #authority: StorageAuthority;
   readonly #generation: symbol | undefined;
   readonly #candidate: symbol | undefined;
+  readonly #syncWrites: boolean;
 
   private constructor(
     filename: string,
@@ -363,6 +424,7 @@ export class JsonPluginStorage {
     version: number,
     generation?: symbol,
     candidate?: symbol,
+    syncWrites = false,
   ) {
     this.#filename = filename;
     this.#fileSystem = fileSystem;
@@ -370,6 +432,7 @@ export class JsonPluginStorage {
     this.version = version;
     this.#generation = generation;
     this.#candidate = candidate;
+    this.#syncWrites = syncWrites;
   }
 
   get replacementPending(): boolean {
@@ -388,13 +451,17 @@ export class JsonPluginStorage {
     if (authority.staging)
       throw new Error("Plugin storage replacement is being prepared");
     return await queueStorage(authority, async () => {
+      if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
       if (authority.staging)
         throw new Error("Plugin storage replacement is being prepared");
-      const { data } = await this.#readAndMigrate(
-        options,
-        filename,
-        fileSystem,
-      );
+      let data: StoredPluginData;
+      try {
+        ({ data } = await this.#readAndMigrate(options, filename, fileSystem));
+      } catch (error) {
+        if (error instanceof PluginStorageWriteOutcomeUnknownError)
+          authority.writeOutcomeUnknown = error;
+        throw error;
+      }
       authority.data = data;
       return new JsonPluginStorage(
         filename,
@@ -402,6 +469,8 @@ export class JsonPluginStorage {
         authority,
         data.version,
         options.bindGeneration ? authority.generation : undefined,
+        undefined,
+        options.syncWrites,
       );
     });
   }
@@ -427,21 +496,26 @@ export class JsonPluginStorage {
           await fileSystem.unlink(filename).catch((error: unknown) => {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           });
+          if (options.syncWrites)
+            await fileSystem.syncDirectory!(path.dirname(filename));
         } else {
-          await atomicWrite(
+          await atomicWriteBytes(
             filename,
-            decodeStoredPluginData(previousBytes),
+            previousBytes,
             fileSystem,
+            options.syncWrites,
           );
         }
         authority.data = previous;
         authority.generation = oldGeneration;
+        delete authority.writeOutcomeUnknown;
         delete authority.staging;
         notifyStorageReplacement(authority);
       });
     };
     try {
       await queueStorage(authority, async () => {
+        if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
         if (authority.staging)
           throw new Error(
             "Plugin storage replacement is already being prepared",
@@ -466,7 +540,14 @@ export class JsonPluginStorage {
         authority.data = data;
       });
     } catch (error) {
-      await rollback();
+      try {
+        await rollback();
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Plugin storage rollback failed; replacement remains fenced",
+        );
+      }
       throw error;
     }
     return {
@@ -477,8 +558,10 @@ export class JsonPluginStorage {
         options.version,
         candidate,
         candidate,
+        options.syncWrites,
       ),
       publish() {
+        if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
         if (published) return;
         if (authority.staging !== candidate)
           throw new Error("Plugin storage candidate is no longer current");
@@ -495,16 +578,25 @@ export class JsonPluginStorage {
     validatePluginId(options.pluginId);
     validateStorageVersion(options.version);
     const fileSystem = options.fileSystem ?? nodeStorageFileSystem;
+    if (
+      options.syncWrites &&
+      (!fileSystem.openFile || !fileSystem.syncDirectory)
+    )
+      throw new Error(
+        "Synced plugin storage requires openFile and syncDirectory IO primitives",
+      );
     const filename = path.join(
       path.resolve(options.root),
       options.pluginId,
       "storage.json",
     );
-    return {
-      filename,
-      fileSystem,
-      authority: storageAuthority(fileSystem, filename),
-    };
+    const authority = storageAuthority(fileSystem, filename);
+    if (storageLeaseScope.getStore()?.get(authority)?.active)
+      throw new Error(
+        "Storage lease callback cannot reenter the same namespace",
+      );
+    if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
+    return { filename, fileSystem, authority };
   }
 
   static async #readAndMigrate(
@@ -544,12 +636,13 @@ export class JsonPluginStorage {
     }
     const data = { version: options.version, value: migrated };
     if (!exists || current.version !== options.version)
-      await atomicWrite(filename, data, fileSystem);
+      await atomicWrite(filename, data, fileSystem, options.syncWrites);
     return { data };
   }
 
   #checkOwnership(): StoredPluginData {
     const authority = this.#authority;
+    if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
     const candidateActive =
       this.#candidate !== undefined && authority.staging === this.#candidate;
     if (authority.staging !== undefined && !candidateActive)
@@ -565,6 +658,37 @@ export class JsonPluginStorage {
     if (authority.data === undefined || authority.data.version !== this.version)
       throw new Error("Plugin storage version changed while running");
     return authority.data;
+  }
+
+  async [runStorageLease]<T>(
+    callback: (lease: PluginStorageLease) => Promise<T>,
+  ): Promise<T> {
+    this.#checkOwnership();
+    return await queueStorage(this.#authority, async () => {
+      const data = this.#checkOwnership();
+      const authority = this.#authority;
+      const generation = authority.staging ?? authority.generation;
+      const scope = { active: true };
+      const assertCurrent = () => {
+        if (!scope.active) throw new Error("Storage lease has expired");
+        this.#checkOwnership();
+        if ((authority.staging ?? authority.generation) !== generation)
+          throw new Error("Storage lease generation was replaced");
+      };
+      const lease: PluginStorageLease = Object.freeze({
+        filename: this.#filename,
+        version: data.version,
+        value: structuredClone(data.value),
+        assertCurrent,
+      });
+      const scopes = new Map(storageLeaseScope.getStore());
+      scopes.set(authority, scope);
+      try {
+        return await storageLeaseScope.run(scopes, () => callback(lease));
+      } finally {
+        scope.active = false;
+      }
+    });
   }
 
   async get(): Promise<PluginStorageValue> {
@@ -592,13 +716,29 @@ export class JsonPluginStorage {
     const validated = cloneAndValidate(value);
     await queueStorage(this.#authority, async () => {
       this.#checkOwnership();
-      await atomicWrite(
-        this.#filename,
-        { version: this.version, value: validated },
-        this.#fileSystem,
-      );
+      try {
+        await atomicWrite(
+          this.#filename,
+          { version: this.version, value: validated },
+          this.#fileSystem,
+          this.#syncWrites,
+        );
+      } catch (error) {
+        if (error instanceof PluginStorageWriteOutcomeUnknownError)
+          this.#authority.writeOutcomeUnknown = error;
+        throw error;
+      }
       this.#authority.data = { version: this.version, value: validated };
     });
+  }
+}
+
+class PluginStorageWriteOutcomeUnknownError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Synced plugin storage write outcome is unknown; reopen the Host before continuing",
+      { cause },
+    );
   }
 }
 
@@ -606,11 +746,24 @@ async function atomicWrite(
   filename: string,
   data: StoredPluginData,
   fileSystem: PluginStorageFileSystem,
+  syncWrites = false,
 ): Promise<void> {
-  const encoded = `${JSON.stringify(data, null, 2)}\n`;
-  if (Buffer.byteLength(encoded, "utf8") > MAX_STORAGE_BYTES) {
+  await atomicWriteBytes(
+    filename,
+    `${JSON.stringify(data, null, 2)}\n`,
+    fileSystem,
+    syncWrites,
+  );
+}
+
+async function atomicWriteBytes(
+  filename: string,
+  encoded: string,
+  fileSystem: PluginStorageFileSystem,
+  syncWrites = false,
+): Promise<void> {
+  if (Buffer.byteLength(encoded, "utf8") > MAX_STORAGE_BYTES)
     throw new Error("Plugin storage exceeds its byte limit");
-  }
   await fileSystem.mkdir(path.dirname(filename), {
     recursive: true,
     mode: 0o700,
@@ -618,15 +771,30 @@ async function atomicWrite(
   const temporary = `${filename}.${String(process.pid)}.${randomUUID()}.tmp`;
   let failure: unknown;
   let committed = false;
+  let publicationAttempted = false;
   try {
-    await fileSystem.writeFile(temporary, encoded, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    if (syncWrites) {
+      const file = await fileSystem.openFile!(temporary, "wx", 0o600);
+      try {
+        await writeJournalPayload(file, encoded);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+    } else {
+      await fileSystem.writeFile(temporary, encoded, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    }
+    publicationAttempted = true;
     await fileSystem.rename(temporary, filename);
     committed = true;
+    if (syncWrites) await fileSystem.syncDirectory!(path.dirname(filename));
   } catch (error) {
     failure = error;
+    if (syncWrites && publicationAttempted)
+      throw new PluginStorageWriteOutcomeUnknownError(error);
     throw error;
   } finally {
     await fileSystem.unlink(temporary).catch((error: unknown) => {
@@ -634,9 +802,8 @@ async function atomicWrite(
         !committed &&
         failure === undefined &&
         (error as NodeJS.ErrnoException).code !== "ENOENT"
-      ) {
+      )
         throw error;
-      }
     });
   }
 }

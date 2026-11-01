@@ -326,6 +326,13 @@ jobs:
         run: node --import tsx --test --test-timeout=30000 apps/zenx/test/shell-panel-service.test.ts
       - name: Exercise shell lifecycle observations on macOS
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
+      - name: Verify Room journal persistence and migration
+        timeout-minutes: 3
+        run: >-
+          node --import tsx --test --test-timeout=30000
+          apps/zenx/test/automation-transaction-store.test.ts
+          apps/zenx/test/automation-transaction-migration.test.ts
+          apps/zenx/test/automation-journal-factory.test.ts
       - name: Verify macOS input construction without desktop input
         env:
           ZENX_COMPUTER_CONSTRUCTION_EVIDENCE: ${{ runner.temp }}/computer-event-construction.json
@@ -419,6 +426,13 @@ jobs:
         run: node --import tsx --test --test-timeout=40000 apps/zenx/test/shell-pty-native-cleanup.test.ts
       - name: Exercise shell lifecycle observations on Windows
         run: npm run build && node --test dist/test/shell-lifecycle.test.js
+      - name: Verify Room journal persistence and migration
+        timeout-minutes: 3
+        run: >-
+          node --import tsx --test --test-timeout=30000
+          apps/zenx/test/automation-transaction-store.test.ts
+          apps/zenx/test/automation-transaction-migration.test.ts
+          apps/zenx/test/automation-journal-factory.test.ts
       - name: Exercise trigger process containment on Windows
         run: npm --workspace apps/zenx exec -- tsx --test test/trigger-program-runner.test.ts
       - name: Verify native smoke phase snapshot sharing

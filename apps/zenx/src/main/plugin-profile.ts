@@ -632,9 +632,9 @@ class ProfileTrustedPluginPackage implements ZenXCapabilityPackage {
     this.#runtime = runtime;
     if (runtime.activate !== undefined) {
       this.activate = (previousRetired) => runtime.activate!(previousRetired);
-      this.createRuntime = () =>
-        new ProfileTrustedPluginPackage(manifest, create);
     }
+    this.createRuntime = () =>
+      new ProfileTrustedPluginPackage(manifest, create);
     if (runtime.storage !== undefined) this.storage = runtime.storage;
   }
 

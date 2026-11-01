@@ -41,7 +41,7 @@ export const FIRST_PARTY_PLUGIN_PACKAGES = Object.freeze({
   triggers: {
     pluginId: "zenx-triggers",
     packageName: "@zenx/triggers-plugin",
-    tarball: "zenx-triggers-plugin-1.0.1.tgz",
+    tarball: "zenx-triggers-plugin-1.0.2.tgz",
   },
 });
 

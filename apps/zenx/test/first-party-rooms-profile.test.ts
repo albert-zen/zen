@@ -158,7 +158,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         pluginId: ZENX_ROOMS_CAPABILITY_ID,
         packageName: ZENX_ROOMS_PACKAGE_NAME,
       }),
-      /already version 1\.0\.8/u,
+      /already version 1\.0\.9/u,
     );
     const unchangedCatalog = JSON.parse(
       await readFile(path.join(userData, "capability-grants.json"), "utf8"),
@@ -350,6 +350,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
     await capabilities.setEnabled(ZENX_ROOMS_CAPABILITY_ID, true);
     await manager.stop();
     await capabilities.close();
+    await domain.close();
 
     await rm(tarball, { force: true });
     const restartedDomain = await createBundledAutomationPluginService({
@@ -377,6 +378,7 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       );
     } finally {
       await restarted.close();
+      await restartedDomain.close();
     }
 
     await copyPreparedRoomsPlugin(resources);
@@ -407,7 +409,11 @@ test("packaged Rooms installs offline through profile discovery and preserves it
         ),
         "utf8",
       );
-      assert.match(preserved, /release/u);
+      assert.equal(JSON.parse(preserved).version, 2);
+      assert.equal(
+        JSON.parse(preserved).value.format,
+        "zenx-automation-forward",
+      );
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
       const reinstalled = await listAllRoomPages(lifecycle);
       assert.equal(
@@ -416,17 +422,25 @@ test("packaged Rooms installs offline through profile discovery and preserves it
       );
 
       await lifecycle.uninstall(ZENX_ROOMS_CAPABILITY_ID);
-      await lifecycle.deletePluginData(ZENX_ROOMS_CAPABILITY_ID);
+      await assert.rejects(
+        lifecycle.deletePluginData(ZENX_ROOMS_CAPABILITY_ID),
+        /share history|independent Delete data/,
+      );
       await lifecycle.reinstall(ZENX_ROOMS_CAPABILITY_ID);
       const cleared = await listAllRoomPages(lifecycle);
-      assert.deepEqual(cleared.rooms, []);
+      assert.equal(
+        cleared.rooms.some((room) => room.name === "release"),
+        true,
+      );
       assert.equal(await readFile(legacyFile, "utf8").then(Boolean), true);
     } finally {
       await lifecycle.close();
+      await lifecycleDomain.close();
     }
   } finally {
     await manager.stop();
     await capabilities.close();
+    await domain.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -502,6 +516,7 @@ test("packaged Rooms adopts disabled and uninstalled legacy Catalog lifecycle wi
         }
       } finally {
         await capabilities.close();
+        await domain.close();
         await rm(directory, { recursive: true, force: true });
       }
     });
@@ -556,6 +571,7 @@ test("packaged Rooms refuses bundled adoption across a legacy Catalog identity m
     );
   } finally {
     await capabilities.close();
+    await domain.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -640,6 +656,7 @@ test("packaged startup isolates a Rooms identity mismatch and starts with a late
   } finally {
     await manager.stop();
     await capabilities.close();
+    await domain.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -873,6 +890,9 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
   const oldManifestFile = path.join(oldPackage, "zenx.plugin.json");
   const oldPackageFile = path.join(oldPackage, "package.json");
   const oldManifest = JSON.parse(await readFile(oldManifestFile, "utf8"));
+  // Only the old tool surface is synthesized; historical storage-v1 admission
+  // is separately rejected by automation-capability-marker-policy tests.
+  assert.equal(oldManifest.storageVersion, 2);
   oldManifest.version = "1.0.3";
   oldManifest.tools = oldManifest.tools.filter(
     (tool: { name: string }) =>
@@ -954,7 +974,7 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
         .pluginSnapshot()
         .plugins.find((plugin) => plugin.id === ZENX_ROOMS_CAPABILITY_ID)
         ?.version,
-      "1.0.8",
+      "1.0.9",
     );
     const unreadList = (await capabilities.executePluginCommand(
       ZENX_ROOMS_CAPABILITY_ID,
@@ -1008,6 +1028,7 @@ test("normal bundled profile upgrades 1.0.3 to PAW notebook tools without losing
     assert.equal(reloaded.memory[0]?.text, "Inspectable after package restart");
   } finally {
     await capabilities.close();
+    await domain.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

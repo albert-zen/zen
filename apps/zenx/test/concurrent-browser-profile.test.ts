@@ -180,10 +180,9 @@ for (const direction of [
       const isolated: ReturnType<typeof tracked>[] = [];
       const create = (
         mode: "legacy" | "concurrent" | "isolated",
-        failLoad = false,
+        failLoad: () => boolean = () => false,
       ) => {
-        let service!: ZenXCapabilityService,
-          loads = 0;
+        let service!: ZenXCapabilityService;
         const loader = createDelegatingFirstPartyProfileLoader(() =>
           service.browserProfilePackage(),
         );
@@ -222,8 +221,7 @@ for (const direction of [
           },
           trustedProfileLoaders: {
             browser: (module) => {
-              if (++loads === 2 && failLoad)
-                throw Error("fixture runtime admission failure");
+              if (failLoad()) throw Error("fixture runtime admission failure");
               return loader(module);
             },
           },
@@ -254,7 +252,12 @@ for (const direction of [
         await first.close();
         first = undefined;
         const before = await disk.load();
-        restarted = create(selectedMode, outcome === "runtime-failure");
+        let failNextAdmission = false;
+        restarted = create(selectedMode, () => {
+          const fail = failNextAdmission;
+          failNextAdmission = false;
+          return fail;
+        });
         await restarted.initialize();
         assert.equal(
           await title(restarted, oldTool),
@@ -275,6 +278,7 @@ for (const direction of [
             "corrupt archive",
           );
         if (outcome === "catalog-failure") rejectSave = true;
+        if (outcome === "runtime-failure") failNextAdmission = true;
         if (outcome.startsWith("success")) {
           const oldBackend =
             initialMode === "legacy" ? external.at(-1)! : workspace;
@@ -372,6 +376,11 @@ for (const direction of [
               : outcome === "catalog-failure"
                 ? /fixture Catalog/
                 : (error: unknown) => error instanceof Error,
+          );
+          assert.equal(
+            failNextAdmission,
+            false,
+            "candidate fault gate was consumed",
           );
           assert.deepEqual(
             await disk.load(),

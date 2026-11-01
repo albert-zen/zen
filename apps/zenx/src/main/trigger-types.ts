@@ -202,6 +202,8 @@ export interface ZenXRoom {
   operationEpoch?: string;
   members: RoomMember[];
   messages: RoomMessage[];
+  /** Total journal history; messages may be only recent context. */
+  messageCount?: number;
   operations?: RoomSendOperation[];
   createdAt: number;
 }

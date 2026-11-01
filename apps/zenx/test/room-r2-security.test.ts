@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -43,7 +43,7 @@ async function fixture(
     await service.startPlugin("zenx-rooms", {} as any);
     await run(service, dir);
   } finally {
-    await service.stopPlugin("zenx-rooms");
+    await service.close();
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -211,6 +211,7 @@ test("128 prepared slots release by exact durable cancel, old key fenced after t
       /stale|cancel/,
     );
     await service.stopPlugin("zenx-rooms");
+    await service.close();
     const reopened = await createBundledAutomationPluginService({
       userDataDirectory: dir,
       appServer: {
@@ -228,7 +229,7 @@ test("128 prepared slots release by exact durable cancel, old key fenced after t
         /missing|stale|cancel/i,
       );
     } finally {
-      await reopened.stopPlugin("zenx-rooms");
+      await reopened.close();
     }
   }));
 
@@ -272,6 +273,7 @@ test("persisted cancel is idempotent, never withdraws saved messages, and surviv
     );
     assert.equal(service.roomOperation(a.id, saved).state, "saved");
     await service.stopPlugin("zenx-rooms");
+    await service.close();
     const reopened = await createBundledAutomationPluginService({
       userDataDirectory: dir,
       appServer: {
@@ -298,7 +300,7 @@ test("persisted cancel is idempotent, never withdraws saved messages, and surviv
         1,
       );
     } finally {
-      await reopened.stopPlugin("zenx-rooms");
+      await reopened.close();
     }
   }));
 
@@ -366,6 +368,38 @@ test("upgrading an enabled 1.0.1 Room generation cannot acknowledge a cancellati
       (await service.cancelPreparedRoomOperation(room.id, id)).state,
       "cancelled",
     );
+    // Check the actual committed fact before any lifecycle close can write.
+    const namespace = path.join(dir, "plugin-data", "zenx-triggers");
+    const marker = JSON.parse(
+      await readFile(path.join(namespace, "storage.json"), "utf8"),
+    );
+    const bytes = await readFile(
+      path.join(
+        namespace,
+        "automation-history",
+        `automation-${marker.value.generation}.jsonl`,
+      ),
+      "utf8",
+    );
+    assert(bytes.endsWith("\n"));
+    const frame = JSON.parse(bytes.trimEnd().split("\n").at(-1)!);
+    assert.equal(frame.record.generation, marker.value.generation);
+    assert.equal(
+      frame.sha256,
+      createHash("sha256").update(JSON.stringify(frame.record)).digest("hex"),
+    );
+    assert.equal(
+      frame.record.metadata.rooms
+        .find((entry: { id: string }) => entry.id === room.id)
+        ?.operations.find((entry: { id: string }) => entry.id === id)
+        ?.cancelled,
+      true,
+      "cancel ACK must follow persistence, not be rescued by stop",
+    );
+    // A restart has one writer: retire all old owners before opening another.
+    await service.stopPlugin("zenx-rooms", fixedSdk);
+    await service.stopPlugin("zenx-triggers");
+    await service.close();
     const reopened = await createBundledAutomationPluginService({
       userDataDirectory: dir,
       appServer,
@@ -378,11 +412,10 @@ test("upgrading an enabled 1.0.1 Room generation cannot acknowledge a cancellati
         "durable Room fact cannot be omitted by old-generation close",
       );
     } finally {
-      await reopened.stopPlugin("zenx-rooms");
+      await reopened.close();
     }
-    await service.stopPlugin("zenx-rooms", fixedSdk);
-    await service.stopPlugin("zenx-triggers");
   } finally {
+    await service.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

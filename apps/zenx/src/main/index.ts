@@ -255,6 +255,8 @@ let threadSidebarStore: ThreadSidebarStore | undefined;
 let fleetSettingsService: FleetSettingsService | undefined;
 let settingsService: ZenXSettingsService | undefined;
 let capabilityService: ZenXCapabilityService | undefined;
+let automationService:
+  Awaited<ReturnType<typeof createBundledAutomationPluginService>> | undefined;
 let foregroundActivity: ForegroundActivity | undefined;
 let automationEnvironment: AutomationEnvironment | undefined;
 let imZenXSetupService: ImZenXSetupService | undefined;
@@ -499,9 +501,6 @@ async function bootstrapZenX(): Promise<void> {
       throw new Error("Unsupported interface language");
     if (setNativeLanguage(language)) installApplicationMenu();
   });
-  let automationService:
-    | Awaited<ReturnType<typeof createBundledAutomationPluginService>>
-    | undefined;
   let triggersPackage: ZenXTriggersCapabilityPackage | undefined;
   const resourcesDirectory = app.isPackaged
     ? process.resourcesPath
@@ -1105,11 +1104,12 @@ async function bootstrapZenX(): Promise<void> {
       titles: titleCoordinator,
     });
     bootstrapFence.throwIfCancelled();
-    const roomVersions = new Map<string, string>();
-    automationService.onChange((snapshot) => {
+    // This map is fresh for each Host bootstrap. Revisions never cross the wire.
+    const roomVersions = new Map<string, number>();
+    automationService.onChange((snapshot, revision) => {
       for (const room of snapshot.rooms) {
         if (!room.assistant) continue;
-        const version = `${room.messages.length}:${room.messages.at(-1)?.id ?? ""}`;
+        const version = revision;
         if (roomVersions.get(room.id) !== version) {
           roomVersions.set(room.id, version);
           appServerManager?.notifyRemoteRoom(room.id, room.assistant.threadId);
@@ -1413,6 +1413,12 @@ async function stopZenXHost(): Promise<void> {
   }
   try {
     await capabilityService?.close();
+  } catch (error) {
+    errors.push(normalizeTitleOwnershipFailure(error));
+  }
+  try {
+    await automationService?.close();
+    automationService = undefined;
   } catch (error) {
     errors.push(normalizeTitleOwnershipFailure(error));
   }

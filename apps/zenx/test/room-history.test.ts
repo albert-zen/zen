@@ -55,7 +55,7 @@ for (const count of [40, 256])
     );
   });
 
-test("evicted oldest identity resolves at the retained boundary without caching beyond 256", async () => {
+test("missing oldest identity resolves at the retained boundary with periodic verification", async () => {
   const all = Array.from({ length: 256 }, (_, id) => message(id + 10));
   let requests = 0;
   const page = await readRoomHistory(
@@ -69,7 +69,7 @@ test("evicted oldest identity resolves at the retained boundary without caching 
     },
     { ...options, oldestMessageId: "m0", earlierMessages: 16 },
   );
-  assert.equal(requests, 257);
+  assert.equal(requests, 260);
   assert.deepEqual(page!.messages, all);
   assert.equal(page!.nextCursor, null);
 });
@@ -87,7 +87,7 @@ test("history aborts stale reads and rejects nonadvancing cursors", async () => 
     null,
   );
   assert.equal(requests, 1);
-  for (const cursor of [0, -1, 256, Number.NaN])
+  for (const cursor of [0, -1, Number.MAX_SAFE_INTEGER + 1, Number.NaN])
     await assert.rejects(
       readRoomHistory(
         async () => ({ messages: [message(1)], nextCursor: cursor }),
@@ -220,6 +220,124 @@ test("snapshot verification is stale-safe and network failure is never retried a
       throw Error("Network unavailable");
     }, options),
     /Network unavailable/,
+  );
+  assert.equal(requests, 1);
+});
+
+for (const pageSize of [1, 4])
+  test(`history beyond256 stays ordered across checkpoints with ${pageSize}-message pages`, async () => {
+    const all = Array.from({ length: 1024 }, (_, id) => message(id));
+    let reads = 0;
+    const read = async (cursor: number) => {
+      reads++;
+      const end = all.length - cursor,
+        start = Math.max(0, end - pageSize);
+      return {
+        messages: all.slice(start, end),
+        nextCursor: start > 0 ? cursor + end - start : null,
+      };
+    };
+    const initial = await readRoomHistory(read, options);
+    assert.equal(initial!.messages.length, 4);
+    assert(reads <= 5);
+    reads = 0;
+    const earlier = await readRoomHistory(read, {
+      ...options,
+      oldestMessageId: "m1020",
+      earlierMessages: 16,
+    });
+    assert.deepEqual(earlier!.messages, all.slice(-20));
+    reads = 0;
+    const complete = await readRoomHistory(read, {
+      ...options,
+      oldestMessageId: "m0",
+      earlierMessages: 16,
+    });
+    assert.deepEqual(complete!.messages, all);
+    assert.equal(complete!.nextCursor, null);
+    assert.equal(
+      new Set(complete!.messages.map((entry) => entry.id)).size,
+      1024,
+    );
+    const pages = 1024 / pageSize;
+    assert.equal(reads, pages + pages / 64);
+  });
+
+test("a changed tail after64 pages restarts without losing older history", async () => {
+  let all = Array.from({ length: 600 }, (_, id) => message(id));
+  let reads = 0;
+  const result = await readRoomHistory(
+    async (cursor) => {
+      if (++reads === 64)
+        all = [
+          ...all,
+          ...Array.from({ length: 12 }, (_, id) => message(600 + id)),
+        ];
+      const end = all.length - cursor,
+        start = Math.max(0, end - 4);
+      return {
+        messages: all.slice(start, end),
+        nextCursor: start > 0 ? cursor + end - start : null,
+      };
+    },
+    { ...options, oldestMessageId: "m0" },
+  );
+  assert.deepEqual(result!.messages, all);
+  assert.equal(new Set(result!.messages.map((entry) => entry.id)).size, 612);
+  assert(reads < 250);
+});
+
+test("an unreachable anchor during continuous append fails within three checkpoints", async () => {
+  const all = Array.from({ length: 1024 }, (_, id) => message(id));
+  let reads = 0;
+  await assert.rejects(
+    readRoomHistory(
+      async (cursor) => {
+        reads++;
+        if (cursor > 0)
+          all.push(
+            ...Array.from({ length: 5 }, (_, index) =>
+              message(all.length + index),
+            ),
+          );
+        const end = all.length - cursor,
+          start = Math.max(0, end - 4);
+        return {
+          messages: all.slice(start, end),
+          nextCursor: start > 0 ? cursor + end - start : null,
+        };
+      },
+      { ...options, oldestMessageId: "missing" },
+    ),
+    /History changed/,
+  );
+  assert.equal(reads, 3 * 65);
+});
+
+test("unchanged-tail malformed duplicate pages are never published", async () => {
+  await assert.rejects(
+    readRoomHistory(
+      async (cursor) => ({
+        messages: [message(0)],
+        nextCursor: cursor === 0 ? 1 : null,
+      }),
+      { ...options, oldestMessageId: "missing" },
+    ),
+    /History changed/,
+  );
+});
+
+test("empty nonterminal pages reject without an unbounded scan", async () => {
+  let requests = 0;
+  await assert.rejects(
+    readRoomHistory(
+      async (cursor) => {
+        requests++;
+        return { messages: [], nextCursor: cursor + 1 };
+      },
+      { ...options, oldestMessageId: "missing" },
+    ),
+    /Invalid cursor/,
   );
   assert.equal(requests, 1);
 });

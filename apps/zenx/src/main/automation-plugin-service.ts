@@ -1,4 +1,4 @@
-import { readFile, realpath, stat, unlink } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   listThreadCandidates,
@@ -24,7 +24,20 @@ import {
   type ZenXTriggerStorePort,
   type ZenXTriggerTitlePort,
 } from "./trigger-service.js";
-import { canonicalTriggerSnapshot, ZenXTriggerStore } from "./trigger-store.js";
+import { ZenXTriggerStore } from "./trigger-store.js";
+import {
+  openAutomationTransactionStorage,
+  assertAutomationDataDeletable,
+  type MigratedAutomationStorage,
+} from "./automation-transaction-migration.js";
+import {
+  readAutomationProjection,
+  automationTransactionForSnapshot,
+} from "./automation-transaction-adapter.js";
+import type {
+  AutomationRoomEvent,
+  AutomationRoomSnapshot,
+} from "./automation-transaction-store.js";
 import type {
   CreateRoomInput,
   CreateTriggerInput,
@@ -69,6 +82,7 @@ export async function clearBundledAutomationRoomsData(
   userDataDirectory: string,
 ): Promise<void> {
   const root = path.join(userDataDirectory, "plugin-data");
+  await assertAutomationDataDeletable(root);
   const filename = path.join(root, ZENX_TRIGGERS_CAPABILITY_ID, "storage.json");
   try {
     await readFile(filename, "utf8");
@@ -109,151 +123,33 @@ export async function createBundledAutomationPluginService(options: {
     reasoningEffort: string | null;
   }>;
 }): Promise<ZenXBundledAutomationPluginService> {
-  let legacy: TriggerSnapshot;
-  try {
-    legacy = await new ZenXTriggerStore(
-      path.join(options.userDataDirectory, "trigger-registry.json"),
-    ).read();
-  } catch (error) {
-    // Rooms and Triggers are optional capabilities. Preserve the corrupt
-    // legacy file for repair, but do not prevent the core host from starting.
-    console.error(
-      `ZenX legacy automation state is unavailable; starting with empty optional state: ${describeError(error)}`,
-    );
-    legacy = { triggers: [], history: [], rooms: [] };
-  }
-  const storageRoot = path.join(options.userDataDirectory, "plugin-data");
-  // A pre-existing Room namespace is authoritative during migration. Read it
-  // before filling the shared Trigger container so a missing `rooms` field in
-  // that container cannot overwrite newer Room data with the legacy fallback.
-  const roomProjectionFile = path.join(
-    storageRoot,
-    ZENX_ROOMS_CAPABILITY_ID,
-    "storage.json",
-  );
-  let roomProjection: JsonPluginStorage | undefined;
-  let existingRooms: unknown;
-  let roomProjectionError: unknown;
-  const readStorageFile =
-    options.storageFileSystem?.readFile ??
-    ((filename: string, encoding: "utf8") => readFile(filename, encoding));
-  try {
-    await readStorageFile(roomProjectionFile, "utf8");
-    roomProjection = await JsonPluginStorage.open({
-      pluginId: ZENX_ROOMS_CAPABILITY_ID,
-      root: storageRoot,
-      version: 1,
-      initialValue: { rooms: legacy.rooms },
-      fileSystem: options.storageFileSystem,
-    });
-    const projectedRooms = (await roomProjection.get())["rooms"];
-    // A generic plugin container only validates JSON shape. Validate the Room
-    // namespace before allowing a legacy projection to seed the shared
-    // Trigger document, otherwise malformed but parseable data can poison the
-    // canonical store during migration.
-    existingRooms = canonicalTriggerSnapshot({
-      triggers: [],
-      history: [],
-      rooms: projectedRooms,
-    }).rooms;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      roomProjectionError = error;
-      console.error(
-        `ZenX Room compatibility projection is unavailable: ${describeError(error)}`,
-      );
-    }
-    roomProjection = undefined;
-  }
-  // Keep the historical Trigger filename as the physical container so old
-  // readers continue to find their namespace; the document now also carries
-  // the Room projection and is the sole commit point.
-  const automationStorage = await JsonPluginStorage.open({
-    pluginId: ZENX_TRIGGERS_CAPABILITY_ID,
-    root: storageRoot,
-    version: 1,
-    initialValue: {
-      triggers: legacy.triggers,
-      history: legacy.history,
-      rooms: existingRooms ?? legacy.rooms,
-    },
+  // The migration module inspects both marker namespaces and known artifacts
+  // before this lazy legacy read, and before any bootstrap write can occur.
+  const storage = await openAutomationTransactionStorage({
+    storageRoot: path.join(options.userDataDirectory, "plugin-data"),
     fileSystem: options.storageFileSystem,
-  });
-  const persistedAutomation = await automationStorage.get();
-  if (!("rooms" in persistedAutomation)) {
-    await automationStorage.set({
-      triggers: persistedAutomation["triggers"] ?? legacy.triggers,
-      history: persistedAutomation["history"] ?? legacy.history,
-      rooms: existingRooms ?? legacy.rooms,
-    });
-  }
-  const canonicalRooms = persistedAutomation["rooms"] ?? legacy.rooms;
-  if (roomProjection === undefined && roomProjectionError === undefined) {
-    try {
-      roomProjection = await JsonPluginStorage.open({
-        pluginId: ZENX_ROOMS_CAPABILITY_ID,
-        root: storageRoot,
-        version: 1,
-        initialValue: { rooms: canonicalRooms },
-        fileSystem: options.storageFileSystem,
-      });
-    } catch (error) {
-      console.error(
-        `ZenX Room compatibility projection is unavailable: ${describeError(error)}`,
-      );
-    }
-  }
-  if (roomProjection === undefined && roomProjectionError !== undefined) {
-    // Only malformed, reconstructible data may be quarantined. Future-version
-    // and permission failures must leave the original file untouched.
-    if (isReconstructibleProjectionError(roomProjectionError)) {
+    loadLegacy: async () => {
       try {
-        canonicalTriggerSnapshot({
-          triggers: persistedAutomation["triggers"] ?? [],
-          history: persistedAutomation["history"] ?? [],
-          rooms: canonicalRooms,
-        });
-        await (options.storageFileSystem?.unlink ?? unlink)(roomProjectionFile);
-        roomProjection = await JsonPluginStorage.open({
-          pluginId: ZENX_ROOMS_CAPABILITY_ID,
-          root: storageRoot,
-          version: 1,
-          initialValue: { rooms: canonicalRooms },
-          fileSystem: options.storageFileSystem,
-        });
+        return await new ZenXTriggerStore(
+          path.join(options.userDataDirectory, "trigger-registry.json"),
+        ).read();
       } catch (error) {
         console.error(
-          `ZenX Room compatibility projection remains unavailable: ${describeError(error)}`,
+          `ZenX legacy automation source is unavailable: ${describeError(error)}`,
         );
-        roomProjection = undefined;
+        return { triggers: [], history: [], rooms: [] };
       }
-    }
-  }
-  if (roomProjection !== undefined) {
-    try {
-      await roomProjection.set({ rooms: canonicalRooms });
-    } catch (error) {
-      console.error(
-        `ZenX Room compatibility projection is stale; canonical state remains authoritative: ${describeError(error)}`,
-      );
-    }
-  }
+    },
+  });
   const active = new Set<string>();
   return new ZenXBundledAutomationPluginService(
     options.appServer,
-    new PluginAutomationStore(automationStorage, active, roomProjection),
+    new PluginAutomationStore(storage, active),
     active,
     options.titles,
     options.threadTargets,
     options.targetDefaults,
     options.startThread,
-  );
-}
-
-function isReconstructibleProjectionError(error: unknown): boolean {
-  const message = describeError(error);
-  return /invalid JSON|document is invalid|invalid entry shape|value must be|exceeds its byte limit/u.test(
-    message,
   );
 }
 
@@ -275,94 +171,91 @@ async function resolveAutomationDirectory(workspace: string): Promise<string> {
 }
 
 class PluginAutomationStore implements ZenXTriggerStorePort {
-  readonly #storage: Pick<JsonPluginStorage, "get" | "set"> & {
-    reload?(): Promise<void>;
-  };
-  readonly #active: ReadonlySet<string>;
-  readonly #roomProjection: Pick<JsonPluginStorage, "get" | "set"> | undefined;
-
+  readonly roomHistory;
   constructor(
-    storage: Pick<JsonPluginStorage, "get" | "set"> & {
-      reload?(): Promise<void>;
-    },
-    active: ReadonlySet<string>,
-    roomProjection: Pick<JsonPluginStorage, "get" | "set"> | undefined,
+    readonly storage: MigratedAutomationStorage,
+    readonly active: ReadonlySet<string>,
+    readonly candidates: Parameters<
+      MigratedAutomationStorage["append"]
+    >[1] = {},
   ) {
-    this.#storage = storage;
-    this.#active = active;
-    this.#roomProjection = roomProjection;
+    this.roomHistory = storage.journal;
   }
 
   forLifecycle(
     pluginId: string,
     sdk: ZenXPluginHostSdkV1,
   ): PluginAutomationStore {
-    return new PluginAutomationStore(
-      pluginId === ZENX_TRIGGERS_CAPABILITY_ID ? sdk.storage : this.#storage,
-      this.#active,
-      pluginId === ZENX_ROOMS_CAPABILITY_ID
-        ? sdk.storage
-        : this.#roomProjection,
-    );
+    if (
+      pluginId !== ZENX_TRIGGERS_CAPABILITY_ID &&
+      pluginId !== ZENX_ROOMS_CAPABILITY_ID
+    )
+      throw Error("Unknown shared automation plugin");
+    return new PluginAutomationStore(this.storage, this.active, {
+      ...this.candidates,
+      ...(pluginId === ZENX_TRIGGERS_CAPABILITY_ID
+        ? { shared: sdk.storage }
+        : { rooms: sdk.storage }),
+    });
   }
-
   wakeupStorageAvailable(): boolean {
-    return [this.#storage, this.#roomProjection].every(
-      (storage) =>
-        !(storage instanceof JsonPluginStorage) || !storage.replacementPending,
+    return (
+      !this.storage.shared.replacementPending &&
+      !this.storage.rooms.replacementPending
     );
   }
-
   onStorageReplacementChange(listener: () => void): () => void {
-    const disposers = [this.#storage, this.#roomProjection].flatMap(
-      (storage) =>
-        storage instanceof JsonPluginStorage
-          ? [storage.onReplacementChange(listener)]
-          : [],
+    const disposers = [this.storage.shared, this.storage.rooms].map((storage) =>
+      storage.onReplacementChange(listener),
     );
     return () => {
       for (const dispose of disposers) dispose();
     };
   }
-
-  async read(): Promise<TriggerSnapshot> {
-    await this.#storage.reload?.();
-    const data = await this.#storage.get();
-    return canonicalTriggerSnapshot({
-      triggers: data["triggers"],
-      history: data["history"],
-      rooms: data["rooms"],
-    });
-  }
-
-  async write(snapshot: TriggerSnapshot): Promise<void> {
-    const current = await this.#storage.get();
-    const committed = {
-      triggers: this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
-        ? snapshot.triggers
-        : (current["triggers"] ?? []),
-      history: this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID)
-        ? snapshot.history
-        : (current["history"] ?? []),
-      rooms: this.#active.has(ZENX_ROOMS_CAPABILITY_ID)
-        ? snapshot.rooms
-        : (current["rooms"] ?? []),
-    };
-    await this.#storage.set(committed);
-    // The room namespace remains as a compatibility projection for older
-    // runtimes. The shared Trigger document above is the sole authority. A
-    // projection failure must not report a failed mutation after the
-    // authoritative commit; startup resynchronizes this compatibility file.
-    if (this.#active.has(ZENX_ROOMS_CAPABILITY_ID)) {
-      try {
-        if (this.#roomProjection !== undefined)
-          await this.#roomProjection.set({ rooms: committed.rooms });
-      } catch (error) {
-        console.error(
-          `ZenX Room compatibility projection is stale; canonical state committed: ${describeError(error)}`,
+  async #verifyMarkers(): Promise<void> {
+    for (const [storage, format] of [
+      [
+        this.candidates?.shared ?? this.storage.shared,
+        "zenx-automation-journal",
+      ],
+      [this.candidates?.rooms ?? this.storage.rooms, "zenx-automation-forward"],
+    ] as const) {
+      const value = await storage.get();
+      if (
+        storage.version !== 2 ||
+        value.format !== format ||
+        value.generation !== this.storage.journal.generation
+      )
+        throw Error(
+          "Automation lifecycle marker does not select this history generation",
         );
-      }
     }
+  }
+  async read(): Promise<TriggerSnapshot> {
+    await this.#verifyMarkers();
+    const snapshot = await readAutomationProjection(this.storage.journal);
+    await this.#verifyMarkers();
+    return snapshot;
+  }
+  async write(
+    snapshot: TriggerSnapshot,
+    roomEvents: readonly AutomationRoomEvent[] = [],
+  ): Promise<void> {
+    await this.storage.append(
+      automationTransactionForSnapshot(
+        this.storage.journal,
+        snapshot,
+        roomEvents,
+        {
+          triggers: this.active.has(ZENX_TRIGGERS_CAPABILITY_ID),
+          rooms: this.active.has(ZENX_ROOMS_CAPABILITY_ID),
+        },
+      ),
+      this.candidates,
+    );
+  }
+  async close(): Promise<void> {
+    await this.storage.close();
   }
 }
 
@@ -632,7 +525,9 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     });
   }
 
-  onChange(listener: (snapshot: TriggerSnapshot) => void): () => void {
+  onChange(
+    listener: (snapshot: TriggerSnapshot, revision: number) => void,
+  ): () => void {
     return this.#service.onChange(listener);
   }
   triggersAvailable(): boolean {
@@ -644,17 +539,73 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return this.#serviceRunning && this.#active.has(ZENX_ROOMS_CAPABILITY_ID);
   }
   snapshot(): TriggerSnapshot {
+    this.#assertStorageReadable();
     return this.#service.snapshot();
   }
 
+  snapshotPreviews() {
+    this.#assertStorageReadable();
+    return this.#service.snapshotPreviews();
+  }
+  roomOperations(roomId: string) {
+    this.#assertStorageReadable();
+    return this.#service.roomOperations(roomId);
+  }
+  readRoomPage(
+    roomId: string,
+    cursor?: number,
+    snapshot?: AutomationRoomSnapshot,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.readRoomPage(roomId, cursor, snapshot);
+  }
+  readRoomMessage(
+    roomId: string,
+    messageId: string,
+    snapshot?: AutomationRoomSnapshot,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.readRoomMessage(roomId, messageId, snapshot);
+  }
+  roomMessageReadProjection(
+    roomId: string,
+    readCursor: unknown,
+    readSince: unknown,
+  ) {
+    this.#assertStorageReadable();
+    return this.#service.roomMessageReadProjection(
+      roomId,
+      readCursor,
+      readSince,
+    );
+  }
+  async close(): Promise<void> {
+    await this.#serialize(async () => {
+      try {
+        await this.#service.close();
+      } finally {
+        this.#serviceRunning = false;
+        this.#active.clear();
+        this.#triggerRuntimeLeases = 0;
+        this.#triggerRuntimeSdks.length = 0;
+        this.#roomRuntimeLeases.length = 0;
+        if (this.#store instanceof PluginAutomationStore)
+          await this.#store.close();
+      }
+    });
+  }
+
   sidebarFacts(): TriggerSidebarSnapshot {
+    this.#assertStorageReadable();
     return this.#service.sidebarFacts();
   }
 
   async create(input: CreateTriggerInput) {
+    this.#assertStorageReadable();
     return await this.#service.create(await this.#resolveInput(input));
   }
   async update(input: UpdateTriggerInput) {
+    this.#assertStorageReadable();
     return await this.#service.update({
       ...(await this.#resolveInput(input)),
       id: input.id,
@@ -694,6 +645,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     workspace: string,
     expected: AutomationTargetPreview,
   ): Promise<{ threadId: string; effective: AutomationTargetPreview }> {
+    this.#assertStorageReadable();
     return await this.#createTarget(workspace, expected);
   }
 
@@ -725,6 +677,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Workspace directory changed; review its actual location again",
       );
+    this.#assertStorageReadable();
     onStart?.();
     const result = await this.#startThread(current);
     const sandboxType =
@@ -844,6 +797,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       : { ...input, threadId };
   }
   async cancel(triggerId: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.cancel(triggerId);
   }
   async resume(triggerId: string, expectedRevision?: number): Promise<void> {
@@ -880,12 +834,15 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       throw new Error(
         "Remote Trigger source identity changed; edit its definition before enabling",
       );
+    this.#assertStorageReadable();
     await this.#service.resume(triggerId, trigger);
   }
   async delete(triggerId: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.delete(triggerId);
   }
   async signal(name: string, detail: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.signal(name, detail);
   }
   async prepareRoomMessage(
@@ -894,6 +851,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     text: string,
     replyToMessageId?: string,
   ): Promise<RoomSendOperation> {
+    this.#assertStorageReadable();
     return await this.#service.prepareRoomMessage(
       roomId,
       operationId,
@@ -909,6 +867,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   ): Promise<RoomDeliveryView> {
     if (!this.roomsAvailable())
       throw new Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
     return await this.#service.postAddressedRoomMessage(
       roomId,
       threadId,
@@ -921,6 +880,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     operationId: string,
     language: "en" | "zh",
   ) {
+    this.#assertStorageReadable();
     return this.#service.prepareAssistantIntroduction(
       roomId,
       operationId,
@@ -928,6 +888,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     );
   }
   async startAssistantIntroduction(roomId: string, operationId: string) {
+    this.#assertStorageReadable();
     return this.#service.startAssistantIntroduction(roomId, operationId);
   }
   async postPreparedRoomMessage(
@@ -935,6 +896,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     operationId: string,
     text: string,
   ): Promise<RoomSendOperation> {
+    this.#assertStorageReadable();
     return await this.#service.postPreparedRoomMessage(
       roomId,
       operationId,
@@ -942,6 +904,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     );
   }
   async cancelPreparedRoomOperation(roomId: string, operationId: string) {
+    this.#assertStorageReadable();
     return await this.#service.cancelPreparedRoomOperation(roomId, operationId);
   }
   wakeupsEnabled(): boolean {
@@ -951,9 +914,11 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     );
   }
   roomOperation(roomId: string, operationId: string): RoomDeliveryView {
+    this.#assertStorageReadable();
     return this.#service.roomOperation(roomId, operationId);
   }
   roomDelivery(roomId: string, messageId: string) {
+    this.#assertStorageReadable();
     return this.#service.roomMessageReceipt(roomId, messageId);
   }
   async setRoomReaction(
@@ -962,6 +927,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     actorThreadId: string | null,
     emoji: string | null,
   ) {
+    this.#assertStorageReadable();
     return await this.#service.setRoomReaction(
       roomId,
       messageId,
@@ -973,11 +939,13 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     roomId: string,
     operationId: string,
   ): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.acknowledgeRoomOperation(roomId, operationId);
   }
   async createAssistantRoom(
     input: CreateAssistantRoomInput | CreateRoomInput,
   ): Promise<ZenXRoom> {
+    this.#assertStorageReadable();
     const captured = structuredClone(input);
     // Cached 1.0.x Rooms runtimes explicitly supply their existing binding.
     if ("members" in captured) {
@@ -1042,6 +1010,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
         );
         threadId = created.threadId;
         this.#requireAssistantSetup();
+        this.#assertStorageReadable();
         return await this.#service.createAssistantRoom({
           name: validated.name,
           members: [{ name: validated.members[0]!.name, threadId }],
@@ -1074,6 +1043,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   }
 
   #requireAssistantSetup(): void {
+    this.#assertStorageReadable();
     if (
       !this.#serviceRunning ||
       !this.#active.has(ZENX_TRIGGERS_CAPABILITY_ID) ||
@@ -1092,6 +1062,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     if (target.status !== "resolved" || target.candidate.archived)
       throw new Error("Assistant Thread is unavailable or archived");
     this.#requireAssistantSetup();
+    this.#assertStorageReadable();
     return await this.#service.createAssistantRoom({
       name: input.name,
       members: [{ name: member.name, threadId: target.threadId }],
@@ -1100,6 +1071,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
   async setAssistantDeliveryMode(roomId: string, mode: "steer" | "queue") {
     if (!this.roomsAvailable())
       throw new Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
     return await this.#service.setAssistantDeliveryMode(roomId, mode);
   }
   async setAssistantReplies(roomId: string, enabled: boolean) {
@@ -1126,15 +1098,18 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
       if (target.status !== "resolved" || target.candidate.archived)
         throw new Error("PAW working Thread is unavailable or archived");
       this.#requireAssistantSetup();
+      this.#assertStorageReadable();
       return await this.#service.addAssistantHeartbeat(roomId);
     });
   }
   async createRoom(input: CreateRoomInput) {
+    this.#assertStorageReadable();
     return await this.#service.createRoom(input);
   }
   assistantWorkspace(roomId: string): AssistantWorkspace {
     if (!this.roomsAvailable())
       throw Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
     return this.#service.assistantWorkspace(roomId);
   }
   async updateAssistantWorkspace(
@@ -1144,19 +1119,24 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     return await this.#serialize(async () => {
       if (!this.roomsAvailable())
         throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
       return await this.#service.updateAssistantWorkspace(captured);
     });
   }
   async renameRoom(roomId: string, name: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.renameRoom(roomId, name);
   }
   async deleteRoom(roomId: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.deleteRoom(roomId);
   }
   async addRoomMember(roomId: string, member: RoomMember): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.addRoomMember(roomId, member);
   }
   async removeRoomMember(roomId: string, threadId: string): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.removeRoomMember(roomId, threadId);
   }
   async postAgentRoomMessage(
@@ -1165,6 +1145,7 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     replyToMessageId?: string,
     callingThreadId?: string,
   ): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.postAgentRoomMessage(
       roomId,
       text,
@@ -1177,7 +1158,13 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     author: string,
     text: string,
   ): Promise<void> {
+    this.#assertStorageReadable();
     await this.#service.postRoomMessage(roomId, author, text);
+  }
+
+  #assertStorageReadable(): void {
+    if (this.#store instanceof PluginAutomationStore)
+      void this.#store.storage.journal.position;
   }
 
   async #serialize<T>(operation: () => Promise<T>): Promise<T> {

@@ -35,7 +35,6 @@ import {
   MAX_REASON_BYTES,
   MAX_ROOM_COUNT,
   MAX_ROOM_MEMBERS,
-  MAX_ROOM_MESSAGES,
   MAX_ROOM_OPERATIONS,
   MAX_ROOM_NAME_BYTES,
   MAX_TRIGGER_COUNT,
@@ -164,6 +163,7 @@ const OUTCOME_KEYS = [
   "error",
 ] as const;
 const ROOM_KEYS = [
+  "messageCount",
   "assistant",
   "assistantWorkspace",
   "id",
@@ -484,6 +484,9 @@ function canonicalRoom(room: ZenXRoom): ZenXRoom {
       name: member.name,
       threadId: member.threadId,
     })),
+    ...(room.messageCount === undefined
+      ? {}
+      : { messageCount: room.messageCount }),
     messages: room.messages.map((message) => ({
       ...(message.replyTo === undefined
         ? {}
@@ -854,7 +857,11 @@ function isRoom(value: unknown): value is ZenXRoom {
     !string(room["id"], MAX_ID_BYTES) ||
     !string(room["name"], MAX_ROOM_NAME_BYTES) ||
     !arrayOf(room["members"], isRoomMember, MAX_ROOM_MEMBERS) ||
-    !arrayOf(room["messages"], isRoomMessage, MAX_ROOM_MESSAGES) ||
+    !arrayOf(room["messages"], isRoomMessage) ||
+    (room["messageCount"] !== undefined &&
+      (!Number.isSafeInteger(room["messageCount"]) ||
+        (room["messageCount"] as number) <
+          (room["messages"] as unknown[]).length)) ||
     (room["operationEpoch"] !== undefined &&
       !string(room["operationEpoch"], MAX_ID_BYTES)) ||
     (room["operations"] !== undefined &&
@@ -1121,7 +1128,7 @@ function isRoomMember(value: unknown): value is RoomMember {
   );
 }
 
-function isRoomMessage(value: unknown): value is RoomMessage {
+export function isRoomMessage(value: unknown): value is RoomMessage {
   const message = record(value);
   return (
     message !== null &&
@@ -1235,7 +1242,7 @@ function isRoomQuote(value: unknown): boolean {
     string(quote["text"], 1000)
   );
 }
-function isRoomReactions(value: unknown): boolean {
+export function isRoomReactions(value: unknown): boolean {
   if (!Array.isArray(value) || value.length > MAX_ROOM_MEMBERS + 1)
     return false;
   const actors = new Set<string>();

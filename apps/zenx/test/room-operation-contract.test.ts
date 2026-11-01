@@ -65,10 +65,11 @@ test("prepared Room operation binds same key to same text and commits at most on
   );
   assert.equal(service.snapshot().rooms[0]?.messages[1]?.kind, "agent");
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   await rm(dir, { recursive: true, force: true });
 });
 
-test("receipt survives transcript truncation and a restart without inferring an unsent message", async () => {
+test("receipt and original message survive history growth and restart without duplicate admission", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "room-operation-retain-"));
   const port = {
     request: async () => {
@@ -94,7 +95,7 @@ test("receipt survives transcript truncation and a restart without inferring an 
   );
   for (let n = 0; n < 260; n++)
     await service.postRoomMessage(room.id, "You", `ordinary ${n}`);
-  assert.equal(service.snapshot().rooms[0]?.messages.length, 256);
+  assert.equal(service.snapshot().rooms[0]?.messageCount, 261);
   const runtime = createZenXTrustedPlugin(service);
   const paged = (name: string, arguments_: Record<string, unknown>) =>
     runtime.invoke(name, {
@@ -110,7 +111,7 @@ test("receipt survives transcript truncation and a restart without inferring an 
     rooms: Array<{ messageCount: number; messages: Array<{ text: string }> }>;
     nextCursor: number | null;
   };
-  assert.equal(metadata.rooms[0]?.messageCount, 256);
+  assert.equal(metadata.rooms[0]?.messageCount, 261);
   assert(metadata.rooms[0]?.messages[0]!.text.length <= 120);
   const messageIds = new Set<string>();
   let offset: number | null = 0;
@@ -126,7 +127,8 @@ test("receipt survives transcript truncation and a restart without inferring an 
     for (const entry of page.messages) messageIds.add(entry.id);
     offset = page.nextCursor;
   }
-  assert.equal(messageIds.size, 256);
+  assert.equal(messageIds.size, 261);
+  assert(messageIds.has(receipt.messageId!));
   assert.equal(service.roomOperation(room.id, id).messageId, receipt.messageId);
   const again = await service.postPreparedRoomMessage(
     room.id,
@@ -134,8 +136,9 @@ test("receipt survives transcript truncation and a restart without inferring an 
     "retain original",
   );
   assert.equal(again.messageId, receipt.messageId);
-  assert.equal(service.snapshot().rooms[0]?.messages.length, 256);
+  assert.equal(service.snapshot().rooms[0]?.messageCount, 261);
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   const restarted = await createBundledAutomationPluginService({
     userDataDirectory: dir,
     appServer: port,
@@ -146,6 +149,7 @@ test("receipt survives transcript truncation and a restart without inferring an 
     receipt.messageId,
   );
   await restarted.stopPlugin("zenx-rooms");
+  await restarted.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -215,6 +219,7 @@ test("bounded Room receipts reject overflow rather than dropping unacknowledged 
   }
   assert.equal(ids.size, 128);
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -259,6 +264,7 @@ test("wake failure retains exact committed message and repeated key never re-wak
   assert.equal(service.snapshot().rooms[0]?.messages.length, 1);
   await service.stopPlugin("zenx-triggers");
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -304,6 +310,7 @@ test("disabled Triggers plugin cannot wake from an active persisted Room mention
   assert.equal(calls, 0);
   assert.equal(service.snapshot().history.length, 0);
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -349,6 +356,7 @@ test("an evicted acknowledged key cannot be re-admitted after the bounded epoch 
   assert.equal(service.snapshot().rooms[0]?.messages.length, 1);
   assert.equal(service.snapshot().rooms[0]?.operations?.length, 128);
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -401,6 +409,7 @@ test("legacy Room without epoch migrates in place with stable ID and trustworthy
   );
   assert.equal(service.snapshot().rooms[0]?.operationEpoch, "legacy");
   await service.stopPlugin("zenx-rooms");
+  await service.close();
   const reopened = await createBundledAutomationPluginService({
     userDataDirectory: dir,
     appServer: {
