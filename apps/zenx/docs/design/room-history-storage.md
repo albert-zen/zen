@@ -57,6 +57,29 @@ a new sync receipt or trigger delivery. A committed receipt is not proof that an
 Agent received a wakeup. Observe unknown dispatch outcomes, never replay them.
 Test both commit-before-dispatch and dispatch-before-observation failure windows.
 
+## Host marker lease during service lifecycle
+
+The selected journal exposes one Host-owned `append(transaction, candidates?)`
+entry point. It acquires the existing shared namespace queue, then the Room
+namespace queue in that fixed order. A candidate supplies its actual Host-created
+SDK storage facade; a private WeakMap resolves that facade to its real storage
+owner. Unmapped, expired, cross-root, wrong-version and wrong-generation handles
+cannot authorize an append. The peer namespace must also be current.
+
+Only after both namespace paths and generation markers are verified does this
+one callback install a private, transient token for exactly one journal append.
+Core lease checks validate both captured storage owners; finally expires the token.
+The selected journal's raw append path cannot bypass this admission. A replacement
+arriving after admission waits for the existing queues, rather than making a
+partially written append spuriously unknown. A replacement that entered first
+continues to fence old Host/runtime handles.
+
+This is not a new persistence authority or plugin permission API. The SDK facade
+still exposes only its existing storage methods. Same-namespace recursive SDK
+access from a lease callback is rejected using callback-local async context;
+independent callers continue to queue normally. Callback failure expires its lease;
+there is no promise that cancelling after I/O revokes or rolls back a commit.
+
 ## Receipt bodies and reaction snapshots
 
 Prepared operations need immutable independent body facts in the same frame as

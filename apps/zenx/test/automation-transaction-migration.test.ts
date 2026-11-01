@@ -237,7 +237,7 @@ check(
     const meta = result.journal.metadata();
     for (let i = 320; i < 400; i++) {
       meta.rooms[0]!.messageCount++;
-      await result.journal.append({
+      await result.append({
         metadata: meta,
         roomEvents: [
           {
@@ -390,7 +390,7 @@ for (const appended of [false, true])
       if (appended) {
         const metadata = result.journal.metadata();
         metadata.rooms[0]!.messageCount++;
-        await result.journal.append({
+        await result.append({
           metadata,
           roomEvents: [
             {
@@ -610,7 +610,7 @@ check(
       );
       const metadata = selected.journal.metadata();
       metadata.rooms[0]!.messageCount++;
-      await selected.journal.append({
+      await selected.append({
         metadata,
         roomEvents: [
           {

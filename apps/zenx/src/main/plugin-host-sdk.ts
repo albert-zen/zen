@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   mkdir,
@@ -219,7 +220,7 @@ export async function createZenXPluginHostSdk(
       bindGeneration: true,
     }));
   const ui = options.ui ?? unavailableUiPort;
-  return Object.freeze({
+  const sdk = Object.freeze({
     version: ZENX_PLUGIN_HOST_SDK_VERSION,
     pluginId: options.pluginId,
     query: Object.freeze({
@@ -273,6 +274,32 @@ export async function createZenXPluginHostSdk(
       },
     }),
   });
+  hostStorageFacades.set(sdk.storage, storage);
+  return sdk;
+}
+
+export interface PluginStorageLease {
+  readonly filename: string;
+  readonly version: number;
+  readonly value: PluginStorageValue;
+  assertCurrent(): void;
+}
+
+const hostStorageFacades = new WeakMap<object, JsonPluginStorage>();
+const runStorageLease = Symbol("Host storage lease");
+
+/** Host-only queue lease; never exposed on the plugin SDK facade. */
+export async function withPluginStorageLease<T>(
+  handle: JsonPluginStorage | ZenXPluginHostSdkV1["storage"],
+  callback: (lease: PluginStorageLease) => Promise<T>,
+): Promise<T> {
+  const storage =
+    handle instanceof JsonPluginStorage
+      ? handle
+      : hostStorageFacades.get(handle);
+  if (!storage)
+    throw new Error("Storage lease requires a Host-created storage handle");
+  return await storage[runStorageLease](callback);
 }
 
 interface StoredPluginData {
@@ -350,10 +377,18 @@ function notifyStorageReplacement(authority: StorageAuthority): void {
     }
   }
 }
+const storageLeaseScope = new AsyncLocalStorage<
+  ReadonlyMap<StorageAuthority, { active: boolean }>
+>();
+
 function queueStorage<T>(
   authority: StorageAuthority,
   operation: () => Promise<T>,
 ): Promise<T> {
+  if (storageLeaseScope.getStore()?.get(authority)?.active)
+    return Promise.reject(
+      new Error("Storage lease callback cannot reenter the same namespace"),
+    );
   const result = authority.tail.then(operation);
   authority.tail = result.then(
     () => undefined,
@@ -556,6 +591,10 @@ export class JsonPluginStorage {
       "storage.json",
     );
     const authority = storageAuthority(fileSystem, filename);
+    if (storageLeaseScope.getStore()?.get(authority)?.active)
+      throw new Error(
+        "Storage lease callback cannot reenter the same namespace",
+      );
     if (authority.writeOutcomeUnknown) throw authority.writeOutcomeUnknown;
     return { filename, fileSystem, authority };
   }
@@ -619,6 +658,37 @@ export class JsonPluginStorage {
     if (authority.data === undefined || authority.data.version !== this.version)
       throw new Error("Plugin storage version changed while running");
     return authority.data;
+  }
+
+  async [runStorageLease]<T>(
+    callback: (lease: PluginStorageLease) => Promise<T>,
+  ): Promise<T> {
+    this.#checkOwnership();
+    return await queueStorage(this.#authority, async () => {
+      const data = this.#checkOwnership();
+      const authority = this.#authority;
+      const generation = authority.staging ?? authority.generation;
+      const scope = { active: true };
+      const assertCurrent = () => {
+        if (!scope.active) throw new Error("Storage lease has expired");
+        this.#checkOwnership();
+        if ((authority.staging ?? authority.generation) !== generation)
+          throw new Error("Storage lease generation was replaced");
+      };
+      const lease: PluginStorageLease = Object.freeze({
+        filename: this.#filename,
+        version: data.version,
+        value: structuredClone(data.value),
+        assertCurrent,
+      });
+      const scopes = new Map(storageLeaseScope.getStore());
+      scopes.set(authority, scope);
+      try {
+        return await storageLeaseScope.run(scopes, () => callback(lease));
+      } finally {
+        scope.active = false;
+      }
+    });
   }
 
   async get(): Promise<PluginStorageValue> {

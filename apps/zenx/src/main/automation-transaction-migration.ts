@@ -8,6 +8,8 @@ import {
 } from "../../../../src/storage-files.js";
 import {
   JsonPluginStorage,
+  withPluginStorageLease,
+  type ZenXPluginHostSdkV1,
   type PluginStorageFileSystem,
 } from "./plugin-host-sdk.js";
 import { canonicalTriggerSnapshot } from "./trigger-store.js";
@@ -16,6 +18,8 @@ import {
   AutomationTransactionStore,
   fingerprintOperationBody,
   type AutomationMetadata,
+  type AutomationTransaction,
+  type AutomationTransactionReceipt,
   type AutomationRoomEvent,
 } from "./automation-transaction-store.js";
 
@@ -58,6 +62,14 @@ export interface MigratedAutomationStorage {
   journal: AutomationTransactionStore;
   shared: JsonPluginStorage;
   rooms: JsonPluginStorage;
+  /** Exactly one append under both existing marker queues; only Host-created handles are admitted. */
+  append(
+    transaction: AutomationTransaction,
+    candidates?: {
+      shared?: JsonPluginStorage | ZenXPluginHostSdkV1["storage"];
+      rooms?: JsonPluginStorage | ZenXPluginHostSdkV1["storage"];
+    },
+  ): Promise<AutomationTransactionReceipt>;
   close(): Promise<void>;
 }
 
@@ -266,10 +278,12 @@ export async function openAutomationTransactionStorage(
   let shared: JsonPluginStorage | undefined;
   let rooms: JsonPluginStorage | undefined;
   let journal: AutomationTransactionStore | undefined;
+  let mutationLease: { assertCurrent(): void } | undefined;
   const assertWriterLease = () => {
     if (closed) throw Error("Automation storage is closed");
-    if (shared?.replacementPending || rooms?.replacementPending)
-      throw Error("Automation plugin replacement is being prepared");
+    if (!mutationLease)
+      throw Error("Automation append requires current marker leases");
+    mutationLease.assertCurrent();
   };
   const storageOptions = (pluginId: string) => ({
     pluginId,
@@ -449,6 +463,47 @@ export async function openAutomationTransactionStorage(
     journal: journal!,
     shared: shared!,
     rooms: rooms!,
+    async append(transaction, candidates = {}) {
+      if (closed) throw Error("Automation storage is closed");
+      return withPluginStorageLease(
+        candidates.shared ?? shared!,
+        async (ownerLease) =>
+          withPluginStorageLease(
+            candidates.rooms ?? rooms!,
+            async (peerLease) => {
+              for (const [lease, expectedFile, forward] of [
+                [ownerLease, sharedFile, false],
+                [peerLease, roomFile, true],
+              ] as const) {
+                lease.assertCurrent();
+                if (lease.filename !== expectedFile || lease.version !== 2)
+                  throw Error(
+                    "Automation marker lease has a different namespace or version",
+                  );
+                const selected = marker(lease.value, forward);
+                if (selected.generation !== journal!.generation)
+                  throw Error(
+                    "Automation marker lease selects a different generation",
+                  );
+              }
+              if (mutationLease)
+                throw Error("Automation mutation lease is already active");
+              const token = {
+                assertCurrent() {
+                  ownerLease.assertCurrent();
+                  peerLease.assertCurrent();
+                },
+              };
+              mutationLease = token;
+              try {
+                return await journal!.append(transaction);
+              } finally {
+                if (mutationLease === token) mutationLease = undefined;
+              }
+            },
+          ),
+      );
+    },
     async close() {
       closed = true;
       await journal!.close();
