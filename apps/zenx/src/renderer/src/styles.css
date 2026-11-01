@@ -8302,9 +8302,13 @@ button:disabled {
     > :is(.agent-surface, .plugin-product-page) {
     padding-top: var(--titlebar-height);
   }
+  /* The session track becomes zero-width when the pane fills the workspace.
+     Hide its whole surface: the padded workspace-header can still paint 36px
+     past that track and cover the first tab even when its title is hidden.
+     Native controls remain in the separate window-titlebar-native-actions. */
   :root[data-platform="darwin"]
     .app-shell:has(.auxiliary-panel[data-open="true"][data-expanded="true"])
-    .thread-heading {
+    .window-titlebar-session {
     visibility: hidden;
   }
 }
