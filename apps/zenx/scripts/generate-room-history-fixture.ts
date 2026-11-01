@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createBundledAutomationPluginService } from "../src/main/automation-plugin-service.js";
 import { JsonPluginStorage } from "../src/main/plugin-host-sdk.js";
+import { createZenXTrustedPlugin } from "../../../packages/zenx-rooms-plugin/src/runtime.js";
 import { MAX_ROOM_OPERATIONS } from "../src/main/trigger-limits.js";
 
 const output = path.resolve(process.argv[2] ?? ".room-history-preview");
@@ -55,7 +56,9 @@ try {
     { length: 320 },
     (_, i) =>
       `Synthetic message ${String(i + 1).padStart(3, "0")} — durable history\n` +
-      "Synthetic body. ".repeat(260).trim(),
+      (i === 319
+        ? "Synthetic latest-message boundary."
+        : "Synthetic body. ".repeat(260).trim()),
   );
   const ids: string[] = [];
   for (const text of texts) {
@@ -76,6 +79,33 @@ try {
   assert.equal(notificationViolation, false);
   await service.close();
   service = await open();
+  const runtime = createZenXTrustedPlugin(service);
+  const invoke = (command: string, input: Record<string, unknown>) =>
+    runtime.invoke(`zenx_rooms_${command}`, {
+      callId: "synthetic-history-acceptance",
+      trustedPluginUi: true,
+      arguments: { input },
+      cwd: ".",
+      signal: new AbortController().signal,
+    });
+  const list = (await invoke("list", {})) as {
+    rooms: Array<{
+      id: string;
+      messageCount: number;
+      pendingCount: number;
+      operations: unknown[];
+    }>;
+    nextCursor: number | null;
+  };
+  assert.equal(list.rooms[0]!.id, room.id);
+  assert.equal(list.rooms[0]!.messageCount, 320);
+  assert.equal(list.rooms[0]!.pendingCount, 0);
+  assert.deepEqual(list.rooms[0]!.operations, []);
+  const operations = (await invoke("operations", { roomId: room.id })) as {
+    operations: unknown[];
+    nextCursor: number | null;
+  };
+  assert.deepEqual(operations, { operations: [], nextCursor: null });
   const pages: Record<
     number,
     Awaited<ReturnType<typeof service.readRoomPage>>
@@ -84,7 +114,11 @@ try {
   let cursor: number | null = 0;
   let snapshot;
   while (cursor !== null) {
-    const page = await service.readRoomPage(room.id, cursor, snapshot);
+    const page = (await invoke("messages", {
+      roomId: room.id,
+      cursor,
+      ...(snapshot ? { snapshot } : {}),
+    })) as Awaited<ReturnType<typeof service.readRoomPage>>;
     assert(page.messages.length <= 4);
     assert(Buffer.byteLength(JSON.stringify(page)) < 60 * 1024);
     snapshot = page.snapshot;
@@ -113,7 +147,8 @@ try {
     roomId: room.id,
     ids,
     texts,
-    list: { rooms: service.snapshotPreviews().rooms, nextCursor: null },
+    list,
+    operations,
     pages,
   };
   const bytes = JSON.stringify(fixture);

@@ -8,6 +8,10 @@ import type { PluginUiSdkV1 } from "../src/renderer/src/plugin-ui-host.js";
 import "../src/renderer/src/theme.css";
 import "../src/renderer/src/styles.css";
 import "../src/renderer/src/trigger-ui.css";
+// Match the production entry point: these override the legacy sidebar grid.
+import "../src/renderer/src/rooms-layout.css";
+import "../src/renderer/src/room-message-actions.css";
+import "../src/renderer/src/room-conversations.css";
 const fixture = (window as any).__roomHistoryFixture;
 const calls: string[] = [];
 (window as any).zenx = {
@@ -43,7 +47,7 @@ const sdk = {
           throw Error("Invalid synthetic snapshot");
         return structuredClone(page);
       }
-      if (command === "operations") return { operations: [], nextCursor: null };
+      if (command === "operations") return structuredClone(fixture.operations);
       throw Error(`Fixture mutations forbidden: ${command}`);
     },
   },

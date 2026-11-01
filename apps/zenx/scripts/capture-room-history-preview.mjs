@@ -34,7 +34,26 @@ const evidence = {
   externalRequests: [],
 };
 
-const measure = `(() => { const rows=[...document.querySelectorAll('[data-room-message-id]')]; const ids=rows.map(e=>e.dataset.roomMessageId); const fixture=window.__roomHistoryPreview; const expected=fixture.ids.slice(-rows.length); const texts=fixture.texts.slice(-rows.length); const normalize=s=>s.replace(/\\s+/g,' ').trim(); const feed=document.querySelector('.rooms-chat-feed'); return {count:rows.length,unique:new Set(ids).size,idsMatch:JSON.stringify(ids)===JSON.stringify(expected),textsMatch:rows.every((e,i)=>normalize(e.textContent).includes(normalize(texts[i]))),scrollTop:feed.scrollTop,scrollHeight:feed.scrollHeight,clientHeight:feed.clientHeight,viewport:{width:innerWidth,height:innerHeight}}; })()`;
+const measure = `(() => {
+  const rows=[...document.querySelectorAll('[data-room-message-id]')];
+  const ids=rows.map(e=>e.dataset.roomMessageId);
+  const fixture=window.__roomHistoryPreview;
+  const expected=fixture.ids.slice(-rows.length);
+  const texts=fixture.texts.slice(-rows.length);
+  const normalize=s=>s.replace(/\\s+/g,' ').trim();
+  const feed=document.querySelector('.rooms-chat-feed');
+  const root=document.querySelector('.rooms-chat');
+  const bounds=feed.getBoundingClientRect();
+  const fullyVisible=row=>{if(!row)return false;const r=row.getBoundingClientRect();return r.top>=bounds.top-1&&r.bottom<=bounds.bottom+1;};
+  return {count:rows.length,unique:new Set(ids).size,
+    idsMatch:JSON.stringify(ids)===JSON.stringify(expected),
+    textsMatch:rows.every((e,i)=>normalize(e.textContent).includes(normalize(texts[i]))),
+    rootWidth:root.clientWidth,feedWidth:feed.clientWidth,
+    oldestVisible:ids[0]===fixture.ids[0] && rows[0].getBoundingClientRect().top>=bounds.top-1 && rows[0].getBoundingClientRect().top<bounds.bottom,
+    latestVisible:ids.at(-1)===fixture.ids.at(-1)&&fullyVisible(rows.at(-1)),
+    scrollTop:feed.scrollTop,scrollHeight:feed.scrollHeight,clientHeight:feed.clientHeight,
+    viewport:{width:innerWidth,height:innerHeight}};
+})()`;
 
 let server;
 let child;
@@ -220,6 +239,26 @@ try {
   const verify = async (name, expectedCount) => {
     const state = await evaluate(measure);
     assert.equal(state.count, expectedCount);
+    assert(
+      state.rootWidth >= state.viewport.width * 0.95,
+      "Production Room root fills its viewport",
+    );
+    assert(
+      state.feedWidth >= state.viewport.width * 0.8,
+      "Production feed must not remain in the legacy narrow sidebar column",
+    );
+    if (name === "oldest")
+      assert.equal(
+        state.oldestVisible,
+        true,
+        "Oldest message identifier is visible",
+      );
+    if (name === "latest")
+      assert.equal(
+        state.latestVisible,
+        true,
+        "Latest short synthetic message is fully visible",
+      );
     if (name === "oldest")
       assert(
         Math.abs(state.scrollTop) <= 1,
@@ -269,6 +308,10 @@ try {
       "document.querySelectorAll('[data-room-message-id]').length",
     );
     if (!crossed && count > 256) {
+      await evaluate(
+        "document.querySelector('.rooms-chat-feed').scrollTop = 0",
+      );
+      await delay(300);
       await verify("cross-256", count);
       crossed = true;
     }

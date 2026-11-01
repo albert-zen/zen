@@ -60,6 +60,11 @@ test("Room evidence allowlists synthetic outputs and fails closed without exact 
           idsMatch: true,
           textsMatch: true,
           scrollStable: true,
+          rootWidth: 1100,
+          feedWidth: 1068,
+          viewport: { width: 1100 },
+          oldestVisible: name === "oldest",
+          latestVisible: name === "latest",
         })),
       }),
     );
@@ -123,6 +128,25 @@ test("Room evidence allowlists synthetic outputs and fails closed without exact 
         { env: environment, stdio: "pipe" },
       ),
     );
+    const measurementFile = path.join(input, "measurements.json");
+    const validMeasurements = JSON.parse(
+      await readFile(measurementFile, "utf8"),
+    );
+    for (const patch of [
+      { feedWidth: 210 },
+      { rootWidth: 210 },
+      { latestVisible: false },
+    ]) {
+      const invalid = structuredClone(validMeasurements);
+      Object.assign(invalid.cases[3], patch);
+      await writeFile(measurementFile, JSON.stringify(invalid));
+      assert.equal(
+        (await collectRoomHistoryEvidence(input, output, commit))
+          .acceptancePassed,
+        false,
+      );
+    }
+    await writeFile(measurementFile, JSON.stringify(validMeasurements));
     await unlink(path.join(input, "source.json"));
     assert.equal(
       (await collectRoomHistoryEvidence(input, output, commit))

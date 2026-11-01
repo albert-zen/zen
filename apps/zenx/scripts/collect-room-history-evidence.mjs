@@ -65,6 +65,11 @@ export async function collectRoomHistoryEvidence(input, output, commit) {
       idsMatch: entry.idsMatch === true,
       textsMatch: entry.textsMatch === true,
       scrollStable: entry.scrollStable === true,
+      rootWidth: safeInteger(entry.rootWidth),
+      feedWidth: safeInteger(entry.feedWidth),
+      viewportWidth: safeInteger(entry.viewport?.width),
+      oldestVisible: entry.oldestVisible === true,
+      latestVisible: entry.latestVisible === true,
     };
   });
   const capturePassed =
@@ -83,13 +88,18 @@ export async function collectRoomHistoryEvidence(input, output, commit) {
         entry.idsMatch &&
         entry.textsMatch &&
         entry.scrollStable &&
+        entry.viewportWidth >= 800 &&
+        entry.rootWidth >= entry.viewportWidth * 0.95 &&
+        entry.feedWidth >= entry.viewportWidth * 0.8 &&
         entry.count === entry.unique,
     ) &&
     cases[0].count === 4 &&
     cases[1].count > 256 &&
     cases[1].count <= 320 &&
     cases[2].count === 320 &&
-    cases[3].count === 320;
+    cases[2].oldestVisible &&
+    cases[3].count === 320 &&
+    cases[3].latestVisible;
   const receipt = {
     schemaVersion: 1,
     scope:
