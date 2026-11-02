@@ -8578,6 +8578,21 @@ test(
       ).apply(i18n, args);
     }) as unknown as typeof i18n.t);
     const harness = await mountThreadApp({
+      plugins: {
+        get: async () => ({
+          plugins: [],
+          bundles: [],
+          surfaces: [],
+          sidebar: [],
+          pages: [],
+          subroutes: [],
+          settings: [],
+          panels: [],
+          commands: [],
+          menus: [],
+          resultRenderers: [],
+        }),
+      },
       onNotification: (listener) => {
         notify = listener;
         return () => {
