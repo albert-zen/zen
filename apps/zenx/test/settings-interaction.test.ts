@@ -2230,6 +2230,37 @@ test("General exposes and saves the Host-owned tool presentation mode", async ()
   }
 });
 
+test("General explicitly enables and disables native cross-device tools through Apply", async () => {
+  const saved: ZenXSettingsUpdate[] = [];
+  const harness = await mountSettings("general", {
+    save: async (profile) => {
+      saved.push(profile);
+      return { ...settings, profile: { ...settings.profile, ...profile } };
+    },
+  });
+  try {
+    const control = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        '[role="switch"][aria-label="Native cross-device tools"]',
+      ),
+    );
+    assert.equal(control.getAttribute("aria-checked"), "false");
+    assert.match(
+      document.body.textContent ?? "",
+      /may reduce prompt cache reuse/u,
+    );
+    await click(control);
+    assert.equal(saved.length, 0);
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[0]?.nativeCrossDeviceToolsEnabled, true);
+    await click(control);
+    await click(exactButtonRequired("Apply"));
+    assert.equal(saved[1]?.nativeCrossDeviceToolsEnabled, false);
+  } finally {
+    await unmount(harness);
+  }
+});
+
 test("General requires an explicit risk-labeled opt-in for foreground computer takeover", async () => {
   const saved: ZenXSettingsUpdate[] = [];
   const harness = await mountSettings("general", {

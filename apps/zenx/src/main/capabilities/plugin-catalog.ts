@@ -36,6 +36,7 @@ import type { PluginDiscoveryCatalog } from "../plugin-discovery.js";
 
 export interface ZenXPluginCatalogOptions {
   allowForegroundRequired: boolean;
+  allowNativeCrossDeviceTools: boolean;
   platform: string;
   pluginDataDirectory?: string;
   pluginRuntimeLifecycle?: ZenXPluginRuntimeLifecycle;
@@ -56,6 +57,7 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
   #bundledStartupFailureCount = 0;
   readonly #options: ZenXPluginCatalogOptions;
   #allowForegroundRequired: boolean;
+  #allowNativeCrossDeviceTools: boolean;
   #disabled = new Set<string>();
   #uninstalled = new Set<string>();
   #packageDescriptors: Record<string, ZenXPluginPackageDescriptor> = {};
@@ -70,10 +72,13 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     this.#configurationStore = configurationStore;
     this.#options = {
       allowForegroundRequired: false,
+      allowNativeCrossDeviceTools: false,
       platform: process.platform,
       ...options,
     };
     this.#allowForegroundRequired = this.#options.allowForegroundRequired;
+    this.#allowNativeCrossDeviceTools =
+      this.#options.allowNativeCrossDeviceTools;
   }
 
   async initialize(): Promise<void> {
@@ -1065,9 +1070,22 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
     this.#emit();
   }
 
+  setNativeCrossDeviceToolsAllowed(allowed: boolean): void {
+    if (allowed === this.#allowNativeCrossDeviceTools) return;
+    this.#allowNativeCrossDeviceTools = allowed;
+    this.#emit();
+  }
+
   assertToolExposed(toolName: string): void {
     const owner = this.#toolOwners.get(toolName);
     if (owner === undefined) return;
+    if (
+      owner.tool.capabilities.includes("zenx.fleet.tools") &&
+      !this.#allowNativeCrossDeviceTools
+    )
+      throw new Error(
+        "Native cross-device tools are disabled; enable them in ZenX Settings before use",
+      );
     if (
       owner.tool.interactionMode === "foreground_required" &&
       !this.#allowForegroundRequired
@@ -1172,6 +1190,8 @@ export class ZenXPluginCatalog implements PluginDiscoveryCatalog {
 
   #isToolExposed(capabilityId: string, tool: ZenXCapabilityTool): boolean {
     return (
+      (!tool.capabilities.includes("zenx.fleet.tools") ||
+        this.#allowNativeCrossDeviceTools) &&
       !this.#disabled.has(capabilityId) &&
       this.#options.pluginRuntimeLifecycle?.activationFailure?.(
         capabilityId,

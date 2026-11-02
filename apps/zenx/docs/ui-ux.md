@@ -280,6 +280,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 4.6 Settings 与 onboarding
 
+- General 的“原生跨端工具调用”使用现有设置开关与 Apply 草稿流程，旧配置默认关闭。说明其调用目标设备原生工具、仍需目标独立授权，以及远端目录变化可能影响上下文缓存；保存后对后续采样生效，不要求重启。普通 Fleet 连接、远程会话与独立 Shell 功能不受此开关影响。
 - Settings 是由左下导航进入的 routed page。Host 设置使用独立底部 Apply 保存栏，未保存草稿跨页保留；即时外观设置在本页说明，重启仅按真实 configuration 状态提示。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
 - Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来

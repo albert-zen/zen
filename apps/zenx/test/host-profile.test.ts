@@ -17,6 +17,7 @@ const profile: ZenXHostProfile = {
   version: 3,
   onboardingComplete: true,
   computerForegroundControlEnabled: false,
+  nativeCrossDeviceToolsEnabled: false,
   experimentalRtkEnabled: false,
   providerProfiles: [
     {
