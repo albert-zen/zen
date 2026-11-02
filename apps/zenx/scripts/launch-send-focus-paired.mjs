@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import {
   mkdtemp,
+  copyFile,
   mkdir,
   writeFile,
   readFile,
@@ -13,14 +14,14 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import electron from "electron";
+import { packageZenX } from "./package-zenx-portable.mjs";
 import {
   seedLongThread,
   verifyLongThread,
 } from "./long-thread-domain-seed.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
-assert.ok(["win32", "darwin"].includes(process.platform));
+assert.equal(process.platform, "darwin");
 const directory = path.resolve(process.argv[2]);
 const version = "current";
 const count = Number(process.argv[3]);
@@ -38,7 +39,7 @@ const hostSnapshot = () => ({
   totalMemoryBytes: os.totalmem(),
   uptimeSeconds: os.uptime(),
 });
-const hostBefore = hostSnapshot();
+let hostBefore;
 const expected = {
   baseline: "50ae16e1811a186fbf29fa6dfb721d8e328275a7",
   cv: "a1ecd02aba5f699be72adb16885ddf2562ba3feb",
@@ -129,6 +130,74 @@ for (const file of [
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
     .digest("hex");
+// Reuse the normal signed portable packager. Only the private acceptance app's
+// entry is redirected to our observer; production main/preload/renderer stay intact.
+let stagedEntryHash;
+const previousSigningIdentity = process.env.ZENX_CODESIGN_IDENTITY;
+const previousSigningMode = process.env.ZENX_CODESIGN_MODE;
+let packaged;
+try {
+  process.env.ZENX_CODESIGN_IDENTITY = "-";
+  delete process.env.ZENX_CODESIGN_MODE;
+  packaged = await packageZenX(["--app"], {
+    buildDirectory: path.join(root, "out"),
+    artifactDirectory: path.join(temporary, "packaged-artifact"),
+    prepareApp: async (appDirectory) => {
+      const main = path.join(appDirectory, "out/main/index.js");
+      stagedEntryHash = createHash("sha256")
+        .update(await readFile(main))
+        .digest("hex");
+      await mkdir(path.join(appDirectory, "scripts"), { mode: 0o700 });
+      await copyFile(
+        path.join(root, "scripts/capture-send-feedback.cjs"),
+        path.join(appDirectory, "scripts/capture-send-feedback.cjs"),
+      );
+      const manifestPath = path.join(appDirectory, "package.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      assert.equal(manifest.main, "out/main/index.js");
+      manifest.main = "scripts/capture-send-feedback.cjs";
+      await writeFile(manifestPath, JSON.stringify(manifest) + "\n");
+      assert.equal(
+        createHash("sha256")
+          .update(await readFile(main))
+          .digest("hex"),
+        stagedEntryHash,
+      );
+    },
+  });
+} finally {
+  if (previousSigningIdentity === undefined)
+    delete process.env.ZENX_CODESIGN_IDENTITY;
+  else process.env.ZENX_CODESIGN_IDENTITY = previousSigningIdentity;
+  if (previousSigningMode === undefined) delete process.env.ZENX_CODESIGN_MODE;
+  else process.env.ZENX_CODESIGN_MODE = previousSigningMode;
+}
+const bundle = path.join(packaged.packagedArtifact, "ZenX.app");
+execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", bundle]);
+const resources = path.join(bundle, "Contents/Resources");
+const packagedHashes = {};
+for (const file of [
+  "app/out/main/index.js",
+  "app/out/preload/index.cjs",
+  "app/scripts/capture-send-feedback.cjs",
+  "native-helpers/zenx-accessibility",
+  "native-helpers/zenx-bound-target",
+  "native-helpers/zenx-foreground-input",
+  "native-helpers/zenx-ocr",
+])
+  packagedHashes[file] = createHash("sha256")
+    .update(await readFile(path.join(resources, file)))
+    .digest("hex");
+assert.equal(packagedHashes["app/out/main/index.js"], stagedEntryHash);
+assert.equal(
+  packagedHashes["app/out/preload/index.cjs"],
+  hashes["out/preload/index.cjs"],
+);
+assert.equal(
+  packagedHashes["app/scripts/capture-send-feedback.cjs"],
+  hashes["scripts/capture-send-feedback.cjs"],
+);
+hostBefore = hostSnapshot();
 await writeFile(
   path.join(directory, "full-app-source.json"),
   JSON.stringify(
@@ -145,6 +214,9 @@ await writeFile(
       fixtureContextWindow: 100000000,
       platform: process.platform,
       hashes,
+      launchMode: "signed-private-packaged-bundle",
+      packagedHashes,
+      stagedProductionEntryUnchanged: true,
       scope:
         "Actual production App, native Send, private production DomainThreadJournal history. Fake model only, no compaction, only actual product local pending UI, no injected bubbles or fake receipt. Timing seed excluded.",
     },
@@ -187,14 +259,8 @@ if (process.platform === "win32") {
   await mkdir(environment.LOCALAPPDATA, { recursive: true });
 }
 const child = spawn(
-  electron,
-  [
-    path.join(root, "scripts/capture-send-feedback.cjs"),
-    directory,
-    version,
-    temporary,
-    `--user-data-dir=${profile}`,
-  ],
+  packaged.executable,
+  [directory, version, temporary, `--user-data-dir=${profile}`],
   {
     env: environment,
     stdio: ["ignore", "inherit", "inherit"],
@@ -332,6 +398,14 @@ try {
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
   assert.equal(result.ok, true);
+  assert.equal(result.packagedRuntime?.isPackaged, true);
+  assert.equal(result.packagedRuntime.defaultApp, false);
+  assert.equal(result.packagedRuntime.productionEntrySha256, stagedEntryHash);
+  for (const [file, hash] of Object.entries(
+    result.packagedRuntime.helperHashes,
+  ))
+    assert.equal(hash, packagedHashes[file]);
+  assert.equal(Object.keys(result.packagedRuntime.helperHashes).length, 4);
   assert.equal(
     result.harnessVersion,
     "native-feedback-v3-post-geometry-and-subsequent-frame",

@@ -1,4 +1,4 @@
-name: Same-source historical content visibility A/B (verified frames, post-timing geometry)
+name: Packaged historical content visibility A/B (precompiled helpers, verified frames)
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]
@@ -12,7 +12,7 @@ permissions:
 jobs:
   paired-native-macos:
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,8 +55,8 @@ jobs:
       - name: Verify observer timing and replacement identity contracts (synthetic, not native timing)
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
-      - name: Native A1 B1, all three messages per fresh isolated profile
-        timeout-minutes: 24
+      - name: Package and launch A1 B1, all three messages per fresh isolated profile
+        timeout-minutes: 40
         run: |
           failed=0
           for case in A1 B1; do
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-history-cv-ab-5000
+          name: native-send-packaged-history-cv-ab-5000
           path: |
             results/*/full-app-*.json
             results/*/independent-storage-verification.json

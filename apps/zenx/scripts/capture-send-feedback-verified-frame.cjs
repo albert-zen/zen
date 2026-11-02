@@ -2,6 +2,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, session, ipcMain } = require("electron");
 assert.ok(["win32", "darwin"].includes(process.platform));
@@ -12,7 +13,13 @@ assert.ok(
     (a) => a === "--no-sandbox" || a.startsWith("--remote-debugging"),
   ),
 );
-const [directory, version, temporary] = process.argv.slice(2, 5);
+assert.equal(app.isPackaged, true, "A real packaged bundle is required");
+assert.notEqual(
+  process.defaultApp,
+  true,
+  "Default Electron script mode is not representative",
+);
+const [directory, version, temporary] = process.argv.slice(1, 4);
 assert.ok(directory && temporary && ["before", "current"].includes(version));
 app.setPath("userData", path.join(temporary, "profile"));
 app.setPath("home", path.join(temporary, "home"));
@@ -981,7 +988,36 @@ async function capturePostTimingLayout() {
   await screenshot("messages-post-timing-new-thread.png");
   result.postTimingLayout = { timingComplete: true, history, newThread };
 }
-void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
+async function verifyPackagedRuntime() {
+  const helperHashes = {};
+  for (const name of [
+    "zenx-accessibility",
+    "zenx-bound-target",
+    "zenx-foreground-input",
+    "zenx-ocr",
+  ]) {
+    const relative = `native-helpers/${name}`;
+    const file = path.join(process.resourcesPath, relative);
+    const stat = await fs.lstat(file);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.mode & 0o111);
+    helperHashes[relative] = createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex");
+  }
+  result.packagedRuntime = {
+    isPackaged: app.isPackaged,
+    defaultApp: process.defaultApp === true,
+    helperHashes,
+    productionEntrySha256: createHash("sha256")
+      .update(await fs.readFile(path.join(__dirname, "../out/main/index.js")))
+      .digest("hex"),
+  };
+}
+void verifyPackagedRuntime()
+  .then(
+    () =>
+      import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href),
+  )
   .then(run)
   .catch(async (error) => {
     result.error = String(error.stack || error);
