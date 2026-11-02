@@ -1,0 +1,52 @@
+name: Packaged CV reading correctness (synthetic, no latency acceptance)
+# First publication to this exact branch is the single approved correctness run.
+on:
+  push:
+    branches: [diagnostic/cv-reading-correctness-20261102]
+    paths: [.github/workflows/cv-reading-correctness.yml]
+permissions:
+  contents: read
+jobs:
+  native-reading-macos:
+    if: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 51007e8f8ed21ce6db3ef94c5401ca2726564173
+          persist-credentials: false
+          path: source
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy only correctness driver into fixed production checkout
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-cv-reading-correctness.cjs source/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/launch-cv-reading-correctness.mjs source/apps/zenx/scripts/
+      - name: Build exact candidate without product edits
+        working-directory: source
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Package and run one private 1000-turn correctness fixture
+        working-directory: source
+        timeout-minutes: 25
+        run: node apps/zenx/scripts/launch-cv-reading-correctness.mjs ../results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cv-reading-correctness-synthetic
+          path: |
+            results/reading-source.json
+            results/reading-correctness.json
+            results/reading-storage.json
+            results/reading-lifecycle.json
+            results/reading-*.png
+          if-no-files-found: error
