@@ -1,6 +1,9 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 
-/** Stable UI event identity; only committed renders may replace its target. */
+/**
+ * Stable UI-event identity; updates publish in layout commit, never render.
+ * Not a child-layout-effect synchronization primitive: use after commit.
+ */
 export function useCommittedCallback<Args extends unknown[], Result>(
   callback: (...args: Args) => Result,
 ): (...args: Args) => Result {

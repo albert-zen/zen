@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { useCommittedCallback } from "../src/renderer/src/use-committed-callback.js";
 Object.assign(globalThis, { React });
 const { AppConversationProviders } = await import("../src/renderer/src/App.js");
-const { MessageForkContext } =
+const { MessageForkContext, SideChatQuoteContext } =
   await import("../src/renderer/src/ThreadView.js");
 const { ShellTargetNavigationContext } =
   await import("../src/renderer/src/shell-target-navigation.js");
@@ -169,3 +169,66 @@ test(
     });
   },
 );
+
+test("semantic shell, model, quote availability and focus changes still reach consumers", { timeout: 10000 }, async () => {
+  await withDom(async (root) => {
+    const initialModels: React.ComponentProps<typeof AppConversationProviders>["models"] = [];
+    let latest: {
+      request: React.ContextType<typeof ShellTargetNavigationContext>;
+      model: React.ContextType<typeof SubagentCreationModelsContext>;
+      quote: React.ContextType<typeof SideChatQuoteContext>;
+    } | undefined;
+    let renders = 0;
+    const Consumer = React.memo(function Consumer() {
+      renders++;
+      const request = React.useContext(ShellTargetNavigationContext);
+      const model = React.useContext(SubagentCreationModelsContext);
+      const quote = React.useContext(SideChatQuoteContext);
+      React.useLayoutEffect(() => { latest = { request, model, quote }; }, [request, model, quote]);
+      return null;
+    });
+    const state: {
+      request: NonNullable<React.ContextType<typeof ShellTargetNavigationContext>>["request"];
+      models: typeof initialModels;
+      error: string | null;
+      canAdd: boolean;
+      focus: { composerId: string; sequence: number } | undefined;
+    } = { request: null, models: initialModels, error: null, canAdd: false, focus: undefined };
+    const render = () => root.render(createElement(AppConversationProviders, {
+      models: state.models, modelCatalogError: state.error,
+      fork: async () => undefined, source: async () => undefined,
+      openSideChatDraft: async () => undefined,
+      addToSideChat: state.canAdd ? () => undefined : undefined,
+      composerFocus: state.focus,
+      shellNavigation: {
+        request: state.request, consumed: () => undefined, open: async () => undefined,
+      },
+      children: createElement(Consumer),
+    }));
+    await act(async () => render());
+    assert.equal(latest?.request?.request, null);
+    assert.equal(latest?.quote.add, undefined);
+    const initialRenders = renders;
+    await act(async () => render());
+    assert.equal(renders, initialRenders);
+    state.request = { threadId: "source", taskId: "task", ownerKey: "thread:source", requestId: 1 };
+    state.models = [...initialModels];
+    state.error = "Synthetic catalog update";
+    state.canAdd = true;
+    state.focus = { composerId: "current-composer", sequence: 1 };
+    await act(async () => render());
+    assert.ok(renders > initialRenders);
+    assert.equal(latest?.request?.request, state.request);
+    assert.equal(latest?.model.models, state.models);
+    assert.equal(latest?.model.error, state.error);
+    assert.equal(typeof latest?.quote.add, "function");
+    assert.equal(latest?.quote.focus, state.focus);
+    state.canAdd = false;
+    state.request = null;
+    state.focus = undefined;
+    await act(async () => render());
+    assert.equal(latest?.quote.add, undefined);
+    assert.equal(latest?.request?.request, null);
+    assert.equal(latest?.quote.focus, undefined);
+  });
+});

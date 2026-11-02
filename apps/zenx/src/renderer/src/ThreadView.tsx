@@ -179,7 +179,7 @@ export type MessageForkHandler = (
 export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
-const SideChatQuoteContext = createContext<{
+export const SideChatQuoteContext = createContext<{
   add?(quote: MessageQuoteReference): void;
   focus?: { composerId: string; sequence: number };
 }>({});

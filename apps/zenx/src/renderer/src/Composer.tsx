@@ -15,6 +15,30 @@ export function ComposerShell({
   return <form {...props} className={`composer ${className}`.trim()} />;
 }
 
+// Empty editors have a native rows/min-height baseline. Let CSS establish
+// it instead of forcing the entire conversation through an auto-height read.
+// Nonempty text still uses the existing bounded scroll-height measurement.
+function resizeComposerEditor(textarea: HTMLTextAreaElement): void {
+  textarea.style.height = "auto";
+  if (textarea.value.length === 0) {
+    textarea.style.overflowY = "hidden";
+    return;
+  }
+  const contentHeight = textarea.scrollHeight;
+  const style = window.getComputedStyle(textarea);
+  const declaredMinHeight = Number.parseFloat(style.minHeight);
+  const minHeight = Number.isFinite(declaredMinHeight)
+    ? declaredMinHeight
+    : 36;
+  const declaredMaxHeight = Number.parseFloat(style.maxHeight);
+  const maxHeight = Number.isFinite(declaredMaxHeight)
+    ? declaredMaxHeight
+    : 136;
+  const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
+  textarea.style.height = `${height}px`;
+  textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
+}
+
 export function ComposerEditor({
   textareaRef,
   ...props
@@ -26,41 +50,32 @@ export function ComposerEditor({
     localRef) as RefObject<HTMLTextAreaElement | null>;
   useLayoutEffect(() => {
     const textarea = ref.current;
+    if (textarea !== null) resizeComposerEditor(textarea);
+  }, [props.value, props.rows, ref]);
+  useLayoutEffect(() => {
+    const textarea = ref.current;
     if (textarea === null) return;
-    const resize = () => {
-      textarea.style.height = "auto";
-      const contentHeight = textarea.scrollHeight;
-      const style = window.getComputedStyle(textarea);
-      const declaredMinHeight = Number.parseFloat(style.minHeight);
-      const minHeight = Number.isFinite(declaredMinHeight)
-        ? declaredMinHeight
-        : 36;
-      const declaredMaxHeight = Number.parseFloat(style.maxHeight);
-      const maxHeight = Number.isFinite(declaredMaxHeight)
-        ? declaredMaxHeight
-        : 136;
-      const height = Math.min(Math.max(contentHeight, minHeight), maxHeight);
-      textarea.style.height = `${height}px`;
-      textarea.style.overflowY = contentHeight > height ? "auto" : "hidden";
-    };
-    resize();
-    window.addEventListener("resize", resize);
-    let width = textarea.getBoundingClientRect().width;
+    const onResize = () => resizeComposerEditor(textarea);
+    window.addEventListener("resize", onResize);
+    let width: number | undefined;
     const observer =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(() => {
-            const next = textarea.getBoundingClientRect().width;
-            if (next === width) return;
+        : new ResizeObserver((entries) => {
+            const next = entries.find((entry) => entry.target === textarea)
+              ?.contentRect.width;
+            if (next === undefined || next === width) return;
             width = next;
-            resize();
+            // Observer entries supply geometry without a second synchronous
+            // getBoundingClientRect read. Always use the live committed value.
+            resizeComposerEditor(textarea);
           });
     observer?.observe(textarea);
     return () => {
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", onResize);
       observer?.disconnect();
     };
-  }, [props.value, ref]);
+  }, [ref]);
   return (
     <textarea
       {...props}
