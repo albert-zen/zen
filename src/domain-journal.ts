@@ -427,10 +427,12 @@ export class DomainThreadJournal implements ThreadJournal {
       const encoded =
         present.has(item.id) || frozen.has(item.id)
           ? []
-          : contextItemsFromLegacy(item, previous, data.sequence, [
-              ...contexts,
-              ...missing,
-            ]);
+          : contextItemsFromLegacy(
+              item,
+              previous,
+              data.sequence,
+              missing.length === 0 ? contexts : [...contexts, ...missing],
+            );
       for (const context of encoded)
         if (!present.has(context.id)) {
           missing.push(context);
