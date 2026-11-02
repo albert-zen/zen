@@ -1,5 +1,5 @@
 name: Packaged CV reading correctness (synthetic, no latency acceptance)
-# First publication to this exact branch is the single approved correctness run.
+# Diagnostic revision 2: exact-row readiness fix; original bootstrap failure retained.
 on:
   push:
     branches: [diagnostic/cv-reading-correctness-20261102]

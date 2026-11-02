@@ -43,6 +43,11 @@ let window;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 // Catch renderer exceptions before Electron replaces them with an opaque IPC rejection.
 // JSON-normalize successes too: only plain data crosses this diagnostic boundary.
+function diagnosticFailure(code) {
+  const error = new Error("Owned diagnostic failure");
+  error.diagnosticCode = code;
+  throw error;
+}
 function diagnosticEvaluation(expression) {
   return `(async()=>{try{return {ok:true,value:JSON.parse(JSON.stringify(await (${expression})??null))}}catch{return {ok:false}}})()`;
 }
@@ -51,7 +56,7 @@ const evaluate = async (expression) => {
     diagnosticEvaluation(expression),
     true,
   );
-  assert.equal(reply.ok, true, "renderer-observation-failed");
+  if (reply.ok !== true) diagnosticFailure("renderer-observation-failed");
   return reply.value;
 };
 async function until(check, label) {
@@ -71,7 +76,7 @@ async function until(check, label) {
     }
     await pause(100);
   }
-  throw Error("Timed out: " + label);
+  diagnosticFailure("ui-readiness-timeout");
 }
 async function click(expression, label) {
   result.pendingOperation = label;
@@ -416,6 +421,20 @@ async function screenshot(name) {
     capture.toPNG(),
   );
 }
+async function waitForFixtureRow(id) {
+  result.stage = "fixture-row-readiness";
+  await until(
+    async () =>
+      await read((id) => {
+        const row = document.querySelector(
+          `.thread-row-shell[data-thread-id=${JSON.stringify(id)}] > button.thread-row`,
+        );
+        return row instanceof HTMLButtonElement && row.isConnected;
+      }, id),
+    "exact-fixture-thread-row",
+  );
+  result.fixtureRowReady = true;
+}
 async function chooseThread(id) {
   const row = element(
     `.thread-row-shell[data-thread-id=${JSON.stringify(id)}] > button.thread-row`,
@@ -676,6 +695,9 @@ async function run() {
     await fs.readFile(path.join(temporary, "reading-fixture.json"), "utf8"),
   );
   result.fixture = { ...fixture };
+  // Match the established paired driver's readiness boundary before any sidebar geometry/input.
+  await waitForFixtureRow(fixture.threadId);
+  result.stage = "fixture-thread-selection";
   await chooseThread(fixture.threadId);
   await read(installObservation);
   const initial = await read(() => ({
@@ -1043,6 +1065,7 @@ const failureReasons = new Set([
   "correctness-assertion-or-owned-driver-failed",
   "true",
   "renderer-observation-failed",
+  "ui-readiness-timeout",
   "actual-target-uncovered-and-focused",
   "tall-leading-edge-aligned",
   "short-entire-target-visible",
@@ -1068,8 +1091,9 @@ void verifyPackagedRuntime()
   )
   .then(run)
   .catch(async (error) => {
-    result.reason = failureReasons.has(error?.message)
-      ? error.message
+    const code = error?.diagnosticCode ?? error?.message;
+    result.reason = failureReasons.has(code)
+      ? code
       : "correctness-assertion-or-owned-driver-failed";
     result.failureClass = [
       "cancellation-input-missed-closing-presence",
