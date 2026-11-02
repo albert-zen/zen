@@ -128,3 +128,22 @@ The overall initial geometry job **failed** because its final reset tried the cl
 
 
 The selector-only [repeat 41396096033](https://github.com/albert-zen/zen/actions/runs/41396096033) **passed both locales end to end**. All six geometry cases passed again; each locale then closed the real pane, sent one ordinary message through actual native input/Send, matched its real receipt and canonical identity, and independently reopened production storage after Host shutdown: exactly one new message, complete Trace, zero compaction facts or attempts. This closes the tested geometry/regression loop only, not the failed 5000-turn latency acceptance. The earlier failed run remains above.
+
+
+## Current-main combined candidate 617: native feedback gate passes in this run
+
+Exact product `2bfd08e0d72fbe634b73bbfe86739296e23342b3`, parent `8ec519f2da880d0c1184665fde07231262013b08`. This is a new current-main combined acceptance source preserving unrelated main changes, not a causal comparison for one optimization. It includes the reviewed frontend feedback/autosize changes plus bounded Domain reconciliation, Trace durability, context-prefix and timezone-normalization changes; no append-log experiment or steer-recall feature is included.
+
+[Native run 41396686595](https://github.com/albert-zen/zen/actions/runs/41396686595) passed the unchanged **both visible feedback and input-clear <=200 ms** requirement for all nine warm ordinary sends:
+
+| Prior completed turns | First visible feedback / input clear, ms | Canonical bubble visible, ms | Actual main IPC duration, ms |
+|---|---|---|---|
+| 0 | 26.0 / 28.4 / 12.5 | 331.1 / 211.1 / 218.2 | 275.6 / 173.8 / 180.9 |
+| 1000 | 41.1 / 66.2 / 45.1 | 2026.1 / 2509.3 / 2299.1 | 901.8 / 695.6 / 924.2 |
+| 5000 | 132.8 / 96.3 / 157.3 | 3305.0 / 3010.2 / 3877.0 | 1425.3 / 1239.9 / 1285.2 |
+
+For 5000 turns, pending DOM appeared at 95.9 / 73.5 / 135.0 ms. All historical 5000 Turn blocks, 5000 user rows and 5000 assistant rows were actually rendered. All nine messages passed actual receipt/canonical identity matching, final projection verification, independent production-storage reopen, unique persistence, complete Trace and zero compaction facts/attempts.
+
+These are **three samples per history size on disposable hosted Mac runners**, not a p95 estimate or a guarantee on the user's device. Visible feedback is the actual product's honest local pending state, not durable admission or model consumption. Canonical rendering at 5000 turns still takes 3.0–3.9 seconds and actual IPC 1.2–1.4 seconds in this run; those separate costs remain visible and are not hidden by the fast pending row.
+
+The exact same candidate also passed [all four native controlled-fault cases 41396686660](https://github.com/albert-zen/zen/actions/runs/41396686660), with four unique persisted messages and complete zero-compaction Trace, and [full-App English/Chinese geometry 41396686761](https://github.com/albert-zen/zen/actions/runs/41396686761), including all six geometry checks per locale plus actual send and independent storage reopen. Controlled-fault and geometry sends are correctness checks, **not additional performance samples**. Normal repository CI/review/release approval remains separate.

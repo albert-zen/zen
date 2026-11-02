@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          run-id: 41395198231
+          run-id: 41396686761
           github-token: ${{ github.token }}
           name: full-app-composer-geometry-en-zh
           path: geometry
@@ -28,6 +28,6 @@ jobs:
             assert.equal(matches.length,1);
             const bytes=fs.readFileSync(matches[0]);assert(bytes.length>0&&bytes.length<=1048576,'bounded PNG');
             assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-            console.log('SYNTHETIC_GEOMETRY_IMAGE '+JSON.stringify({sourceRun:41395198231,source:'5e37358e69fd7344aac25cfd3802078b92f79e2d',locale,frame:'full-page narrow-empty before fixture close failure',bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
+            console.log('SYNTHETIC_GEOMETRY_IMAGE '+JSON.stringify({sourceRun:41396686761,source:'2bfd08e0d72fbe634b73bbfe86739296e23342b3',locale,frame:'full-page narrow-empty from completed final-candidate geometry acceptance',bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
           }
           NODE
