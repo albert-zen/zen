@@ -31,7 +31,8 @@ export class ThreadRecencyProjection {
       }
       const humanAdmission =
         item.type === "user_message_queued" ||
-        (item.type === "turn_replacement_requested" && item.sender === undefined);
+        (item.type === "turn_replacement_requested" &&
+          item.sender === undefined);
       if (humanAdmission || item.type === "user_message") {
         const key =
           "clientId" in item && item.clientId !== undefined

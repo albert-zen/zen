@@ -54,13 +54,19 @@ test("queue, edited queue, steer and replacement preserve first human receipt", 
   append(fact("agent_message", 9, { text: "not accepted due to steer" }), 3);
   append(fact("user_message", 10, { clientId: "steer" }), 10);
   append(fact("user_message_queue_cancelled", 11), 10);
-  append(fact("turn_replacement_requested", 12, { clientId: "replacement" }), 12);
+  append(
+    fact("turn_replacement_requested", 12, { clientId: "replacement" }),
+    12,
+  );
   append(fact("turn_aborted", 13), 12);
   append(fact("user_message", 15, { clientId: "replacement" }), 12);
-  append(fact("turn_replacement_requested", 16, {
-    clientId: "agent-control",
-    sender: { threadId: "other" },
-  }), 12);
+  append(
+    fact("turn_replacement_requested", 16, {
+      clientId: "agent-control",
+      sender: { threadId: "other" },
+    }),
+    12,
+  );
   append(fact("host_message", 17), 12);
   append(fact("thread_message", 18), 12);
   append(fact("agent_message", 19), 12);
@@ -90,7 +96,9 @@ test("refresh only reads the appended suffix rather than rescanning history", ()
   const items = [fact("thread_metadata", 1), fact("user_message", 2)];
   assert.equal(projection.read(items), at(2));
   Object.defineProperty(items, 1, {
-    get() { throw new Error("old history was rescanned"); },
+    get() {
+      throw new Error("old history was rescanned");
+    },
   });
   items.push(fact("thread_configuration_changed", 3));
   assert.equal(projection.read(items), at(2));
@@ -99,22 +107,38 @@ test("refresh only reads the appended suffix rather than rescanning history", ()
 test("successful control closure without a complete final answer cannot bump Recent", () => {
   for (const tail of [
     [fact("turn_completed", 30, { status: "completed" })],
-    [fact("agent_message", 10), fact("tool_call", 20), fact("turn_completed", 30, { status: "completed" })],
-    [fact("agent_message", 10, { incomplete: true }), fact("turn_completed", 30, { status: "completed" })],
+    [
+      fact("agent_message", 10),
+      fact("tool_call", 20),
+      fact("turn_completed", 30, { status: "completed" }),
+    ],
+    [
+      fact("agent_message", 10, { incomplete: true }),
+      fact("turn_completed", 30, { status: "completed" }),
+    ],
   ]) {
-    assert.equal(new ThreadRecencyProjection().read([
-      fact("thread_metadata", 1), fact("user_message", 2), ...tail,
-    ]), at(2));
+    assert.equal(
+      new ThreadRecencyProjection().read([
+        fact("thread_metadata", 1),
+        fact("user_message", 2),
+        ...tail,
+      ]),
+      at(2),
+    );
   }
 });
 
 test("actual Thread snapshot replacement preserves suffix-only recency work", () => {
-  const thread = new Thread("thread", [
-    fact("thread_metadata", 1),
-    ...Array.from({ length: 10_000 }, (_, index) =>
-      fact("user_message", index + 2),
-    ),
-  ], []);
+  const thread = new Thread(
+    "thread",
+    [
+      fact("thread_metadata", 1),
+      ...Array.from({ length: 10_000 }, (_, index) =>
+        fact("user_message", index + 2),
+      ),
+    ],
+    [],
+  );
   const projection = new ThreadRecencyProjection();
   assert.equal(projection.read(thread.items), at(10_001));
   thread.append(fact("agent_message", 20_000), []);
@@ -123,7 +147,11 @@ test("actual Thread snapshot replacement preserves suffix-only recency work", ()
   const observed = new Proxy(snapshot, {
     get(target, key, receiver) {
       if (typeof key === "string" && /^\d+$/u.test(key) && key !== "0") {
-        assert.equal(Number(key), snapshot.length - 1, "old items must not be visited");
+        assert.equal(
+          Number(key),
+          snapshot.length - 1,
+          "old items must not be visited",
+        );
         reads++;
       }
       return Reflect.get(target, key, receiver);
