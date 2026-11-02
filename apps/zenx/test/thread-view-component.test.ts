@@ -4989,6 +4989,7 @@ test("long-history composer renders do not scan canonical history once per turn"
         createdAt: "2026-01-01T00:00:01.000Z",
         code: "runtime_error",
         message: "New indexed failure",
+        diagnosticId: "new-index-diagnostic",
       },
     });
     assert.notEqual(appended.canonicalItems, canonicalItems);
@@ -5012,9 +5013,16 @@ test("long-history composer renders do not scan canonical history once per turn"
         }),
       ),
     );
+    await act(async () =>
+      requiredButton(".turn-outcome-actions button[aria-expanded]").click(),
+    );
     assert.match(
-      requiredElement(".turn-outcome").textContent ?? "",
+      requiredElement(".turn-outcome-error").textContent ?? "",
       /New indexed failure/,
+    );
+    assert.match(
+      requiredElement(".turn-outcome-details").textContent ?? "",
+      /new-index-diagnostic/,
     );
   });
 });
