@@ -1,3 +1,4 @@
+import { pendingSteerMessages } from "../src/steer-recall.js";
 import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -5517,3 +5518,164 @@ test("send admission is independent of a blocked automatic summary", async (t) =
     });
   }
 });
+
+for (const action of ["recall", "continue", "stop"] as const)
+  test(
+    `active summary keeps staged admission and ${action} outside its lock`,
+    { timeout: 10000 },
+    async () => {
+      const started = deferred<void>();
+      const release = deferred<void>();
+      const summaries: ModelRequest[] = [];
+      const normal: ModelRequest[] = [];
+      const model: ModelAdapter = {
+        provider: "recording",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          if (isSummaryRequest(request)) {
+            summaries.push(cloneRequest(request));
+            started.resolve();
+            await release.promise;
+            request.signal.throwIfAborted();
+            yield { type: "text_delta", delta: "bounded summary" };
+            return;
+          }
+          normal.push(cloneRequest(request));
+          if (normal.length === 2) {
+            yield {
+              type: "tool_call",
+              callId: "pending-summary-tool",
+              name: "shell",
+              arguments: { command: "printf ok" },
+            };
+            yield { type: "usage", inputTokens: 810, outputTokens: 1 };
+            return;
+          }
+          yield { type: "text_delta", delta: "done" };
+        },
+      };
+      const server = createServer({
+        journal: new InMemoryThreadJournal(),
+        model,
+        modelCatalog: new StaticModelCatalog([
+          { id: "recording-model", isDefault: true, contextWindow: 1000 },
+        ]),
+      });
+      const thread = await server.startThread();
+      await (await server.startTurn(thread.id, "seed")).done;
+      const active = await server.startTurn(thread.id, "active");
+      void active.done.catch(() => undefined);
+      try {
+        await expectSummaryStarted(started.promise, active.done);
+        const accepted = server.stageSteerMessage(
+          thread.id,
+          active.id,
+          "private pending marker",
+          { clientId: "pending-summary" },
+        );
+        const timely = await Promise.race([
+          accepted.then(() => true),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+        ]);
+        assert(timely, "pending admission must not await summary completion");
+        const before = await server.readThread(thread.id);
+        const pending = pendingSteerMessages(before.items);
+        assert.equal(pending.length, 1);
+        assert(!JSON.stringify(before.itemList).includes("private pending marker"));
+        if (action === "recall")
+          await server.recallSteerMessages(thread.id, {
+            recallId: "during-summary",
+            targets: pending.map((item) => ({
+              queuedItemId: item.id,
+              clientId: item.clientId,
+              expectedRevision: item.revision,
+            })),
+          });
+        const stop =
+          action === "stop"
+            ? server.interruptTurn(thread.id, active.id)
+            : undefined;
+        release.resolve();
+        await stop;
+        await active.done.catch(() => undefined);
+        assert(!JSON.stringify(summaries).includes("private pending marker"));
+        const after = await server.readThread(thread.id);
+        if (action === "stop") {
+          assert.equal(normal.length, 2);
+          assert.equal(pendingSteerMessages(after.items).length, 1);
+          assert(!after.items.some((item) => item.type === "context_compaction"));
+        } else {
+          assert.equal(normal.length, 3);
+          assert.equal(
+            JSON.stringify(normal[2]!.messages).includes("private pending marker"),
+            action === "continue",
+          );
+          assert.equal(after.turns.length, 2);
+        }
+      } finally {
+        release.resolve();
+        await active.done.catch(() => undefined);
+      }
+    },
+  );
+
+test(
+  "pending human pressure compacts before claim without entering summary",
+  { timeout: 10000 },
+  async () => {
+    const sampled = deferred<void>();
+    const release = deferred<void>();
+    const normal: ModelRequest[] = [];
+    const summaries: ModelRequest[] = [];
+    const pendingText = "PENDING_PRESSURE ".repeat(1100);
+    const model: ModelAdapter = {
+      provider: "recording",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        if (isSummaryRequest(request)) {
+          summaries.push(cloneRequest(request));
+          yield { type: "text_delta", delta: "small completed history summary" };
+          return;
+        }
+        normal.push(cloneRequest(request));
+        if (normal.length === 1) {
+          yield { type: "text_delta", delta: "seed history ".repeat(1400) };
+          return;
+        }
+        if (normal.length === 2) {
+          sampled.resolve();
+          await release.promise;
+        }
+        yield { type: "text_delta", delta: "done" };
+      },
+    };
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      model,
+      modelCatalog: new StaticModelCatalog([
+        { id: "recording-model", isDefault: true, contextWindow: 10000 },
+      ]),
+    });
+    const thread = await server.startThread();
+    await (await server.startTurn(thread.id, "seed")).done;
+    const active = await server.startTurn(thread.id, "active");
+    void active.done.catch(() => undefined);
+    try {
+      await sampled.promise;
+      await server.stageSteerMessage(thread.id, active.id, pendingText, {
+        clientId: "pressure",
+      });
+      release.resolve();
+      await active.done;
+      assert.equal(summaries.length, 1);
+      assert(!JSON.stringify(summaries).includes("PENDING_PRESSURE"));
+      assert.equal(normal.length, 3);
+      assert(JSON.stringify(normal[2]!.messages).includes("PENDING_PRESSURE"));
+      assert.equal(
+        pendingSteerMessages((await server.readThread(thread.id)).items).length,
+        0,
+      );
+    } finally {
+      release.resolve();
+      await active.done.catch(() => undefined);
+    }
+  },
+);

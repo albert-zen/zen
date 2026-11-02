@@ -1,4 +1,7 @@
-import { captureReceiptTimezone } from "./message-timezone.js";
+import {
+  captureReceiptTimezone,
+  formatReceiptTimestamp,
+} from "./message-timezone.js";
 import {
   observeTraceSpan,
   recordTraceObservation,
@@ -3350,7 +3353,9 @@ export class ZenAppServer {
       };
     } = {},
   ): Promise<TurnHandle> {
-    return await this.#launchTurn(threadId, input, options);
+    return await this.#launchTurn(threadId, input, options, {
+      carryHeldHumanSteer: true,
+    });
   }
 
   /** Explicit continuation, never replay of a previous Turn or tool call. */
@@ -3377,7 +3382,10 @@ export class ZenAppServer {
       threadId,
       [{ type: "text", text: language === "zh-CN" ? "继续" : "Go on" }],
       { ...options, requireUnarchived: true },
-      { expectedTerminalTurnId: expectedTurnId },
+      {
+        expectedTerminalTurnId: expectedTurnId,
+        carryHeldHumanSteer: true,
+      },
     );
   }
 
@@ -3506,6 +3514,8 @@ export class ZenAppServer {
       };
     },
     internal: {
+      /** Explicit human successor authority; automatic queue/Host launches omit it. */
+      carryHeldHumanSteer?: boolean;
       preparedInput?: boolean;
       /** Explicit retry fence, evaluated under the same admission lock. */
       expectedTerminalTurnId?: string;
@@ -3816,7 +3826,9 @@ export class ZenAppServer {
         throw error;
       }
       const heldSteerIds = new Set(
-        pendingSteerMessages(thread.items).map((item) => item.id),
+        internal.carryHeldHumanSteer === true
+          ? pendingSteerMessages(thread.items).map((item) => item.id)
+          : [],
       );
       let heldSteerClaimed = false;
       const ready = deferred<void>();
@@ -3976,8 +3988,12 @@ export class ZenAppServer {
                     this.#auxiliaryModel?.trace,
                     { threadId, turnId, sampleId: modelResponseId },
                     "context_preparation",
-                    async () =>
-                      await this.#withThreadMutation(threadId, async () => {
+                    async () => {
+                      let attemptedCompaction = false;
+                      for (;;) {
+                        const prepared = await this.#withThreadMutation(
+                          threadId,
+                          async () => {
                         this.#assertCurrentThreadAuthority(thread);
                         await this.#journal.assertRecoverySafe?.(threadId);
                         this.#assertCurrentThreadAuthority(thread);
@@ -3989,6 +4005,48 @@ export class ZenAppServer {
                           );
                         }
                         active.controller.signal.throwIfAborted();
+                        const pendingItems = thread.items;
+                        const pendingTokens = this.#pendingSteerTokenEstimate(
+                          pendingItems,
+                          turnId,
+                        );
+                        if (pendingTokens > 0) {
+                          const preview = this.#providerRegistry.acquire(
+                            thread.effectiveConfiguration(),
+                          );
+                          try {
+                            const window = preview.model.contextWindow;
+                            if (window !== null) {
+                              const total =
+                                this.#estimateContext(
+                                  pendingItems,
+                                  preview,
+                                  this.#runtimeConfiguration.contextCompaction,
+                                ).total + pendingTokens;
+                              if (pendingTokens >= window)
+                                throw new AppServerError(
+                                  "context_window_exceeded",
+                                  "Pending human input alone exceeds the model window; it remains pending and can be recalled",
+                                );
+                              if (
+                                !attemptedCompaction &&
+                                total >= automaticCompactionThreshold(
+                                  window,
+                                  this.#runtimeConfiguration.contextCompaction
+                                    .triggerPercent,
+                                )
+                              )
+                                return { prepareCompaction: true as const };
+                              if (total >= window)
+                                throw new AppServerError(
+                                  "context_window_exceeded",
+                                  "Pending human input does not fit the prepared context; it remains pending and can be recalled",
+                                );
+                            }
+                          } finally {
+                            preview.release();
+                          }
+                        }
                         // Agent guidance that arrived during initial admission joins this
                         // Turn in arrival order after its fixed initial input batch.
                         // Bound backlog admission just like a normal queue batch.
@@ -3999,7 +4057,7 @@ export class ZenAppServer {
                           (resolved.model.contextWindow ?? 32_768) * 2,
                         );
                         for (const pending of pendingQueuedMessages(
-                          thread.items,
+                          pendingItems,
                         )) {
                           if (
                             !(
@@ -4241,7 +4299,21 @@ export class ZenAppServer {
                           sample.release();
                           throw error;
                         }
-                      }),
+                          },
+                        );
+                        if (!("prepareCompaction" in prepared)) return prepared;
+                        attemptedCompaction = true;
+                        await this.#handleActiveTurnCompaction({
+                          threadId,
+                          turnId,
+                          contextCompaction:
+                            this.#runtimeConfiguration.contextCompaction,
+                          inputTokens: undefined,
+                          agenticCompaction: false,
+                          signal: controller.signal,
+                        });
+                      }
+                    },
                     {
                       clientIds: [
                         ...new Set(
@@ -4644,6 +4716,7 @@ export class ZenAppServer {
           },
           {
             turnId: replacementIntent.successorTurnId,
+            carryHeldHumanSteer: replacementIntent.sender === undefined,
             preparedInput: true,
             replacementClientId: replacementIntent.clientId,
             ...(replacementIntent.sender === undefined
@@ -5024,6 +5097,24 @@ export class ZenAppServer {
     });
   }
 
+  #pendingSteerTokenEstimate(
+    items: readonly CanonicalItem[],
+    turnId: string,
+  ): number {
+    return estimateModelMessageInputTokens(
+      pendingSteerMessages(items)
+        .filter((item) => item.expectedTurnId === turnId)
+        .map((item) => ({
+          role: "user" as const,
+          content: item.input,
+          userTimestamp: formatReceiptTimestamp(
+            item.createdAt,
+            item.receiptTimezone,
+          ),
+        })),
+    );
+  }
+
   async #handleActiveTurnCompaction(options: {
     threadId: string;
     turnId: string;
@@ -5033,14 +5124,17 @@ export class ZenAppServer {
     signal: AbortSignal;
   }): Promise<boolean> {
     const inputTokens = options.inputTokens;
-    return await this.#withThreadMutation(options.threadId, async () => {
+    let release: (() => void) | undefined;
+    try {
+      const plan = await this.#withThreadMutation(options.threadId, async () => {
       const active = this.#activeTurns.get(options.threadId);
       if (active?.turnId !== options.turnId) return false;
+      options.signal.throwIfAborted();
       const thread = await this.#requireThread(options.threadId);
       const resolved = this.#providerRegistry.acquire(
         thread.effectiveConfiguration(),
       );
-      try {
+      release = () => resolved.release();
         const contextWindow = resolved.model.contextWindow;
         if (contextWindow === null) return false;
         // Provider usage describes the request that just completed. Tool results
@@ -5052,7 +5146,9 @@ export class ZenAppServer {
           resolved,
           options.contextCompaction,
         );
-        const estimatedInputTokens = estimate.total;
+        const estimatedInputTokens =
+          estimate.total +
+          this.#pendingSteerTokenEstimate(thread.items, options.turnId);
         if (
           estimate.toolDefinitions +
             estimateModelInput([], [], resolved.adapter.contextInstructions)
@@ -5159,7 +5255,9 @@ export class ZenAppServer {
         if (!compactionBoundaryAdvances(thread.items, boundary)) {
           return false;
         }
-        await this.#appendContextCompaction({
+        return {
+          active,
+          append: {
           thread,
           boundary,
           initiator: "automatic",
@@ -5180,14 +5278,26 @@ export class ZenAppServer {
           contextCompaction: options.contextCompaction,
           signal: options.signal,
           allowOpenTurns: true,
-        });
-        active.contextCompactionNotice = undefined;
-        active.contextCompactionNoticeIssued = false;
-        return true;
-      } finally {
-        resolved.release();
-      }
-    });
+          concurrentAdmission: true,
+          concurrentAdmissionTurnId: options.turnId,
+          } satisfies GeneratedContextCompactionOptions,
+        };
+      });
+      if (plan === false) return false;
+      await this.#appendContextCompaction(plan.append);
+      await this.#withThreadMutation(options.threadId, async () => {
+        if (
+          this.#activeTurns.get(options.threadId) === plan.active &&
+          !plan.active.controller.signal.aborted
+        ) {
+          plan.active.contextCompactionNotice = undefined;
+          plan.active.contextCompactionNoticeIssued = false;
+        }
+      });
+      return true;
+    } finally {
+      release?.();
+    }
   }
 
   async #commitFinalResponse(

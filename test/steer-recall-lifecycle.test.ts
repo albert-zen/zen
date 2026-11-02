@@ -12,7 +12,10 @@ import { ProviderRegistry } from "../src/provider-registry.js";
 import { AgentRuntime, type RunTurnOptions } from "../src/runtime.js";
 import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
 import { ToolEnvironment } from "../src/tool.js";
-import { pendingSteerMessages } from "../src/steer-recall.js";
+import {
+  pendingSteerMessages,
+  recoverSteerRecall,
+} from "../src/steer-recall.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 import type { JsonRpcMessage } from "../src/protocol/codex/wire.js";
@@ -529,3 +532,152 @@ test(
     }
   },
 );
+
+test(
+  "automatic queued successor does not claim held human steer",
+  { timeout: 10000 },
+  async () => {
+    const f = await running();
+    try {
+      await f.server.stageSteerMessage(f.threadId, f.turn.id, "held-private", {
+        clientId: "held",
+      });
+      await f.server.interruptTurn(f.threadId, f.turn.id);
+      await f.server.queueMessage(f.threadId, "queued-next", "queued");
+      await f.sampled[1]!.promise;
+      const after = await f.server.readThread(f.threadId);
+      assert.equal(pendingSteerMessages(after.items).length, 1);
+      assert(!JSON.stringify(f.requests[1]!.messages).includes("held-private"));
+      assert(JSON.stringify(f.requests[1]!.messages).includes("queued-next"));
+      f.release[1]!.resolve();
+      await setImmediate();
+    } finally {
+      for (const gate of f.release) gate.resolve();
+      await f.turn.done.catch(() => undefined);
+    }
+  },
+);
+
+test(
+  "fork remaps recall receipt anchors without changing parent recovery",
+  { timeout: 10000 },
+  async () => {
+    const f = await running();
+    try {
+      await f.server.stageSteerMessage(f.threadId, f.turn.id, "fork-recalled", {
+        clientId: "fork-pending",
+      });
+      const pending = await f.server.readThread(f.threadId);
+      await f.server.recallSteerMessages(f.threadId, {
+        recallId: "fork-receipt",
+        targets: snapshotTargets(pending.items),
+      });
+      f.release[0]!.resolve();
+      await f.turn.done;
+      const parent = await f.server.readThread(f.threadId);
+      const child = await f.server.forkThread({
+        sourceThreadId: f.threadId,
+        through: { type: "latest-complete" },
+        workspace: { type: "same-directory" },
+      });
+      const recovered = recoverSteerRecall(
+        child.items,
+        child.id,
+        "fork-receipt",
+      );
+      assert(recovered);
+      assert.equal(recovered.messages.length, 1);
+      assert.equal(recovered.messages[0]!.threadId, child.id);
+      assert.notEqual(
+        recovered.messages[0]!.id,
+        pendingSteerMessages(pending.items)[0]!.id,
+      );
+      assert.deepEqual(
+        (await f.server.readThread(f.threadId)).items,
+        parent.items,
+      );
+      assert(recoverSteerRecall(parent.items, f.threadId, "fork-receipt"));
+    } finally {
+      for (const gate of f.release) gate.resolve();
+      await f.turn.done.catch(() => undefined);
+    }
+  },
+);
+
+for (const winner of ["claim", "recall"] as const)
+  test(
+    `simultaneous claim and recall serialize with ${winner} first`,
+    { timeout: 10000 },
+    async () => {
+      const f = await running();
+      const entered = deferred();
+      const releaseCommit = deferred();
+      const append = f.journal.append.bind(f.journal);
+      try {
+        await f.server.stageSteerMessage(f.threadId, f.turn.id, "race-input", {
+          clientId: "race",
+        });
+        const targets = snapshotTargets(
+          (await f.server.readThread(f.threadId)).items,
+        );
+        f.journal.append = async (item) => {
+          if (
+            (winner === "claim" &&
+              item.type === "user_message" &&
+              item.clientId === "race") ||
+            (winner === "recall" &&
+              item.type === "user_message_steer_recalled")
+          ) {
+            entered.resolve();
+            await releaseCommit.promise;
+          }
+          return await append(item);
+        };
+        const recall = () =>
+          f.server.recallSteerMessages(f.threadId, {
+            recallId: "race-receipt",
+            targets,
+          });
+        let withdrawal: ReturnType<typeof recall>;
+        if (winner === "recall") {
+          withdrawal = recall();
+          await entered.promise;
+          f.release[0]!.resolve();
+        } else {
+          f.release[0]!.resolve();
+          await entered.promise;
+          withdrawal = recall();
+        }
+        const outcome = withdrawal.then(
+          () => "recalled",
+          () => "conflict",
+        );
+        await setImmediate();
+        releaseCommit.resolve();
+        assert.equal(
+          await outcome,
+          winner === "recall" ? "recalled" : "conflict",
+        );
+        if (winner === "claim") await f.sampled[1]!.promise;
+        f.release[1]!.resolve();
+        await f.turn.done;
+        const after = await f.server.readThread(f.threadId);
+        assert.equal(
+          after.items.some(
+            (item) => item.type === "user_message" && item.clientId === "race",
+          ),
+          winner === "claim",
+        );
+        assert.equal(
+          after.items.some(
+            (item) => item.type === "user_message_steer_recalled",
+          ),
+          winner === "recall",
+        );
+      } finally {
+        releaseCommit.resolve();
+        for (const gate of f.release) gate.resolve();
+        await f.turn.done.catch(() => undefined);
+      }
+    },
+  );
