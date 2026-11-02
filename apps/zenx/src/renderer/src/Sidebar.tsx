@@ -31,6 +31,7 @@ import { ProviderLogo } from "./ProviderLogo.js";
 import {
   deriveInboxSections,
   deriveSidebarThreads,
+  deriveRecentThreads,
   deriveProjectGroups,
   EMPTY_SIDEBAR_ORDER,
   threadEditTitle,
@@ -230,13 +231,7 @@ export function Sidebar({
   const [recentOpen, toggleRecent, recentExpansionError] =
     useSidebarExpansion("recent");
   const recentThreads = useMemo(
-    () =>
-      [...visibleThreads].sort(
-        (a, b) =>
-          (Date.parse(b.updatedAt ?? "") || 0) -
-            (Date.parse(a.updatedAt ?? "") || 0) ||
-          a.threadId.localeCompare(b.threadId),
-      ),
+    () => deriveRecentThreads(visibleThreads),
     [visibleThreads],
   );
   const pinnedThreads = useMemo(
