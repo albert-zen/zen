@@ -1,6 +1,6 @@
 import type { TraceClock } from "./trace-clock.js";
 import { createHash, randomUUID } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants, realpathSync, type Stats } from "node:fs";
 import {
   chmod,
   link,
@@ -8,10 +8,13 @@ import {
   mkdir,
   open,
   readdir,
+  realpath,
   rm,
   type FileHandle,
 } from "node:fs/promises";
 import path from "node:path";
+import { StorageWriterOwnership } from "./storage-writer-ownership.js";
+import { ThreadJournalAppendOutcomeUnknownError } from "./journal.js";
 
 const clockDomain = randomUUID();
 const clockStart = process.hrtime.bigint();
@@ -111,6 +114,54 @@ export interface TraceStatus {
   lastError?: string;
 }
 
+
+/** Ephemeral source ordering only; neither this generation nor a scope grants dispatch. */
+export interface OwnedTraceSourceScope {
+  readonly generation: number;
+  read(): Promise<TraceReadResult>;
+  appendSource(event: TraceEvent): Promise<TraceReceipt>;
+}
+export interface OwnedTraceSourceSession {
+  run<T>(action: (scope: OwnedTraceSourceScope) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+interface SourceLane {
+  tail: Promise<unknown>;
+  generation: number;
+  owners: number;
+  owner?: StorageWriterOwnership;
+}
+const sourceLanes = new Map<string, Map<string, SourceLane>>();
+function authoritativeSource(type: string): boolean {
+  return type === "runtime_item" || type === "context_source";
+}
+function sourceLane(namespace: string, threadId: string): SourceLane {
+  const threads = sourceLanes.get(namespace) ?? new Map<string, SourceLane>();
+  sourceLanes.set(namespace, threads);
+  let lane = threads.get(threadId);
+  if (lane === undefined) {
+    lane = { tail: Promise.resolve(), generation: 0, owners: 0 };
+    threads.set(threadId, lane);
+  }
+  return lane;
+}
+function inSourceLane<T>(
+  namespace: string,
+  threadId: string,
+  lane: SourceLane,
+  action: () => Promise<T>,
+): Promise<T> {
+  const pending = lane.tail.catch(() => undefined).then(action);
+  lane.tail = pending;
+  void pending.finally(() => {
+    if (lane.tail !== pending || lane.owners !== 0) return;
+    const threads = sourceLanes.get(namespace);
+    if (threads?.get(threadId) === lane) threads.delete(threadId);
+    if (threads?.size === 0) sourceLanes.delete(namespace);
+  }).catch(() => undefined);
+  return pending;
+}
+
 /** Always-on append-only evidence; no side-effect authority, replay, eviction or hidden redaction. */
 export class FileTraceStore implements RuntimeTrace, TraceReader {
   readonly directory: string;
@@ -142,6 +193,9 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     };
   }
   async record(event: TraceEvent): Promise<TraceReceipt> {
+    return this.#record(event);
+  }
+  async #record(event: TraceEvent, scoped = false): Promise<TraceReceipt> {
     const id = randomUUID(),
       clock = traceClock();
     let snapshot: TraceEvent;
@@ -162,7 +216,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     } catch (error) {
       return this.#failed(event.threadId, id, error);
     }
-    return this.#serialize(snapshot.threadId, async () => {
+    return this.#serializeSource(snapshot.threadId, authoritativeSource(snapshot.type) && !scoped, async () => {
       try {
         await this.#initialize(snapshot.threadId);
         await this.#recordGap(snapshot.threadId);
@@ -207,7 +261,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         this.#segments.delete(snapshot.threadId);
         return this.#failed(snapshot.threadId, id, error);
       }
-    });
+    }).catch((error: unknown) => this.#failed(snapshot.threadId, id, error));
   }
   /** Bounded fsync groups keep the existing independent, checksummed record format. */
   async recordBatch(events: readonly TraceEvent[]): Promise<TraceReceipt[]> {
@@ -256,7 +310,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     } catch (error) {
       return fail(error);
     }
-    return this.#serialize(threadId, async () => {
+    return this.#serializeSource(threadId, snapshots.some(({ event }) => authoritativeSource(event.type)), async () => {
       try {
         await this.#initialize(threadId);
         await this.#recordGap(threadId);
@@ -312,7 +366,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         this.#segments.delete(threadId);
         return fail(error);
       }
-    });
+    }).catch(fail);
   }
   async read(
     threadId: string,
@@ -421,6 +475,24 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     source: TraceReader,
   ): Promise<TraceReceipt[]> {
     assertIdentifier(threadId);
+    let snapshot: TraceRecord[];
+    try {
+      snapshot = structuredClone([...records]);
+    } catch (error) {
+      return [this.#failed(threadId, randomUUID(), error)];
+    }
+    if (!snapshot.some((record) => record !== null && typeof record === "object" && authoritativeSource(record.type)))
+      return this.#importRecords(threadId, snapshot, source);
+    return this.#withSourceLane(threadId, async (lane) => {
+      lane.generation++;
+      return this.#importRecords(threadId, snapshot, source);
+    }).catch((error: unknown) => [this.#failed(threadId, randomUUID(), error)]);
+  }
+  async #importRecords(
+    threadId: string,
+    records: readonly TraceRecord[],
+    source: TraceReader,
+  ): Promise<TraceReceipt[]> {
     const receipts: TraceReceipt[] = [];
     for (const input of records) {
       const id = randomUUID();
@@ -473,6 +545,129 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     }
     return receipts;
   }
+
+  async #sourceNamespace(threadId: string): Promise<string> {
+    try {
+      await assertRealDirectory(this.directory);
+      return await realpath(this.directory);
+    } catch (error) {
+      if (!isCode(error, "ENOENT")) throw error;
+      await this.#initializeDirectoriesQueued(threadId);
+      return realpath(this.directory);
+    }
+  }
+  async #withSourceLane<T>(
+    threadId: string,
+    action: (lane: SourceLane) => Promise<T>,
+  ): Promise<T> {
+    const namespace = await this.#sourceNamespace(threadId);
+    const lane = sourceLane(namespace, threadId);
+    return inSourceLane(namespace, threadId, lane, () => action(lane));
+  }
+  #serializeSource<T>(
+    threadId: string,
+    source: boolean,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    // Acquire source lane BEFORE Trace queue. The reverse order deadlocks owned scopes.
+    if (!source) return this.#serialize(threadId, action);
+    return this.#withSourceLane(threadId, async (lane) => {
+      lane.generation++;
+      return this.#serialize(threadId, action);
+    });
+  }
+  /** Disabled coordination foundation: no Domain projection uses this session yet. */
+  async openOwnedSources(
+    owner: StorageWriterOwnership,
+    journalDirectory: string,
+    threadId: string,
+  ): Promise<OwnedTraceSourceSession> {
+    assertIdentifier(threadId);
+    const assertOwner = () =>
+      StorageWriterOwnership.prototype.assertDirectory.call(owner, journalDirectory);
+    assertOwner();
+    const namespace = await this.#sourceNamespace(threadId);
+    const lane = sourceLane(namespace, threadId);
+    if (lane.owner !== undefined && lane.owner !== owner)
+      throw new Error("Trace source namespace already has another journal owner");
+    lane.owner = owner;
+    lane.owners++;
+    let identity: Stats;
+    const assertNamespace = async () => {
+      await assertRealDirectory(this.directory);
+      const current = await lstat(namespace);
+      if (current.dev !== identity.dev || current.ino !== identity.ino)
+        throw new Error("Trace source namespace identity changed");
+    };
+    try {
+      identity = await lstat(namespace);
+      await inSourceLane(namespace, threadId, lane, async () => { await assertNamespace(); assertOwner(); });
+    } catch (error) {
+      lane.owners--;
+      if (lane.owners === 0) delete lane.owner;
+      await inSourceLane(namespace, threadId, lane, async () => undefined);
+      throw error;
+    }
+    const pending = new Set<Promise<unknown>>();
+    let closing: Promise<void> | undefined;
+    return Object.freeze({
+      run: <T>(action: (scope: OwnedTraceSourceScope) => Promise<T>): Promise<T> => {
+        if (closing !== undefined) return Promise.reject(new Error("Owned source session is closed"));
+        const work = inSourceLane(namespace, threadId, lane, async () => {
+          assertOwner();
+          await assertNamespace();
+          let accepting = true;
+          const writes: Promise<TraceReceipt>[] = [];
+          const assertScope = () => {
+            if (!accepting) throw new Error("Owned source scope expired");
+            assertOwner();
+          };
+          const scope: OwnedTraceSourceScope = Object.freeze({
+            get generation() { assertScope(); return lane.generation; },
+            read: () => { assertScope(); return this.read(threadId, { verifyArtifacts: false }); },
+            appendSource: (event: TraceEvent) => {
+              assertScope();
+              if (event.threadId !== threadId || !authoritativeSource(event.type))
+                throw new Error("Owned source scope requires exact Thread source facts");
+              lane.generation++;
+              const write = this.#record(event, true);
+              writes.push(write);
+              return write;
+            },
+          });
+          let value!: T;
+          let failed = false;
+          let failure: unknown;
+          try { value = await action(scope); }
+          catch (error) { failed = true; failure = error; }
+          finally { accepting = false; }
+          const results = await Promise.allSettled(writes);
+          if (results.some((result) => result.status === "rejected" || result.value.durability !== "durable"))
+            throw new ThreadJournalAppendOutcomeUnknownError("Owned source publication was not durable");
+          try {
+            await assertNamespace();
+            assertOwner();
+          } catch (error) {
+            if (writes.length !== 0)
+              throw new ThreadJournalAppendOutcomeUnknownError(error);
+            throw error;
+          }
+          if (failed) throw failure;
+          return value;
+        });
+        pending.add(work);
+        void work.finally(() => pending.delete(work)).catch(() => undefined);
+        return work;
+      },
+      close: () => closing ??= (async () => {
+        await Promise.allSettled([...pending]);
+        lane.owners--;
+        if (lane.owners === 0) delete lane.owner;
+        await inSourceLane(namespace, threadId, lane, async () => undefined);
+      })(),
+    });
+  }
+
   async flush(): Promise<void> {
     await Promise.allSettled([...this.#queues.values()]);
   }
@@ -497,13 +692,16 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       await assertRealDirectory(current);
     }
   }
-  async #initialize(threadId: string): Promise<void> {
-    // Only shared directory setup is serialized; records and cold reads stay outside.
+  async #initializeDirectoriesQueued(threadId: string): Promise<void> {
     const initialized = this.#initialization
       .catch(() => undefined)
       .then(() => this.#initializeDirectories(threadId));
     this.#initialization = initialized;
     await initialized;
+  }
+  async #initialize(threadId: string): Promise<void> {
+    // Only shared directory setup is serialized; records and cold reads stay outside.
+    await this.#initializeDirectoriesQueued(threadId);
     if (!this.#next.has(threadId)) {
       const prior = await this.#readStored(threadId, false);
       this.#next.set(
@@ -778,6 +976,10 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     };
   }
   #failed(threadId: string, id: string, error: unknown): TraceReceipt {
+    try {
+      const lane = sourceLanes.get(realpathSync(this.directory))?.get(threadId);
+      if (lane !== undefined) lane.generation++;
+    } catch { /* Missing namespace has no reusable owned source proof. */ }
     const message = describe(error);
     this.#failedRecords++;
     this.#lastError = message;
