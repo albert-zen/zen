@@ -83,7 +83,12 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   const finish = (attempt: RecallSession, result: RecoveredSteerRecall) => {
     const current = store.getSnapshot().sessions[attempt.request.threadId];
     if (current?.request.recallId !== attempt.request.recallId) return;
-    store.set(attempt.request.threadId, { ...attempt, phase: "ready", result });
+    store.set(attempt.request.threadId, {
+      request: attempt.request,
+      owner: attempt.owner,
+      phase: "ready",
+      result,
+    });
     if (
       !store.getSnapshot().applied.has(result.receipt.id) &&
       mounted.current &&

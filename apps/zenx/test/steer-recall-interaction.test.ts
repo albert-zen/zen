@@ -439,3 +439,63 @@ test("unsupported whole batch makes no recall RPC", async () => {
     );
   });
 });
+
+test("successful read-only Check clears the previous unknown warning before canonical notifications", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = staged();
+    let request!: NativeSteerRecallParams;
+    const calls: string[] = [];
+    let restores = 0;
+    let reads = 0;
+    protocol(async (method, value) => {
+      calls.push(method);
+      if (method === "zen/thread/steer/recall") {
+        request = value as NativeSteerRecallParams;
+        throw new Error("Actual recall reply lost");
+      }
+      assert.equal(method, "zen/thread/read");
+      if (++reads === 1) throw new Error("Automatic read reply lost");
+      return {
+        thread: {
+          id: thread.id,
+          items: [...thread.canonicalItems!, receipt(request)],
+        },
+      };
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => {
+        restores++;
+        return true;
+      },
+    });
+    await h.click(recallButton);
+    await flush();
+    assert.equal(restores, 0);
+    assert.ok(
+      document.body.textContent!.includes(i18n.t("shell:steerRecallUnknown")),
+    );
+    const check = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".pending-steer-panel button",
+      ),
+    ].find(
+      (button) => button.textContent === i18n.t("shell:steerRecallCheck"),
+    )!;
+    assert.ok(check);
+    await act(async () => check.click());
+    await flush();
+    assert.equal(restores, 1);
+    assert.equal(
+      document.body.textContent!.includes(i18n.t("shell:steerRecallUnknown")),
+      false,
+    );
+    assert.equal(document.querySelector(recallButton), null);
+    assert.equal(document.querySelector("[data-queue-id]"), null);
+    assert.deepEqual(calls, [
+      "zen/thread/steer/recall",
+      "zen/thread/read",
+      "zen/thread/read",
+    ]);
+  });
+});
