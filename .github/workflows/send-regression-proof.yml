@@ -15,8 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - variant: baseline
+            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
           - variant: candidate
-            source: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+            source: cb3b4300bd082bd5fbb7053d2977b5c5c6fee220
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +27,7 @@ jobs:
           path: product
       - uses: actions/checkout@v4
         with:
-          ref: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+          ref: cb3b4300bd082bd5fbb7053d2977b5c5c6fee220
           persist-credentials: false
           path: regression-source
       - uses: actions/checkout@v4
@@ -60,3 +62,21 @@ jobs:
           name: send-regression-proof-${{ matrix.variant }}
           path: proof-results
           if-no-files-found: error
+  format-next-backend-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 03fe83221bab8f653d7385fb4eb160557fed3540
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install formatter from exact lockfile without lifecycle scripts
+        timeout-minutes: 7
+        run: npm ci --ignore-scripts
+      - name: Show exact formatter-only synthetic test diff
+        run: |
+          npx --no-install prettier --write test/domain-reconciliation-performance.test.ts
+          git diff -- test/domain-reconciliation-performance.test.ts

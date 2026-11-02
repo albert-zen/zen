@@ -51,3 +51,17 @@ Each row passed the durable message and no-compaction checks. Separate-runner re
 - First fixture used an invalid null reasoning effort and failed to configure its private workspace. Those jobs failed before valid send samples; no latency conclusion is drawn from them.
 - The first 5,000-turn execution exhausted a 240-second owned-process budget without a complete sample report. It is not reported as a 240-second send.
 - Initial frontend A/B attempt failed to commit native text before Send, with zero send IPC requests. The successful repeat waits for actual native textarea focus before insertion; no JavaScript focus/value assignment or forced click was introduced.
+
+
+## Combined candidate: negative end-to-end result retained
+
+The combined production candidate `a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09` passed native message integrity/no-compaction checks, but did **not** demonstrate acceptable send latency:
+
+| Prior completed turns | Click → visible bubble frame (ms) | Main IPC duration (ms) |
+|---|---|---|
+| 1,000 | 3417.7 / 2136.3 / 3810.4 | 1839.0 / 1087.6 / 1377.6 |
+| 5,000 | 30311.7 / 46670.4 / 22686.1 | 14753.3 / 16490.6 / 14166.6 |
+
+[Combined native run](https://github.com/albert-zen/zen/actions/runs/41385416571), jobs `125085055892` and `125085056053`. The 5,000-turn run again observed other Host configuration request deadlines. These samples cannot be attributed to runner variability, residual work or a combination regression without further evidence. A same-runner interleaved A/B/A/B comparison is the next diagnostic gate, not an assumption that the combined change is faster.
+
+The first combined component regression proof failed its final collapsed-details UI text assertion, not its scan budget. That test setup is being corrected separately; it does not invalidate or explain away the above native latency observations.

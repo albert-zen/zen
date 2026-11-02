@@ -1,0 +1,68 @@
+name: Same-runner ordinary-send ABAB
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/send-paired-e2e.yml
+      - apps/zenx/scripts/capture-send-paired.cjs
+      - apps/zenx/scripts/launch-send-paired.mjs
+permissions:
+  contents: read
+jobs:
+  paired-native-macos:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+          persist-credentials: false
+          path: combined
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy identical passive drivers, leaving product tracked files unchanged
+        run: |
+          for source in baseline combined; do
+            cp diagnostic/apps/zenx/scripts/capture-send-paired.cjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/launch-send-paired.mjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
+          done
+      - name: Build exact baseline once
+        working-directory: baseline
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Build exact combined candidate once
+        working-directory: combined
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Native A1 B1 A2 B2, three messages per fresh isolated profile
+        timeout-minutes: 18
+        run: |
+          for case in A1 B1 A2 B2; do
+            case "$case" in A*) source=baseline ;; B*) source=combined ;; esac
+            echo "PAIRED_CASE_BEGIN $case $source"
+            (cd "$source" && node apps/zenx/scripts/launch-send-paired.mjs "../results/$case" 1000 "$source" "$case")
+            echo "PAIRED_CASE_END $case $source"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-send-same-runner-abab-1000
+          path: results
+          if-no-files-found: error
