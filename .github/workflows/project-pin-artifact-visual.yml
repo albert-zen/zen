@@ -1,0 +1,58 @@
+name: Project and Pin visual from exact CI artifact
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/project-pin-artifact-visual.yml
+      - apps/zenx/scripts/capture-project-pin-artifact.mjs
+permissions:
+  contents: read
+  actions: read
+jobs:
+  visual-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install locked capture-helper dependencies without scripts
+        run: npm ci --ignore-scripts
+        timeout-minutes: 5
+      - name: Download and verify only the authorized immutable artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "${{ runner.temp }}/project-pin-visual"
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/albert-zen/zen/actions/artifacts/13130870327/zip \
+            -o "${{ runner.temp }}/project-pin-visual.zip"
+          echo "cd8e3f8b30c4d7de87e0592c0b6eb61408a534301e3f3b347fe8f4eb00f6f604  ${{ runner.temp }}/project-pin-visual.zip" | sha256sum --check
+          python - <<'PY'
+          import os, pathlib, zipfile
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          with zipfile.ZipFile(root / "project-pin-visual.zip") as archive:
+              for item in archive.infolist():
+                  p = pathlib.PurePosixPath(item.filename)
+                  assert not p.is_absolute() and ".." not in p.parts
+                  assert (item.external_attr >> 16) & 0o170000 != 0o120000
+              archive.extractall(root / "project-pin-visual")
+          PY
+      - name: Render the existing navigation mode without modifying artifact HTML
+        run: node apps/zenx/scripts/capture-project-pin-artifact.mjs "${{ runner.temp }}/project-pin-visual"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-recent-pinned-visual-2ca2adc
+          path: |
+            ${{ runner.temp }}/project-pin-visual/project-recent-pinned-production-sidebar.png
+            ${{ runner.temp }}/project-pin-visual/project-pin-artifact-evidence.json
+            ${{ runner.temp }}/project-pin-visual/browser-lifecycle.json
+            ${{ runner.temp }}/project-pin-visual/source.json
+          if-no-files-found: error
+          retention-days: 14
