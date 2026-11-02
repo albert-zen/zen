@@ -27,3 +27,24 @@ All cases had complete Trace and **zero compaction facts or attempts**. Recall-c
 [Initial two-case run 41398526913](https://github.com/albert-zen/zen/actions/runs/41398526913), source `c5b387c306d6015e3034cdacbf199edc4b8f70c2`, failed **before the App was launched** at eight test-fixture TypeScript errors. No native functional result was claimed. The author corrected only fixture typings in279f; the diagnostic retained its typecheck gate and then ran all three cases above. This failure is not rewritten as a passing run.
 
 Full-page screenshots and exact diagnostic measurements/source manifests are attached to the successful native run. Repository-wide CI, independent product review and merge approval remain separate.
+
+
+## Fourth case: two lost replies, followed by explicit read-only recovery
+
+[Run 41401906539](https://github.com/albert-zen/zen/actions/runs/41401906539), job125135346337, exact same product279f, **passed** the additional required recovery case in a fresh owned App.
+
+The actual recall handler durably succeeded, but its reply was replaced only at the diagnostic transport boundary with the generic error `SYNTHETIC transport reply unavailable`. The product legitimately attempts an automatic read-only reconciliation. To exercise its stable unknown state, the first **actual completed** read response was also lost with that same generic transport error. Genuine target-thread notifications remained held. This is explicitly a **two-response-loss scenario**: a single lost recall ACK followed by successful automatic read-only reconciliation is allowed to recover normally and is not required to remain unknown.
+
+Verified sequence:
+
+1. The real unknown-state warning appeared. The current draft was unchanged, with no automatic resend and no repeated recall mutation.
+2. Native editing replaced the selected current draft with that draft plus additional text, using the actual editor's native Select All action, read-only selection-range verification and native text insertion; no JavaScript value/caret assignment.
+3. The user-facing Check button performed the next actual read-only request and recovered the real receipt. Both recalled messages merged once, in order, before the latest draft.
+4. **Before releasing the held real notification**, the known-success batch had no enabled Recall action and no actionable legacy queue row for its target IDs. Recorded checkpoint: notifications still held=true, held count=1, recall button actionable=false, legacy actionable rows=0.
+5. Releasing the real receipt notification did not duplicate the recovered content. The exact actual Turn completed normally.
+
+Independent read-only reopening found two staged facts, exactly one recall control fact, only one canonical user message, complete Trace and zero compaction facts/attempts. Withdrawn nonces were absent from semantic history and the sole actual model request (`[true,false,false]`). Exactly one recall RPC and the original three send RPCs occurred. The log's three completed read entries are the failed automatic-read reply, successful user Check, and final verification projection read—not three recovery attempts.
+
+The [first attempt 41401044397](https://github.com/albert-zen/zen/actions/runs/41401044397) reached the real unknown state and passed no-auto-restore/resend checks, then failed because the fixture's macOS end-of-document key chord did not move the caret to the asserted end position. It never reached Check and is **not** counted as passed. The repeat changed only the native editing fixture to the already verified native Select All path; product code and all behavioral/storage gates remained unchanged.
+
+This closes the four explicitly assigned native cases within their stated fake-provider/text-input scope. It does not establish general network reliability, real-provider latency or unsupported-input coverage. Repository-wide CI and merge approval remain separate.

@@ -13,23 +13,23 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          run-id: 41399317890
+          run-id: 41401906539
           github-token: ${{ github.token }}
-          pattern: native-steer-recall-*
+          name: native-steer-recall-lost-reply
           path: recall
-      - name: Emit four bounded whole-App synthetic images
+      - name: Emit two bounded whole-App recovery images
         run: |
           node <<'NODE'
           const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict');
           function walk(p){return fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(p,e.name)):[path.join(p,e.name)]);}
           const files=walk('recall');
-          for(const name of ['recall-wins-restored-current-draft.png','claim-wins-real-conflict-stale-ui.png','navigation-other-draft-preserved.png','navigation-final-complete-app.png']){
+          for(const name of ['lost-recall-reply-unknown.png','lost-recall-reply-readonly-recovered.png']){
             const matches=files.filter(f=>path.basename(f)===name);
             // Navigation also saves its restored frame under the shared recall-wins name.
             const selected=name==='recall-wins-restored-current-draft.png'?matches.filter(f=>f.includes('native-steer-recall-recall-wins/')):matches;
             assert.equal(selected.length,1,name);
             const bytes=fs.readFileSync(selected[0]);assert(bytes.length>0&&bytes.length<=1048576);
             assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-            console.log('SYNTHETIC_RECALL_IMAGE '+JSON.stringify({sourceRun:41399317890,source:'279f84ff35c68979a55f35c5322c941235dff7be',name,bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
+            console.log('SYNTHETIC_RECALL_IMAGE '+JSON.stringify({sourceRun:41401906539,source:'279f84ff35c68979a55f35c5322c941235dff7be',name,bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
           }
           NODE
