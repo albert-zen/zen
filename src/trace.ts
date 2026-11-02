@@ -497,6 +497,9 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     }
   }
   async #initialize(threadId: string): Promise<void> {
+    // Failed checks or partial permission restoration must retire the prior durability proof.
+    const initialized = this.#initializedDirectories.get(threadId);
+    this.#initializedDirectories.delete(threadId);
     // Recheck on every append: cached readiness cannot legitimize a replaced directory alias.
     const directories = [
       await privateDirectory(this.directory),
@@ -504,7 +507,6 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       await privateDirectory(path.join(this.directory, "threads")),
       await privateDirectory(this.#threadPath(threadId)),
     ];
-    const initialized = this.#initializedDirectories.get(threadId);
     if (
       directories.some(
         (directory, index) =>

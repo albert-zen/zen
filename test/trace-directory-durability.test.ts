@@ -210,3 +210,34 @@ test(
     assert.equal(directories, 4);
   },
 );
+
+test(
+  "failed warm permission restoration retires the prior initialization proof",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { store, prototype } = await fixture(t);
+    await store.record(event());
+    await chmod(store.directory, 0o755);
+    const sync = prototype.sync;
+    let fail = true;
+    const calls: string[] = [];
+    t.mock.method(prototype, "sync", async function (this: FileHandle) {
+      const directory = (await this.stat()).isDirectory();
+      calls.push(directory ? "directory" : "file");
+      if (fail && directory)
+        throw new Error("Synthetic warm ancestor sync failure");
+      await sync.call(this);
+    });
+    assert.equal((await store.record(event())).durability, "degraded");
+    calls.length = 0;
+    fail = false;
+    assert.equal((await store.record(event())).durability, "durable");
+    assert.deepEqual(calls.slice(0, 3), [
+      "directory",
+      "directory",
+      "directory",
+    ]);
+    assert.equal(calls.filter((kind) => kind === "file").length, 2);
+    assert.equal(calls.filter((kind) => kind === "directory").length, 5);
+  },
+);
