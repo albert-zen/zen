@@ -1671,6 +1671,17 @@ button:disabled {
   display: grid;
   gap: 8px;
 }
+/* Diagnostic-only prototype: keep the remembered size while the latest or
+   expanded completed Turn is fully rendered. Fixed fallback registered at
+   240px before measurement; this is not cold-reading restoration support. */
+.turn[data-history-layout] {
+  contain-intrinsic-block-size: auto 240px;
+}
+.turn[data-history-layout="auto"]:not(:focus-within):not(
+    :has([data-message-target])
+  ) {
+  content-visibility: auto;
+}
 .user-row {
   position: relative;
   min-width: 0;

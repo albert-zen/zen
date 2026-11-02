@@ -963,6 +963,15 @@ function ThreadViewContent({
     [displayedThread?.cwd, threadAttachments, onReadAttachment, onOpenImage],
   );
   const turns = displayedThread?.turns ?? [];
+  // Diagnostic-only layout candidate; protect the protocol tail even without
+  // canonical end facts. Immutable turn identity keeps Composer edits O(1).
+  const latestLayoutTurnId = turns.at(-1)?.id;
+  const latestLayoutTerminalTurnId = useMemo(
+    () =>
+      displayedThread?.turns.findLast((turn) => turn.status !== "inProgress")
+        ?.id,
+    [displayedThread?.turns],
+  );
   const contextCompactions = useMemo(
     () => projectContextCompactions(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
@@ -1518,6 +1527,10 @@ function ThreadViewContent({
             index={row.index}
             key={JSON.stringify([thread?.id, row.turn.id])}
             turn={row.turn}
+            layoutTail={
+              row.turn.id === latestLayoutTurnId ||
+              row.turn.id === latestLayoutTerminalTurnId
+            }
             compactionPending={
               row.turn.id === runningTurn?.id &&
               composer.compaction?.status === "pending"
@@ -1558,6 +1571,8 @@ function ThreadViewContent({
       thread,
       contextPreview,
       transcriptRows,
+      latestLayoutTurnId,
+      latestLayoutTerminalTurnId,
       runningTurn,
       composer.compaction?.status,
       lastCanonicalTurnEnd,
@@ -2700,6 +2715,7 @@ function isNestedTranscriptScroll(
 
 const TurnBlock = memo(function TurnBlock({
   turn,
+  layoutTail,
   compactionPending,
   endItemId,
   stopping,
@@ -2720,6 +2736,7 @@ const TurnBlock = memo(function TurnBlock({
   failureDetail,
 }: {
   turn: Turn;
+  layoutTail: boolean;
   compactionPending: boolean;
   endItemId?: string | undefined;
   stopping: boolean;
@@ -2804,6 +2821,18 @@ const TurnBlock = memo(function TurnBlock({
     protectedOpen ||
     (expandedOverride ?? (contextPreview && turn.status === "inProgress"));
   const complete = contextPreview || turn.status !== "inProgress";
+  const rememberHistoryLayout = turn.status === "completed" && !contextPreview;
+  const skipHistoricalLayout =
+    rememberHistoryLayout &&
+    !layoutTail &&
+    endItemId === undefined &&
+    !expanded &&
+    !turn.liveRecovery &&
+    !confirmedStopped &&
+    !failureDetail &&
+    !stopping &&
+    !compactionPending &&
+    approvals.length === 0;
   // Only the latest trace can own the sweep, and only while its actual call
   // or thinking is pending. A returned tool never borrows the Turn's lifetime.
   const latestProcess = projection.history.findLast(
@@ -2869,6 +2898,13 @@ const TurnBlock = memo(function TurnBlock({
               <section
                 ref={sectionRef}
                 className={`turn ${turn.status}`}
+                data-history-layout={
+                  rememberHistoryLayout
+                    ? skipHistoricalLayout
+                      ? "auto"
+                      : "remember"
+                    : undefined
+                }
                 data-read-message-id={complete ? endItemId : undefined}
                 aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
               >
