@@ -43,10 +43,26 @@ await withPreviewBrowser(
           labels.some((label) => label.includes(expected)),
           expected,
         );
-      observations.push({ theme, labels });
+      const appearance = await evaluate(`({
+        selected: document.documentElement.dataset.appearance,
+        colorScheme: getComputedStyle(document.documentElement).colorScheme,
+        canvas: getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim(),
+      })`);
+      assert.equal(appearance.selected, theme);
+      assert.equal(
+        appearance.colorScheme,
+        theme,
+        "Production appearance CSS applied",
+      );
+      observations.push({ theme, labels, appearance });
       await screenshot(`canonical-first-input-${theme}.png`);
     }
   },
+);
+assert.notEqual(
+  observations[0].appearance.canvas,
+  observations[1].appearance.canvas,
+  "Light and dark production canvas colors differ",
 );
 await writeFile(
   path.join(directory, "observations.json"),

@@ -95,7 +95,8 @@ const threads = [
   ),
 ];
 const theme = new URLSearchParams(location.search).get("theme") ?? "light";
-document.documentElement.dataset.theme = theme;
+document.documentElement.dataset.appearance = theme;
+document.documentElement.dataset.themePreset = "graphite";
 document.documentElement.dataset.platform = "linux";
 
 await i18n.changeLanguage("en");
