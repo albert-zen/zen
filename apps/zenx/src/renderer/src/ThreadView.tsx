@@ -1760,6 +1760,7 @@ function ThreadViewContent({
             runningTurnId={runningTurn?.id ?? null}
             store={steerRecallStore}
             onRestore={onRestoreRecalled}
+            onReadAttachment={onReadAttachment}
           />
         ) : null}
         {thread ? (

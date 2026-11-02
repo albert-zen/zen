@@ -16,6 +16,7 @@ export const en = {
   steerPendingLabel: "Messages waiting for the model",
   steerPendingCount: "Waiting for the model: {{count}}",
   steerRecallAll: "Recall all to composer",
+  steerRecallOne: "Recall to composer",
   steerRecalling: "Recalling…",
   steerHeldNotice:
     "These messages have not entered the model. They will join the next turn you explicitly start, retry or replace. You can recall them first.",
@@ -24,6 +25,8 @@ export const en = {
   steerPendingDetails: "View waiting messages",
   steerStructuredInput: "References or attachments",
   steerImageCount: "Images: {{count}}",
+  steerPendingImageUnavailable:
+    "This image is no longer in the current pending input.",
   steerRecallConflict:
     "The pending messages changed or were claimed. This recall did not partially remove the batch; check the current messages.",
   steerRecallUnsupported:
@@ -979,6 +982,7 @@ export const zhCN = {
   steerPendingLabel: "等待进入模型的消息",
   steerPendingCount: "等待进入模型：{{count}} 条",
   steerRecallAll: "全部撤回到输入框",
+  steerRecallOne: "撤回到输入框",
   steerRecalling: "正在撤回…",
   steerHeldNotice:
     "这些消息尚未进入模型；你明确发起、重试或替换下一轮时会一并提交，可先全部撤回。",
@@ -987,6 +991,7 @@ export const zhCN = {
   steerPendingDetails: "查看等待中的消息",
   steerStructuredInput: "引用或附件",
   steerImageCount: "图片：{{count}} 张",
+  steerPendingImageUnavailable: "这张图片已不属于当前等待中的输入。",
   steerRecallConflict:
     "等待中的消息已变化或已被模型领取。本次没有部分撤回，请检查当前消息。",
   steerRecallUnsupported:

@@ -32,8 +32,8 @@ import { i18n } from "../src/renderer/src/i18n.js";
 const flush = async () => {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 };
-function staged(): Thread {
-  const thread = queueScenario(0);
+function staged(scene = 0): Thread {
+  const thread = queueScenario(scene);
   return {
     ...thread,
     canonicalItems: thread.canonicalItems!.map((item): CanonicalItem =>
@@ -534,6 +534,11 @@ test("successful read-only Check clears the previous unknown warning before cano
     assert.ok(
       document.body.textContent!.includes(i18n.t("shell:steerRecallUnknown")),
     );
+    const diagnostic = document.querySelector(
+      ".pending-steer-panel .context-compaction-error-detail pre",
+    );
+    assert.ok(diagnostic?.textContent?.includes("Actual recall reply lost"));
+    assert.ok(diagnostic?.textContent?.includes("Automatic read reply lost"));
     const check = [
       ...document.querySelectorAll<HTMLButtonElement>(
         ".pending-steer-panel button",
@@ -551,10 +556,193 @@ test("successful read-only Check clears the previous unknown warning before cano
     );
     assert.equal(document.querySelector(recallButton), null);
     assert.equal(document.querySelector("[data-queue-id]"), null);
+    assert.equal(
+      document.querySelector(
+        ".pending-steer-panel .context-compaction-error-detail",
+      ),
+      null,
+    );
     assert.deepEqual(calls, [
       "zen/thread/steer/recall",
       "zen/thread/read",
       "zen/thread/read",
     ]);
+  });
+});
+
+test("pending preview expands the complete original text and preserves reference capsules", async () => {
+  const { referenceMessage } =
+    await import("../src/renderer/src/reference-draft.js");
+  await withRuntimeDom(async (h) => {
+    const source = staged();
+    const text =
+      "Long original message\n".repeat(24) +
+      "Complete tail after the old cutoff ";
+    const thread = {
+      ...source,
+      canonicalItems: source.canonicalItems!.map((item): CanonicalItem =>
+        item.type === "user_message_queued"
+          ? {
+              ...item,
+              input: [
+                {
+                  type: "text",
+                  text: referenceMessage(
+                    text + "\uFFFC",
+                    [
+                      {
+                        kind: "message",
+                        id: "synthetic-source-item",
+                        threadId: source.id,
+                        name: "Selected source text",
+                        cwd: "/synthetic",
+                        excerpt: "Exact quoted excerpt\nwith its next line",
+                        position: text.length,
+                      },
+                    ],
+                    item.clientId,
+                  ),
+                },
+              ],
+            }
+          : item,
+      ),
+    };
+    let writes = 0;
+    protocol(async () => {
+      writes++;
+      throw new Error("Preview must not call the Host");
+    });
+    await h.render(thread, { onRestoreRecalled: () => true });
+    const preview = document.querySelector<HTMLDetailsElement>(
+      ".pending-steer-message",
+    )!;
+    assert.ok(preview);
+    assert.equal(preview.open, false);
+    assert.equal(preview.querySelector("summary")!.textContent!.length, 241);
+    await act(async () => {
+      preview.open = true;
+    });
+    assert.ok(
+      preview
+        .querySelector(".pending-steer-text")!
+        .textContent!.includes("Complete tail after the old cutoff"),
+    );
+    assert.ok(preview.querySelector('[data-reference-kind="message"]'));
+    assert.ok(
+      preview.textContent!.includes("Exact quoted excerpt\nwith its next line"),
+    );
+    assert.equal(
+      preview
+        .querySelector('[data-reference-kind="message"]')!
+        .textContent!.includes("synthetic-source-item"),
+      false,
+    );
+    assert.equal(writes, 0);
+  });
+});
+
+test("known recall refusal keeps expandable original local diagnostics as text", async () => {
+  await withRuntimeDom(async (h) => {
+    const detail =
+      'Original native refusal\n<img src=x onerror="throw Error()">\nrevision 2 != 3';
+    protocol(async () => ({
+      type: "zenx.queue-edit-rejection.v1",
+      data: { zenCode: "steer_recall_conflict" },
+      message: "Changed revision",
+      detail,
+    }));
+    await h.render(staged(), { onRestoreRecalled: () => true });
+    await h.click(recallButton);
+    await flush();
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".pending-steer-panel .context-compaction-error-detail",
+    )!;
+    assert.ok(details);
+    assert.equal(details.open, false);
+    assert.equal(details.querySelector("pre")!.textContent, detail);
+    assert.equal(details.querySelector("img"), null);
+    assert.equal(details.querySelector("pre")!.tabIndex, 0);
+  });
+});
+
+test("pending images use canonical attachment refs and their preview closes after recall", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { queueImageAttachments } =
+    await import("./fixtures/agent-queue-images.js");
+  await withRuntimeDom(async (h) => {
+    const thread = staged(2);
+    let reads = 0;
+    const props = {
+      onRestoreRecalled: () => true,
+      onReadAttachment: async (
+        attachment: import("../../../src/attachment.js").AttachmentRef,
+      ) => {
+        const index = queueImageAttachments.findIndex(
+          (ref) => ref.sha256 === attachment.sha256,
+        );
+        assert.ok(
+          index >= 0,
+          "only exact synthetic canonical attachments may be read",
+        );
+        reads++;
+        return new Uint8Array(
+          await readFile(
+            new URL(
+              `./fixtures/assets/queue-images/queue-image-${index + 1}.png`,
+              import.meta.url,
+            ),
+          ),
+        );
+      },
+    };
+    await h.render(thread, props);
+    assert.equal(
+      reads,
+      0,
+      "collapsed pending content does not read image payloads",
+    );
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".pending-steer-panel > details",
+    )!;
+    await act(async () => {
+      details.open = true;
+      details.dispatchEvent(new window.Event("toggle"));
+    });
+    await flush();
+    assert.equal(
+      document.querySelectorAll(".pending-steer-images .image-thumbnail")
+        .length,
+      3,
+    );
+    assert.equal(
+      document.querySelectorAll('.pending-steer-images img[src^="blob:"]')
+        .length,
+      3,
+    );
+    const image = await h.click(".pending-steer-images .image-thumbnail");
+    assert.ok(document.querySelector(".image-preview-layer"));
+    await act(async () =>
+      document.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    assert.equal(document.querySelector(".image-preview-layer"), null);
+    assert.equal(document.activeElement, image);
+    await h.click(".pending-steer-images .image-thumbnail");
+    const before = reads;
+    const request = {
+      threadId: thread.id,
+      recallId: "canonical-image-recall",
+      targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
+        queuedItemId: item.id,
+        clientId: item.clientId,
+        expectedRevision: item.revision,
+      })),
+    };
+    await h.render(applyQueueItem(thread, receipt(request)), props);
+    assert.equal(document.querySelector(".image-preview-layer"), null);
+    assert.equal(document.querySelector(".pending-steer-images"), null);
+    assert.equal(reads, before);
   });
 });

@@ -99,6 +99,7 @@ export interface RecallSession {
   phase: "pending" | "unknown" | "failed" | "ready";
   result?: RecoveredSteerRecall;
   error?: string;
+  errorDetail?: string;
 }
 export function createSteerRecallStore() {
   let snapshot: {

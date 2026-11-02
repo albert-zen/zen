@@ -526,3 +526,20 @@
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
+
+.pending-steer-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pending-steer-message > .pending-steer-text {
+  display: block;
+  margin-top: 4px;
+}
+
+.pending-steer-images {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0;
+}

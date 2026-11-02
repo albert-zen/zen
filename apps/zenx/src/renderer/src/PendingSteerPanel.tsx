@@ -28,6 +28,13 @@ import {
 } from "./steer-recall-state.js";
 import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
+import { inlineReferenceParts, referenceTitle } from "./reference-draft.js";
+import { ReferenceToken } from "./ReferenceToken.js";
+import { localErrorDetail } from "../../local-error-detail.js";
+import type { AttachmentRef } from "../../../../../src/attachment.js";
+import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
+import { sameImageAttachment } from "./queued-message-images.js";
+import { useCommittedCallback } from "./use-committed-callback.js";
 
 export interface PendingSteerPanelProps {
   threadId: string;
@@ -36,6 +43,7 @@ export interface PendingSteerPanelProps {
   runningTurnId: string | null;
   store?: SteerRecallStore;
   onRestore?(result: RecoveredSteerRecall): boolean;
+  onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
 }
 
 /** Native pending control facts only; receipt never means model consumption. */
@@ -57,6 +65,14 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   });
   const [confirm, setConfirm] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [preview, setPreview] = useState<{
+    queuedItemId: string;
+    clientId: string;
+    attachment: AttachmentRef;
+    name: string;
+    trigger: HTMLButtonElement;
+  } | null>(null);
   useLayoutEffect(() => {
     mounted.current = true;
     return () => {
@@ -86,6 +102,36 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     session?.result?.receipt.targets.map((target) => target.queuedItemId) ?? [],
   );
   const pending = props.pending.filter((item) => !recalledIds.has(item.id));
+  const isCurrentImage = (
+    attachment: AttachmentRef,
+    queuedItemId?: string,
+    clientId?: string,
+  ) =>
+    pending.some(
+      (item) =>
+        item.threadId === props.threadId &&
+        (queuedItemId === undefined ||
+          (item.id === queuedItemId && item.clientId === clientId)) &&
+        item.input.some(
+          (part) =>
+            part.type === "image" &&
+            sameImageAttachment(part.attachment, attachment),
+        ),
+    );
+  const readPendingImage = useCommittedCallback(
+    async (attachment: AttachmentRef) => {
+      if (!props.onReadAttachment || !isCurrentImage(attachment))
+        throw new Error(t("steerPendingImageUnavailable"));
+      return await props.onReadAttachment(attachment);
+    },
+  );
+  const previewCurrent =
+    preview !== null &&
+    detailsOpen &&
+    isCurrentImage(preview.attachment, preview.queuedItemId, preview.clientId);
+  useLayoutEffect(() => {
+    if (!previewCurrent && preview !== null) setPreview(null);
+  }, [previewCurrent, preview]);
   const busy = session?.phase === "pending" || session?.phase === "unknown";
   const held = pending.some(
     (item) => item.expectedTurnId !== props.runningTurnId,
@@ -156,7 +202,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
               : "steerRecallUnknown",
           ),
         });
-    } catch {
+    } catch (error) {
       if (
         store.getSnapshot().sessions[attempt.request.threadId]?.request
           .recallId !== attempt.request.recallId ||
@@ -167,6 +213,10 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
         ...attempt,
         phase: "unknown",
         error: t("steerRecallUnknown"),
+        errorDetail: localErrorDetail({
+          writeOrPreviousRead: attempt.errorDetail,
+          read: error,
+        }),
       });
     }
   };
@@ -230,13 +280,15 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
         store.set(props.threadId, {
           ...attempt,
           phase: "failed",
+          errorDetail: localErrorDetail(error),
           error: t(
             code === "steer_recall_unsupported_input"
               ? "steerRecallUnsupported"
               : "steerRecallConflict",
           ),
         });
-      } else await readOutcome(attempt);
+      } else
+        await readOutcome({ ...attempt, errorDetail: localErrorDetail(error) });
     }
   };
 
@@ -272,14 +324,17 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
             >
               {session?.phase === "pending"
                 ? t("steerRecalling")
-                : t("steerRecallAll")}
+                : t(pending.length === 1 ? "steerRecallOne" : "steerRecallAll")}
             </button>
           </div>
           <p>{t(held ? "steerHeldNotice" : "steerWaitingNotice")}</p>
           {!supported ? (
             <p role="status">{t("steerRecallUnsupported")}</p>
           ) : null}
-          <details>
+          <details
+            open={detailsOpen}
+            onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+          >
             <summary>{t("steerPendingDetails")}</summary>
             <ol>
               {pending.map((item) => {
@@ -288,14 +343,76 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                   item.id,
                   item.clientId,
                 );
+                const parsed =
+                  draft === null ? null : parseSkillDraft(draft.text);
                 const text =
-                  draft === null ? "" : parseSkillDraft(draft.text).text;
+                  parsed === null
+                    ? ""
+                    : referenceTitle(parsed.text, parsed.references);
+                const body =
+                  parsed === null ? (
+                    t("steerStructuredInput")
+                  ) : (
+                    <span className="pending-steer-text">
+                      {inlineReferenceParts(parsed.text, parsed.references).map(
+                        (part, index) =>
+                          "text" in part ? (
+                            part.text
+                          ) : (
+                            <ReferenceToken
+                              key={index}
+                              reference={part.reference}
+                            />
+                          ),
+                      )}
+                    </span>
+                  );
                 return (
                   <li key={item.id}>
-                    {text.slice(0, 240) || t("steerStructuredInput")}
+                    {text.length > 240 ? (
+                      <details className="pending-steer-message">
+                        <summary>{text.slice(0, 240)}…</summary>
+                        {body}
+                      </details>
+                    ) : (
+                      body
+                    )}
                     {draft?.images.length
                       ? ` · ${t("steerImageCount", { count: draft.images.length })}`
                       : ""}
+                    {detailsOpen &&
+                    draft?.images.length &&
+                    props.onReadAttachment ? (
+                      <div className="pending-steer-images">
+                        {draft.images.map((image) => (
+                          <AttachmentImage
+                            key={image.id}
+                            attachment={image.attachment}
+                            name={image.name}
+                            onReadAttachment={readPendingImage}
+                            onOpen={(attachment, name, trigger) => {
+                              if (
+                                isCurrentImage(
+                                  attachment,
+                                  item.id,
+                                  item.clientId,
+                                )
+                              )
+                                setPreview({
+                                  queuedItemId: item.id,
+                                  clientId: item.clientId,
+                                  attachment,
+                                  name,
+                                  trigger,
+                                });
+                            }}
+                            lazy
+                            retryOnError
+                            compact
+                          />
+                        ))}
+                      </div>
+                    ) : null}
                   </li>
                 );
               })}
@@ -303,7 +420,17 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
           </details>
         </>
       ) : null}
-      {session?.error ? <p role="status">{session.error}</p> : null}
+      {session?.error ? (
+        <div role="status">
+          <p>{session.error}</p>
+          {session.errorDetail ? (
+            <details className="context-compaction-error-detail">
+              <summary>{t("technicalDetails")}</summary>
+              <pre tabIndex={0}>{session.errorDetail}</pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
       {restoreError ? <p role="status">{restoreError}</p> : null}
       {session?.phase === "unknown" ? (
         <button type="button" onClick={() => void readOutcome(session)}>
@@ -356,6 +483,15 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
             </div>
           ))}
         </details>
+      ) : null}
+      {previewCurrent && preview ? (
+        <ImagePreview
+          attachment={preview.attachment}
+          name={preview.name}
+          trigger={preview.trigger}
+          onReadAttachment={readPendingImage}
+          onClose={() => setPreview(null)}
+        />
       ) : null}
     </section>
   );
