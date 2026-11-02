@@ -81,6 +81,72 @@ const base: Thread = {
     },
   ],
 };
+if (params.has("alltext")) {
+  const facts = {
+    threadId: base.id,
+    turnId: "runtime-turn",
+    createdAt: "2026-11-02T02:00:00Z",
+  };
+  const publicReasoning = "合成推理：先核对引用来源，再检查工具输出。";
+  const tool = {
+    ...runtimeCommand("synthetic-call", "printf synthetic"),
+    callId: "synthetic-call-id",
+    aggregatedOutput: "合成工具输出：保留原始换行。\n第二行完整内容。",
+  };
+  base.turns[0]!.items = [
+    {
+      type: "userMessage",
+      id: "synthetic-user",
+      clientId: null,
+      content: [
+        {
+          type: "text",
+          text: "合成用户问题：这段话可以引用吗？",
+          text_elements: [],
+        },
+      ],
+    },
+    {
+      type: "reasoning",
+      id: "synthetic-reasoning",
+      summary: [publicReasoning],
+      content: [publicReasoning],
+    },
+    tool,
+    ...base.turns[0]!.items,
+  ];
+  base.canonicalItems = [
+    {
+      ...facts,
+      type: "user_message",
+      id: "synthetic-user",
+      text: "合成用户问题：这段话可以引用吗？",
+    },
+    {
+      ...facts,
+      type: "reasoning",
+      id: "synthetic-reasoning",
+      summary: publicReasoning,
+    },
+    {
+      ...facts,
+      type: "tool_call",
+      id: tool.id,
+      callId: tool.callId,
+      name: "shell",
+      arguments: { command: "printf synthetic" },
+    },
+    {
+      ...facts,
+      type: "tool_result",
+      id: "synthetic-result",
+      callId: tool.callId,
+      output: tool.aggregatedOutput!,
+      exitCode: 0,
+    },
+    ...base.canonicalItems!,
+  ];
+}
 /** The same native event projection used after an actual send. No provider is called. */
 export function appendSyntheticSent(
   thread: Thread,
@@ -353,6 +419,14 @@ function Fixture() {
         {!narrow ? (
           <div className="window-titlebar-product">
             <span style={{ paddingLeft: 18, fontWeight: 650 }}>ZenX</span>
+            {params.has("alltext") && (
+              <input
+                id="synthetic-page-field"
+                aria-label="合成页面字段"
+                defaultValue="页面字段中的可选原文"
+                style={{ width: 140 }}
+              />
+            )}
           </div>
         ) : null}
         <div

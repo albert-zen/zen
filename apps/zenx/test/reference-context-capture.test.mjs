@@ -9,6 +9,15 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 const expected = fileURLToPath(
   new URL("../docs/reference-context/v2/", import.meta.url),
 );
+const portable = (value) =>
+  JSON.parse(
+    JSON.stringify(value)
+      .replaceAll(`/private${os.tmpdir()}`, "/tmp")
+      .replaceAll(os.tmpdir(), "/tmp")
+      .replaceAll("/private/tmp", "/tmp")
+      .replaceAll("%2Fprivate%2Ftmp", "%2Ftmp"),
+  );
+
 test("v2 references normalize before dispatch while original input and recorded receipts survive both provider shapes", async () => {
   const output = await mkdtemp(
     path.join(os.tmpdir(), "zen-reference-capture-"),
@@ -43,9 +52,9 @@ test("v2 references normalize before dispatch while original input and recorded 
           timeZone: "UTC",
           source: "client",
         });
-        assert.deepEqual(originalFacts, historical, file);
+        assert.deepEqual(portable(originalFacts), historical, file);
       } else {
-        assert.deepEqual(current, historical, file);
+        assert.deepEqual(portable(current), historical, file);
       }
     }
     const bundle = JSON.parse(
@@ -70,7 +79,7 @@ test("v2 references normalize before dispatch while original input and recorded 
       const previousUser = prior[key].find(
         (message) =>
           message.role === "user" &&
-          text(message).includes(bundle.canonicalText),
+          text(message).includes(portable(bundle.canonicalText)),
       );
       assert.ok(
         previousUser,
@@ -79,9 +88,9 @@ test("v2 references normalize before dispatch while original input and recorded 
       // Keep the old fixture intact: its adapter-added metadata wrapper is a
       // historical observation, not the new compiler's receipt spelling.
       const oldSource = previousUser.content.find(
-        (part) => part.text === bundle.canonicalText,
+        (part) => part.text === portable(bundle.canonicalText),
       );
-      assert.equal(oldSource.text, bundle.canonicalText);
+      assert.equal(oldSource.text, portable(bundle.canonicalText));
       const submitted = current[key].filter(
         (message) => message.role === "user",
       );
@@ -118,7 +127,11 @@ test("v2 references normalize before dispatch while original input and recorded 
         ["s1", "s2", "s3"],
       );
       for (const binding of bindings)
-        assert.ok(semantic.content.text.includes(`; ${binding.ref};`));
+        assert.ok(
+          semantic.content.text.includes(
+            `zenx_threads_read ref=${binding.ref}`,
+          ),
+        );
       const { [key]: _oldContext, ...priorSettings } = prior;
       const { [key]: _currentContext, ...currentSettings } = current;
       assert.deepEqual(

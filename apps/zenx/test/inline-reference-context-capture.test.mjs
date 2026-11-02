@@ -11,6 +11,16 @@ const expected = fileURLToPath(
   new URL("../docs/reference-context/v3/", import.meta.url),
 );
 
+// Historical fixtures were captured on Linux; keep their synthetic paths portable.
+const portable = (value) =>
+  JSON.parse(
+    JSON.stringify(value)
+      .replaceAll(`/private${os.tmpdir()}`, "/tmp")
+      .replaceAll(os.tmpdir(), "/tmp")
+      .replaceAll("/private/tmp", "/tmp")
+      .replaceAll("%2Fprivate%2Ftmp", "%2Ftmp"),
+  );
+
 test("five original inline references persist as compact semantic input at both real provider boundaries without network", async () => {
   const output = await mkdtemp(
     path.join(os.tmpdir(), "zen-inline-reference-v3-"),
@@ -34,7 +44,7 @@ test("five original inline references persist as compact semantic input at both 
     );
     for (const file of ["fixture-metadata.json", "verification.json"]) {
       assert.deepEqual(
-        JSON.parse(await readFile(path.join(output, file), "utf8")),
+        portable(JSON.parse(await readFile(path.join(output, file), "utf8"))),
         JSON.parse(await readFile(path.join(expected, file), "utf8")),
         file,
       );
@@ -64,9 +74,19 @@ test("five original inline references persist as compact semantic input at both 
       currentReceipt,
       "[Message received at 2026-10-21T03:00:00.000+00:00; Client-reported timezone: UTC (UTC+00:00)]",
     );
-    assert.deepEqual(currentBody, historicalBody);
     assert.equal(
-      await readFile(path.join(output, "fixture-metadata.json"), "utf8"),
+      portable(currentBody.join("\n")),
+      historicalBody
+        .join("\n")
+        .replace(
+          /; (s[0-9]+); source time unavailable; read-only/g,
+          "; zenx_threads_read ref=$1",
+        ),
+    );
+    assert.equal(
+      portable(
+        await readFile(path.join(output, "fixture-metadata.json"), "utf8"),
+      ),
       await readFile(path.join(expected, "fixture-metadata.json"), "utf8"),
       "the original generated v3 fixture remains byte-identical",
     );
@@ -75,10 +95,22 @@ test("five original inline references persist as compact semantic input at both 
       actualUserMessage,
       /zenx-reference-message:v3|synthetic-v3-host-[0-9]|synthetic-v3-runtime-[0-9]|synthetic-inline-reference-v3-submission/,
     );
-    assert.match(actualUserMessage, /Selected message "验收结论 A"; s1;/);
-    assert.match(actualUserMessage, /Selected message "验收结论 B"; s2;/);
-    assert.match(actualUserMessage, /Selected thread "项目状态讨论"; s3;/);
-    assert.match(actualUserMessage, /Selected thread "执行子任务审查"; s4;/);
+    assert.match(
+      actualUserMessage,
+      /Selected message "验收结论 A"; zenx_threads_read ref=s1/,
+    );
+    assert.match(
+      actualUserMessage,
+      /Selected message "验收结论 B"; zenx_threads_read ref=s2/,
+    );
+    assert.match(
+      actualUserMessage,
+      /Selected thread "项目状态讨论"; zenx_threads_read ref=s3/,
+    );
+    assert.match(
+      actualUserMessage,
+      /Selected thread "执行子任务审查"; zenx_threads_read ref=s4/,
+    );
     assert.doesNotMatch(actualUserMessage, /; s5;/);
     for (const reference of fixture.references.filter(
       (value) => value.kind === "message",

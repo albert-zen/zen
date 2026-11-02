@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "pid": 26306,
+  "executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "startupTimeoutMs": 30000,
+  "phase": "capture",
+  "events": [
+    {
+      "phase": "spawn",
+      "elapsedMs": 0
+    },
+    {
+      "phase": "devtools-port",
+      "elapsedMs": 0
+    },
+    {
+      "phase": "target-list",
+      "elapsedMs": 3555
+    },
+    {
+      "phase": "websocket-connect",
+      "elapsedMs": 3925
+    },
+    {
+      "phase": "page-setup",
+      "elapsedMs": 3960
+    },
+    {
+      "phase": "capture",
+      "elapsedMs": 4008
+    }
+  ],
+  "pollCount": 36,
+  "captureStatus": "passed",
+  "lastObservation": "ENOENT: no such file or directory, open '/var/folders/kn/qprvl_8n6vn88tcp8tv_h2ph0000gn/T/zenx-preview-chrome-Ghcwee/DevToolsActivePort'",
+  "port": 63547,
+  "readyElapsedMs": 3960,
+  "lastCommand": {
+    "method": "Page.captureScreenshot",
+    "elapsedMs": 7491
+  },
+  "cleanupComplete": true,
+  "profileRetained": false,
+  "stderrTailLimit": 65536,
+  "exitCode": 0,
+  "signalCode": null,
+  "elapsedMs": 7601,
+  "artifactErrors": []
+}
