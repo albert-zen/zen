@@ -1138,13 +1138,23 @@ function ThreadViewContent({
     if (zone !== null) zone.scrollTop = zone.scrollHeight;
   }, [composer.compaction, thread?.id]);
 
-  const submit = (intent: ComposerIntent) => {
+  const submit = (intent: ComposerIntent, trigger?: HTMLButtonElement) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
       return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
     const observation = observeSendActivation();
     reportSendActivation(observation, thread?.id);
+    // Return only the activated Send's focus before clearing the draft disables it.
+    // Editor input, other owners and later receipts must not acquire focus here.
+    const editor = composerTextareaRef.current;
+    if (
+      trigger?.isConnected &&
+      trigger === document.activeElement &&
+      viewRef.current?.contains(trigger) &&
+      editor?.isConnected
+    )
+      editor.focus({ preventScroll: true });
     void onSubmit(intent, runningTurn?.id ?? null, observation);
   };
 
@@ -1196,9 +1206,9 @@ function ThreadViewContent({
     : primaryMode === "stop"
       ? i18n.t(interrupting ? "shell:stopping" : "shell:stop")
       : intentLabel(sendIntent);
-  const primary = () => {
+  const primary = (trigger?: HTMLButtonElement) => {
     if (primaryMode === "stop") void interrupt();
-    else submit(sendIntent);
+    else submit(sendIntent, trigger);
   };
   const saveQueuedEdit = async (key: string, draft: ComposerDraft) => {
     const session = editSessionsRef.current[key];

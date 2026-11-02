@@ -9384,3 +9384,271 @@ test("real App canonical end and active-Turn derivations invalidate on append, b
     await unmountApp(harness);
   }
 });
+
+for (const activation of ["pointer", "keyboard-button"] as const) {
+  test(`real App ${activation} submit returns focused Send to its Composer before disabling`, async (t) => {
+    const admission = deferred<unknown>();
+    let sends = 0;
+    let observation:
+      | import("../../../src/client-observation.js").ClientSendObservation
+      | undefined;
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory());
+        if (method === "zen/turn/send") {
+          sends++;
+          observation = (params as { clientObservation?: typeof observation })
+            .clientObservation;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    const originalSetAttribute = Element.prototype.setAttribute;
+    let restoreFocus = () => {};
+    let removeFocusListeners = () => {};
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Synthetic focused Send");
+      const send = document.querySelector<HTMLButtonElement>(
+        ".composer-send-control > button.action-orb.send",
+      )!;
+      assert.ok(send);
+      // JSDOM does not synthesize native pointer/keyboard focus or button activation.
+      // Establish that focus precondition explicitly, then exercise App's real click route.
+      await act(async () => send.focus());
+      const calls: FocusOptions[] = [];
+      const order: string[] = [];
+      const focusEvents: string[] = [];
+      let observingFocus = true;
+      const recordFocus = (event: Event) => {
+        if (!observingFocus) return;
+        if (event.target === send) focusEvents.push(`send-${event.type}`);
+        if (event.target === composer)
+          focusEvents.push(`composer-${event.type}`);
+      };
+      for (const type of ["blur", "focusout", "focus", "focusin"])
+        document.addEventListener(type, recordFocus, true);
+      removeFocusListeners = () => {
+        for (const type of ["blur", "focusout", "focus", "focusin"])
+          document.removeEventListener(type, recordFocus, true);
+      };
+      let focusAt = 0;
+      const originalFocus = composer.focus;
+      composer.focus = function (options?: FocusOptions) {
+        calls.push(options ?? {});
+        focusAt = performance.now();
+        order.push("composer-focus");
+        originalFocus.call(this, options);
+      };
+      restoreFocus = () => {
+        composer.focus = originalFocus;
+      };
+      Element.prototype.setAttribute = function (name: string, value: string) {
+        if (this === send && name === "disabled") {
+          order.push(
+            document.activeElement === composer
+              ? "disable-after-focus"
+              : "disable-without-focus",
+          );
+        }
+        return originalSetAttribute.call(this, name, value);
+      };
+      await act(async () =>
+        send.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            detail: activation === "pointer" ? 1 : 0,
+          }),
+        ),
+      );
+      await waitFor(() => sends === 1);
+      observingFocus = false;
+      assert.equal(composer.value, "");
+      assert.ok(document.querySelector('[data-send-state="sending"]'));
+      assert.deepEqual(calls, [{ preventScroll: true }]);
+      assert.deepEqual(order, ["composer-focus", "disable-after-focus"]);
+      assert.deepEqual(focusEvents, [
+        "send-blur",
+        "send-focusout",
+        "composer-focus",
+        "composer-focusin",
+      ]);
+      assert.equal(document.activeElement === composer, true);
+      assert.equal(send.disabled, true);
+      assert.ok(observation);
+      assert.ok(
+        BigInt(observation.clock.monotonicNs) <=
+          BigInt(Math.floor(focusAt * 1e6)),
+        "activation clock includes the focus operation",
+      );
+      await act(async () => send.click());
+      assert.equal(
+        sends,
+        1,
+        "native disabled still prevents duplicate submission",
+      );
+      await setTextareaValue(composer, "New draft after immediate send");
+      const elsewhere =
+        document.querySelector<HTMLButtonElement>(".thread-row")!;
+      await act(async () => elsewhere.focus());
+      await act(async () => admission.resolve({ turnId: "focus-turn" }));
+      assert.equal(
+        document.activeElement === elsewhere,
+        true,
+        "old ACK must not reclaim focus",
+      );
+      assert.equal(composer.value, "New draft after immediate send");
+      assert.equal(calls.length, 1);
+      t.diagnostic(
+        JSON.stringify({
+          activation,
+          order,
+          focusEvents,
+          focusCalls: calls.length,
+          sends,
+        }),
+      );
+    } finally {
+      Element.prototype.setAttribute = originalSetAttribute;
+      removeFocusListeners();
+      restoreFocus();
+      admission.resolve({});
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("real App editor, invalid and external-owner submits do not acquire Composer focus", async () => {
+  let sends = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(derivedScanHistory());
+      if (method === "zen/turn/send") {
+        sends++;
+        return {};
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let restoreFocus = () => {};
+  try {
+    const composer = await selectedComposer();
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    let focuses = 0;
+    const originalFocus = composer.focus;
+    composer.focus = function (options?: FocusOptions) {
+      focuses++;
+      originalFocus.call(this, options);
+    };
+    restoreFocus = () => {
+      composer.focus = originalFocus;
+    };
+    const elsewhere = document.querySelector<HTMLButtonElement>(".thread-row")!;
+    await act(async () => elsewhere.focus());
+    await invokeButtonClick(send); // Even bypassing the DOM disabled check must hit submit's guard.
+    assert.equal(sends, 0);
+    assert.equal(document.activeElement === elsewhere, true);
+    assert.equal(focuses, 0);
+    await setTextareaValue(composer, "IME draft");
+    await act(async () => composer.focus());
+    focuses = 0;
+    await dispatchComposerKey(composer, { key: "Enter", isComposing: true });
+    await dispatchComposerKey(composer, { key: "Enter", repeat: true });
+    assert.equal(sends, 0);
+    assert.equal(focuses, 0);
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => sends === 1);
+    assert.equal(document.activeElement === composer, true);
+    assert.equal(focuses, 0, "textarea Enter does not refocus the editor");
+    await setTextareaValue(composer, "External focus remains owned");
+    await act(async () => elsewhere.focus());
+    await invokeButtonClick(send);
+    await waitFor(() => sends === 2);
+    assert.equal(
+      document.activeElement === elsewhere,
+      true,
+      "a Send without focus does not steal another owner's focus",
+    );
+    assert.equal(focuses, 0);
+  } finally {
+    restoreFocus();
+    await unmountApp(harness);
+  }
+});
+
+test("real App delayed send ACK after Thread navigation never focuses the new owner", async () => {
+  const admission = deferred<unknown>();
+  let sends = 0;
+  const resumes: string[] = [];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const id = (params as { threadId: string }).threadId;
+          resumes.push(id);
+          return resumed({
+            ...liveThread(),
+            id,
+            name: id === "thread-2" ? "Thread two" : "Thread one",
+          });
+        }
+        if (method === "zen/turn/send") {
+          sends++;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    },
+  );
+  try {
+    const first = await selectedComposer();
+    await setTextareaValue(first, "Thread one send");
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    await act(async () => send.focus());
+    await act(async () => send.click());
+    await waitFor(() => sends === 1);
+    assert.equal(document.activeElement === first, true);
+    const secondRow = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread two"))!;
+    await act(async () => secondRow.click());
+    await waitFor(() => resumes.includes("thread-2"));
+    const second =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    await setTextareaValue(second, "Thread two draft");
+    await act(async () => second.focus());
+    const before = [...resumes];
+    await act(async () => admission.resolve({ turnId: "old-turn" }));
+    assert.equal(document.activeElement === second, true);
+    assert.equal(second.value, "Thread two draft");
+    assert.deepEqual(resumes, before);
+    assert.equal(sends, 1);
+  } finally {
+    admission.resolve({});
+    await unmountApp(harness);
+  }
+});
