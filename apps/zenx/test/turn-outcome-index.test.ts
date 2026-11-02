@@ -87,7 +87,10 @@ test("outcome lookup exactly preserves some/findLast semantics and item identity
       );
     }
   }
-  assert.equal(indexTurnOutcomeItems(items).latestFailureByTurn.get("one"), last);
+  assert.equal(
+    indexTurnOutcomeItems(items).latestFailureByTurn.get("one"),
+    last,
+  );
   assert.equal(indexTurnOutcomeItems(undefined).abortedTurnIds.size, 0);
   assert.equal(indexTurnOutcomeItems(undefined).latestFailureByTurn.size, 0);
 });
