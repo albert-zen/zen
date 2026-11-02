@@ -258,6 +258,20 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.querySelector(".information-dock"),
       "maximized main-conversation tab uses the whole available width",
     );
+    panel.dataset.primaryActive = "false";
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      trigger.getAttribute("aria-pressed"),
+      "false",
+      "switching from main conversation to a resource closes its dock",
+    );
+    panel.dataset.primaryActive = "true";
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    await click(".information-toolbar button");
     workspaceWidth = 700;
     await act(async () => {
       for (const callback of callbacks) callback([]);

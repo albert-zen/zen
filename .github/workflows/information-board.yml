@@ -1,0 +1,43 @@
+name: Information board full App acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/information-board.yml
+      - apps/zenx/scripts/*information-board*
+      - apps/zenx/src/renderer/src/plugin-information-host.tsx
+      - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
+      - apps/zenx/src/renderer/src/BackgroundShellStatus.tsx
+      - apps/zenx/src/renderer/src/styles.css
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: information-board-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-information:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build --workspace @zen/zenx
+      - name: Native information board flow in disposable full production App
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-information-board-acceptance.mjs "${{ runner.temp }}/information-board"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: information-board-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/information-board
+          if-no-files-found: error
+          retention-days: 14

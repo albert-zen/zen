@@ -12,6 +12,7 @@ import {
   applyCompactionStatus,
   markCompactionOutcomeUnknown,
 } from "./compaction-feedback.js";
+import { ConversationInformationCards } from "./ConversationInformationCards.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -4448,6 +4449,18 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                contextContent={
+                  !selectedRoomId && selectedThreadId ? (
+                    <ConversationInformationCards
+                      threadId={selectedThreadId}
+                      threads={[...activeSummaries, ...archivedSummaries]}
+                      snapshot={pluginSnapshot}
+                      registry={pluginUiRegistry}
+                      theme={appearance}
+                      navigate={openPage}
+                    />
+                  ) : undefined
+                }
                 owner={
                   selectedRoomId
                     ? { kind: "room", roomId: selectedRoomId }

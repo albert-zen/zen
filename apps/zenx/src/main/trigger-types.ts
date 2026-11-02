@@ -79,12 +79,13 @@ export interface ZenXTrigger {
   program?: TriggerProgramConfig;
 }
 
-/** Disposable scheduling facts; no definition, history, or Room content. */
+/** Disposable display/scheduling facts; no prompt, program, history, or Room content. */
 export interface TriggerSidebarSnapshot {
   triggers: Array<{
     id: string;
     threadId: string;
     kind: TriggerKind;
+    label: string;
     active: boolean;
     timer?: { nextRunAt: number };
     sourceError?: "Source observation unavailable";

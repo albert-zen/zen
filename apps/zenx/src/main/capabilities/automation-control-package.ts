@@ -308,12 +308,12 @@ const manifest: ZenXPluginManifestV2 = {
     {
       ...tool(
         "zenx_triggers_sidebar_facts",
-        "Read only Trigger identity, Thread binding, status, and next scheduled time.",
+        "Read only Trigger identity, bounded display label, Thread binding, status, and next scheduled time.",
         {},
         [],
         false,
       ),
-      // The registry bounds 256 definitions and each identity to 512 UTF-8 bytes.
+      // The registry bounds 256 definitions, identities to 512 bytes and labels to 256 bytes.
       maxOutputBytes: 524288,
     },
     tool(

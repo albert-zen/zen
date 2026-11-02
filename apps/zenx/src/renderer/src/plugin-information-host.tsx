@@ -25,6 +25,7 @@ export function PluginInformationHost({
   executeCommand,
   readHandle,
   resourcePanelWidth = 0,
+  contextContent,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -38,6 +39,7 @@ export function PluginInformationHost({
   ): Promise<unknown>;
   readHandle(pluginId: string, handleId: string): Promise<unknown>;
   resourcePanelWidth?: number;
+  contextContent?: React.ReactNode;
 }) {
   const { t } = useTranslation("panels");
   const contributions = snapshot.information ?? [];
@@ -48,6 +50,7 @@ export function PluginInformationHost({
   const toolbar = useRef<HTMLDivElement>(null);
   const contentId = useId();
   const previousResourceOpen = useRef(false);
+  const previousPrimaryActive = useRef(false);
   const [layout, setLayout] = useState({
     headerBottom: 0,
     top: 12,
@@ -88,7 +91,15 @@ export function PluginInformationHost({
           ),
       };
       if (resourceOpen && !previousResourceOpen.current) setOpen(false);
+      if (
+        previousPrimaryActive.current &&
+        !primaryActive &&
+        resourceOpen &&
+        panel?.dataset.expanded === "true"
+      )
+        setOpen(false);
       previousResourceOpen.current = resourceOpen;
+      previousPrimaryActive.current = primaryActive;
       setLayout((current) =>
         Object.keys(next).every(
           (key) =>
@@ -145,24 +156,32 @@ export function PluginInformationHost({
   }, [ownerKey, contributions.length === 0]);
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
-  if (!active) return null;
+  if (!active && !contextContent) return null;
   const admissionId = snapshot.plugins.find(
-    (plugin) => plugin.id === active.pluginId,
+    (plugin) => plugin.id === active?.pluginId,
   )?.admissionId;
   const surface = (
-    <GenericPluginUiHost
-      key={`${active.key}:${ownerKey}`}
-      registry={registry}
-      snapshot={snapshot}
-      pluginId={active.pluginId}
-      surfaceId={active.surfaceId}
-      context={{ owner, admissionId }}
-      theme={theme}
-      navigate={navigate}
-      executeCommand={executeCommand}
-      readHandle={readHandle}
-      className="information-content"
-    />
+    <div className="information-content">
+      {contextContent}
+      {active ? (
+        <GenericPluginUiHost
+          key={`${active.key}:${ownerKey}`}
+          registry={registry}
+          snapshot={snapshot}
+          pluginId={active.pluginId}
+          surfaceId={active.surfaceId}
+          context={{
+            owner,
+            admissionId,
+            hasConversationInformation: !!contextContent,
+          }}
+          theme={theme}
+          navigate={navigate}
+          executeCommand={executeCommand}
+          readHandle={readHandle}
+        />
+      ) : null}
+    </div>
   );
   const tabs =
     contributions.length > 1 ? (
@@ -171,7 +190,7 @@ export function PluginInformationHost({
           <button
             key={item.key}
             type="button"
-            aria-pressed={item.key === active.key}
+            aria-pressed={item.key === active?.key}
             onClick={() => {
               setSelected(item.key);
             }}
@@ -219,7 +238,7 @@ export function PluginInformationHost({
                   (trigger.current?.getBoundingClientRect().bottom ?? 0) +
                   8,
               )}
-              aria-label={active.title}
+              aria-label={active?.title ?? t("boardTitle")}
             >
               {tabs}
               {surface}
@@ -231,7 +250,7 @@ export function PluginInformationHost({
         <aside
           id={contentId}
           className="information-dock"
-          aria-label={active.title}
+          aria-label={active?.title ?? t("boardTitle")}
           style={{
             top: layout.top,
             right: layout.right,
