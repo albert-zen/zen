@@ -8992,3 +8992,268 @@ test("native streaming deltas update the real App without reloading or cloning i
     globalThis.structuredClone = clone;
   }
 });
+
+function derivedScanHistory(running = false): Thread {
+  return {
+    ...liveThread(),
+    ...(running ? { status: runningThread().status } : {}),
+    turns: [
+      ...Array.from({ length: 40 }, (_, index): Thread["turns"][number] => ({
+        id: `derived-history-${index}`,
+        itemsView: "full" as const,
+        status: "completed" as const,
+        error: null,
+        startedAt: index + 10,
+        completedAt: index + 11,
+        durationMs: 1000,
+        items: [
+          {
+            id: `derived-user-${index}`,
+            type: "userMessage" as const,
+            clientId: `derived-client-${index}`,
+            content: [
+              {
+                type: "text" as const,
+                text: "Synthetic history",
+                text_elements: [],
+              },
+            ],
+          },
+          {
+            id: `derived-agent-${index}`,
+            type: "agentMessage" as const,
+            text: "Synthetic answer",
+            phase: "final_answer" as const,
+            memoryCitation: null,
+          },
+        ],
+      })),
+      ...(running ? runningThread().turns : []),
+    ],
+  };
+}
+
+for (const running of [false, true]) {
+  test(`real App ${running ? "active" : "idle"} input and ACK reuse canonical end and active-Turn derivations`, async (t) => {
+    const admission = deferred<unknown>();
+    let sends = 0;
+    const harness = await mountThreadApp({
+      composerSendMode: "soft",
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory(running));
+        if (method === "zen/turn/send") {
+          sends++;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    const methods = ["findLastIndex", "filter", "reverse", "findLast"] as const;
+    const originals = methods.map(
+      (method) =>
+        [
+          method,
+          Object.getOwnPropertyDescriptor(Array.prototype, method)!,
+        ] as const,
+    );
+    const emptyCounts = () => ({
+      canonicalFindLastIndex: 0,
+      canonicalFilter: 0,
+      turnSearch: 0,
+    });
+    let counts = emptyCounts();
+    let observing = false;
+    // Count the actual arrays created by App's native recovery/projection, not
+    // a hand-rendered ThreadView with artificially stable props. Scope the
+    // wrappers to this synthetic fixture and always restore the descriptors.
+    for (const [method, descriptor] of originals) {
+      Object.defineProperty(Array.prototype, method, {
+        ...descriptor,
+        value: function (this: unknown[], ...args: unknown[]) {
+          if (observing) {
+            const first = this[0] as { id?: string } | undefined;
+            if (first?.id === "thread-1-metadata") {
+              if (method === "findLastIndex") counts.canonicalFindLastIndex++;
+              if (method === "filter") counts.canonicalFilter++;
+            }
+            if (
+              first?.id === "derived-history-0" &&
+              (method === "reverse" || method === "findLast")
+            )
+              counts.turnSearch++;
+          }
+          return Reflect.apply(descriptor.value, this, args);
+        },
+      });
+    }
+    const samples: { phase: string; counts: ReturnType<typeof emptyCounts> }[] =
+      [];
+    const record = (phase: string) => {
+      samples.push({ phase, counts });
+      t.diagnostic(JSON.stringify({ running, phase, counts }));
+      counts = emptyCounts();
+    };
+    try {
+      const composer = await selectedComposer();
+      observing = true;
+      await setTextareaValue(composer, "Synthetic immediate input");
+      record("typing");
+      await dispatchComposerKey(composer, { key: "Enter" });
+      await waitFor(() => sends === 1);
+      assert.equal(composer.value, "");
+      assert.ok(document.querySelector('[data-send-state="sending"]'));
+      record("local-pending-before-ack");
+      await act(async () => admission.resolve({ turnId: "turn-1" }));
+      record("ack-only");
+      await setTextareaValue(composer, "Newer draft after ACK");
+      record("newer-draft");
+      for (const sample of samples)
+        assert.deepEqual(sample.counts, emptyCounts(), sample.phase);
+      assert.equal(sends, 1);
+    } finally {
+      observing = false;
+      for (const [method, descriptor] of originals)
+        Object.defineProperty(Array.prototype, method, descriptor);
+      admission.resolve({});
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("real App canonical end and active-Turn derivations invalidate on append, backfill and fork boundaries", async () => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const harness = await mountThreadApp({
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(derivedScanHistory());
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let watermark = 0;
+  const emit = async (
+    event: import("../../../src/app-server.js").AppServerEvent,
+  ) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  const canonical = async (
+    item: import("../../../src/item.js").CanonicalItem,
+  ) => emit({ type: "item_completed", item });
+  const common = {
+    threadId: "thread-1",
+    createdAt: "2026-11-02T00:00:00.000Z",
+  };
+  const readEnds = () =>
+    [...document.querySelectorAll("section.turn[data-read-message-id]")].map(
+      (element) => element.getAttribute("data-read-message-id"),
+    );
+  try {
+    await selectedComposer();
+    assert.deepEqual(readEnds(), ["derived-history-39-completed"]);
+    await canonical({
+      ...common,
+      type: "turn_started",
+      id: "new-start",
+      turnId: "new",
+    });
+    await emit({ type: "turn_started", threadId: "thread-1", turnId: "new" });
+    assert.deepEqual(
+      readEnds(),
+      [],
+      "a new active Turn invalidates the previous end",
+    );
+    assert.ok(document.querySelector("section.turn.inProgress"));
+    assert.ok(
+      document.querySelector(".composer-send-control .action-orb.stop"),
+    );
+    await canonical({
+      ...common,
+      type: "agent_message",
+      id: "late-backfill",
+      turnId: "derived-history-0",
+      text: "Late historical answer",
+    });
+    assert.deepEqual(
+      readEnds(),
+      [],
+      "backfill does not revive the prior end while another Turn runs",
+    );
+    assert.match(
+      document.querySelector('[data-read-message-id="late-backfill"]')
+        ?.textContent ?? "",
+      /Late historical answer/u,
+    );
+    await canonical({
+      ...common,
+      type: "turn_completed",
+      id: "new-end",
+      turnId: "new",
+      status: "completed",
+    });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "new",
+      status: "completed",
+    });
+    assert.deepEqual(readEnds(), ["new-end"]);
+    assert.equal(document.querySelector("section.turn.inProgress"), null);
+    assert.equal(
+      document.querySelector(".composer-send-control .action-orb.stop"),
+      null,
+    );
+    await canonical({
+      ...common,
+      type: "thread_forked",
+      id: "fork-boundary",
+      sourceThreadId: "source",
+      sourceBoundaryItemId: "new-end",
+      sourceTurnId: "new",
+      workspace: "same-directory",
+    });
+    assert.deepEqual(
+      readEnds(),
+      [],
+      "copied pre-fork ends are not local execution ends",
+    );
+    await canonical({
+      ...common,
+      type: "turn_started",
+      id: "local-start",
+      turnId: "local",
+    });
+    await emit({ type: "turn_started", threadId: "thread-1", turnId: "local" });
+    await canonical({
+      ...common,
+      type: "turn_aborted",
+      id: "local-end",
+      turnId: "local",
+      reason: "Synthetic stop",
+    });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "local",
+      status: "interrupted",
+    });
+    assert.deepEqual(
+      readEnds(),
+      ["local-end"],
+      "a local post-fork end is observable immediately",
+    );
+  } finally {
+    await unmountApp(harness);
+  }
+});
