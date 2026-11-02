@@ -50,7 +50,6 @@ function facts(turns: number): CanonicalItem[] {
   return items;
 }
 
-
 function semanticFacts(items: readonly CanonicalItem[]): ContextItem[] {
   const contexts: ContextItem[] = [];
   const previous: CanonicalItem[] = [];
@@ -105,7 +104,6 @@ function baselineContextForFacts(
   return contexts;
 }
 
-
 for (const turns of [32, 128, 512]) {
   test(`contextForFacts avoids history-prefix slices for ${turns} completed turns`, (t) => {
     const items = facts(turns);
@@ -115,7 +113,11 @@ for (const turns of [32, 128, 512]) {
     let copied = 0;
     Object.defineProperty(items, "slice", {
       value(start?: number, end?: number) {
-        const result = Array.prototype.slice.call(items, start, end) as CanonicalItem[];
+        const result = Array.prototype.slice.call(
+          items,
+          start,
+          end,
+        ) as CanonicalItem[];
         calls++;
         copied += result.length;
         return result;
@@ -127,7 +129,14 @@ for (const turns of [32, 128, 512]) {
     assert.deepEqual(actual, expected);
     assert.equal(calls, 0);
     assert.equal(copied, 0);
-    t.diagnostic(JSON.stringify({ turns, calls, copied, oldCopied: 4 * turns * turns + turns }));
+    t.diagnostic(
+      JSON.stringify({
+        turns,
+        calls,
+        copied,
+        oldCopied: 4 * turns * turns + turns,
+      }),
+    );
   });
 }
 
@@ -139,25 +148,46 @@ test("frozen imported context wins while prospective references and receipt line
   if (frozen.kind !== "message") throw new Error("message expected");
   frozen.content = {
     text: "[Message received at imported exact instant]\nFrozen imported bytes",
-    parts: [{ type: "text", text: "[Message received at imported exact instant]" }, { type: "text", text: "Frozen imported bytes" }],
+    parts: [
+      { type: "text", text: "[Message received at imported exact instant]" },
+      { type: "text", text: "Frozen imported bytes" },
+    ],
   };
   frozen.source.metadata = { ...frozen.source.metadata, imported: true };
   const clientId = "prospective-client";
   items.push(
     {
-      id: "queued", threadId: "t", type: "user_message_queued",
-      createdAt: "2026-03-08T06:59:00Z", clientId,
+      id: "queued",
+      threadId: "t",
+      type: "user_message_queued",
+      createdAt: "2026-03-08T06:59:00Z",
+      clientId,
       input: [{ type: "text", text: "original input" }],
       receiptTimezone: { timeZone: "America/New_York", source: "client" },
     },
     {
-      id: "prospective", threadId: "t", turnId: "next", type: "user_message",
-      createdAt: "2026-03-08T07:01:00Z", clientId,
+      id: "prospective",
+      threadId: "t",
+      turnId: "next",
+      type: "user_message",
+      createdAt: "2026-03-08T07:01:00Z",
+      clientId,
       receiptTimezone: { timeZone: "Asia/Tokyo", source: "host" },
-      text: referenceMessage("See \uFFFC", [{
-        kind: "message", name: "Imported selection", cwd: "/synthetic",
-        threadId: "t", id: "user-0", excerpt: "Frozen imported bytes", position: 4,
-      }], clientId),
+      text: referenceMessage(
+        "See \uFFFC",
+        [
+          {
+            kind: "message",
+            name: "Imported selection",
+            cwd: "/synthetic",
+            threadId: "t",
+            id: "user-0",
+            excerpt: "Frozen imported bytes",
+            position: 4,
+          },
+        ],
+        clientId,
+      ),
     },
   );
   const before = JSON.stringify({ items, existing });
@@ -165,49 +195,110 @@ test("frozen imported context wins while prospective references and receipt line
   const actual = contextForFacts(Object.freeze(items), Object.freeze(existing));
   assert.deepEqual(actual, expected);
   assert.equal(JSON.stringify({ items, existing }), before);
-  assert.equal(actual.find((item) => item.id === frozen.id), frozen);
+  assert.equal(
+    actual.find((item) => item.id === frozen.id),
+    frozen,
+  );
   const prospective = actual.find((item) => item.id === "prospective")!;
   assert.equal(prospective.kind, "message");
   if (prospective.kind !== "message") throw new Error("message expected");
   assert.match(prospective.content.text, /America\/New_York/);
-  assert.match(prospective.content.text, /source received at imported exact instant/);
+  assert.match(
+    prospective.content.text,
+    /source received at imported exact instant/,
+  );
   assert.doesNotMatch(prospective.content.text, /Asia\/Tokyo/);
 });
 
 test("missing nested-tool suffix keeps full preceding facts and existing context unchanged", () => {
   const items = facts(1);
   const existing = semanticFacts(items);
-  const common = { threadId: "t", turnId: "tool-turn", createdAt: "2026-11-02T00:00:00Z" };
+  const common = {
+    threadId: "t",
+    turnId: "tool-turn",
+    createdAt: "2026-11-02T00:00:00Z",
+  };
   items.push(
     { ...common, id: "tool-start", type: "turn_started" },
-    { ...common, id: "parent-call", type: "tool_call", callId: "parent", name: "run_code", arguments: {} },
-    { ...common, id: "child-call", type: "tool_call", callId: "child", parentCallId: "parent", name: "read", arguments: {} },
-    { ...common, id: "child-result", type: "tool_result", callId: "child", output: "synthetic child", exitCode: 0 },
-    { ...common, id: "parent-result", type: "tool_result", callId: "parent", output: "synthetic parent", exitCode: 0 },
+    {
+      ...common,
+      id: "parent-call",
+      type: "tool_call",
+      callId: "parent",
+      name: "run_code",
+      arguments: {},
+    },
+    {
+      ...common,
+      id: "child-call",
+      type: "tool_call",
+      callId: "child",
+      parentCallId: "parent",
+      name: "read",
+      arguments: {},
+    },
+    {
+      ...common,
+      id: "child-result",
+      type: "tool_result",
+      callId: "child",
+      output: "synthetic child",
+      exitCode: 0,
+    },
+    {
+      ...common,
+      id: "parent-result",
+      type: "tool_result",
+      callId: "parent",
+      output: "synthetic parent",
+      exitCode: 0,
+    },
     { ...common, id: "tool-end", type: "turn_completed", status: "completed" },
   );
-  assert.deepEqual(contextForFacts(items, existing), baselineContextForFacts(items, existing));
-  assert.deepEqual(contextForFacts(items, []), baselineContextForFacts(items, []));
+  assert.deepEqual(
+    contextForFacts(items, existing),
+    baselineContextForFacts(items, existing),
+  );
+  assert.deepEqual(
+    contextForFacts(items, []),
+    baselineContextForFacts(items, []),
+  );
 });
 
 test("selection boundary and supplemental context filtering stay byte-identical", () => {
   const items = facts(2);
   const existing = semanticFacts(items);
   existing.push({
-    id: "workspace", threadId: "t", createdAt: "2026-11-02T00:00:00Z",
-    kind: "message", role: "developer",
-    content: { text: "frozen workspace", parts: [{ type: "text", text: "frozen workspace" }] },
+    id: "workspace",
+    threadId: "t",
+    createdAt: "2026-11-02T00:00:00Z",
+    kind: "message",
+    role: "developer",
+    content: {
+      text: "frozen workspace",
+      parts: [{ type: "text", text: "frozen workspace" }],
+    },
     source: { kind: "workspace_instructions", sequence: 0 },
   });
   items.push({
-    id: "selection", threadId: "t", createdAt: "2026-11-02T00:00:01Z",
-    type: "context_compaction", coveredThroughItemId: "end-1",
-    retainedItemIds: ["user-0", "agent-1"], summary: "Synthetic summary",
-    includeOriginalReference: true, algorithmVersion: "fixture",
-    providerProfileId: "synthetic", modelId: "synthetic", reasoningEffort: null,
+    id: "selection",
+    threadId: "t",
+    createdAt: "2026-11-02T00:00:01Z",
+    type: "context_compaction",
+    coveredThroughItemId: "end-1",
+    retainedItemIds: ["user-0", "agent-1"],
+    summary: "Synthetic summary",
+    includeOriginalReference: true,
+    algorithmVersion: "fixture",
+    providerProfileId: "synthetic",
+    modelId: "synthetic",
+    reasoningEffort: null,
     tokenUsage: { inputTokens: 0, outputTokens: 0 },
   });
   const before = JSON.stringify({ items, existing });
-  assert.deepEqual(contextForFacts(items, existing), baselineContextForFacts(items, existing));
+  assert.deepEqual(
+    contextForFacts(items, existing),
+    baselineContextForFacts(items, existing),
+  );
   assert.equal(JSON.stringify({ items, existing }), before);
 });
