@@ -3166,3 +3166,21 @@ test("turn end retires created Chrome pages but releases existing and explicitly
     await backend.close();
   }
 });
+
+test("confirmed created-page closure retires its attachment before delayed destroy events", async () => {
+  const cdp = await createFakeCdpServer({ closeTargetsWithoutEvents: true });
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  try {
+    await connection.backend.open("temporary", "http://localhost:3080");
+    await connection.backend.finishSession!("temporary");
+    assert.equal(cdp.count("Target.closeTarget"), 1);
+    assert.equal(
+      cdp.count("Target.detachFromTarget"),
+      0,
+      "a confirmed destroyed target has no session left to detach",
+    );
+  } finally {
+    await connection.backend.close();
+    await cdp.close();
+  }
+});

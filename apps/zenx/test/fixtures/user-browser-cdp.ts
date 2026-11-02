@@ -139,7 +139,11 @@ export function fakeInputScreenshotData(): string {
 }
 
 export async function createFakeCdpServer(
-  options: { targetedInput?: boolean; createGrouping?: unknown } = {},
+  options: {
+    targetedInput?: boolean;
+    createGrouping?: unknown;
+    closeTargetsWithoutEvents?: boolean;
+  } = {},
 ): Promise<{
   endpoint: string;
   inputSnapshot: BrowserInputSnapshot;
@@ -706,8 +710,29 @@ export async function createFakeCdpServer(
       ) {
         dropDetachReplyCount -= 1;
         return;
+      } else if (
+        request.method === "Target.closeTarget" &&
+        options.closeTargetsWithoutEvents
+      ) {
+        const targetId = String(request.params.targetId);
+        targets.delete(targetId);
+        for (const [sessionId, id] of [...sessionTargets])
+          if (id === targetId) sessionTargets.delete(sessionId);
+        result = { success: true }; // Deliberately precedes any targetDestroyed event.
       } else if (request.method === "Target.detachFromTarget") {
         const sessionId = String(request.params.sessionId ?? "");
+        if (
+          options.closeTargetsWithoutEvents &&
+          !sessionTargets.has(sessionId)
+        ) {
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              error: { code: -32000, message: "No session with given id" },
+            }),
+          );
+          return;
+        }
         detachedSessionIds.push(sessionId);
         sessionTargets.delete(sessionId);
       }

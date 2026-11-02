@@ -3908,13 +3908,26 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
   ): Promise<void> {
     const attached = this.#targetAttachments.get(targetId);
-    if (attached && !sameAttachmentOwner(attached.epoch, owner))
+    const epoch = this.#attachmentClosures.get(targetId);
+    if (
+      (attached && !sameAttachmentOwner(attached.epoch, owner)) ||
+      (epoch && !sameAttachmentOwner(epoch, owner))
+    )
       throw new Error("User browser attachment ownership changed");
     const result = asRecord(
       await this.#send("Target.closeTarget", { targetId }),
     );
     if (result?.success !== true)
       throw new Error("Browser did not confirm temporary page closure");
+    const current = this.#attachmentClosures.get(targetId);
+    if (current && current !== epoch)
+      throw new Error(
+        "User browser attachment ownership changed during closure",
+      );
+    // The exact close receipt proves this page no longer has an attachment.
+    // Chrome can publish targetDestroyed later; do not send detach to a dead
+    // session in that interval. Existing unknown-effect evidence is preserved.
+    this.#reapTarget(targetId, true);
   }
 
   async detachTarget(
