@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.
+
 ## ItemList / Trace / current product state contract
 
 - **Input admission before context preparation** — Initial input is durably committed and acknowledged before first-sample context estimation or automatic summary generation; preparation preserves the active input suffix, generates outside the Thread mutation lock, and revalidates ownership, cancellation and the completed-history boundary under the short commit lock. Preparation failure terminates the admitted Turn visibly without replaying or withdrawing its accepted input. Completed-Turn eager summaries retain a process-local auxiliary owner and independent provider lease, not the completed execution handle or admission lock; a following Turn admits input immediately but waits for that owner before its first sample. Shutdown aborts and joins both lifetimes; restart derives preparation from history, without replaying an unknown write. `TurnHandle.done` ends the Turn, not optional completed-history preparation.

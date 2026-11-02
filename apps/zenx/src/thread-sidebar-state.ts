@@ -1,3 +1,12 @@
+import {
+  applyInformationOperations,
+  assertInformationOwner,
+  parseInformationLayout,
+  parseInformationOperations,
+  type InformationLayout,
+  type InformationOperations,
+} from "./information-layout.js";
+
 export interface SidebarOwner {
   kind: "thread" | "room";
   id: string;
@@ -21,13 +30,18 @@ export interface ThreadSidebarState {
   tabs: ThreadSidebarTab[];
   selectedTab: string | null;
   resourceThreadId: string | null;
+  /** Absent legacy facts remain absent; defaults are read-only projections. */
+  informationLayout?: InformationLayout;
 }
 export type ThreadSidebarPatch = Partial<
   Pick<
     ThreadSidebarState,
     "open" | "fullscreen" | "tabs" | "selectedTab" | "resourceThreadId"
   >
->;
+> & {
+  /** A full layout is used by existing snapshot recovery, never model edits. */
+  informationLayout?: InformationLayout | InformationOperations;
+};
 export interface ThreadSidebarUpdate {
   owner: SidebarOwner;
   expectedRevision: number;
@@ -234,8 +248,15 @@ export function parseSidebarUpdate(value: unknown): ThreadSidebarUpdate {
     "tabs",
     "selectedTab",
     "resourceThreadId",
+    "informationLayout",
   ]);
   const patch: ThreadSidebarPatch = {};
+  if (source.informationLayout !== undefined) {
+    const information = object(source.informationLayout);
+    patch.informationLayout = Object.hasOwn(information, "operations")
+      ? parseInformationOperations(information)
+      : parseInformationLayout(information);
+  }
   for (const key of ["open", "fullscreen"] as const)
     if (source[key] !== undefined) {
       if (typeof source[key] !== "boolean")
@@ -267,11 +288,25 @@ export function applySidebarPatch(
     expectedRevision: state.revision,
     patch: input,
   });
-  const next = {
+  const { informationLayout, ...presentation } = patch;
+  const next: ThreadSidebarState = {
     ...structuredClone(state),
-    ...patch,
+    ...presentation,
+    ...(informationLayout === undefined
+      ? {}
+      : {
+          informationLayout:
+            "operations" in informationLayout
+              ? applyInformationOperations(
+                  state.informationLayout,
+                  informationLayout,
+                )
+              : parseInformationLayout(informationLayout),
+        }),
     revision: state.revision + 1,
   };
+  if (next.informationLayout)
+    assertInformationOwner(next.informationLayout, state.owner);
   if (
     next.selectedTab &&
     !next.tabs.some((tab) => sidebarTabId(tab) === next.selectedTab)
