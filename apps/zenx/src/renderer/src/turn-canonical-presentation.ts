@@ -94,7 +94,12 @@ export function indexTurnCanonicalPresentation(
     if (
       old !== undefined &&
       sameEntries(old.inputs, inputEntries) &&
-      sameEntries(old.quoteItems, quoteEntries, (a, b) => a.length === b.length && a.every((item, index) => item === b[index])) &&
+      sameEntries(
+        old.quoteItems,
+        quoteEntries,
+        (a, b) =>
+          a.length === b.length && a.every((item, index) => item === b[index]),
+      ) &&
       sameEntries(old.forkItems, forkEntries) &&
       sameAttachments(old.attachments, attachmentEntries) &&
       sameEntries(old.toolTargets, targetEntries, sameTarget)
@@ -114,18 +119,20 @@ export function indexTurnCanonicalPresentation(
 }
 
 /** Preserve complete call/result quote ownership before per-Turn partitioning. */
-export function indexCanonicalQuoteItems(items: readonly CanonicalItem[]): ReadonlyMap<string, readonly CanonicalItem[]> {
-    const index = new Map<string, CanonicalItem[]>();
-    const calls = new Map<string, string>();
-    for (const item of items) {
-      index.set(item.id, [item]);
-      if (item.type === "tool_call")
-        calls.set(JSON.stringify([item.turnId, item.callId]), item.id);
-    }
-    for (const item of items) {
-      if (item.type !== "tool_result") continue;
-      const callId = calls.get(JSON.stringify([item.turnId, item.callId]));
-      if (callId) index.get(callId)?.push(item);
-    }
-    return index;
+export function indexCanonicalQuoteItems(
+  items: readonly CanonicalItem[],
+): ReadonlyMap<string, readonly CanonicalItem[]> {
+  const index = new Map<string, CanonicalItem[]>();
+  const calls = new Map<string, string>();
+  for (const item of items) {
+    index.set(item.id, [item]);
+    if (item.type === "tool_call")
+      calls.set(JSON.stringify([item.turnId, item.callId]), item.id);
+  }
+  for (const item of items) {
+    if (item.type !== "tool_result") continue;
+    const callId = calls.get(JSON.stringify([item.turnId, item.callId]));
+    if (callId) index.get(callId)?.push(item);
+  }
+  return index;
 }

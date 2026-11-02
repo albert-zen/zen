@@ -8344,10 +8344,20 @@ test(
         document.querySelectorAll(".agent-copy").length,
         historicalTurns,
       );
-      const historicalUser = document.querySelector('[data-sent-message-id="user-0"]');
-      const historicalAgent = document.querySelector('[data-read-message-id="agent-0"]');
-      assert.equal(historicalUser?.getAttribute("data-quote-item-id"), "user-0");
-      assert.equal(historicalAgent?.getAttribute("data-quote-item-id"), "agent-0");
+      const historicalUser = document.querySelector(
+        '[data-sent-message-id="user-0"]',
+      );
+      const historicalAgent = document.querySelector(
+        '[data-read-message-id="agent-0"]',
+      );
+      assert.equal(
+        historicalUser?.getAttribute("data-quote-item-id"),
+        "user-0",
+      );
+      assert.equal(
+        historicalAgent?.getAttribute("data-quote-item-id"),
+        "agent-0",
+      );
       observing = true;
       await emit({
         type: "item_completed",
@@ -8419,9 +8429,20 @@ test(
       );
       assert.equal(counts.agent, boundaryCounts.agent);
       assert.equal(counts.fork, boundaryCounts.fork);
-      assert.equal(document.querySelector('[data-sent-message-id="next-user"]')?.getAttribute("data-quote-item-ids"), JSON.stringify(["next-user"]));
-      assert.equal(historicalUser?.getAttribute("data-quote-item-id"), "user-0");
-      assert.equal(historicalAgent?.getAttribute("data-quote-item-id"), "agent-0");
+      assert.equal(
+        document
+          .querySelector('[data-sent-message-id="next-user"]')
+          ?.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["next-user"]),
+      );
+      assert.equal(
+        historicalUser?.getAttribute("data-quote-item-id"),
+        "user-0",
+      );
+      assert.equal(
+        historicalAgent?.getAttribute("data-quote-item-id"),
+        "agent-0",
+      );
       // A genuine late append to an old Turn must still update that Turn and its
       // canonical descendant; the optimization is not a frozen history cache.
       const beforeBackfill = { ...counts };
@@ -8456,7 +8477,12 @@ test(
         counts.fork > beforeBackfill.fork &&
           counts.fork - beforeBackfill.fork <= 2,
       );
-      assert.equal(document.querySelector('[data-read-message-id="late-history-answer"]')?.getAttribute("data-quote-item-ids"), JSON.stringify(["late-history-answer"]));
+      assert.equal(
+        document
+          .querySelector('[data-read-message-id="late-history-answer"]')
+          ?.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["late-history-answer"]),
+      );
       assert.match(
         document.querySelector('[data-read-message-id="late-history-answer"]')
           ?.textContent ?? "",

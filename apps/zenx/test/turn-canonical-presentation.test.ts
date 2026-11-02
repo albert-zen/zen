@@ -3,7 +3,10 @@ import test from "node:test";
 import type { CanonicalItem } from "../../../src/item.js";
 import type { AttachmentRef } from "../../../src/attachment-ref.js";
 import type { Turn } from "../src/protocol-client/index.js";
-import { indexTurnCanonicalPresentation, indexCanonicalQuoteItems } from "../src/renderer/src/turn-canonical-presentation.js";
+import {
+  indexTurnCanonicalPresentation,
+  indexCanonicalQuoteItems,
+} from "../src/renderer/src/turn-canonical-presentation.js";
 import { projectToolActionTargets } from "../src/renderer/src/tool-action-targets.js";
 type User = Extract<CanonicalItem, { type: "user_message" }>;
 const turn = (id: string, ids: string[]) =>
@@ -244,34 +247,115 @@ test("global cross-turn tool target projection is retained and backfilled target
 
 test("quote metadata preserves call/result pairs, immutable reuse, late replacement and removal", () => {
   const stamp = { threadId: "thread", createdAt: "2026-01-01T00:00:00.000Z" };
-  const call: CanonicalItem = { ...stamp, type: "tool_call", id: "call-item", callId: "call", turnId: "a", name: "test", arguments: {} };
-  const result: CanonicalItem = { ...stamp, type: "tool_result", id: "result-item", callId: "call", turnId: "a", exitCode: 0, output: "first" };
+  const call: CanonicalItem = {
+    ...stamp,
+    type: "tool_call",
+    id: "call-item",
+    callId: "call",
+    turnId: "a",
+    name: "test",
+    arguments: {},
+  };
+  const result: CanonicalItem = {
+    ...stamp,
+    type: "tool_result",
+    id: "result-item",
+    callId: "call",
+    turnId: "a",
+    exitCode: 0,
+    output: "first",
+  };
   const unrelated = user("unrelated");
-  const a = turn("a", [call.id]), b = turn("b", [unrelated.id]);
+  const a = turn("a", [call.id]),
+    b = turn("b", [unrelated.id]);
   // The displayed result row can live elsewhere; quote pairing follows canonical ownership.
   const resultRow = turn("result-row", [result.id]);
-  const beforeResult = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, undefined, indexCanonicalQuoteItems([call, unrelated]));
-  assert.deepEqual(beforeResult.turns.get("a")!.quoteItems.get(call.id), [call]);
+  const beforeResult = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b, resultRow],
+    new Map(),
+    new Map(),
+    {},
+    emptyTargets,
+    undefined,
+    indexCanonicalQuoteItems([call, unrelated]),
+  );
+  assert.deepEqual(beforeResult.turns.get("a")!.quoteItems.get(call.id), [
+    call,
+  ]);
   assert.equal(beforeResult.turns.get("result-row")!.quoteItems.size, 0);
   const initialItems = [call, result, unrelated];
-  const first = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, beforeResult, indexCanonicalQuoteItems(initialItems));
-  assert.deepEqual(first.turns.get("a")!.quoteItems.get(call.id), [call, result]);
+  const first = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b, resultRow],
+    new Map(),
+    new Map(),
+    {},
+    emptyTargets,
+    beforeResult,
+    indexCanonicalQuoteItems(initialItems),
+  );
+  assert.deepEqual(first.turns.get("a")!.quoteItems.get(call.id), [
+    call,
+    result,
+  ]);
   assert.notEqual(first.turns.get("a"), beforeResult.turns.get("a"));
-  assert.notEqual(first.turns.get("result-row"), beforeResult.turns.get("result-row"));
+  assert.notEqual(
+    first.turns.get("result-row"),
+    beforeResult.turns.get("result-row"),
+  );
   assert.equal(first.turns.get("b"), beforeResult.turns.get("b"));
-  assert.deepEqual(first.turns.get("result-row")!.quoteItems.get(result.id), [result]);
-  const appended = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, first, indexCanonicalQuoteItems([...initialItems, user("new")]));
+  assert.deepEqual(first.turns.get("result-row")!.quoteItems.get(result.id), [
+    result,
+  ]);
+  const appended = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b, resultRow],
+    new Map(),
+    new Map(),
+    {},
+    emptyTargets,
+    first,
+    indexCanonicalQuoteItems([...initialItems, user("new")]),
+  );
   assert.equal(appended.turns.get("a"), first.turns.get("a"));
   assert.equal(appended.turns.get("b"), first.turns.get("b"));
   const replacement = { ...result, output: "late correction" };
-  const changed = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, appended, indexCanonicalQuoteItems([call, replacement, unrelated]));
+  const changed = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b, resultRow],
+    new Map(),
+    new Map(),
+    {},
+    emptyTargets,
+    appended,
+    indexCanonicalQuoteItems([call, replacement, unrelated]),
+  );
   assert.notEqual(changed.turns.get("a"), appended.turns.get("a"));
   assert.equal(changed.turns.get("b"), appended.turns.get("b"));
-  assert.deepEqual(changed.turns.get("a")!.quoteItems.get(call.id), [call, replacement]);
-  assert.deepEqual(first.turns.get("a")!.quoteItems.get(call.id), [call, result]);
-  const removed = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, changed, indexCanonicalQuoteItems([call, unrelated]));
+  assert.deepEqual(changed.turns.get("a")!.quoteItems.get(call.id), [
+    call,
+    replacement,
+  ]);
+  assert.deepEqual(first.turns.get("a")!.quoteItems.get(call.id), [
+    call,
+    result,
+  ]);
+  const removed = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b, resultRow],
+    new Map(),
+    new Map(),
+    {},
+    emptyTargets,
+    changed,
+    indexCanonicalQuoteItems([call, unrelated]),
+  );
   assert.deepEqual(removed.turns.get("a")!.quoteItems.get(call.id), [call]);
   assert.notEqual(removed.turns.get("a"), changed.turns.get("a"));
-  assert.notEqual(removed.turns.get("result-row"), changed.turns.get("result-row"));
+  assert.notEqual(
+    removed.turns.get("result-row"),
+    changed.turns.get("result-row"),
+  );
   assert.equal(removed.turns.get("result-row")!.quoteItems.size, 0);
 });
