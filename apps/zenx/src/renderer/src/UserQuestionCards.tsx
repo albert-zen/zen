@@ -1,5 +1,13 @@
-import { memo, useEffect, useSyncExternalStore } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useTranslation } from "react-i18next";
+import { useCommittedCallback } from "./use-committed-callback.js";
+import { Icon } from "./icons.js";
 import {
   draftReply,
   questionBusy,
@@ -33,11 +41,13 @@ export const UserQuestionCards = memo(function UserQuestionCards({
         <h3>{t("questionTitle")}</h3>
         <button
           type="button"
-          className="text-button"
-          disabled={state.loading}
+          className="icon-button"
+          aria-label={t("refresh")}
+          title={t("refresh")}
+          disabled={state.loading || disabled}
           onClick={() => void store.refresh(threadId)}
         >
-          {t("refresh")}
+          <Icon name="reload" size={14} />
         </button>
       </header>
       {!state.loaded && !state.error ? (
@@ -52,7 +62,7 @@ export const UserQuestionCards = memo(function UserQuestionCards({
       {state.ids.map((id) =>
         state.cards[id] ? (
           <QuestionCard
-            key={id}
+            key={JSON.stringify([threadId, id])}
             view={state.cards[id]!}
             store={store}
             disabled={disabled}
@@ -62,7 +72,7 @@ export const UserQuestionCards = memo(function UserQuestionCards({
       {state.nextAfter ? (
         <button
           type="button"
-          className="text-button"
+          className="quiet-button"
           disabled={state.loading}
           onClick={() => void store.loadMore(threadId)}
         >
@@ -103,17 +113,48 @@ function QuestionCard({
     attempt?.phase === "rejected"
       ? attempt.phase
       : question.state;
+  // Liveness is committed and cleared on unmount; writable ownership remains the
+  // latest committed disabled/question props, never a render-time ref.
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const committedEdit = useCommittedCallback(
+    (
+      questionId: string,
+      patch: Partial<QuestionView["draft"]["answers"][number]>,
+    ) => {
+      if (unavailable) return;
+      store.edit(
+        threadId,
+        callItemId,
+        draft.answers.map((answer) =>
+          answer.questionId === questionId ? { ...answer, ...patch } : answer,
+        ),
+      );
+    },
+  );
   const edit = (
     questionId: string,
     patch: Partial<QuestionView["draft"]["answers"][number]>,
-  ) =>
-    store.edit(
-      threadId,
-      callItemId,
-      draft.answers.map((answer) =>
-        answer.questionId === questionId ? { ...answer, ...patch } : answer,
-      ),
-    );
+  ) => {
+    if (mounted.current) committedEdit(questionId, patch);
+  };
+  const committedRespond = useCommittedCallback(
+    (outcome: "answer" | "cancel") => {
+      if (unavailable || busy || (outcome === "answer" && !valid)) return;
+      void store.respond(threadId, callItemId, outcome);
+    },
+  );
+  const respond = (outcome: "answer" | "cancel") => {
+    if (mounted.current) committedRespond(outcome);
+  };
+  const committedCheck = useCommittedCallback(() => {
+    if (!disabled) void store.check(threadId, callItemId);
+  });
   return (
     <article className="user-question-card" data-question-call-id={callItemId}>
       <p className="user-question-status" role="status">
@@ -182,9 +223,9 @@ function QuestionCard({
           <>
             <button
               type="button"
-              className="text-button"
+              className="quiet-button"
               disabled={unavailable || busy}
-              onClick={() => void store.respond(threadId, callItemId, "cancel")}
+              onClick={() => respond("cancel")}
             >
               {t("questionCancel")}
             </button>
@@ -192,7 +233,7 @@ function QuestionCard({
               type="button"
               className="primary-button"
               disabled={unavailable || busy || !valid}
-              onClick={() => void store.respond(threadId, callItemId, "answer")}
+              onClick={() => respond("answer")}
             >
               {t("questionSend")}
             </button>
@@ -202,8 +243,11 @@ function QuestionCard({
         ["unknown", "pending", "sending"].includes(attempt.phase) ? (
           <button
             type="button"
-            className="text-button"
-            onClick={() => void store.check(threadId, callItemId)}
+            className="quiet-button"
+            disabled={disabled}
+            onClick={() => {
+              if (mounted.current) committedCheck();
+            }}
           >
             {t("questionCheck")}
           </button>

@@ -289,3 +289,81 @@ test("a real admitted response followed by a failing Host read stays unknown thr
     await f.close();
   }
 });
+
+for (const late of ["ack", "check"] as const) {
+  test(`disconnect fences a late ${late} behind fresh canonical state without dropping intent or draft`, async () => {
+    const q = question("ask");
+    const reply = {
+      version: 1 as const,
+      request: q.request,
+      outcome: "answer" as const,
+      answers: [{ questionId: "q", optionIds: ["a"] }],
+    };
+    const oldQuestion: UserQuestionState = {
+      ...q,
+      state: "answer-pending",
+      response: { clientId: "original", itemId: "queued", reply },
+    };
+    const ack = deferred<NativeQuestionRespondResult>();
+    const read = deferred<Awaited<ReturnType<QuestionTransport["read"]>>>();
+    let current = q;
+    const store = createUserQuestionStore(
+      {
+        list: async () => ({ questions: [current], totalPending: 1 }),
+        respond: async () => ack.promise,
+        read: async () => read.promise,
+      },
+      () => "original",
+    );
+    await store.refresh("t");
+    store.edit("t", "ask", reply.answers);
+    const pendingAck = store.respond("t", "ask", "answer");
+    const pendingRead =
+      late === "check" ? store.check("t", "ask") : Promise.resolve();
+    store.edit("t", "ask", [
+      { questionId: "q", optionIds: [], text: "newer local draft" },
+    ]);
+    const before = store.get("t").cards.ask!;
+    store.disconnect();
+    current = { ...oldQuestion, state: "answered" };
+    await store.refresh("t");
+    ack.resolve({ turnId: "old-turn", question: oldQuestion });
+    read.resolve({
+      question: oldQuestion,
+      response: { clientId: "original", status: "pending", reply },
+    });
+    await Promise.all([pendingAck, pendingRead]);
+    const after = store.get("t").cards.ask!;
+    assert.equal(after.question.state, "answered");
+    assert.equal(after.attempt!.phase, "unknown");
+    assert.equal(after.attempt!.request, before.attempt!.request);
+    assert.equal(after.draft, before.draft);
+  });
+}
+
+test("close/reopen starts a new traversal even when the refreshed cursor is unchanged", async () => {
+  const oldMore = deferred<UserQuestionPage>();
+  const store = createUserQuestionStore({
+    list: async (p) =>
+      p.afterQuestionCallItemId
+        ? oldMore.promise
+        : {
+            questions: [question("first")],
+            totalPending: 2,
+            nextAfter: "first",
+          },
+    read: unexpected,
+    respond: unexpected,
+  });
+  const close = store.mount("t");
+  await store.refresh("t");
+  const more = store.loadMore("t");
+  close();
+  const closeAgain = store.mount("t");
+  await store.refresh("t");
+  oldMore.resolve({ questions: [question("old-traversal")], totalPending: 2 });
+  await more;
+  assert.deepEqual(store.get("t").ids, ["first"]);
+  assert.equal(store.get("t").nextAfter, "first");
+  closeAgain();
+});

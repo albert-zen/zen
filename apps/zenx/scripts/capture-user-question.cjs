@@ -235,6 +235,16 @@ async function typeOnce(selector, value, label) {
     throw error;
   }
 }
+async function selectThread(selector, label) {
+  await click(selector, label);
+  await until(
+    () =>
+      evaluate(
+        `${query(selector)}?.getAttribute('aria-current')==='page' && document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false'`,
+      ),
+    label + " navigation and owner panel reset settled",
+  );
+}
 async function openInformation() {
   if (
     await evaluate(
@@ -242,6 +252,13 @@ async function openInformation() {
     )
   )
     await click(".information-toolbar button", "Open information panel");
+  await until(
+    () =>
+      evaluate(
+        `document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='true'`,
+      ),
+    "information panel open settled",
+  );
 }
 async function cardVisible(selector) {
   await until(() => evaluate(`Boolean(${query(selector)})`), "question card");
@@ -291,7 +308,7 @@ async function run() {
   );
   const card = (q) =>
     `.user-question-card[data-question-call-id="${q.request.callItemId}"]`;
-  await click(mainRow, "Select synthetic main conversation");
+  await selectThread(mainRow, "Select synthetic main conversation");
   await until(
     () =>
       evaluate(
@@ -343,19 +360,26 @@ async function run() {
     ".information-toolbar button",
     "Hide questions without cancelling",
   );
+  await until(
+    () =>
+      evaluate(
+        `document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false'`,
+      ),
+    "explicit hide settled",
+  );
   await openInformation();
   assert.equal(
     await evaluate(`${query(card(color) + " textarea")}.value`),
     "Synthetic custom color detail.",
   );
-  await click(otherRow, "Switch Thread with independent drafts");
+  await selectThread(otherRow, "Switch Thread with independent drafts");
   await openInformation();
   await cardVisible(card(unknown));
   assert.equal(
     await evaluate(`${query(card(unknown) + " textarea")}.value`),
     "",
   );
-  await click(mainRow, "Return to original question drafts");
+  await selectThread(mainRow, "Return to original question drafts");
   await openInformation();
   await cardVisible(card(note));
   assert.equal(
@@ -438,7 +462,7 @@ async function run() {
   );
   await capture("04-answer-confirmed-other-draft-intact", "dock");
   await click(
-    card(note) + " .user-question-actions .text-button",
+    card(note) + " .user-question-actions > button:first-child",
     "Explicit Cancel this entire request",
   );
   await until(
@@ -456,7 +480,7 @@ async function run() {
     "Synthetic independent main Composer draft.",
   );
 
-  await click(otherRow, "Select synthetic unknown-outcome conversation");
+  await selectThread(otherRow, "Select synthetic unknown-outcome conversation");
   await openInformation();
   await cardVisible(card(unknown));
   await typeOnce(
@@ -492,7 +516,7 @@ async function run() {
   await capture("05-real-host-reply-lost-unknown", "dock");
   // The last action is the real Check response button, not a direct RPC replacement.
   await click(
-    card(unknown) + " .user-question-actions .text-button:last-child",
+    card(unknown) + " .user-question-actions > button:last-child",
     "Read-only Check response for same intent",
   );
   await until(

@@ -9890,6 +9890,7 @@ test("real Host questions render in full App information panel with independent 
     await import("./user-question-native-fixture.js");
   const f = await questionNativeFixture();
   let harness: AppHarness | undefined;
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
   try {
     const thread = await f.host.startThread();
     const first = await f.publish(thread.id);
@@ -9915,6 +9916,12 @@ test("real Host questions render in full App information panel with independent 
         lastUsedWorkspace: f.directory,
       },
       {
+        onStatus: (listener) => {
+          statusListener = listener;
+          return () => {
+            statusListener = undefined;
+          };
+        },
         threads: (archived) => f.host.listThreadSummaries({ archived }),
         request: async (method, params) => {
           if (method === "zen/thread/questions/respond")
@@ -10011,6 +10018,53 @@ test("real Host questions render in full App information panel with independent 
         )!
         .querySelector<HTMLTextAreaElement>("textarea")!.value,
       "Independent second draft",
+    );
+    const retainedSend = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".primary-button")!,
+    ).onClick;
+    const retainedCancel = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".user-question-actions button")!,
+    ).onClick;
+    const retainedEdit = reactProps<{
+      onChange(event: { target: { value: string } }): void;
+    }>(reopened.querySelector("textarea")!).onChange;
+    const invokeRetained = async () => {
+      await act(async () => {
+        retainedEdit({ target: { value: "stale owner edit" } });
+        retainedSend();
+        retainedCancel();
+      });
+      assert.equal(writes.length, 0);
+      assert.equal(
+        reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "Also preserve keyboard focus",
+      );
+    };
+    await act(async () =>
+      statusListener?.({ type: "error", message: "synthetic disconnection" }),
+    );
+    await invokeRetained();
+    await act(async () =>
+      statusListener?.({ type: "ready", reconnected: true }),
+    );
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, true);
+    });
+    await waitFor(
+      () =>
+        reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await invokeRetained();
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, false);
+    });
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
     );
     await invokeButtonClick(
       reopened.querySelector<HTMLButtonElement>(".primary-button")!,

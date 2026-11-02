@@ -149,6 +149,8 @@ export function createUserQuestionStore(
   const refresh = (threadId: string): Promise<void> => {
     const existing = reads.get(threadId);
     if (existing) return existing;
+    // Every first page owns a new traversal, even when its cursor is unchanged.
+    versions.set(threadId, (versions.get(threadId) ?? 0) + 1);
     const run = async () => {
       let version: number;
       do {
@@ -243,10 +245,17 @@ export function createUserQuestionStore(
         const cards = Object.fromEntries(
           Object.entries(state.cards).map(([id, view]) => [
             id,
-            view.attempt?.phase === "sending"
+            view.attempt
               ? {
                   ...view,
-                  attempt: { ...view.attempt, phase: "unknown" as const },
+                  attempt: {
+                    ...view.attempt,
+                    observation: view.attempt.observation + 1,
+                    phase:
+                      view.attempt.phase === "sending"
+                        ? ("unknown" as const)
+                        : view.attempt.phase,
+                  },
                 }
               : view,
           ]),
@@ -276,7 +285,7 @@ export function createUserQuestionStore(
             error: localErrorDetail(error),
           });
       } finally {
-        if (!reads.has(threadId))
+        if (version === (versions.get(threadId) ?? 0) && !reads.has(threadId))
           publish(threadId, { ...get(threadId), loading: false });
       }
     },
@@ -331,7 +340,7 @@ export function createUserQuestionStore(
           },
           question,
         );
-        invalidate(threadId);
+        if (matchingAttempt(threadId, id, attempt)) invalidate(threadId);
       } catch (error) {
         settle(threadId, id, attempt, {
           phase:
@@ -387,7 +396,8 @@ export function createUserQuestionStore(
           { phase, error: undefined, detail: undefined },
           result.question,
         );
-        if (phase !== "unknown") invalidate(threadId);
+        if (phase !== "unknown" && matchingAttempt(threadId, id, attempt))
+          invalidate(threadId);
       } catch (error) {
         settle(threadId, id, attempt, {
           phase: "unknown",
