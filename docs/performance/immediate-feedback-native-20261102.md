@@ -101,3 +101,30 @@ All nine sends passed exact identity, independent storage reopen, complete Trace
 The initial check run had 134/136 tests pass with typecheck/build successful: one existing test required inline height `36px` while the experiment intentionally delegates empty height to CSS `auto`; another existing ResizeObserver stub supplied no entries and failed `entries.find`. These are not presented as a passing check run. Test/format successor `284d1c8` keeps the measured product behavior and corrects the fixtures; new checks are separate. Real narrow/localized-placeholder and multiline-to-empty geometry acceptance remains outstanding; jsdom call counts are not visual proof.
 
 A narrowly combined source `5e37358e69fd7344aac25cfd3802078b92f79e2d` overlays exactly the two PR614 context-prefix files onto that same UI candidate. Its intermediate native run is **5000 turns only**, not an unnecessary full variant matrix. Later release acceptance must still use the complete required history sizes and strict feedback/durable metrics separately.
+
+
+## Context-prefix candidate: intermediate 5000-turn acceptance remains failed
+
+Exact combined source `5e37358e69fd7344aac25cfd3802078b92f79e2d`, [run 41394449321](https://github.com/albert-zen/zen/actions/runs/41394449321), three ordinary sends with 5000 prior completed turns:
+
+| Metric | Sample 1 | Sample 2 | Sample 3 |
+|---|---:|---:|---:|
+| Pending DOM, ms | 1143.3 | 335.5 | 653.5 |
+| First visible feedback / input clear, ms | 1376.0 | 383.4 | 775.2 |
+| Canonical bubble visible, ms | 20975.6 | 16566.5 | 22392.5 |
+| Actual main IPC duration, ms | 11452.957 | 6813.930 | 9002.989 |
+
+All three sends passed independent persisted identity, complete Trace and zero-compaction checks, but **all three fail the unchanged 200 ms feedback/clear requirement**. Compared with the earlier autosize run, these independent-runner, three-sample measurements suggest a durable-admission direction worth investigating; they do not establish a causal or tail-latency guarantee and do not resolve the user-visible problem.
+
+[Check run 41394449192](https://github.com/albert-zen/zen/actions/runs/41394449192) passed six context-preparation tests, 246 UI tests, typecheck and build. Separate strict [context-prefix proof 41394610388](https://github.com/albert-zen/zen/actions/runs/41394610388) accepted baseline RED only for exact slice-count assertions 65/257/1025 versus zero, while all three semantic oracles passed; candidate passed all six. Separate [timezone-normalization proof 41394947273](https://github.com/albert-zen/zen/actions/runs/41394947273) accepted baseline RED only for constructor counts 1000 versus 1 and 258 versus 257, with three semantic tests passing; candidate passed all five. These narrow operation-count proofs are not native performance acceptance.
+
+## Actual full-App geometry: initial partial pass and fixture failure retained
+
+[Initial geometry run 41395198231](https://github.com/albert-zen/zen/actions/runs/41395198231) exercised both English and Chinese in independent private full-App instances. All six geometry assertions passed in each locale: actual textarea width 822 px at window width 1280, then 319.203125 px at legal window width 1120 after opening the production Subagents pane and dragging the actual splitter. A 400-character native draft wrapped from height 90 to the CSS maximum 136 px (scroll height 216); clearing returned to the measured CSS minimum 36 px. Twenty native text lines reached max height 136 with scroll height 426; clearing restored height/scroll height 36 and overflow hidden.
+
+The real placeholders fit the narrow field (English approximate text width 131.5 px, Chinese 98.1 px, content width approximately 303 px). **Localized placeholder wrapping was not triggered and is N/A**, not an invented passing wrap test. Two full-page narrow-empty screenshots were independently viewed through [artifact-only readback 41396230815](https://github.com/albert-zen/zen/actions/runs/41396230815): whole App, real navigation and open right pane are visible, and neither locale's empty composer/placeholder is clipped.
+
+The overall initial geometry job **failed** because its final reset tried the closed-pane toggle, which is not available while the pane is open. Consequently, its final real send and storage verification were not reached. The selector-only repeat uses the production `.auxiliary-close-button` with actual native input; no product state, geometry or performance gate was changed. Its result is recorded separately rather than rewriting the original failure.
+
+
+The selector-only [repeat 41396096033](https://github.com/albert-zen/zen/actions/runs/41396096033) **passed both locales end to end**. All six geometry cases passed again; each locale then closed the real pane, sent one ordinary message through actual native input/Send, matched its real receipt and canonical identity, and independently reopened production storage after Host shutdown: exactly one new message, complete Trace, zero compaction facts or attempts. This closes the tested geometry/regression loop only, not the failed 5000-turn latency acceptance. The earlier failed run remains above.
