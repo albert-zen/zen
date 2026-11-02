@@ -9884,3 +9884,182 @@ test("native streaming deltas update the real App without reloading or cloning i
     globalThis.structuredClone = clone;
   }
 });
+
+test("real Host questions render in full App information panel with independent drafts and explicit native answer/cancel", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  let harness: AppHarness | undefined;
+  try {
+    const thread = await f.host.startThread();
+    const first = await f.publish(thread.id);
+    const second = await f.publish(thread.id, {
+      questions: [{ id: "next", prompt: "Any additional constraint?" }],
+      answerTemplate: "Constraint: {{next}}",
+    });
+    let completedWrites = 0;
+    const writes: import("../../../src/protocol/native/wire.js").NativeQuestionRespondParams[] =
+      [];
+    harness = await mountApp(
+      {
+        projects: [
+          {
+            key: f.directory,
+            workspace: f.directory,
+            configured: true,
+            isDefault: true,
+            threadIds: [thread.id],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: f.directory,
+      },
+      {
+        threads: (archived) => f.host.listThreadSummaries({ archived }),
+        request: async (method, params) => {
+          if (method === "zen/thread/questions/respond")
+            writes.push(params as (typeof writes)[number]);
+          const result = await f.request(method, params);
+          if (method === "zen/thread/questions/respond") completedWrites++;
+          return result;
+        },
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        onNotification: (listener) =>
+          f.onNotification((method, params) =>
+            listener(method as never, params as never),
+          ),
+      },
+    );
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const firstCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    const secondCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
+    const answerButton =
+      firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
+    assert.equal(answerButton.disabled, true);
+    await act(async () =>
+      firstCard.querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+    );
+    const freeText = firstCard.querySelector<HTMLTextAreaElement>("textarea")!;
+    await setTextareaValue(freeText, "Also preserve keyboard focus");
+    await act(async () => freeText.focus());
+    let additional!: import("../../../src/user-question-state.js").UserQuestionState;
+    await act(async () => {
+      additional = await f.publish(thread.id);
+    });
+    await waitFor(() =>
+      document.querySelector(
+        `[data-question-call-id="${additional.request.callItemId}"]`,
+      ),
+    );
+    assert.ok(
+      document.activeElement === freeText,
+      "a new accepted question never steals existing input focus",
+    );
+
+    await setTextareaValue(
+      secondCard.querySelector<HTMLTextAreaElement>("textarea")!,
+      "Independent second draft",
+    );
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    assert.equal(writes.length, 0, "hiding is not cancellation");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const reopened = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    assert.equal(
+      reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Also preserve keyboard focus",
+    );
+    assert.equal(
+      document
+        .querySelector<HTMLElement>(
+          `[data-question-call-id="${second.request.callItemId}"]`,
+        )!
+        .querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Independent second draft",
+    );
+    await invokeButtonClick(
+      reopened.querySelector<HTMLButtonElement>(".primary-button")!,
+      2,
+    );
+    await waitFor(() => completedWrites === 1);
+    const sent = await f.host.readUserQuestion(
+      thread.id,
+      first.request.callItemId,
+      writes[0]!.clientUserMessageId,
+    );
+    assert.ok(
+      sent.response.status === "claimed" || sent.response.status === "pending",
+    );
+    assert.equal(sent.response.reply?.outcome, "answer");
+    if (sent.response.reply?.outcome === "answer")
+      assert.deepEqual(sent.response.reply.answers, [
+        {
+          questionId: "scope",
+          optionIds: ["small"],
+          text: "Also preserve keyboard focus",
+        },
+      ]);
+    const currentSecond = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    const cancel = [
+      ...currentSecond.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Cancel request")!;
+    await invokeButtonClick(cancel, 2);
+    await waitFor(() => completedWrites === 2);
+    assert.equal(writes[1]!.outcome, "cancel");
+    assert.equal("answers" in writes[1]!, false);
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    const snapshot = await f.host.readThread(thread.id);
+    const bound = snapshot.items.filter(
+      (item) =>
+        (item.type === "user_message" || item.type === "user_message_queued") &&
+        item.questionReply !== undefined,
+    );
+    assert.equal(
+      bound.length,
+      2,
+      "only two explicit human response intents were admitted",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await f.close();
+  }
+});

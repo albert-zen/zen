@@ -12278,3 +12278,90 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Native question drafts stay in the existing information surface. */
+.user-question-card {
+  min-width: 0;
+  padding-block: 12px;
+  border-top: 1px solid var(--border);
+}
+.user-question-card fieldset {
+  min-width: 0;
+  border: 0;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.user-question-card legend {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.user-question-status,
+.user-question-draft-note {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.user-question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 4px;
+  cursor: pointer;
+}
+.user-question-option input {
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+.user-question-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.user-question-option strong {
+  font-weight: 500;
+}
+.user-question-option small {
+  display: block;
+  color: var(--text-3);
+}
+.user-question-text {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.user-question-text textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+.user-question-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-block: 8px;
+}
+.user-question-actions button,
+.user-question-attention > button,
+.user-question-attention > header button {
+  min-height: 44px;
+}
+.user-question-error {
+  overflow-wrap: anywhere;
+  margin-block: 8px;
+}
+.user-question-error pre {
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+}

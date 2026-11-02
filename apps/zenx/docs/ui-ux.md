@@ -1054,3 +1054,26 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 副本只由精确 client ID 与匹配 admission kind 消除：start/steer 可以由
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
+
+### Native question cards (experimental Desktop slice)
+
+Native accepted questions appear in the existing information panel attention slot,
+with independent `(Thread, call Item)` drafts, authored options, always-available
+free text, explicit Send and explicit Cancel request. Nothing is preselected or
+sent automatically. Hiding the information panel, changing Thread, or the model
+ending its Turn does not cancel a question, clear its draft, move focus or navigate.
+This initial renderer-local draft does not survive application reload; native
+accepted/pending questions do. Neither Board fields nor Composer/queue-edit fields
+are reused. Each authored question must have a valid answer before one group Send.
+
+The view reads bounded native pages and exact response identities. Invalidation
+restarts pagination; additional pages remain explicitly reachable. Pending means
+admitted, not model-visible; claimed means model input, not successful inference.
+Unknown writes retain their exact identity/payload and expose read-only Check
+response. Not-found is not proof that an in-flight write failed. No reconnect,
+status event or late callback resends or clears a newer draft. Local diagnostics
+remain expandable plain text. Current Host authority, not disabled controls,
+resolves concurrent clients. Publication remains behind the default-off Host
+experiment; this slice does not enable shared Room/CLI/remote publication, change
+Pinned/hidden state, or claim sidebar asking/recency integration without the
+separately reviewed authoritative summary projection.

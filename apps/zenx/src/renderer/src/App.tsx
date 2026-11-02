@@ -1,3 +1,5 @@
+import { UserQuestionCards } from "./UserQuestionCards.js";
+import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import {
   createSteerRecallStore,
@@ -543,6 +545,16 @@ function AppContent() {
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const [steerRecallStore] = useState(createSteerRecallStore);
+  const [userQuestionStore] = useState(() =>
+    createUserQuestionStore({
+      list: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/list", params),
+      read: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/read", params),
+      respond: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/respond", params),
+    }),
+  );
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const endNotificationsRef = useRef<ReturnType<
@@ -1477,7 +1489,10 @@ function AppContent() {
     const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
-      if (status.type !== "ready") endNotifications.disconnect();
+      if (status.type !== "ready") {
+        endNotifications.disconnect();
+        userQuestionStore.disconnect();
+      }
       if (status.type === "ready") {
         void endNotifications.connect();
         void replaceApprovalSnapshot();
@@ -1485,6 +1500,7 @@ function AppContent() {
         void loadProjects();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
+          userQuestionStore.invalidate(selectedThreadIdRef.current);
           void resumeThread(selectedThreadIdRef.current, true);
         }
       } else if (status.type === "reconnecting") {
@@ -1609,6 +1625,13 @@ function AppContent() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "user_question_attention_invalidated" &&
+            cached?.processEpoch === projected.processEpoch &&
+            cached.watermark === projected.watermark
+          ) {
+            userQuestionStore.invalidate(projected.threadId);
+          }
           if (nativeEvent.type === "context_compaction_status") {
             if (
               cached?.processEpoch === projected.processEpoch &&
@@ -1886,6 +1909,25 @@ function AppContent() {
   const informationThreads = useMemo(
     () => [...activeSummaries, ...archivedSummaries],
     [activeSummaries, archivedSummaries],
+  );
+  const questionAttention = useMemo(
+    () =>
+      selectedThreadId ? (
+        <UserQuestionCards
+          threadId={selectedThreadId}
+          store={userQuestionStore}
+          disabled={
+            serverStatus.type !== "ready" ||
+            archivingThreadIds.has(selectedThreadId)
+          }
+        />
+      ) : undefined,
+    [
+      selectedThreadId,
+      userQuestionStore,
+      serverStatus.type,
+      archivingThreadIds,
+    ],
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedBaseSummary =
@@ -4504,6 +4546,7 @@ function AppContent() {
                   !selectedRoomId && selectedThreadId ? (
                     <ConversationInformationCards
                       threadId={selectedThreadId}
+                      attention={questionAttention}
                       threads={informationThreads}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}
