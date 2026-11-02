@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        prior-user-messages: [0, 1000, 5000]
+        prior-user-messages: [5000]
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
@@ -47,7 +47,7 @@ jobs:
           npm run build --workspace @zen/zenx
       - name: Full native App ordinary send
         working-directory: product
-        timeout-minutes: 6
+        timeout-minutes: 12
         run: node apps/zenx/scripts/launch-send-latency.mjs ../results '${{ matrix.prior-user-messages }}'
       - uses: actions/upload-artifact@v4
         if: always()

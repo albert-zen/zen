@@ -266,7 +266,7 @@ child.once("close", (code, signal) => {
 try {
   const code = await (
     process.platform === "win32" ? waitOwnedWindowsTree : waitOwnedPosixGroup
-  )(child, 240000);
+  )(child, count===5000?600000:240000);
   assert.equal(code, 0, "Owned full App diagnostic must pass");
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),

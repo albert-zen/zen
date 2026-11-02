@@ -53,9 +53,11 @@ const evaluate = async (expression) => {
 };
 async function until(check, label) {
   result.waitingFor = label;
+  console.log("SYNTHETIC_SEND_STAGE "+JSON.stringify({phase:"wait",label,mainMs:performance.now()}));
   for (let i = 0; i < 400; i++) {
     if (await check()) {
       delete result.waitingFor;
+      console.log("SYNTHETIC_SEND_STAGE "+JSON.stringify({phase:"ready",label,mainMs:performance.now()}));
       return;
     }
     await pause(100);
@@ -91,6 +93,7 @@ async function click(expression, label) {
     ...p,
   });
   result.steps.push(label);
+  console.log("SYNTHETIC_SEND_STAGE "+JSON.stringify({phase:"native-input-dispatched",label,mainMs:performance.now()}));
   delete result.pendingOperation;
 }
 // Electron wheel delta sign is opposite to DOM deltaY (existing native capture contract).
@@ -180,6 +183,7 @@ ipcMain.handle = function (channel, handler) {
       record.finishedMs = performance.now();
       record.durationMs = record.finishedMs - record.receivedMs;
       record.receipt = structuredClone(receipt);
+      console.log("SYNTHETIC_SEND_IPC_RECEIPT "+JSON.stringify(record));
       return receipt;
     } catch (error) {
       record.finishedMs = performance.now();
@@ -356,6 +360,7 @@ async function run() {
       assert.ok(sample.notifications.some(n=>n.itemId===sample.messageId && n.itemType==="user_message"),"Canonical native item event observed");
       assert.ok(!sample.notifications.some(n=>String(n.type).includes("compact")||String(n.itemType).includes("compact")),"Ordinary baseline must not compact");
       sample.durableVerification={itemId:matches[0].id,clientId:matches[0].clientId,turnId:sample.ipc[0].receipt.turnId};
+      console.log("SYNTHETIC_SEND_SAMPLE_JSON "+JSON.stringify({priorCompletedTurns:manifest.completedTurnCount,repetition,clickToBubbleDomMs:sample.clickToBubbleDomMs,clickToVisibleFrameMs:sample.clickToVisibleFrameMs,clickToClearFrameMs:sample.clickToClearFrameMs,ipcDurationMs:sample.ipc[0].durationMs,verification:sample.durableVerification,independentStorageReopenPending:true}));
     } catch(error) {
       result.failedSample=await evaluate("window.__sendLatency.stop()");
       throw error;
@@ -369,6 +374,7 @@ async function run() {
 void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
   .then(run).catch(async error=>{
     result.error=String(error.stack||error);
+    console.error("SYNTHETIC_SEND_CAPTURE_ERROR "+JSON.stringify({error:result.error,waitingFor:result.waitingFor,pendingOperation:result.pendingOperation}));
     if(window&&!window.isDestroyed())try{await screenshot("send-latency-failure.png")}catch{}
   }).finally(async()=>{
     await fs.writeFile(path.join(directory,"full-app-measurements.json"),JSON.stringify(result,null,2));
