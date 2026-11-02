@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
-import { seedLongThread } from "./long-thread-domain-seed.mjs";
+import { seedLongThread, verifyLongThread } from "./long-thread-domain-seed.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["win32", "darwin"].includes(process.platform));
@@ -27,6 +27,7 @@ assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   expected,
 );
+assert.equal(execFileSync("git",["diff","--name-only","HEAD"],{encoding:"utf8"}).trim(),"","Tracked production checkout must be unchanged");
 await mkdir(directory, { recursive: true });
 const temporary = await mkdtemp(path.join(os.tmpdir(), "zenx-owned-full-app-"));
 const profile = path.join(temporary, "profile"),
@@ -271,6 +272,8 @@ try {
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
   assert.equal(result.ok, true);
+  const persisted=await verifyLongThread({dataDirectory:data,threadId:result.seed.threadId,samples:result.samples,userMessageCount:count});
+  await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
   await writeFile(

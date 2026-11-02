@@ -51,3 +51,25 @@ export async function seedLongThread({ isolationRoot, dataDirectory, workspace, 
   await writeFile(path.join(isolationRoot,"seed-manifest.json"),JSON.stringify(manifest,null,2)+"\n");
   return manifest;
 }
+
+
+/** Independent storage reopen only after the owned production Host exits normally. */
+export async function verifyLongThread({dataDirectory,threadId,samples,userMessageCount}) {
+  const trace=new FileTraceStore(path.join(dataDirectory,"trace"));
+  const journal=new DomainThreadJournal({directory:path.join(dataDirectory,"threads"),trace,metadata:new JsonlThreadMetadataStore(path.join(dataDirectory,"thread-metadata.jsonl"))});
+  try {
+    const facts=await journal.read(threadId);
+    assert.equal(facts.filter(i=>i.type==="user_message").length,userMessageCount+samples.length);
+    const compactionFacts=facts.filter(i=>i.type.includes("compact"));
+    assert.equal(compactionFacts.length,0,"No persisted compaction anywhere in ordinary baseline");
+    for(const sample of samples){
+      const found=facts.filter(i=>i.type==="user_message"&&i.clientId===sample.ipc[0].clientUserMessageId);
+      assert.equal(found.length,1);
+      assert.equal(found[0].id,sample.messageId);
+      assert.ok(found[0].content.some(p=>p.type==="text"&&p.text===sample.nonce));
+    }
+    const observed=await trace.read(threadId,{verifyArtifacts:false});
+    assert.equal(observed.completeness,"complete");
+    return {independentReopen:true,userMessages:userMessageCount+samples.length,matchedNewMessages:samples.length,compactionFacts:0,traceCompleteness:observed.completeness};
+  } finally {await journal.close();await trace.flush();}
+}

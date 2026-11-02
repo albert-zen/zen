@@ -215,7 +215,8 @@ function installObservation(nonce) {
   document.addEventListener("click", capture, true);
   const findBubble = (root) => {
     if (!(root instanceof Element)) return;
-    const rows = root.matches("article.user-row[data-sent-message-id]")
+    const rows = root.closest("article.user-row[data-sent-message-id]")
+      ? [root.closest("article.user-row[data-sent-message-id]")] : root.matches("article.user-row[data-sent-message-id]")
       ? [root] : [...root.querySelectorAll("article.user-row[data-sent-message-id]")];
     for (const row of rows) {
       const bubble = row.querySelector(".user-bubble");
@@ -237,6 +238,7 @@ function installObservation(nonce) {
   const off = window.zenx.protocol.onNotification((method, params) => {
     if (record.clickMs === undefined || method !== "zen/thread/event") return;
     const event = params.event;
+    if (record.notifications.length >= 2000) return;
     record.notifications.push({
       atMs:performance.now(), type:event?.type,
       itemType:event?.item?.type, itemId:event?.item?.id,
@@ -252,7 +254,8 @@ function installObservation(nonce) {
       if (record.bubble && record.bubbleVisibleFrameMs === undefined) {
         const r = record.bubble.getBoundingClientRect();
         const style = getComputedStyle(record.bubble);
-        if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && style.visibility !== "hidden" && style.display !== "none") {
+        const viewport = record.bubble.closest(".messages")?.getBoundingClientRect() ?? {top:0,bottom:innerHeight,left:0,right:innerWidth};
+        if (record.bubble.isConnected && r.width > 0 && r.height > 0 && r.bottom > Math.max(0,viewport.top) && r.top < Math.min(innerHeight,viewport.bottom) && r.right > Math.max(0,viewport.left) && r.left < Math.min(innerWidth,viewport.right) && style.visibility !== "hidden" && style.display !== "none") {
           record.bubbleVisibleFrameMs = now;
           record.bubbleBounds = {left:r.left,top:r.top,width:r.width,height:r.height};
           requestAnimationFrame(() => {record.followingFrameMs = performance.now();});
@@ -286,10 +289,20 @@ async function run() {
   result.nativeWindow = {bounds:window.getBounds(),contentBounds:window.getContentBounds()};
   await until(async()=>await evaluate("Boolean(document.querySelector('.app-shell') && window.zenx?.protocol)"),"App mounted");
   await until(async()=>await evaluate("window.zenx.protocol.getStatus().then(s=>s.type==='ready')"),"fake Host ready");
+  const settings = await evaluate("window.zenx.settings.get()");
+  assert.equal(settings.profile.defaultModel.providerProfileId,"fake");
+  assert.equal(settings.profile.defaultModel.modelId,"fake");
+  const configuredProvider=settings.profile.providerProfiles.find(p=>p.providerProfileId==="fake");
+  assert.equal(configuredProvider.type,"fake");
+  assert.equal(configuredProvider.models.find(m=>m.id==="fake").contextWindow,100000000);
+  assert.equal(settings.hasApiKey,false);
+  assert.equal(settings.subscription.authenticated,false);
+  result.fixtureModel={provider:"fake",modelId:"fake",contextWindow:100000000};
   const manifest = JSON.parse(await fs.readFile(path.join(temporary,"seed-manifest.json"),"utf8"));
   assert.ok(manifest.threadId && Number.isInteger(manifest.visibleMessageCount));
   result.seed = manifest;
   const threadId = manifest.threadId;
+  await evaluate("(()=>{window.__baselineEvents=[];window.__stopBaseline=window.zenx.protocol.onNotification((method,params)=>{if(method==='zen/thread/event'&&params.threadId==="+JSON.stringify(threadId)+"){window.__baselineEvents.push({type:params.event?.type,itemType:params.event?.item?.type});}})})()");
   const threadTarget = 'document.querySelector('+JSON.stringify(".thread-row-shell[data-thread-id="+JSON.stringify(threadId)+"] > button.thread-row")+')';
   await until(async()=>await evaluate("Boolean("+threadTarget+")"),"seeded production Thread in sidebar");
   await revealThreadWithSidebarWheel(threadTarget);
@@ -299,9 +312,11 @@ async function run() {
   const beforeMessages = before.thread.turns.flatMap(t=>t.items).filter(i=>i.type==="userMessage"||i.type==="agentMessage");
   assert.equal(beforeMessages.length,manifest.visibleMessageCount,"Production Host projects every seeded message");
   assert.ok(before.thread.turns.every(t=>t.status!=="inProgress"),"No active Turn before ordinary send");
-  result.before = {turns:before.thread.turns.length,messages:beforeMessages.length};
+  result.before = {turns:before.thread.turns.length,messages:beforeMessages.length,baselineKind:"existing selected idle Thread; initial production thread/read verified and warmed before timing",rendered:await evaluate("({userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('.turn-block').length})")};
   await pause(500);
   result.samples=[];
+  assert.equal(await evaluate("document.querySelector('#thread-composer') instanceof HTMLTextAreaElement"),true,"Baseline is native plain-text composer");
+  result.frameMeaning="DOM visibility at a requestAnimationFrame opportunity, not proof of physical screen scanout; synthetic whole-window screenshots included";
   for(let repetition=0;repetition<3;repetition++) {
     const nonce = "Synthetic latency message "+manifest.visibleMessageCount+" "+repetition+" "+require("node:crypto").randomUUID();
     await click("document.querySelector('#thread-composer:not(:disabled)')","Focus actual composer");
@@ -315,6 +330,7 @@ async function run() {
     try {
       await until(async()=>await evaluate("window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined"),"real visible bubble and cleared composer");
       await until(async()=>result.ipc.slice(ipcStart).some(r=>r.finishedMs!==undefined),"real protocol receipt");
+      await until(async()=>await evaluate("window.__sendLatency.notifications.some(n=>n.type==='turn_completed' || n.itemType==='turn_completed')"),"real fake Turn terminal notification");
       const sample=await evaluate("window.__sendLatency.stop()");
       result.samples.push(sample);
       assert.equal(sample.trusted,true);
@@ -330,10 +346,6 @@ async function run() {
       assert.equal(sample.ipc[0].threadId,threadId);
       assert.ok(sample.ipc[0].requestId);
       await screenshot("messages-"+manifest.visibleMessageCount+"-sample-"+repetition+"-after.png");
-      await until(async()=> {
-        const read=await evaluate("window.zenx.protocol.request('thread/read',{threadId:"+JSON.stringify(threadId)+",includeTurns:true})");
-        return read.thread.turns.every(t=>t.status!=="inProgress");
-      },"fake response completed");
       const after=await evaluate("window.zenx.protocol.request('thread/read',{threadId:"+JSON.stringify(threadId)+",includeTurns:true})");
       const matches=after.thread.turns.flatMap(t=>t.items).filter(i=>i.type==="userMessage" && i.content.some(p=>p.type==="text"&&p.text===nonce));
       assert.equal(matches.length,1,"Exactly one real durable canonical user message");
@@ -348,6 +360,8 @@ async function run() {
     }
     await pause(300);
   }
+  result.baselineEvents=await evaluate("(()=>{window.__stopBaseline();return window.__baselineEvents})()");
+  assert.ok(!result.baselineEvents.some(n=>String(n.type).includes("compact")||String(n.itemType).includes("compact")),"No compaction anywhere in observed baseline lifecycle");
   result.ok=true;
 }
 void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
