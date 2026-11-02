@@ -1,0 +1,74 @@
+name: Same-runner current-base quote-aware Turn comparison
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/turn-quote-native-comparison.yml
+      - apps/zenx/scripts/launch-turn-quote-comparison.mjs
+permissions:
+  contents: read
+jobs:
+  paired-native-macos:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ad4c029d31b848d7a46c2bf9db64b4504cb5a1e2
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 07dccde9020847bd694da240ce7a9f79386cd379
+          persist-credentials: false
+          path: pending
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy identical passive drivers, leaving product tracked files unchanged
+        run: |
+          for source in baseline pending; do
+            cp diagnostic/apps/zenx/scripts/capture-send-feedback.cjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/launch-turn-quote-comparison.mjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
+          done
+      - name: Build exact baseline once
+        working-directory: baseline
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Build exact pending candidate once
+        working-directory: pending
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Native A1 B1, three messages per fresh isolated profile
+        timeout-minutes: 18
+        run: |
+          failed=0
+          for case in A1 B1; do
+            case "$case" in A*) source=baseline ;; B*) source=pending ;; esac
+            echo "PAIRED_CASE_BEGIN $case $source"
+            if (cd "$source" && node apps/zenx/scripts/launch-turn-quote-comparison.mjs "../results/$case" 5000 "$source" "$case"); then
+              echo "PAIRED_CASE_RESULT $case success"
+            else
+              failed=1
+              echo "PAIRED_CASE_RESULT $case failure"
+            fi
+            echo "PAIRED_CASE_END $case $source"
+          done
+          test "$failed" = 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-turn-quote-same-runner-ab-5000
+          path: results
+          if-no-files-found: error
