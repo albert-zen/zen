@@ -6,6 +6,200 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
+import {
+  applySidebarPatch,
+  emptySidebarState,
+} from "../src/thread-sidebar-state.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
+
+test("Chrome discovery offers an explicit preview choice without adding duplicate tabs, and dismissal never closes Chrome", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const commands: string[] = [];
+  const target = {
+    id: "connected:chrome-page",
+    sessionId: "chrome",
+    tabId: "1",
+    title: "Chrome reference",
+    url: "https://example.test",
+    backendId: "connected",
+    mode: "live",
+    loading: false,
+  } as const;
+  const listeners = new Set<(event: BrowserThreadEvent) => void>();
+  (window as any).zenx = {
+    workspaceBrowser: {
+      onChanged: () => () => {},
+      command: async (_owner: string, command: string) => {
+        commands.push(command);
+        return [];
+      },
+    },
+    browserObservation: {
+      subscribe(
+        _request: unknown,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        listeners.add(listener);
+        listener({ type: "targets", targets: [target] });
+        return () => listeners.delete(listener);
+      },
+    },
+  };
+  const snapshot = {
+    plugins: [{ id: "browser", enabled: true, available: true }],
+    panels: [],
+  } as unknown as ZenXPluginSnapshot;
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("");
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "a",
+      title: "Task",
+      open: true,
+      onOpenChange() {},
+      snapshot,
+      selectedTab,
+      onSelectTab,
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "catalog discovery must not open a preview",
+    );
+    const choose = async () => {
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+          .click(),
+      );
+      const option = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ].find((b) => b.textContent?.includes("Chrome reference"));
+      assert.ok(option, "the external page remains explicitly available");
+      await act(async () => option!.click());
+    };
+    await choose();
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label^="Close tab"]')!
+        .click(),
+    );
+    await act(async () => {
+      for (const listener of listeners)
+        listener({ type: "targets", targets: [target] });
+    });
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "a catalog refresh must not reopen the dismissed preview",
+    );
+    await choose();
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    assert.deepEqual(
+      commands,
+      ["list"],
+      "preview selection and dismissal never create or close native pages",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("a restored missing Browser descriptor explains its state and can be dismissed without closing a native page", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const commands: string[] = [];
+  (window as any).zenx = {
+    workspaceBrowser: {
+      onChanged: () => () => {},
+      command: async (_owner: string, command: string) => {
+        commands.push(command);
+        if (command !== "list")
+          throw Error("Browser tab is not in this Thread");
+        return [];
+      },
+    },
+  };
+  let saved = applySidebarPatch(emptySidebarState("a"), {
+    open: true,
+    tabs: [{ kind: "browser", id: "expired-native-page" }],
+    selectedTab: "browser:expired-native-page",
+  });
+  function Harness() {
+    const [state, setState] = useState(saved);
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "a",
+      title: "Task",
+      open: true,
+      onOpenChange() {},
+      snapshot: null,
+      presentationState: state,
+      selectedTab: state.selectedTab ?? "",
+      onSelectTab() {},
+      onRemoveTab(id) {
+        saved = applySidebarPatch(saved, {
+          tabs: saved.tabs.filter(
+            (tab) => `browser:${"id" in tab ? tab.id : ""}` !== id,
+          ),
+          selectedTab: null,
+        });
+        setState(saved);
+      },
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.match(
+      document.querySelector('[role="status"]')?.textContent ?? "",
+      /page.*unavailable/i,
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label^="Close tab"]')!
+        .click(),
+    );
+    assert.equal(saved.tabs.length, 0);
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 0);
+    assert.deepEqual(
+      commands,
+      ["list"],
+      "dismissal must not address a dead native resource",
+    );
+    await act(async () =>
+      root.render(React.createElement(Harness, { key: "restart" })),
+    );
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 0);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
 
 test("shared browser pages are peer workspace tabs and the type picker unmounts the native view", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
@@ -104,7 +298,7 @@ test("shared browser pages are peer workspace tabs and the type picker unmounts 
       ...document.querySelectorAll<HTMLButtonElement>(
         ".workspace-tab-types button",
       ),
-    ].find((e) => e.querySelector("strong")?.textContent === "Browser")!;
+    ].find((e) => e.querySelector("strong")?.textContent === "ZenX browser")!;
     await act(async () => browser.click());
     assert.deepEqual(
       tabs().map((tab) => tab.textContent),

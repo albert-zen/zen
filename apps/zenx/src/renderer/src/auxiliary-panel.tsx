@@ -395,7 +395,6 @@ export function AuxiliaryPanel({
   const [pickingFile, setPickingFile] = useState(false);
   const [fileNavigationOpen, setFileNavigationOpen] = useState(true);
   const [externalListScope, setExternalListScope] = useState<string>();
-  const [dismissedExternal, setDismissedExternal] = useState<string[]>([]);
   const [externalTargets, setExternalTargets] = useState<BrowserThreadTarget[]>(
     [],
   );
@@ -494,14 +493,14 @@ export function AuxiliaryPanel({
           },
         ]
       : []),
-    ...(externalListScope === externalScope ? externalTargets : [])
-      .filter((target) => !dismissedExternal.includes(target.id))
-      .map((target) => ({
+    ...(externalListScope === externalScope ? externalTargets : []).map(
+      (target) => ({
         id: `external-browser:${target.id}`,
         title: `${target.title || target.url} · ${i18n.t("panels:externalReadOnly")}`,
         icon: "browser" as const,
         externalBrowser: target,
-      })),
+      }),
+    ),
     ...panels.map((panel) => ({
       id: `plugin:${panel.key}`,
       title:
@@ -533,7 +532,9 @@ export function AuxiliaryPanel({
             ? descriptor.url
             : descriptor.kind === "terminal"
               ? i18n.t("panels:shellTitle")
-              : descriptor.kind),
+              : descriptor.kind === "browser"
+                ? i18n.t("shell:workspaceBrowser")
+                : descriptor.kind),
       icon:
         existing?.icon ??
         (descriptor.kind === "file"
@@ -566,7 +567,7 @@ export function AuxiliaryPanel({
         ...new Set([
           ...order,
           ...candidates
-            .filter((tab) => tab.path || tab.browser || tab.externalBrowser)
+            .filter((tab) => tab.path || tab.browser)
             .map((tab) => tab.id),
           ...(selectedTab && available.has(selectedTab) ? [selectedTab] : []),
         ]),
@@ -1034,7 +1035,6 @@ export function AuxiliaryPanel({
   useEffect(() => {
     setExternalTargets([]);
     setExternalListScope(externalScope);
-    setDismissedExternal([]);
   }, [externalScope]);
   useEffect(() => {
     if (!browser || !threadId || !window.zenx.browserObservation) return;
@@ -1048,12 +1048,7 @@ export function AuxiliaryPanel({
         const external = event.targets.filter(
           (target) => target.backendId !== "workspace",
         );
-        setExternalTargets((previous) => [
-          ...previous
-            .filter((old) => !external.some((next) => next.id === old.id))
-            .map((old) => ({ ...old, activityCount: 0 })),
-          ...external,
-        ]);
+        setExternalTargets(external);
       },
     );
     return () => {
@@ -1228,6 +1223,15 @@ export function AuxiliaryPanel({
         return;
       }
       operationEpoch = selectionEpoch.current;
+      // A successful current-owner catalog can prove the persisted native page
+      // has expired. Dismissing that presentation needs no native close command.
+      if (
+        browserListThread === owner &&
+        !browserTabs.some((page) => page.id === browserId)
+      ) {
+        remove(tab.id, operationEpoch, closedIndex);
+        return;
+      }
       const browserVersion = browserSnapshotVersion.current;
       try {
         const value = await window.zenx.workspaceBrowser.command(
@@ -1244,8 +1248,6 @@ export function AuxiliaryPanel({
         return;
       }
     }
-    if (tab.externalBrowser)
-      setDismissedExternal((ids) => [...ids, tab.externalBrowser!.id]);
     remove(tab.id, operationEpoch, closedIndex);
   };
   const close = () => {
@@ -1773,12 +1775,33 @@ export function AuxiliaryPanel({
                       >
                         <Icon name="browser" />
                         <span>
-                          <strong>{i18n.t("panels:browser")}</strong>
+                          <strong>{i18n.t("shell:workspaceBrowser")}</strong>
                           <small>
                             {i18n.t("panels:browseASharedPageWithTheAgent")}
                           </small>
                         </span>
                       </button>
+                      {candidates
+                        .filter((tab) => tab.externalBrowser)
+                        .map((tab) => (
+                          <button
+                            type="button"
+                            key={tab.id}
+                            onClick={() => void add(tab.id)}
+                          >
+                            <Icon name="browser" />
+                            <span>
+                              <strong>
+                                {tab.externalBrowser!.title ||
+                                  tab.externalBrowser!.url}
+                              </strong>
+                              <small>
+                                {tab.externalBrowser!.connectionLabel ||
+                                  i18n.t("panels:externalReadOnly")}
+                              </small>
+                            </span>
+                          </button>
+                        ))}
                       {computer ? (
                         <button
                           type="button"
@@ -1853,6 +1876,11 @@ export function AuxiliaryPanel({
           ) : null}
           {tabs.map((tab) => {
             const visible = !showChooser && active === tab.id;
+            const externalBrowserId =
+              tab.externalBrowser?.id ??
+              (tab.descriptor?.kind === "external-browser"
+                ? tab.descriptor.id
+                : undefined);
             const panel = panels.find(
               (value) => scopedId(`plugin:${value.key}`) === tab.id,
             );
@@ -1915,6 +1943,15 @@ export function AuxiliaryPanel({
                     open={open === true}
                   />
                 ) : null}
+                {tab.descriptor?.kind === "browser" &&
+                !tab.browser &&
+                open &&
+                visible &&
+                browserListReady ? (
+                  <p role="status" className="browser-observation-feedback">
+                    {i18n.t("panels:workspaceBrowserClosed")}
+                  </p>
+                ) : null}
                 {(tab.descriptor?.kind === "terminal" ||
                   tab.id === "terminal") &&
                 threadId !== undefined ? (
@@ -1941,13 +1978,13 @@ export function AuxiliaryPanel({
                     active={open === true && visible}
                   />
                 ) : null}
-                {tab.externalBrowser && threadId !== undefined ? (
+                {externalBrowserId !== undefined && threadId !== undefined ? (
                   <BrowserThreadPanel
                     threadId={threadId}
-                    title={tab.externalBrowser.connectionLabel || title}
-                    fixedTargetId={tab.externalBrowser.id}
-                    activityCount={tab.externalBrowser.activityCount}
-                    activityFailed={tab.externalBrowser.activityFailed}
+                    title={tab.externalBrowser?.connectionLabel || title}
+                    fixedTargetId={externalBrowserId}
+                    activityCount={tab.externalBrowser?.activityCount}
+                    activityFailed={tab.externalBrowser?.activityFailed}
                     embedded
                     open={open === true && visible}
                     onOpenChange={onOpenChange}

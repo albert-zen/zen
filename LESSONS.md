@@ -43,6 +43,9 @@
   compaction 重构
 - 工具失败后的自动重试、fallback、自愈或 durable recovery 状态机；工具局部失败只
   结算一次 canonical failed result 并让模型决定下一步
+  2026-11-02 用户要求 Chrome 扩展在 ZenX 重启后自动连接：扩展只持久保存用户显式
+  连接选择，并通过 Chrome alarm 重新建立全新 transport；手动断开和 debugger cancel
+  撤销该选择。不恢复旧工具、权限/观察引用或未知副作用，不启动 ZenX，也不新增宿主状态机。
 - 把 `apply_patch` 包装成 durable filesystem transaction、workspace confinement 或第二套
   文件权限系统；它与 shell 使用同一 Host 权限边界，预检保证内容错误时零修改，I/O 失败
   则明确报告可能已经提交的前缀

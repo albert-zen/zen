@@ -672,9 +672,9 @@ export const en = {
     "Open chrome://extensions or edge://extensions, enable Developer mode, choose Load unpacked, then select the folder opened here.",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. Connect your browser",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "Click the ZenX extension once in Chrome or Edge. Existing and new web tabs become available without connecting each tab. Click the extension again to disconnect the whole browser.",
+    "Click the ZenX extension once in Chrome or Edge. Existing and new web tabs become available, and the extension remembers your connection choice across ZenX and browser restarts. Click again to disconnect and stop automatic reconnection.",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "Keep using your usual browser windows and signed-in pages. Chrome, Edge and multiple browser profiles can connect together. Reload the updated extension in each browser; approval labels show only the browser and a short random instance ID. You and the Agent work in the same tabs; the sidebar shows the Agent’s latest view. Closing ZenX or disabling the extension ends the connection.",
+    "Keep using your usual browser windows and signed-in pages. Chrome, Edge and multiple profiles can connect together. Reload the updated extension in each browser and connect once. While ZenX is closed the extension waits and checks every 30 seconds; reopening ZenX restores the connection without a toolbar click. Chrome may delay checks while sleeping. Choose an external page from the workspace tab menu to preview it. Clicking Disconnect or cancelling Chrome debugger access stops reconnection.",
   "contextCompactionPanel.contextCompaction": "Context compaction",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "Control when history is summarized and which original items the model keeps.",
@@ -1983,9 +1983,9 @@ export const zhCN: Record<keyof typeof en, string> = {
     "打开 chrome://extensions 或 edge://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，然后选取此处打开的文件夹。",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. 连接浏览器",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "在 Chrome 或 Edge 中点击一次 ZenX 扩展程序。现有和新打开的网页标签页都会可用，无需逐个连接。再次点击扩展程序即可断开整个浏览器。",
+    "在 Chrome 或 Edge 中点击一次 ZenX 扩展程序，现有和新打开的网页标签页都会可用，并会记住连接选择，在 ZenX 或浏览器重启后自动重连。再次点击即可断开并停止自动重连。",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "你可以继续使用平常的浏览器窗口和已登录的页面。Chrome、Edge 和多个浏览器配置文件可以同时连接。请在各浏览器中重新加载新版扩展；授权标签仅显示浏览器名称与随机实例编号。你和智能体共用同一批标签页；侧边栏显示智能体最近看到的页面。关闭 ZenX 或停用扩展程序会断开连接。",
+    "你可以继续使用平常的浏览器窗口和已登录的页面。Chrome、Edge 和多个配置文件可以同时连接。更新后在各浏览器中重新加载扩展并连接一次。ZenX 关闭时扩展等待，并每 30 秒检查一次；重新打开 ZenX 后自动连接，无需再点工具栏。休眠时 Chrome 可能延迟检查。需要预览时，从工作区新标签菜单选择外部网页。点击断开或取消 Chrome 调试访问后，将停止自动重连。",
   "contextCompactionPanel.contextCompaction": "上下文压缩",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "设置何时总结历史记录，以及模型保留哪些原始条目。",

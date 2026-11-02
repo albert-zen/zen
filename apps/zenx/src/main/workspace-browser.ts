@@ -596,6 +596,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       return this.#workspaceSnapshot(threadId);
     }
     const tab = typeof tabId === "string" ? this.#tabs.get(tabId) : undefined;
+    // Sidebar descriptors survive app restart; native pages do not. Closing an
+    // already absent page is complete, while a live foreign page stays guarded.
+    if (command === "close" && typeof tabId === "string" && tabId && !tab)
+      return this.#workspaceSnapshot(threadId);
     if (!tab || tab.threadId !== threadId)
       throw new Error("Browser tab is not in this Thread");
     const web = tab.view.webContents;

@@ -436,7 +436,8 @@ test("late new and materialize replies cannot resurrect already-settled Agent ac
             ".workspace-tab-types button",
           ),
         ].find(
-          (button) => button.querySelector("strong")?.textContent === "Browser",
+          (button) =>
+            button.querySelector("strong")?.textContent === "ZenX browser",
         )!;
         await act(async () => browser.click());
       } else {

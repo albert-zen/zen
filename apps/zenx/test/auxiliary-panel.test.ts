@@ -204,10 +204,11 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
     await act(async () =>
-      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-        .find((tab) => tab.textContent?.startsWith("Connected page"))!
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
         .click(),
     );
+    await act(async () => choose("Connected page").click());
     assert.equal(requests.at(-1)?.frames, true);
     const subscriptionsBeforeSwitch = requests.length;
     const stoppedBeforeSwitch = stopped;
@@ -485,7 +486,7 @@ for (const throughHostSdk of [false, true]) {
           .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
           .click(),
       );
-      await act(async () => choose("Browser").click());
+      await act(async () => choose("ZenX browser").click());
       await act(async () => {
         if (throughHostSdk) externalSelect("plugin:notes:external");
         else choose("Notes").click();
