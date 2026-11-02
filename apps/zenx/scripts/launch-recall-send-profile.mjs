@@ -287,6 +287,7 @@ try {
   assert.equal(sourceLabel,"profile");
   assert.equal(result.profile?.acceptance,false);
   assert.equal(result.profile?.traceStopped,true);
+  assert.equal(result.profile?.review?.passed,true);
   console.log("DIAGNOSTIC_PROFILE_ONLY_NOT_PERFORMANCE_ACCEPTANCE");
   assert.equal(result.samples.length,3);
   assert.ok(result.samples.every(s=>Number.isFinite(s.firstVisibleFeedbackMs)&&s.firstVisibleFeedbackMs>=0&&Number.isFinite(s.clickToClearFrameMs)&&s.clickToClearFrameMs>=0),"Finite nonnegative feedback and clear measurements required");

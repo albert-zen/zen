@@ -1,11 +1,6 @@
 name: Owned native send phase profile (not acceptance)
-on:
-  push:
-    branches: [diagnostic/send-latency-e2e-20261102]
-    paths:
-      - .github/workflows/recall-send-profile.yml
-      - apps/zenx/scripts/capture-recall-send-profile.cjs
-      - apps/zenx/scripts/launch-recall-send-profile.mjs
+# Diagnostic-only manual entry; safety corrections must not start another run.
+on: workflow_dispatch
 permissions:
   contents: read
 jobs:
@@ -32,6 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Verify private profile publication guards with synthetic inputs
+        run: node --test diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs
       - name: Copy only diagnostic drivers to exact product checkout
         run: |
           cp diagnostic/apps/zenx/scripts/capture-recall-send-profile.cjs product/apps/zenx/scripts/capture-send-feedback.cjs
@@ -55,5 +52,9 @@ jobs:
         if: always()
         with:
           name: owned-native-recall-send-profile-400bac
-          path: results
+          path: |
+            results/full-app-*.json
+            results/independent-storage-verification.json
+            results/messages-*.png
+            results/owned-native-send-profile.reviewed.json
           if-no-files-found: error

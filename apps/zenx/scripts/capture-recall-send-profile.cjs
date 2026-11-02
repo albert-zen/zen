@@ -298,6 +298,47 @@ function installObservation(nonce, profileIndex) {
   };
 }
 
+// Fail closed before any raw trace reaches the upload allowlist. These inputs
+// belong only to this disposable fixture; their literal values are never logged.
+function profileReviewReasons(raw, secrets, configurations, allowedRoots) {
+ const reasons=new Set();
+ for(const secret of secrets)if(raw.includes(secret)||raw.includes(JSON.stringify(secret).slice(1,-1)))reasons.add("known-credential-literal");
+ for(const config of configurations)if(raw.includes(config)||raw.includes(JSON.stringify(config).slice(1,-1)))reasons.add("private-configuration-content");
+ const sensitive=[/Bearer\s+[A-Za-z0-9._~+/=-]{12,}/,/\bsk-[A-Za-z0-9_-]{20,}/,/\bgh[pousr]_[A-Za-z0-9]{20,}/,/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,/"(?:providerProfiles|onboardingComplete|apiKey|accessToken|bearerToken)"\s*:/];
+ if(sensitive.some(pattern=>pattern.test(raw)))reasons.add("credential-or-configuration-pattern");
+ for(const candidate of raw.match(/\/(?:Users|home)\/[^"\s\\]+/g)??[])if(!allowedRoots.some(root=>candidate===root||candidate.startsWith(root+"/")))reasons.add("non-fixture-user-path");
+ return [...reasons];
+}
+async function reviewAndPublishProfile(rawPath) {
+ try {
+ const secrets=[];
+ for(const [relative,required] of [["profile/runtime/app-server.token",true],["profile/runtime/plugin-dev.token",false]]){
+  try{
+   const filename=path.join(temporary,relative),stat=await fs.lstat(filename);
+   assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1,"Fixture token must be an owned regular file");
+   const tokenFile=await fs.readFile(filename,"utf8");
+   assert(/^[a-f0-9]{64}\n?$/.test(tokenFile),"Fixture token format must match its production generator");secrets.push(tokenFile.trim());
+  }catch(error){if(!required&&error.code==="ENOENT")continue;throw error;}
+ }
+ const config=await fs.readFile(path.join(temporary,"profile/host-profile.json"),"utf8");
+ const parsed=JSON.parse(config);
+ const collect=value=>{if(!value||typeof value!=="object")return;for(const [key,entry] of Object.entries(value)){if(/token|secret|password|api.?key|credential|authorization/i.test(key)&&typeof entry==="string"&&entry.length>=16)secrets.push(entry);else collect(entry);}};
+ collect(parsed);
+ const raw=await fs.readFile(rawPath,"utf8");
+ const reasonCodes=profileReviewReasons(raw,secrets,[config,JSON.stringify(parsed)],[process.cwd(),temporary]);
+ result.profile.review={passed:false,knownCredentialCount:secrets.length,privateConfigurationCount:1,reasonCodes};
+ assert.equal(reasonCodes.length,0,"Raw profile withheld: private review did not pass");
+ const published=path.join(directory,"owned-native-send-profile.reviewed.json");
+ await fs.copyFile(rawPath,published);
+ result.profile.traceFile=path.basename(published);
+ result.profile.review.passed=true;
+ } catch {
+  if(!result.profile.review)result.profile.review={passed:false,reasonCodes:["review-input-unavailable-or-invalid"]};
+  result.profile.review.passed=false;
+  throw new Error("Profile review failed; raw trace remains private");
+ }
+}
+
 async function run() {
   await networkReady;
   await until(async () => {
@@ -429,9 +470,10 @@ void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
     if(traceStarted)try{
       result.profile.bufferUsage=await contentTracing.getTraceBufferUsage();
       result.profile.processesAfter=app.getAppMetrics().map(({pid,type,cpu,memory,name,serviceName})=>({pid,type,cpu,memory,name,serviceName}));
-      result.profile.traceFile=path.basename(await contentTracing.stopRecording(path.join(directory,"owned-native-send-profile.json")));
+      const rawPath=await contentTracing.stopRecording(path.join(temporary,"owned-native-send-profile.private.json"));
+      await reviewAndPublishProfile(rawPath);
       result.profile.traceStopped=true;
-    }catch(error){result.profile.traceError=String(error);result.ok=false;}
+    }catch(error){result.profile.traceError="Profile collection or private review failed";result.ok=false;}
     await fs.writeFile(path.join(directory,"full-app-measurements.json"),JSON.stringify(result,null,2));
     process.exitCode=result.ok?0:1;
     app.quit();
