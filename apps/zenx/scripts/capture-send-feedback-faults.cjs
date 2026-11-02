@@ -443,8 +443,8 @@ async function run() {
       sample.feedbackWithinTarget=sample.firstVisibleFeedbackMs<=200;
       sample.ipc=result.ipc.slice(ipcStart);
       assert.equal(sample.ipc.length,1,"One native click produces exactly one send request");
-      if(faultCase==="lost-reply"){ sample.ipc[0].receipt=sample.ipc[0].realHandlerReceipt; sample.receiptSource="real main handler result; deliberately NOT delivered to renderer"; }
-      assert.ok(sample.ipc[0].receipt?.turnId,"Real handler admits Turn");
+      if(faultCase==="lost-reply") sample.receiptSource="real main handler result; deliberately NOT delivered to renderer";
+      assert.ok((sample.ipc[0].receipt??sample.ipc[0].realHandlerReceipt)?.turnId,"Real handler admits Turn");
       if(faultCase!=="lost-reply") assert.equal(sample.ipc[0].error,undefined);
       assert.equal(sample.ipc[0].threadId,threadId);
       if(sample.pendingClientId!==undefined) assert.equal(sample.pendingClientId,sample.ipc[0].clientUserMessageId,"Local pending and real receipt share identity");
@@ -455,8 +455,8 @@ async function run() {
         assert.equal(await evaluate("document.querySelector('#thread-composer').value"),expectedDraft,"Late canonical and ACK never overwrite newer or explicitly recovered draft");
         await click("document.querySelector('#thread-composer:not(:disabled)')","Native focus preserved draft for fixture reset");
         await until(async()=>await evaluate("document.activeElement === document.querySelector('#thread-composer')"),"fixture reset native focus");
-        window.webContents.sendInputEvent({type:"keyDown",keyCode:"A",modifiers:process.platform==="darwin"?["meta"]:["control"]});
-        window.webContents.sendInputEvent({type:"keyUp",keyCode:"A",modifiers:process.platform==="darwin"?["meta"]:["control"]});
+        window.webContents.selectAll(); // Native edit command; never assigns DOM value or React state.
+        await until(async()=>await evaluate("(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e && e.selectionStart===0 && e.selectionEnd===e.value.length})()"),"native select-all selection range before fixture reset");
         window.webContents.sendInputEvent({type:"keyDown",keyCode:"Backspace"});
         window.webContents.sendInputEvent({type:"keyUp",keyCode:"Backspace"});
         await until(async()=>await evaluate("document.querySelector('#thread-composer').value === ''"),"native reset only owned fixture draft");
@@ -468,7 +468,7 @@ async function run() {
       assert.equal(canonicalEvent.clientId,sample.ipc[0].clientUserMessageId);
       assert.ok(!sample.notifications.some(n=>String(n.type).includes("compact")||String(n.itemType).includes("compact")),"Ordinary baseline must not compact");
       sample.clickToCanonicalNotificationMs=canonicalEvent.atMs-sample.clickMs;
-      sample.canonicalEventVerification={itemId:sample.messageId,clientId:canonicalEvent.clientId,turnId:sample.ipc[0].receipt.turnId};
+      sample.canonicalEventVerification={itemId:sample.messageId,clientId:canonicalEvent.clientId,turnId:(sample.ipc[0].receipt??sample.ipc[0].realHandlerReceipt).turnId};
       sample.finalProjectionVerificationPending=true;
       console.log("SYNTHETIC_SEND_SAMPLE_JSON "+JSON.stringify({controlledFault:true,faultCase,priorCompletedTurns:manifest.completedTurnCount,repetition,firstVisibleFeedbackMs:sample.firstVisibleFeedbackMs,firstVisibleFeedbackKind:sample.firstVisibleFeedbackKind,clickToPendingVisibleFrameMs:sample.clickToPendingVisibleFrameMs,feedbackWithinTarget:sample.feedbackWithinTarget,clickToBubbleDomMs:sample.clickToBubbleDomMs,clickToVisibleFrameMs:sample.clickToVisibleFrameMs,clickToClearFrameMs:sample.clickToClearFrameMs,ipcDurationMs:sample.ipc[0].durationMs,clickToCanonicalNotificationMs:sample.clickToCanonicalNotificationMs,verification:sample.canonicalEventVerification,finalProjectionVerificationPending:true,independentStorageReopenPending:true}));
     } catch(error) {
@@ -485,7 +485,7 @@ async function run() {
     assert.equal(matches.length,1,"Exactly one real canonical user message per sample");
     assert.equal(matches[0].id,sample.messageId);
     assert.equal(matches[0].clientId,sample.ipc[0].clientUserMessageId);
-    sample.durableVerification={itemId:matches[0].id,clientId:matches[0].clientId,turnId:sample.ipc[0].receipt.turnId};
+    sample.durableVerification={itemId:matches[0].id,clientId:matches[0].clientId,turnId:(sample.ipc[0].receipt??sample.ipc[0].realHandlerReceipt).turnId};
     sample.finalProjectionVerificationPending=false;
   }
   result.historyReadPolicy="One initial full projection verification, zero full history reads between samples, one final full projection verification, independent read-only storage reopen after Host shutdown";
