@@ -79,7 +79,7 @@ async function harness(
       ...(extraRecent
         ? Array.from({ length: extraRecent }, (_, index) => ({
             ...summary(`Recent ${index}`, `/synthetic/no-project/${index}`),
-            updatedAt: new Date(10_000 + index * 1000).toISOString(),
+            recentActivityAt: new Date(10_000 + index * 1000).toISOString(),
           }))
         : []),
       ...(includeChildren
@@ -571,7 +571,7 @@ test("Pinned, Projects and Recent are independent disclosures and Recent creates
   });
 });
 
-test("Recent sorts all visible conversations by activity and reveals more without changing project order", async () => {
+test("Recent sorts by message recency and reveals more without changing project order", async () => {
   await harness(
     async () => {
       const recentIds = () =>
