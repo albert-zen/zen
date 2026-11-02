@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           - variant: baseline
-            source: d66c3ee9c4fb491e0845a5a54b25d876f5983d9e
+            source: ad4c029d31b848d7a46c2bf9db64b4504cb5a1e2
           - variant: candidate
-            source: e6fac956e4aec1c6ef0548be85c7358c83d116bf
+            source: 07dccde9020847bd694da240ce7a9f79386cd379
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +27,7 @@ jobs:
           path: product
       - uses: actions/checkout@v4
         with:
-          ref: e6fac956e4aec1c6ef0548be85c7358c83d116bf
+          ref: 07dccde9020847bd694da240ce7a9f79386cd379
           persist-credentials: false
           path: regression-source
       - uses: actions/checkout@v4
