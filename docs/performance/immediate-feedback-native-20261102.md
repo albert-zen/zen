@@ -147,3 +147,18 @@ For 5000 turns, pending DOM appeared at 95.9 / 73.5 / 135.0 ms. All historical 5
 These are **three samples per history size on disposable hosted Mac runners**, not a p95 estimate or a guarantee on the user's device. Visible feedback is the actual product's honest local pending state, not durable admission or model consumption. Canonical rendering at 5000 turns still takes 3.0–3.9 seconds and actual IPC 1.2–1.4 seconds in this run; those separate costs remain visible and are not hidden by the fast pending row.
 
 The exact same candidate also passed [all four native controlled-fault cases 41396686660](https://github.com/albert-zen/zen/actions/runs/41396686660), with four unique persisted messages and complete zero-compaction Trace, and [full-App English/Chinese geometry 41396686761](https://github.com/albert-zen/zen/actions/runs/41396686761), including all six geometry checks per locale plus actual send and independent storage reopen. Controlled-fault and geometry sends are correctness checks, **not additional performance samples**. Normal repository CI/review/release approval remains separate.
+
+
+## Integrated page-quote feature: scoped preservation check
+
+[Native run 41405245767](https://github.com/albert-zen/zen/actions/runs/41405245767), job 125145677825, passed on exact product `1fabfb44f627476a201a88731731b2b7476eb5e1`. This is a narrowly scoped preservation check after integrating page quotes, not a new causal benchmark or an exhaustive feature matrix. The accepted v2 driver and strict ≤200 ms feedback **and** input-clear gates were unchanged.
+
+Production DomainThreadJournal seeded 5000 completed turns / 10,000 visible messages / 20,001 canonical facts; the complete App actually rendered all 5000 Turn blocks and both 5000-message roles.
+
+| Sample | Pending DOM, ms | Actual pending-visible frame and input clear, ms | Canonical-visible frame, ms | Actual IPC, ms |
+|---|---:|---:|---:|---:|
+| 1 | 145.5 | 181.4 | 4861.1 | 1945.2 |
+| 2 | 90.6 | 118.9 | 3051.5 | 1293.9 |
+| 3 | 130.2 | 149.9 | 3497.9 | 1185.1 |
+
+Independent read-only storage reopening verified all three exact new message identities once, 5003 total user messages, complete Trace, zero compaction facts and zero compaction attempts. Pending rows were honestly marked sending, not durably confirmed. This is n=3 on one disposable hosted Mac runner; frame opportunity is not physical-pixel timing. Separate runners and host load prevent attributing the difference from the earlier 617 numbers to page quotes. Canonical/IPC delays remain separately reported.
