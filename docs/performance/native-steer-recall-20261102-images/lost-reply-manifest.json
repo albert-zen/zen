@@ -1,0 +1,21 @@
+{
+  "scope": "Actual complete production Electron App on disposable owned macOS CI; synthetic messages/workspace and real bundled FakeModel with declared gate. Double response loss means real recall ACK and first automatic read reply are dropped; explicit Check uses a real read-only receipt.",
+  "sourceCommit": "87208215b4ba41a54a2680b0342d606fc56e998b",
+  "sourceRun": 41403239261,
+  "artifactReadbackRun": 41403782765,
+  "artifactReadbackJob": 125141137941,
+  "images": [
+    {
+      "path": "lost-recall-reply-unknown.png",
+      "bytes": 97554,
+      "sha256": "ee69fb955b798c07ae68fc3057b476c1da28945a7b7e9a4d6bdedde3570f6f78",
+      "gitBlobSha": "0a207b3e50ff4e06e733a81f58368720f39180aa"
+    },
+    {
+      "path": "lost-recall-reply-readonly-recovered.png",
+      "bytes": 94478,
+      "sha256": "504d578cdbfd663e5db7e21ea4af49d4d787f530654d159f7cd59ac05f30f66e",
+      "gitBlobSha": "f4889614800d020e5c0b5d3c5004d20bae416379"
+    }
+  ]
+}
