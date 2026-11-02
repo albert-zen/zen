@@ -52,6 +52,7 @@ interface ContentTab {
   browser?: WorkspaceBrowserTab;
   browserActivityLabel?: string;
   externalBrowser?: BrowserThreadTarget;
+  previewOutcome?: "completed" | "failed";
   render?: () => React.ReactNode;
 }
 
@@ -398,6 +399,15 @@ export function AuxiliaryPanel({
   const [externalTargets, setExternalTargets] = useState<BrowserThreadTarget[]>(
     [],
   );
+  const [operationPreview, setOperationPreview] = useState<{
+    scope: string;
+    id: string;
+    sequence: number;
+    outcome?: "completed" | "failed";
+  }>();
+  const previewSequence = useRef(0);
+  const previewDismissed = useRef(0);
+  const previewOpen = useRef<(() => void) | undefined>(undefined);
   const [browserTabs, setBrowserTabs] = useState<WorkspaceBrowserTab[]>([]);
   // A command reply may arrive after a newer current-state event. Never let
   // that older snapshot erase live activity (or resurrect settled activity).
@@ -427,6 +437,8 @@ export function AuxiliaryPanel({
     threadId ?? null,
     browserAdmissionId ?? null,
   ]);
+  const preview =
+    operationPreview?.scope === externalScope ? operationPreview : undefined;
   const computer =
     threadId !== undefined &&
     (snapshot?.plugins.some(
@@ -496,9 +508,13 @@ export function AuxiliaryPanel({
     ...(externalListScope === externalScope ? externalTargets : []).map(
       (target) => ({
         id: `external-browser:${target.id}`,
-        title: `${target.title || target.url} · ${i18n.t("panels:externalReadOnly")}`,
+        title: target.title || target.url,
         icon: "browser" as const,
         externalBrowser: target,
+        browserActivityLabel:
+          (target.activityCount ?? 0) > 0
+            ? i18n.t("panels:browserAgentWorking")
+            : undefined,
       }),
     ),
     ...panels.map((panel) => ({
@@ -554,7 +570,7 @@ export function AuxiliaryPanel({
   const presentationIds = persistedIds
     ? [...persistedIds, ...ephemeralIds]
     : undefined;
-  const ids = presentationIds
+  const baseIds = presentationIds
     ? ephemeralIds.length && openedTabs
       ? [
           ...new Set([
@@ -567,12 +583,22 @@ export function AuxiliaryPanel({
         ...new Set([
           ...order,
           ...candidates
-            .filter((tab) => tab.path || tab.browser)
+            .filter(
+              (tab) => tab.path || (tab.browser && !tab.browser.temporary),
+            )
             .map((tab) => tab.id),
           ...(selectedTab && available.has(selectedTab) ? [selectedTab] : []),
         ]),
       ].filter((id) => available.has(id));
-  const signature = JSON.stringify(ids);
+  const ids =
+    preview && available.has(preview.id)
+      ? [...new Set([...baseIds, preview.id])]
+      : baseIds;
+  if (preview && available.has(preview.id)) {
+    const tab = available.get(preview.id)!;
+    available.set(preview.id, { ...tab, previewOutcome: preview.outcome });
+  }
+  const signature = JSON.stringify(baseIds);
   const browserListReady =
     threadId === undefined ||
     !window.zenx.workspaceBrowser ||
@@ -607,11 +633,14 @@ export function AuxiliaryPanel({
       : tabs;
   const canReorder =
     tabs.length > 1 && (!presentationState || Boolean(onTabsChange));
-  const active = primaryActive
-    ? PRIMARY_CONVERSATION_TAB
-    : selectedTab && ids.includes(selectedTab)
-      ? selectedTab
-      : undefined;
+  const active =
+    preview && available.has(preview.id)
+      ? preview.id
+      : primaryActive
+        ? PRIMARY_CONVERSATION_TAB
+        : selectedTab && ids.includes(selectedTab)
+          ? selectedTab
+          : undefined;
   const idsRef = useRef(ids);
   const selectedTabRef = useRef(selectedTab);
   const orderRef = useRef(order);
@@ -650,8 +679,9 @@ export function AuxiliaryPanel({
     const next = current.filter((id) => id !== source);
     next.splice(next.indexOf(target) + (after ? 1 : 0), 0, source);
     if (next.every((id, index) => id === current[index])) return;
+    if (preview?.id === source && !baseIds.includes(source)) return;
     if (focus) reorderedFocus.current = source;
-    setOrder(next);
+    setOrder(next.filter((id) => baseIds.includes(id)));
   };
   const reorderTabRef = useRef(reorderTab);
   reorderTabRef.current = reorderTab;
@@ -890,7 +920,18 @@ export function AuxiliaryPanel({
     if (fileSplit.stacked) setFileNavigationHeight(clamped);
     else setFileNavigationWidth(clamped);
   };
+  const dismissPreview = () => {
+    previewDismissed.current = previewSequence.current;
+    setOperationPreview(undefined);
+    previewOpen.current = undefined;
+  };
   const select = (id: string, focusTab = false) => {
+    if (id === preview?.id && !baseIds.includes(id)) {
+      setChoosing(false);
+      setPrimarySelection(null);
+      return;
+    }
+    dismissPreview();
     selectionEpoch.current += 1;
     reorderedFocus.current = null;
     pendingTabFocus.current = focusTab ? id : null;
@@ -917,6 +958,7 @@ export function AuxiliaryPanel({
     if (pendingTabFocus.current !== selectedTab) pendingTabFocus.current = null;
     setChoosing(false);
     setPickingFile(false);
+    dismissPreview();
   }, [selectedTab]);
   useLayoutEffect(() => {
     const rail = tabRail.current;
@@ -1035,7 +1077,15 @@ export function AuxiliaryPanel({
   useEffect(() => {
     setExternalTargets([]);
     setExternalListScope(externalScope);
+    setOperationPreview(undefined);
+    previewSequence.current = 0;
+    previewDismissed.current = 0;
+    previewOpen.current = undefined;
   }, [externalScope]);
+  const externalTargetsRef = useRef(externalTargets);
+  externalTargetsRef.current = externalTargets;
+  const presentationRef = useRef({ open, onOpenChange });
+  presentationRef.current = { open, onOpenChange };
   useEffect(() => {
     if (!browser || !threadId || !window.zenx.browserObservation) return;
     let alive = true;
@@ -1043,7 +1093,55 @@ export function AuxiliaryPanel({
       { threadId, frames: false, catalog: true },
       (event) => {
         if (!alive) return;
+        if (event.type === "turn-ended") {
+          setOperationPreview((previous) =>
+            previous?.scope === externalScope &&
+            previous.sequence <= event.throughSequence
+              ? {
+                  ...previous,
+                  outcome:
+                    event.failed ||
+                    externalTargetsRef.current.find(
+                      (t) =>
+                        scopedId(`external-browser:${t.id}`) === previous.id,
+                    )?.activityFailed
+                      ? "failed"
+                      : "completed",
+                }
+              : previous,
+          );
+          if (event.failed && event.message) setError(event.message);
+          return;
+        }
         if (event.type !== "targets") return;
+        const latest = event.targets
+          .filter(
+            (t) =>
+              t.previewActive &&
+              (t.previewSequence ?? 0) > previewDismissed.current,
+          )
+          .sort(
+            (a, b) => (b.previewSequence ?? 0) - (a.previewSequence ?? 0),
+          )[0];
+        if (latest && (latest.previewSequence ?? 0) > previewSequence.current) {
+          previewSequence.current = latest.previewSequence!;
+          const id =
+            latest.backendId === "workspace"
+              ? scopedId(`browser:${latest.tabId.replace(/^workspace:/u, "")}`)
+              : scopedId(`external-browser:${latest.id}`);
+          setOperationPreview({
+            scope: externalScope,
+            id,
+            sequence: latest.previewSequence!,
+          });
+          if (!presentationRef.current.open) {
+            presentationRef.current.onOpenChange(true);
+            previewOpen.current = () =>
+              presentationRef.current.onOpenChange(false);
+          }
+          setChoosing(false);
+          setPrimarySelection(null);
+        }
         // Preserve exact observer/backend/connection identity, never match URLs.
         const external = event.targets.filter(
           (target) => target.backendId !== "workspace",
@@ -1052,7 +1150,11 @@ export function AuxiliaryPanel({
         // observer reports unavailable rather than silently removing the view.
         setExternalTargets((previous) => [
           ...previous
-            .filter((old) => !external.some((next) => next.id === old.id))
+            .filter(
+              (old) =>
+                !external.some((next) => next.id === old.id) &&
+                idsRef.current.includes(scopedId(`external-browser:${old.id}`)),
+            )
             .map((old) => ({ ...old, activityCount: 0 })),
           ...external,
         ]);
@@ -1062,7 +1164,18 @@ export function AuxiliaryPanel({
       alive = false;
       stop();
     };
-  }, [threadId, browser, snapshot]);
+  }, [threadId, browser, browserAdmissionId]);
+  useEffect(() => {
+    if (!preview?.outcome) return;
+    const timer = setTimeout(() => {
+      setOperationPreview((current) =>
+        current?.sequence === preview.sequence ? undefined : current,
+      );
+      previewOpen.current?.();
+      previewOpen.current = undefined;
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [preview?.sequence, preview?.outcome]);
   const add = async (id: string) => {
     const operationEpoch = ++selectionEpoch.current;
     const bindingEpoch = resourceEpoch.current;
@@ -1185,6 +1298,11 @@ export function AuxiliaryPanel({
     }
   };
   const closeTab = async (tab: ContentTab) => {
+    if (preview?.id === tab.id && !baseIds.includes(tab.id)) {
+      dismissPreview();
+      return;
+    }
+    dismissPreview();
     setError("");
     // The close notification can remove the tab before the command replies.
     // Retain only this human close's position; newer selection remains fenced.
@@ -1258,6 +1376,7 @@ export function AuxiliaryPanel({
     remove(tab.id, operationEpoch, closedIndex);
   };
   const close = () => {
+    dismissPreview();
     setExpanded(false);
     restoreToggleFocus.current = true;
     onOpenChange(false);
@@ -1364,7 +1483,10 @@ export function AuxiliaryPanel({
               <span
                 className="workspace-content-tab"
                 data-active={!showChooser && active === tab.id}
-                data-browser-tab={tab.browser ? true : undefined}
+                data-browser-tab={
+                  tab.browser || tab.externalBrowser ? true : undefined
+                }
+                data-browser-outcome={tab.previewOutcome}
                 data-agent-active={Boolean(
                   tab.browserActivityLabel ||
                   (tab.externalBrowser?.activityCount ?? 0) > 0,
@@ -1372,7 +1494,9 @@ export function AuxiliaryPanel({
                 key={tab.id}
                 data-tab-id={tab.id}
                 data-reorderable={
-                  (canReorder && tab.id !== PRIMARY_CONVERSATION_TAB) ||
+                  (canReorder &&
+                    tab.id !== PRIMARY_CONVERSATION_TAB &&
+                    baseIds.includes(tab.id)) ||
                   undefined
                 }
                 data-dragging={tabDrag?.source === tab.id || undefined}
@@ -1485,12 +1609,20 @@ export function AuxiliaryPanel({
                     }
                   }}
                 >
-                  {tab.browser ? (
+                  {tab.browser || tab.externalBrowser ? (
                     <span
                       className="workspace-browser-tab-icon"
                       aria-hidden="true"
                     >
-                      <Icon name={tab.icon} />
+                      <Icon
+                        name={
+                          tab.previewOutcome === "completed"
+                            ? "check"
+                            : tab.previewOutcome === "failed"
+                              ? "warning"
+                              : tab.icon
+                        }
+                      />
                     </span>
                   ) : (
                     <Icon name={tab.icon} />

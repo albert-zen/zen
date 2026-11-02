@@ -2495,3 +2495,34 @@ test("Board liveness is a pure exact Thread lookup independent of loading or hum
     await fixture.close();
   }
 });
+
+test("turn cleanup closes only this session's temporary pages and releases human and kept pages", async () => {
+  const f = await sharedFixture();
+  try {
+    const human = f.browser.command(f.sender as never, "thread-a", "new")[0]!;
+    f.browser.bindThreadSession("session-a", "thread-a");
+    f.browser.bindThreadSession("session-b", "thread-b");
+    const temporary = await f.browser.open(
+      "session-a",
+      "http://localhost:3080",
+    );
+    const kept = await f.browser.open("session-a", "http://localhost:3080");
+    f.browser.keepTab("session-a", kept.tabId);
+    const other = await f.browser.open("session-b", "http://localhost:3080");
+    f.browser.finishSession("session-a");
+    const remaining = f.browser.command(f.sender as never, "thread-a", "list");
+    assert.deepEqual(
+      remaining.map((t) => t.id),
+      [human.id, kept.tabId],
+    );
+    assert.ok(!remaining.some((t) => t.id === temporary.tabId));
+    assert.equal(
+      f.browser.hasTab("session-b", other.tabId),
+      true,
+      "same-URL page in B is untouched",
+    );
+    assert.ok(remaining.every((t) => !t.temporary));
+  } finally {
+    await f.close();
+  }
+});

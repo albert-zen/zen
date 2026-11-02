@@ -195,6 +195,7 @@ export interface UserBrowserCdpClient {
   createTarget(
     url: string,
     signal?: AbortSignal,
+    groupSessionId?: string,
   ): Promise<string | UserBrowserTargetCreation>;
   findTargetsByUrl(
     url: string,
@@ -247,6 +248,10 @@ export interface UserBrowserCdpClient {
     owner: UserBrowserAttachmentOwner,
     expectedDocumentIdentity: string,
   ): void;
+  closeCreatedTarget?(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+  ): Promise<void>;
   detachTarget(
     targetId: string,
     owner: UserBrowserAttachmentOwner,
@@ -266,6 +271,7 @@ interface UserBrowserSession {
   id: string;
   incarnation: number;
   targetIds: Set<string>;
+  createdTargetIds: Set<string>;
   uncertainTargetIds: Set<string>;
   ignoredTargetIds: Set<string>;
   operationTail: Promise<void>;
@@ -696,7 +702,11 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       let targetId: string | undefined;
       let grouping: BrowserTabGrouping;
       try {
-        const created = await this.#client.createTarget(pendingUrl, signal);
+        const created = await this.#client.createTarget(
+          pendingUrl,
+          signal,
+          sessionId,
+        );
         targetId = typeof created === "string" ? created : created.targetId;
         grouping = readUserBrowserGrouping(
           typeof created === "string" ? undefined : created.grouping,
@@ -737,6 +747,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         );
       }
       this.#accountTarget(session, targetId, pendingUrl, false);
+      session.createdTargetIds.add(targetId);
       const matches = await this.#client
         .findTargetsByUrl(pendingUrl, signal)
         .catch((error) => {
@@ -1515,6 +1526,40 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     await this.#artifacts.clearScope(`${sessionId}/${tabId}`);
   }
 
+  keepTab(sessionId: string, tabId: string): void {
+    this.#requireSession(sessionId).createdTargetIds.delete(tabId);
+  }
+
+  async finishSession(sessionId: string): Promise<void> {
+    const session = this.#requireSession(sessionId);
+    // Only positively identified pages created by this session are disposable.
+    // Unknown creates and pre-existing user pages never enter this set.
+    const outcomes = await Promise.allSettled(
+      [...session.createdTargetIds].map(async (id) => {
+        if (!session.targetIds.has(id)) return;
+        if (!this.#client.closeCreatedTarget)
+          throw new Error("Browser cannot close its temporary created page");
+        await this.#startSessionOperation(
+          session,
+          async () => {
+            const tab = this.#tabs.get(id);
+            if (!tab) return;
+            this.#assertTabCurrent(session, id, tab, true);
+            await this.#client.closeCreatedTarget!(
+              id,
+              this.#attachmentOwner(session),
+            );
+            session.createdTargetIds.delete(id);
+          },
+          true,
+        );
+      }),
+    );
+    await this.closeSession(sessionId);
+    const failure = outcomes.find((r) => r.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+
   async closeSession(sessionId: string): Promise<number> {
     const existing = this.#sessionCloseOperations.get(sessionId);
     if (existing !== undefined) return await existing;
@@ -1861,6 +1906,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         id: sessionId,
         incarnation: this.#nextSessionIncarnation++,
         targetIds: new Set(),
+        createdTargetIds: new Set(),
         uncertainTargetIds: new Set(),
         ignoredTargetIds: new Set(),
         operationTail: Promise.resolve(),
@@ -2562,11 +2608,17 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
   async createTarget(
     url: string,
     signal?: AbortSignal,
+    groupSessionId?: string,
   ): Promise<UserBrowserTargetCreation> {
     const response = asRecord(
       await this.#send(
         "Target.createTarget",
-        { url, background: true, focus: false },
+        {
+          url,
+          background: true,
+          focus: false,
+          ...(groupSessionId ? { zenxSessionId: groupSessionId } : {}),
+        },
         undefined,
         signal,
         USER_BROWSER_CDP_OUTCOME_TIMEOUT_MS,
@@ -3849,6 +3901,20 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
     ) {
       throw new UserBrowserDocumentChangedBeforeDispatchError();
     }
+  }
+
+  async closeCreatedTarget(
+    targetId: string,
+    owner: UserBrowserAttachmentOwner,
+  ): Promise<void> {
+    const attached = this.#targetAttachments.get(targetId);
+    if (attached && !sameAttachmentOwner(attached.epoch, owner))
+      throw new Error("User browser attachment ownership changed");
+    const result = asRecord(
+      await this.#send("Target.closeTarget", { targetId }),
+    );
+    if (result?.success !== true)
+      throw new Error("Browser did not confirm temporary page closure");
   }
 
   async detachTarget(

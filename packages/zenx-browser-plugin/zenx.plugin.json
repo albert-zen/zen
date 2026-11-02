@@ -65,6 +65,10 @@
           "url": {
             "type": "string"
           },
+          "keep": {
+            "type": "boolean",
+            "description": "Keep this new page as a deliverable after the turn; defaults to false."
+          },
           "observe": {
             "type": "boolean",
             "description": "Return a fresh observation after the action; defaults to true. Set false to skip the read. A failed follow-up read never retries the completed action."

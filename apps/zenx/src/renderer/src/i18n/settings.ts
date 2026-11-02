@@ -647,6 +647,18 @@ export const en = {
   "pluginAccessReview.relaunchZenxIfMacosAsksThenReturnHereZenx":
     "Relaunch ZenX if macOS asks, then return here. ZenX checks both access paths again when this page opens.",
   "pluginAccessReview.openBrowserSettings": "Open Browser settings",
+  "chromeConnectionSettings.connectChrome": "Connect browser",
+  "chromeConnectionSettings.connecting": "Preparing connection…",
+  "chromeConnectionSettings.connectionReady":
+    "Ready. Restarting ZenX or Chrome reconnects automatically.",
+  "chromeConnectionSettings.connectionAutomatic":
+    "Allow this installed ZenX app to connect. An installed, enabled extension connects automatically.",
+  "chromeConnectionSettings.waitingAutomatically":
+    "Waiting for the browser extension. No toolbar click is needed unless you previously disconnected it.",
+  "chromeConnectionSettings.installationHelp":
+    "Extension not installed or connection unavailable?",
+  "chromeConnectionSettings.developmentInstall":
+    "This development build has no Chrome Web Store listing yet. Install once from chrome://extensions using Developer mode → Load unpacked, then select the extension folder. Reload an older installed extension once after updating ZenX. If you explicitly disconnected it, click its toolbar icon to allow connecting again.",
   "chromeConnectionSettings.browser": "Browser",
   "chromeConnectionSettings.connectedInstances": "Connected browser instances",
   "chromeConnectionSettings.instanceConnected": "Connected",
@@ -1961,6 +1973,17 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.relaunchZenxIfMacosAsksThenReturnHereZenx":
     "如果 macOS 提示，请重新启动 ZenX，然后返回这里。页面打开时，ZenX 会重新检查两项权限。",
   "pluginAccessReview.openBrowserSettings": "打开浏览器设置",
+  "chromeConnectionSettings.connectChrome": "连接浏览器",
+  "chromeConnectionSettings.connecting": "正在准备连接…",
+  "chromeConnectionSettings.connectionReady":
+    "已就绪。重启 ZenX 或 Chrome 后会自动重连。",
+  "chromeConnectionSettings.connectionAutomatic":
+    "允许当前 ZenX 应用连接浏览器。已安装并启用的扩展会自动连接。",
+  "chromeConnectionSettings.waitingAutomatically":
+    "正在等待浏览器扩展。无需点击工具栏；之前主动断开过连接时除外。",
+  "chromeConnectionSettings.installationHelp": "未安装扩展或仍未连接？",
+  "chromeConnectionSettings.developmentInstall":
+    "当前开发版本尚未上架 Chrome 商店。首次安装需在 chrome://extensions 开启开发者模式、选择“加载已解压的扩展程序”并选中扩展目录。更新 ZenX 后，旧扩展需要重新加载一次；若你曾主动断开连接，需点击扩展图标重新允许连接。",
   "chromeConnectionSettings.browser": "浏览器",
   "chromeConnectionSettings.connectedInstances": "已连接的浏览器实例",
   "chromeConnectionSettings.instanceConnected": "已连接",

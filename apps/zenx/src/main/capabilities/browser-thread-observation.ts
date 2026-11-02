@@ -16,6 +16,8 @@ import type {
 
 export interface BrowserThreadTarget extends BrowserTabSummary {
   activityCount?: number;
+  previewSequence?: number;
+  previewActive?: boolean;
   activityFailed?: boolean;
   backendId?: "workspace" | "connected";
   connectionId?: string;
@@ -27,7 +29,7 @@ export interface BrowserThreadTarget extends BrowserTabSummary {
 }
 export interface BrowserThreadRequest {
   threadId: string;
-  /** Only an explicit human-selected target receives observations. Omission is catalog-only. */
+  /** Only the exact presented target receives observations. Omission is catalog-only. */
   targetId?: string;
   frames: boolean;
   /** Separate catalog/activity lane; never grants frame or external-open authority. */
@@ -46,6 +48,13 @@ export interface BrowserThreadActivity {
   phase: "started" | "completed" | "failed";
 }
 export type BrowserThreadEvent =
+  | {
+      type: "turn-ended";
+      threadId: string;
+      throughSequence: number;
+      failed: boolean;
+      message?: string;
+    }
   | BrowserThreadActivity
   | Exclude<BrowserLiveObservationEvent, { type: "metadata" }>
   | { type: "targets"; targets: BrowserThreadTarget[]; selectedId?: string }
@@ -184,6 +193,8 @@ export class BrowserThreadObservation {
           summary: {
             activityCount: prior?.summary.activityCount,
             activityFailed: prior?.summary.activityFailed,
+            previewSequence: prior?.summary.previewSequence,
+            previewActive: prior?.summary.previewActive,
             sessionId: session.sessionId,
             tabId: summary.tabId,
             title: summary.title,
@@ -245,6 +256,11 @@ export class BrowserThreadObservation {
       if (phase === "failed") target.failureGeneration++;
       target.summary = {
         ...target.summary,
+        previewSequence: Math.max(
+          target.summary.previewSequence ?? 0,
+          operationSequence,
+        ),
+        previewActive: true,
         activityCount: Math.max(
           0,
           (target.summary.activityCount ?? 0) + (phase === "started" ? 1 : -1),
@@ -298,6 +314,54 @@ export class BrowserThreadObservation {
       }
       emit(failed ? "failed" : "completed");
     };
+  }
+
+  finishTurn(threadId: string): {
+    sessions: string[];
+    throughSequence: number;
+    operationFailed: boolean;
+  } {
+    const sessions = [...this.#sessions.values()].filter(
+      (s) => s.threadId === threadId,
+    );
+    for (const session of sessions) this.#sessions.delete(session.key);
+    return {
+      sessions: sessions.map((s) => s.providerSessionId),
+      operationFailed: sessions.some((s) =>
+        [...s.targets.values()].some((t) => t.summary.activityFailed),
+      ),
+      throughSequence: Math.max(
+        0,
+        ...sessions.flatMap((s) =>
+          [...s.targets.values()].map((t) => t.summary.previewSequence ?? 0),
+        ),
+      ),
+    };
+  }
+
+  completeTurn(
+    threadId: string,
+    throughSequence: number,
+    error?: unknown,
+  ): void {
+    for (const observer of [...this.#observers]) {
+      if (observer.request.threadId !== threadId) continue;
+      try {
+        observer.listener({
+          type: "turn-ended",
+          threadId,
+          throughSequence,
+          failed: error !== undefined,
+          ...(error === undefined
+            ? {}
+            : { message: localErrorDetail(error).slice(0, 2048) }),
+        });
+      } catch {
+        this.#observers.delete(observer);
+        this.#stop(observer);
+      }
+    }
+    this.#notify(threadId);
   }
 
   /** Reobserve only an already-owned native target, never discovery/adoption. */

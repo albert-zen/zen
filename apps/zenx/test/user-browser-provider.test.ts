@@ -2974,6 +2974,11 @@ class FakeUserBrowserClient implements UserBrowserCdpClient {
       }));
   }
 
+  async closeCreatedTarget(targetId: string) {
+    this.closedTargets.push(targetId);
+    this.createdTargets.delete(targetId);
+  }
+
   async detachTarget(targetId: string) {
     this.calls.push("Target.detachFromTarget");
     this.detachedTargets.push(targetId);
@@ -3140,6 +3145,23 @@ test("Board exact connected-target liveness checks full native targets without a
     );
     client.primaryTargetPresent = false;
     assert.equal(await backend.hasTab("board", "target-1"), false);
+  } finally {
+    await backend.close();
+  }
+});
+
+test("turn end retires created Chrome pages but releases existing and explicitly kept pages", async () => {
+  const client = new FakeUserBrowserClient();
+  const backend = new UserBrowserCdpBackend(client);
+  try {
+    await backend.listTabs("work");
+    const temporary = await backend.open("work", "http://localhost:3080");
+    const deliverable = await backend.open("work", "http://localhost:3080");
+    backend.keepTab("work", deliverable.tabId);
+    await backend.finishSession("work");
+    assert.deepEqual(client.closedTargets, [temporary.tabId]);
+    assert.ok(!client.closedTargets.includes("target-1"));
+    assert.ok(!client.closedTargets.includes(deliverable.tabId));
   } finally {
     await backend.close();
   }

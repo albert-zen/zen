@@ -726,6 +726,15 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     return url;
   }
 
+  async finishBrowserTurn(threadId: string, failed = false): Promise<void> {
+    const selected = this.#browserProfilePackage;
+    if (
+      selected instanceof BrowserZenXCapabilityPackage ||
+      selected instanceof BrowserBackendRegistry
+    )
+      await selected.finishTurn(threadId, failed);
+  }
+
   observeBrowserLive(
     request: BrowserThreadRequest,
     listener: BrowserThreadListener,

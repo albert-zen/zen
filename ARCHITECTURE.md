@@ -1473,9 +1473,9 @@ The first exact trusted browser inspection reserves its own 10-second observatio
 
 The Browser catalog/activity IPC lane is an independent read-only renderer subscription; it cannot request frames or authorize external opening, and replacing it never retires the exact-target frame subscription.
 
-Browser operation activity is a disposable Host projection of the existing invocation, provider session incarnation and exact observer target. It travels over the read-only catalog lane with registry connection-generation fencing; it is not an operation journal, action authorization, cancellation proof or retry authority. Browser and Computer observation selection is human-owned: omitted targets receive catalogs only, and Agent activity never selects a target or opens a panel. Exact selected targets may continue emitting their own frames without navigating the human UI.
+Browser operation activity is a disposable Host projection of the existing invocation, provider session incarnation and exact observer target. It travels over the read-only catalog lane with registry connection-generation fencing; it is not an operation journal, action authorization, cancellation proof or retry authority. Omitted targets receive catalogs only. Browser operations project an exact temporary preview in the unified workspace; Computer observation retains human selection. Neither grants execution authority.
 
-Browser activity ordering uses a process-local monotonic Host invocation sequence carried only through the current async call; it carries observation provenance, never presentation or selection authority. Per-target failure generations prevent an older successful operation from clearing a warning caused by a later failure. Neither projection creates dispatch, retry or durable execution authority.
+Browser activity ordering uses a process-local monotonic Host invocation sequence carried only through the current async call; it carries observation provenance and orders the temporary Browser preview, never execution authority. Per-target failure generations prevent an older successful operation from clearing a warning caused by a later failure. Neither projection creates dispatch, retry or durable execution authority.
 
 ### Queued input promotion
 
@@ -1661,3 +1661,7 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+### Browser operation presentation and turn cleanup
+
+Browser operation previews are an ephemeral projection of exact Host target activity in the existing workspace tab rail; operation admission order selects the preview, while turn completion releases existing pages and retires temporary pages/observations without persisting a second execution state.

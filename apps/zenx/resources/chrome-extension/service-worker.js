@@ -13,7 +13,7 @@ const storageReady = (async () => {
     accessLevel: "TRUSTED_CONTEXTS",
   });
   const stored = await chrome.storage.local.get(AUTO_CONNECT_KEY);
-  autoConnect = stored[AUTO_CONNECT_KEY] === true;
+  autoConnect = stored[AUTO_CONNECT_KEY] !== false;
 })();
 
 chrome.action.onClicked.addListener(() => {
@@ -348,8 +348,20 @@ async function runCommand(session, message) {
       // to report creation failure or to create another tab on retry.
       result = {
         targetId: `chrome-tab-${tab.id}`,
-        grouping: await boundedGrouping(session, tab),
+        grouping: await boundedGrouping(
+          session,
+          tab,
+          typeof message.params?.zenxSessionId === "string"
+            ? message.params.zenxSessionId
+            : "default",
+        ),
       };
+    } else if (message.method === "Target.closeTarget") {
+      if (!session.owned.has(message.tabId))
+        throw new Error("Only this connection's created pages may be retired");
+      await chrome.tabs.remove(message.tabId);
+      session.owned.delete(message.tabId);
+      result = { success: true };
     } else {
       const tabId = message.tabId;
       if (!session.tabs.has(tabId))
@@ -382,7 +394,7 @@ async function runCommand(session, message) {
   }
 }
 
-async function boundedGrouping(session, tab) {
+async function boundedGrouping(session, tab, taskId) {
   if (session.groupingStalled)
     return {
       status: "unavailable",
@@ -391,7 +403,7 @@ async function boundedGrouping(session, tab) {
     };
   const ticket = { active: true };
   const grouping = session.groupingChain.then(() =>
-    groupCreatedTab(session, tab, ticket),
+    groupCreatedTab(session, tab, ticket, taskId),
   );
   session.groupingChain = grouping.then(() => {});
   let timer;
@@ -421,7 +433,7 @@ async function boundedGrouping(session, tab) {
   }
 }
 
-async function groupCreatedTab(session, tab, ticket) {
+async function groupCreatedTab(session, tab, ticket, taskId) {
   let groupId;
   const abandoned = () => !ticket.active || connection !== session;
   try {
@@ -449,7 +461,7 @@ async function groupCreatedTab(session, tab, ticket) {
         status: "unavailable",
         reason: "Tab or connection changed; grouping left unchanged",
       };
-    let existingId = session.groups.get(tab.windowId);
+    let existingId = session.groups.get(JSON.stringify([taskId, tab.windowId]));
     if (existingId !== undefined) {
       try {
         const existing = await chrome.tabGroups.get(existingId);
@@ -462,7 +474,8 @@ async function groupCreatedTab(session, tab, ticket) {
       } catch {
         existingId = undefined;
       }
-      if (existingId === undefined) session.groups.delete(tab.windowId);
+      if (existingId === undefined)
+        session.groups.delete(JSON.stringify([taskId, tab.windowId]));
     }
     // Recheck after asynchronous group lookup. Never reclaim a tab the user
     // moved or grouped, and never restore an older connection's visual group.
@@ -486,7 +499,7 @@ async function groupCreatedTab(session, tab, ticket) {
     if (!Number.isSafeInteger(groupId) || groupId < 0)
       throw new Error("Browser returned an invalid tab group");
     if (abandoned()) return { status: "grouped", groupId };
-    session.groups.set(tab.windowId, groupId);
+    session.groups.set(JSON.stringify([taskId, tab.windowId]), groupId);
     if (existingId === undefined) {
       const created = await chrome.tabGroups.get(groupId);
       // Name only the fresh unnamed group. Reused/user-renamed groups are not

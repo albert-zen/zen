@@ -17,7 +17,7 @@ import type {
 } from "../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
-test("real Host activity never presents a peer tab; explicit selection keeps its exact read-only frame lane", async () => {
+test("real Host operations automatically present exact read-only peers and respect human navigation", async () => {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -188,31 +188,12 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     await act(async () => {
       pending = invoke("navigate", tabs[0].tabId);
     });
-    assert.equal(expanded, false);
-    assert.equal(selected(), "Terminal");
-    assert.deepEqual(frameTargets, []);
-    await act(async () => openPanel(true));
-    assert.equal(selected(), "Terminal");
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
-        .click(),
-    );
-    await act(async () =>
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types button",
-        ),
-      ]
-        .find(
-          (node) => node.querySelector("strong")?.textContent === "Page one",
-        )!
-        .click(),
-    );
+    assert.equal(expanded, true);
     assert.match(selected()!, /Page one/);
-    assert.ok(
-      document.activeElement?.id?.startsWith("aux-tab-external-browser:"),
-      "explicit chooser navigation focuses the selected preview tab",
+    assert.equal(
+      document.activeElement?.id,
+      "composer",
+      "automatic preview preserves keyboard focus",
     );
     assert.equal(frameTargets.at(-1), "one");
     assert.deepEqual(
@@ -241,7 +222,7 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     await act(async () => {
       pending = invoke("navigate", tabs[1].tabId);
     });
-    assert.equal(selected(), "Terminal");
+    assert.match(selected()!, /Page two/);
     assert.ok(
       button("Follow Agent") === undefined,
       "no Follow Agent control remains",
@@ -293,8 +274,8 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     });
     assert.match(
       selected()!,
-      /Page two/,
-      "hidden-window activity cannot steal selection",
+      /Page three/,
+      "presentation follows the operation without activating the OS",
     );
     assert.deepEqual(
       [...activeFrames.values()],
@@ -314,8 +295,8 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     );
     assert.match(
       selected()!,
-      /Page two/,
-      "hidden activity is not replayed on return",
+      /Page three/,
+      "the same exact preview resumes when visible",
     );
     await act(async () =>
       document
@@ -345,10 +326,10 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     });
     assert.equal(
       expanded,
-      false,
-      "later activity cannot reopen a user-collapsed panel",
+      true,
+      "a new operation automatically reveals its target",
     );
-    assert.deepEqual([...activeFrames.values()], []);
+    assert.deepEqual([...activeFrames.values()], ["one"]);
     await act(async () => {
       finish();
       await pending;

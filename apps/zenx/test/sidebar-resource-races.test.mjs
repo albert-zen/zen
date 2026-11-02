@@ -533,8 +533,7 @@ for (const lateHydration of [false, true]) {
       const chooseBrowser = [
         ...document.querySelectorAll(".workspace-tab-types button"),
       ].find(
-        (button) =>
-          button.querySelector("strong")?.textContent === "ZenX browser",
+        (button) => button.querySelector("strong")?.textContent === "Browser",
       );
       assert.ok(
         Boolean(chooseBrowser),

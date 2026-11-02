@@ -339,7 +339,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     assert.equal(tabs().length, 3);
     assert.ok(!document.body.textContent?.includes("Attached browser"));
     const external = tabs().filter((tab) =>
-      tab.textContent?.includes("read-only"),
+      tab.id.includes("external-browser:"),
     );
     assert.equal(external.length, 2);
     await act(async () => external[0]!.click());
@@ -460,17 +460,13 @@ test("external read-only pages share the strip without merging same-URL identiti
     assert.ok(document.body.textContent?.includes("Selected page unavailable"));
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Close tab Same page · External · read-only"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="Close tab Same page"]')!
         .click(),
     );
     assert.equal(tabs().length, 2);
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Close tab Same page · External · read-only"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="Close tab Same page"]')!
         .click(),
     );
     assert.equal(tabs().length, 1);
@@ -585,7 +581,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
         await act(async () =>
           document
             .querySelector<HTMLButtonElement>(
-              '[aria-label="Close tab Retained page · External · read-only"]',
+              '[aria-label="Close tab Retained page"]',
             )!
             .click(),
         );

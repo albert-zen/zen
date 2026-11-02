@@ -5,26 +5,21 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-test("browser opt-in reconnects after ZenX restarts without replaying tab operations", async () => {
+test("an installed extension connects at startup and reconnects without replaying operations", async () => {
   const stored = {};
   const f = await workerFixture({ stored });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.ports.length, 0, "a fresh install never connects by itself");
-  await connectFixture(f);
-  assert.equal(stored.zenxBrowserAutoConnect, true);
+  await waitFor(() =>
+    f.ports[0]?.messages.some((m) => m.type === "browser-connected"),
+  );
   assert.equal(f.alarms.get("zenx-browser-reconnect")?.periodInMinutes, 0.5);
   f.ports[0].onDisconnect.emit();
   await waitFor(() => f.ports[0].disconnected);
-  f.chrome.alarms.onAlarm.emit({ name: "unrelated" });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.ports.length, 1);
   f.chrome.alarms.onAlarm.emit({ name: "zenx-browser-reconnect" });
   await waitFor(() =>
     f.ports[1]?.messages.some((m) => m.type === "browser-connected"),
   );
   assert.deepEqual(f.commands, []);
   assert.deepEqual(f.createCalls, []);
-  assert.deepEqual(f.attachCalls, []);
   f.clicked.emit(tab(1));
   await waitFor(
     () => stored.zenxBrowserAutoConnect === false && f.ports[1].disconnected,
@@ -32,7 +27,7 @@ test("browser opt-in reconnects after ZenX restarts without replaying tab operat
   assert.equal(f.alarms.size, 0);
   f.chrome.alarms.onAlarm.emit({ name: "zenx-browser-reconnect" });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.ports.length, 2, "manual disconnect cancels reconnection");
+  assert.equal(f.ports.length, 2);
 });
 
 test("worker/browser restart restores opt-in and recreates a lost alarm, but preserves opt-out", async () => {
@@ -76,7 +71,7 @@ test("an unavailable ZenX host is retried only as a fresh connection on the next
 });
 
 test("cancelling Chrome debugger access revokes remembered connection intent", async () => {
-  const stored = {};
+  const stored = { zenxBrowserAutoConnect: false };
   const f = await workerFixture({ stored });
   await connectFixture(f);
   f.ports[0].onMessage.emit({
@@ -670,13 +665,16 @@ async function connectFixture(fixture, portIndex = 0) {
   );
 }
 
-async function createFixtureTab(fixture, requestId) {
+async function createFixtureTab(fixture, requestId, taskId) {
   const port = fixture.ports.at(-1);
   port.onMessage.emit({
     type: "cdp-command",
     requestId,
     method: "Target.createTarget",
-    params: { url: "about:blank#zenx-pending-1234-abcd" },
+    params: {
+      url: "about:blank#zenx-pending-1234-abcd",
+      zenxSessionId: taskId,
+    },
   });
   await waitFor(() =>
     port.messages.some((message) => message.requestId === requestId),
@@ -709,7 +707,7 @@ async function workerFixture(options = {}) {
       entry,
     ]),
   );
-  const stored = options.stored ?? {};
+  const stored = options.stored ?? { zenxBrowserAutoConnect: false };
   const alarms = new Map();
   const chrome = {
     alarms: {
@@ -1001,4 +999,43 @@ test("queued grouping expires without issuing another group after the blocked re
   assert.deepEqual(fixture.groupUpdates, []);
   assert.equal(fixture.tabs.get(101).groupId, -1);
   assert.equal(fixture.createCalls.length, 2);
+});
+
+test("new pages group by task session rather than sharing one browser-wide group", async () => {
+  const fixture = await workerFixture();
+  await connectFixture(fixture);
+  const a1 = await createFixtureTab(fixture, "a1", "session-a");
+  const b = await createFixtureTab(fixture, "b", "session-b");
+  const a2 = await createFixtureTab(fixture, "a2", "session-a");
+  assert.notEqual(a1.result.grouping.groupId, b.result.grouping.groupId);
+  assert.equal(a1.result.grouping.groupId, a2.result.grouping.groupId);
+  assert.deepEqual(
+    fixture.createCalls.map((c) => c.active),
+    [false, false, false],
+  );
+});
+
+test("turn cleanup closes a positively created tab and refuses to close a user tab", async () => {
+  const f = await workerFixture();
+  await connectFixture(f);
+  await createFixtureTab(f, "create-for-cleanup", "task");
+  const port = f.ports[0];
+  for (const tabId of [1, 100]) {
+    port.onMessage.emit({
+      type: "cdp-command",
+      requestId: `close-${tabId}`,
+      method: "Target.closeTarget",
+      tabId,
+    });
+    await waitFor(() =>
+      port.messages.some((m) => m.requestId === `close-${tabId}`),
+    );
+  }
+  assert.ok(port.messages.find((m) => m.requestId === "close-1").error);
+  assert.equal(
+    port.messages.find((m) => m.requestId === "close-100").result.success,
+    true,
+  );
+  assert.deepEqual(f.removed, [100]);
+  assert.deepEqual(f.attachCalls, []);
 });

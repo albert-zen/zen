@@ -298,7 +298,7 @@ test("an external Room tab selection preserves outside focus and fences a pendin
   );
   try {
     await h.click("New workspace tab");
-    await h.click("ZenX browser");
+    await h.click("Browser");
     const outside = document.createElement("button");
     outside.textContent = "Outside focus";
     document.body.append(outside);
@@ -421,15 +421,13 @@ test("Room resource A→B→A rejects the first A's late Browser creation and cl
   const h = await mount(context("A"), { gateBrowserNew });
   try {
     await h.click("New workspace tab");
-    await h.click("ZenX browser");
+    await h.click("Browser");
     await h.render(context("B"));
     const browser = [
       ...document.querySelectorAll<HTMLButtonElement>(
         ".workspace-tab-types button",
       ),
-    ].find(
-      (node) => node.querySelector("strong")?.textContent === "ZenX browser",
-    )!;
+    ].find((node) => node.querySelector("strong")?.textContent === "Browser")!;
     assert.equal(browser.disabled, false);
     await h.click("Overview");
     await h.render(context("A"));
@@ -511,7 +509,7 @@ test("Room resource actions target the explicitly selected real Thread and carry
       ),
     );
     await h.click("New workspace tab");
-    await h.click("ZenX browser");
+    await h.click("Browser");
     assert(
       h.calls.some(
         (call) =>

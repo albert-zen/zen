@@ -170,6 +170,9 @@ export interface ZenXBrowserBackend {
   ): Promise<unknown>;
   /** Bind the provider's opaque session to its trusted Thread owner. */
   bindThreadSession?(sessionId: string, threadId: string): void;
+  /** Turn cleanup: release human pages and retire unkept Agent-created pages. */
+  finishSession?(sessionId: string): Promise<void> | void;
+  keepTab?(sessionId: string, tabId: string): void;
   /** Read-only exact existing-target liveness; must never adopt or create targets. */
   hasTab?(sessionId: string, tabId: string): boolean | Promise<boolean>;
   /** Trusted human UI only: never include the unredacted URL in tool results. */
@@ -353,6 +356,11 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         {
           sessionId: stringSchema(),
           url: stringSchema(),
+          keep: {
+            type: "boolean",
+            description:
+              "Keep this new page as a deliverable after the turn; defaults to false.",
+          },
           observe: observationOption(),
           baseObservationId: observationReadProperties.baseObservationId,
           full: observationReadProperties.full,
@@ -751,6 +759,33 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       : projected;
   }
 
+  async finishTurn(threadId: string, failed = false): Promise<number> {
+    const { sessions, throughSequence, operationFailed } =
+      this.#threadObservation.finishTurn(threadId);
+    if (!sessions.length) return 0;
+    const outcomes = await Promise.allSettled(
+      sessions.map(async (session) => {
+        if (this.#backend.finishSession)
+          await this.#backend.finishSession(session);
+        else await this.#backend.closeSession(session);
+      }),
+    );
+    const failure = outcomes.find((result) => result.status === "rejected");
+    this.#threadObservation.completeTurn(
+      threadId,
+      throughSequence,
+      failure?.status === "rejected"
+        ? failure.reason
+        : failed || operationFailed
+          ? new Error(
+              "Browser work did not finish successfully. Check the tool result.",
+            )
+          : undefined,
+    );
+    if (failure?.status === "rejected") throw failure.reason;
+    return throughSequence;
+  }
+
   assertModelTarget(
     route: BrowserModelRoute,
     threadId: string | undefined,
@@ -1084,12 +1119,20 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     switch (toolName) {
       case "browser_list_tabs":
         return await this.#backend.listTabs(sessionId, invocation.signal);
-      case "browser_open":
-        return await this.#backend.open(
+      case "browser_open": {
+        if (invocation.arguments.keep === true && !this.#backend.keepTab)
+          throw new Error(
+            "This Browser provider cannot retain a deliverable page",
+          );
+        const page = await this.#backend.open(
           sessionId,
           safeBrowserUrl(requiredString(invocation.arguments, "url")),
           invocation.signal,
         );
+        if (invocation.arguments.keep === true)
+          this.#backend.keepTab?.(sessionId, page.tabId);
+        return page;
+      }
       case "browser_navigate":
         return await this.#backend.navigate(
           sessionId,

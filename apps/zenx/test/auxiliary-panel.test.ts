@@ -486,7 +486,7 @@ for (const throughHostSdk of [false, true]) {
           .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
           .click(),
       );
-      await act(async () => choose("ZenX browser").click());
+      await act(async () => choose("Browser").click());
       await act(async () => {
         if (throughHostSdk) externalSelect("plugin:notes:external");
         else choose("Notes").click();

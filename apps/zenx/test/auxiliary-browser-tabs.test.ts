@@ -13,7 +13,7 @@ import {
 import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 
-test("Chrome discovery offers an explicit preview choice without adding duplicate tabs, and dismissal never closes Chrome", async () => {
+test("Chrome operations automatically present one exact preview; discovery and dismissal never create a native page", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
     url: "https://zenx.local/",
     pretendToBeVisual: true,
@@ -67,6 +67,14 @@ test("Chrome discovery offers an explicit preview choice without adding duplicat
       open: true,
       onOpenChange() {},
       snapshot,
+      presentationState: emptySidebarState("a"),
+      onTabsChange(ids) {
+        assert.deepEqual(
+          ids,
+          [],
+          "temporary previews never enter durable tab order",
+        );
+      },
       selectedTab,
       onSelectTab,
     });
@@ -79,38 +87,78 @@ test("Chrome discovery offers an explicit preview choice without adding duplicat
       0,
       "catalog discovery must not open a preview",
     );
-    const choose = async () => {
-      await act(async () =>
-        document
-          .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
-          .click(),
-      );
-      const option = [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types button",
-        ),
-      ].find((b) => b.textContent?.includes("Chrome reference"));
-      assert.ok(option, "the external page remains explicitly available");
-      await act(async () => option!.click());
+    let sequence = 0;
+    const operate = async () => {
+      sequence++;
+      await act(async () => {
+        for (const listener of [...listeners])
+          listener({
+            type: "targets",
+            targets: [
+              {
+                ...target,
+                previewActive: true,
+                previewSequence: sequence,
+                activityCount: 1,
+              },
+            ],
+          });
+      });
     };
-    await choose();
+    await operate();
     assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    assert.match(
+      document.querySelector('[role="tab"]')?.textContent ?? "",
+      /Chrome reference/,
+    );
+    assert.equal(
+      document.querySelector('[role="tab"]')?.getAttribute("aria-selected"),
+      "true",
+    );
     await act(async () =>
       document
         .querySelector<HTMLButtonElement>('[aria-label^="Close tab"]')!
         .click(),
     );
     await act(async () => {
-      for (const listener of listeners)
-        listener({ type: "targets", targets: [target] });
+      for (const listener of [...listeners])
+        listener({
+          type: "targets",
+          targets: [
+            { ...target, previewActive: true, previewSequence: sequence },
+          ],
+        });
     });
     assert.equal(
       document.querySelectorAll('[role="tab"]').length,
       0,
-      "a catalog refresh must not reopen the dismissed preview",
+      "the same operation cannot reopen a dismissed preview",
     );
-    await choose();
+    await operate();
     assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    await act(async () => {
+      for (const listener of [...listeners])
+        listener({
+          type: "turn-ended",
+          threadId: "a",
+          throughSequence: sequence,
+          failed: false,
+        });
+      for (const listener of [...listeners])
+        listener({ type: "targets", targets: [] });
+    });
+    assert.equal(
+      document
+        .querySelector("[data-browser-outcome]")
+        ?.getAttribute("data-browser-outcome"),
+      "completed",
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1250)));
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "the temporary presentation retires after completion",
+    );
     assert.deepEqual(
       commands,
       ["list"],
@@ -298,7 +346,7 @@ test("shared browser pages are peer workspace tabs and the type picker unmounts 
       ...document.querySelectorAll<HTMLButtonElement>(
         ".workspace-tab-types button",
       ),
-    ].find((e) => e.querySelector("strong")?.textContent === "ZenX browser")!;
+    ].find((e) => e.querySelector("strong")?.textContent === "Browser")!;
     await act(async () => browser.click());
     assert.deepEqual(
       tabs().map((tab) => tab.textContent),
