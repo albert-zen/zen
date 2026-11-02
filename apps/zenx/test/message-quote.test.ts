@@ -17,6 +17,7 @@ import {
   MessageSelectionActions,
   type MessageSelection,
   readMessageSelection,
+  selectionReference,
 } from "../src/renderer/src/message-quote.js";
 
 function selectionFixture() {
@@ -70,7 +71,7 @@ test("message selection preserves exact native text across inline formatting", (
   }
 });
 
-test("selection excludes cross-message ranges, controls and code headers but includes code", () => {
+test("selection includes cross-message ranges, controls, code headers and code", () => {
   const view = selectionFixture();
   try {
     const first = view.document.querySelector("p")!.firstChild!;
@@ -78,15 +79,24 @@ test("selection excludes cross-message ranges, controls and code headers but inc
       '[data-quote-item-id="item-b"] [data-message-quote-body]',
     )!.firstChild!;
     view.select(first, 1, other, 3);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     const header = view.document.querySelector(
       ".markdown-code-header",
     )!.firstChild!;
     view.select(header, 0, header, 2);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     const code = view.document.querySelector("code")!.firstChild!;
     view.select(first, 0, code, 5);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     view.select(code, 0, code, code.textContent!.length);
     assert.equal(
       readMessageSelection(view.viewport, view.selection)?.excerpt,
@@ -222,6 +232,7 @@ async function actionsHarness() {
       threadId?: string;
       sourceThread?: string;
       disabled?: boolean;
+      pageSelection?: boolean;
       onQuote?: (selection: MessageSelection) => void;
       onAddToSideChat?: (selection: MessageSelection) => void;
     } = {},
@@ -249,6 +260,7 @@ async function actionsHarness() {
             viewport,
             threadId: options.threadId ?? "thread-a",
             disabled: options.disabled ?? false,
+            pageSelection: options.pageSelection,
             onQuote: options.onQuote ?? ((selection) => quotes.push(selection)),
             onAddToSideChat: options.onAddToSideChat,
           }),
@@ -653,6 +665,130 @@ test("Add to side chat hands off exact structured selection without quoting loca
     assert.equal(
       document.querySelector("textarea")?.value,
       "Existing composer note",
+    );
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("page selections outside message bodies remain quotes and cross-message provenance is retained", () => {
+  const view = selectionFixture();
+  try {
+    const action = view.viewport.lastElementChild!.firstChild!;
+    view.select(action, 0, action, action.textContent!.length);
+    const plain = readMessageSelection(view.viewport, view.selection)!;
+    assert.deepEqual(selectionReference(plain, "/workspace"), {
+      kind: "text",
+      name: "",
+      cwd: "/workspace",
+      excerpt: view.selection.toString(),
+      sources: [],
+    });
+    const first = view.document.querySelector("p")!.firstChild!;
+    const other = view.document.querySelector(
+      '[data-quote-item-id="item-b"] [data-message-quote-body]',
+    )!.firstChild!;
+    view.select(first, 1, other, 3);
+    const selected = readMessageSelection(view.viewport, view.selection)!;
+    assert.deepEqual(selected.sources, [
+      { threadId: "thread /中", id: "item-a" },
+      { threadId: "thread /中", id: "item-b" },
+    ]);
+    const quote = selectionReference(selected, "/workspace");
+    const draft = addMessageQuote("note", quote);
+    assert.deepEqual(parseSkillDraft(draft).references, [quote]);
+    assert.equal(addMessageQuote(draft, quote), draft);
+  } finally {
+    view.dom.window.close();
+  }
+});
+
+test("selected form text survives its native horizontal scroll and quotes without sending", async () => {
+  const view = await actionsHarness();
+  try {
+    await view.render({ pageSelection: true });
+    const field = document.querySelector("textarea")!;
+    await act(async () => {
+      document.getSelection()!.removeAllRanges();
+      field.focus();
+      field.setSelectionRange(0, 8);
+      field.dispatchEvent(new window.Event("select", { bubbles: true }));
+    });
+    assert.ok(document.querySelector(".message-selection-actions"));
+    await act(async () => field.dispatchEvent(new window.Event("scroll")));
+    assert.ok(document.querySelector(".message-selection-actions"));
+    await key("Enter", { altKey: true });
+    assert.deepEqual(view.quotes, [
+      { threadId: undefined, id: undefined, excerpt: "Existing", sources: [] },
+    ]);
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("main and side surfaces route their own selections once, while page text goes to main", async () => {
+  const view = await mount();
+  const main = React.createRef<HTMLDivElement>(),
+    side = React.createRef<HTMLDivElement>();
+  const mainQuotes: MessageSelection[] = [],
+    sideQuotes: MessageSelection[] = [];
+  view.dom.window.Range.prototype.getBoundingClientRect = () =>
+    new view.dom.window.DOMRect(40, 80, 80, 20);
+  view.dom.window.Range.prototype.getClientRects = () =>
+    [new view.dom.window.DOMRect(40, 80, 80, 20)] as unknown as DOMRectList;
+  try {
+    await view.render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          "div",
+          { className: "thread-view", ref: main },
+          React.createElement("p", { id: "main-text" }, "Main message"),
+          React.createElement(MessageSelectionActions, {
+            viewport: main,
+            threadId: "main",
+            pageSelection: true,
+            disabled: false,
+            onQuote: (quote) => mainQuotes.push(quote),
+          }),
+        ),
+        React.createElement(
+          "div",
+          { className: "thread-view", ref: side },
+          React.createElement("p", { id: "side-text" }, "Side message"),
+          React.createElement(MessageSelectionActions, {
+            viewport: side,
+            threadId: "side",
+            disabled: false,
+            onQuote: (quote) => sideQuotes.push(quote),
+          }),
+        ),
+        React.createElement("p", { id: "page-text" }, "Page label"),
+      ),
+    );
+    for (const id of ["side-text", "main-text", "page-text"]) {
+      await act(async () => {
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById(id)!);
+        const selection = document.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.dispatchEvent(new window.Event("selectionchange"));
+      });
+      assert.equal(
+        document.querySelectorAll(".message-selection-actions").length,
+        1,
+      );
+      await key("Enter", { altKey: true });
+    }
+    assert.deepEqual(
+      mainQuotes.map((quote) => quote.excerpt),
+      ["Main message", "Page label"],
+    );
+    assert.deepEqual(
+      sideQuotes.map((quote) => quote.excerpt),
+      ["Side message"],
     );
   } finally {
     await view.cleanup();

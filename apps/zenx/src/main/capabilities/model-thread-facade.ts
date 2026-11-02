@@ -75,7 +75,7 @@ export function threadModelDefinition<T extends ModelTool>(source: T): T {
         ...MODEL_REF,
         pattern: "^[rs][1-9][0-9]*$",
         description:
-          "Exact Thread ref or selected source ref; selected refs identify read-only sources; current permissions still apply.",
+          "Thread ref or exact source ref from a quote header, e.g. s3.",
       };
   }
   if (subagents.has(tool.name)) renameField(schema, "parentThreadId", "parent");

@@ -310,7 +310,7 @@ export function useComposerSelector({
             reference.path,
           );
           reference = { kind: "file", ...verified };
-        } else {
+        } else if (reference.kind === "thread") {
           await window.zenx.protocol.request("thread/read", {
             threadId: reference.id,
           });
