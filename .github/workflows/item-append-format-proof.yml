@@ -1,0 +1,25 @@
+name: Owned item-list append formatting evidence
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/item-append-format-proof.yml]
+permissions:
+  contents: read
+jobs:
+  formatter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5e484d2c822c1f836987e048b55299790062a46c
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+        timeout-minutes: 7
+      - name: Print exact formatting diff from isolated checkout
+        run: |
+          npx --no-install prettier --write src/owned-item-list-append.ts test/owned-item-list-append.test.ts
+          git diff -- src/owned-item-list-append.ts test/owned-item-list-append.test.ts
