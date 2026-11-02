@@ -1,3 +1,4 @@
+import { questionIpcError } from "../preload/user-question-ipc.js";
 import { compactionIpcRejection } from "../preload/compaction-ipc.js";
 import { ipcMain } from "electron";
 import type { AppServerManager } from "./app-server-manager.js";
@@ -24,6 +25,8 @@ export function registerProtocolRequestIpc(
       try {
         result = await manager.request(method, params as never);
       } catch (error) {
+        if (method.startsWith("zen/thread/questions/"))
+          return questionIpcError(error);
         if (method === "thread/compact") return compactionIpcRejection(error);
         if (
           method !== "zen/thread/queue/edit" &&

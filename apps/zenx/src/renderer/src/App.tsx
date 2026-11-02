@@ -1,3 +1,5 @@
+import { UserQuestionCards } from "./UserQuestionCards.js";
+import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import {
   createSteerRecallStore,
@@ -18,6 +20,7 @@ import {
   applyCompactionStatus,
   markCompactionOutcomeUnknown,
 } from "./compaction-feedback.js";
+import { ConversationInformationCards } from "./ConversationInformationCards.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -542,6 +545,16 @@ function AppContent() {
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const [steerRecallStore] = useState(createSteerRecallStore);
+  const [userQuestionStore] = useState(() =>
+    createUserQuestionStore({
+      list: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/list", params),
+      read: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/read", params),
+      respond: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/respond", params),
+    }),
+  );
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const endNotificationsRef = useRef<ReturnType<
@@ -1476,7 +1489,10 @@ function AppContent() {
     const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
       setServerStatus(status);
-      if (status.type !== "ready") endNotifications.disconnect();
+      if (status.type !== "ready") {
+        endNotifications.disconnect();
+        userQuestionStore.disconnect();
+      }
       if (status.type === "ready") {
         void endNotifications.connect();
         void replaceApprovalSnapshot();
@@ -1484,6 +1500,7 @@ function AppContent() {
         void loadProjects();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
+          userQuestionStore.invalidate(selectedThreadIdRef.current);
           void resumeThread(selectedThreadIdRef.current, true);
         }
       } else if (status.type === "reconnecting") {
@@ -1518,8 +1535,18 @@ function AppContent() {
           void loadModels();
           return;
         }
+        const nativeEvent =
+          method === "zen/thread/event"
+            ? (params as ServerNotificationParams["zen/thread/event"]).event
+            : null;
+        // Streaming text lives in the active projection, not the canonical
+        // summary/project catalog. Keep every non-delta invalidation unchanged.
+        const nativeTextDelta =
+          nativeEvent?.type === "item_delta" ||
+          nativeEvent?.type === "reasoning_summary_delta" ||
+          nativeEvent?.type === "reasoning_content_delta";
         if (
-          method === "zen/thread/event" ||
+          (method === "zen/thread/event" && !nativeTextDelta) ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"
@@ -1598,6 +1625,13 @@ function AppContent() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "user_question_attention_invalidated" &&
+            cached?.processEpoch === projected.processEpoch &&
+            cached.watermark === projected.watermark
+          ) {
+            userQuestionStore.invalidate(projected.threadId);
+          }
           if (nativeEvent.type === "context_compaction_status") {
             if (
               cached?.processEpoch === projected.processEpoch &&
@@ -1854,15 +1888,27 @@ function AppContent() {
 
   const readPreference = useConversationReadPreference();
   const unreadThreads = unreadThreadIds(threadSummaries, readPreference);
-  const activeSummaries = threadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const activeSummaries = useMemo(
+    () =>
+      threadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [threadSummaries, titleSnapshot],
   );
-  const archivedSummaries = archivedThreadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const archivedSummaries = useMemo(
+    () =>
+      archivedThreadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [archivedThreadSummaries, titleSnapshot],
+  );
+  const informationThreads = useMemo(
+    () => [...activeSummaries, ...archivedSummaries],
+    [activeSummaries, archivedSummaries],
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedBaseSummary =
@@ -1879,6 +1925,27 @@ function AppContent() {
           name: titleSnapshot[selectedBaseSummary.threadId]!.title,
         }
       : selectedBaseSummary;
+  const questionAttention = useMemo(
+    () =>
+      selectedThreadId ? (
+        <UserQuestionCards
+          threadId={selectedThreadId}
+          store={userQuestionStore}
+          disabled={
+            serverStatus.type !== "ready" ||
+            selectedSummary?.archived === true ||
+            archivingThreadIds.has(selectedThreadId)
+          }
+        />
+      ) : undefined,
+    [
+      selectedThreadId,
+      userQuestionStore,
+      serverStatus.type,
+      selectedSummary?.archived,
+      archivingThreadIds,
+    ],
+  );
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =
@@ -2025,26 +2092,65 @@ function AppContent() {
     return next;
   };
 
+  const recallOwnerWritable = useCommittedCallback(
+    (threadId: string) =>
+      page === "agent" &&
+      selectedThreadId === threadId &&
+      serverStatus.type === "ready" &&
+      selectedSummary?.archived !== true,
+  );
+
   const restoreRecalledInput = (
     threadId: string,
     result: RecoveredSteerRecall,
-  ): boolean => {
-    if (
-      result.receipt.threadId !== threadId ||
-      selectedThreadIdRef.current !== threadId ||
-      recallPageRef.current !== "agent" ||
-      archivingThreadIdsRef.current.has(threadId)
-    )
-      return false;
-    let restored = false;
-    updateComposer(threadId, (state) => {
-      const next = restoreRecalledComposer(state, result, () =>
-        crypto.randomUUID(),
-      );
-      restored = next !== state;
-      return next;
-    });
-    return restored;
+  ): boolean | Promise<boolean> => {
+    const epoch = selectionEpoch.current;
+    const currentOwner = () =>
+      result.receipt.threadId === threadId &&
+      recallOwnerWritable(threadId) &&
+      selectedThreadIdRef.current === threadId &&
+      selectionEpoch.current === epoch &&
+      recallPageRef.current === "agent" &&
+      !archivingThreadIdsRef.current.has(threadId) &&
+      !steerRecallStore.getSnapshot().applied.has(result.receipt.id);
+    if (!currentOwner()) return false;
+    const hasQuestions = result.messages.some(
+      (message) => message.questionReply !== undefined,
+    );
+    const hasOrdinary = result.messages.some(
+      (message) => message.questionReply === undefined,
+    );
+    const restoreComposer = () => {
+      if (!currentOwner()) return false;
+      if (!hasOrdinary) return true;
+      let restored = false;
+      updateComposer(threadId, (state) => {
+        const next = restoreRecalledComposer(state, result, () =>
+          crypto.randomUUID(),
+        );
+        restored = next !== state;
+        return next;
+      });
+      return restored;
+    };
+    if (!hasQuestions) {
+      const restored = restoreComposer();
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    }
+    // One native receipt, then all destination preflights. No UI insertion before
+    // exact withdrawn reads and the latest navigation/draft fences have passed.
+    return (async () => {
+      // Join the receipt's bounded attention refresh before capturing destinations;
+      // a later observation during exact preflight must still fail the whole batch.
+      await userQuestionStore.refresh(threadId);
+      if (!currentOwner()) return false;
+      const plan = await userQuestionStore.prepareRecall(result);
+      if (!plan || !currentOwner()) return false;
+      const restored = userQuestionStore.commitRecall(plan, restoreComposer);
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    })();
   };
 
   const updateNewThreadComposer = (
@@ -4477,6 +4583,19 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                contextContent={
+                  !selectedRoomId && selectedThreadId ? (
+                    <ConversationInformationCards
+                      threadId={selectedThreadId}
+                      attention={questionAttention}
+                      threads={informationThreads}
+                      snapshot={pluginSnapshot}
+                      registry={pluginUiRegistry}
+                      theme={appearance}
+                      navigate={openPage}
+                    />
+                  ) : undefined
+                }
                 owner={
                   selectedRoomId
                     ? { kind: "room", roomId: selectedRoomId }
@@ -5149,7 +5268,10 @@ function AgentSurface({
   onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   steerRecallStore: SteerRecallStore;
-  onRestoreRecalled(threadId: string, result: RecoveredSteerRecall): boolean;
+  onRestoreRecalled(
+    threadId: string,
+    result: RecoveredSteerRecall,
+  ): boolean | Promise<boolean>;
   queueEditStore: QueueEditStore;
   onOpenMessageLink(
     threadId: string,

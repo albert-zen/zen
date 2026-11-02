@@ -12,6 +12,7 @@ export interface SidebarTrigger {
   id: string;
   threadId: string;
   kind: string;
+  label?: string;
   active: boolean;
   nextRunAt?: number;
   sourceError?: string;
@@ -44,6 +45,7 @@ export function sidebarTriggerFacts(value: unknown): SidebarTrigger[] {
       id: t.id,
       threadId: t.threadId,
       kind: t.kind,
+      ...(typeof t.label === "string" ? { label: t.label } : {}),
       active: t.active,
       ...(typeof timer?.nextRunAt === "number"
         ? { nextRunAt: timer.nextRunAt }

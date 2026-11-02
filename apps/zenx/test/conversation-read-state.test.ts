@@ -538,3 +538,352 @@ test("retired viewport observers cannot acknowledge from an older render", async
     dom.window.close();
   }
 });
+
+function visibleReadFixture() {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const state = {
+    focused: true,
+    hidden: false,
+    tail: 300,
+    occluderTop: 400,
+    queries: 0,
+    geometryReads: 0,
+    duringGeometry: undefined as (() => void) | undefined,
+  };
+  Object.defineProperty(document, "hasFocus", {
+    configurable: true,
+    value: () => state.focused,
+  });
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (state.hidden ? "hidden" : "visible"),
+  });
+  const query = dom.window.Element.prototype.querySelectorAll;
+  dom.window.Element.prototype.querySelectorAll = function (
+    this: Element,
+    selector: string,
+  ) {
+    if (selector === "[data-read-message-id]") state.queries++;
+    return query.call(this, selector);
+  } as typeof query;
+  dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
+    state.geometryReads++;
+    state.duringGeometry?.();
+    return this.id === "occluder"
+      ? rect(state.occluderTop, 500)
+      : this.dataset.readMessageId
+        ? rect(state.tail - 100, state.tail)
+        : rect(0, 500);
+  };
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  window.requestAnimationFrame = (callback) => {
+    frames.set(++frameId, callback);
+    return frameId;
+  };
+  window.cancelAnimationFrame = (id) => {
+    frames.delete(id);
+  };
+  const observers = new Set<() => void>();
+  const previousResizeObserver = globalThis.ResizeObserver;
+  Object.assign(globalThis, {
+    ResizeObserver: class {
+      constructor(private readonly callback: () => void) {}
+      observe() {
+        observers.add(this.callback);
+      }
+      disconnect() {
+        observers.delete(this.callback);
+      }
+    },
+  });
+  type ReaderProps = {
+    scope?: "threads" | "rooms";
+    owner?: string;
+    id?: string;
+    position?: number;
+    present?: boolean;
+    enabled?: boolean;
+  };
+  function Reader({
+    scope = "threads",
+    owner = "owner",
+    id = "target",
+    position = 39,
+    present = true,
+    enabled = true,
+  }: ReaderProps) {
+    const viewport = useRef<HTMLDivElement>(null);
+    const occluder = useRef<HTMLDivElement>(null);
+    useReadVisibleMessage({
+      scope,
+      conversationId: owner,
+      message: message(id, 100, position),
+      viewport,
+      occluder,
+      enabled,
+    });
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(
+        "div",
+        { ref: viewport, id: "viewport" },
+        React.createElement(
+          "div",
+          null,
+          Array.from({ length: 39 }, (_, i) =>
+            React.createElement("article", {
+              key: i,
+              "data-read-message-id": `history-${i}`,
+            }),
+          ),
+          present &&
+            React.createElement("article", { "data-read-message-id": id }),
+        ),
+      ),
+      React.createElement("div", { ref: occluder, id: "occluder" }),
+    );
+  }
+  const root = createRoot(document.getElementById("root")!);
+  const store = conversationReadStore();
+  return {
+    dom,
+    state,
+    store,
+    frames,
+    async render(props: ReaderProps = {}) {
+      await act(async () => root.render(React.createElement(Reader, props)));
+    },
+    async flush() {
+      const pending = [...frames.values()];
+      frames.clear();
+      await act(async () => pending.forEach((callback) => callback(0)));
+    },
+    schedule(
+      event: "scroll" | "resize" | "focus" | "visibilitychange" | "observer",
+    ) {
+      if (event === "observer") observers.forEach((callback) => callback());
+      else {
+        const target =
+          event === "scroll"
+            ? document.getElementById("viewport")!
+            : event === "visibilitychange"
+              ? document
+              : window;
+        target.dispatchEvent(new dom.window.Event(event));
+      }
+    },
+    resetCounts() {
+      state.queries = state.geometryReads = 0;
+    },
+    async close() {
+      await act(async () => root.unmount());
+      Object.assign(globalThis, { ResizeObserver: previousResizeObserver });
+      dom.window.close();
+    },
+  };
+}
+
+test("read-visible same-ID cursor skips DOM scans and geometry on scroll, resize and focus", async () => {
+  const fixture = visibleReadFixture();
+  try {
+    fixture.store.advance("threads", "owner", message("target", 50, 39));
+    await fixture.render();
+    await fixture.flush();
+    assert.equal(
+      fixture.state.queries,
+      0,
+      "already-read ID needs no DOM lookup",
+    );
+    assert.equal(fixture.state.geometryReads, 0);
+    // A pending row can change the observed content size without changing the
+    // last canonical end. Exercise the real hook's ResizeObserver/scroll paths.
+    document
+      .querySelector("#viewport > div")!
+      .append(document.createElement("article"));
+    for (const event of [
+      "scroll",
+      "observer",
+      "resize",
+      "focus",
+      "visibilitychange",
+    ] as const) {
+      fixture.schedule(event);
+      await fixture.flush();
+    }
+    assert.equal(fixture.state.queries, 0);
+    assert.equal(fixture.state.geometryReads, 0);
+    assert.equal(fixture.store.getSnapshot().threads.owner?.createdAt, 50);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("read-visible foreground precheck avoids scans but retains final visibility and occluder guards", async () => {
+  const fixture = visibleReadFixture();
+  try {
+    fixture.state.hidden = true;
+    await fixture.render();
+    await fixture.flush();
+    assert.equal(
+      fixture.state.queries,
+      0,
+      "hidden document needs no DOM lookup",
+    );
+    fixture.state.hidden = false;
+    fixture.state.focused = false;
+    fixture.schedule("visibilitychange");
+    await fixture.flush();
+    assert.equal(
+      fixture.state.queries,
+      0,
+      "unfocused document needs no DOM lookup",
+    );
+    assert.equal(fixture.state.geometryReads, 0);
+    fixture.state.focused = true;
+    fixture.state.tail = 450;
+    fixture.schedule("focus");
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 1);
+    assert.ok(fixture.state.geometryReads > 0);
+    assert.equal(
+      fixture.store.getSnapshot().threads.owner,
+      undefined,
+      "composer covers tail",
+    );
+    fixture.state.tail = 300;
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    document.body.append(dialog);
+    fixture.schedule("observer");
+    await fixture.flush();
+    assert.equal(
+      fixture.store.getSnapshot().threads.owner,
+      undefined,
+      "modal blocks reading",
+    );
+    dialog.remove();
+    fixture.state.duringGeometry = () => {
+      fixture.state.focused = false;
+    };
+    fixture.schedule("scroll");
+    await fixture.flush();
+    assert.equal(
+      fixture.store.getSnapshot().threads.owner,
+      undefined,
+      "foreground is rechecked after geometry",
+    );
+    fixture.state.duringGeometry = undefined;
+    fixture.state.focused = true;
+    fixture.schedule("focus");
+    await fixture.flush();
+    assert.equal(fixture.store.getSnapshot().threads.owner?.id, "target");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("read-visible rereads current watermarks after reload and never borrows another scope or owner", async () => {
+  const fixture = visibleReadFixture();
+  try {
+    await fixture.render();
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 1);
+    assert.equal(fixture.store.getSnapshot().threads.owner?.id, "target");
+    const reset = { ...fixture.store.getSnapshot(), threads: {} };
+    window.localStorage.setItem(CONVERSATION_READ_KEY, JSON.stringify(reset));
+    window.dispatchEvent(
+      new fixture.dom.window.StorageEvent("storage", {
+        key: CONVERSATION_READ_KEY,
+      }),
+    );
+    assert.equal(fixture.store.getSnapshot().threads.owner, undefined);
+    fixture.resetCounts();
+    fixture.schedule("scroll");
+    await fixture.flush();
+    assert.equal(
+      fixture.state.queries,
+      1,
+      "same ID is checked again after preference reset",
+    );
+    assert.equal(fixture.store.getSnapshot().threads.owner?.id, "target");
+    fixture.resetCounts();
+    await fixture.render({ owner: "other-owner" });
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 1);
+    assert.equal(
+      fixture.store.getSnapshot().threads["other-owner"]?.id,
+      "target",
+    );
+    fixture.resetCounts();
+    await fixture.render({ scope: "rooms" });
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 1);
+    assert.equal(fixture.store.getSnapshot().rooms.owner?.id, "target");
+    fixture.resetCounts();
+    await fixture.render({ id: "different-ID-same-position" });
+    await fixture.flush();
+    assert.equal(
+      fixture.state.queries,
+      1,
+      "fast path must not widen to position or timestamp",
+    );
+    assert.equal(
+      fixture.store.getSnapshot().threads.owner?.id,
+      "target",
+      "existing watermark order still refuses equal-position progress",
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("read-visible late DOM remains unread until visible and retired or disabled owners cannot acknowledge", async () => {
+  const fixture = visibleReadFixture();
+  try {
+    await fixture.render({ present: false });
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 1);
+    assert.equal(fixture.state.geometryReads, 0);
+    assert.equal(fixture.store.getSnapshot().threads.owner, undefined);
+    await fixture.render();
+    fixture.state.tail = 700;
+    fixture.schedule("observer");
+    await fixture.flush();
+    assert.equal(
+      fixture.store.getSnapshot().threads.owner,
+      undefined,
+      "late but offscreen is not read",
+    );
+    fixture.state.tail = 300;
+    fixture.schedule("scroll");
+    const retired = [...fixture.frames.values()];
+    await fixture.render({ owner: "new-owner", enabled: false });
+    fixture.resetCounts();
+    await act(async () => retired.forEach((callback) => callback(0)));
+    fixture.schedule("focus");
+    fixture.schedule("observer");
+    await fixture.flush();
+    assert.equal(fixture.state.queries, 0);
+    assert.equal(fixture.store.getSnapshot().threads.owner, undefined);
+    assert.equal(fixture.store.getSnapshot().threads["new-owner"], undefined);
+    await fixture.render({ owner: "new-owner" });
+    await fixture.flush();
+    assert.equal(
+      fixture.store.getSnapshot().threads["new-owner"]?.id,
+      "target",
+    );
+  } finally {
+    await fixture.close();
+  }
+});

@@ -216,6 +216,7 @@ test("real bundled profile upgrades Triggers 1.0.0 to 1.0.2 narrow facts without
           id: "kept-trigger",
           threadId: "kept-thread",
           kind: "timer",
+          label: "User timer",
           active: false,
           timer: { nextRunAt: 2_000_000_000_000 },
         },

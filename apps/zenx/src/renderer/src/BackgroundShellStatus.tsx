@@ -8,7 +8,13 @@ import {
 import { ShellTargetNavigationContext } from "./shell-target-navigation.js";
 import { Icon } from "./icons.js";
 
-export function BackgroundShellStatus({ threadId }: { threadId: string }) {
+export function BackgroundShellStatus({
+  threadId,
+  presentation = "compact",
+}: {
+  threadId: string;
+  presentation?: "compact" | "information";
+}) {
   const { t } = useTranslation("panels");
   const navigation = useContext(ShellTargetNavigationContext);
   const api =
@@ -19,7 +25,7 @@ export function BackgroundShellStatus({ threadId }: { threadId: string }) {
     error: string | null;
   } | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(presentation === "information");
   const [navigationError, setNavigationError] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
   const identity = useRef(threadId);
@@ -33,11 +39,11 @@ export function BackgroundShellStatus({ threadId }: { threadId: string }) {
     };
   }, []);
   useEffect(() => {
-    setExpanded(false);
+    setExpanded(presentation === "information");
     setNavigationError("");
     setOpening(null);
     openingRef.current = false;
-  }, [threadId]);
+  }, [threadId, presentation]);
   useEffect(() => {
     if (!api) return;
     let retired = false;
@@ -70,7 +76,10 @@ export function BackgroundShellStatus({ threadId }: { threadId: string }) {
     };
   }, [threadId, api, refresh]);
   const current = observation?.threadId === threadId ? observation : null;
-  if (!api || !current) return null;
+  if (!api || !current)
+    return presentation === "information" ? (
+      <p role="status">{t(!api ? "unavailable" : "boardLoading")}</p>
+    ) : null;
   const pending = current.sessions.filter(
     (s) => backgroundShellPhase(s) !== "ended",
   );

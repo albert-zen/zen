@@ -1,3 +1,4 @@
+import type { QuestionIpcError } from "./user-question-ipc.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import type { CompactionIpcReply } from "./compaction-ipc.js";
 import type {
@@ -64,15 +65,17 @@ export function queueIpcUnknown(error: unknown): QueueIpcUnknown {
 export type QueueEditIpcReply =
   NativeQueueEditResult | QueueEditIpcRejection | QueueIpcUnknown;
 export type ProtocolIpcResult<M extends ClientRequestMethod> =
-  M extends "thread/compact"
-    ? CompactionIpcReply
-    : M extends "zen/thread/queue/edit"
-      ? QueueEditIpcReply
-      : M extends "zen/thread/steer/recall"
-        ? NativeSteerRecallResult | QueueEditIpcRejection | QueueIpcUnknown
-        : M extends "zen/thread/queue/steer"
-          ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
-          : ClientRequestResults[M];
+  M extends `zen/thread/questions/${string}`
+    ? ClientRequestResults[M] | QuestionIpcError
+    : M extends "thread/compact"
+      ? CompactionIpcReply
+      : M extends "zen/thread/queue/edit"
+        ? QueueEditIpcReply
+        : M extends "zen/thread/steer/recall"
+          ? NativeSteerRecallResult | QueueEditIpcRejection | QueueIpcUnknown
+          : M extends "zen/thread/queue/steer"
+            ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
+            : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,

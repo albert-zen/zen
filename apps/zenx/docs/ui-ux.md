@@ -859,7 +859,7 @@ Provider 保存错误的稳定摘要不替代本机诊断：编辑器中的失�
 
 ### Interactive information board
 
-Information contributions use the existing top-right Board button to toggle a popup; the popup has no duplicate icon/title, pin or close header. The open button uses only a deeper neutral surface background, never an accent color or highlight; its accessible pressed/expanded state tracks visibility. The information host has no separate pin mode and does not read or write the obsolete renderer pin preference. Information contributions are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger, outside dismissal remains available, and the same popup stays usable at narrow widths. Closing and reopening through the Board button preserves user fields without sending or navigating.
+Information contributions use the existing top-right Board button. When the actual conversation allocation is at least 920px, an open board occupies a 340px card to the right with 12px outer/inter-column gutters; the conversation and Composer yield that space rather than being covered. These are ZenX responsive choices, not recovered Codex desktop implementation values. At narrower allocations a dismissible popover remains available. Opening the workspace right sidebar closes the board once; manually reopening it while the workspace remains open is allowed. Internal workspace maximization is not OS fullscreen: selecting its main-conversation Tab retains the same conversation DOM and allows the board to dock whenever the resulting allocation is wide enough. The card/popover has no duplicate icon/title, pin or close header. The information and workspace toggles share the deeper neutral active surface and primary foreground; no accent is introduced. Accessible pressed/expanded state tracks visibility. The Thread board also projects the admitted Trigger names and enabled/paused state with an exact existing edit route, the existing Subagents lineage surface, and current native Shell session observations. These are read/navigation projections, not scheduling or execution authority; unavailable facts stay explicit and no broad Trigger list/history is read for summaries. Dedicated question UI has a separate attention content slot and must not reuse Board fields or the main Composer draft as its state. Switching a maximized main-conversation Tab back to a resource closes its board. The information host has no separate pin mode and does not read or write the obsolete renderer pin preference. Information contributions are not Browser/File resource tabs and do not replace the Composer. The Board plugin provides questions, forms, metrics, notes, progress and shortcuts as convenience templates alongside arbitrary isolated HTML/CSS/JS. Agents define event behavior: local UI/navigation, explicitly assembled model messages, permission-gated non-model execution, or conditional combinations. Each model-delivery action names the owning Thread or Room member and reports admission, not completion. User fields survive hide/show, owner changes and document updates; stale revisions fail explicitly, without silent overwrites or retries. Background updates never open the board, change the selected conversation or move focus. Popup Escape returns to its trigger, outside dismissal remains available, and the same popup stays usable at narrow widths. Closing and reopening through the Board button preserves user fields without sending or navigating.
 
 ### Send admission feedback (2026-10-28)
 
@@ -1054,3 +1054,47 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 副本只由精确 client ID 与匹配 admission kind 消除：start/steer 可以由
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
+
+### Native question cards (experimental Desktop slice)
+
+Native accepted questions appear in the existing information panel attention slot,
+with independent `(Thread, call Item)` drafts, authored options, always-available
+free text, explicit Send and explicit Cancel request. Nothing is preselected or
+sent automatically. Hiding the information panel, changing Thread, or the model
+ending its Turn does not cancel a question, clear its draft, move focus or navigate.
+This initial renderer-local draft does not survive application reload; native
+accepted/pending questions do. Neither Board fields nor Composer/queue-edit fields
+are reused. Each authored question must have a valid answer before one group Send.
+
+The view reads bounded native pages and exact response identities. Invalidation
+restarts pagination; additional pages remain explicitly reachable. Pending means
+admitted, not model-visible; claimed means model input, not successful inference.
+Unknown writes retain their exact identity/payload and expose read-only Check
+response. Not-found is not proof that an in-flight write failed. No reconnect,
+status event or late callback resends or clears a newer draft. Disconnect fences
+all outstanding response observations; reopening begins a fresh page traversal.
+Question actions use the committed private Thread owner and current writable
+state, including archive/disconnection, with no authority published during render.
+Retained handlers cannot write after owner change or unmount. Local diagnostics
+remain expandable plain text. Current Host authority, not disabled controls,
+resolves concurrent clients. Publication remains behind the default-off Host
+experiment; this slice does not enable shared Room/CLI/remote publication, change
+Pinned/hidden state, or claim sidebar asking/recency integration without the
+separately reviewed authoritative summary projection.
+
+#### Whole-batch recall returns to its original inputs
+
+One authoritative atomic recall receipt is validated before partitioning UI
+restoration destinations. Ordinary messages retain the existing lossless
+Composer/reference/image merge; question replies restore normalized choices and
+free text to their exact original question cards, never backend-rendered answer
+text in Composer. Cancellation preserves an available local pre-cancel draft;
+a cold client cannot invent the missing draft. Exact withdrawn response reads,
+current open question authority, unchanged question drafts and the current
+Thread/page/selection generation all pass before any destination is changed.
+A newer draft, newer response, navigation or submitting destination leaves the
+whole receipt recoverable, without partial insertion. In-window applied markers
+advance only after all destinations accept. Old recalled client identities are
+terminal; a later explicit new answer receives a fresh identity. Restoration
+never sends, navigates, steals focus, enables shared Host publication or promises
+cross-window automatic insertion.

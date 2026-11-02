@@ -9652,3 +9652,779 @@ test("real App delayed send ACK after Thread navigation never focuses the new ow
     await unmountApp(harness);
   }
 });
+
+test("native streaming deltas update the real App without reloading or cloning information catalogs", async (t) => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let summaryReads = 0,
+    projectReads = 0,
+    contextClones = 0;
+  const clone = globalThis.structuredClone;
+  let summaries: NativeThreadSummary[] = [
+    summary(false),
+    ...Array.from({ length: 64 }, (_, index) => ({
+      ...summary(false, `child-${index}`, `Child ${index}`),
+      parentThreadId: "thread-1",
+    })),
+  ];
+  const snapshot = messageSourcePlugins();
+  globalThis.structuredClone = ((
+    value: unknown,
+    options?: StructuredSerializeOptions,
+  ) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      "threadId" in value &&
+      "threads" in value
+    )
+      contextClones++;
+    return clone(value, options);
+  }) as typeof structuredClone;
+  const harness = await mountThreadApp({
+    threads: async (archived) => {
+      summaryReads++;
+      return clone(archived ? [] : summaries);
+    },
+    projectsGet: async () => {
+      projectReads++;
+      return {
+        ...oneProject(),
+        projects: [{ ...oneProject().projects[0]!, threadIds: ["thread-1"] }],
+      };
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => snapshot,
+      executeCommand: async (_plugin, command) => {
+        assert.equal(command, "list");
+        return { threads: clone(summaries.slice(1)) };
+      },
+    },
+  });
+  let watermark = 0;
+  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        threadId:
+          event.type === "item_completed"
+            ? event.item.threadId
+            : "threadId" in event
+              ? event.threadId
+              : "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".information-content .subagents-panel"),
+    );
+    for (const [itemId, itemType] of [
+      ["stream-answer", "agent_message"],
+      ["stream-reasoning", "reasoning"],
+    ] as const)
+      await emit({
+        type: "item_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId,
+        itemType,
+      });
+    const before = { summaryReads, projectReads, contextClones };
+    assert.ok(
+      before.contextClones > 0,
+      "real admitted GenericPluginUiHost has cloned its immutable context",
+    );
+    for (let index = 0; index < 10; index++) {
+      await emit({
+        type: "item_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-answer",
+        delta: `visible-token-${index} `,
+      });
+      await emit({
+        type: "reasoning_summary_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "summary ",
+      });
+      await emit({
+        type: "reasoning_content_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "reasoning ",
+      });
+    }
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /visible-token-9/,
+    );
+    assert.deepEqual(
+      { summaryReads, projectReads, contextClones },
+      before,
+      "30 native transient deltas do not issue list/project IPC or clone catalog contexts, even when every RPC returns fresh arrays",
+    );
+    t.diagnostic(
+      JSON.stringify({
+        deltas: 30,
+        summaryReads: summaryReads - before.summaryReads,
+        projectReads: projectReads - before.projectReads,
+        contextClones: contextClones - before.contextClones,
+      }),
+    );
+    const refresh = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+    ) => {
+      const reads = summaryReads,
+        projects = projectReads;
+      await emit(event);
+      assert.equal(
+        summaryReads,
+        reads + 2,
+        `${event.type} refreshes active and archived summaries`,
+      );
+      assert.equal(
+        projectReads,
+        projects + 1,
+        `${event.type} refreshes project facts`,
+      );
+    };
+    summaries = summaries.map((row, index) =>
+      index === 1 && row.status !== "systemError"
+        ? { ...row, name: "Changed live child", status: "active" as const }
+        : row,
+    );
+    await refresh({
+      type: "thread_name_updated",
+      threadId: "child-0",
+      name: "Changed live child",
+    });
+    assert.match(
+      document.querySelector(".information-content")!.textContent!,
+      /Changed live child/,
+    );
+    assert.ok(
+      contextClones > before.contextClones,
+      "real child facts still reach the card",
+    );
+    await refresh({
+      type: "thread_settings_updated",
+      threadId: "thread-1",
+      settings: {
+        providerProfileId: "fake",
+        modelId: "fake",
+        reasoningEffort: "medium",
+        model: "fake",
+        provider: "fake",
+        cwd: "/work/zen",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    });
+    await refresh({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "first-input",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:00Z",
+        text: "Canonical input still refreshes",
+      },
+    });
+    await refresh({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+    });
+    await refresh({
+      type: "thread_archived_updated",
+      threadId: "child-0",
+      archived: true,
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "agent_message",
+        id: "final-answer",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:01Z",
+        text: "Canonical answer still refreshes",
+      },
+    });
+  } finally {
+    await unmountApp(harness);
+    globalThis.structuredClone = clone;
+  }
+});
+
+test("real Host questions render in full App information panel with independent drafts and explicit native answer/cancel", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  let harness: AppHarness | undefined;
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  try {
+    const thread = await f.host.startThread();
+    const first = await f.publish(thread.id);
+    const second = await f.publish(thread.id, {
+      questions: [{ id: "next", prompt: "Any additional constraint?" }],
+      answerTemplate: "Constraint: {{next}}",
+    });
+    let completedWrites = 0;
+    const writes: import("../../../src/protocol/native/wire.js").NativeQuestionRespondParams[] =
+      [];
+    harness = await mountApp(
+      {
+        projects: [
+          {
+            key: f.directory,
+            workspace: f.directory,
+            configured: true,
+            isDefault: true,
+            threadIds: [thread.id],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: f.directory,
+      },
+      {
+        onStatus: (listener) => {
+          statusListener = listener;
+          return () => {
+            statusListener = undefined;
+          };
+        },
+        threads: (archived) => f.host.listThreadSummaries({ archived }),
+        request: async (method, params) => {
+          if (method === "zen/thread/questions/respond")
+            writes.push(params as (typeof writes)[number]);
+          const result = await f.request(method, params);
+          if (method === "zen/thread/questions/respond") completedWrites++;
+          return result;
+        },
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        onNotification: (listener) =>
+          f.onNotification((method, params) =>
+            listener(method as never, params as never),
+          ),
+      },
+    );
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const firstCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    const secondCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
+    const answerButton =
+      firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
+    assert.equal(answerButton.disabled, true);
+    await act(async () =>
+      firstCard.querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+    );
+    const freeText = firstCard.querySelector<HTMLTextAreaElement>("textarea")!;
+    await setTextareaValue(freeText, "Also preserve keyboard focus");
+    await act(async () => freeText.focus());
+    let additional!: import("../../../src/user-question-state.js").UserQuestionState;
+    await act(async () => {
+      additional = await f.publish(thread.id);
+    });
+    await waitFor(() =>
+      document.querySelector(
+        `[data-question-call-id="${additional.request.callItemId}"]`,
+      ),
+    );
+    assert.ok(
+      document.activeElement === freeText,
+      "a new accepted question never steals existing input focus",
+    );
+
+    await setTextareaValue(
+      secondCard.querySelector<HTMLTextAreaElement>("textarea")!,
+      "Independent second draft",
+    );
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    assert.equal(writes.length, 0, "hiding is not cancellation");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const reopened = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    assert.equal(
+      reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Also preserve keyboard focus",
+    );
+    assert.equal(
+      document
+        .querySelector<HTMLElement>(
+          `[data-question-call-id="${second.request.callItemId}"]`,
+        )!
+        .querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Independent second draft",
+    );
+    const retainedSend = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".primary-button")!,
+    ).onClick;
+    const retainedCancel = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".user-question-actions button")!,
+    ).onClick;
+    const retainedEdit = reactProps<{
+      onChange(event: { target: { value: string } }): void;
+    }>(reopened.querySelector("textarea")!).onChange;
+    const invokeRetained = async () => {
+      await act(async () => {
+        retainedEdit({ target: { value: "stale owner edit" } });
+        retainedSend();
+        retainedCancel();
+      });
+      assert.equal(writes.length, 0);
+      assert.equal(
+        reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "Also preserve keyboard focus",
+      );
+    };
+    await act(async () =>
+      statusListener?.({ type: "error", message: "synthetic disconnection" }),
+    );
+    await invokeRetained();
+    await act(async () =>
+      statusListener?.({ type: "ready", reconnected: true }),
+    );
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, true);
+    });
+    await waitFor(
+      () =>
+        reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await invokeRetained();
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, false);
+    });
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await invokeButtonClick(
+      reopened.querySelector<HTMLButtonElement>(".primary-button")!,
+      2,
+    );
+    await waitFor(() => completedWrites === 1);
+    const sent = await f.host.readUserQuestion(
+      thread.id,
+      first.request.callItemId,
+      writes[0]!.clientUserMessageId,
+    );
+    assert.ok(
+      sent.response.status === "claimed" || sent.response.status === "pending",
+    );
+    assert.equal(sent.response.reply?.outcome, "answer");
+    if (sent.response.reply?.outcome === "answer")
+      assert.deepEqual(sent.response.reply.answers, [
+        {
+          questionId: "scope",
+          optionIds: ["small"],
+          text: "Also preserve keyboard focus",
+        },
+      ]);
+    const currentSecond = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    const cancel = [
+      ...currentSecond.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Cancel request")!;
+    await invokeButtonClick(cancel, 2);
+    await waitFor(() => completedWrites === 2);
+    assert.equal(writes[1]!.outcome, "cancel");
+    assert.equal("answers" in writes[1]!, false);
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    const snapshot = await f.host.readThread(thread.id);
+    const bound = snapshot.items.filter(
+      (item) =>
+        (item.type === "user_message" || item.type === "user_message_queued") &&
+        item.questionReply !== undefined,
+    );
+    assert.equal(
+      bound.length,
+      2,
+      "only two explicit human response intents were admitted",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await f.close();
+  }
+});
+
+for (const outcome of [
+  "restored",
+  "newer-question-draft",
+  "navigation",
+  "disconnect",
+  "archive",
+] as const) {
+  test(`real Host full App atomic mixed recall returns to original inputs: ${outcome}`, async () => {
+    const { questionNativeFixture } =
+      await import("./user-question-native-fixture.js");
+    const { ToolEnvironment } = await import("../../../src/tool.js");
+    const entered = deferred<void>(),
+      release = deferred<void>();
+    const environment = new ToolEnvironment({
+      runtimes: [
+        {
+          name: "synthetic_hold",
+          enforcesSandbox: true,
+          specification: {
+            name: "synthetic_hold",
+            description: "Hold synthetic test work",
+            inputSchema: { type: "object", properties: {} },
+          },
+          execute: async () => {
+            entered.resolve();
+            await release.promise;
+            return { exitCode: 0, output: "Synthetic hold released" };
+          },
+        },
+      ],
+    });
+    const f = await questionNativeFixture(environment);
+    let harness: AppHarness | undefined;
+    let held: import("../../../src/app-server.js").TurnHandle | undefined;
+    let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+    const readGate = deferred<void>();
+    try {
+      const thread = await f.host.startThread();
+      const question = await f.publish(thread.id);
+      held = await f.host.startTurn(thread.id, "!tool synthetic_hold {}");
+      await entered.promise;
+      let answers = 0,
+        sends = 0,
+        recalls = 0,
+        restoreReads = 0;
+      let deferRestoreRead = false;
+      let originalClient = "";
+      harness = await mountApp(
+        {
+          projects: [
+            {
+              key: f.directory,
+              workspace: f.directory,
+              configured: true,
+              isDefault: true,
+              threadIds: [thread.id],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: f.directory,
+        },
+        {
+          composerSendMode: "soft",
+          onStatus: (listener) => {
+            statusListener = listener;
+            return () => {
+              statusListener = undefined;
+            };
+          },
+          threads: (archived) => f.host.listThreadSummaries({ archived }),
+          plugins: {
+            get: async () => ({
+              ...workspaceLauncherSnapshot,
+              plugins: [],
+              panels: [],
+              information: [],
+              commands: [],
+            }),
+          },
+          onNotification: (listener) =>
+            f.onNotification((method, params) =>
+              listener(method as never, params as never),
+            ),
+          request: async (method, params) => {
+            const result = await f.request(method, params);
+            if (method === "zen/thread/questions/respond") {
+              answers++;
+              originalClient = (params as { clientUserMessageId: string })
+                .clientUserMessageId;
+            }
+            if (method === "zen/turn/send") sends++;
+            if (method === "zen/thread/steer/recall") recalls++;
+            if (method === "zen/thread/questions/read" && deferRestoreRead) {
+              restoreReads++;
+              await readGate.promise;
+            }
+            return result;
+          },
+        },
+      );
+      const composer = await selectedComposer();
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      const card = () =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${question.request.callItemId}"]`,
+        )!;
+      await waitFor(card);
+      await act(async () =>
+        card().querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+      );
+      await setTextareaValue(
+        card().querySelector<HTMLTextAreaElement>("textarea")!,
+        "Original question free text",
+      );
+      await invokeButtonClick(
+        card().querySelector<HTMLButtonElement>(".primary-button")!,
+      );
+      await waitFor(() => answers === 1);
+      await setTextareaValue(composer, "Original ordinary message");
+      await invokePrimarySubmit(
+        document.querySelector<HTMLButtonElement>(
+          ".composer-send-control > button.action-orb",
+        )!,
+      );
+      await waitFor(() => sends === 1);
+      await setTextareaValue(composer, "New ordinary draft");
+      const { pendingSteerMessages } =
+        await import("../../../src/steer-recall.js");
+      assert.equal(
+        pendingSteerMessages((await f.host.readThread(thread.id)).items).length,
+        2,
+      );
+      deferRestoreRead = outcome !== "restored";
+      const recall = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".pending-steer-heading button",
+        ),
+      );
+      await invokeButtonClick(recall, 2);
+      await waitFor(() => recalls === 1);
+      if (outcome === "disconnect" || outcome === "archive") {
+        await waitFor(() => restoreReads > 0);
+        if (outcome === "disconnect") {
+          await act(async () =>
+            statusListener?.({
+              type: "error",
+              message: "Synthetic disconnect during origin preflight",
+            }),
+          );
+        } else {
+          await act(async () => {
+            release.resolve();
+            await held!.done;
+            await f.host.setThreadArchived(thread.id, true);
+          });
+          await waitFor(
+            () =>
+              card()?.querySelector<HTMLButtonElement>(".primary-button")
+                ?.disabled,
+          );
+        }
+        await act(async () => readGate.resolve());
+        if (outcome === "disconnect")
+          await act(async () =>
+            statusListener?.({ type: "ready", reconnected: true }),
+          );
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "unwritable owner leaves the whole batch unapplied",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+      } else if (outcome === "navigation") {
+        await waitFor(() => restoreReads > 0);
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+        const newComposer = await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        );
+        await setTextareaValue(newComposer, "New navigation draft");
+        await act(async () => readGate.resolve());
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+        assert.equal(newComposer.value, "New navigation draft");
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              `[data-thread-id="${thread.id}"] .thread-row`,
+            )!
+            .click(),
+        );
+        const originalComposer = await waitFor(() => {
+          const input =
+            document.querySelector<HTMLTextAreaElement>("#thread-composer");
+          return input?.value === "New ordinary draft" ? input : null;
+        });
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          originalComposer.value,
+          "New ordinary draft",
+          "navigation blocks the whole original restoration",
+        );
+      } else if (outcome === "newer-question-draft") {
+        await waitFor(() => restoreReads > 0);
+        // The receipt is confirmed but one question-origin preflight is still pending.
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(
+          () =>
+            card()?.querySelector<HTMLFieldSetElement>("fieldset")?.disabled ===
+            false,
+        );
+        await setTextareaValue(
+          card().querySelector<HTMLTextAreaElement>("textarea")!,
+          "New question draft must win",
+        );
+        await act(async () => readGate.resolve());
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "no partial ordinary restoration",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "New question draft must win",
+        );
+      } else {
+        await waitFor(
+          () =>
+            composer.value ===
+            "Original ordinary message\n\nNew ordinary draft",
+        );
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(card);
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+        assert.equal(card().querySelectorAll("input:checked").length, 1);
+        assert.doesNotMatch(
+          composer.value,
+          /Reply to question|Original question free text/,
+        );
+      }
+      const current = await f.host.readThread(thread.id);
+      assert.equal(pendingSteerMessages(current.items).length, 0);
+      assert.equal(
+        current.items.filter(
+          (item) => item.type === "user_message_steer_recalled",
+        ).length,
+        1,
+      );
+      assert.equal(
+        (
+          await f.host.readUserQuestion(
+            thread.id,
+            question.request.callItemId,
+            originalClient,
+          )
+        ).response.status,
+        "withdrawn",
+      );
+      assert.equal(answers, 1, "restoration never sends an answer");
+      assert.equal(sends, 1, "restoration never sends an ordinary message");
+      assert.equal(
+        recalls,
+        1,
+        "mixed destinations use one atomic native recall",
+      );
+    } finally {
+      readGate.resolve();
+      release.resolve();
+      if (harness) await unmountApp(harness);
+      await held?.done.catch(() => undefined);
+      await f.close();
+    }
+  });
+}

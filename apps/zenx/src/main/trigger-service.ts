@@ -1330,6 +1330,7 @@ export class ZenXTriggerService {
         id: trigger.id,
         threadId: trigger.threadId,
         kind: trigger.kind,
+        label: trigger.label,
         active: trigger.active,
         ...(trigger.timer === undefined
           ? {}

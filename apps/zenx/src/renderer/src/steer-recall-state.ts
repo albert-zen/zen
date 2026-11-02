@@ -33,6 +33,7 @@ export function recalledDrafts(
 ): ComposerDraft[] | null {
   const drafts: ComposerDraft[] = [];
   for (const message of result.messages) {
+    if (message.questionReply !== undefined) continue;
     const draft = queuedInputDraft(message.input, message.id, message.clientId);
     if (draft === null) return null;
     drafts.push(draft);
@@ -78,7 +79,7 @@ export function restoreRecalledComposer(
 ): ComposerState {
   if (state.submission?.status === "pending") return state;
   const drafts = recalledDrafts(result);
-  if (drafts === null) return state;
+  if (drafts === null || drafts.length === 0) return state;
   const recovered = drafts.map((draft) => ({
     ...draft,
     images: draft.images.map((image) => ({ ...image, id: createId() })),
@@ -126,6 +127,7 @@ export function createSteerRecallStore() {
       publish();
     },
     applied(receiptId: string) {
+      if (snapshot.applied.has(receiptId)) return;
       snapshot = {
         ...snapshot,
         applied: new Set([...snapshot.applied, receiptId]),
