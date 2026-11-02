@@ -1,4 +1,4 @@
-name: Same-source history flow A/B (verified frames, post-timing geometry)
+name: Same-source historical content visibility A/B (verified frames, post-timing geometry)
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]
@@ -21,9 +21,9 @@ jobs:
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 18fb553683bdfc0eb254487d44dec4688c299b94
+          ref: a1ecd02aba5f699be72adb16885ddf2562ba3feb
           persist-credentials: false
-          path: flex
+          path: cv
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -33,7 +33,7 @@ jobs:
           node-version: 22
       - name: Copy identical passive drivers, leaving product tracked files unchanged
         run: |
-          for source in baseline flex; do
+          for source in baseline cv; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
@@ -45,8 +45,8 @@ jobs:
           npm ci
           npm run build
           npm run build --workspace @zen/zenx
-      - name: Build exact flex candidate once
-        working-directory: flex
+      - name: Build exact cv candidate once
+        working-directory: cv
         timeout-minutes: 10
         run: |
           npm ci
@@ -60,7 +60,7 @@ jobs:
         run: |
           failed=0
           for case in A1 B1; do
-            case "$case" in A*) source=baseline ;; B*) source=flex ;; esac
+            case "$case" in A*) source=baseline ;; B*) source=cv ;; esac
             echo "PAIRED_CASE_BEGIN $case $source"
             set +e
             (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case")
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-history-flow-ab-5000
+          name: native-send-history-cv-ab-5000
           path: |
             results/*/full-app-*.json
             results/*/independent-storage-verification.json

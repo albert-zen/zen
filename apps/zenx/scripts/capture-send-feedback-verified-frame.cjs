@@ -928,6 +928,11 @@ async function capturePostTimingLayout() {
       "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
     );
   await settle();
+  // Probe only the first known fixture Turn, after every timing sample. The
+  // optional check tests skipped ancestors without scrolling/revealing them.
+  result.postTimingContentVisibility = await evaluate(
+    "(()=>{const first=document.querySelector('.messages-inner')?.firstElementChild,probe=first?.querySelector(':scope > .user-row');if(!first?.matches('.turn')||!probe)throw Error('First historical fixture input required');const style=getComputedStyle(first),supported=typeof probe.checkVisibility==='function';return {checkedRows:1,supported,eligible:first.dataset.historyLayout==='auto',contentVisibility:style.contentVisibility,intrinsicBlockSize:style.containIntrinsicBlockSize,renderedIgnoringAuto:supported?probe.checkVisibility():null,renderedIncludingAuto:supported?probe.checkVisibility({contentVisibilityAuto:true}):null}})()",
+  );
   const history = await evaluate(
     "(()=>{const root=document.querySelector('.messages-inner'),last=root?.lastElementChild,prior=last?.previousElementSibling;const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}};if(!root||!last?.matches('.turn')||!prior?.matches('.turn'))throw Error('Actual canonical tail Turns required');return {display:getComputedStyle(root).display,gap:parseFloat(getComputedStyle(root).rowGap),width:root.getBoundingClientRect().width,rows:[prior,last].map(e=>({rect:rect(e),display:getComputedStyle(e).display,marginTop:parseFloat(getComputedStyle(e).marginTop)||0,marginBottom:parseFloat(getComputedStyle(e).marginBottom)||0}))}})()",
   );

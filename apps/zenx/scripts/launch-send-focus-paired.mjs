@@ -41,7 +41,7 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const expected = {
   baseline: "50ae16e1811a186fbf29fa6dfb721d8e328275a7",
-  flex: "18fb553683bdfc0eb254487d44dec4688c299b94",
+  cv: "a1ecd02aba5f699be72adb16885ddf2562ba3feb",
 }[sourceLabel];
 assert.ok(
   expected,
@@ -137,11 +137,11 @@ await writeFile(
       sourceCommit: expected,
       comparisonRole:
         sourceLabel === "baseline"
-          ? "same-source-without-focus-handoff"
-          : "same-source-with-only-focus-handoff",
+          ? "same-source-grid-without-history-cv"
+          : "same-source-grid-with-only-history-cv",
       priorUserMessages: count,
       priorCompletedTurns: count,
-      visibleHistoricalMessages: count * 2,
+      mountedHistoricalMessages: count * 2,
       fixtureContextWindow: 100000000,
       platform: process.platform,
       hashes,
@@ -338,10 +338,19 @@ try {
   );
   assert.equal(result.samples.length, 3);
   assert.equal(result.postTimingLayout?.timingComplete, true);
+  assert.equal(result.postTimingLayout.history.display, "grid");
+  const visibility = result.postTimingContentVisibility;
+  assert.equal(visibility?.checkedRows, 1);
+  assert.equal(visibility.supported, true);
+  assert.equal(visibility.renderedIgnoringAuto, true);
+  assert.equal(visibility.eligible, sourceLabel === "cv");
+  assert.equal(visibility.renderedIncludingAuto, sourceLabel !== "cv");
   assert.equal(
-    result.postTimingLayout.history.display,
-    sourceLabel === "baseline" ? "grid" : "flex",
+    visibility.contentVisibility,
+    sourceLabel === "cv" ? "auto" : "visible",
   );
+  if (sourceLabel === "cv")
+    assert.equal(visibility.intrinsicBlockSize, "auto 240px");
   assert.equal(result.postTimingLayout.newThread.display, "grid");
   for (const sample of result.samples) {
     for (const field of [
@@ -398,7 +407,7 @@ try {
         appAfter: result.processResourcesAfter,
         priorUserMessages: count,
         priorCompletedTurns: count,
-        visibleHistoricalMessages: count * 2,
+        mountedHistoricalMessages: count * 2,
         rendered: result.before.rendered,
         seed: result.seed,
         samples: result.samples.map((s) => ({
