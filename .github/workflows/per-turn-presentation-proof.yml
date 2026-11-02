@@ -1,0 +1,62 @@
+name: Per-Turn canonical presentation render-count proof
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/per-turn-presentation-proof.yml
+      - scripts/prove-per-turn-presentation-regression.mjs
+permissions:
+  contents: read
+jobs:
+  per-turn-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            source: d66c3ee9c4fb491e0845a5a54b25d876f5983d9e
+          - variant: candidate
+            source: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          ref: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+          persist-credentials: false
+          path: regression-source
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Overlay only identical regression test on baseline
+        if: matrix.variant == 'baseline'
+        run: cp regression-source/apps/zenx/test/app-project-picker-interaction.test.ts product/apps/zenx/test/
+      - name: Install pinned source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production source and prepare real App dependencies
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run prepare:first-party-plugins --workspace @zen/zenx
+      - name: Verify exact historical broadcast RED or complete GREEN
+        working-directory: product
+        timeout-minutes: 6
+        run: node ../diagnostic/scripts/prove-per-turn-presentation-regression.mjs '${{ matrix.variant }}' '${{ matrix.source }}' ../proof-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: per-turn-presentation-proof-${{ matrix.variant }}
+          path: proof-results
+          if-no-files-found: error
