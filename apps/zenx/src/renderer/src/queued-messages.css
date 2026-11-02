@@ -460,3 +460,69 @@
     gap: 0;
   }
 }
+
+.pending-steer-panel {
+  width: calc(100% - 16px);
+  max-width: calc(var(--conversation-width) - 16px);
+  margin: 6px auto;
+  background: var(--color-surface-inset);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.pending-steer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pending-steer-panel p {
+  margin: 6px 0;
+  color: var(--color-text-secondary);
+}
+.pending-steer-panel button {
+  min-height: 44px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+  max-width: 100%;
+  white-space: normal;
+}
+.pending-steer-panel summary {
+  cursor: pointer;
+}
+.pending-steer-panel ol {
+  max-height: 160px;
+  overflow: auto;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+.steer-recovery > div {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.steer-recovery > div > p {
+  flex-basis: 100%;
+}
+
+.pending-steer-panel button:disabled {
+  cursor: default;
+  color: var(--color-text-disabled);
+}
+.pending-steer-panel button:focus-visible,
+.pending-steer-panel summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

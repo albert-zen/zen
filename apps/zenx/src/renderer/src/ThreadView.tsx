@@ -1,3 +1,6 @@
+import { PendingSteerPanel } from "./PendingSteerPanel.js";
+import type { SteerRecallStore } from "./steer-recall-state.js";
+import { pendingSteerMessages, type PendingSteerInput, type RecoveredSteerRecall } from "../../../../../src/steer-recall.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
 import type { MessageQuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
@@ -259,6 +262,10 @@ function goToMessageQuoteSource(
 }
 
 interface ThreadViewProps {
+  steerRecallStore?: SteerRecallStore;
+  onRestoreRecalled?(result: RecoveredSteerRecall): boolean;
+  onRefreshRecall?(): void;
+  pendingSteer?: readonly PendingSteerInput[];
   localModelDebug?: boolean;
   debugMode?: boolean;
   onExitDebug?(): void;
@@ -345,6 +352,17 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const pendingSteer = useMemo(
+    () => pendingSteerMessages(props.thread?.canonicalItems ?? []),
+    [props.thread?.canonicalItems],
+  );
+  const queueThread = useMemo(() => {
+    if (props.thread === null || pendingSteer.length === 0) return props.thread;
+    const ids = new Set(pendingSteer.map((item) => item.id));
+    return { ...props.thread, queuedMessages: props.thread.queuedMessages?.filter(
+      (item) => !ids.has(item.id),
+    ) };
+  }, [props.thread, pendingSteer]);
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
   debuggingRef.current = debugging;
@@ -441,6 +459,8 @@ export function ThreadView(props: ThreadViewProps) {
                 ) : (
                   <ThreadViewContent
                     {...props}
+                    thread={queueThread}
+                    pendingSteer={pendingSteer}
                     threadAttachments={
                       canonicalAttachments ?? props.threadAttachments
                     }
@@ -456,6 +476,10 @@ export function ThreadView(props: ThreadViewProps) {
 }
 
 function ThreadViewContent({
+  steerRecallStore,
+  onRestoreRecalled,
+  onRefreshRecall,
+  pendingSteer = [],
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -850,7 +874,7 @@ function ThreadViewContent({
   const compactRequested = isCompactCommand(composer.draft.text);
   const submitting =
     composer.submission?.status === "pending" ||
-    composer.compaction?.status === "pending";
+    (compactRequested && composer.compaction?.status === "pending");
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
     !compactRequested &&
@@ -1627,6 +1651,18 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
+        {thread?.canonicalItems ? (
+          <PendingSteerPanel
+            key={thread.id}
+            threadId={thread.id}
+            items={thread.canonicalItems}
+            pending={pendingSteer}
+            runningTurnId={runningTurn?.id ?? null}
+            store={steerRecallStore}
+            onRestore={onRestoreRecalled}
+            onRefresh={onRefreshRecall}
+          />
+        ) : null}
         {thread ? (
           <QueuedMessages
             threadId={thread.id}

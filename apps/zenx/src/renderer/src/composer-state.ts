@@ -157,8 +157,7 @@ export function beginComposerSubmission(
   timezone: () => string | undefined = clientTimeZone,
 ): ComposerState {
   if (
-    state.submission?.status === "pending" ||
-    state.compaction?.status === "pending"
+    state.submission?.status === "pending"
   )
     return state;
   const text = state.draft.text.trim();
@@ -244,14 +243,17 @@ export function reconcileCanonicalAdmission(
   const delivered = items.find(
     (item) => item.type === "user_message" && item.clientId === clientId,
   );
-  const queued = items.some(
+  const queued = items.find(
     (item) => item.type === "user_message_queued" && item.clientId === clientId,
   );
-  // A queued record only confirms a queue submission; other modes require
-  // the actual user_message associated with a Turn.
+  // Native staged steer proves admission, not model claim. Legacy modes still
+  // require their matching canonical admission kind.
   if (
     delivered === undefined &&
-    (!queued || (submission !== null && submission.intent !== "queue"))
+    (queued?.type !== "user_message_queued" ||
+      (submission !== null &&
+        submission.intent !== "queue" &&
+        !(submission.intent === "steer" && queued.deliveryMode === "steer")))
   )
     return state;
   const terminal =

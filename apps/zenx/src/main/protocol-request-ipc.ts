@@ -27,7 +27,8 @@ export function registerProtocolRequestIpc(
         if (method === "thread/compact") return compactionIpcRejection(error);
         if (
           method !== "zen/thread/queue/edit" &&
-          method !== "zen/thread/queue/steer"
+          method !== "zen/thread/queue/steer" &&
+          method !== "zen/thread/steer/recall"
         )
           throw error;
         const rejection = queueEditIpcRejection(error);
