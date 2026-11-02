@@ -14,6 +14,7 @@ import {
   moveSidebarProject,
   moveSidebarThread,
   movePinnedThreadIds,
+  derivePinnedThreads,
   type SidebarOrderPlacement,
 } from "../src/renderer/src/thread-list.js";
 
@@ -1013,5 +1014,84 @@ test("Recent keeps focus and running indicators stable until genuine message act
       second,
     ]);
     assert.deepEqual(ids(), ["active", "idle"]);
+  });
+});
+
+test("Project activity uses Recent order while explicit Project and Pinned order remain fixed", async () => {
+  await withDom(async (root) => {
+    const at = (seconds: number) => new Date(seconds * 1_000).toISOString();
+    const first = {
+      ...summary("active", "active", 90, "/work/a"),
+      recentActivityAt: at(10),
+    };
+    const second = {
+      ...summary("idle", "idle", 40, "/work/a"),
+      recentActivityAt: at(20),
+    };
+    const pins = [
+      { ...summary("pin-a", "idle", 10, "/work/a"), recentActivityAt: at(30) },
+      { ...summary("pin-b", "idle", 20, "/work/a"), recentActivityAt: at(40) },
+    ];
+    const render = async (
+      threadRows: NativeThreadSummary[],
+      sidebarOrder: ZenXSidebarOrder = { projectKeys: [], threadIdsByProject: {} },
+    ) => {
+      await act(async () =>
+        root.render(
+          createElement(StaticSidebar, {
+            threadRows,
+            sidebarOrder,
+            pinnedThreads: derivePinnedThreads(threadRows, ["pin-a", "pin-b"]),
+          }),
+        ),
+      );
+    };
+    const ids = (selector: string) =>
+      [...document.querySelectorAll<HTMLElement>(selector)].map(
+        (row) => row.dataset.threadId,
+      );
+    const projectRows = '[data-project-key="/work/a"] .thread-row-shell';
+    const pinnedRows = ".pinned-thread-group .thread-row-shell";
+    await render([first, second, ...pins]);
+    assert.deepEqual(ids(projectRows), ["idle", "active"]);
+    assert.deepEqual(ids(pinnedRows), ["pin-a", "pin-b"]);
+    const activeRow = requiredButton(
+      '[data-project-key="/work/a"] [data-thread-id="active"] .thread-row',
+    );
+    activeRow.focus();
+    await render([
+      second,
+      { ...first, updatedAt: at(100), turnSortAt: at(100) },
+      ...pins,
+    ]);
+    assert.deepEqual(ids(projectRows), ["idle", "active"]);
+    assert.ok(document.activeElement === activeRow, "activity preserves focus");
+    assert.ok(
+      document.querySelector(
+        '[data-project-key="/work/a"] [data-thread-id="active"] [aria-label="Running"]',
+      ) !== null,
+      "the running indicator remains live",
+    );
+    const newer = { ...first, recentActivityAt: at(50) };
+    const changedPins = pins.map((pin, index) => ({
+      ...pin,
+      recentActivityAt: at(200 + index),
+      updatedAt: at(300 + index),
+      status: "active" as const,
+    }));
+    await render([second, newer, ...changedPins]);
+    assert.deepEqual(ids(projectRows), ["active", "idle"]);
+    assert.deepEqual(ids(pinnedRows), ["pin-a", "pin-b"]);
+    assert.ok(document.activeElement === activeRow, "message reorder preserves focus");
+    assert.equal(activeRow.getAttribute("aria-current"), "page");
+    const manual: ZenXSidebarOrder = {
+      projectKeys: [],
+      threadIdsByProject: { "/work/a": ["idle", "active"] },
+    };
+    await render([{ ...newer, recentActivityAt: at(500) }, second, ...changedPins], manual);
+    assert.deepEqual(ids(projectRows), ["idle", "active"]);
+    assert.deepEqual(ids(pinnedRows), ["pin-a", "pin-b"]);
+    assert.ok(document.activeElement === activeRow, "manual preference preserves focus");
+    assert.equal(activeRow.getAttribute("aria-current"), "page");
   });
 });
