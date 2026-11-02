@@ -209,7 +209,22 @@ test("delayed Agent opens preserve admission order but never replace human targe
     assert.equal(selected(), "Terminal");
     assert.equal(expanded, false);
     await act(async () => openPanel(true));
-    await act(async () => button("Page two · External · read-only").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ]
+        .find(
+          (node) => node.querySelector("strong")?.textContent === "Page two",
+        )!
+        .click(),
+    );
     await act(async () => {
       openResolvers[0]!();
       await older;

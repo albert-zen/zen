@@ -311,9 +311,17 @@ test("external read-only pages share the strip without merging same-URL identiti
     panels: [],
   } as any;
   function Harness() {
+    const [opened, setOpened] = useState([
+      "browser:1",
+      `external-browser:${targetA}`,
+      `external-browser:${targetB}`,
+    ]);
     const [selectedTab, onSelectTab] = useState("browser:1");
     return React.createElement(AuxiliaryPanel, {
       threadId: "presentation-ui-external",
+      // These peers were explicitly opened before this refresh/lifecycle test.
+      openedTabs: opened,
+      onTabsChange: setOpened,
       title: "Task",
       snapshot,
       open: true,
@@ -559,6 +567,19 @@ for (const state of ["dismissed", "disconnected"] as const) {
     const count = () => document.querySelectorAll('[role="tab"]').length;
     try {
       await rerender();
+      assert.equal(count(), 0, "discovery alone does not open a preview");
+      await act(async () =>
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            ".workspace-tab-types button",
+          ),
+        ]
+          .find(
+            (node) =>
+              node.querySelector("strong")?.textContent === "Retained page",
+          )!
+          .click(),
+      );
       assert.equal(count(), 1);
       if (state === "dismissed") {
         await act(async () =>
@@ -597,17 +618,22 @@ for (const state of ["dismissed", "disconnected"] as const) {
       await rerender();
       assert.equal(
         count(),
-        state === "dismissed" ? 1 : 0,
-        "genuine provider incarnation establishes a fresh presentation scope",
+        0,
+        "a new provider never reopens a dismissed preview or substitutes its target",
       );
       if (state === "disconnected") {
         await act(async () => {
-          targets = [target];
+          // Real replacement connections publish a new generation in the ID.
+          targets = [{ ...target, id: "connected:fresh-generation" }];
           for (const listener of [...listeners])
             listener({ type: "targets", targets });
         });
       }
-      assert.equal(count(), 1);
+      assert.equal(
+        count(),
+        0,
+        "fresh discovery still requires explicit preview selection",
+      );
       targets = [];
       threadId = "another-thread";
       await rerender();

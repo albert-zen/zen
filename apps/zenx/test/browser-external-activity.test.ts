@@ -193,9 +193,27 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
     assert.deepEqual(frameTargets, []);
     await act(async () => openPanel(true));
     assert.equal(selected(), "Terminal");
-    await act(async () => button("Page one · External · read-only").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ]
+        .find(
+          (node) => node.querySelector("strong")?.textContent === "Page one",
+        )!
+        .click(),
+    );
     assert.match(selected()!, /Page one/);
-    assert.equal(document.activeElement?.id, "composer");
+    assert.ok(
+      document.activeElement?.id?.startsWith("aux-tab-external-browser:"),
+      "explicit chooser navigation focuses the selected preview tab",
+    );
     assert.equal(frameTargets.at(-1), "one");
     assert.deepEqual(
       [...activeFrames.values()],
@@ -228,7 +246,22 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
       button("Follow Agent") === undefined,
       "no Follow Agent control remains",
     );
-    await act(async () => button("Page two · External · read-only").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ]
+        .find(
+          (node) => node.querySelector("strong")?.textContent === "Page two",
+        )!
+        .click(),
+    );
     assert.match(selected()!, /Page two/);
     assert.equal(frameTargets.at(-1), "two");
     assert.deepEqual([...activeFrames.values()], ["two"]);

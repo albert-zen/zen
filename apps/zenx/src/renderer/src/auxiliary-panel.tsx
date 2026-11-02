@@ -1048,7 +1048,14 @@ export function AuxiliaryPanel({
         const external = event.targets.filter(
           (target) => target.backendId !== "workspace",
         );
-        setExternalTargets(external);
+        // Keep an explicitly opened peer addressable when disconnected; its
+        // observer reports unavailable rather than silently removing the view.
+        setExternalTargets((previous) => [
+          ...previous
+            .filter((old) => !external.some((next) => next.id === old.id))
+            .map((old) => ({ ...old, activityCount: 0 })),
+          ...external,
+        ]);
       },
     );
     return () => {
@@ -1948,9 +1955,10 @@ export function AuxiliaryPanel({
                 open &&
                 visible &&
                 browserListReady ? (
-                  <p role="status" className="browser-observation-feedback">
-                    {i18n.t("panels:workspaceBrowserClosed")}
-                  </p>
+                  <div role="status" className="browser-live-placeholder">
+                    <Icon name="browser" />
+                    <span>{i18n.t("panels:workspaceBrowserClosed")}</span>
+                  </div>
                 ) : null}
                 {(tab.descriptor?.kind === "terminal" ||
                   tab.id === "terminal") &&
