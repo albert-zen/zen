@@ -9652,3 +9652,235 @@ test("real App delayed send ACK after Thread navigation never focuses the new ow
     await unmountApp(harness);
   }
 });
+
+test("native streaming deltas update the real App without reloading or cloning information catalogs", async (t) => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let summaryReads = 0,
+    projectReads = 0,
+    contextClones = 0;
+  const clone = globalThis.structuredClone;
+  let summaries: NativeThreadSummary[] = [
+    summary(false),
+    ...Array.from({ length: 64 }, (_, index) => ({
+      ...summary(false, `child-${index}`, `Child ${index}`),
+      parentThreadId: "thread-1",
+    })),
+  ];
+  const snapshot = messageSourcePlugins();
+  globalThis.structuredClone = ((
+    value: unknown,
+    options?: StructuredSerializeOptions,
+  ) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      "threadId" in value &&
+      "threads" in value
+    )
+      contextClones++;
+    return clone(value, options);
+  }) as typeof structuredClone;
+  const harness = await mountThreadApp({
+    threads: async (archived) => {
+      summaryReads++;
+      return clone(archived ? [] : summaries);
+    },
+    projectsGet: async () => {
+      projectReads++;
+      return {
+        ...oneProject(),
+        projects: [{ ...oneProject().projects[0]!, threadIds: ["thread-1"] }],
+      };
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => snapshot,
+      executeCommand: async (_plugin, command) => {
+        assert.equal(command, "list");
+        return { threads: clone(summaries.slice(1)) };
+      },
+    },
+  });
+  let watermark = 0;
+  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        threadId:
+          event.type === "item_completed"
+            ? event.item.threadId
+            : "threadId" in event
+              ? event.threadId
+              : "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".information-content .subagents-panel"),
+    );
+    for (const [itemId, itemType] of [
+      ["stream-answer", "agent_message"],
+      ["stream-reasoning", "reasoning"],
+    ] as const)
+      await emit({
+        type: "item_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId,
+        itemType,
+      });
+    const before = { summaryReads, projectReads, contextClones };
+    assert.ok(
+      before.contextClones > 0,
+      "real admitted GenericPluginUiHost has cloned its immutable context",
+    );
+    for (let index = 0; index < 10; index++) {
+      await emit({
+        type: "item_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-answer",
+        delta: `visible-token-${index} `,
+      });
+      await emit({
+        type: "reasoning_summary_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "summary ",
+      });
+      await emit({
+        type: "reasoning_content_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "reasoning ",
+      });
+    }
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /visible-token-9/,
+    );
+    assert.deepEqual(
+      { summaryReads, projectReads, contextClones },
+      before,
+      "30 native transient deltas do not issue list/project IPC or clone catalog contexts, even when every RPC returns fresh arrays",
+    );
+    t.diagnostic(
+      JSON.stringify({
+        deltas: 30,
+        summaryReads: summaryReads - before.summaryReads,
+        projectReads: projectReads - before.projectReads,
+        contextClones: contextClones - before.contextClones,
+      }),
+    );
+    const refresh = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+    ) => {
+      const reads = summaryReads,
+        projects = projectReads;
+      await emit(event);
+      assert.equal(
+        summaryReads,
+        reads + 2,
+        `${event.type} refreshes active and archived summaries`,
+      );
+      assert.equal(
+        projectReads,
+        projects + 1,
+        `${event.type} refreshes project facts`,
+      );
+    };
+    summaries = summaries.map((row, index) =>
+      index === 1 && row.status !== "systemError"
+        ? { ...row, name: "Changed live child", status: "active" as const }
+        : row,
+    );
+    await refresh({
+      type: "thread_name_updated",
+      threadId: "child-0",
+      name: "Changed live child",
+    });
+    assert.match(
+      document.querySelector(".information-content")!.textContent!,
+      /Changed live child/,
+    );
+    assert.ok(
+      contextClones > before.contextClones,
+      "real child facts still reach the card",
+    );
+    await refresh({
+      type: "thread_settings_updated",
+      threadId: "thread-1",
+      settings: {
+        providerProfileId: "fake",
+        modelId: "fake",
+        reasoningEffort: "medium",
+        model: "fake",
+        provider: "fake",
+        cwd: "/work/zen",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    });
+    await refresh({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "first-input",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:00Z",
+        text: "Canonical input still refreshes",
+      },
+    });
+    await refresh({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+    });
+    await refresh({
+      type: "thread_archived_updated",
+      threadId: "child-0",
+      archived: true,
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "agent_message",
+        id: "final-answer",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:01Z",
+        text: "Canonical answer still refreshes",
+      },
+    });
+  } finally {
+    await unmountApp(harness);
+    globalThis.structuredClone = clone;
+  }
+});

@@ -18,6 +18,7 @@ import {
   applyCompactionStatus,
   markCompactionOutcomeUnknown,
 } from "./compaction-feedback.js";
+import { ConversationInformationCards } from "./ConversationInformationCards.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -1518,8 +1519,18 @@ function AppContent() {
           void loadModels();
           return;
         }
+        const nativeEvent =
+          method === "zen/thread/event"
+            ? (params as ServerNotificationParams["zen/thread/event"]).event
+            : null;
+        // Streaming text lives in the active projection, not the canonical
+        // summary/project catalog. Keep every non-delta invalidation unchanged.
+        const nativeTextDelta =
+          nativeEvent?.type === "item_delta" ||
+          nativeEvent?.type === "reasoning_summary_delta" ||
+          nativeEvent?.type === "reasoning_content_delta";
         if (
-          method === "zen/thread/event" ||
+          (method === "zen/thread/event" && !nativeTextDelta) ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"
@@ -1854,15 +1865,27 @@ function AppContent() {
 
   const readPreference = useConversationReadPreference();
   const unreadThreads = unreadThreadIds(threadSummaries, readPreference);
-  const activeSummaries = threadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const activeSummaries = useMemo(
+    () =>
+      threadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [threadSummaries, titleSnapshot],
   );
-  const archivedSummaries = archivedThreadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const archivedSummaries = useMemo(
+    () =>
+      archivedThreadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [archivedThreadSummaries, titleSnapshot],
+  );
+  const informationThreads = useMemo(
+    () => [...activeSummaries, ...archivedSummaries],
+    [activeSummaries, archivedSummaries],
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedBaseSummary =
@@ -4477,6 +4500,18 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                contextContent={
+                  !selectedRoomId && selectedThreadId ? (
+                    <ConversationInformationCards
+                      threadId={selectedThreadId}
+                      threads={informationThreads}
+                      snapshot={pluginSnapshot}
+                      registry={pluginUiRegistry}
+                      theme={appearance}
+                      navigate={openPage}
+                    />
+                  ) : undefined
+                }
                 owner={
                   selectedRoomId
                     ? { kind: "room", roomId: selectedRoomId }

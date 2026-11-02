@@ -11852,9 +11852,10 @@ button:disabled {
   width: 36px;
   height: 36px;
 }
-/* Open is a quiet neutral pressed surface, never an accent/highlight. */
-.information-toolbar > .icon-button[aria-pressed="true"] {
-  color: var(--color-text-muted);
+/* Information and workspace toggles share one neutral, legible active state. */
+.information-toolbar > .icon-button[aria-pressed="true"],
+.auxiliary-heading > .auxiliary-close-button {
+  color: var(--color-text-primary);
   background: var(--color-surface-active);
 }
 :root[data-platform="linux"] .information-toolbar,
@@ -11878,10 +11879,111 @@ button:disabled {
   display: flex;
   flex-direction: column;
 }
+/* Docking reserves a column without moving/remounting the conversation. */
+.information-dock {
+  position: absolute;
+  z-index: 4;
+  width: 340px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 16px;
+  background: var(--color-surface);
+}
+.workspace:has(> .information-dock)
+  > :is(.agent-surface, .plugin-product-page) {
+  width: calc(100% - var(--workspace-panel-width, 0px) - 364px);
+}
+.workspace:has(> .information-dock) {
+  --information-dock-reserved-width: 364px;
+}
 .information-content {
   min-height: 0;
   overflow: auto;
   flex: 1;
+}
+.conversation-information-cards {
+  padding: 4px 16px;
+}
+.conversation-information-section {
+  padding: 12px 0;
+  min-width: 0;
+}
+.conversation-information-section + .conversation-information-section {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.conversation-information-section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+.conversation-information-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+.conversation-information-section p {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 8px 0;
+}
+.conversation-information-section .icon-button {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.information-trigger-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.information-trigger-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+}
+.information-trigger-list li > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.information-trigger-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.information-trigger-list small {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.conversation-information-section .subagents-panel {
+  padding: 0;
+}
+.conversation-information-section .subagent-tree-entry {
+  flex-wrap: wrap;
+}
+.conversation-information-section .background-shell-status {
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+.conversation-information-section .background-shell-heading {
+  padding-inline: 0;
+}
+.conversation-information-section .background-shell-list {
+  padding-inline: 0;
 }
 .information-tabs {
   display: flex;
@@ -12140,7 +12242,7 @@ button:disabled {
   > :is(.agent-surface, .plugin-product-page) {
   display: grid;
   visibility: visible;
-  width: 100%;
+  width: calc(100% - var(--information-dock-reserved-width, 0px));
   padding-top: var(--native-titlebar-height, 44px);
 }
 .auxiliary-panel[data-primary-active="true"] {
