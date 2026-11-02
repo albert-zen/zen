@@ -725,6 +725,30 @@ export function previewFromUserMessage(item: UserMessageItem): string {
   return item.text ?? previewFromUserInput(item.content);
 }
 
+/** Product preview of committed input, independent of compatibility projections. */
+export function previewFromInputMessage(item: CanonicalItem): string {
+  switch (item.type) {
+    case "user_message":
+      return previewFromUserMessage(item);
+    case "thread_message":
+      return previewFromUserInput(item.content);
+    case "host_message":
+      return item.text;
+    default:
+      return "";
+  }
+}
+
+export function firstInputMessagePreview(
+  items: readonly CanonicalItem[],
+): string {
+  for (const item of items) {
+    const preview = previewFromInputMessage(item);
+    if (preview.trim()) return preview;
+  }
+  return "";
+}
+
 export function sameUserInput(left: UserInput, right: UserInput): boolean {
   return (
     left.length === right.length &&

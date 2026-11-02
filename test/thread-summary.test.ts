@@ -1067,3 +1067,97 @@ test("rejected projection writes leave canonical mutations and current summaries
     await removeDirectory(directory);
   }
 });
+
+for (const type of [
+  "user_message",
+  "thread_message",
+  "host_message",
+] as const) {
+  test(`native summary preview preserves first ${type} across replay`, async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-input-preview-"),
+    );
+    try {
+      const journal = new JsonlThreadJournal(path.join(directory, "threads"));
+      const started = await createServer(directory, journal).startThread();
+      await drainSummaries(directory);
+      const base = {
+        id: "first-input",
+        threadId: started.id,
+        turnId: "synthetic-turn",
+        clientId: "synthetic-client",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      const content = [
+        { type: "text" as const, text: "First canonical request" },
+      ];
+      const item: import("../src/item.js").DeliveredInputItem =
+        type === "host_message"
+          ? {
+              ...base,
+              type,
+              sender: "host",
+              mode: "start",
+              source: "bootstrap",
+              text: "First canonical request",
+            }
+          : type === "thread_message"
+            ? {
+                ...base,
+                type,
+                mode: "batch-next",
+                messageType: "follow_up",
+                sender: {
+                  threadId: "source",
+                  turnId: "source-turn",
+                  toolCallId: "tool",
+                  callId: "call",
+                },
+                content,
+              }
+            : { ...base, type, content };
+      await journal.append({
+        type: "turn_started",
+        id: "turn-start",
+        threadId: started.id,
+        turnId: base.turnId,
+        createdAt: base.createdAt,
+      });
+      await journal.append(item);
+      await journal.append({
+        ...base,
+        id: "later-user",
+        type: "user_message",
+        content: [{ type: "text", text: "Later user request" }],
+      });
+      await journal.append({
+        type: "turn_completed",
+        id: "turn-end",
+        threadId: started.id,
+        turnId: base.turnId,
+        createdAt: base.createdAt,
+        status: "completed",
+      });
+      const server = createServer(directory);
+      const summaries = await server.listThreadSummaries();
+      assert.equal(summaries[0]?.preview, "First canonical request");
+      assert.equal(
+        projectThreadSummary(summaries[0]!).preview,
+        "First canonical request",
+      );
+      if (type !== "user_message")
+        assert.equal(
+          projectCompletedItem(item),
+          null,
+          "CAS does not invent native input channels",
+        );
+      await drainSummaries(directory);
+      assert.equal(
+        (await createServer(directory).listThreadSummaries())[0]?.preview,
+        "First canonical request",
+      );
+    } finally {
+      await removeDirectory(directory);
+    }
+  });
+}

@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  observeCompletedUserMessageTitle,
+  observeCompletedInputTitle,
   observeDiscoveredThreadTitle,
+  observeThreadSnapshotTitle,
 } from "../src/main/thread-title-notification.js";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import { readZenXConnectionDescriptor } from "../src/protocol-client/index.js";
@@ -47,17 +48,19 @@ test(
           observedTitles.push(input);
         },
       };
+      manager.onThreadRecovery(({ thread }) => {
+        void observeThreadSnapshotTitle(titles, thread);
+      });
       manager.onNotification((method, params) => {
-        void observeCompletedUserMessageTitle(titles, method, params);
+        void observeCompletedInputTitle(titles, method, params);
         view = applyThreadViewNotification(view, method, params);
         if (method === "thread/started") {
           const event =
             params as import("../src/protocol-client/index.js").ServerNotificationParams["thread/started"];
           discovered.push(event.thread.id);
           void observeDiscoveredThreadTitle(
-            titles,
             async (threadId) =>
-              (await manager.request("thread/resume", { threadId })).thread,
+              (await manager.request("zen/thread/resume", { threadId })).thread,
             event.thread,
           );
         }

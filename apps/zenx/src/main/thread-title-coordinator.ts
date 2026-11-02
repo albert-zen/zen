@@ -138,14 +138,14 @@ export class ZenXThreadTitleCoordinator {
     const owner = this.#operationOwner(ownership);
     const source = meaningfulTitleSource(input);
     if (source === null) return undefined;
-    const result = await this.#serial(owner, async () => {
+    return await this.#serial(owner, async () => {
       const existing = this.#snapshot[threadId];
       if (existing !== undefined) {
         if (
           !["provisional", "generating"].includes(existing.status) ||
           this.#hasCurrentGenerationOwner(existing)
         ) {
-          return { projection: existing, created: false };
+          return existing;
         }
         const generating = {
           ...existing,
@@ -161,7 +161,8 @@ export class ZenXThreadTitleCoordinator {
         ) {
           return undefined;
         }
-        return { projection: generating, created: true };
+        this.#startGeneration(generating, owner);
+        return generating;
       }
       const provisional: ThreadTitleProjection = {
         threadId,
@@ -177,11 +178,30 @@ export class ZenXThreadTitleCoordinator {
         version: 2,
       };
       if (!(await this.#commit(generating, owner))) return undefined;
-      return { projection: generating, created: true };
+      // Reserve ownership inside the same serialized operation as the status
+      // commit, before a concurrent snapshot/live observation can claim it.
+      this.#startGeneration(generating, owner);
+      return generating;
     });
-    if (result?.created === true)
-      this.#startGeneration(result.projection, owner);
-    return result?.projection;
+  }
+
+  /** A read can seed missing ownership, but cannot supersede a newer local fact. */
+  async observeNativeName(threadId: string, title: string): Promise<void> {
+    const owner = this.#operationOwner();
+    const normalized = normalizeManualTitle(title);
+    await this.#serial(owner, async () => {
+      if (this.#snapshot[threadId] !== undefined) return;
+      await this.#commit(
+        {
+          threadId,
+          title: normalized,
+          status: "manual",
+          version: 1,
+          source: normalized,
+        },
+        owner,
+      );
+    });
   }
 
   async rename(
