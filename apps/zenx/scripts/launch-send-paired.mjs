@@ -27,10 +27,11 @@ const pairCase = process.argv[5] ?? null;
 const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arch(),cpuModel:os.cpus()[0]?.model,cpuCount:os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem(),uptimeSeconds:os.uptime()});
 const hostBefore=hostSnapshot();
 const expected = {
-  baseline:"6aa0a5055530eeb018cc41a3ce486603756c06bb",
+  baseline:"0c7ebff5960493bf3b1ae47ffaa78e9c24202440",
+  pending:"400bac27dd80c0238360dd2632c5c41972566d4b",
   frontend:"3819977ddd2da5698bcbee2c14fd8165f9934009",
   backend:"8e036167d864ae5d452dccc411970352ce26e433",
-  combined:"a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09",
+  combined:"400bac27dd80c0238360dd2632c5c41972566d4b",
 }[sourceLabel];
 assert.ok(expected,"Only independently identified source snapshots are allowed");
 assert.equal(
@@ -76,8 +77,8 @@ for (const file of [
   "src/renderer/src/main.tsx",
   "src/renderer/src/App.tsx",
   "src/renderer/src/auxiliary-panel.tsx",
-  "scripts/capture-send-paired.cjs",
-  "scripts/launch-send-paired.mjs",
+  "scripts/capture-send-feedback.cjs",
+  "scripts/launch-send-feedback.mjs",
   "scripts/long-thread-domain-seed.mjs",
 ])
   hashes[file] = createHash("sha256")
@@ -96,7 +97,7 @@ await writeFile(
       fixtureContextWindow:100000000,
       platform:process.platform,
       hashes,
-      scope:"Actual production App, native Send, private production DomainThreadJournal history. Fake model only, no compaction, no optimistic bubbles or fake receipt. Timing seed excluded.",
+      scope:"Actual production App, native Send, private production DomainThreadJournal history. Fake model only, no compaction, only actual product local pending UI, no injected bubbles or fake receipt. Timing seed excluded.",
     },
     null,
     2,
@@ -139,7 +140,7 @@ if (process.platform === "win32") {
 const child = spawn(
   electron,
   [
-    path.join(root, "scripts/capture-send-paired.cjs"),
+    path.join(root, "scripts/capture-send-feedback.cjs"),
     directory,
     version,
     temporary,
@@ -282,10 +283,13 @@ try {
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
   assert.equal(result.ok, true);
+  assert.equal(result.samples.length,3);
+  assert.ok(result.samples.every(s=>Number.isFinite(s.firstVisibleFeedbackMs)&&s.firstVisibleFeedbackMs>=0&&Number.isFinite(s.clickToClearFrameMs)&&s.clickToClearFrameMs>=0),"Finite nonnegative feedback and clear measurements required");
   const persisted=await verifyLongThread({dataDirectory:data,threadId:result.seed.threadId,samples:result.samples,userMessageCount:count});
   await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
-  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,sourceLabel,pairCase,hostBefore,hostAfter:hostSnapshot(),appBefore:result.processResourcesBefore,appAfter:result.processResourcesAfter,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,clickToCanonicalNotificationMs:s.clickToCanonicalNotificationMs,instrumentation:s.instrumentation,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
+  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,sourceLabel,harnessVersion:result.harnessVersion,historyReadPolicy:result.historyReadPolicy,pairCase,hostBefore,hostAfter:hostSnapshot(),appBefore:result.processResourcesBefore,appAfter:result.processResourcesAfter,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({firstVisibleFeedbackMs:s.firstVisibleFeedbackMs,firstVisibleFeedbackKind:s.firstVisibleFeedbackKind,clickToPendingDomMs:s.clickToPendingDomMs,clickToPendingVisibleFrameMs:s.clickToPendingVisibleFrameMs,pendingStateAtFrame:s.pendingStateAtFrame,feedbackWithinTarget:s.feedbackWithinTarget,clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,clickToCanonicalNotificationMs:s.clickToCanonicalNotificationMs,instrumentation:s.instrumentation,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
+  assert.ok(result.samples.every(s=>s.feedbackWithinTarget && s.clickToClearFrameMs<=200),"Actual first visible feedback and input clear must each meet 200ms target in every observed sample; see verified numeric output, no threshold relaxation");
 } finally {
   try { const report=JSON.parse(await readFile(path.join(directory,"full-app-measurements.json"),"utf8")); if(!report.ok)console.error("SYNTHETIC_SEND_FAILURE_JSON "+JSON.stringify(report)); } catch {}
   await writeFile(

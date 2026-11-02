@@ -1,4 +1,4 @@
-name: Same-runner ordinary-send ABAB
+name: Same-runner recall integration send A/B
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]
@@ -15,12 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+          ref: 0c7ebff5960493bf3b1ae47ffaa78e9c24202440
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+          ref: 400bac27dd80c0238360dd2632c5c41972566d4b
           persist-credentials: false
           path: combined
       - uses: actions/checkout@v4
@@ -33,8 +33,8 @@ jobs:
       - name: Copy identical passive drivers, leaving product tracked files unchanged
         run: |
           for source in baseline combined; do
-            cp diagnostic/apps/zenx/scripts/capture-send-paired.cjs "$source/apps/zenx/scripts/"
-            cp diagnostic/apps/zenx/scripts/launch-send-paired.mjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/capture-send-feedback.cjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/launch-send-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
           done
       - name: Build exact baseline once
@@ -51,18 +51,25 @@ jobs:
           npm ci
           npm run build
           npm run build --workspace @zen/zenx
-      - name: Native A1 B1 A2 B2, three messages per fresh isolated profile
-        timeout-minutes: 18
+      - name: Native A1 B1, all three messages per fresh isolated profile
+        timeout-minutes: 24
         run: |
-          for case in A1 B1 A2 B2; do
+          failed=0
+          for case in A1 B1; do
             case "$case" in A*) source=baseline ;; B*) source=combined ;; esac
             echo "PAIRED_CASE_BEGIN $case $source"
-            (cd "$source" && node apps/zenx/scripts/launch-send-paired.mjs "../results/$case" 1000 "$source" "$case")
+            set +e
+            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case")
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
+            if [ "$status" -ne 0 ]; then failed=1; fi
             echo "PAIRED_CASE_END $case $source"
           done
+          exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-same-runner-abab-1000
+          name: native-send-recall-same-runner-ab-5000
           path: results
           if-no-files-found: error
