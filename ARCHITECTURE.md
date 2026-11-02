@@ -1717,3 +1717,13 @@ native tests before acceptance.
 Source baseline: [ordinary steer](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L4441),
 [queued cancellation](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740),
 [existing draft codec](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-draft.ts).
+
+### Foundation checkpoint: recall control projection only
+
+The pending-steer foundation adds strict staged-input and atomic recall control
+schemas plus disposable projections that recover exact pre-recall content from
+existing immutable facts. Neither fact emits model-semantic ItemList content.
+This checkpoint does not enable staged admission, expose a recall endpoint,
+schedule held input, or change normal send behavior. The full proposal above
+remains unimplemented until claim, successor admission, protocol authority and
+race tests are integrated and independently accepted.
