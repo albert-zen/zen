@@ -73,7 +73,10 @@ export class FileItemListStore {
     await assertOwnedFile(filename);
     return readFile(filename);
   }
-  #decode(threadId: string, bytes: Buffer): ContextItem[] {
+  #decode(
+    threadId: string,
+    bytes: Buffer,
+  ): { items: ContextItem[]; ids: Set<string> } {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (text !== "" && !text.endsWith("\n"))
       throw new Error("Incomplete semantic JSONL tail; no automatic repair");
@@ -81,21 +84,37 @@ export class FileItemListStore {
       .split("\n")
       .filter((line) => line.length > 0)
       .map((line) => decodeContextItem(JSON.parse(line)));
-    this.#validate(threadId, items);
-    return items;
+    // The complete schema pass above already decoded these plain JSON values.
+    // Preserve parse-before-identity errors without cloning the history again.
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (item.threadId !== threadId || ids.has(item.id))
+        throw new Error("Mixed Thread or duplicate semantic identity");
+      ids.add(item.id);
+    }
+    return { items, ids };
   }
-  #validate(threadId: string, items: readonly ContextItem[]): void {
+  #validate(
+    threadId: string,
+    items: readonly ContextItem[],
+    priorIds?: ReadonlySet<string>,
+  ): Set<string> {
     const seen = new Set<string>();
     for (const raw of items) {
       const item = decodeContextItem(raw);
-      if (item.threadId !== threadId || seen.has(item.id))
+      if (
+        item.threadId !== threadId ||
+        seen.has(item.id) ||
+        priorIds?.has(item.id)
+      )
         throw new Error("Mixed Thread or duplicate semantic identity");
       seen.add(item.id);
     }
+    return seen;
   }
   async read(threadId: string): Promise<ContextItem[]> {
     try {
-      return this.#decode(threadId, await this.#bytes(threadId));
+      return this.#decode(threadId, await this.#bytes(threadId)).items;
     } catch (error) {
       if (isMissing(error)) return [];
       throw error;
@@ -152,7 +171,8 @@ export class FileItemListStore {
   ): Promise<T> {
     const write = this.#chain.then(async () => {
       let active = true;
-      let retained: { bytes: Buffer; items: ContextItem[] } | undefined;
+      let retained:
+        { bytes: Buffer; items: ContextItem[]; ids: Set<string> } | undefined;
       let pending: Promise<void> | undefined;
       let failure: { error: unknown } | undefined;
       const run = <R>(action: () => Promise<R>): Promise<R> => {
@@ -179,9 +199,11 @@ export class FileItemListStore {
       const load = async () => {
         if (retained === undefined) {
           const bytes = await this.#bytes(threadId);
+          const decoded = this.#decode(threadId, bytes);
           retained = {
             bytes,
-            items: freezeSnapshot(this.#decode(threadId, bytes)),
+            items: freezeSnapshot(decoded.items),
+            ids: decoded.ids,
           };
         }
         return retained;
@@ -203,7 +225,9 @@ export class FileItemListStore {
             if (!suffix.length) return;
             const prior = await load();
             const combined = freezeSnapshot([...prior.items, ...suffix]);
-            this.#validate(threadId, combined);
+            // The frozen prefix and its IDs are private to this active scope.
+            // Still validate detached suffixes: caller accessors may change on clone.
+            const addedIds = this.#validate(threadId, suffix, prior.ids);
             // Keep the fresh readable/owned-file gate without rereading content.
             if (!(await this.exists(threadId)))
               throw Object.assign(new Error("Semantic source disappeared"), {
@@ -220,7 +244,8 @@ export class FileItemListStore {
             } catch (error) {
               throw new ThreadJournalAppendOutcomeUnknownError(error);
             }
-            retained = { bytes, items: combined };
+            for (const id of addedIds) prior.ids.add(id);
+            retained = { bytes, items: combined, ids: prior.ids };
           });
         },
       };
