@@ -51,6 +51,10 @@ import {
   useReadingDisclosure,
   useReadingDisclosures,
   disclosureKey,
+  captureReadingAnchor,
+  findReadingAnchor,
+  readingIdentitySelector,
+  readingViewportBounds,
 } from "./thread-reading-state.js";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n.js";
@@ -166,6 +170,9 @@ import {
 } from "./turn-canonical-presentation.js";
 import {
   MessageTargetNavigationContext,
+  MessageQuoteNavigationContext,
+  revealAndPositionReadingTarget,
+  type ReadingTargetPosition,
   useMessageTargetNavigation,
   type MessageTargetRequest,
 } from "./message-target-navigation.js";
@@ -285,26 +292,10 @@ function findMessageQuoteSource(
   quote: SentMessageQuote,
 ): HTMLElement | null {
   return (
-    Array.from(
-      viewport?.querySelectorAll<HTMLElement>(
-        "[data-quote-thread-id][data-quote-item-id]",
-      ) ?? [],
-    ).find(
-      (element) =>
-        element.dataset.quoteThreadId === quote.threadId &&
-        element.dataset.quoteItemId === quote.id,
+    viewport?.querySelector<HTMLElement>(
+      `${readingIdentitySelector("data-quote-thread-id", quote.threadId)}${readingIdentitySelector("data-quote-item-id", quote.id)}`,
     ) ?? null
   );
-}
-function goToMessageQuoteSource(
-  viewport: Element | null,
-  quote: SentMessageQuote,
-): boolean {
-  const source = findMessageQuoteSource(viewport, quote);
-  if (!source) return false;
-  source.scrollIntoView({ block: "center", behavior: "auto" });
-  source.focus({ preventScroll: true });
-  return true;
 }
 
 interface ThreadViewProps {
@@ -1019,13 +1010,34 @@ function ThreadViewContent({
   });
   const selectorId = useId();
 
+  const positioning = useRef<object | null>(null);
+  const cancelPosition = useRef<(() => void) | null>(null);
+  const positionGeneration = useRef(0);
+  const positionOwner = useRef<typeof readingState | null>(null);
+  const cancelReadingPosition = useCallback(() => {
+    cancelPosition.current?.();
+    cancelPosition.current = null;
+  }, []);
+  useLayoutEffect(() => {
+    positionOwner.current = readingState;
+    return () => {
+      positionOwner.current = null;
+      cancelReadingPosition();
+    };
+  }, [readingState, cancelReadingPosition]);
+
   const saveReadingPosition = useCallback(() => {
     const scroll = scrollRef.current;
-    if (scroll)
+    if (scroll && positioning.current === null) {
+      const anchor = shouldFollowRef.current
+        ? undefined
+        : captureReadingAnchor(scroll);
       readingState.scroll = {
         top: scroll.scrollTop,
         following: shouldFollowRef.current,
+        ...(anchor === undefined ? {} : { anchor }),
       };
+    }
   }, [readingState]);
   const pauseFollowing = useCallback(() => {
     shouldFollowRef.current = false;
@@ -1048,6 +1060,79 @@ function ThreadViewContent({
     setAtLive(true);
     saveReadingPosition();
   }, [pauseFollowing, saveReadingPosition]);
+
+  const positionReadingTarget = useCallback(
+    (target: ReadingTargetPosition) => {
+      cancelReadingPosition();
+      const scroll = scrollRef.current;
+      if (!scroll || positionOwner.current !== readingState) return () => {};
+      const operation = {};
+      const generation = ++positionGeneration.current;
+      positioning.current = operation;
+      pauseFollowing();
+      const cancel = revealAndPositionReadingTarget({
+        ...target,
+        viewport: scroll,
+        isCurrent: () =>
+          positionOwner.current === readingState &&
+          positionGeneration.current === generation &&
+          target.isCurrent(),
+        onPosition: (top) => {
+          observedScrollTop.current = top;
+        },
+        onFinish: () => {
+          if (positioning.current === operation) {
+            positioning.current = null;
+            cancelPosition.current = null;
+          }
+        },
+        onComplete: (anchor) => {
+          // Save the validated destination itself, not a neighboring hit-test row.
+          readingState.scroll = {
+            top: scroll.scrollTop,
+            following: false,
+            anchor,
+          };
+          target.onComplete?.(anchor);
+        },
+      });
+      if (positioning.current === operation) cancelPosition.current = cancel;
+      return cancel;
+    },
+    [cancelReadingPosition, pauseFollowing, readingState],
+  );
+
+  const goToMessageQuoteSource = useCommittedCallback(
+    (quote: SentMessageQuote, afterClose?: Promise<void>): boolean => {
+      if (thread?.id !== quote.threadId) return false;
+      const canonical = thread.canonicalItems?.find(
+        (item) => item.id === quote.id,
+      );
+      const turn =
+        canonical && "turnId" in canonical
+          ? thread.turns.find((turn) => turn.id === canonical.turnId)
+          : undefined;
+      if (!turn) return false;
+      readingState.set(disclosureKey("turn", turn.id), true);
+      // A quote can originate inside an existing trace disclosure, not only a final answer.
+      for (const node of projectTurn(turn).history) {
+        if (node.kind !== "traceItem" && node.kind !== "traceGroup") continue;
+        const items = node.kind === "traceItem" ? [node.item] : node.items;
+        if (items.some((item) => item.id === quote.id)) {
+          readingState.set(disclosureKey("trace", turn.id, node.id), true);
+          readingState.set(disclosureKey("item", turn.id, quote.id), true);
+        }
+      }
+      positionReadingTarget({
+        turnId: turn.id,
+        target: () => findMessageQuoteSource(scrollRef.current, quote),
+        afterClose,
+        focus: true,
+        isCurrent: () => positionOwner.current === readingState,
+      });
+      return true;
+    },
+  );
 
   // The Composer overlays the bottom of the full-height transcript scroll
   // area. Publish its live height so the list reserves matching virtual
@@ -1076,7 +1161,8 @@ function ThreadViewContent({
   // Restore only after this thread's Composer inset above has been published.
   // Otherwise scrollTop clamps to the temporary CSS fallback range and saving
   // that clamp loses near-bottom positions, especially with a tall draft.
-  // This finishes synchronously: no delayed restore can override later input.
+  // Pixel top is only a compatibility fallback. A cold DOM needs stable identity;
+  // one cancellable reveal/correction restores the same intra-item reading point.
   // A new thread opens at live.
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
@@ -1089,10 +1175,23 @@ function ThreadViewContent({
     setAtLive(
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
     );
-    saveReadingPosition();
-  }, [readingState, saveReadingPosition]);
+    if (
+      saved?.following === false &&
+      saved.anchor &&
+      document.getSelection()?.isCollapsed !== false &&
+      findReadingAnchor(scroll, saved.anchor)
+    ) {
+      const anchor = saved.anchor;
+      positionReadingTarget({
+        turnId: anchor.turnId,
+        target: () => findReadingAnchor(scroll, anchor),
+        offset: anchor.offset,
+        isCurrent: () => positionOwner.current === readingState,
+      });
+    } else saveReadingPosition();
+  }, [readingState, saveReadingPosition, positionReadingTarget]);
 
-  useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
+  useMessageTargetNavigation(thread, scrollRef, positionReadingTarget);
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -1115,11 +1214,14 @@ function ThreadViewContent({
 
   useEffect(() => {
     const selection = () => {
-      if (transcriptHasSelection(scrollRef.current)) pauseFollowing();
+      if (transcriptHasSelection(scrollRef.current)) {
+        cancelReadingPosition();
+        pauseFollowing();
+      }
     };
     document.addEventListener("selectionchange", selection);
     return () => document.removeEventListener("selectionchange", selection);
-  }, [pauseFollowing]);
+  }, [cancelReadingPosition, pauseFollowing]);
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
@@ -1127,6 +1229,33 @@ function ThreadViewContent({
     const observer = new ResizeObserver(() => {
       // Layout can settle after completion (Markdown, images, canonical fold).
       // Follow ownership survives completion; only reader input releases it.
+      if (
+        !shouldFollowRef.current &&
+        positioning.current === null &&
+        document.getSelection()?.isCollapsed !== false
+      ) {
+        const anchor = readingState.scroll?.anchor;
+        const target = anchor ? findReadingAnchor(scroll, anchor) : null;
+        if (anchor && target) {
+          const bounds = readingViewportBounds(scroll);
+          const rect = target.getBoundingClientRect();
+          const offset = Math.min(anchor.offset, Math.max(0, rect.height - 1));
+          // Observer delivery (including release of our temporary reveal) is
+          // not new intent or a retry. Only an actual anchor displacement needs
+          // a bounded correction; unchanged geometry never starts another one.
+          if (
+            bounds.bottom > bounds.top &&
+            rect.height > 0 &&
+            Math.abs(bounds.top - rect.top - offset) > 2
+          )
+            positionReadingTarget({
+              turnId: anchor.turnId,
+              target: () => findReadingAnchor(scroll, anchor),
+              offset: anchor.offset,
+              isCurrent: () => positionOwner.current === readingState,
+            });
+        }
+      }
       followBottom();
       setAtLive(
         scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
@@ -1136,7 +1265,7 @@ function ThreadViewContent({
     observer.observe(scroll);
     if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
-  }, [followBottom, pauseFollowing]);
+  }, [followBottom, positionReadingTarget, readingState]);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -1628,6 +1757,7 @@ function ThreadViewContent({
         style={{ overflowAnchor: atLive ? "none" : undefined }}
         ref={scrollRef}
         onWheel={(event) => {
+          cancelReadingPosition();
           if (isNestedTranscriptScroll(event.target, event.currentTarget))
             return;
           if (event.deltaY < 0) pauseFollowing();
@@ -1644,11 +1774,16 @@ function ThreadViewContent({
           }
         }}
         onPointerDownCapture={(event) => {
+          cancelReadingPosition();
           if (!isNestedTranscriptScroll(event.target, event.currentTarget))
             pauseFollowing();
         }}
-        onFocusCapture={pauseFollowing}
+        onFocusCapture={() => {
+          cancelReadingPosition();
+          pauseFollowing();
+        }}
         onKeyDownCapture={(event) => {
+          cancelReadingPosition();
           if (isNestedTranscriptScroll(event.target, event.currentTarget))
             return;
           const downward =
@@ -1671,12 +1806,14 @@ function ThreadViewContent({
         onScroll={(event) => {
           const target = event.currentTarget;
           const top = target.scrollTop;
+          const moved = Math.abs(top - observedScrollTop.current) > 0.5;
+          if (moved) cancelReadingPosition();
           const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
           // Native/programmatic scroll delivery can lag behind content growth.
           // A changed range alone is not reader movement. Explicitly reaching
           // the bottom restores follow intent; upward reading releases it.
           if (transcriptHasSelection(target)) pauseFollowing();
-          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
+          else if (moved) {
             // Content shrinking can clamp the native offset to the new floor.
             // That is layout, not an upward gesture or a new follow request.
             const clamped = atBottom && observedScrollTop.current > top;
@@ -1686,7 +1823,9 @@ function ThreadViewContent({
           }
           observedScrollTop.current = top;
           setAtLive(atBottom);
-          saveReadingPosition();
+          // Delayed delivery of our own bounded positioning is not new intent;
+          // only its successful geometry check may save that destination.
+          if (moved || shouldFollowRef.current) saveReadingPosition();
         }}
       >
         <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
@@ -1695,14 +1834,20 @@ function ThreadViewContent({
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
               />
-              {transcriptRows.length === 0
-                ? (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>{i18n.t("shell:startANewThread")}</h2>
-                      <p>{i18n.t("shell:describeOutcome")}</p>
-                    </div>
-                  ))
-                : renderedTranscriptRows}
+              {transcriptRows.length === 0 ? (
+                (emptyContent ?? (
+                  <div className="thread-empty">
+                    <h2>{i18n.t("shell:startANewThread")}</h2>
+                    <p>{i18n.t("shell:describeOutcome")}</p>
+                  </div>
+                ))
+              ) : (
+                <MessageQuoteNavigationContext.Provider
+                  value={goToMessageQuoteSource}
+                >
+                  {renderedTranscriptRows}
+                </MessageQuoteNavigationContext.Provider>
+              )}
               {composer.pendingSends && (
                 <PendingSendRows
                   key={thread?.id ?? composerId}
@@ -1759,6 +1904,7 @@ function ThreadViewContent({
           onClick={() => {
             const scroll = scrollRef.current;
             if (scroll === null) return;
+            cancelReadingPosition();
             shouldFollowRef.current = true;
             document.getSelection()?.removeAllRanges();
             scroll.scrollTo({ top: scroll.scrollHeight, behavior: "auto" });
@@ -2072,10 +2218,9 @@ function ThreadViewContent({
                 }}
                 onSelectionChange={(input) => selector.select(input)}
                 onBlur={() => selector.dismiss()}
-                onReferenceSource={(reference) => {
+                onReferenceSource={(reference, afterClose) => {
                   if (reference.kind !== "message") return false;
-                  pauseFollowing();
-                  return goToMessageQuoteSource(scrollRef.current, reference);
+                  return goToMessageQuoteSource(reference, afterClose);
                 }}
                 onPaste={(event) => {
                   if (composerDisabled || submitting) return;
@@ -2431,14 +2576,9 @@ function ThreadViewContent({
                 updateEditSession(key, { ...current, draft });
             }}
             onSave={(draft) => saveQueuedEdit(key, draft)}
-            onReferenceSource={(reference) => {
-              if (currentThreadRef.current !== session.threadId) return null;
-              const target = findMessageQuoteSource(
-                scrollRef.current,
-                reference,
-              );
-              if (target) pauseFollowing();
-              return target;
+            onReferenceSource={(reference, afterClose) => {
+              if (currentThreadRef.current !== session.threadId) return false;
+              return goToMessageQuoteSource(reference, afterClose);
             }}
             onClose={(reason) => {
               const current = editSessionsRef.current[key];
@@ -2898,6 +3038,7 @@ const TurnBlock = memo(function TurnBlock({
               <section
                 ref={sectionRef}
                 className={`turn ${turn.status}`}
+                data-turn-id={turn.id}
                 data-history-layout={
                   rememberHistoryLayout
                     ? skipHistoricalLayout
@@ -4076,7 +4217,7 @@ function InputMessage({
 }) {
   const quoteAttributes = useQuoteAttributes(item.id);
   const text = item.content.map((content) => content.text).join("\n");
-  const article = useRef<HTMLElement>(null);
+  const goToSource = useContext(MessageQuoteNavigationContext);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
   const parts = canonical
     ? canonical.text !== undefined
@@ -4096,7 +4237,6 @@ function InputMessage({
   };
   return (
     <article
-      ref={article}
       data-sent-message-id={item.id}
       {...quoteAttributes}
       tabIndex={-1}
@@ -4154,12 +4294,9 @@ function InputMessage({
                 key={index}
                 text={part.text}
                 references={part.references}
-                onSource={(reference) =>
+                onSource={(reference, afterClose) =>
                   reference.kind === "message" &&
-                  goToMessageQuoteSource(
-                    article.current?.closest(".thread-view") ?? null,
-                    reference,
-                  )
+                  (goToSource?.(reference, afterClose) ?? false)
                 }
               />
             ))

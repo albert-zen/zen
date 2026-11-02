@@ -33,7 +33,8 @@ export interface QueuedMessageEditorProps {
   /** Exact current-viewport target, not a label search; source navigation suspends this draft. */
   onReferenceSource?(
     reference: Extract<Reference, { kind: "message" }>,
-  ): HTMLElement | null;
+    afterClose?: Promise<void>,
+  ): boolean;
   trigger: HTMLElement | null;
   /** Exact parent-owned thread/selection guard, including a connected trigger. */
   canRestoreFocus?(): boolean;
@@ -79,6 +80,8 @@ function EditorSession(props: QueuedMessageEditorProps) {
   const saveLock = useRef(false);
   const importLock = useRef(false);
   const restoreRequested = useRef(false);
+  const sourceClose = useRef<{ resolve(): void; retire(): void } | null>(null);
+  const closingSource = sourceClose.current;
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -105,6 +108,8 @@ function EditorSession(props: QueuedMessageEditorProps) {
       setDragging(false);
       return;
     }
+    sourceClose.current?.retire();
+    sourceClose.current = null;
     // Another viewport may have edited the shared session while this copy was
     // hidden. Reconcile only on open, never on streaming parent rerenders.
     const currentDraft = latest.current.initialDraft;
@@ -215,18 +220,29 @@ function EditorSession(props: QueuedMessageEditorProps) {
     return true;
   };
 
-  const openReferenceSource = (reference: Reference): boolean => {
+  const openReferenceSource = (
+    reference: Reference,
+    popupClosed?: Promise<void>,
+  ): boolean => {
     if (reference.kind !== "message" || !canEdit()) return false;
-    const target = latest.current.onReferenceSource?.(reference);
-    if (!target) return false;
+    sourceClose.current?.retire();
+    sourceClose.current = null;
+    let resolveClose = () => {};
+    let retireClose = () => {};
+    const dialogClosed = new Promise<void>((resolve, reject) => {
+      resolveClose = resolve;
+      retireClose = () => reject();
+    });
+    const closed = Promise.all([popupClosed, dialogClosed]).then(
+      () => undefined,
+    );
+    void closed.catch(() => {});
+    if (!latest.current.onReferenceSource?.(reference, closed)) return false;
+    sourceClose.current = { resolve: resolveClose, retire: retireClose };
     restoreRequested.current = false;
     latest.current.onClose("source");
-    requestAnimationFrame(() => {
-      if (target.isConnected && (latest.current.canRestoreFocus?.() ?? true)) {
-        target.scrollIntoView({ block: "center", behavior: "auto" });
-        target.focus({ preventScroll: true });
-      }
-    });
+    // The current ThreadView owns reveal/position/visibility validation after
+    // this dialog closes; unmounting this editor must not retire that owner.
     return true;
   };
   return (
@@ -256,6 +272,16 @@ function EditorSession(props: QueuedMessageEditorProps) {
         // React portal events otherwise reach ThreadView's main draft importer.
         event.stopPropagation();
         if (event.dataTransfer.files.length > 0) event.preventDefault();
+      }}
+      onAfterClose={() => {
+        if (
+          closingSource &&
+          sourceClose.current === closingSource &&
+          !props.open
+        ) {
+          sourceClose.current = null;
+          closingSource.resolve();
+        }
       }}
       restoreFocus={() => {
         const active = document.activeElement;

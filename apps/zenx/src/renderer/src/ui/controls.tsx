@@ -496,6 +496,7 @@ export function Dialog({
   children,
   className = "",
   restoreFocus: allowRestoreFocus = true,
+  onAfterClose,
   ...contentProps
 }: {
   open: boolean;
@@ -504,6 +505,8 @@ export function Dialog({
   children: ReactNode;
   className?: string;
   restoreFocus?: boolean | (() => boolean);
+  /** This Content instance has completed its Radix close-focus lifecycle. */
+  onAfterClose?(): void;
 } & Omit<
   ComponentProps<typeof DialogPrimitive.Content>,
   "children" | "title" | "onOpenAutoFocus" | "onCloseAutoFocus"
@@ -547,6 +550,7 @@ export function Dialog({
                 content.current?.contains(active))
             )
               target.focus();
+            onAfterClose?.();
           }}
         >
           <DialogPrimitive.Title className="sr-only">

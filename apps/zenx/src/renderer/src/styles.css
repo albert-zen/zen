@@ -1677,9 +1677,9 @@ button:disabled {
 .turn[data-history-layout] {
   contain-intrinsic-block-size: auto 240px;
 }
-.turn[data-history-layout="auto"]:not(:focus-within):not(
-    :has([data-message-target])
-  ) {
+.turn[data-history-layout="auto"]:not([data-reading-reveal]):not(
+    :focus-within
+  ):not(:has([data-message-target])) {
   content-visibility: auto;
 }
 .user-row {

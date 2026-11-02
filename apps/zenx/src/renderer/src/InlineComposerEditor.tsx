@@ -268,7 +268,7 @@ type CurrentProps = {
   onKeyDown?(event: KeyboardEvent): void;
   onPaste?(event: ClipboardEvent): void;
   onBlur?(): void;
-  onReferenceSource?(reference: Reference): boolean;
+  onReferenceSource?(reference: Reference, afterClose?: Promise<void>): boolean;
   disabled?: boolean;
   readOnly?: boolean;
 };
@@ -332,9 +332,11 @@ class ReferenceWidget extends WidgetType {
                 removeDisabled={Boolean(
                   this.current().disabled || this.current().readOnly,
                 )}
-                onSource={() =>
-                  this.current().onReferenceSource?.(this.entry.reference) ??
-                  false
+                onSource={(afterClose) =>
+                  this.current().onReferenceSource?.(
+                    this.entry.reference,
+                    afterClose,
+                  ) ?? false
                 }
               />
             </MessageSourceViewportContext.Provider>
@@ -364,7 +366,7 @@ export interface InlineComposerEditorProps {
   onKeyDown?(event: KeyboardEvent): void;
   onPaste?(event: ClipboardEvent): void;
   onBlur?(): void;
-  onReferenceSource?(reference: Reference): boolean;
+  onReferenceSource?(reference: Reference, afterClose?: Promise<void>): boolean;
   /** Seed native history when switching from a plain textarea on first chip insertion. */
   initialUndo?: {
     value: string;

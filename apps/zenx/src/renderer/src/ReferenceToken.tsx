@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useState } from "react";
+import { useContext, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Reference } from "./composer-selector.js";
 import { Icon } from "./icons.js";
@@ -20,17 +20,30 @@ export function ReferenceToken({
   reference: Reference;
   onRemove?(): void;
   removeDisabled?: boolean;
-  onSource?(): boolean;
+  onSource?(afterClose?: Promise<void>): boolean;
 }) {
   const { t } = useTranslation("shell");
   const openLink = useContext(MessageLinkContext);
   const ownerThreadId = useContext(MessageSourceViewportContext);
   const navigateSource = useContext(MessageSourceNavigationContext);
   const [open, setOpen] = useState(false);
+  const [popupInstance, setPopupInstance] = useState(0);
   const [sourceUnavailable, setSourceUnavailable] = useState(false);
+  const sourceFocusTransferred = useRef(false);
+  const sourceClose = useRef<{
+    identity: string;
+    popupInstance: number;
+    accepted: boolean;
+    resolve(): void;
+    retire(): void;
+  } | null>(null);
   const heading = useId();
   const identity = JSON.stringify(reference);
   useEffect(() => {
+    if (sourceClose.current && sourceClose.current.identity !== identity) {
+      sourceClose.current.retire();
+      sourceClose.current = null;
+    }
     setOpen(false);
     setSourceUnavailable(false);
   }, [identity]);
@@ -57,10 +70,38 @@ export function ReferenceToken({
             .join("\n");
   function source() {
     try {
-      if (onSource?.()) {
+      sourceClose.current?.retire();
+      sourceClose.current = null;
+      let resolveClose = () => {};
+      let retireClose = () => {};
+      const afterClose =
+        reference.kind === "message"
+          ? new Promise<void>((resolve, reject) => {
+              resolveClose = resolve;
+              retireClose = () => reject();
+            })
+          : undefined;
+      void afterClose?.catch(() => {});
+      const ticket = afterClose
+        ? {
+            identity,
+            popupInstance,
+            accepted: false,
+            resolve: resolveClose,
+            retire: retireClose,
+          }
+        : null;
+      sourceClose.current = ticket;
+      if (onSource?.(afterClose)) {
+        if (ticket) ticket.accepted = true;
+        // The current ThreadView now owns bounded reveal/position/focus. The
+        // closing popup must not create a competing focus-return intent.
+        sourceFocusTransferred.current = reference.kind === "message";
         setOpen(false);
         return;
       }
+      ticket?.retire();
+      if (sourceClose.current === ticket) sourceClose.current = null;
       if (reference.kind === "file" && openLink) {
         openLink({ kind: "file", value: location });
         setOpen(false);
@@ -68,11 +109,24 @@ export function ReferenceToken({
       }
       setSourceUnavailable(true);
     } catch {
+      sourceClose.current?.retire();
+      sourceClose.current = null;
       setSourceUnavailable(true);
     }
   }
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          sourceClose.current?.retire();
+          sourceClose.current = null;
+          sourceFocusTransferred.current = false;
+          setPopupInstance((value) => value + 1);
+        }
+        setOpen(next);
+      }}
+    >
       <span className="reference-token-wrap">
         <span
           className="reference-token"
@@ -110,6 +164,19 @@ export function ReferenceToken({
       <PopoverContent
         className="reference-details-popover"
         aria-labelledby={heading}
+        onCloseAutoFocus={(event) => {
+          if (sourceFocusTransferred.current) event.preventDefault();
+          sourceFocusTransferred.current = false;
+          const ticket = sourceClose.current;
+          if (
+            ticket?.accepted &&
+            ticket.popupInstance === popupInstance &&
+            ticket.identity === identity
+          ) {
+            sourceClose.current = null;
+            ticket.resolve();
+          }
+        }}
       >
         <header>
           <strong id={heading}>{t("referenceDetails")}</strong>

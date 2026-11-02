@@ -808,10 +808,28 @@ test("queue excerpt source opens the exact visible message and suspends unsaved 
       '[data-quote-thread-id="runtime-thread"][data-quote-item-id="queue-intro"]',
     )!;
     assert.ok(target);
-    let scrolled = 0;
-    target.scrollIntoView = () => {
-      scrolled++;
-    };
+    const viewport = document.querySelector<HTMLElement>(".messages")!;
+    const rect = (top: number, height: number) => ({
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 600,
+      width: 600,
+      height,
+      x: 0,
+      y: top,
+      toJSON() {},
+    });
+    viewport.getBoundingClientRect = () => rect(40, 500);
+    document.querySelector<HTMLElement>(".bottom-zone")!.getBoundingClientRect =
+      () => rect(440, 100);
+    target.getBoundingClientRect = () => rect(800 - viewport.scrollTop, 100);
+    document.elementFromPoint = () => target;
+    document.hasFocus = () => true;
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
     const identity = editor()!.dataset.queueEditorIdentity;
     await changeText("未保存的问题");
@@ -824,7 +842,13 @@ test("queue excerpt source opens the exact visible message and suspends unsaved 
     await h.click(".reference-open-source");
     await flush();
     assert.equal(editor(), null);
-    assert.equal(scrolled, 1);
+    await flush();
+    await flush();
+    assert.equal(
+      target.getBoundingClientRect().top,
+      190,
+      "verified above the overlay after dialog unmount",
+    );
     assert.equal(document.activeElement, target);
     assert.equal(saves, 0);
     await h.click('[data-queue-id="queue-0"] .queue-row-edit');
@@ -867,3 +891,269 @@ test("missing queue excerpt source keeps the editor and unsaved reference draft 
     assert.equal(saves, 0);
   });
 });
+
+for (const replacement of ["thread", "selection"] as const) {
+  test(`queue source handoff is cancelled by newer ${replacement} intent after the dialog closes`, async () => {
+    await withRuntimeDom(async (h) => {
+      const source = {
+        ...queueReferences[1]!,
+        kind: "message" as const,
+        threadId: "runtime-thread",
+        id: "queue-intro",
+        excerpt: "Source",
+      };
+      const thread = referencedQueue(
+        referenceMessage("Question", [source], "queue-client-0"),
+      );
+      thread.canonicalItems!.push({
+        type: "agent_message",
+        id: "queue-intro",
+        threadId: thread.id,
+        turnId: "runtime-turn",
+        createdAt: "2026-11-02T00:00:00Z",
+        text: "Source",
+      });
+      await h.render(thread, {
+        onReadAttachment: readImage,
+        onEditQueued: async (p) => result(p),
+      });
+      const viewport = document.querySelector<HTMLElement>(".messages")!;
+      const target = document.querySelector<HTMLElement>(
+        '[data-quote-item-id="queue-intro"]',
+      )!;
+      const rect = (top: number, height: number) => ({
+        top,
+        bottom: top + height,
+        left: 0,
+        right: 600,
+        width: 600,
+        height,
+        x: 0,
+        y: top,
+        toJSON() {},
+      });
+      viewport.getBoundingClientRect = () => rect(40, 500);
+      document.querySelector<HTMLElement>(
+        ".bottom-zone",
+      )!.getBoundingClientRect = () => rect(440, 100);
+      target.getBoundingClientRect = () => rect(800 - viewport.scrollTop, 100);
+      document.elementFromPoint = () => target;
+      document.hasFocus = () => true;
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      let focused = 0;
+      target.addEventListener("focus", () => focused++);
+      await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+      await h.click(".inline-composer-editor .reference-token-details");
+      const previousFrames = {
+        requestAnimationFrame: globalThis.requestAnimationFrame,
+        cancelAnimationFrame: globalThis.cancelAnimationFrame,
+      };
+      const frames = new Map<number, FrameRequestCallback>();
+      let nextFrame = 0;
+      Object.assign(globalThis, {
+        requestAnimationFrame: (callback: FrameRequestCallback) => {
+          frames.set(++nextFrame, callback);
+          return nextFrame;
+        },
+        cancelAnimationFrame: (id: number) => frames.delete(id),
+      });
+      try {
+        await h.click(".reference-open-source");
+        assert.equal(editor(), null);
+        assert.equal(
+          focused,
+          0,
+          "handoff is still pending before the next layout frame",
+        );
+        if (replacement === "thread")
+          await h.render({ ...thread, id: "other-thread" });
+        else
+          await act(async () => {
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            document.getSelection()!.removeAllRanges();
+            document.getSelection()!.addRange(range);
+            assert.equal(document.getSelection()!.isCollapsed, false);
+            document.dispatchEvent(new window.Event("selectionchange"));
+          });
+        for (let i = 0; i < 3; i++)
+          await act(async () => {
+            const batch = [...frames.values()];
+            frames.clear();
+            for (const callback of batch) callback(0);
+          });
+        assert.equal(focused, 0);
+        assert.equal(target.hasAttribute("data-message-target"), false);
+        if (replacement === "selection")
+          assert.ok(document.getSelection()!.toString().length > 0);
+      } finally {
+        Object.assign(globalThis, previousFrames);
+      }
+    });
+  });
+}
+
+for (const order of ["popup first", "dialog first", "new intent"] as const) {
+  test(`queue source waits for actual popup and Dialog close lifecycles (${order})`, async () => {
+    await withRuntimeDom(async (h) => {
+      const source = {
+        ...queueReferences[1]!,
+        kind: "message" as const,
+        threadId: "runtime-thread",
+        id: "queue-intro",
+        excerpt: "Source",
+      };
+      const thread = referencedQueue(
+        referenceMessage("Question", [source], "queue-client-0"),
+      );
+      thread.canonicalItems!.push({
+        type: "agent_message",
+        id: "queue-intro",
+        threadId: thread.id,
+        turnId: "runtime-turn",
+        createdAt: "2026-11-02T00:00:00Z",
+        text: "Source",
+      });
+      const computedStyle = globalThis.getComputedStyle;
+      const css = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+      Object.defineProperty(globalThis, "CSS", {
+        configurable: true,
+        value: {
+          escape(value: string) {
+            assert.match(value, /^ui-(enter|exit)$/u);
+            return value;
+          },
+        },
+      });
+      globalThis.getComputedStyle = (element, pseudo) => {
+        const style = computedStyle(element, pseudo);
+        if (
+          !element.matches(
+            ".reference-details-popover, .ui-dialog, .ui-dialog-overlay",
+          )
+        )
+          return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "animationName")
+              return element.getAttribute("data-state") === "closed"
+                ? "ui-exit"
+                : "ui-enter";
+            const value: unknown = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      };
+      try {
+        await h.render(thread, {
+          onReadAttachment: readImage,
+          onEditQueued: async (p) => result(p),
+        });
+        const viewport = document.querySelector<HTMLElement>(".messages")!;
+        const target = document.querySelector<HTMLElement>(
+          '[data-quote-item-id="queue-intro"]',
+        )!;
+        const rect = (top: number, height: number) => ({
+          top,
+          bottom: top + height,
+          left: 0,
+          right: 600,
+          width: 600,
+          height,
+          x: 0,
+          y: top,
+          toJSON() {},
+        });
+        viewport.getBoundingClientRect = () => rect(40, 500);
+        document.querySelector<HTMLElement>(
+          ".bottom-zone",
+        )!.getBoundingClientRect = () => rect(440, 100);
+        target.getBoundingClientRect = () =>
+          rect(800 - viewport.scrollTop, 100);
+        document.hasFocus = () => true;
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        let focused = 0;
+        target.addEventListener("focus", () => focused++);
+        await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+        await h.click(".inline-composer-editor .reference-token-details");
+        const before = viewport.scrollTop;
+        await h.click(".reference-open-source");
+        const popup = document.querySelector<HTMLElement>(
+          '.reference-details-popover[data-state="closed"]',
+        );
+        const dialog = document.querySelector<HTMLElement>(
+          '.ui-dialog[data-state="closed"]',
+        );
+        const overlay = document.querySelector<HTMLElement>(
+          '.ui-dialog-overlay[data-state="closed"]',
+        );
+        assert.ok(
+          popup && dialog && overlay,
+          "both real Radix Presence layers remain outgoing",
+        );
+        document.elementFromPoint = () =>
+          overlay.isConnected ? overlay : popup.isConnected ? popup : target;
+        await flush();
+        await flush();
+        await flush();
+        assert.equal(
+          viewport.scrollTop,
+          before,
+          "no navigation scroll while outgoing layers still exist",
+        );
+        assert.equal(focused, 0);
+        assert.equal(document.querySelector("[data-reading-reveal]"), null);
+        const end = async (...nodes: HTMLElement[]) => {
+          await act(async () => {
+            for (const node of nodes)
+              if (node.isConnected) {
+                const event = new window.Event("animationend", {
+                  bubbles: true,
+                });
+                Object.defineProperty(event, "animationName", {
+                  value: "ui-exit",
+                });
+                node.dispatchEvent(event);
+              }
+          });
+          await flush();
+        };
+        if (order === "new intent")
+          document.dispatchEvent(new window.Event("wheel"));
+        if (order === "dialog first") await end(dialog, overlay);
+        else {
+          await end(popup);
+          await flush();
+          await flush();
+          assert.equal(dialog.isConnected, true);
+          assert.equal(
+            focused,
+            0,
+            "popup completion alone cannot release a modal navigation",
+          );
+          assert.equal(viewport.scrollTop, before);
+        }
+        await end(popup, dialog, overlay);
+        for (let i = 0; i < 5; i++) await flush();
+        assert.equal(
+          popup.isConnected || dialog.isConnected || overlay.isConnected,
+          false,
+        );
+        assert.equal(focused, order === "new intent" ? 0 : 1);
+        if (order !== "new intent")
+          assert.equal(document.activeElement === target, true);
+        assert.equal(document.querySelector("[data-reading-reveal]"), null);
+      } finally {
+        globalThis.getComputedStyle = computedStyle;
+        if (css) Object.defineProperty(globalThis, "CSS", css);
+        else Reflect.deleteProperty(globalThis, "CSS");
+      }
+    });
+  });
+}

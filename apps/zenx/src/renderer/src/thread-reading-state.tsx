@@ -6,12 +6,106 @@ import {
   type ReactNode,
 } from "react";
 
+export interface ReadingAnchor {
+  turnId: string;
+  itemId?: string;
+  /** Distance from the item's top to the uncovered viewport's top. */
+  offset: number;
+}
+
+// Exact DOM identity lookup, including IDs containing CSS punctuation.
+export function readingIdentitySelector(attribute: string, id: string) {
+  const escaped = id.replace(
+    /[\x00-\x1f\x7f"\\]/g,
+    (character) => `\\${character.charCodeAt(0).toString(16)} `,
+  );
+  return `[${attribute}="${escaped}"]`;
+}
+
+export function readingViewportBounds(viewport: HTMLElement) {
+  const rect = viewport.getBoundingClientRect();
+  const zone = viewport
+    .closest(".thread-view")
+    ?.querySelector<HTMLElement>(":scope > .bottom-zone")
+    ?.getBoundingClientRect();
+  return {
+    top: Math.max(0, rect.top),
+    bottom: Math.min(
+      window.innerHeight,
+      rect.bottom,
+      zone && zone.height > 0 && zone.bottom > rect.top ? zone.top : Infinity,
+    ),
+    left: Math.max(0, rect.left),
+    right: Math.min(window.innerWidth, rect.right),
+  };
+}
+
+export function findReadingAnchor(
+  viewport: HTMLElement,
+  anchor: ReadingAnchor,
+) {
+  const turn = viewport.querySelector<HTMLElement>(
+    readingIdentitySelector("data-turn-id", anchor.turnId),
+  );
+  if (!turn || anchor.itemId === undefined) return turn;
+  return turn.querySelector<HTMLElement>(
+    `${readingIdentitySelector("data-quote-item-id", anchor.itemId)}, ${readingIdentitySelector("data-sent-message-id", anchor.itemId)}`,
+  );
+}
+
+/** At most nine viewport hit tests/nearby identity rects, never a history scan. */
+export function captureReadingAnchor(
+  viewport: HTMLElement,
+): ReadingAnchor | undefined {
+  if (
+    !document.elementFromPoint ||
+    viewport.closest("[hidden], [aria-hidden='true'], [inert]")
+  )
+    return;
+  const bounds = readingViewportBounds(viewport);
+  const height = bounds.bottom - bounds.top;
+  const width = bounds.right - bounds.left;
+  if (height <= 0 || width <= 0) return;
+  for (const y of [1, Math.min(24, height / 2), height / 2]) {
+    for (const x of [0.5, 0.25, 0.75]) {
+      const hit = document.elementFromPoint(
+        bounds.left + width * x,
+        bounds.top + y,
+      );
+      const turn = hit?.closest<HTMLElement>("[data-turn-id]");
+      if (!turn || !viewport.contains(turn)) continue;
+      const item = hit?.closest<HTMLElement>(
+        "[data-quote-item-id], [data-sent-message-id]",
+      );
+      const target = item && turn.contains(item) ? item : turn;
+      const rect = target.getBoundingClientRect();
+      if (
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.bottom <= bounds.top ||
+        rect.top >= bounds.bottom
+      )
+        continue;
+      const itemId = target.dataset.quoteItemId ?? target.dataset.sentMessageId;
+      return {
+        turnId: turn.dataset.turnId!,
+        ...(itemId === undefined ? {} : { itemId }),
+        offset: bounds.top - rect.top,
+      };
+    }
+  }
+}
+
 // Reading choices are disposable renderer state, never Thread execution facts.
 export function createThreadReadingState() {
   let disclosures: ReadonlyMap<string, boolean> = new Map();
   const listeners = new Set<() => void>();
   return {
-    scroll: null as { top: number; following: boolean } | null,
+    scroll: null as {
+      top: number;
+      following: boolean;
+      anchor?: ReadingAnchor;
+    } | null,
     snapshot: () => disclosures,
     subscribe: (listener: () => void) => {
       listeners.add(listener);

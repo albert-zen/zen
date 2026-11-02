@@ -496,7 +496,37 @@ test("legacy leading quote renders exact multiline reference instead of UUID JSO
       document.querySelector(".reference-exact-excerpt")!.textContent,
       longQuote.excerpt,
     );
+    // Explicit synthetic layout: DOM existence alone is not successful navigation.
+    const viewport = document.querySelector<HTMLElement>(".messages")!;
+    const target = document.querySelector<HTMLElement>(
+      '[data-quote-item-id="source-a"]',
+    )!;
+    const rect = (top: number, height: number) => ({
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 600,
+      width: 600,
+      height,
+      x: 0,
+      y: top,
+      toJSON() {},
+    });
+    viewport.getBoundingClientRect = () => rect(40, 500);
+    document.querySelector<HTMLElement>(".bottom-zone")!.getBoundingClientRect =
+      () => rect(440, 100);
+    target.getBoundingClientRect = () => rect(800 - viewport.scrollTop, 100);
+    document.elementFromPoint = () => target;
+    document.hasFocus = () => true;
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
     await click(document.querySelector(".reference-open-source")!);
+    // Radix close-focus completion precedes the three positioning frames.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    for (let i = 0; i < 3; i++)
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     assert.equal(
       (document.activeElement as HTMLElement).dataset.quoteItemId,
       "source-a",

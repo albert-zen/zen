@@ -11,7 +11,7 @@ export function InlineReferenceContent({
 }: {
   text: string;
   references: readonly Reference[];
-  onSource?(reference: Reference): boolean;
+  onSource?(reference: Reference, afterClose?: Promise<void>): boolean;
 }) {
   const normalized = normalizeInlineReferences(text, references);
   let prefix = "\uE000ZENXREF";
@@ -30,7 +30,11 @@ export function InlineReferenceContent({
       node: (
         <ReferenceToken
           reference={reference}
-          onSource={onSource ? () => onSource(reference) : undefined}
+          onSource={
+            onSource
+              ? (afterClose) => onSource(reference, afterClose)
+              : undefined
+          }
         />
       ),
     });

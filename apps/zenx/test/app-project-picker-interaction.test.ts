@@ -7789,6 +7789,33 @@ test("tool destination opens and focuses the exact delivered message, not just i
   });
   try {
     await selectedComposer();
+    // Deterministic JSDOM geometry only; real engine occlusion remains a native gate.
+    const originalRect = window.HTMLElement.prototype.getBoundingClientRect;
+    const rect = (top: number, height: number): DOMRect => ({
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 600,
+      width: 600,
+      height,
+      x: 0,
+      y: top,
+      toJSON() {},
+    });
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList.contains("messages")) return rect(40, 500);
+      if (this.classList.contains("bottom-zone")) return rect(440, 100);
+      if (this.dataset.sentMessageId === "exact-delivered")
+        return rect(800 - (this.closest(".messages")?.scrollTop ?? 0), 100);
+      return originalRect.call(this);
+    };
+    document.elementFromPoint = () =>
+      document.querySelector('[data-sent-message-id="exact-delivered"]');
+    document.hasFocus = () => true;
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
     const link = await waitFor(() =>
       document.querySelector<HTMLButtonElement>(".tool-action-target button"),
     );
