@@ -521,7 +521,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
       loading: false,
       mode: "live",
     };
-    let targets = [target];
+    let targets: any[] = [target];
     const listeners = new Set<(event: any) => void>();
     (dom.window as any).zenx = {
       plugins: {},
@@ -564,18 +564,11 @@ for (const state of ["dismissed", "disconnected"] as const) {
     try {
       await rerender();
       assert.equal(count(), 0, "discovery alone does not open a preview");
-      await act(async () =>
-        [
-          ...document.querySelectorAll<HTMLButtonElement>(
-            ".workspace-tab-types button",
-          ),
-        ]
-          .find(
-            (node) =>
-              node.querySelector("strong")?.textContent === "Retained page",
-          )!
-          .click(),
-      );
+      await act(async () => {
+        targets = [{ ...target, previewActive: true, previewSequence: 1 }];
+        for (const listener of [...listeners])
+          listener({ type: "targets", targets });
+      });
       assert.equal(count(), 1);
       if (state === "dismissed") {
         await act(async () =>
@@ -607,6 +600,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
         expected,
         `${state} identity survives an unrelated plugin snapshot`,
       );
+      targets = []; // A newly admitted provider has no prior runtime sessions.
       snapshot = {
         ...snapshot,
         plugins: [{ ...snapshot.plugins[0], admissionId: "provider-two" }],
@@ -628,7 +622,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
       assert.equal(
         count(),
         0,
-        "fresh discovery still requires explicit preview selection",
+        "fresh discovery does not create an operation preview",
       );
       targets = [];
       threadId = "another-thread";

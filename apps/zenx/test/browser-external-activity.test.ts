@@ -227,22 +227,6 @@ test("real Host operations automatically present exact read-only peers and respe
       button("Follow Agent") === undefined,
       "no Follow Agent control remains",
     );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
-        .click(),
-    );
-    await act(async () =>
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types button",
-        ),
-      ]
-        .find(
-          (node) => node.querySelector("strong")?.textContent === "Page two",
-        )!
-        .click(),
-    );
     assert.match(selected()!, /Page two/);
     assert.equal(frameTargets.at(-1), "two");
     assert.deepEqual([...activeFrames.values()], ["two"]);
@@ -298,22 +282,6 @@ test("real Host operations automatically present exact read-only peers and respe
       /Page three/,
       "the same exact preview resumes when visible",
     );
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
-        .click(),
-    );
-    await act(async () =>
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types button",
-        ),
-      ]
-        .find(
-          (node) => node.querySelector("strong")?.textContent === "Page three",
-        )!
-        .click(),
-    );
     assert.match(selected()!, /Page three/);
     assert.deepEqual([...activeFrames.values()], ["three"]);
     await act(async () =>
@@ -344,8 +312,8 @@ test("real Host operations automatically present exact read-only peers and respe
     assert.ok(frameStops > 0);
     assert.equal(
       document.querySelectorAll('[role="tab"]').length,
-      4,
-      "disconnected identities remain visible",
+      2,
+      "only the current preview remains unavailable; earlier automatic previews do not accumulate",
     );
   } finally {
     await act(async () => root.unmount());

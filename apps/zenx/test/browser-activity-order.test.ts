@@ -208,30 +208,14 @@ test("automatic previews preserve admission order and newer human selection", as
     });
     assert.match(selected()!, /Page opened-1/);
     assert.equal(expanded, true);
-    await act(async () => openPanel(true));
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
-        .click(),
-    );
-    await act(async () =>
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          ".workspace-tab-types button",
-        ),
-      ]
-        .find(
-          (node) => node.querySelector("strong")?.textContent === "Page two",
-        )!
-        .click(),
-    );
+    await act(async () => button("Terminal").click());
     await act(async () => {
       openResolvers[0]!();
       await older;
     });
-    assert.match(
-      selected()!,
-      /Page two/,
+    assert.equal(
+      selected(),
+      "Terminal",
       "older delayed open must not steal from human selection",
     );
     const starts = envelopes

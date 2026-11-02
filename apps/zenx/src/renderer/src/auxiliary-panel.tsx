@@ -1920,41 +1920,6 @@ export function AuxiliaryPanel({
                           </small>
                         </span>
                       </button>
-                      {candidates
-                        .filter((tab) => tab.externalBrowser)
-                        .map((tab) => (
-                          <button
-                            type="button"
-                            key={tab.id}
-                            onClick={() => void add(tab.id)}
-                          >
-                            <Icon name="browser" />
-                            <span>
-                              <strong>
-                                {tab.externalBrowser!.title ||
-                                  tab.externalBrowser!.url}
-                              </strong>
-                              <small>
-                                {tab.externalBrowser!.connectionLabel ||
-                                  i18n.t("panels:externalReadOnly")}
-                              </small>
-                            </span>
-                          </button>
-                        ))}
-                      {computer ? (
-                        <button
-                          type="button"
-                          onClick={() => void add("computer")}
-                        >
-                          <Icon name="computer" />
-                          <span>
-                            <strong>{i18n.t("panels:computer")}</strong>
-                            <small>
-                              {i18n.t("panels:observeTheAgentSDesktopActivity")}
-                            </small>
-                          </span>
-                        </button>
-                      ) : null}
                       {panels.map((panel) => (
                         <div
                           className="workspace-plugin-choice"

@@ -82,6 +82,11 @@ test("cancelling Chrome debugger access revokes remembered connection intent", a
   });
   await waitFor(() => f.commands.length === 1);
   f.chrome.debugger.onDetach.emit({ tabId: 1 }, "canceled_by_user");
+  assert.equal(
+    stored.zenxBrowserAutoConnect,
+    false,
+    "revocation starts its durable write in the debugger callback, without waiting for queued cleanup",
+  );
   await waitFor(
     () => stored.zenxBrowserAutoConnect === false && f.ports[0].disconnected,
   );

@@ -61,12 +61,13 @@ async function handleAction() {
   await connectBrowser();
 }
 
-async function stopConnecting() {
+async function stopConnecting(persistedRevocation) {
   // Revoke in memory immediately; cleanup cannot authorize a queued reconnect.
   autoConnect = false;
   const closing =
     connection === undefined ? Promise.resolve() : disconnect(connection);
-  await chrome.storage.local.set({ [AUTO_CONNECT_KEY]: false });
+  await (persistedRevocation ??
+    chrome.storage.local.set({ [AUTO_CONNECT_KEY]: false }));
   await chrome.alarms.clear(RECONNECT_ALARM);
   await closing;
   await chrome.action.setBadgeText({ text: "" });
@@ -238,8 +239,14 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   // Cancel in Chrome's debugger banner revokes the entire browser connection.
   // The Chrome debugger banner is an explicit revocation, not a transport loss.
   autoConnect = false;
+  // Start persistence in this Chrome event callback, before waiting for a
+  // pending attach/disconnect or a queued native handshake to settle.
+  const persistedRevocation = chrome.storage.local.set({
+    [AUTO_CONNECT_KEY]: false,
+  });
+  void persistedRevocation.catch(showConnectionError);
   void disconnect(session);
-  enqueue(stopConnecting);
+  enqueue(() => stopConnecting(persistedRevocation));
 });
 
 function updateTab(tab, changeInfo = {}) {

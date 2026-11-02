@@ -18,6 +18,7 @@ import type { ZenXCapabilityPackage, ZenXPluginManifestV2 } from "./types.js";
 import type {
   BrowserThreadListener,
   BrowserThreadRequest,
+  BrowserThreadEvent,
   BrowserThreadTarget,
 } from "./browser-thread-observation.js";
 

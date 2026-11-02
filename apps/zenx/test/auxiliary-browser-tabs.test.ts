@@ -87,6 +87,11 @@ test("Chrome operations automatically present one exact preview; discovery and d
       0,
       "catalog discovery must not open a preview",
     );
+    assert.equal(
+      document.querySelectorAll(".workspace-tab-types button").length,
+      3,
+      "the launcher has one Browser type alongside files and terminal; it does not expose Chrome as another type",
+    );
     let sequence = 0;
     const operate = async () => {
       sequence++;
