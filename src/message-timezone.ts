@@ -4,6 +4,10 @@ export interface ReceiptTimezone {
   source: "client" | "host" | "utc-fallback";
 }
 
+const normalizedTimeZones = new Map<string, string>();
+let normalizationConstructor: typeof Intl.DateTimeFormat | undefined;
+const MAX_NORMALIZED_TIME_ZONES = 256;
+
 /** Accept bounded Intl-supported IANA names, never arbitrary model-facing text. */
 export function normalizeTimeZone(value: unknown): string | undefined {
   if (
@@ -13,9 +17,20 @@ export function normalizeTimeZone(value: unknown): string | undefined {
   )
     return undefined;
   try {
-    return new Intl.DateTimeFormat("en-US", {
+    const constructor = Intl.DateTimeFormat;
+    if (normalizationConstructor !== constructor) {
+      normalizedTimeZones.clear();
+      normalizationConstructor = constructor;
+    }
+    const known = normalizedTimeZones.get(value);
+    if (known !== undefined) return known;
+    const normalized = new constructor("en-US", {
       timeZone: value,
     }).resolvedOptions().timeZone;
+    if (normalizedTimeZones.size >= MAX_NORMALIZED_TIME_ZONES)
+      normalizedTimeZones.delete(normalizedTimeZones.keys().next().value!);
+    normalizedTimeZones.set(value, normalized);
+    return normalized;
   } catch {
     return undefined;
   }

@@ -1659,3 +1659,5 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+Explicit IANA-name normalization retains at most 256 successful results for the current Intl.DateTimeFormat implementation, never the default OS timezone choice or timestamp/DST formatting; constructor replacement invalidates this disposable pure-validation optimization and invalid inputs remain rejected.
