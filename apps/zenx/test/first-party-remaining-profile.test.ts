@@ -70,7 +70,7 @@ test("updating an old bundled Computer profile uses the current resource and exp
     const oldTarball = path.join(
       resources,
       "plugins",
-      "zenx-computer-plugin-macos-1.5.0.tgz",
+      "zenx-computer-plugin-macos-1.0.0.tgz",
     );
     await run("tar", ["-xf", currentTarball, "-C", staging]);
     for (const filename of ["package.json", "zenx.plugin.json"]) {
@@ -167,7 +167,7 @@ test("strict Windows Computer profile upgrades retain disablement and do not app
       const previous = path.join(
         resources,
         "plugins",
-        "zenx-computer-plugin-win32-1.5.0.tgz",
+        "zenx-computer-plugin-win32-1.1.5.tgz",
       );
       await run("tar", ["-xf", current, "-C", staging]);
       const manifest = {
