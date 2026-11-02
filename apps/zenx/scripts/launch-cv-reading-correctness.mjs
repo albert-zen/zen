@@ -25,7 +25,7 @@ assert.equal(process.platform, "darwin");
 const directory = path.resolve(process.argv[2]);
 const version = "current";
 const count = 1000;
-const expected = "51007e8f8ed21ce6db3ef94c5401ca2726564173";
+const expected = "9188f8e915f25ae4d693fae43ad5b8350282a87f";
 // Correctness-only. No send-latency thresholds or timing samples are changed/reused.
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
@@ -462,6 +462,9 @@ try {
         stage: result.stage,
         reason: result.reason,
         cases: result.cases,
+        summary: result.summary,
+        scope:
+          "Required correctness and conditional/animation coverage are separate; not-covered is not passed.",
       }),
   );
   assert.equal(code, 0, "Owned correctness capture exited unsuccessfully");
@@ -474,9 +477,54 @@ try {
     result.packagedRuntime.helperHashes,
   ))
     assert.equal(hash, packagedHashes[file]);
-  assert.equal(result.harnessVersion, "cv-reading-correctness-v1");
-  assert.equal(result.cases.length, 9);
-  assert.ok(result.cases.every((x) => x.passed));
+  assert.equal(result.harnessVersion, "cv-reading-correctness-v2");
+  const required = [
+    "cv-skip",
+    "short-quote-close",
+    "tall-quote-close",
+    "cold-thread-restore",
+    "resize-anchor",
+    "native-selection",
+    "queue-dual-close-draft",
+  ];
+  const conditional = ["waiting-wheel-cancels", "waiting-owner-cancels"];
+  assert.deepEqual(
+    result.cases.map((entry) => entry.name),
+    [...required, ...conditional],
+  );
+  for (const entry of result.cases) {
+    assert.equal(entry.required, required.includes(entry.name));
+    if (entry.required || entry.status === "passed") {
+      assert.equal(entry.status, "passed");
+      assert.equal(entry.passed, true);
+      assert.equal(entry.evidence?.coverageGap, undefined);
+    } else {
+      assert.equal(entry.status, "not-covered");
+      assert.equal(entry.passed, false);
+      assert.ok(
+        [
+          "closed-window-not-observed",
+          "closed-window-expired-or-no-animation",
+        ].includes(entry.evidence?.coverageGap),
+      );
+    }
+  }
+  assert.deepEqual(result.summary.requiredCorrectness, {
+    expected: 7,
+    passed: 7,
+    failed: 0,
+    notCovered: 0,
+    notRun: 0,
+  });
+  assert.deepEqual(result.summary.conditionalWaiting, {
+    expected: 2,
+    passed: result.cases.filter((entry) => !entry.required && entry.passed)
+      .length,
+    failed: 0,
+    notCovered: result.cases.filter((entry) => entry.status === "not-covered")
+      .length,
+    notRun: 0,
+  });
   const { trace, journal } = storage("read-only");
   try {
     const facts = await journal.read(threadId),

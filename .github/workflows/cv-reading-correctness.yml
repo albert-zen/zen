@@ -1,5 +1,5 @@
 name: Packaged CV reading correctness (synthetic, no latency acceptance)
-# Diagnostic revision 4: exact native source-input evidence and focus-first geometry; prior failures retained.
+# Diagnostic revision 5 candidate: natural-motion correctness and explicit uncovered animation/waiting branches.
 on:
   push:
     branches: [diagnostic/cv-reading-correctness-20261102]
@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 51007e8f8ed21ce6db3ef94c5401ca2726564173
+          ref: 9188f8e915f25ae4d693fae43ad5b8350282a87f
           persist-credentials: false
           path: source
       - uses: actions/checkout@v4
