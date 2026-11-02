@@ -1844,15 +1844,27 @@ function AppContent() {
 
   const readPreference = useConversationReadPreference();
   const unreadThreads = unreadThreadIds(threadSummaries, readPreference);
-  const activeSummaries = threadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const activeSummaries = useMemo(
+    () =>
+      threadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [threadSummaries, titleSnapshot],
   );
-  const archivedSummaries = archivedThreadSummaries.map((summary) =>
-    titleSnapshot[summary.threadId]?.title === undefined
-      ? summary
-      : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+  const archivedSummaries = useMemo(
+    () =>
+      archivedThreadSummaries.map((summary) =>
+        titleSnapshot[summary.threadId]?.title === undefined
+          ? summary
+          : { ...summary, name: titleSnapshot[summary.threadId]!.title },
+      ),
+    [archivedThreadSummaries, titleSnapshot],
+  );
+  const informationThreads = useMemo(
+    () => [...activeSummaries, ...archivedSummaries],
+    [activeSummaries, archivedSummaries],
   );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedBaseSummary =
@@ -4453,7 +4465,7 @@ function AppContent() {
                   !selectedRoomId && selectedThreadId ? (
                     <ConversationInformationCards
                       threadId={selectedThreadId}
-                      threads={[...activeSummaries, ...archivedSummaries]}
+                      threads={informationThreads}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}
                       theme={appearance}

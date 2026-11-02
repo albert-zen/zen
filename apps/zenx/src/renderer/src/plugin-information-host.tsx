@@ -66,6 +66,19 @@ export function PluginInformationHost({
     const heading = panel?.querySelector<HTMLElement>(
       ":scope > .auxiliary-heading",
     );
+    const titlebar = workspace
+      .closest(".app-shell")
+      ?.querySelector<HTMLElement>(
+        ":scope > .window-titlebar .window-titlebar-session",
+      );
+    const visibleBottom = (element: HTMLElement | null | undefined) => {
+      if (!element) return 0;
+      const style =
+        element.ownerDocument.defaultView?.getComputedStyle(element);
+      return style?.display === "none" || style?.visibility === "hidden"
+        ? 0
+        : element.getBoundingClientRect().bottom;
+    };
     const measure = () => {
       const bounds = workspace.getBoundingClientRect();
       const resourceOpen = panel?.dataset.open === "true";
@@ -73,12 +86,15 @@ export function PluginInformationHost({
         resourceOpen && panel?.dataset.primaryActive === "true";
       const resourceWidth =
         resourceOpen && !primaryActive ? resourcePanelWidth : 0;
-      const headerBottom = resourceOpen
-        ? (heading?.getBoundingClientRect().bottom ?? 0)
-        : 0;
+      // Windows/Linux have a separate visible conversation row below the OS
+      // strip; macOS may hide that row when workspace tabs own the same space.
+      const headerBottom = Math.max(
+        visibleBottom(titlebar),
+        resourceOpen ? visibleBottom(heading) : 0,
+      );
       const next = {
         headerBottom,
-        top: Math.max(0, primaryActive ? headerBottom - bounds.top : 0) + 12,
+        top: Math.max(0, headerBottom - bounds.top) + 12,
         right: resourceWidth + 12,
         // Our responsive allocation, not a value copied from a reference app:
         // a 340px card, 24px gutters and at least 556px for the conversation.
@@ -117,6 +133,7 @@ export function PluginInformationHost({
         : new ResizeObserver(measure);
     observer?.observe(workspace);
     if (heading) observer?.observe(heading);
+    if (titlebar) observer?.observe(titlebar);
     // The primary conversation stays mounted in place while a workspace tab is
     // selected. Observe only its presentation attributes, never transcript DOM.
     const presentation =

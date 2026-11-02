@@ -52,7 +52,7 @@ const snapshot: ZenXPluginSnapshot = {
 
 test("Board uses one headerless toggle, measures Browser coexistence and retires hidden owners", async () => {
   const dom = new JSDOM(
-    '<main class="workspace"><aside class="auxiliary-panel" data-open="true"><header class="auxiliary-heading"></header></aside><div id="root"></div></main>',
+    '<div class="app-shell"><header class="window-titlebar"><div class="window-titlebar-session"></div></header><main class="workspace"><aside class="auxiliary-panel" data-open="true"><header class="auxiliary-heading"></header></aside><div id="root"></div></main></div>',
     { url: "https://zenx.local" },
   );
   Object.assign(globalThis, {
@@ -76,10 +76,16 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       callbacks.delete(this.callback);
     }
   } as unknown as typeof ResizeObserver;
+  let titlebarBottom = 88;
   let headerBottom = 104;
   let workspaceWidth = 1000;
   const workspace = document.querySelector<HTMLElement>(".workspace")!;
   const heading = document.querySelector<HTMLElement>(".auxiliary-heading")!;
+  const titlebar = document.querySelector<HTMLElement>(
+    ".window-titlebar-session",
+  )!;
+  titlebar.getBoundingClientRect = () =>
+    ({ bottom: titlebarBottom }) as DOMRect;
   workspace.getBoundingClientRect = () =>
     ({ top: 44, width: workspaceWidth }) as DOMRect;
   heading.getBoundingClientRect = () => ({ bottom: headerBottom }) as DOMRect;
@@ -231,6 +237,21 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
     await act(async () => {
       for (const callback of callbacks) callback([]);
     });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-dock")!.style.top,
+      "56px",
+      "ordinary dock clears the visible Windows/Linux conversation title row",
+    );
+    assert.ok(observed.has(titlebar), "title row resizing is observed");
+    titlebarBottom = 132;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      document.querySelector<HTMLElement>(".information-dock")!.style.top,
+      "100px",
+    );
+    titlebarBottom = 88;
     panel.dataset.open = "true";
     await act(async () => {
       for (const callback of callbacks) callback([]);

@@ -90,7 +90,7 @@ async function capture(name, mode) {
   );
   await pause(250);
   const geometry = await evaluate(
-    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
+    `(()=>{const rect=s=>{const e=document.querySelector(s);if(!e)return null;const r=e.getBoundingClientRect(),c=getComputedStyle(e);return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:c.display,visibility:c.visibility,color:c.color,background:c.backgroundColor}};return {chat:rect('.agent-surface'),composer:rect('#thread-composer'),card:rect('.information-dock'),popover:rect('.information-popover'),workspace:rect('.workspace'),resource:rect('.auxiliary-panel'),titlebar:rect('.window-titlebar-session'),resourceHeading:document.querySelector('.auxiliary-panel')?.dataset.open==='true'?rect('.auxiliary-heading'):null,informationToggle:rect('.information-toolbar button'),workspaceToggle:rect('.auxiliary-close-button'),expanded:document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded'),overflow:document.documentElement.scrollWidth>innerWidth,composerIdentity:window.__informationComposer===document.querySelector('#thread-composer'),draft:document.querySelector('#thread-composer')?.value}})()`,
   );
   if (mode === "dock") {
     assert.ok(
@@ -108,6 +108,20 @@ async function capture(name, mode) {
     assert.ok(
       geometry.card.bottom <= geometry.workspace.bottom + 1,
       "card remains within workspace height",
+    );
+    const visibleHeaders = [geometry.titlebar, geometry.resourceHeading].filter(
+      (rect) => rect && rect.visibility !== "hidden" && rect.display !== "none",
+    );
+    assert.ok(
+      visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
+      "card clears actual visible conversation/workspace headings on every platform",
+    );
+    assert.equal(
+      await evaluate(
+        "(()=>{const e=document.querySelector('.information-dock .conversation-information-section > header'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
+      ),
+      true,
+      "first card heading is not occluded by a higher titlebar layer",
     );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
@@ -323,6 +337,29 @@ async function run() {
     "Reopen narrow overlay repeatedly",
   );
   await capture("08-narrow-reopened", "overlay");
+  window.setSize(1600, 1000);
+  await capture("08a-open-overlay-to-dock", "dock");
+  assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
+  window.setSize(1000, 820);
+  await capture("08b-open-dock-to-overlay", "overlay");
+  assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
+  assert.equal(
+    result.cases.at(-1).geometry.draft,
+    "Synthetic draft must survive information and workspace toggles.",
+  );
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+  await until(
+    () =>
+      evaluate(
+        "document.activeElement===document.querySelector('.information-toolbar button')&&!document.querySelector('.information-popover')",
+      ),
+    "resize-transition overlay retains controlled dismissal and focus return",
+  );
+  await click(
+    ".information-toolbar button",
+    "Reopen after presentation transition",
+  );
   await click(
     ".information-toolbar button",
     "Dismiss overlay before switching conversation",

@@ -1,4 +1,11 @@
-import React, { type ReactNode } from "react";
+import React, {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type { NativeThreadSummary } from "../../../../../src/thread-summary.js";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
@@ -14,8 +21,39 @@ import {
 import { triggerSourceRoute } from "./message-source-navigation.js";
 import { Icon } from "./icons.js";
 
-/** Read-only conversation projections; every edit/navigation uses its existing owner. */
-export function ConversationInformationCards({
+type ConversationInformationProps = {
+  threadId: string;
+  threads: readonly NativeThreadSummary[];
+  snapshot: ZenXPluginSnapshot;
+  registry: PluginUiRegistry;
+  theme: "light" | "dark";
+  navigate(route: string): void;
+  /** Dedicated question UI never shares Board fields or main Composer state. */
+  attention?: ReactNode;
+};
+
+/** Keep App's latest navigation closure without making token deltas redraw cards. */
+export function ConversationInformationCards(
+  props: ConversationInformationProps,
+) {
+  const navigate = useRef(props.navigate);
+  useLayoutEffect(() => {
+    navigate.current = props.navigate;
+  }, [props.navigate]);
+  const navigateLatest = useCallback(
+    (route: string) => navigate.current(route),
+    [],
+  );
+  return (
+    <MemoizedConversationInformationContent
+      {...props}
+      navigate={navigateLatest}
+    />
+  );
+}
+
+/** Read-only projections; canonical summary/admission/attention changes still render. */
+function ConversationInformationContent({
   threadId,
   threads,
   snapshot,
@@ -23,17 +61,12 @@ export function ConversationInformationCards({
   theme,
   navigate,
   attention,
-}: {
-  threadId: string;
-  threads: readonly NativeThreadSummary[];
-  snapshot: ZenXPluginSnapshot;
-  registry: PluginUiRegistry;
-  theme: "light" | "dark";
-  navigate(route: string): void;
-  /** Dedicated question/attention UI can be supplied without sharing Board fields or Composer state. */
-  attention?: ReactNode;
-}) {
+}: ConversationInformationProps) {
   const { t } = useTranslation("panels");
+  const lineageContext = useMemo(
+    () => ({ threadId, threads }),
+    [threadId, threads],
+  );
   const admissionId = sidebarTriggerAdmissionId(snapshot);
   const { state, refresh } = useSidebarTriggers(admissionId, threadId);
   const triggers = state.triggers.filter(
@@ -103,7 +136,7 @@ export function ConversationInformationCards({
             snapshot={snapshot}
             pluginId={subagents.pluginId}
             surfaceId={subagents.surfaceId}
-            context={{ threadId, threads }}
+            context={lineageContext}
             theme={theme}
             navigate={navigate}
             executeCommand={window.zenx.plugins.executeCommand}
@@ -126,3 +159,7 @@ export function ConversationInformationCards({
     </div>
   );
 }
+
+const MemoizedConversationInformationContent = memo(
+  ConversationInformationContent,
+);
