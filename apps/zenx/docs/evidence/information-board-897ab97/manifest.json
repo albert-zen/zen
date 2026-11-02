@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "synthetic": true,
+  "productHead": "897ab97e1bd83fc4f959eb8b47c398b83cb92a10",
+  "productTree": "dd12bcb99390e771fe3a9de8df3739a375831f1c",
+  "capturedCommit": "5c744149140318a776c1be63650f11886e61e6ea",
+  "workflowRun": 41426944128,
+  "artifacts": {
+    "macos": 13132492494,
+    "windows": 13132208343
+  },
+  "capture": "Unmodified full production Electron App, preload/main and child Host; private fake-provider profile; native mouse/keyboard; no user device, private user conversation or component fixture. Screenshots are original capturePage PNG bytes, not edited.",
+  "files": [
+    {
+      "file": "windows-01-wide-light.png",
+      "source": "windows/01-wide-light.png",
+      "bytes": 128892,
+      "sha256": "b780134f1f5442d384210e96ea699a40d933d4b173fd07665d814983920b7e2f",
+      "caption": "Wide conversation; independent information card clears Windows conversation header."
+    },
+    {
+      "file": "windows-03-workspace-reopen-overlay.png",
+      "source": "windows/03-workspace-reopen-overlay.png",
+      "bytes": 144497,
+      "sha256": "6ccf4a6cbcc55bdaa8ce25fc73a46c2c8865cc54f98f6f9d6ed8197ede0ceac4",
+      "caption": "Workspace opening first closed information; explicit reopening uses the narrow-space overlay."
+    },
+    {
+      "file": "macos-05-maximized-main-dark.png",
+      "source": "macos/05-maximized-main-dark.png",
+      "bytes": 164678,
+      "sha256": "a5a7be97152ec7e6cf05021f30b41cb56f9e533639e2bc733acb66879cc9a3a0",
+      "caption": "Internally maximized workspace, main conversation Tab, dark theme; not OS fullscreen."
+    },
+    {
+      "file": "windows-08c-920px-allocation-dock.png",
+      "source": "windows/08c-920px-allocation-dock.png",
+      "bytes": 116873,
+      "sha256": "8aace4c3818749a9b44b627e376158cc1c0621b0992a485b2ce23ece096449b4",
+      "caption": "Exact 920px conversation allocation: 340px card, 556px chat, 490px input; no overlap."
+    },
+    {
+      "file": "macos-08d-919px-allocation-overlay.png",
+      "source": "macos/08d-919px-allocation-overlay.png",
+      "bytes": 149556,
+      "sha256": "29b485e4fb26feed6050156cfbfe7b07f57932a145921c14c58e8468a15b8f31",
+      "caption": "At 919px available allocation, the card becomes an overlay without remounting Composer."
+    },
+    {
+      "file": "windows-06-resource-tab-closes-information.png",
+      "source": "windows/06-resource-tab-closes-information.png",
+      "bytes": 63009,
+      "sha256": "ed03897237a6ff696411ea4267f8659d4b4822b52bfc35e87ec021626c50a18b",
+      "caption": "Selecting a resource Tab closes information instead of covering the file."
+    },
+    {
+      "file": "macos-11-trigger-editor.png",
+      "source": "macos/11-trigger-editor.png",
+      "bytes": 122478,
+      "sha256": "48d8df4970bd82090462bc5d096e579823805098a6911843fd6b5d5d18e2a5c2",
+      "caption": "Edit opens the existing exact trigger editor without executing or saving it."
+    }
+  ]
+}
