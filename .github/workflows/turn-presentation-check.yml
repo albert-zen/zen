@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+          ref: e6fac956e4aec1c6ef0548be85c7358c83d116bf
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+          ref: e6fac956e4aec1c6ef0548be85c7358c83d116bf
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:

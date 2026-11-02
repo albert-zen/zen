@@ -18,7 +18,7 @@ jobs:
           - variant: baseline
             source: d66c3ee9c4fb491e0845a5a54b25d876f5983d9e
           - variant: candidate
-            source: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+            source: e6fac956e4aec1c6ef0548be85c7358c83d116bf
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +27,7 @@ jobs:
           path: product
       - uses: actions/checkout@v4
         with:
-          ref: 12ff35e6a0da36c11a8c5eaf10b1112f4e1568e0
+          ref: e6fac956e4aec1c6ef0548be85c7358c83d116bf
           persist-credentials: false
           path: regression-source
       - uses: actions/checkout@v4

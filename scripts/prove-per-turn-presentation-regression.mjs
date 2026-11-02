@@ -62,7 +62,7 @@ async function run(name, cwd, args, expectedNames, expectedFailures, validateFai
 }
 
 
-const expectedTestBlob = "42d70c0567f8d7ed42d13f25228b170f02607555";
+const expectedTestBlob = "73e5aaa80ec6e7085ca11ff7af59202c17d66fae";
 const testPath = "apps/zenx/test/app-project-picker-interaction.test.ts";
 const hash = spawnSync("git", ["hash-object", testPath], {encoding:"utf8"});
 assert.equal(hash.status,0);
