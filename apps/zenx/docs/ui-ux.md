@@ -1081,3 +1081,20 @@ resolves concurrent clients. Publication remains behind the default-off Host
 experiment; this slice does not enable shared Room/CLI/remote publication, change
 Pinned/hidden state, or claim sidebar asking/recency integration without the
 separately reviewed authoritative summary projection.
+
+#### Whole-batch recall returns to its original inputs
+
+One authoritative atomic recall receipt is validated before partitioning UI
+restoration destinations. Ordinary messages retain the existing lossless
+Composer/reference/image merge; question replies restore normalized choices and
+free text to their exact original question cards, never backend-rendered answer
+text in Composer. Cancellation preserves an available local pre-cancel draft;
+a cold client cannot invent the missing draft. Exact withdrawn response reads,
+current open question authority, unchanged question drafts and the current
+Thread/page/selection generation all pass before any destination is changed.
+A newer draft, newer response, navigation or submitting destination leaves the
+whole receipt recoverable, without partial insertion. In-window applied markers
+advance only after all destinations accept. Old recalled client identities are
+terminal; a later explicit new answer receives a fresh identity. Restoration
+never sends, navigates, steals focus, enables shared Host publication or promises
+cross-window automatic insertion.

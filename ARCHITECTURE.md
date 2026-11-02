@@ -75,7 +75,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 
 ## 核心概念
 
-- **Desktop question attention** — An App-owned disposable view cache reads bounded native question pages and exact response identities, keeps per-request drafts separate from Composer and Board, and treats uncertain writes as read-only reconciliation; it adds no execution authority, publication permission, or persistent answer ledger.
+- **Desktop question attention** — An App-owned disposable view cache reads bounded native question pages and exact response identities, keeps per-request drafts separate from Composer and Board, and treats uncertain writes as read-only reconciliation; it adds no execution authority, publication permission, or persistent answer ledger. After one confirmed whole-batch recall, all origin drafts are preflighted before a synchronous UI commit: ordinary inputs merge into the latest Composer and question replies return to their original cards; failed preflight preserves the entire native receipt without partial insertion or automatic resend.
 
 - **Native asynchronous user questions** — A direct builtin publishes an immutable semantic call/result pair; native response admission validates the exact Thread/request under the ordinary start/recallable-steer mutation boundary, preserves human reply provenance in semantic ItemList and existing pending-input Trace facts, and derives attention without a question store, durable reservation, permission grant, or change to manual pinned order. Its disposable Thread-owned question index folds discriminators during existing decode/append work and only rebuilds on relevant semantic publication/input/control facts; ordinary snapshots do not walk or parse question history. Publication requires the Host-owned, default-off `experimentalUserQuestions` startup option; disabling it does not remove native reads or response admission for existing questions.
 
@@ -1737,6 +1737,5 @@ is rejected before recall. Applied-in-this-window markers are not durable proof.
 The same-thread canonical receipt also invalidates the older queue projection.
 
 This implementation does not add Room, Host/Agent or cross-author recall,
-remote-tool recall, automatic cross-window exactly-once insertion or Ask User
-Question behavior. Acceptance evidence is recorded separately against the exact
+remote-tool recall or automatic cross-window exactly-once insertion. Acceptance evidence is recorded separately against the exact
 combined source version; historical branch checks do not accept an integration.

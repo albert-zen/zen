@@ -10117,3 +10117,314 @@ test("real Host questions render in full App information panel with independent 
     await f.close();
   }
 });
+
+for (const outcome of [
+  "restored",
+  "newer-question-draft",
+  "navigation",
+  "disconnect",
+  "archive",
+] as const) {
+  test(`real Host full App atomic mixed recall returns to original inputs: ${outcome}`, async () => {
+    const { questionNativeFixture } =
+      await import("./user-question-native-fixture.js");
+    const { ToolEnvironment } = await import("../../../src/tool.js");
+    const entered = deferred<void>(),
+      release = deferred<void>();
+    const environment = new ToolEnvironment({
+      runtimes: [
+        {
+          name: "synthetic_hold",
+          enforcesSandbox: true,
+          specification: {
+            name: "synthetic_hold",
+            description: "Hold synthetic test work",
+            inputSchema: { type: "object", properties: {} },
+          },
+          execute: async () => {
+            entered.resolve();
+            await release.promise;
+            return { exitCode: 0, output: "Synthetic hold released" };
+          },
+        },
+      ],
+    });
+    const f = await questionNativeFixture(environment);
+    let harness: AppHarness | undefined;
+    let held: import("../../../src/app-server.js").TurnHandle | undefined;
+    let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+    const readGate = deferred<void>();
+    try {
+      const thread = await f.host.startThread();
+      const question = await f.publish(thread.id);
+      held = await f.host.startTurn(thread.id, "!tool synthetic_hold {}");
+      await entered.promise;
+      let answers = 0,
+        sends = 0,
+        recalls = 0,
+        restoreReads = 0;
+      let deferRestoreRead = false;
+      let originalClient = "";
+      harness = await mountApp(
+        {
+          projects: [
+            {
+              key: f.directory,
+              workspace: f.directory,
+              configured: true,
+              isDefault: true,
+              threadIds: [thread.id],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: f.directory,
+        },
+        {
+          composerSendMode: "soft",
+          onStatus: (listener) => {
+            statusListener = listener;
+            return () => {
+              statusListener = undefined;
+            };
+          },
+          threads: (archived) => f.host.listThreadSummaries({ archived }),
+          plugins: {
+            get: async () => ({
+              ...workspaceLauncherSnapshot,
+              plugins: [],
+              panels: [],
+              information: [],
+              commands: [],
+            }),
+          },
+          onNotification: (listener) =>
+            f.onNotification((method, params) =>
+              listener(method as never, params as never),
+            ),
+          request: async (method, params) => {
+            const result = await f.request(method, params);
+            if (method === "zen/thread/questions/respond") {
+              answers++;
+              originalClient = (params as { clientUserMessageId: string })
+                .clientUserMessageId;
+            }
+            if (method === "zen/turn/send") sends++;
+            if (method === "zen/thread/steer/recall") recalls++;
+            if (method === "zen/thread/questions/read" && deferRestoreRead) {
+              restoreReads++;
+              await readGate.promise;
+            }
+            return result;
+          },
+        },
+      );
+      const composer = await selectedComposer();
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      const card = () =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${question.request.callItemId}"]`,
+        )!;
+      await waitFor(card);
+      await act(async () =>
+        card().querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+      );
+      await setTextareaValue(
+        card().querySelector<HTMLTextAreaElement>("textarea")!,
+        "Original question free text",
+      );
+      await invokeButtonClick(
+        card().querySelector<HTMLButtonElement>(".primary-button")!,
+      );
+      await waitFor(() => answers === 1);
+      await setTextareaValue(composer, "Original ordinary message");
+      await invokePrimarySubmit(
+        document.querySelector<HTMLButtonElement>(
+          ".composer-send-control > button.action-orb",
+        )!,
+      );
+      await waitFor(() => sends === 1);
+      await setTextareaValue(composer, "New ordinary draft");
+      const { pendingSteerMessages } =
+        await import("../../../src/steer-recall.js");
+      assert.equal(
+        pendingSteerMessages((await f.host.readThread(thread.id)).items).length,
+        2,
+      );
+      deferRestoreRead = outcome !== "restored";
+      const recall = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".pending-steer-heading button",
+        ),
+      );
+      await invokeButtonClick(recall, 2);
+      await waitFor(() => recalls === 1);
+      if (outcome === "disconnect" || outcome === "archive") {
+        await waitFor(() => restoreReads > 0);
+        if (outcome === "disconnect") {
+          await act(async () =>
+            statusListener?.({
+              type: "error",
+              message: "Synthetic disconnect during origin preflight",
+            }),
+          );
+        } else {
+          await act(async () => {
+            release.resolve();
+            await held!.done;
+            await f.host.setThreadArchived(thread.id, true);
+          });
+          await waitFor(
+            () =>
+              card()?.querySelector<HTMLButtonElement>(".primary-button")
+                ?.disabled,
+          );
+        }
+        await act(async () => readGate.resolve());
+        if (outcome === "disconnect")
+          await act(async () =>
+            statusListener?.({ type: "ready", reconnected: true }),
+          );
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "unwritable owner leaves the whole batch unapplied",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+      } else if (outcome === "navigation") {
+        await waitFor(() => restoreReads > 0);
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+        const newComposer = await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        );
+        await setTextareaValue(newComposer, "New navigation draft");
+        await act(async () => readGate.resolve());
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+        assert.equal(newComposer.value, "New navigation draft");
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              `[data-thread-id="${thread.id}"] .thread-row`,
+            )!
+            .click(),
+        );
+        const originalComposer = await waitFor(() => {
+          const input =
+            document.querySelector<HTMLTextAreaElement>("#thread-composer");
+          return input?.value === "New ordinary draft" ? input : null;
+        });
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          originalComposer.value,
+          "New ordinary draft",
+          "navigation blocks the whole original restoration",
+        );
+      } else if (outcome === "newer-question-draft") {
+        await waitFor(() => restoreReads > 0);
+        // The receipt is confirmed but one question-origin preflight is still pending.
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(
+          () =>
+            card()?.querySelector<HTMLFieldSetElement>("fieldset")?.disabled ===
+            false,
+        );
+        await setTextareaValue(
+          card().querySelector<HTMLTextAreaElement>("textarea")!,
+          "New question draft must win",
+        );
+        await act(async () => readGate.resolve());
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "no partial ordinary restoration",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "New question draft must win",
+        );
+      } else {
+        await waitFor(
+          () =>
+            composer.value ===
+            "Original ordinary message\n\nNew ordinary draft",
+        );
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(card);
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+        assert.equal(card().querySelectorAll("input:checked").length, 1);
+        assert.doesNotMatch(
+          composer.value,
+          /Reply to question|Original question free text/,
+        );
+      }
+      const current = await f.host.readThread(thread.id);
+      assert.equal(pendingSteerMessages(current.items).length, 0);
+      assert.equal(
+        current.items.filter(
+          (item) => item.type === "user_message_steer_recalled",
+        ).length,
+        1,
+      );
+      assert.equal(
+        (
+          await f.host.readUserQuestion(
+            thread.id,
+            question.request.callItemId,
+            originalClient,
+          )
+        ).response.status,
+        "withdrawn",
+      );
+      assert.equal(answers, 1, "restoration never sends an answer");
+      assert.equal(sends, 1, "restoration never sends an ordinary message");
+      assert.equal(
+        recalls,
+        1,
+        "mixed destinations use one atomic native recall",
+      );
+    } finally {
+      readGate.resolve();
+      release.resolve();
+      if (harness) await unmountApp(harness);
+      await held?.done.catch(() => undefined);
+      await f.close();
+    }
+  });
+}

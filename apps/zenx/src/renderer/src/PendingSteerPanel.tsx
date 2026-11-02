@@ -42,7 +42,7 @@ export interface PendingSteerPanelProps {
   pending: readonly PendingSteerInput[];
   runningTurnId: string | null;
   store?: SteerRecallStore;
-  onRestore?(result: RecoveredSteerRecall): boolean;
+  onRestore?(result: RecoveredSteerRecall): boolean | Promise<boolean>;
   onReadAttachment?(attachment: AttachmentRef): Promise<Uint8Array>;
 }
 
@@ -59,6 +59,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   const session = snapshot.sessions[props.threadId];
   const owner = useRef(Symbol("recall-view"));
   const mounted = useRef(false);
+  const restoring = useRef(new Set<string>());
   const latest = useRef(props);
   useLayoutEffect(() => {
     latest.current = props;
@@ -140,7 +141,38 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     (item) => queuedInputDraft(item.input, item.id, item.clientId) !== null,
   );
 
-  const finish = (attempt: RecallSession, result: RecoveredSteerRecall) => {
+  const restoreOrigins = async (
+    result: RecoveredSteerRecall,
+  ): Promise<boolean> => {
+    const id = result.receipt.id;
+    if (
+      !mounted.current ||
+      latest.current.threadId !== result.receipt.threadId ||
+      store.getSnapshot().applied.has(id) ||
+      restoring.current.has(id)
+    )
+      return false;
+    restoring.current.add(id);
+    try {
+      const restored = await latest.current.onRestore?.(result);
+      if (restored) store.applied(id);
+      return restored === true;
+    } catch {
+      if (
+        mounted.current &&
+        latest.current.threadId === result.receipt.threadId
+      )
+        setRestoreError(t("steerRecoveryBusy"));
+      return false;
+    } finally {
+      restoring.current.delete(id);
+    }
+  };
+
+  const finish = async (
+    attempt: RecallSession,
+    result: RecoveredSteerRecall,
+  ) => {
     const current = store.getSnapshot().sessions[attempt.request.threadId];
     if (current?.request.recallId !== attempt.request.recallId) return;
     store.set(attempt.request.threadId, {
@@ -150,13 +182,11 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       result,
     });
     if (
-      !store.getSnapshot().applied.has(result.receipt.id) &&
       mounted.current &&
       attempt.owner === owner.current &&
-      latest.current.threadId === attempt.request.threadId &&
-      latest.current.onRestore?.(result)
+      latest.current.threadId === attempt.request.threadId
     )
-      store.applied(result.receipt.id);
+      await restoreOrigins(result);
   };
 
   useEffect(() => {
@@ -169,7 +199,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     );
     if (recovered !== undefined) {
       const outcome = resolveRecallRead(current.request, props.items);
-      if (outcome.state === "recalled") finish(current, outcome.result);
+      if (outcome.state === "recalled") void finish(current, outcome.result);
     }
   }, [props.items, props.threadId, session?.phase, session?.request.recallId]);
 
@@ -191,7 +221,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
         attempt.request,
         recovered.thread.items,
       );
-      if (outcome.state === "recalled") finish(attempt, outcome.result);
+      if (outcome.state === "recalled") await finish(attempt, outcome.result);
       else
         store.set(attempt.request.threadId, {
           ...attempt,
@@ -250,7 +280,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       const reply = unwrapQueueMutationIpcReply(
         await window.zenx.protocol.request("zen/thread/steer/recall", request),
       );
-      finish(attempt, validateRecallReply(request, reply));
+      await finish(attempt, validateRecallReply(request, reply));
     } catch (error) {
       const current = store.getSnapshot().sessions[attempt.request.threadId];
       if (
@@ -292,15 +322,17 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     }
   };
 
-  const restore = (receipt: SteerRecalledItem) => {
+  const restore = async (receipt: SteerRecalledItem) => {
     if (store.getSnapshot().applied.has(receipt.id)) return;
     const result =
       session?.result?.receipt.id === receipt.id
         ? session.result
         : recoverSteerRecall(props.items, props.threadId, receipt.recallId);
     if (result === undefined || recalledDrafts(result) === null) return;
-    if (props.onRestore?.(result)) {
-      store.applied(receipt.id);
+    const restored = await restoreOrigins(result);
+    if (!mounted.current || latest.current.threadId !== receipt.threadId)
+      return;
+    if (restored) {
       setConfirm(null);
       setRestoreError(null);
     } else setRestoreError(t("steerRecoveryBusy"));
@@ -462,7 +494,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                   <p>{t("steerRecoveryConfirm")}</p>
                   <button
                     type="button"
-                    onClick={() => restore(receipt)}
+                    onClick={() => void restore(receipt)}
                     disabled={props.onRestore === undefined}
                   >
                     {t("steerRecoveryMerge")}

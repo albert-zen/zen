@@ -2092,26 +2092,65 @@ function AppContent() {
     return next;
   };
 
+  const recallOwnerWritable = useCommittedCallback(
+    (threadId: string) =>
+      page === "agent" &&
+      selectedThreadId === threadId &&
+      serverStatus.type === "ready" &&
+      selectedSummary?.archived !== true,
+  );
+
   const restoreRecalledInput = (
     threadId: string,
     result: RecoveredSteerRecall,
-  ): boolean => {
-    if (
-      result.receipt.threadId !== threadId ||
-      selectedThreadIdRef.current !== threadId ||
-      recallPageRef.current !== "agent" ||
-      archivingThreadIdsRef.current.has(threadId)
-    )
-      return false;
-    let restored = false;
-    updateComposer(threadId, (state) => {
-      const next = restoreRecalledComposer(state, result, () =>
-        crypto.randomUUID(),
-      );
-      restored = next !== state;
-      return next;
-    });
-    return restored;
+  ): boolean | Promise<boolean> => {
+    const epoch = selectionEpoch.current;
+    const currentOwner = () =>
+      result.receipt.threadId === threadId &&
+      recallOwnerWritable(threadId) &&
+      selectedThreadIdRef.current === threadId &&
+      selectionEpoch.current === epoch &&
+      recallPageRef.current === "agent" &&
+      !archivingThreadIdsRef.current.has(threadId) &&
+      !steerRecallStore.getSnapshot().applied.has(result.receipt.id);
+    if (!currentOwner()) return false;
+    const hasQuestions = result.messages.some(
+      (message) => message.questionReply !== undefined,
+    );
+    const hasOrdinary = result.messages.some(
+      (message) => message.questionReply === undefined,
+    );
+    const restoreComposer = () => {
+      if (!currentOwner()) return false;
+      if (!hasOrdinary) return true;
+      let restored = false;
+      updateComposer(threadId, (state) => {
+        const next = restoreRecalledComposer(state, result, () =>
+          crypto.randomUUID(),
+        );
+        restored = next !== state;
+        return next;
+      });
+      return restored;
+    };
+    if (!hasQuestions) {
+      const restored = restoreComposer();
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    }
+    // One native receipt, then all destination preflights. No UI insertion before
+    // exact withdrawn reads and the latest navigation/draft fences have passed.
+    return (async () => {
+      // Join the receipt's bounded attention refresh before capturing destinations;
+      // a later observation during exact preflight must still fail the whole batch.
+      await userQuestionStore.refresh(threadId);
+      if (!currentOwner()) return false;
+      const plan = await userQuestionStore.prepareRecall(result);
+      if (!plan || !currentOwner()) return false;
+      const restored = userQuestionStore.commitRecall(plan, restoreComposer);
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    })();
   };
 
   const updateNewThreadComposer = (
@@ -5229,7 +5268,10 @@ function AgentSurface({
   onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   steerRecallStore: SteerRecallStore;
-  onRestoreRecalled(threadId: string, result: RecoveredSteerRecall): boolean;
+  onRestoreRecalled(
+    threadId: string,
+    result: RecoveredSteerRecall,
+  ): boolean | Promise<boolean>;
   queueEditStore: QueueEditStore;
   onOpenMessageLink(
     threadId: string,

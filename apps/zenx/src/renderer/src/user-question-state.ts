@@ -1,3 +1,4 @@
+import type { RecoveredSteerRecall } from "../../../../../src/steer-recall.js";
 import type {
   NativeQuestionListParams,
   NativeQuestionListResult,
@@ -58,6 +59,17 @@ export interface QuestionAttention {
   loaded: boolean;
   loading: boolean;
   error?: string;
+}
+export interface QuestionRecallPlan {
+  threadId: string;
+  generation: number;
+  entries: {
+    id: string;
+    previousQuestion?: UserQuestionState;
+    previousDraft?: QuestionDraft;
+    previousAttempt?: QuestionAttempt;
+    view: QuestionView;
+  }[];
 }
 const empty: QuestionAttention = {
   cards: {},
@@ -351,6 +363,156 @@ export function createUserQuestionStore(
           detail: localErrorDetail(error),
         });
       }
+    },
+    async prepareRecall(
+      result: RecoveredSteerRecall,
+    ): Promise<QuestionRecallPlan | null> {
+      const threadId = result.receipt.threadId;
+      const generation = versions.get(threadId) ?? 0;
+      const messages = result.messages.filter(
+        (message) => message.questionReply !== undefined,
+      );
+      const seen = new Set<string>();
+      const captured = messages.map((message) => {
+        const reply = message.questionReply!;
+        const id = reply.request.callItemId;
+        const current = get(threadId).cards[id];
+        return { message, reply, id, current };
+      });
+      if (
+        captured.some(({ reply, id }) => {
+          if (reply.request.threadId !== threadId || seen.has(id)) return true;
+          seen.add(id);
+          return false;
+        })
+      )
+        return null;
+      try {
+        const entries = await Promise.all(
+          captured.map(async ({ message, reply, id, current }) => {
+            const read = unwrapQuestionIpcReply(
+              await transport.read({
+                threadId,
+                questionCallItemId: id,
+                clientUserMessageId: message.clientId,
+              }),
+            );
+            if (
+              !read.question ||
+              read.question.request.threadId !== threadId ||
+              read.question.request.callItemId !== id ||
+              read.question.state !== "open" ||
+              read.response.clientId !== message.clientId ||
+              read.response.status !== "withdrawn"
+            )
+              return null;
+            const normalized = normalizeUserQuestionReply(
+              read.question.specification,
+              reply,
+            );
+            if (
+              JSON.stringify(read.response.reply) !== JSON.stringify(normalized)
+            )
+              return null;
+            if (
+              current &&
+              questionBusy(current) &&
+              current.attempt!.request.clientUserMessageId !== message.clientId
+            )
+              return null;
+            let draft = current?.draft ?? blankDraft(read.question);
+            if (normalized.outcome === "answer") {
+              const nonempty = draft.answers.some(
+                (answer) => answer.optionIds.length > 0 || Boolean(answer.text),
+              );
+              if (nonempty) {
+                try {
+                  const existing = normalizeUserQuestionReply(
+                    read.question.specification,
+                    {
+                      version: 1,
+                      request: reply.request,
+                      outcome: "answer",
+                      answers: draft.answers,
+                    },
+                  );
+                  if (JSON.stringify(existing) !== JSON.stringify(normalized))
+                    return null;
+                } catch {
+                  return null;
+                }
+              }
+              draft = {
+                revision: draft.revision + 1,
+                answers: normalized.answers,
+              };
+            }
+            // Cancellation has no answer payload: keep the local pre-cancel draft,
+            // or an honestly blank draft after reload, never invent selections.
+            const attempt = current?.attempt;
+            return {
+              id,
+              previousQuestion: current?.question,
+              previousDraft: current?.draft,
+              previousAttempt: attempt,
+              view: {
+                question: read.question,
+                draft,
+                ...(attempt
+                  ? {
+                      attempt:
+                        attempt.request.clientUserMessageId === message.clientId
+                          ? {
+                              ...attempt,
+                              observation: attempt.observation + 1,
+                              phase: "withdrawn" as const,
+                              error: undefined,
+                              detail: undefined,
+                            }
+                          : attempt,
+                    }
+                  : {}),
+              },
+            };
+          }),
+        );
+        if (entries.some((entry) => entry === null)) return null;
+        return {
+          threadId,
+          generation,
+          entries: entries.filter(
+            (entry): entry is NonNullable<typeof entry> => entry !== null,
+          ),
+        };
+      } catch {
+        return null;
+      }
+    },
+    commitRecall(
+      plan: QuestionRecallPlan,
+      commitOtherOrigins: () => boolean,
+    ): boolean {
+      const state = get(plan.threadId);
+      if ((versions.get(plan.threadId) ?? 0) !== plan.generation) return false;
+      if (
+        plan.entries.some(
+          (entry) =>
+            state.cards[entry.id]?.question !== entry.previousQuestion ||
+            state.cards[entry.id]?.draft !== entry.previousDraft ||
+            state.cards[entry.id]?.attempt !== entry.previousAttempt,
+        )
+      )
+        return false;
+      const cards = { ...state.cards },
+        ids = [...state.ids];
+      for (const entry of plan.entries) {
+        cards[entry.id] = entry.view;
+        if (!ids.includes(entry.id)) ids.push(entry.id);
+      }
+      // Every destination has passed preflight; no asynchronous work between commits.
+      if (!commitOtherOrigins()) return false;
+      publish(plan.threadId, { ...state, cards, ids });
+      return true;
     },
     async check(threadId: string, id: string) {
       const previous = get(threadId).cards[id]?.attempt;
