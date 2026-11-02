@@ -865,7 +865,16 @@ function ThreadViewContent({
           composerTextareaRef.current?.selectionEnd ?? skillDraft.text.length,
       },
     };
-  const lastCanonicalTurnEnd = latestTurnEnd(thread?.canonicalItems ?? []);
+  // Composer-only updates retain these immutable projection arrays. Recompute
+  // on native append/recovery, not on every keystroke or admission ACK.
+  const lastCanonicalTurnEnd = useMemo(
+    () => latestTurnEnd(thread?.canonicalItems ?? []),
+    [thread?.canonicalItems],
+  );
+  const runningTurn = useMemo(
+    () => (thread === null ? null : activeTurn(thread)),
+    [thread?.id, thread?.turns],
+  );
   const readMessageOrder = useMemo(
     () =>
       thread?.canonicalItems?.flatMap((item) =>
@@ -873,28 +882,32 @@ function ThreadViewContent({
       ),
     [thread?.canonicalItems],
   );
+  const readMessage = useMemo(
+    () =>
+      lastCanonicalTurnEnd === undefined
+        ? undefined
+        : {
+            id: lastCanonicalTurnEnd.id,
+            createdAt: Date.parse(lastCanonicalTurnEnd.createdAt),
+            position: turnEndPosition(
+              thread!.canonicalItems!,
+              lastCanonicalTurnEnd,
+            ),
+          },
+    [thread?.canonicalItems, lastCanonicalTurnEnd],
+  );
   useReadVisibleMessage({
     scope: "threads",
     conversationId: thread?.id,
-    message: lastCanonicalTurnEnd
-      ? {
-          id: lastCanonicalTurnEnd.id,
-          createdAt: Date.parse(lastCanonicalTurnEnd.createdAt),
-          position: turnEndPosition(
-            thread!.canonicalItems!,
-            lastCanonicalTurnEnd,
-          ),
-        }
-      : undefined,
+    message: readMessage,
     messageOrder: readMessageOrder,
     viewport: scrollRef,
     occluder: bottomZoneRef,
     enabled:
       thread?.status.type !== "active" &&
-      !thread?.turns.some((turn) => turn.status === "inProgress") &&
+      runningTurn === null &&
       thread?.turns.at(-1)?.id === lastCanonicalTurnEnd?.turnId,
   });
-  const runningTurn = thread === null ? null : activeTurn(thread);
   const runKey =
     thread && runningTurn ? JSON.stringify([thread.id, runningTurn.id]) : null;
   activeRunRef.current = runKey;
