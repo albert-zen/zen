@@ -1718,12 +1718,27 @@ Source baseline: [ordinary steer](https://github.com/albert-zen/zen/blob/6aa0a50
 [queued cancellation](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740),
 [existing draft codec](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-draft.ts).
 
-### Foundation checkpoint: recall control projection only
+### Backend draft checkpoint: native human staging and atomic recall
 
-The pending-steer foundation adds strict staged-input and atomic recall control
-schemas plus disposable projections that recover exact pre-recall content from
-existing immutable facts. Neither fact emits model-semantic ItemList content.
-This checkpoint does not enable staged admission, expose a recall endpoint,
-schedule held input, or change normal send behavior. The full proposal above
-remains unimplemented until claim, successor admission, protocol authority and
-race tests are integrated and independently accepted.
+This draft connects native human ingress with a stable client ID to Core-owned
+stageSteerMessage (or sendMessage with recallableSteer), and adds the native
+zen/thread/steer/recall command. Both omitted-mode native sends and explicit
+native steer use that staged path, including while initial admission is waiting.
+Legacy Core/CAS steerTurn retains its immediate model-semantic compatibility
+behavior and is not recallable. No adapter owns a parallel queue or compiler.
+
+Exact pending revisions are claimed under the existing Thread mutation fence at
+sample preparation. Normal final completion with pending bound steer continues
+the same Turn. Stop/error/crash leaves held inputs unscheduled; existing
+next-Turn queue selection excludes them. An independently authorized successor
+claims its held snapshot before its first fresh input; a recall can win until
+that fenced claim. Existing original inputs/edits plus one atomic control receipt
+provide recovery through zen/thread/read; no dedicated recovery endpoint or
+persistent Composer store is added. Receipt IDs fence explicit duplicate writes,
+but clients must read after unknown transport outcomes rather than replay.
+
+This checkpoint is backend-only and unaccepted until native tests and independent
+review pass. The UI proposal above remains an Experiment: no recall button,
+Composer restoration, full-App E2E, installed-build acceptance or completed
+feature is claimed. Native RPC is available only through the existing initialized
+Host boundary; no new remote-tools/Room/cross-author mutation surface is added.

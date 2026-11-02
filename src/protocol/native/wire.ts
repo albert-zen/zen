@@ -112,6 +112,12 @@ export interface NativeQueueEditParams {
 export type NativeQueueEditResult =
   import("../../app-server.js").QueuedEditResult;
 
+export const NATIVE_STEER_RECALL_METHOD = "zen/thread/steer/recall";
+export type NativeSteerRecallParams =
+  import("../../app-server.js").SteerRecallRequest & { threadId: string };
+export type NativeSteerRecallResult =
+  import("../../app-server.js").SteerRecallResult;
+
 export const NATIVE_QUEUE_CANCEL_METHOD = "zen/thread/queue/cancel";
 export const NATIVE_THREAD_RESUME_METHOD = "zen/thread/resume";
 export const NATIVE_THREAD_EVENT_METHOD = "zen/thread/event";

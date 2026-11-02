@@ -92,3 +92,13 @@ export function recoverSteerRecall(
     return undefined;
   return { receipt, messages };
 }
+
+/** Held steer never schedules work or blocks the explicit next-Turn queue. */
+export function pendingNextTurnMessages(
+  items: readonly CanonicalItem[],
+): PendingQueuedInput[] {
+  return pendingQueuedMessages(items).filter(
+    (item) =>
+      item.type !== "user_message_queued" || item.deliveryMode !== "steer",
+  );
+}

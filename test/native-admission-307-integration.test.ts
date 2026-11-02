@@ -257,7 +257,8 @@ test("combined native omitted-mode image start and soft steer coexist with expli
       ),
     );
     assert.equal(steered.turnId, started.turnId);
-    assert.equal(steered.admission, undefined);
+    assert.equal(steered.admission?.state, "queued");
+    assert(steered.admission?.queuedItemId);
     const params = {
       threadId: target.id,
       clientUserMessageId: "queue-image",
@@ -277,7 +278,7 @@ test("combined native omitted-mode image start and soft steer coexist with expli
     const busy = await f.server.readThread(target.id);
     assert.equal(
       busy.items.filter((item) => item.type === "user_message").length,
-      2,
+      1,
     );
     assert.equal(
       busy.items.some((item) => item.type === "turn_aborted"),
@@ -285,7 +286,7 @@ test("combined native omitted-mode image start and soft steer coexist with expli
     );
     assert.equal(
       busy.items.filter((item) => item.type === "user_message_queued").length,
-      1,
+      2,
     );
     release.resolve();
     await bounded(done.promise);

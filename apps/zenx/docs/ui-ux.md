@@ -1021,3 +1021,7 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 - [T3 Code 待处理消息 UI](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/MessagesTimeline.tsx#L1780-L1870)
   区分 queued / sending，提供 “Cancel and return to the composer”。仅借鉴状态与
   操作文案，不以此证明它或本提案具有原子批次、跨窗口恢复或后端竞态安全。
+
+本提案的初期后端草稿只将有稳定 client ID 的 native 人类普通发送及显式 steer
+接到 Core staged admission。旧 Core/CAS steerTurn 保留立即模型语义兼容行为，
+不显示可撤回承诺。后端草稿及其单测不代表输入框恢复、完整 App 或安装版本已验收。
