@@ -3262,7 +3262,13 @@ test("late canonical queue ID settles only the original unknown submission, not 
     );
     await waitFor(() => sends.length === 2);
     assert.notEqual(sends[1]!.clientUserMessageId, clientId);
-    await waitFor(() => document.querySelector(".composer-error"));
+    const newClientId = sends[1]!.clientUserMessageId;
+    const pending = await waitFor(() =>
+      document.querySelector(`[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`),
+    );
+    assert.match(pending.textContent ?? "", /new draft after reconnect/u);
+    assert.equal(composer.value, "");
+    await setTextareaValue(composer, "Even newer local draft");
     await act(async () =>
       notify?.("zen/thread/event", {
         threadId: "thread-1",
@@ -3282,7 +3288,8 @@ test("late canonical queue ID settles only the original unknown submission, not 
         },
       }),
     );
-    assert.equal(composer.value, "new draft after reconnect");
+    assert.equal(composer.value, "Even newer local draft");
+    assert.ok(document.querySelector(`[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`));
     assert.match(document.body.textContent ?? "", /outcome unknown/u);
     assert.equal(sends.length, 2);
   } finally {
@@ -3290,7 +3297,7 @@ test("late canonical queue ID settles only the original unknown submission, not 
   }
 });
 
-test("failed Send preserves its draft and stable id for a deliberate retry", async () => {
+test("unconfirmed Send keeps a recoverable row and requires explicit recovery before same-id retry", async () => {
   const turnStartRequests: Array<{
     clientUserMessageId?: string;
   }> = [];
@@ -3319,6 +3326,15 @@ test("failed Send preserves its draft and stable id for a deliberate retry", asy
       await Promise.resolve();
     });
     await waitFor(() => (document.body.textContent ?? "").includes("offline"));
+    assert.equal(composer.value, "");
+    const pending = document.querySelector('[data-send-state="unconfirmed"]');
+    assert.ok(pending);
+    assert.match(pending.textContent ?? "", /Retry this message/u);
+    assert.equal(turnStartRequests.length, 1, "unknown outcomes never automatically resend");
+    const recover = [...pending.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Add back to draft");
+    assert.ok(recover);
+    await invokeButtonClick(recover);
     assert.equal(composer.value, "Retry this message");
 
     await act(async () => {
@@ -7474,14 +7490,20 @@ for (const scenario of ["idle", "steer", "new"] as const) {
       const dispatchedBeforeTitle = sendTimes.length === 1;
       assert.equal(
         composer.value,
-        "Synthetic delayed title send",
-        "unconfirmed input stays recoverable",
+        scenario === "idle" ? "" : "Synthetic delayed title send",
+        "ordinary input moves to honest Sending; legacy new/queue flows retain the editor",
       );
       assert.equal(
-        document.querySelectorAll(".user-row").length,
+        document.querySelectorAll(".user-row[data-sent-message-id]").length,
         0,
         "no invented accepted bubble",
       );
+      if (scenario === "idle") {
+        const pending = document.querySelector('[data-send-state="sending"]');
+        assert.ok(pending);
+        assert.match(pending.textContent ?? "", /Synthetic delayed title send/u);
+        assert.equal(pending.hasAttribute("data-sent-message-id"), false);
+      }
       await act(async () => title.resolve(undefined));
       await waitFor(() => sendTimes.length === 1);
       t.diagnostic(
@@ -7499,8 +7521,13 @@ for (const scenario of ["idle", "steer", "new"] as const) {
       );
       assert.equal(
         document.querySelector<HTMLTextAreaElement>("#thread-composer")?.value,
-        "Synthetic delayed title send",
+        scenario === "idle" ? "" : "Synthetic delayed title send",
       );
+      if (scenario === "idle") {
+        const pending = document.querySelector('[data-send-state="unconfirmed"]');
+        assert.ok(pending);
+        assert.match(pending.textContent ?? "", /Synthetic delayed title send/u);
+      }
       assert.match(
         document.body.textContent ?? "",
         /Synthetic admission rejected/u,
@@ -7518,7 +7545,7 @@ for (const scenario of ["idle", "steer", "new"] as const) {
   });
 }
 
-test("send presentation clears only the matching admitted draft and shows its bubble before elapsed work while title and reply are delayed", async (t) => {
+test("send presentation shows honest pending before admission and canonical identity replaces it without clearing newer drafts", async (t) => {
   const title = deferred<undefined>();
   const admission = deferred<unknown>();
   let notify:
@@ -7580,9 +7607,12 @@ test("send presentation clears only the matching admitted draft and shows its bu
       threadId: "thread-1",
     });
     await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
-    assert.equal(document.querySelectorAll(".user-row").length, 0);
+    assert.equal(document.querySelectorAll(".user-row[data-sent-message-id]").length, 0);
+    const pending = document.querySelector(`[data-pending-send-client-id="${clientId}"][data-send-state="sending"]`);
+    assert.ok(pending);
+    assert.match(pending.textContent ?? "", /Synthetic canonically admitted message/u);
     assert.equal(document.querySelectorAll(".turn-duration").length, 0);
-    assert.equal(composer.value, "Synthetic canonically admitted message");
+    assert.equal(composer.value, "");
     const committedAt = performance.now();
     await emit({
       type: "item_completed",
@@ -7596,7 +7626,8 @@ test("send presentation clears only the matching admitted draft and shows its bu
         text: "Synthetic canonically admitted message",
       },
     });
-    const bubble = document.querySelector(".user-row");
+    const bubble = document.querySelector('.user-row[data-sent-message-id="admitted-user"]');
+    assert.equal(document.querySelector(`[data-pending-send-client-id="${clientId}"]`), null);
     assert.ok(bubble);
     assert.match(
       bubble.textContent ?? "",
@@ -7605,7 +7636,7 @@ test("send presentation clears only the matching admitted draft and shows its bu
     assert.equal(
       composer.value,
       "",
-      "canonical admission clears the exact draft without waiting for the RPC reply or title",
+      "canonical admission does not resurrect the already-cleared pending draft",
     );
     assert.equal(document.querySelectorAll(".turn-duration").length, 1);
     const turn = bubble.closest(".turn")!;
