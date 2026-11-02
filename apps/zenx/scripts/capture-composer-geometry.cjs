@@ -372,7 +372,7 @@ async function exerciseComposerGeometry(){
   const cleared=await measureComposer("narrow-cleared");
   assert.ok(Math.abs(cleared.height-narrowEmpty.height)<=1,"Multiline-to-empty returns to measured CSS baseline");
   assert.equal(cleared.overflowY,"hidden");
-  await click("document.querySelector('#thread-browser-toggle:not(:disabled)')","Geometry close actual right workspace");
+  await click("document.querySelector('.auxiliary-panel .auxiliary-close-button:not(:disabled)')","Geometry close actual right workspace");
   await until(async()=>await evaluate("document.querySelector('.auxiliary-panel')?.dataset.open !== 'true'"),"real right workspace closed");
   window.setSize(1280,820);await pause(250);
 }
