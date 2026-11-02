@@ -218,7 +218,12 @@ export function beginImmediateComposerSubmission(
   timezone: () => string | undefined = clientTimeZone,
 ): ComposerState {
   const next = beginComposerSubmission(
-    state, intent, expectedTurnId, createId, clientObservation, timezone,
+    state,
+    intent,
+    expectedTurnId,
+    createId,
+    clientObservation,
+    timezone,
   );
   if (next === state || next.submission === null) return next;
   const submission = next.submission;
@@ -253,7 +258,8 @@ function reconcilePendingSendPresentations(
     if (
       (item.type === "user_message" || item.type === "user_message_queued") &&
       item.clientId !== undefined
-    ) admitted.add(item.clientId);
+    )
+      admitted.add(item.clientId);
   }
   const pendingSends = state.pendingSends.filter(
     (entry) => !admitted.has(entry.clientId),
@@ -267,9 +273,16 @@ function reconcilePendingSendPresentations(
 function mergeRecoveredDraftText(newer: string, recovered: string): string {
   const newerDraft = parseSkillDraft(newer);
   const recoveredDraft = parseSkillDraft(recovered);
-  const first = normalizeInlineReferences(newerDraft.text, newerDraft.references);
-  const second = normalizeInlineReferences(recoveredDraft.text, recoveredDraft.references);
-  const separator = first.text.length > 0 && second.text.length > 0 ? "\n\n" : "";
+  const first = normalizeInlineReferences(
+    newerDraft.text,
+    newerDraft.references,
+  );
+  const second = normalizeInlineReferences(
+    recoveredDraft.text,
+    recoveredDraft.references,
+  );
+  const separator =
+    first.text.length > 0 && second.text.length > 0 ? "\n\n" : "";
   const offset = first.text.length + separator.length;
   return withSkillDraft(
     first.text + separator + second.text,
@@ -294,11 +307,13 @@ export function recoverPendingSend(
     entry === undefined ||
     entry.recovered ||
     (entry.status !== "unconfirmed" && entry.status !== "notSent")
-  ) return state;
+  )
+    return state;
   const empty = !composerDraftHasContent(state.draft);
   const images = [...state.draft.images];
   for (const image of entry.draft.images) {
-    if (!images.some((existing) => existing.id === image.id)) images.push(image);
+    if (!images.some((existing) => existing.id === image.id))
+      images.push(image);
   }
   const draft = empty
     ? cloneDraft(entry.draft)
@@ -331,7 +346,9 @@ export function dismissPendingSend(
   if (entry === undefined || !entry.recovered) return state;
   return {
     ...state,
-    pendingSends: state.pendingSends!.filter((item) => item.clientId !== clientId),
+    pendingSends: state.pendingSends!.filter(
+      (item) => item.clientId !== clientId,
+    ),
   };
 }
 
@@ -343,7 +360,8 @@ export function failImmediateComposerSubmission(
   dispatched: boolean,
 ): ComposerState {
   const entry = state.pendingSends?.find((item) => item.clientId === clientId);
-  if (entry === undefined) return failComposerSubmission(state, clientId, error);
+  if (entry === undefined)
+    return failComposerSubmission(state, clientId, error);
   const failed = failComposerSubmission(state, clientId, error);
   const next: ComposerState = {
     ...failed,
@@ -359,7 +377,8 @@ export function failImmediateComposerSubmission(
     !composerDraftHasContent(next.draft) &&
     next.submission?.clientUserMessageId === clientId &&
     next.draftRevision === next.submission.draftRevision + 1
-  ) return recoverPendingSend(next, clientId);
+  )
+    return recoverPendingSend(next, clientId);
   return next;
 }
 
@@ -485,13 +504,15 @@ export function acceptComposerSubmission(
     ...(state.compactionObservation === undefined
       ? {}
       : { compactionObservation: state.compactionObservation }),
-    ...(state.pendingSends === undefined ? {} : {
-      pendingSends: state.pendingSends.map((entry) =>
-        entry.clientId === clientUserMessageId
-          ? { ...entry, status: "admitted" as const, error: null }
-          : entry,
-      ),
-    }),
+    ...(state.pendingSends === undefined
+      ? {}
+      : {
+          pendingSends: state.pendingSends.map((entry) =>
+            entry.clientId === clientUserMessageId
+              ? { ...entry, status: "admitted" as const, error: null }
+              : entry,
+          ),
+        }),
     draftRevision: state.draftRevision,
     draft: canClearSubmittedDraft(state, submission)
       ? { text: "", images: [] }

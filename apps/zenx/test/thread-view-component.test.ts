@@ -5032,26 +5032,47 @@ test("long-history composer renders do not scan canonical history once per turn"
 
 test("ordinary send shows an honest local row and clears input before admission settles", async () => {
   await withDom(async (root) => {
-    let composer = editComposer(emptyComposerState(), "Immediate synthetic message");
+    let composer = editComposer(
+      emptyComposerState(),
+      "Immediate synthetic message",
+    );
     let sends = 0;
     let settle!: () => void;
-    const receipt = new Promise<void>((resolve) => { settle = resolve; });
-    const view = { ...thread([]), status: { type: "idle" as const }, canonicalItems: [] };
-    const renderView = () => root.render(
-      createElement(ThreadView, {
-        thread: view, approvals: [], composer,
-        onDraftChange: (text) => { composer = editComposer(composer, text); renderView(); },
-        onInterrupt: noop, onRespondToApproval: noop,
-        onSubmit: async (intent, expectedTurnId) => {
-          sends++;
-          composer = beginImmediateComposerSubmission(composer, intent, expectedTurnId, () => "local-client");
-          renderView();
-          await receipt;
-          composer = acceptComposerSubmission(composer, "local-client");
-          renderView();
-        },
-      }),
-    );
+    const receipt = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const view = {
+      ...thread([]),
+      status: { type: "idle" as const },
+      canonicalItems: [],
+    };
+    const renderView = () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: view,
+          approvals: [],
+          composer,
+          onDraftChange: (text) => {
+            composer = editComposer(composer, text);
+            renderView();
+          },
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: async (intent, expectedTurnId) => {
+            sends++;
+            composer = beginImmediateComposerSubmission(
+              composer,
+              intent,
+              expectedTurnId,
+              () => "local-client",
+            );
+            renderView();
+            await receipt;
+            composer = acceptComposerSubmission(composer, "local-client");
+            renderView();
+          },
+        }),
+      );
     await act(async () => renderView());
     await act(async () => requiredButton('[aria-label="Send"]').click());
     const row = requiredElement('[data-pending-send-client-id="local-client"]');
@@ -5063,10 +5084,24 @@ test("ordinary send shows an honest local row and clears input before admission 
     assert.equal(sends, 1);
     composer = editComposer(composer, "Newer draft");
     await act(async () => renderView());
-    assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "Newer draft");
-    await act(async () => { settle(); await receipt; });
-    assert.equal(requiredElement('[data-pending-send-client-id="local-client"]').getAttribute("data-send-state"), "admitted");
-    assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "Newer draft");
+    assert.equal(
+      requiredElement<HTMLTextAreaElement>("textarea").value,
+      "Newer draft",
+    );
+    await act(async () => {
+      settle();
+      await receipt;
+    });
+    assert.equal(
+      requiredElement(
+        '[data-pending-send-client-id="local-client"]',
+      ).getAttribute("data-send-state"),
+      "admitted",
+    );
+    assert.equal(
+      requiredElement<HTMLTextAreaElement>("textarea").value,
+      "Newer draft",
+    );
     assert.equal(sends, 1);
   });
 });
@@ -5074,35 +5109,53 @@ test("ordinary send shows an honest local row and clears input before admission 
 test("checking an old thread cannot disable or report a delivery error in the new thread", async () => {
   await withDom(async (root) => {
     let rejectOld!: (error: Error) => void;
-    const oldRead = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
-    const pending = (id: string) => failImmediateComposerSubmission(
-      beginImmediateComposerSubmission(editComposer(emptyComposerState(), id), "start", null, () => id),
-      id, "Unknown original receipt", true,
-    );
-    const renderView = (id: string) => root.render(
-      createElement(ThreadView, {
-        thread: { ...thread([]), id },
-        composer: pending(id),
-        approvals: [],
-        onDraftChange: () => undefined,
-        onInterrupt: noop,
-        onRespondToApproval: noop,
-        onSubmit: noop,
-        onCheckPendingSends: () => id === "thread-a" ? oldRead : Promise.resolve(),
-      }),
-    );
+    const oldRead = new Promise<void>((_resolve, reject) => {
+      rejectOld = reject;
+    });
+    const pending = (id: string) =>
+      failImmediateComposerSubmission(
+        beginImmediateComposerSubmission(
+          editComposer(emptyComposerState(), id),
+          "start",
+          null,
+          () => id,
+        ),
+        id,
+        "Unknown original receipt",
+        true,
+      );
+    const renderView = (id: string) =>
+      root.render(
+        createElement(ThreadView, {
+          thread: { ...thread([]), id },
+          composer: pending(id),
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+          onCheckPendingSends: () =>
+            id === "thread-a" ? oldRead : Promise.resolve(),
+        }),
+      );
     await act(async () => renderView("thread-a"));
-    const checkButton = () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Check delivery",
-    )!;
+    const checkButton = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Check delivery",
+      )!;
     await act(async () => checkButton().click());
     assert.equal(checkButton().disabled, true);
     await act(async () => renderView("thread-b"));
     assert.equal(checkButton().disabled, false);
-    await act(async () => { rejectOld(new Error("Old A read failed")); await oldRead.catch(() => undefined); });
+    await act(async () => {
+      rejectOld(new Error("Old A read failed"));
+      await oldRead.catch(() => undefined);
+    });
     assert.equal(checkButton().disabled, false);
     assert.doesNotMatch(document.body.textContent ?? "", /Old A read failed/);
-    assert.ok(document.querySelector('[data-pending-send-client-id="thread-b"]'));
+    assert.ok(
+      document.querySelector('[data-pending-send-client-id="thread-b"]'),
+    );
   });
 });
 
@@ -5110,44 +5163,70 @@ test("stable App transcript props avoid visiting all turn IDs for composer-only 
   const count = 160;
   let idReads = 0;
   const turns = Array.from({ length: count }, (_, i) => ({
-    ...turnWithItems("completed", [user(`Question ${i}`, `user-${i}`), agent(`Answer ${i}`)]),
-    get id() { idReads++; return `memo-turn-${i}`; },
+    ...turnWithItems("completed", [
+      user(`Question ${i}`, `user-${i}`),
+      agent(`Answer ${i}`),
+    ]),
+    get id() {
+      idReads++;
+      return `memo-turn-${i}`;
+    },
   }));
   const view = { ...thread(turns), canonicalItems: [] };
   const approvals: ApprovalCardState[] = [];
   await withDom(async (root) => {
-    const renderView = (text: string) => root.render(
-      createElement(ThreadView, {
-        thread: view, approvals, composer: editComposer(emptyComposerState(), text),
-        onDraftChange: () => undefined, onInterrupt: noop,
-        onRespondToApproval: noop, onSubmit: noop,
-      }),
-    );
+    const renderView = (text: string) =>
+      root.render(
+        createElement(ThreadView, {
+          thread: view,
+          approvals,
+          composer: editComposer(emptyComposerState(), text),
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      );
     await act(async () => renderView(""));
     idReads = 0;
     await act(async () => renderView("Typing is not a history update"));
-    assert.ok(idReads < count, `Composer-only render revisited ${idReads} turn IDs`);
+    assert.ok(
+      idReads < count,
+      `Composer-only render revisited ${idReads} turn IDs`,
+    );
     assert.equal(document.querySelectorAll(".turn").length, count);
   });
 });
 
 test("local sending presentation hides draft framing but keeps readable skill and reference names", async () => {
-  const { PendingSendRows } = await import("../src/renderer/src/PendingSendRows.js");
+  const { PendingSendRows } =
+    await import("../src/renderer/src/PendingSendRows.js");
   const { withSkillDraft } = await import("../src/renderer/src/skill-draft.js");
   const raw = withSkillDraft(
     "Use this file",
     [{ id: "11111111-1111-1111-1111-111111111111", name: "synthetic_skill" }],
-    [{ kind: "file", name: "example.ts", cwd: "/synthetic", path: "example.ts" }],
+    [
+      {
+        kind: "file",
+        name: "example.ts",
+        cwd: "/synthetic",
+        path: "example.ts",
+      },
+    ],
   );
-  const html = renderToStaticMarkup(createElement(PendingSendRows, {
-    messages: [{
-      clientId: "presentation-only",
-      intent: "start",
-      draft: { text: raw, images: [] },
-      status: "sending",
-      error: null,
-    }],
-  }));
+  const html = renderToStaticMarkup(
+    createElement(PendingSendRows, {
+      messages: [
+        {
+          clientId: "presentation-only",
+          intent: "start",
+          draft: { text: raw, images: [] },
+          status: "sending",
+          error: null,
+        },
+      ],
+    }),
+  );
   assert.match(html, /Use this file/);
   assert.match(html, /synthetic_skill/);
   assert.match(html, /example.ts/);

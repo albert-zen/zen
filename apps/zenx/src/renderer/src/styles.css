@@ -12160,7 +12160,19 @@ button:disabled {
 }
 
 /* Local Send feedback is not a canonical message or delivery receipt. */
-.pending-send-content { white-space: pre-wrap; overflow-wrap: anywhere; }
-.pending-send-status { font-size: var(--font-size-caption); color: var(--color-text-muted); }
-.pending-send-recovery { max-width: 100%; font-size: var(--font-size-caption); }
-.pending-send-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pending-send-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pending-send-status {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+}
+.pending-send-recovery {
+  max-width: 100%;
+  font-size: var(--font-size-caption);
+}
+.pending-send-recovery pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

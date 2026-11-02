@@ -1371,58 +1371,60 @@ function ThreadViewContent({
 
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
-    () => transcriptRows.map((row) =>
-                    row.type === "turn" ? (
-                      <TurnBlock
-                        index={row.index}
-                        key={JSON.stringify([thread?.id, row.turn.id])}
-                        turn={row.turn}
-                        compactionPending={
-                          row.turn.id === runningTurn?.id &&
-                          composer.compaction?.status === "pending"
-                        }
-                        contextPreview={
-                          thread === null && contextPreview !== undefined
-                        }
-                        endItemId={
-                          lastCanonicalTurnEnd?.turnId === row.turn.id
-                            ? lastCanonicalTurnEnd.id
-                            : undefined
-                        }
-                        stopping={
-                          interrupting && row.turn.id === runningTurn?.id
-                        }
-                        approvals={
-                          approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS
-                        }
-                        confirmedStopped={turnOutcomeItems.abortedTurnIds.has(
-                          row.turn.id,
-                        )}
-                        failureDetail={
-                          turnOutcomeItems.latestFailureByTurn.get(
-                            row.turn.id,
-                          ) ?? null
-                        }
-                        usage={threadUsage?.turns[row.turn.id]}
-                        wakeups={wakeups}
-                        attachments={threadAttachments}
-                        onOpenImage={onOpenImage}
-                        onReadAttachment={onReadAttachment}
-                        pluginSnapshot={pluginSnapshot}
-                        pluginUiRegistry={pluginUiRegistry}
-                      />
-                    ) : (
-                      <ContextCompactionEvent
-                        key={row.compaction.item.id}
-                        projection={row.compaction}
-                      />
-                    ),
-                  ),
+    () =>
+      transcriptRows.map((row) =>
+        row.type === "turn" ? (
+          <TurnBlock
+            index={row.index}
+            key={JSON.stringify([thread?.id, row.turn.id])}
+            turn={row.turn}
+            compactionPending={
+              row.turn.id === runningTurn?.id &&
+              composer.compaction?.status === "pending"
+            }
+            contextPreview={thread === null && contextPreview !== undefined}
+            endItemId={
+              lastCanonicalTurnEnd?.turnId === row.turn.id
+                ? lastCanonicalTurnEnd.id
+                : undefined
+            }
+            stopping={interrupting && row.turn.id === runningTurn?.id}
+            approvals={approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS}
+            confirmedStopped={turnOutcomeItems.abortedTurnIds.has(row.turn.id)}
+            failureDetail={
+              turnOutcomeItems.latestFailureByTurn.get(row.turn.id) ?? null
+            }
+            usage={threadUsage?.turns[row.turn.id]}
+            wakeups={wakeups}
+            attachments={threadAttachments}
+            onOpenImage={onOpenImage}
+            onReadAttachment={onReadAttachment}
+            pluginSnapshot={pluginSnapshot}
+            pluginUiRegistry={pluginUiRegistry}
+          />
+        ) : (
+          <ContextCompactionEvent
+            key={row.compaction.item.id}
+            projection={row.compaction}
+          />
+        ),
+      ),
     [
-      thread, contextPreview, transcriptRows, runningTurn,
-      composer.compaction?.status, lastCanonicalTurnEnd, interrupting,
-      approvalsByTurn, turnOutcomeItems, threadUsage, wakeups,
-      threadAttachments, onOpenImage, onReadAttachment, pluginSnapshot,
+      thread,
+      contextPreview,
+      transcriptRows,
+      runningTurn,
+      composer.compaction?.status,
+      lastCanonicalTurnEnd,
+      interrupting,
+      approvalsByTurn,
+      turnOutcomeItems,
+      threadUsage,
+      wakeups,
+      threadAttachments,
+      onOpenImage,
+      onReadAttachment,
+      pluginSnapshot,
       pluginUiRegistry,
     ],
   );

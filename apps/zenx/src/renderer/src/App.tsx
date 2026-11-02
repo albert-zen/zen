@@ -2044,22 +2044,36 @@ function AppContent() {
     if (before === undefined) return;
     // Native resume reads/subscribes; unlike the navigation wrapper it does not
     // discard drafts or change selection. It never dispatches model/tool work.
-    const recovery = await window.zenx.protocol.request("zen/thread/resume", { threadId });
+    const recovery = await window.zenx.protocol.request("zen/thread/resume", {
+      threadId,
+    });
     const current = threadProjectionCacheRef.current.get(threadId);
-    if (current === undefined || recovery.threadId !== threadId || recovery.thread.id !== threadId) return;
+    if (
+      current === undefined ||
+      recovery.threadId !== threadId ||
+      recovery.thread.id !== threadId
+    )
+      return;
     if (
       current.processEpoch !== before.processEpoch &&
       current.processEpoch !== recovery.processEpoch
-    ) return;
+    )
+      return;
     const projected =
       current.processEpoch === recovery.processEpoch &&
       current.watermark >= recovery.watermark
         ? current
         : replayThreadProjection(
             projectNativeRecovery(recovery),
-            settingsFromSnapshot(threadId, nativeSettingsSnapshot(recovery.thread)),
+            settingsFromSnapshot(
+              threadId,
+              nativeSettingsSnapshot(recovery.thread),
+            ),
             current.activeTurnNotifications,
-            { processEpoch: recovery.processEpoch, watermark: recovery.watermark },
+            {
+              processEpoch: recovery.processEpoch,
+              watermark: recovery.watermark,
+            },
           );
     threadProjectionCacheRef.current.set(threadId, projected);
     if (selectedThreadIdRef.current === threadId) {
@@ -2067,7 +2081,9 @@ function AppContent() {
       setSelectedSettings(projected.settings);
     }
     if (projected.thread.canonicalItems !== undefined)
-      updateComposer(threadId, (state) => reconcileCanonicalAdmission(state, projected.thread.canonicalItems!));
+      updateComposer(threadId, (state) =>
+        reconcileCanonicalAdmission(state, projected.thread.canonicalItems!),
+      );
   };
 
   const deliverComposerSubmission = async (
@@ -2582,9 +2598,10 @@ function AppContent() {
       );
       return;
     }
-    const begin = intent === "start" || intent === "steer"
-      ? beginImmediateComposerSubmission
-      : beginComposerSubmission;
+    const begin =
+      intent === "start" || intent === "steer"
+        ? beginImmediateComposerSubmission
+        : beginComposerSubmission;
     const started = begin(
       current,
       intent,
@@ -4374,10 +4391,14 @@ function AppContent() {
                   updateComposer(threadId, dismissCompactionFeedback)
                 }
                 onRecoverPendingSend={(threadId, clientId) =>
-                  updateComposer(threadId, (state) => recoverPendingSend(state, clientId))
+                  updateComposer(threadId, (state) =>
+                    recoverPendingSend(state, clientId),
+                  )
                 }
                 onDismissPendingSend={(threadId, clientId) =>
-                  updateComposer(threadId, (state) => dismissPendingSend(state, clientId))
+                  updateComposer(threadId, (state) =>
+                    dismissPendingSend(state, clientId),
+                  )
                 }
                 onCheckPendingSends={async (threadId) => {
                   await checkPendingDelivery(threadId);
@@ -5463,8 +5484,12 @@ function AgentSurface({
             onRespondToApproval={onRespondToApproval}
             onCompact={onCompact}
             onDismissCompaction={() => onDismissCompaction(threadDetail.id)}
-            onRecoverPendingSend={(clientId) => onRecoverPendingSend(threadDetail.id, clientId)}
-            onDismissPendingSend={(clientId) => onDismissPendingSend(threadDetail.id, clientId)}
+            onRecoverPendingSend={(clientId) =>
+              onRecoverPendingSend(threadDetail.id, clientId)
+            }
+            onDismissPendingSend={(clientId) =>
+              onDismissPendingSend(threadDetail.id, clientId)
+            }
             onCheckPendingSends={() => onCheckPendingSends(threadDetail.id)}
             onSubmit={onSubmit}
           />
