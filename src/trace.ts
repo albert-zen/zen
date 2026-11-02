@@ -122,6 +122,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     string,
     readonly { dev: number; ino: number }[]
   >();
+  #initialization: Promise<void> = Promise.resolve();
   readonly #gaps = new Map<string, { count: number; error: string }>();
   readonly #onFailure: ((issue: TraceIssue) => void) | undefined;
   #failedRecords = 0;
@@ -497,29 +498,12 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     }
   }
   async #initialize(threadId: string): Promise<void> {
-    // Failed checks or partial permission restoration must retire the prior durability proof.
-    const initialized = this.#initializedDirectories.get(threadId);
-    this.#initializedDirectories.delete(threadId);
-    // Recheck on every append: cached readiness cannot legitimize a replaced directory alias.
-    const directories = [
-      await privateDirectory(this.directory),
-      await privateDirectory(path.join(this.directory, "artifacts")),
-      await privateDirectory(path.join(this.directory, "threads")),
-      await privateDirectory(this.#threadPath(threadId)),
-    ];
-    if (
-      directories.some(
-        (directory, index) =>
-          directory.created ||
-          directory.permissionsChanged ||
-          directory.dev !== initialized?.[index]?.dev ||
-          directory.ino !== initialized?.[index]?.ino,
-      )
-    ) {
-      await syncDirectory(this.directory);
-      await syncDirectory(path.dirname(this.directory));
-      await syncDirectory(path.join(this.directory, "threads"));
-    }
+    // Only shared directory setup is serialized; records and cold reads stay outside.
+    const initialized = this.#initialization
+      .catch(() => undefined)
+      .then(() => this.#initializeDirectories(threadId));
+    this.#initialization = initialized;
+    await initialized;
     if (!this.#next.has(threadId)) {
       const prior = await this.#readStored(threadId, false);
       this.#next.set(
@@ -530,8 +514,38 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         ) + 1,
       );
     }
-    // Only directory-entry durability is remembered; every append still validates paths.
-    this.#initializedDirectories.set(threadId, directories);
+  }
+  async #initializeDirectories(threadId: string): Promise<void> {
+    try {
+      const initialized = this.#initializedDirectories.get(threadId);
+      this.#initializedDirectories.delete(threadId);
+      // Recheck every append; remembered durability never legitimizes aliases.
+      const directories = [
+        await privateDirectory(this.directory),
+        await privateDirectory(path.join(this.directory, "artifacts")),
+        await privateDirectory(path.join(this.directory, "threads")),
+        await privateDirectory(this.#threadPath(threadId)),
+      ];
+      const changed = directories.some(
+        (directory, index) =>
+          directory.created ||
+          directory.permissionsChanged ||
+          (initialized !== undefined &&
+            (directory.dev !== initialized[index]?.dev ||
+              directory.ino !== initialized[index]?.ino)),
+      );
+      if (initialized === undefined || changed) {
+        // Ancestors are shared: a repair can invalidate every Thread's proof.
+        if (changed) this.#initializedDirectories.clear();
+        await syncDirectory(this.directory);
+        await syncDirectory(path.dirname(this.directory));
+        await syncDirectory(path.join(this.directory, "threads"));
+      }
+      this.#initializedDirectories.set(threadId, directories);
+    } catch (error) {
+      this.#initializedDirectories.clear();
+      throw error;
+    }
   }
   #allocate(threadId: string): number {
     const value = this.#next.get(threadId)!;
@@ -1032,7 +1046,7 @@ async function privateDirectory(
     ino: metadata.ino,
     created: created !== undefined,
     permissionsChanged:
-      process.platform !== "win32" && (metadata.mode & 0o777) !== 0o700,
+      process.platform !== "win32" && (metadata.mode & 0o7777) !== 0o700,
   };
 }
 async function syncDirectory(directory: string): Promise<boolean> {

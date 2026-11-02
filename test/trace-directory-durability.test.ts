@@ -241,3 +241,92 @@ test(
     assert.equal(calls.filter((kind) => kind === "directory").length, 5);
   },
 );
+
+test(
+  "shared ancestor repair failure invalidates other warm threads",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { store, prototype } = await fixture(t);
+    await store.record(event("a"));
+    await store.record(event("b"));
+    await store.record(event("a"));
+    await store.record(event("b"));
+    await chmod(store.directory, 0o755);
+    const sync = prototype.sync;
+    let fail = true;
+    const calls: string[] = [];
+    t.mock.method(prototype, "sync", async function (this: FileHandle) {
+      const directory = (await this.stat()).isDirectory();
+      calls.push(directory ? "directory" : "file");
+      if (fail && directory) throw new Error("Shared ancestor failure");
+      await sync.call(this);
+    });
+    assert.equal((await store.record(event("a"))).durability, "degraded");
+    fail = false;
+    calls.length = 0;
+    assert.equal((await store.record(event("b"))).durability, "durable");
+    assert.deepEqual(calls, [
+      "directory",
+      "directory",
+      "directory",
+      "file",
+      "directory",
+    ]);
+  },
+);
+
+test(
+  "an overlapping initializer cannot retain a proof across another thread's failed repair",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { store, prototype } = await fixture(t);
+    await store.record(event("a"));
+    await store.record(event("b"));
+    await store.record(event("a"));
+    await store.record(event("b"));
+    await chmod(store.directory, 0o755);
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const sync = prototype.sync;
+    const calls: string[] = [];
+    let failFirst = true;
+    t.mock.method(prototype, "sync", async function (this: FileHandle) {
+      const directory = (await this.stat()).isDirectory();
+      calls.push(directory ? "directory" : "file");
+      if (directory && failFirst) {
+        failFirst = false;
+        entered();
+        await gate;
+        throw new Error("Shared gated ancestor failure");
+      }
+      await sync.call(this);
+    });
+    const first = store.record(event("a"));
+    await reached;
+    const second = store.record(event("b"));
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.deepEqual(calls, ["directory"]);
+      release();
+      assert.equal((await first).durability, "degraded");
+      assert.equal((await second).durability, "durable");
+      assert.deepEqual(calls, [
+        "directory",
+        "directory",
+        "directory",
+        "directory",
+        "file",
+        "directory",
+      ]);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+  },
+);
