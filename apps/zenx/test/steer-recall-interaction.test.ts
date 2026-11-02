@@ -666,6 +666,131 @@ test("known recall refusal keeps expandable original local diagnostics as text",
   });
 });
 
+for (const [scopeIndex, interruption] of [
+  "close",
+  "receipt",
+  "navigation",
+].entries()) {
+  for (const [settleIndex, settlement] of ["resolve", "reject"].entries()) {
+    test(`late pending image ${settlement} after ${interruption} cannot revive a preview or change newer draft`, async () => {
+      const { readFile } = await import("node:fs/promises");
+      const { queueImageAttachments } =
+        await import("./fixtures/agent-queue-images.js");
+      const attachment = queueImageAttachments[scopeIndex * 2 + settleIndex]!;
+      await withRuntimeDom(
+        async (h) => {
+          const source = staged(1);
+          const thread = {
+            ...source,
+            canonicalItems: source.canonicalItems!.map((item): CanonicalItem =>
+              item.type === "user_message_queued"
+                ? { ...item, input: [{ type: "image", attachment }] }
+                : item,
+            ),
+          };
+          let resolve!: (bytes: Uint8Array) => void;
+          let reject!: (reason: unknown) => void;
+          let reads = 0;
+          const props = {
+            composer: editComposer(
+              emptyComposerState(),
+              "Newer independent draft",
+            ),
+            onRestoreRecalled: () => true,
+            onReadAttachment: (
+              ref: import("../../../src/attachment.js").AttachmentRef,
+            ) => {
+              assert.deepEqual(ref, attachment);
+              reads++;
+              return new Promise<Uint8Array>((done, fail) => {
+                resolve = done;
+                reject = fail;
+              });
+            },
+          };
+          await h.render(thread, props);
+          const details = document.querySelector<HTMLDetailsElement>(
+            ".pending-steer-panel > details",
+          )!;
+          await act(async () => {
+            details.open = true;
+            details.dispatchEvent(new window.Event("toggle"));
+          });
+          await flush();
+          assert.equal(reads, 1);
+          const oldButton = document.querySelector<HTMLButtonElement>(
+            ".pending-steer-images .image-thumbnail",
+          )!;
+          assert.ok(oldButton);
+          if (interruption === "close") {
+            await act(async () => {
+              details.open = false;
+              details.dispatchEvent(new window.Event("toggle"));
+            });
+          } else if (interruption === "receipt") {
+            await h.render(
+              applyQueueItem(
+                thread,
+                receipt({
+                  threadId: thread.id,
+                  recallId: "late-image-recall",
+                  targets: pendingSteerMessages(thread.canonicalItems!).map(
+                    (item) => ({
+                      queuedItemId: item.id,
+                      clientId: item.clientId,
+                      expectedRevision: item.revision,
+                    }),
+                  ),
+                }),
+              ),
+              props,
+            );
+          } else {
+            await h.render(
+              {
+                ...thread,
+                id: "new-thread",
+                canonicalItems: [],
+                queuedMessages: [],
+              },
+              props,
+            );
+          }
+          const editor =
+            document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+          editor.focus();
+          await act(async () => {
+            if (settlement === "resolve")
+              resolve(
+                new Uint8Array(
+                  await readFile(
+                    new URL(
+                      `./fixtures/assets/queue-images/queue-image-${scopeIndex * 2 + settleIndex + 1}.png`,
+                      import.meta.url,
+                    ),
+                  ),
+                ),
+              );
+            else reject(new Error("Late synthetic image read failed"));
+          });
+          await flush();
+          await act(async () => oldButton.click());
+          assert.equal(
+            reads,
+            1,
+            "late completion and detached actions do not dispatch another read",
+          );
+          assert.equal(document.querySelector(".pending-steer-images"), null);
+          assert.equal(document.querySelector(".image-preview-layer"), null);
+          assert.equal(document.activeElement, editor);
+          assert.equal(editor.value, "Newer independent draft");
+        },
+        { keyByThread: true },
+      );
+    });
+  }
+}
+
 test("pending images use canonical attachment refs and their preview closes after recall", async () => {
   const { readFile } = await import("node:fs/promises");
   const { queueImageAttachments } =
