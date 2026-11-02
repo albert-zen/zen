@@ -1,0 +1,59 @@
+name: Thread recency focused acceptance checks
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/thread-recency-check.yml]
+permissions:
+  contents: read
+jobs:
+  targeted-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8e44d2e4098b615a162ecd75465fc82b152e87bd
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        timeout-minutes: 7
+      - name: Prepare production dependencies
+        run: |
+          npm run build
+          npm run prepare:first-party-plugins --workspace @zen/zenx
+      - name: Typecheck exact candidate
+        id: types
+        continue-on-error: true
+        run: npm run typecheck && npm run typecheck:prepared --workspace @zen/zenx
+      - name: Production recency and actual Sidebar interaction regressions
+        id: tests
+        continue-on-error: true
+        run: node --import tsx --test test/thread-recency.test.ts test/thread-summary.test.ts test/user-message-timestamps.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts
+      - name: Require every real check to pass
+        if: always()
+        env:
+          TYPE_RESULT: ${{ steps.types.outcome }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
+        run: |
+          printf 'typecheck=%s tests=%s\n' "$TYPE_RESULT" "$TEST_RESULT"
+          test "$TYPE_RESULT" = success
+          test "$TEST_RESULT" = success
+  exact-formatter-output:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8e44d2e4098b615a162ecd75465fc82b152e87bd
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+        timeout-minutes: 7
+      - name: Print exact formatting diff only
+        run: |
+          npx --no-install prettier --write src/thread-recency.ts test/thread-recency.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts test/thread-summary.test.ts src/app-server.ts
+          git diff -- src/thread-recency.ts test/thread-recency.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts test/thread-summary.test.ts src/app-server.ts
