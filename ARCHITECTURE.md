@@ -1663,3 +1663,5 @@ recorded timestamp; replay never consults the current zone or clock.
 ZenX's turn-outcome lookup is a disposable renderer index of the current immutable canonical-item array: one pass preserves any recorded abort and the last non-recovery failure in array order, without changing admission, Turn status, stored history or recovery authority.
 
 Existing-thread ordinary Send may transfer its draft into a renderer-local, client-ID-keyed pending presentation before native admission; this disposable copy distinguishes sending, admitted-but-not-yet-projected and unknown outcomes, reconciles only exact canonical identity, and never becomes a durable receipt, second transcript or model-consumption authority.
+
+ZenX conversation action contexts use stable UI delegates whose targets update only after a committed render and are invalidated on unmount; this avoids unrelated history redraws while preserving the latest App-owned selection and permission checks, without granting or caching action authority.

@@ -1,3 +1,4 @@
+import { useCommittedCallback } from "./use-committed-callback.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
@@ -201,18 +202,28 @@ export function ThreadViewActionsProvider({
   source: MessageSourceNavigator;
   children: ReactNode;
 }) {
+  const committedFork = useCommittedCallback(fork);
+  const committedSource = useCommittedCallback(source);
+  const committedConsumed = useCommittedCallback((requestId: number) =>
+    onMessageTargetConsumed?.(requestId),
+  );
+  const committedAdd = useCommittedCallback((quote: MessageQuoteReference) =>
+    addToSideChat?.(quote),
+  );
+  const canAdd = addToSideChat !== undefined;
+  const targetValue = useMemo(
+    () => ({ request: messageTarget ?? null, consumed: committedConsumed }),
+    [messageTarget, committedConsumed],
+  );
+  const sideChatValue = useMemo(
+    () => ({ add: canAdd ? committedAdd : undefined, focus: composerFocus }),
+    [canAdd, committedAdd, composerFocus],
+  );
   return (
-    <MessageForkContext.Provider value={fork}>
-      <MessageSourceNavigationContext.Provider value={source}>
-        <MessageTargetNavigationContext.Provider
-          value={{
-            request: messageTarget ?? null,
-            consumed: onMessageTargetConsumed ?? (() => {}),
-          }}
-        >
-          <SideChatQuoteContext.Provider
-            value={{ add: addToSideChat, focus: composerFocus }}
-          >
+    <MessageForkContext.Provider value={committedFork}>
+      <MessageSourceNavigationContext.Provider value={committedSource}>
+        <MessageTargetNavigationContext.Provider value={targetValue}>
+          <SideChatQuoteContext.Provider value={sideChatValue}>
             {children}
           </SideChatQuoteContext.Provider>
         </MessageTargetNavigationContext.Provider>

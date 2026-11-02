@@ -1,3 +1,4 @@
+import { useCommittedCallback } from "./use-committed-callback.js";
 import { SideChatQuoteChooser } from "./SideChatQuoteChooser.js";
 import { chooseSideChatQuoteTarget } from "./side-chat-quote-target.js";
 import { addMessageQuote } from "./message-quote.js";
@@ -77,6 +78,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -479,7 +481,7 @@ export function updateThreadProjectionCache(
   return next;
 }
 
-function AppConversationProviders({
+export function AppConversationProviders({
   models,
   modelCatalogError,
   openSideChatDraft,
@@ -495,12 +497,25 @@ function AppConversationProviders({
     React.ContextType<typeof SideChatDraftContext>
   >;
 }) {
+  const committedOpenShell = useCommittedCallback(shellNavigation.open);
+  const committedConsumeShell = useCommittedCallback(shellNavigation.consumed);
+  const committedOpenSideChat = useCommittedCallback(openSideChatDraft);
+  const shellValue = useMemo(
+    () => ({
+      request: shellNavigation.request,
+      open: committedOpenShell,
+      consumed: committedConsumeShell,
+    }),
+    [shellNavigation.request, committedOpenShell, committedConsumeShell],
+  );
+  const modelsValue = useMemo(
+    () => ({ models, error: modelCatalogError }),
+    [models, modelCatalogError],
+  );
   return (
-    <ShellTargetNavigationContext.Provider value={shellNavigation}>
-      <SubagentCreationModelsContext.Provider
-        value={{ models, error: modelCatalogError }}
-      >
-        <SideChatDraftContext.Provider value={openSideChatDraft}>
+    <ShellTargetNavigationContext.Provider value={shellValue}>
+      <SubagentCreationModelsContext.Provider value={modelsValue}>
+        <SideChatDraftContext.Provider value={committedOpenSideChat}>
           <ThreadViewActionsProvider {...actions} />
         </SideChatDraftContext.Provider>
       </SubagentCreationModelsContext.Provider>
