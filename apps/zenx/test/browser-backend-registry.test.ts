@@ -1308,3 +1308,43 @@ test("turn cleanup retires only captured sessions and its late receipt cannot en
     await registry.close();
   }
 });
+
+test("explicit session close retires its temporary pages and completes its operation preview", async () => {
+  const workspace = fixture("Workspace"),
+    connected = fixture("Chrome");
+  let finished = 0;
+  connected.backend.finishSession = async () => {
+    finished++;
+  };
+  const registry = new BrowserBackendRegistry(
+    workspace.backend,
+    connected.backend,
+  );
+  const events: BrowserThreadEvent[] = [];
+  const stop = registry.observeThread(
+    { threadId: "thread", frames: false },
+    (e) => events.push(e),
+  );
+  const invoke = (op: string, args: Record<string, unknown> = {}) =>
+    registry.invoke(`browser_connected_${op}`, {
+      name: op,
+      callId: op,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", ...args },
+      signal: new AbortController().signal,
+    });
+  try {
+    await invoke("open", { url: "http://localhost:3080", observe: false });
+    await invoke("close_session");
+    assert.equal(finished, 1);
+    assert.ok(
+      events.some(
+        (e) => e.type === "turn-ended" && !e.failed && e.throughSequence > 0,
+      ),
+    );
+  } finally {
+    stop();
+    await registry.close();
+  }
+});

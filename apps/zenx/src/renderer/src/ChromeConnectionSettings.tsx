@@ -57,6 +57,12 @@ export function ChromeConnectionSettings({
   const selectedMode = draft.browserMode ?? "isolated";
   const connected = snapshot?.connection.state === "connected";
   const tabCount = snapshot?.connection.tabCount ?? 0;
+  const selectedConnected =
+    snapshot?.connection.connections?.some(
+      (connection) =>
+        connection.browser === registrationBrowser &&
+        connection.state === "connected",
+    ) ?? connected;
   return (
     <div
       id="browser-settings"
@@ -141,7 +147,9 @@ export function ChromeConnectionSettings({
               className="secondary-button"
               type="button"
               disabled={
-                busy !== null || snapshot?.packaged === false || connected
+                busy !== null ||
+                snapshot?.packaged === false ||
+                selectedConnected
               }
               onClick={() =>
                 void run("connect", () =>
@@ -149,14 +157,19 @@ export function ChromeConnectionSettings({
                 )
               }
             >
-              {connected
+              {selectedConnected
                 ? t("chromeConnectionSettings.chromeConnected")
                 : busy === "connect"
                   ? t("chromeConnectionSettings.connecting")
                   : t("chromeConnectionSettings.connectChrome")}
             </button>
           </div>
-          {!connected &&
+          {connected ? (
+            <p className="settings-note">
+              {t("chromeConnectionSettings.tabsAvailable", { count: tabCount })}
+            </p>
+          ) : null}
+          {!selectedConnected &&
           (registrationBrowser === "edge"
             ? snapshot?.edgeNativeHostRegistered
             : snapshot?.nativeHostRegistered) ? (
@@ -164,7 +177,7 @@ export function ChromeConnectionSettings({
               {t("chromeConnectionSettings.waitingAutomatically")}
             </p>
           ) : null}
-          {!connected ? (
+          {!selectedConnected ? (
             <details>
               <summary>
                 {t("chromeConnectionSettings.installationHelp")}

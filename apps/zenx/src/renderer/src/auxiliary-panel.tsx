@@ -384,7 +384,10 @@ export function AuxiliaryPanel({
   const restoreToggleFocus = useRef(false);
   useLayoutEffect(() => {
     if (open) {
-      if (document.activeElement?.id === "thread-browser-toggle")
+      if (
+        !previewOpen.current &&
+        document.activeElement?.id === "thread-browser-toggle"
+      )
         panel.current
           ?.querySelector<HTMLButtonElement>(".auxiliary-close-button")
           ?.focus();
@@ -549,7 +552,7 @@ export function AuxiliaryPanel({
             : descriptor.kind === "terminal"
               ? i18n.t("panels:shellTitle")
               : descriptor.kind === "browser"
-                ? i18n.t("shell:workspaceBrowser")
+                ? i18n.t("panels:browser")
                 : descriptor.kind),
       icon:
         existing?.icon ??
@@ -1914,12 +1917,26 @@ export function AuxiliaryPanel({
                       >
                         <Icon name="browser" />
                         <span>
-                          <strong>{i18n.t("shell:workspaceBrowser")}</strong>
+                          <strong>{i18n.t("panels:browser")}</strong>
                           <small>
                             {i18n.t("panels:browseASharedPageWithTheAgent")}
                           </small>
                         </span>
                       </button>
+                      {computer ? (
+                        <button
+                          type="button"
+                          onClick={() => void add("computer")}
+                        >
+                          <Icon name="computer" />
+                          <span>
+                            <strong>{i18n.t("panels:computer")}</strong>
+                            <small>
+                              {i18n.t("panels:observeTheAgentSDesktopActivity")}
+                            </small>
+                          </span>
+                        </button>
+                      ) : null}
                       {panels.map((panel) => (
                         <div
                           className="workspace-plugin-choice"

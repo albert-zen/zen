@@ -168,9 +168,21 @@ export class BrowserThreadObservation {
   ): void {
     if (this.#closed || this.#sessions.get(session.key) !== session) return;
     if (tool === "browser_close_session") {
+      const throughSequence = Math.max(
+        0,
+        ...[...session.targets.values()].map(
+          (t) => t.summary.previewSequence ?? 0,
+        ),
+      );
       this.#sessions.delete(session.key);
+      this.completeTurn(session.threadId, throughSequence);
+      return;
     } else if (tool === "browser_close") {
+      const target =
+        tabId === undefined ? undefined : session.targets.get(tabId);
       if (tabId !== undefined) session.targets.delete(tabId);
+      this.completeTurn(session.threadId, target?.summary.previewSequence ?? 0);
+      return;
     } else {
       const values = Array.isArray(result) ? result : [result];
       if (tool === "browser_list_tabs") {

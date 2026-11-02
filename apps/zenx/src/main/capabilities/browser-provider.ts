@@ -273,7 +273,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
+    "For a new browsing task, prefer open to create a background task page; use an existing tab when the user's task calls for that page. New connected pages are grouped by task session automatically. New pages are temporary and close at turn/session end unless open uses keep:true for a deliverable; existing user pages are released. The Host displays the exact operated page automatically, without model UI commands. Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -1230,6 +1230,10 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         return { closed: true, sessionId, tabId };
       }
       case "browser_close_session":
+        if (this.#backend.finishSession) {
+          await this.#backend.finishSession(sessionId);
+          return { closed: true, sessionId };
+        }
         return {
           closedTabs: await this.#backend.closeSession(
             sessionId,

@@ -14,10 +14,13 @@ import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 
 test("Chrome operations automatically present one exact preview; discovery and dismissal never create a native page", async () => {
-  const dom = new JSDOM('<div id="root"></div>', {
-    url: "https://zenx.local/",
-    pretendToBeVisual: true,
-  });
+  const dom = new JSDOM(
+    '<button id="thread-browser-toggle">Workspace</button><div id="root"></div>',
+    {
+      url: "https://zenx.local/",
+      pretendToBeVisual: true,
+    },
+  );
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -61,11 +64,12 @@ test("Chrome operations automatically present one exact preview; discovery and d
   } as unknown as ZenXPluginSnapshot;
   function Harness() {
     const [selectedTab, onSelectTab] = useState("");
+    const [open, onOpenChange] = useState(false);
     return React.createElement(AuxiliaryPanel, {
       threadId: "a",
       title: "Task",
-      open: true,
-      onOpenChange() {},
+      open,
+      onOpenChange,
       snapshot,
       presentationState: emptySidebarState("a"),
       onTabsChange(ids) {
@@ -110,7 +114,13 @@ test("Chrome operations automatically present one exact preview; discovery and d
           });
       });
     };
+    document.getElementById("thread-browser-toggle")!.focus();
     await operate();
+    assert.equal(
+      document.activeElement?.id,
+      "thread-browser-toggle",
+      "automatic opening never moves keyboard focus",
+    );
     assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
     assert.match(
       document.querySelector('[role="tab"]')?.textContent ?? "",
