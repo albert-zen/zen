@@ -355,6 +355,7 @@ async function run() {
    await until(async()=>await evaluate("document.querySelector('#thread-composer')?.value==="+JSON.stringify(nonces[1]+"\n\n"+nonces[2]+"\n\n"+newerDraft)),"read-only recovery merges once with latest draft");
    assert.equal(result.ipc.filter(r=>r.method==="zen/thread/steer/recall").length,1,"check is not another recall mutation");
 
+   assert.equal(await evaluate("Array.from(document.querySelectorAll('.pending-steer-panel [role=status]')).some(e=>/Recall outcome is unconfirmed|撤回结果尚未确认/.test(e.textContent??''))"),false,"authoritative read-only success must clear stale unknown warning");
    assert.equal(notificationGate,true,"real target notifications remain held during read-only recovery assertions");
    assert(heldNotifications.length>0);
    assert(result.hostEvents.some(n=>n.event?.item?.type==="user_message_steer_recalled"&&n.event.item.recallId===recall.params.recallId),"actual durable recall event is among captured Host events");

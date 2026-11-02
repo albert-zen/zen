@@ -34,7 +34,7 @@ const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arc
 const hostBefore=hostSnapshot();
 const expected = {
   baseline:"6aa0a5055530eeb018cc41a3ce486603756c06bb",
-  pending:"279f84ff35c68979a55f35c5322c941235dff7be",
+  pending:"87208215b4ba41a54a2680b0342d606fc56e998b",
   frontend:"3819977ddd2da5698bcbee2c14fd8165f9934009",
   backend:"8e036167d864ae5d452dccc411970352ce26e433",
   combined:"a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09",
