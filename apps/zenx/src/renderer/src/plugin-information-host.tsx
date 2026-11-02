@@ -1,5 +1,11 @@
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useId,
+} from "react";
 import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
 import {
   GenericPluginUiHost,
@@ -40,16 +46,58 @@ export function PluginInformationHost({
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
-  const [headerBottom, setHeaderBottom] = useState(0);
+  const contentId = useId();
+  const previousResourceOpen = useRef(false);
+  const [layout, setLayout] = useState({
+    headerBottom: 0,
+    top: 12,
+    right: 12,
+    dock: false,
+  });
   useLayoutEffect(() => {
     const workspace = toolbar.current?.closest(".workspace");
     if (!workspace) return;
-    const heading = workspace.querySelector<HTMLElement>(
-      '.auxiliary-panel[data-open="true"] > .auxiliary-heading',
+    const panel = workspace.querySelector<HTMLElement>(
+      ":scope > .auxiliary-panel",
+    );
+    const heading = panel?.querySelector<HTMLElement>(
+      ":scope > .auxiliary-heading",
     );
     const measure = () => {
-      const bottom = heading?.getBoundingClientRect().bottom ?? 0;
-      setHeaderBottom(bottom);
+      const bounds = workspace.getBoundingClientRect();
+      const resourceOpen = panel?.dataset.open === "true";
+      const primaryActive =
+        resourceOpen && panel?.dataset.primaryActive === "true";
+      const resourceWidth =
+        resourceOpen && !primaryActive ? resourcePanelWidth : 0;
+      const headerBottom = resourceOpen
+        ? (heading?.getBoundingClientRect().bottom ?? 0)
+        : 0;
+      const next = {
+        headerBottom,
+        top: Math.max(0, primaryActive ? headerBottom - bounds.top : 0) + 12,
+        right: resourceWidth + 12,
+        // Our responsive allocation, not a value copied from a reference app:
+        // a 340px card, 24px gutters and at least 556px for the conversation.
+        dock:
+          bounds.width - resourceWidth >= 920 &&
+          !(
+            resourceOpen &&
+            panel?.dataset.expanded === "true" &&
+            !primaryActive
+          ),
+      };
+      if (resourceOpen && !previousResourceOpen.current) setOpen(false);
+      previousResourceOpen.current = resourceOpen;
+      setLayout((current) =>
+        Object.keys(next).every(
+          (key) =>
+            next[key as keyof typeof next] ===
+            current[key as keyof typeof current],
+        )
+          ? current
+          : next,
+      );
     };
     measure();
     const observer =
@@ -58,9 +106,40 @@ export function PluginInformationHost({
         : new ResizeObserver(measure);
     observer?.observe(workspace);
     if (heading) observer?.observe(heading);
-    return () => observer?.disconnect();
-    // A late-admitted contribution mounts the toolbar after the initial null render.
+    // The primary conversation stays mounted in place while a workspace tab is
+    // selected. Observe only its presentation attributes, never transcript DOM.
+    const presentation =
+      typeof MutationObserver === "undefined"
+        ? undefined
+        : new MutationObserver(measure);
+    if (panel)
+      presentation?.observe(panel, {
+        attributes: true,
+        attributeFilter: ["data-open", "data-expanded", "data-primary-active"],
+      });
+    return () => {
+      observer?.disconnect();
+      presentation?.disconnect();
+    };
   }, [resourcePanelWidth, contributions.length]);
+  useEffect(() => {
+    if (!open || !layout.dock) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing)
+        return;
+      const target = event.target as Node | null;
+      if (
+        !document.getElementById(contentId)?.contains(target) &&
+        target !== trigger.current
+      )
+        return;
+      event.preventDefault();
+      setOpen(false);
+      trigger.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [open, layout.dock, contentId]);
   useEffect(() => {
     setOpen(false);
   }, [ownerKey, contributions.length === 0]);
@@ -103,39 +182,66 @@ export function PluginInformationHost({
       </nav>
     ) : null;
   return (
-    <div ref={toolbar} className="information-toolbar">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            ref={trigger}
-            type="button"
-            className="icon-button"
-            aria-label={t("boardTitle")}
-            title={t("boardTitle")}
-            aria-pressed={open}
-          >
-            <Icon name="list-detail" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="end"
-          className="information-popover"
-          style={{
-            maxHeight: `min(720px, calc(100vh - ${Math.max(headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
-          }}
-          sideOffset={Math.max(
-            8,
-            headerBottom -
-              (trigger.current?.getBoundingClientRect().bottom ?? 0) +
-              8,
+    <>
+      <div ref={toolbar} className="information-toolbar">
+        <Popover
+          open={open && !layout.dock}
+          onOpenChange={(next) =>
+            setOpen((current) => (layout.dock ? !current : next))
+          }
+        >
+          <PopoverTrigger asChild>
+            <button
+              ref={trigger}
+              type="button"
+              className="icon-button"
+              aria-label={t("boardTitle")}
+              title={t("boardTitle")}
+              aria-pressed={open}
+              aria-expanded={open}
+              aria-controls={contentId}
+            >
+              <Icon name="list-detail" />
+            </button>
+          </PopoverTrigger>
+          {!layout.dock && (
+            <PopoverContent
+              id={contentId}
+              side="bottom"
+              align="end"
+              className="information-popover"
+              style={{
+                maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
+              }}
+              sideOffset={Math.max(
+                8,
+                layout.headerBottom -
+                  (trigger.current?.getBoundingClientRect().bottom ?? 0) +
+                  8,
+              )}
+              aria-label={active.title}
+            >
+              {tabs}
+              {surface}
+            </PopoverContent>
           )}
+        </Popover>
+      </div>
+      {open && layout.dock ? (
+        <aside
+          id={contentId}
+          className="information-dock"
           aria-label={active.title}
+          style={{
+            top: layout.top,
+            right: layout.right,
+            maxHeight: `calc(100% - ${layout.top + 12}px)`,
+          }}
         >
           {tabs}
           {surface}
-        </PopoverContent>
-      </Popover>
-    </div>
+        </aside>
+      ) : null}
+    </>
   );
 }

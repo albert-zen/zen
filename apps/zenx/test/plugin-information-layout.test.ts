@@ -77,9 +77,11 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
     }
   } as unknown as typeof ResizeObserver;
   let headerBottom = 104;
+  let workspaceWidth = 1000;
   const workspace = document.querySelector<HTMLElement>(".workspace")!;
   const heading = document.querySelector<HTMLElement>(".auxiliary-heading")!;
-  workspace.getBoundingClientRect = () => ({ top: 44, width: 1000 }) as DOMRect;
+  workspace.getBoundingClientRect = () =>
+    ({ top: 44, width: workspaceWidth }) as DOMRect;
   heading.getBoundingClientRect = () => ({ bottom: headerBottom }) as DOMRect;
   const registry = createPluginUiRegistry();
   registry.registerTrusted("fixture", {
@@ -213,6 +215,58 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.activeElement === trigger,
       "Escape returns focus to the sole toggle",
     );
+    // Resizing the real conversation allocation switches presentation without
+    // changing the owner or inventing a persistent pin mode.
+    workspaceWidth = 1600;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    await click(".information-toolbar button");
+    assert.ok(
+      document.querySelector(".information-dock"),
+      "wide chat reserves a docked card",
+    );
+    const panel = document.querySelector<HTMLElement>(".auxiliary-panel")!;
+    panel.dataset.open = "false";
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    panel.dataset.open = "true";
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.equal(
+      trigger.getAttribute("aria-pressed"),
+      "false",
+      "opening the workspace hides information once",
+    );
+    workspaceWidth = 1000;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    await click(".information-toolbar button");
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "manual reopen beside workspace uses an overlay",
+    );
+    panel.dataset.expanded = "true";
+    panel.dataset.primaryActive = "true";
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.ok(
+      document.querySelector(".information-dock"),
+      "maximized main-conversation tab uses the whole available width",
+    );
+    workspaceWidth = 700;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "narrow maximized main conversation remains usable",
+    );
+    await click(".information-toolbar button");
     await click(".information-toolbar button");
     threadId = "another-owner";
     await act(async () => root.render(React.createElement(Harness)));
@@ -264,7 +318,7 @@ test("information reserves its slot, uses neutral pressed state and keeps primar
   );
   assert.match(
     css,
-    /\.information-toolbar > \.icon-button\[aria-pressed="true"\]\s*\{\s*color: var\(--color-text-muted\);\s*background: var\(--color-surface-active\);\s*\}/,
+    /\.information-toolbar > \.icon-button\[aria-pressed="true"\],\s*\.auxiliary-heading > \.auxiliary-close-button\s*\{\s*color: var\(--color-text-primary\);\s*background: var\(--color-surface-active\);\s*\}/,
   );
   assert.doesNotMatch(css, /\.information-(?:header|rail)/);
   assert.match(app, /const appearance = useAppearance\(\)/);

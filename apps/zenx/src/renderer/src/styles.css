@@ -11852,9 +11852,10 @@ button:disabled {
   width: 36px;
   height: 36px;
 }
-/* Open is a quiet neutral pressed surface, never an accent/highlight. */
-.information-toolbar > .icon-button[aria-pressed="true"] {
-  color: var(--color-text-muted);
+/* Information and workspace toggles share one neutral, legible active state. */
+.information-toolbar > .icon-button[aria-pressed="true"],
+.auxiliary-heading > .auxiliary-close-button {
+  color: var(--color-text-primary);
   background: var(--color-surface-active);
 }
 :root[data-platform="linux"] .information-toolbar,
@@ -11877,6 +11878,29 @@ button:disabled {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+/* Docking reserves a column without moving/remounting the conversation. */
+.information-dock {
+  position: absolute;
+  z-index: 4;
+  width: 340px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 16px;
+  background: var(--color-surface);
+}
+.workspace:has(> .information-dock)
+  > :is(.agent-surface, .plugin-product-page) {
+  width: calc(100% - var(--workspace-panel-width, 0px) - 364px);
+}
+.workspace:has(> .auxiliary-panel[data-primary-active="true"]):has(
+    > .information-dock
+  )
+  > :is(.agent-surface, .plugin-product-page) {
+  width: calc(100% - 364px);
 }
 .information-content {
   min-height: 0;
