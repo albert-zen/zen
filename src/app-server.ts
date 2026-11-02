@@ -2102,10 +2102,11 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     for (let attempt = 0; attempt < 8; attempt++) {
       const thread = await this.#requireThread(threadId);
+      const items = thread.items;
       const duplicate =
         options.clientId === undefined
           ? undefined
-          : thread.items.find(
+          : items.find(
               (item): item is UserMessageItem =>
                 item.type === "user_message" &&
                 item.clientId === options.clientId,
@@ -2114,7 +2115,7 @@ export class ZenAppServer {
       if (duplicate !== undefined)
         return await this.startTurn(threadId, input, options);
       if (options.recallableSteer === true && options.clientId !== undefined) {
-        const staged = thread.items.find(
+        const staged = items.find(
           (item) =>
             item.type === "user_message_queued" &&
             item.deliveryMode === "steer" &&
@@ -3998,17 +3999,21 @@ export class ZenAppServer {
                               ?.has(pending.id)
                           )
                             continue;
-                          const inputBytes = Buffer.byteLength(
-                            JSON.stringify(pending.input),
-                          );
-                          if (
-                            guidanceCount >= 8 ||
-                            (guidanceCount > 0 &&
-                              guidanceBytes + inputBytes > guidanceBudget)
-                          )
-                            break;
-                          guidanceCount++;
-                          guidanceBytes += inputBytes;
+                          // Native human steer keeps its prior all-visible-next-sample
+                          // semantics. Only Agent/Host backlog uses this existing budget.
+                          if (pending.type !== "user_message_queued") {
+                            const inputBytes = Buffer.byteLength(
+                              JSON.stringify(pending.input),
+                            );
+                            if (
+                              guidanceCount >= 8 ||
+                              (guidanceCount > 0 &&
+                                guidanceBytes + inputBytes > guidanceBudget)
+                            )
+                              continue;
+                            guidanceCount++;
+                            guidanceBytes += inputBytes;
+                          }
                           const message:
                             | UserMessageItem
                             | ThreadMessageItem

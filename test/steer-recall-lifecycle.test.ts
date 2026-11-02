@@ -357,3 +357,25 @@ test("initial admission wait does not block recallable steer acceptance", { time
     await turn.done.catch(() => undefined);
   }
 });
+
+test("human pending bursts are all claimed by the next sample, not split by guidance quota", { timeout: 10000 }, async () => {
+  const f = await running();
+  try {
+    for (let index = 0; index < 12; index++)
+      await f.server.stageSteerMessage(f.threadId, f.turn.id, `burst-${index}`, { clientId: `burst-${index}` });
+    f.release[0]!.resolve();
+    await f.sampled[1]!.promise;
+    const after = await f.server.readThread(f.threadId);
+    assert.deepEqual(pendingSteerMessages(after.items), []);
+    const ids = userIdsInTurn(after.items, f.turn.id);
+    assert.equal(ids.length, 13);
+    for (let index = 0; index < 12; index++)
+      assert(JSON.stringify(f.requests[1]!.messages).includes(`burst-${index}`));
+    f.release[1]!.resolve();
+    await f.turn.done;
+    assert.equal(f.requests.length, 2);
+  } finally {
+    for (const gate of f.release) gate.resolve();
+    await f.turn.done.catch(() => undefined);
+  }
+});
