@@ -145,7 +145,7 @@ New thread 保留独立 row，插件入口紧随其后且位于置顶等展示�
 
 ### 4.1 Thread row 与管理菜单
 
-- 最近（Recent）与各 Project 的默认自动顺序均按最新用户原始接收时间或成功接受最终 Agent 回复的完成时间排序，同时间以 Thread ID 稳定打破平局。中间文字、流式 token、工具、状态和元数据不得重新排序；运行指示仍实时更新。排队与 steer 的再次交付不产生新接收时间；旧 Host 缺少此投影时稳定退回创建时间。Project 已保存的用户手动顺序优先，未记录的新线程在其后按同一消息时间排序；读取或模型活动不把自动顺序写成手动 preference。Pinned 严格按用户保存的顺序，模型运行、消息或提问均不得改变其现有排列；Inbox 保留现有 Turn-start 分组顺序。
+- 最近（Recent）与各 Project 的默认自动顺序均按最新用户原始接收时间、成功接受最终 Agent 回复的完成时间或本地问题成功发布的记录时间排序，同时间以 Thread ID 稳定打破平局。中间文字、流式 token、普通工具、状态和元数据不得重新排序；运行指示仍实时更新。排队与 steer 的再次交付不产生新接收时间；旧 Host 缺少此投影时稳定退回创建时间。Project 已保存的用户手动顺序优先，未记录的新线程在其后按同一消息时间排序；读取或模型活动不把自动顺序写成手动 preference。Pinned 严格按用户保存的顺序，模型运行、消息或提问均不得改变其现有排列；Inbox 保留现有 Turn-start 分组顺序。
 
 - 结束提示从本线程实际开始执行后产生的 canonical 终态 ID 推导，复制/fork/导入的历史闭合不算新结束；已读先后采用稳定的终态序号，不受系统时钟回拨影响。不能用中间 Agent 文字、兼容 phase、流式 delta 或 updatedAt 代替。新运行会抑制旧提示而不标记已读；仅在前台有焦点、已结束 Turn 的真实尾部进入阅读范围后清除。选择/hover、隐藏子线程、后台 tab、未聚焦窗口和断线后的临时 interrupted 投影不构成确认。已明确观测到的当前连接实时终态保存一份去重的待查看身份，跨 reload 保留且不被安装时间基线或时钟回拨吞掉；native resume 屏障转交的当前 epoch 重叠事件同样算实时观测，自动重连在 ready 后转交且握手未完成时暂存；恢复旧快照本身不产生这种观测。若结束完全发生在离线期间、恢复无重叠事件且从未建立终态已读游标，时间又回拨到安装基线之前，则保守静默，不能从未知冷历史猜测新结束。缺少新 summary 字段的旧服务保持静默。升级旧消息游标时只初始化一次 Thread 终态基线，旧历史不重新亮点（因此升级前真正未查看的旧结束也不会补提醒）；Room 消息计数与游标保持原语义。
 
@@ -1079,8 +1079,24 @@ Retained handlers cannot write after owner change or unmount. Local diagnostics
 remain expandable plain text. Current Host authority, not disabled controls,
 resolves concurrent clients. Publication remains behind the default-off Host
 experiment; this slice does not enable shared Room/CLI/remote publication, change
-Pinned/hidden state, or claim sidebar asking/recency integration without the
-separately reviewed authoritative summary projection.
+Pinned/hidden state, or provide selected-thread live reveal or hidden-child
+attention discovery.
+
+The sidebar renders a compact **Asking / 待回答** capsule only from the native
+summary’s positive `openCount`; its accessible label and tooltip count request
+groups, not individual authored questions. It is independent of running,
+approval and unread indicators in both row densities. Missing/unavailable summary
+authority stays silent; zero open requests is not a claim that pending answers
+have entered the model. Real accepted publication timestamps already feed the
+shared Recent/default Project sorter; status changes and recall never invent a
+new publication time. Human answer receipts keep ordinary message ordering.
+Pinned and manual Project preferences are untouched, as is Inbox grouping.
+
+Summary updates never select a Thread, open its information panel, take keyboard
+focus, reveal a hidden child or change Pin. Existing question cards remain
+explicitly reachable for a selected Thread. Selected-thread new-question reveal
+and accurate parent-lineage attention with an explicit hidden-child entry remain
+separate integration gaps, not completed by this badge-only slice.
 
 #### Whole-batch recall returns to its original inputs
 
