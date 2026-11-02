@@ -514,10 +514,7 @@ export function applyThreadViewNotification(
 }
 
 export function activeTurn(thread: Thread): Turn | null {
-  return (
-    [...thread.turns].reverse().find((turn) => turn.status === "inProgress") ??
-    null
-  );
+  return thread.turns.findLast((turn) => turn.status === "inProgress") ?? null;
 }
 
 function upsertTurn(turns: readonly Turn[], next: Turn): Turn[] {
