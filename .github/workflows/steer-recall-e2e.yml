@@ -17,7 +17,19 @@ jobs:
       matrix:
         include:
           - label: pending
-            source: 87208215b4ba41a54a2680b0342d606fc56e998b
+            source: 400bac27dd80c0238360dd2632c5c41972566d4b
+            count: 0
+            case: recall-wins
+          - label: pending
+            source: 400bac27dd80c0238360dd2632c5c41972566d4b
+            count: 0
+            case: claim-wins
+          - label: pending
+            source: 400bac27dd80c0238360dd2632c5c41972566d4b
+            count: 0
+            case: navigation
+          - label: pending
+            source: 400bac27dd80c0238360dd2632c5c41972566d4b
             count: 0
             case: lost-reply
     runs-on: macos-latest
