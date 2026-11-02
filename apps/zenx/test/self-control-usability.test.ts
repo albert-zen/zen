@@ -887,12 +887,13 @@ test("a model calls the advertised bounded original-history tool after compactio
               message.text?.includes("Original conversation history;"),
           );
           assert(summary && "text" in summary && summary.text);
-          const match = /Original conversation history; (s[1-9][0-9]*);/u.exec(
-            summary.text,
-          );
+          const match =
+            /Original conversation history; zenx_threads_read ref=(s[1-9][0-9]*)\]/u.exec(
+              summary.text,
+            );
           assert(
             match,
-            "the compiler must expose the exact accepted read-only source ref",
+            "the compiler must expose the exact source ref with its reader",
           );
           sourceRef = match[1]!;
           assert(!summary.text.includes(throughItemId));

@@ -16,7 +16,18 @@ export type Reference =
       /** UTF-16 offset of this reference's U+FFFC token in Composer text. */
       position?: number;
     }
-  | MessageQuoteReference;
+  | MessageQuoteReference
+  | TextQuoteReference;
+
+export interface TextQuoteReference {
+  kind: "text";
+  name: string;
+  cwd: string;
+  position?: number;
+  excerpt: string;
+  sources: Array<{ threadId: string; id: string }>;
+}
+export type QuoteReference = MessageQuoteReference | TextQuoteReference;
 
 export interface MessageQuoteReference {
   kind: "message";
@@ -82,6 +93,13 @@ export function sentReference(reference: Reference) {
     return { ...common, path: reference.path, contentMode: "pointer" };
   if (reference.kind === "thread")
     return { ...common, id: reference.id, contentMode: "pointer" };
+  if (reference.kind === "text")
+    return {
+      ...common,
+      excerpt: reference.excerpt,
+      sources: reference.sources,
+      contentMode: "excerpt",
+    };
   return {
     ...common,
     threadId: reference.threadId,
@@ -136,7 +154,9 @@ function decodedSentReference(value: unknown): Reference | null {
         ? "contentMode,cwd,id,kind,name"
         : kind === "message"
           ? "contentMode,cwd,excerpt,id,kind,name,threadId"
-          : "";
+          : kind === "text"
+            ? "contentMode,cwd,excerpt,kind,name,sources"
+            : "";
   if (!expected || keys !== expected) return null;
   if (
     typeof record.name !== "string" ||
@@ -149,6 +169,8 @@ function decodedSentReference(value: unknown): Reference | null {
       (typeof record.id !== "string" ||
         !record.id ||
         record.contentMode !== "pointer")) ||
+    (kind === "text" &&
+      (!validTextQuote(record) || record.contentMode !== "excerpt")) ||
     (kind === "message" &&
       (typeof record.threadId !== "string" ||
         !record.threadId ||
@@ -289,17 +311,23 @@ export function parseSentReferenceContent(
           ? "contentMode,cwd,kind,name,path"
           : entry.kind === "thread"
             ? "contentMode,cwd,id,kind,name"
-            : "contentMode,cwd,excerpt,id,kind,name,threadId";
+            : entry.kind === "text"
+              ? "contentMode,cwd,excerpt,kind,name,sources"
+              : "contentMode,cwd,excerpt,id,kind,name,threadId";
       if (
         keys !== expected ||
         record.contentMode !==
-          (entry.kind === "message" ? "excerpt" : "pointer")
+          (entry.kind === "message" || entry.kind === "text"
+            ? "excerpt"
+            : "pointer")
       )
         return ordinary;
       if (
         entry.kind === "file"
           ? !entry.path
-          : !entry.id || (entry.kind === "message" && !entry.threadId)
+          : entry.kind === "text"
+            ? false
+            : !entry.id || (entry.kind === "message" && !entry.threadId)
       )
         return ordinary;
       // Strip only the known presentation policy, never source text or identity.
@@ -312,6 +340,25 @@ export function parseSentReferenceContent(
   }
 }
 
+export function validTextQuote(reference: Record<string, unknown>): boolean {
+  return (
+    typeof reference.excerpt === "string" &&
+    reference.excerpt.trim().length > 0 &&
+    Array.isArray(reference.sources) &&
+    reference.sources.every(
+      (source) =>
+        source !== null &&
+        typeof source === "object" &&
+        !Array.isArray(source) &&
+        Object.keys(source).sort().join(",") === "id,threadId" &&
+        typeof source.threadId === "string" &&
+        source.threadId.length > 0 &&
+        typeof source.id === "string" &&
+        source.id.length > 0,
+    )
+  );
+}
+
 function isReference(value: unknown): value is Reference {
   if (!value || typeof value !== "object") return false;
   const reference = value as Record<string, unknown>;
@@ -321,7 +368,8 @@ function isReference(value: unknown): value is Reference {
         (reference.position as number) >= 0)) &&
     typeof reference.name === "string" &&
     typeof reference.cwd === "string" &&
-    ((reference.kind === "file" && typeof reference.path === "string") ||
+    ((reference.kind === "text" && validTextQuote(reference)) ||
+      (reference.kind === "file" && typeof reference.path === "string") ||
       (reference.kind === "thread" && typeof reference.id === "string") ||
       (reference.kind === "message" &&
         typeof reference.threadId === "string" &&

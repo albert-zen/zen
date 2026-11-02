@@ -1,5 +1,5 @@
 import { readReferenceClipboard } from "./reference-clipboard.js";
-import type { MessageQuoteReference } from "./composer-selector.js";
+import type { QuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import {
@@ -13,7 +13,11 @@ import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
 import { InlineReferenceContent } from "./InlineReferenceContent.js";
 import { ReferenceToken } from "./ReferenceToken.js";
-import { MessageSelectionActions, addMessageQuote } from "./message-quote.js";
+import {
+  MessageSelectionActions,
+  addMessageQuote,
+  selectionReference,
+} from "./message-quote.js";
 import {
   parseSentReferenceContent,
   type SentMessageQuote,
@@ -177,7 +181,7 @@ export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
 const SideChatQuoteContext = createContext<{
-  add?(quote: MessageQuoteReference): void;
+  add?(quote: QuoteReference): void;
   focus?: { composerId: string; sequence: number };
 }>({});
 
@@ -193,7 +197,7 @@ export function ThreadViewActionsProvider({
 }: {
   messageTarget?: MessageTargetRequest | null;
   onMessageTargetConsumed?(requestId: number): void;
-  addToSideChat?(quote: MessageQuoteReference): void;
+  addToSideChat?(quote: QuoteReference): void;
   composerFocus?: { composerId: string; sequence: number };
   fork: MessageForkHandler;
   source: MessageSourceNavigator;
@@ -230,6 +234,24 @@ const CanonicalMessageForkContext = createContext<{
   items: Map<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
+
+const CanonicalQuoteItemsContext = createContext<
+  ReadonlyMap<string, readonly CanonicalItem[]>
+>(new Map());
+function useQuoteAttributes(ids: string | string[]) {
+  const items = useContext(CanonicalQuoteItemsContext);
+  const selected = (Array.isArray(ids) ? ids : [ids]).flatMap(
+    (id) => items.get(id) ?? [],
+  );
+  const first = selected[0];
+  return first
+    ? {
+        "data-quote-thread-id": first.threadId,
+        "data-quote-item-id": first.id,
+        "data-quote-item-ids": JSON.stringify(selected.map((item) => item.id)),
+      }
+    : {};
+}
 
 function findMessageQuoteSource(
   viewport: Element | null,
@@ -384,6 +406,21 @@ export function ThreadView(props: ThreadViewProps) {
           },
     [props.thread?.id, items],
   );
+  const quoteItems = useMemo(() => {
+    const index = new Map<string, CanonicalItem[]>();
+    const calls = new Map<string, string>();
+    for (const item of items ?? []) {
+      index.set(item.id, [item]);
+      if (item.type === "tool_call")
+        calls.set(JSON.stringify([item.turnId, item.callId]), item.id);
+    }
+    for (const item of items ?? []) {
+      if (item.type !== "tool_result") continue;
+      const callId = calls.get(JSON.stringify([item.turnId, item.callId]));
+      if (callId) index.get(callId)?.push(item);
+    }
+    return index;
+  }, [items]);
   const forkSourceRef = useRef(forkSource);
   forkSourceRef.current = forkSource;
   const mounted = useRef(true);
@@ -417,38 +454,40 @@ export function ThreadView(props: ThreadViewProps) {
     <ToolActionTargetsProvider thread={props.thread}>
       <ThreadReadingContext.Provider value={readingState}>
         <CanonicalInputContentContext.Provider value={canonicalInputs}>
-          <CanonicalMessageForkContext.Provider value={forkContext}>
-            <MessageSourceViewportContext.Provider
-              value={props.thread?.id ?? null}
-            >
-              <div className="thread-conversation-surface">
-                {debugging && props.thread && items !== undefined ? (
-                  <ThreadDebugger
-                    key={props.thread.id}
-                    thread={props.thread}
-                    items={props.thread.itemList}
-                    currentSettings={{
-                      provider: props.thread.modelProvider,
-                      model: props.selectedModel,
-                      effort: props.selectedReasoningEffort,
-                      permission: props.permissionMode,
-                    }}
-                    localModelDebug={props.localModelDebug}
-                    onExit={props.onExitDebug}
-                    onOpenMessageLink={props.onOpenMessageLink}
-                    onReadAttachment={props.onReadAttachment}
-                  />
-                ) : (
-                  <ThreadViewContent
-                    {...props}
-                    threadAttachments={
-                      canonicalAttachments ?? props.threadAttachments
-                    }
-                  />
-                )}
-              </div>
-            </MessageSourceViewportContext.Provider>
-          </CanonicalMessageForkContext.Provider>
+          <CanonicalQuoteItemsContext.Provider value={quoteItems}>
+            <CanonicalMessageForkContext.Provider value={forkContext}>
+              <MessageSourceViewportContext.Provider
+                value={props.thread?.id ?? null}
+              >
+                <div className="thread-conversation-surface">
+                  {debugging && props.thread && items !== undefined ? (
+                    <ThreadDebugger
+                      key={props.thread.id}
+                      thread={props.thread}
+                      items={props.thread.itemList}
+                      currentSettings={{
+                        provider: props.thread.modelProvider,
+                        model: props.selectedModel,
+                        effort: props.selectedReasoningEffort,
+                        permission: props.permissionMode,
+                      }}
+                      localModelDebug={props.localModelDebug}
+                      onExit={props.onExitDebug}
+                      onOpenMessageLink={props.onOpenMessageLink}
+                      onReadAttachment={props.onReadAttachment}
+                    />
+                  ) : (
+                    <ThreadViewContent
+                      {...props}
+                      threadAttachments={
+                        canonicalAttachments ?? props.threadAttachments
+                      }
+                    />
+                  )}
+                </div>
+              </MessageSourceViewportContext.Provider>
+            </CanonicalMessageForkContext.Provider>
+          </CanonicalQuoteItemsContext.Provider>
         </CanonicalInputContentContext.Provider>
       </ThreadReadingContext.Provider>
     </ToolActionTargetsProvider>
@@ -1528,61 +1567,28 @@ function ThreadViewContent({
       <MessageSelectionActions
         viewport={scrollRef}
         threadId={thread?.id}
+        pageSelection={composerId === "thread-composer"}
         disabled={composerDisabled || submitting}
         onAddToSideChat={
           sideChatQuote.add && thread
-            ? (selection) => {
-                if (
-                  selection.threadId !== thread.id ||
-                  !thread.canonicalItems?.some(
-                    (item) =>
-                      item.type === "agent_message" &&
-                      item.id === selection.id &&
-                      item.threadId === thread.id,
-                  )
-                )
-                  return;
-                sideChatQuote.add?.({
-                  ...selection,
-                  kind: "message",
-                  name: "ZenX",
-                  cwd: thread.cwd,
-                });
-              }
+            ? (selection) =>
+                sideChatQuote.add?.(selectionReference(selection, thread.cwd))
             : undefined
         }
         onQuote={(selection) => {
-          if (
-            !thread ||
-            selection.threadId !== thread.id ||
-            !thread.canonicalItems?.some(
-              (item) =>
-                item.type === "agent_message" &&
-                item.id === selection.id &&
-                item.threadId === thread.id,
-            )
-          )
-            return;
           const insertion =
             composerTextareaRef.current?.selectionStart ??
             skillDraft.text.length;
           onDraftChange(
             addMessageQuote(
               composer.draft.text,
-              {
-                ...selection,
-                kind: "message",
-                name: "ZenX",
-                cwd: thread.cwd,
-              },
-              composerTextareaRef.current?.selectionStart ??
-                skillDraft.text.length,
-              composerTextareaRef.current?.selectionEnd ??
-                skillDraft.text.length,
+              selectionReference(selection, thread?.cwd ?? ""),
+              insertion,
+              composerTextareaRef.current?.selectionEnd ?? insertion,
             ),
           );
           requestAnimationFrame(() => {
-            composerTextareaRef.current?.focus({ preventScroll: true });
+            composerTextareaRef.current?.focus();
             composerTextareaRef.current?.setSelectionRange(
               insertion + 1,
               insertion + 1,
@@ -3703,16 +3709,25 @@ function TraceDetail({
   pluginSnapshot: ZenXPluginSnapshot | null;
   pluginUiRegistry: PluginUiRegistry | null;
 }) {
+  const quoteAttributes = useQuoteAttributes(item.id);
   if (item.type === "reasoning") {
     return (
-      <div className="trace-detail trace-detail-markdown">
+      <div
+        className="trace-detail trace-detail-markdown"
+        {...quoteAttributes}
+        tabIndex={-1}
+      >
         <Markdown text={reasoningContentText(item)} />
       </div>
     );
   }
   if (item.type !== "commandExecution") return null;
   return (
-    <div className="trace-detail trace-tool-detail">
+    <div
+      className="trace-detail trace-tool-detail"
+      {...quoteAttributes}
+      tabIndex={-1}
+    >
       <ToolImages itemId={item.id} />
       <div className="trace-tool-card">
         <ToolInput command={item.command} />
@@ -3818,6 +3833,7 @@ function InputMessage({
   ): void;
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
+  const quoteAttributes = useQuoteAttributes(item.id);
   const text = item.content.map((content) => content.text).join("\n");
   const article = useRef<HTMLElement>(null);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
@@ -3841,6 +3857,7 @@ function InputMessage({
     <article
       ref={article}
       data-sent-message-id={item.id}
+      {...quoteAttributes}
       tabIndex={-1}
       className={
         item.type === "threadMessage"
@@ -3982,6 +3999,7 @@ function AgentMessage({
   turn: Turn;
   usage?: ModelUsageAggregate;
 }) {
+  const quoteAttributes = useQuoteAttributes(item.id);
   const source = useContext(CanonicalMessageForkContext);
   const onFork = useContext(MessageForkContext);
   const forkTarget =
@@ -3992,10 +4010,7 @@ function AgentMessage({
     <article
       className="agent-copy"
       data-read-message-id={item.id}
-      data-quote-thread-id={
-        source?.items.has(item.id) ? source.threadId : undefined
-      }
-      data-quote-item-id={source?.items.has(item.id) ? item.id : undefined}
+      {...quoteAttributes}
       tabIndex={-1}
     >
       <div data-message-quote-body>

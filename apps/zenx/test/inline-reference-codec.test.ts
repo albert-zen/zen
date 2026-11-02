@@ -6,6 +6,7 @@ import {
   parseReferenceDraft,
   parseSentReferenceContent,
   referenceMessage,
+  referenceTitle,
   spliceInlineReferenceText,
   withReferenceDraft,
 } from "../src/renderer/src/reference-draft.js";
@@ -207,4 +208,19 @@ test("positioned references survive the ephemeral draft codec", () => {
     text: pastedHeader,
     references: [],
   });
+});
+
+test("unnamed page quote supplies readable title text without restoring a generic source label", () => {
+  const quote: Reference = {
+    kind: "text",
+    name: "",
+    cwd: "/repo",
+    excerpt: "Selected user question",
+    sources: [],
+    position: 0,
+  };
+  assert.equal(
+    referenceTitle("\uFFFC explain", [quote]),
+    "Selected user question explain",
+  );
 });

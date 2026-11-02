@@ -1,7 +1,7 @@
 import { SideChatQuoteChooser } from "./SideChatQuoteChooser.js";
 import { chooseSideChatQuoteTarget } from "./side-chat-quote-target.js";
 import { addMessageQuote } from "./message-quote.js";
-import type { MessageQuoteReference } from "./composer-selector.js";
+import type { QuoteReference } from "./composer-selector.js";
 import {
   ShellTargetNavigationContext,
   openShellTarget,
@@ -3376,7 +3376,7 @@ function AppContent() {
   };
 
   const [sideQuoteChoice, setSideQuoteChoice] = useState<{
-    quote: MessageQuoteReference;
+    quote: QuoteReference;
     parent: string;
     roomId?: string;
     scope: string;
@@ -3497,11 +3497,12 @@ function AppContent() {
     }));
   };
 
-  const addToSideChat = (quote: MessageQuoteReference) => {
+  const addToSideChat = (quote: QuoteReference) => {
     const roomId = selectedRoom?.id;
-    const parent = roomId
-      ? quote.threadId
-      : (selectedThreadId ?? quote.threadId);
+    const sourceThread =
+      quote.kind === "message" ? quote.threadId : quote.sources[0]?.threadId;
+    const parent = roomId ? sourceThread : (selectedThreadId ?? sourceThread);
+    if (!parent) return;
     const request = {
       parent,
       roomId,

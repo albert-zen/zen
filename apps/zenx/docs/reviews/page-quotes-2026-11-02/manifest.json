@@ -1,0 +1,11 @@
+{
+  "implementationCommit": "50c5501a51069650bab509d87e64c9a46ef09106",
+  "synthetic": true,
+  "rendering": "production React components in standalone browser fixture",
+  "quoteFrameSha256": "72edc2ea9c8a4dc4744ff63099197d285b27a93c8d6f352d305c7ecca234194a",
+  "screenshots": {
+    "tool-output-quoted.png": "6175634aa75c9799859bc5aefdd739a5e4e6ba28e3f4734a2ff0833b66f47b85",
+    "user-selection.png": "799e0b1c69e8bb9b416d3b623086eb2ad6b9e807d9251cc208450e4bd8e520f6",
+    "field-selection.png": "faf95180d4c397714261a60bde10d6de2cb9b0366bfeddffe2671f67bc34aebd"
+  }
+}

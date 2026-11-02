@@ -1,3 +1,4 @@
+import { validTextQuote } from "../../../../../src/selected-reference-protocol.js";
 import { referenceText, type Reference } from "./composer-selector.js";
 import {
   serializeSentReferenceV3,
@@ -237,13 +238,13 @@ export function parseSentReferenceMessage(
 }
 
 export function referenceTitle(text: string, references: readonly Reference[]) {
+  const label = (reference: Reference) =>
+    reference.name || ("excerpt" in reference ? reference.excerpt : "");
   if (references.some((reference) => reference.position !== undefined))
     return inlineReferenceParts(text, references)
-      .map((part) => ("text" in part ? part.text : part.reference.name))
+      .map((part) => ("text" in part ? part.text : label(part.reference)))
       .join("");
-  return [text, ...references.map((reference) => reference.name)]
-    .filter(Boolean)
-    .join("\n");
+  return [text, ...references.map(label)].filter(Boolean).join("\n");
 }
 function isReference(value: unknown): value is Reference {
   if (!value || typeof value !== "object") return false;
@@ -254,7 +255,8 @@ function isReference(value: unknown): value is Reference {
         (reference.position as number) >= 0)) &&
     typeof reference.name === "string" &&
     typeof reference.cwd === "string" &&
-    ((reference.kind === "file" && typeof reference.path === "string") ||
+    ((reference.kind === "text" && validTextQuote(reference)) ||
+      (reference.kind === "file" && typeof reference.path === "string") ||
       (reference.kind === "thread" && typeof reference.id === "string") ||
       (reference.kind === "message" &&
         typeof reference.threadId === "string" &&

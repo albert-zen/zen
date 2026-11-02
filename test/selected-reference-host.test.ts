@@ -94,7 +94,7 @@ test("actual Host persists compact user content before wire while log retains th
         assert.ok(!selected.content.text.includes("zenx-reference-message:v3"));
         assert.match(
           selected.content.text,
-          /Selected message "Recorded source"; s1;/,
+          /Selected message "Recorded source"; zenx_threads_read ref=s1/,
         );
         assert.match(selected.content.text, /Message received at/);
         const actual = wire.findLast((message) => message.role === "user")!;
@@ -186,7 +186,10 @@ test("actual Host persists compact user content before wire while log retains th
     )!;
     assert.equal(selection.kind, "selection");
     if (selection.kind !== "selection") throw Error("selection expected");
-    assert.match(selection.content.text, /Original conversation history; s2;/);
+    assert.match(
+      selection.content.text,
+      /Original conversation history; zenx_threads_read ref=s2/,
+    );
     assert.ok(!selection.content.text.includes("zen-thread://"));
     assert.ok(!selection.content.text.includes(target.id));
     const refs = new ModelReferenceRegistry().scope(
