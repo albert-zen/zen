@@ -1,0 +1,262 @@
+/** Synthetic observer contract tests, not native timing evidence. Run from a
+ * checkout with its normal jsdom dependency installed. No Electron is started. */
+const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
+const { createRequire } = require("node:module");
+const { test } = require("node:test");
+const { JSDOM } = createRequire(path.resolve("package.json"))("jsdom");
+
+const source = readFileSync(
+  path.join(__dirname, "capture-send-feedback-verified-frame.cjs"),
+  "utf8",
+);
+const observer = source.slice(
+  source.indexOf("function installObservation("),
+  source.indexOf("\nasync function run()"),
+);
+assert.ok(observer.startsWith("function installObservation("));
+
+function fixture() {
+  const dom = new JSDOM(
+    '<main class="thread-view"><div class="messages"></div><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></main>',
+    { runScripts: "outside-only" },
+  );
+  const { window: w } = dom;
+  const d = w.document;
+  let now = 100,
+    id = 0,
+    listener,
+    offCount = 0;
+  const frames = new Map();
+  let geometryReads = 0;
+  Object.defineProperty(w.performance, "now", { value: () => now });
+  w.requestAnimationFrame = (callback) => {
+    frames.set(++id, callback);
+    return id;
+  };
+  w.cancelAnimationFrame = (key) => frames.delete(key);
+  w.zenx = {
+    protocol: {
+      onNotification: (callback) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+          offCount++;
+        };
+      },
+    },
+  };
+  const rect = {
+    top: 10,
+    left: 10,
+    right: 410,
+    bottom: 50,
+    width: 400,
+    height: 40,
+  };
+  w.Element.prototype.getBoundingClientRect = function () {
+    geometryReads++;
+    now += Number(this.dataset.cost ?? 0);
+    return this.dataset.offscreen ? { ...rect, top: 2000, bottom: 2040 } : rect;
+  };
+  d.querySelector("#thread-composer").value = "synthetic-nonce";
+  w.eval(observer + '; installObservation("synthetic-nonce", "thread-A");');
+  d.querySelector("button").dispatchEvent(
+    new w.MouseEvent("click", { bubbles: true }),
+  );
+  d.querySelector("#thread-composer").value = "";
+  const row = async (
+    kind,
+    clientOrMessage = kind === "pending" ? "client-A" : "message-A",
+  ) => {
+    const article = d.createElement("article");
+    article.className = kind === "pending" ? "pending-send-row" : "user-row";
+    if (kind === "pending") {
+      article.dataset.pendingSendClientId = clientOrMessage;
+      article.dataset.sendState = "submitting";
+    } else article.dataset.sentMessageId = clientOrMessage;
+    const bubble = d.createElement("div");
+    bubble.className = "user-bubble";
+    bubble.textContent = "synthetic-nonce";
+    article.append(bubble);
+    d.querySelector(".messages").append(article);
+    await new Promise(setImmediate);
+    return { article, bubble };
+  };
+  return {
+    d,
+    w,
+    row,
+    record: w.__sendLatency,
+    geometryReads: () => geometryReads,
+    frame() {
+      now += 16;
+      const callbacks = [...frames.values()];
+      frames.clear();
+      for (const cb of callbacks) cb(now);
+    },
+    notify({
+      clientId = "client-A",
+      messageId = "message-A",
+      threadId = "thread-A",
+    } = {}) {
+      listener?.("zen/thread/event", {
+        threadId,
+        event: {
+          type: "item",
+          item: { type: "user_message", id: messageId, clientId },
+        },
+      });
+    },
+    close() {
+      w.__sendLatency.stop();
+      assert.equal(offCount, 1);
+      dom.window.close();
+    },
+  };
+}
+
+test("v2 timestamp is retained while verified time includes geometry cost and another frame", async () => {
+  const f = fixture();
+  try {
+    const { bubble } = await f.row("pending");
+    bubble.dataset.cost = "250";
+    f.frame();
+    assert.equal(f.record.pendingVisibleFrameMs - f.record.clickMs, 16);
+    assert.ok(
+      f.record.feedbackGeometryCompleteMs - f.record.pendingVisibleFrameMs >=
+        500,
+    );
+    assert.equal(f.record.feedbackSubsequentFrameMs, undefined);
+    assert.equal(f.record.clearSubsequentFrameMs, undefined);
+    f.frame();
+    assert.ok(
+      f.record.feedbackSubsequentFrameMs > f.record.feedbackGeometryCompleteMs,
+    );
+    assert.ok(
+      f.record.clearSubsequentFrameMs > f.record.clearGeometryCompleteMs,
+    );
+    assert.equal(f.record.feedbackClientId, "client-A");
+  } finally {
+    f.close();
+  }
+});
+
+test("pending can be replaced by exact canonical identity before the next frame", async () => {
+  const f = fixture();
+  try {
+    const pending = await f.row("pending");
+    f.frame();
+    pending.article.remove();
+    f.notify();
+    await f.row("canonical");
+    f.frame();
+    assert.equal(f.record.feedbackGeometryKind, "pending");
+    assert.equal(f.record.feedbackSubsequentKind, "canonical");
+    assert.equal(f.record.feedbackSubsequentMessageId, "message-A");
+    assert.ok(Number.isFinite(f.record.bubbleVisibleFrameMs));
+  } finally {
+    f.close();
+  }
+});
+
+test("canonical arriving after verified pending frames is still observed", async () => {
+  const f = fixture();
+  try {
+    const pending = await f.row("pending");
+    f.frame();
+    f.frame();
+    const verifiedGeometryReads = f.geometryReads();
+    f.frame();
+    assert.equal(
+      f.geometryReads(),
+      verifiedGeometryReads,
+      "new geometry verification stops after both verified metrics settle",
+    );
+    pending.article.remove();
+    f.notify();
+    await f.row("canonical");
+    f.frame();
+    f.frame();
+    assert.ok(Number.isFinite(f.record.feedbackSubsequentFrameMs));
+    assert.ok(Number.isFinite(f.record.followingFrameMs));
+    assert.equal(f.record.messageId, "message-A");
+  } finally {
+    f.close();
+  }
+});
+
+for (const mismatch of [
+  { clientId: "client-wrong" },
+  { threadId: "thread-wrong" },
+  { messageId: "message-wrong" },
+]) {
+  test(
+    "canonical identity mismatch cannot complete the pending observation: " +
+      JSON.stringify(mismatch),
+    async () => {
+      const f = fixture();
+      try {
+        const pending = await f.row("pending");
+        f.frame();
+        pending.article.remove();
+        f.notify(mismatch);
+        await f.row("canonical");
+        f.frame();
+        f.frame();
+        assert.equal(f.record.feedbackSubsequentFrameMs, undefined);
+      } finally {
+        f.close();
+      }
+    },
+  );
+}
+
+test("detached pending node does not count as another visible frame", async () => {
+  const f = fixture();
+  try {
+    const pending = await f.row("pending");
+    f.frame();
+    pending.article.remove();
+    f.frame();
+    assert.equal(f.record.feedbackSubsequentFrameMs, undefined);
+  } finally {
+    f.close();
+  }
+});
+
+for (const hidden of ["hidden", "offscreen"]) {
+  test(hidden + " node cannot establish verified feedback", async () => {
+    const f = fixture();
+    try {
+      const { bubble } = await f.row("pending");
+      if (hidden === "hidden") bubble.style.visibility = "hidden";
+      else bubble.dataset.offscreen = "true";
+      f.frame();
+      f.frame();
+      assert.equal(f.record.feedbackGeometryCompleteMs, undefined);
+      assert.equal(f.record.feedbackSubsequentFrameMs, undefined);
+    } finally {
+      f.close();
+    }
+  });
+}
+
+test("canonical-first path requires native identity, supports same-message remount and stops cleanly", async () => {
+  const f = fixture();
+  const first = await f.row("canonical");
+  f.frame();
+  assert.equal(f.record.feedbackGeometryCompleteMs, undefined);
+  f.notify();
+  f.frame();
+  first.article.remove();
+  await f.row("canonical");
+  f.frame();
+  assert.equal(f.record.feedbackClientId, "client-A");
+  assert.equal(f.record.feedbackSubsequentKind, "canonical");
+  const count = f.record.instrumentation.frameCallbacks;
+  f.close();
+  f.frame();
+  assert.equal(f.record.instrumentation.frameCallbacks, count);
+});
