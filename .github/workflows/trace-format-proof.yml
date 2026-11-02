@@ -1,0 +1,26 @@
+name: Trace directory test formatting evidence
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/trace-format-proof.yml]
+permissions:
+  contents: read
+jobs:
+  format-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: be05f0842649287e5eefd88f3984dab8a6afd073
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install exact formatter dependency without lifecycle scripts
+        timeout-minutes: 7
+        run: npm ci --ignore-scripts
+      - name: Print exact formatter changes without committing source
+        run: |
+          npx --no-install prettier --write src/trace.ts test/trace-directory-durability.test.ts
+          git diff -- src/trace.ts test/trace-directory-durability.test.ts

@@ -1,0 +1,66 @@
+name: Immediate-send candidate checks
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/send-feedback-check.yml]
+permissions:
+  contents: read
+jobs:
+  targeted-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0adcdf4b2897344a87ae250e8b1c528828e18162
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        timeout-minutes: 7
+      - name: Prepare production dependencies
+        run: |
+          npm run build
+          npm run prepare:first-party-plugins --workspace @zen/zenx
+      - name: Typecheck exact candidate
+        id: types
+        continue-on-error: true
+        run: npm run typecheck:prepared --workspace @zen/zenx
+      - name: Targeted new and existing composer/component tests
+        id: tests
+        continue-on-error: true
+        working-directory: apps/zenx
+        run: npx --no-install tsx --test test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts
+      - name: Build exact production App
+        id: build
+        continue-on-error: true
+        run: npm run build --workspace @zen/zenx
+      - name: Require every real check to pass
+        if: always()
+        env:
+          TYPE_RESULT: ${{ steps.types.outcome }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+        run: |
+          printf 'typecheck=%s tests=%s build=%s\n' "$TYPE_RESULT" "$TEST_RESULT" "$BUILD_RESULT"
+          test "$TYPE_RESULT" = success
+          test "$TEST_RESULT" = success
+          test "$BUILD_RESULT" = success
+  exact-formatter-output:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 0adcdf4b2897344a87ae250e8b1c528828e18162
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+        timeout-minutes: 7
+      - name: Print exact formatting diff only
+        run: |
+          npx --no-install prettier --write ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts
+          git diff -- ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts
