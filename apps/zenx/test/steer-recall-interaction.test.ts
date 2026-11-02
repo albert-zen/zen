@@ -137,6 +137,7 @@ test("actual ThreadView recalls exact whole snapshot while newer input and later
     thread = applyQueueItem(thread, receipt(request));
     await h.render(thread, props());
     assert.equal(restores, 1);
+    assert.equal(document.querySelector("[data-queue-id]"), null);
     assert.deepEqual(
       pendingSteerMessages(thread.canonicalItems!).map((item) => item.id),
       ["queue-2"],
@@ -331,4 +332,30 @@ test("restart only offers explicit receipt recovery; submitting Composer keeps t
         .textContent!.includes(i18n.t("shell:steerRecoveryBusy")),
     );
   });
+});
+
+test("canonical recall event removes recalled entries from legacy queue projection without a Thread resume", () => {
+  const thread = staged();
+  const request = { threadId: thread.id, recallId: "project-once",
+    targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
+      queuedItemId: item.id, clientId: item.clientId, expectedRevision: item.revision,
+    })) };
+  const updated = applyQueueItem(thread, receipt(request));
+  assert.deepEqual(updated.queuedMessages, []);
+  assert.deepEqual(pendingSteerMessages(updated.canonicalItems!), []);
+  assert.equal(updated.canonicalItems!.filter((item) => item.type === "user_message_queued").length, 2);
+});
+
+test("receipt event keeps unrelated later next-turn and staged inputs in their own projections", () => {
+  let thread = staged();
+  const request = { threadId: thread.id, recallId: "old-batch",
+    targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
+      queuedItemId: item.id, clientId: item.clientId, expectedRevision: item.revision,
+    })) };
+  thread = applyQueueItem(thread, queueItem(2, [{ type: "text", text: "next turn" }]));
+  thread = applyQueueItem(thread, { ...queueItem(3, [{ type: "text", text: "later steer" }]),
+    deliveryMode: "steer", expectedTurnId: "runtime-turn" });
+  const updated = applyQueueItem(thread, receipt(request));
+  assert.deepEqual(updated.queuedMessages!.map((item) => item.id), ["queue-2", "queue-3"]);
+  assert.deepEqual(pendingSteerMessages(updated.canonicalItems!).map((item) => item.id), ["queue-3"]);
 });
