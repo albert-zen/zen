@@ -396,6 +396,10 @@ async function run() {
     "hide/switch never cancels or sends",
   );
 
+  // Only workspace maximization promises the same DOM; changing Thread does not.
+  await evaluate(
+    "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
+  );
   await evaluate(
     `(async()=>{const owner={kind:'thread',id:${JSON.stringify(fixture.main)}},s=await window.zenx.threadSidebar.read(owner);return window.zenx.threadSidebar.update({owner,expectedRevision:s.revision,patch:{open:false,fullscreen:false,tabs:[{kind:'file',path:'fixture.txt'}],selectedTab:'file:fixture.txt'}})})()`,
   );
