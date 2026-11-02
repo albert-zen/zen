@@ -80,10 +80,10 @@ test("existence probes do not read semantic history; actual journal reads remain
       assert.equal(receipt.at(-1)?.id, "next");
       assert.equal(
         reads,
-        4,
-        "append retains its reconciliation read and atomic-publication read",
+        3,
+        "append reuses its operation-local validated raw bytes for publication",
       );
-      assert.equal(bytesRead, 4 * size);
+      assert.equal(bytesRead, 3 * size);
       t.diagnostic(
         JSON.stringify({ reads, bytesRead, priorItemListBytes: size }),
       );
@@ -315,3 +315,156 @@ test("opened non-files and probe I/O errors fail closed and release the descript
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("one append snapshot repairs a missing compiled suffix before publishing new input", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "zen-repair-snapshot-"));
+  const directory = path.join(root, "threads");
+  const trace = new FileTraceStore(path.join(root, "trace"));
+  let publications = 0;
+  const journal = new DomainThreadJournal({
+    directory,
+    trace,
+    metadata: new InMemoryThreadMetadataStore(),
+    onItemListAppendPhase(phase) {
+      if (phase === "synced") publications++;
+    },
+  });
+  const filename = path.join(directory, "items", "t.jsonl");
+  const read = fs.readFile;
+  try {
+    await journal.create([metadata, user("retained"), user("repair")]);
+    const original = await read(filename, "utf8");
+    const prefix = " " + original.split("\n")[0] + "\r\n";
+    await fs.writeFile(filename, prefix);
+    let reads = 0;
+    const tracked = t.mock.method(
+      fs,
+      "readFile",
+      async (...args: Parameters<typeof read>) => {
+        const bytes = await read(...args);
+        if (args[0] === filename) reads++;
+        return bytes;
+      },
+    );
+    syncBuiltinESMExports();
+    let receipt;
+    try {
+      receipt = await journal.append(user("next"));
+      assert.equal(
+        reads,
+        1,
+        "repair and new input share one validated prefix, not two public queued appends",
+      );
+      assert.equal(
+        publications,
+        2,
+        "repair and new input retain their separate durable atomic publications",
+      );
+    } finally {
+      tracked.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.deepEqual(
+      receipt.map((i) => i.id),
+      ["retained", "repair", "next"],
+    );
+    const durable = await read(filename, "utf8");
+    assert.equal(durable.startsWith(prefix), true);
+    assert.deepEqual(
+      durable
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).id),
+      ["retained", "repair", "next"],
+    );
+    await journal.close();
+    const cold = new DomainThreadJournal({
+      directory,
+      trace,
+      metadata: new InMemoryThreadMetadataStore(),
+    });
+    try {
+      await cold.assertRecoverySafe("t");
+      assert.deepEqual(
+        (await cold.readItemList("t")).map((i) => i.id),
+        ["retained", "repair", "next"],
+      );
+    } finally {
+      await cold.close();
+    }
+  } finally {
+    await journal.close();
+    await trace.flush();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const stage of ["before-read", "after-read"] as const)
+  test(`append snapshot fails closed when its source disappears ${stage}`, async (t) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "zen-snapshot-missing-"),
+    );
+    const directory = path.join(root, "threads");
+    const trace = new FileTraceStore(path.join(root, "trace"));
+    const journal = new DomainThreadJournal({
+      directory,
+      trace,
+      metadata: new InMemoryThreadMetadataStore(),
+    });
+    const filename = path.join(directory, "items", "t.jsonl");
+    const read = fs.readFile;
+    const readTrace = trace.read.bind(trace);
+    let removed = false;
+    try {
+      await journal.create([metadata, user("initial")]);
+      const before = await readTrace("t");
+      const tracked = t.mock.method(
+        fs,
+        "readFile",
+        async (...args: Parameters<typeof read>) => {
+          const bytes = await read(...args);
+          if (stage === "after-read" && args[0] === filename && !removed) {
+            await fs.unlink(filename);
+            removed = true;
+          }
+          return bytes;
+        },
+      );
+      syncBuiltinESMExports();
+      trace.read = async (...args) => {
+        const observed = await readTrace(...args);
+        if (stage === "before-read" && !removed) {
+          await fs.unlink(filename);
+          removed = true;
+        }
+        return observed;
+      };
+      try {
+        await assert.rejects(journal.append(user("not-admitted")), {
+          code: "ENOENT",
+        });
+        assert.equal(removed, true);
+      } finally {
+        tracked.mock.restore();
+        syncBuiltinESMExports();
+        trace.read = readTrace;
+      }
+      await assert.rejects(fs.stat(filename), { code: "ENOENT" });
+      assert.deepEqual(
+        await readTrace("t"),
+        before,
+        "no new input source or semantic publication occurred",
+      );
+      // Explicit standalone recovery still rebuilds from fresh source evidence.
+      await journal.reconcileCompilation("t");
+      assert.deepEqual(
+        (await journal.readItemList("t")).map((i) => i.id),
+        ["initial"],
+      );
+    } finally {
+      trace.read = readTrace;
+      await journal.close();
+      await trace.flush();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });

@@ -11,6 +11,19 @@ import {
   syncDirectory,
   type PublicationPhase,
 } from "./storage-files.js";
+// Decoded JSON belongs to this scope; callbacks cannot desynchronize it from bytes.
+function freezeSnapshot<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeSnapshot(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+/** Internal, callback-scoped access; callers must await each operation. */
+export interface ItemListAppendSnapshot {
+  read(): Promise<readonly ContextItem[]>;
+  append(items: readonly ContextItem[]): Promise<void>;
+}
 export class FileItemListStore {
   readonly #directory: string;
   readonly #phase:
@@ -130,26 +143,101 @@ export class FileItemListStore {
   async append(threadId: string, items: readonly ContextItem[]): Promise<void> {
     if (!items.length) return;
     const snapshot = items.map(decodeContextItem);
+    await this.withAppendSnapshot(threadId, (scope) => scope.append(snapshot));
+  }
+  /** Domain operation -> existing store lane; never re-enter public append here. */
+  async withAppendSnapshot<T>(
+    threadId: string,
+    use: (snapshot: ItemListAppendSnapshot) => Promise<T>,
+  ): Promise<T> {
     const write = this.#chain.then(async () => {
-      const original = await this.#bytes(threadId);
-      const prior = this.#decode(threadId, original);
-      this.#validate(threadId, [...prior, ...snapshot]);
-      try {
-        await replaceFile(
-          this.#path(threadId),
-          Buffer.concat([
-            original,
-            Buffer.from(
-              snapshot.map((item) => JSON.stringify(item)).join("\n") + "\n",
-            ),
-          ]),
-          this.#phase,
+      let active = true;
+      let retained: { bytes: Buffer; items: ContextItem[] } | undefined;
+      let pending: Promise<void> | undefined;
+      let failure: { error: unknown } | undefined;
+      const run = <R>(action: () => Promise<R>): Promise<R> => {
+        if (!active || pending !== undefined)
+          return Promise.reject(
+            new Error("ItemList append snapshot is inactive or busy"),
+          );
+        const operation = action().catch((error: unknown) => {
+          active = false;
+          retained = undefined;
+          failure = { error };
+          throw error;
+        });
+        pending = operation.then(
+          () => {
+            pending = undefined;
+          },
+          () => {
+            pending = undefined;
+          },
         );
-      } catch (error) {
-        throw new ThreadJournalAppendOutcomeUnknownError(error);
+        return operation;
+      };
+      const load = async () => {
+        if (retained === undefined) {
+          const bytes = await this.#bytes(threadId);
+          retained = {
+            bytes,
+            items: freezeSnapshot(this.#decode(threadId, bytes)),
+          };
+        }
+        return retained;
+      };
+      const scope: ItemListAppendSnapshot = {
+        read: () =>
+          run(async () => {
+            try {
+              return (await load()).items;
+            } catch (error) {
+              // Absence is not a validated prefix: reconciliation may create it.
+              if (isMissing(error)) return [];
+              throw error;
+            }
+          }),
+        append: (items) => {
+          return run(async () => {
+            const suffix = items.map(decodeContextItem);
+            if (!suffix.length) return;
+            const prior = await load();
+            const combined = freezeSnapshot([...prior.items, ...suffix]);
+            this.#validate(threadId, combined);
+            // Keep the fresh readable/owned-file gate without rereading content.
+            if (!(await this.exists(threadId)))
+              throw Object.assign(new Error("Semantic source disappeared"), {
+                code: "ENOENT",
+              });
+            const bytes = Buffer.concat([
+              prior.bytes,
+              Buffer.from(
+                suffix.map((item) => JSON.stringify(item)).join("\n") + "\n",
+              ),
+            ]);
+            try {
+              await replaceFile(this.#path(threadId), bytes, this.#phase);
+            } catch (error) {
+              throw new ThreadJournalAppendOutcomeUnknownError(error);
+            }
+            retained = { bytes, items: combined };
+          });
+        },
+      };
+      try {
+        const result = await use(scope);
+        active = false;
+        // Even an accidentally unawaited operation must settle before lane release.
+        await pending;
+        if (failure !== undefined) throw failure.error;
+        return result;
+      } finally {
+        active = false;
+        await pending;
+        retained = undefined;
       }
     });
     this.#chain = write.catch(() => undefined);
-    await write;
+    return write;
   }
 }
