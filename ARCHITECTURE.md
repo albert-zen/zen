@@ -1659,3 +1659,48 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+## Proposed / not implemented: pending steer atomic recall (2026-11-02)
+
+This is a design proposal, not an implemented guarantee or an override of the
+existing three durable domains. The proposed user-visible contract is the
+Experiment / TBD pending-steer section in [ZenX UI/UX](apps/zenx/docs/ui-ux.md).
+
+Today ordinary steerTurn directly commits user_message; the existing queued
+cancellation method commits per target. Neither permits claiming that all
+unconsumed ordinary steer can already be atomically recalled. Existing committed
+model-semantic Items must not be deleted, rewritten, or retrospectively treated
+as pending merely because provider dispatch has not been observed.
+
+Proposed admission stages new steer through the existing pending-input domain,
+then claims it under the same Thread mutation fence at model-input preparation.
+Claim/delivery creates the irrevocable model-semantic input boundary. HTTP
+dispatch, first token and renderer state are not that boundary. All actual
+compiler/admission paths must use the same authority before this can ship.
+
+A single durable batch control fact identifies the operation and exact message,
+client and revision snapshot; all targets pass validation or none is withdrawn.
+The receipt is recoverable from existing original input and committed edits, not
+a second editable transcript or a fourth journal. New arrivals are not silently
+added, and critical control persistence must precede ACK.
+
+RecallReceipt retains recoverable structured input and attachment references.
+It is not a normal Composer draft store. The initiating live window may safely
+merge into the latest renderer-local draft; other windows do not auto-insert.
+Crash/restart offers explicit recovery from the receipt. Automatic cross-window
+exactly-once draft insertion and Host-persisted normal drafts are out of scope.
+Unknown outcomes use exact receipt reads, never automatic command replay or send.
+
+Initial scope is human steer in an exact private Thread, not Host/Agent messages,
+Rooms or implicit cross-author authority. Side-chat support requires verified
+routing to its own Thread, not fallback to the selected main Thread.
+
+Unresolved implementation decision: when the target Turn ends before pending
+steer is claimed, use the established delivery policy and document its exact
+outcome. This feature must not implicitly start or resurrect a Turn or convert
+steer to follow-up. The chosen outcome and all claim/recall/Turn-end races require
+native tests before implementation acceptance.
+
+Source baseline: [ordinary steer](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L4441),
+[queued cancellation](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740),
+[existing draft codec](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-draft.ts).
