@@ -625,8 +625,7 @@ for (const winner of ["claim", "recall"] as const)
             (winner === "claim" &&
               item.type === "user_message" &&
               item.clientId === "race") ||
-            (winner === "recall" &&
-              item.type === "user_message_steer_recalled")
+            (winner === "recall" && item.type === "user_message_steer_recalled")
           ) {
             entered.resolve();
             await releaseCommit.promise;

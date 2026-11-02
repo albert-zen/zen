@@ -5561,7 +5561,9 @@ for (const action of ["recall", "continue", "stop"] as const)
         ]),
       });
       const thread = await server.startThread();
-      await (await server.startTurn(thread.id, "seed")).done;
+      await (
+        await server.startTurn(thread.id, "seed")
+      ).done;
       const active = await server.startTurn(thread.id, "active");
       void active.done.catch(() => undefined);
       try {
@@ -5574,13 +5576,17 @@ for (const action of ["recall", "continue", "stop"] as const)
         );
         const timely = await Promise.race([
           accepted.then(() => true),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+          new Promise<boolean>((resolve) =>
+            setTimeout(() => resolve(false), 500),
+          ),
         ]);
         assert(timely, "pending admission must not await summary completion");
         const before = await server.readThread(thread.id);
         const pending = pendingSteerMessages(before.items);
         assert.equal(pending.length, 1);
-        assert(!JSON.stringify(before.itemList).includes("private pending marker"));
+        assert(
+          !JSON.stringify(before.itemList).includes("private pending marker"),
+        );
         if (action === "recall")
           await server.recallSteerMessages(thread.id, {
             recallId: "during-summary",
@@ -5602,11 +5608,15 @@ for (const action of ["recall", "continue", "stop"] as const)
         if (action === "stop") {
           assert.equal(normal.length, 2);
           assert.equal(pendingSteerMessages(after.items).length, 1);
-          assert(!after.items.some((item) => item.type === "context_compaction"));
+          assert(
+            !after.items.some((item) => item.type === "context_compaction"),
+          );
         } else {
           assert.equal(normal.length, 3);
           assert.equal(
-            JSON.stringify(normal[2]!.messages).includes("private pending marker"),
+            JSON.stringify(normal[2]!.messages).includes(
+              "private pending marker",
+            ),
             action === "continue",
           );
           assert.equal(after.turns.length, 2);
@@ -5632,7 +5642,10 @@ test(
       async *stream(request): AsyncIterable<ModelEvent> {
         if (isSummaryRequest(request)) {
           summaries.push(cloneRequest(request));
-          yield { type: "text_delta", delta: "small completed history summary" };
+          yield {
+            type: "text_delta",
+            delta: "small completed history summary",
+          };
           return;
         }
         normal.push(cloneRequest(request));
@@ -5655,7 +5668,9 @@ test(
       ]),
     });
     const thread = await server.startThread();
-    await (await server.startTurn(thread.id, "seed")).done;
+    await (
+      await server.startTurn(thread.id, "seed")
+    ).done;
     const active = await server.startTurn(thread.id, "active");
     void active.done.catch(() => undefined);
     try {

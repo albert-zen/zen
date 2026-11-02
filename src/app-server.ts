@@ -3994,311 +3994,327 @@ export class ZenAppServer {
                         const prepared = await this.#withThreadMutation(
                           threadId,
                           async () => {
-                        this.#assertCurrentThreadAuthority(thread);
-                        await this.#journal.assertRecoverySafe?.(threadId);
-                        this.#assertCurrentThreadAuthority(thread);
-                        const active = this.#activeTurns.get(threadId);
-                        if (active?.turnId !== turnId) {
-                          throw new AppServerError(
-                            "turn_not_running",
-                            `Turn ${turnId} is not running on thread ${threadId}`,
-                          );
-                        }
-                        active.controller.signal.throwIfAborted();
-                        const pendingItems = thread.items;
-                        const pendingTokens = this.#pendingSteerTokenEstimate(
-                          pendingItems,
-                          turnId,
-                        );
-                        if (pendingTokens > 0) {
-                          const preview = this.#providerRegistry.acquire(
-                            thread.effectiveConfiguration(),
-                          );
-                          try {
-                            const window = preview.model.contextWindow;
-                            if (window !== null) {
-                              const total =
-                                this.#estimateContext(
-                                  pendingItems,
-                                  preview,
-                                  this.#runtimeConfiguration.contextCompaction,
-                                ).total + pendingTokens;
-                              if (pendingTokens >= window)
-                                throw new AppServerError(
-                                  "context_window_exceeded",
-                                  "Pending human input alone exceeds the model window; it remains pending and can be recalled",
-                                );
-                              if (
-                                !attemptedCompaction &&
-                                total >= automaticCompactionThreshold(
-                                  window,
-                                  this.#runtimeConfiguration.contextCompaction
-                                    .triggerPercent,
-                                )
-                              )
-                                return { prepareCompaction: true as const };
-                              if (total >= window)
-                                throw new AppServerError(
-                                  "context_window_exceeded",
-                                  "Pending human input does not fit the prepared context; it remains pending and can be recalled",
-                                );
+                            this.#assertCurrentThreadAuthority(thread);
+                            await this.#journal.assertRecoverySafe?.(threadId);
+                            this.#assertCurrentThreadAuthority(thread);
+                            const active = this.#activeTurns.get(threadId);
+                            if (active?.turnId !== turnId) {
+                              throw new AppServerError(
+                                "turn_not_running",
+                                `Turn ${turnId} is not running on thread ${threadId}`,
+                              );
                             }
-                          } finally {
-                            preview.release();
-                          }
-                        }
-                        // Agent guidance that arrived during initial admission joins this
-                        // Turn in arrival order after its fixed initial input batch.
-                        // Bound backlog admission just like a normal queue batch.
-                        let guidanceCount = 0;
-                        let guidanceBytes = 0;
-                        const guidanceBudget = Math.min(
-                          64 * 1024,
-                          (resolved.model.contextWindow ?? 32_768) * 2,
-                        );
-                        for (const pending of pendingQueuedMessages(
-                          pendingItems,
-                        )) {
-                          if (
-                            !(
-                              (pending.type === "user_message_queued" &&
-                                pending.deliveryMode === "steer" &&
-                                pending.expectedTurnId === turnId) ||
-                              (pending.type === "thread_message_queued" &&
-                                pending.messageType === "guidance") ||
-                              (pending.type === "host_message_queued" &&
-                                pending.intent === "steer")
-                            ) ||
-                            this.#reservedQueuedItems
-                              .get(threadId)
-                              ?.has(pending.id)
-                          )
-                            continue;
-                          // Native human steer keeps its prior all-visible-next-sample
-                          // semantics. Only Agent/Host backlog uses this existing budget.
-                          if (pending.type !== "user_message_queued") {
-                            const inputBytes = Buffer.byteLength(
-                              JSON.stringify(pending.input),
-                            );
-                            if (
-                              guidanceCount >= 8 ||
-                              (guidanceCount > 0 &&
-                                guidanceBytes + inputBytes > guidanceBudget)
-                            )
-                              continue;
-                            guidanceCount++;
-                            guidanceBytes += inputBytes;
-                          }
-                          const message:
-                            | UserMessageItem
-                            | ThreadMessageItem
-                            | HostMessageItem =
-                            pending.type === "user_message_queued"
-                              ? {
-                                  id: this.#id(),
-                                  type: "user_message",
-                                  threadId,
-                                  turnId,
-                                  createdAt: this.#now(),
-                                  clientId: pending.clientId,
-                                  content: pending.input,
-                                  ...(pending.receiptTimezone === undefined
-                                    ? {}
-                                    : {
-                                        receiptTimezone:
-                                          pending.receiptTimezone,
-                                      }),
-                                  ...(active.deliveryAnchorId === undefined
-                                    ? {}
-                                    : {
-                                        deliveryAfter: active.deliveryAnchorId,
-                                      }),
-                                }
-                              : pending.type === "host_message_queued"
-                                ? {
-                                    id: this.#id(),
-                                    type: "host_message",
-                                    sender: "host",
-                                    threadId,
-                                    turnId,
-                                    createdAt: this.#now(),
-                                    clientId: pending.clientId,
-                                    source: pending.source,
-                                    ...(pending.sourceId === undefined
-                                      ? {}
-                                      : { sourceId: pending.sourceId }),
-                                    text: pending.text,
-                                    mode: "steer",
-                                    ...(active.deliveryAnchorId === undefined
-                                      ? {}
-                                      : {
-                                          deliveryAfter:
-                                            active.deliveryAnchorId,
-                                        }),
-                                  }
-                                : {
-                                    id: this.#id(),
-                                    type: "thread_message",
-                                    threadId,
-                                    turnId,
-                                    createdAt: this.#now(),
-                                    clientId: pending.clientId,
-                                    sender: pending.sender,
-                                    content: pending.input,
-                                    mode: "steer",
-                                    messageType: pending.messageType,
-                                    ...(active.deliveryAnchorId === undefined
-                                      ? {}
-                                      : {
-                                          deliveryAfter:
-                                            active.deliveryAnchorId,
-                                        }),
-                                  };
-                          active.controller.signal.throwIfAborted();
-                          await this.#commit(thread, message);
-                          this.#emit({ type: "item_completed", item: message });
-                        }
-                        active.deliveryAnchorId = modelResponseId;
-                        const items = thread.items;
-                        // Thread-level settings may be appended between samples.
-                        // They do not enter model messages; anchor the reset to the
-                        // latest observed Item in this Turn under the same lock.
-                        const contextBoundaryItemId = items.findLast(
-                          (item) => item.turnId === turnId,
-                        )?.id;
-                        if (contextBoundaryItemId === undefined) {
-                          throw new AppServerError(
-                            "runtime_error",
-                            "Model sample has no canonical context boundary",
-                          );
-                        }
-                        const notice =
-                          active.contextCompactionNotice !== undefined &&
-                          active.contextCompactionNoticeIssued !== true
-                            ? active.contextCompactionNotice
-                            : undefined;
-                        const configuration = thread.effectiveConfiguration();
-                        const runtimeConfiguration = this.#runtimeConfiguration;
-                        const sample =
-                          this.#providerRegistry.acquire(configuration);
-                        try {
-                          const presentation =
-                            this.#runtime.projectToolPresentation(
-                              items,
-                              runtimeConfiguration.contextCompaction
-                                .agenticEnabled &&
-                                sample.model.contextWindow !== null,
-                            );
-                          await observeTraceSpan(
-                            this.#auxiliaryModel?.trace,
-                            { threadId, turnId, sampleId: modelResponseId },
-                            "context_materialize",
-                            async () => {
-                              for (const context of prepareSampleContext({
-                                threadId,
+                            active.controller.signal.throwIfAborted();
+                            const pendingItems = thread.items;
+                            const pendingTokens =
+                              this.#pendingSteerTokenEstimate(
+                                pendingItems,
                                 turnId,
-                                sampleId: modelResponseId,
-                                items,
-                                itemList: thread.itemList,
-                                sandbox: configuration.sandbox,
-                                ...(sample.adapter.contextInstructions ===
+                              );
+                            if (pendingTokens > 0) {
+                              const preview = this.#providerRegistry.acquire(
+                                thread.effectiveConfiguration(),
+                              );
+                              try {
+                                const window = preview.model.contextWindow;
+                                if (window !== null) {
+                                  const total =
+                                    this.#estimateContext(
+                                      pendingItems,
+                                      preview,
+                                      this.#runtimeConfiguration
+                                        .contextCompaction,
+                                    ).total + pendingTokens;
+                                  if (pendingTokens >= window)
+                                    throw new AppServerError(
+                                      "context_window_exceeded",
+                                      "Pending human input alone exceeds the model window; it remains pending and can be recalled",
+                                    );
+                                  if (
+                                    !attemptedCompaction &&
+                                    total >=
+                                      automaticCompactionThreshold(
+                                        window,
+                                        this.#runtimeConfiguration
+                                          .contextCompaction.triggerPercent,
+                                      )
+                                  )
+                                    return { prepareCompaction: true as const };
+                                  if (total >= window)
+                                    throw new AppServerError(
+                                      "context_window_exceeded",
+                                      "Pending human input does not fit the prepared context; it remains pending and can be recalled",
+                                    );
+                                }
+                              } finally {
+                                preview.release();
+                              }
+                            }
+                            // Agent guidance that arrived during initial admission joins this
+                            // Turn in arrival order after its fixed initial input batch.
+                            // Bound backlog admission just like a normal queue batch.
+                            let guidanceCount = 0;
+                            let guidanceBytes = 0;
+                            const guidanceBudget = Math.min(
+                              64 * 1024,
+                              (resolved.model.contextWindow ?? 32_768) * 2,
+                            );
+                            for (const pending of pendingQueuedMessages(
+                              pendingItems,
+                            )) {
+                              if (
+                                !(
+                                  (pending.type === "user_message_queued" &&
+                                    pending.deliveryMode === "steer" &&
+                                    pending.expectedTurnId === turnId) ||
+                                  (pending.type === "thread_message_queued" &&
+                                    pending.messageType === "guidance") ||
+                                  (pending.type === "host_message_queued" &&
+                                    pending.intent === "steer")
+                                ) ||
+                                this.#reservedQueuedItems
+                                  .get(threadId)
+                                  ?.has(pending.id)
+                              )
+                                continue;
+                              // Native human steer keeps its prior all-visible-next-sample
+                              // semantics. Only Agent/Host backlog uses this existing budget.
+                              if (pending.type !== "user_message_queued") {
+                                const inputBytes = Buffer.byteLength(
+                                  JSON.stringify(pending.input),
+                                );
+                                if (
+                                  guidanceCount >= 8 ||
+                                  (guidanceCount > 0 &&
+                                    guidanceBytes + inputBytes > guidanceBudget)
+                                )
+                                  continue;
+                                guidanceCount++;
+                                guidanceBytes += inputBytes;
+                              }
+                              const message:
+                                | UserMessageItem
+                                | ThreadMessageItem
+                                | HostMessageItem =
+                                pending.type === "user_message_queued"
+                                  ? {
+                                      id: this.#id(),
+                                      type: "user_message",
+                                      threadId,
+                                      turnId,
+                                      createdAt: this.#now(),
+                                      clientId: pending.clientId,
+                                      content: pending.input,
+                                      ...(pending.receiptTimezone === undefined
+                                        ? {}
+                                        : {
+                                            receiptTimezone:
+                                              pending.receiptTimezone,
+                                          }),
+                                      ...(active.deliveryAnchorId === undefined
+                                        ? {}
+                                        : {
+                                            deliveryAfter:
+                                              active.deliveryAnchorId,
+                                          }),
+                                    }
+                                  : pending.type === "host_message_queued"
+                                    ? {
+                                        id: this.#id(),
+                                        type: "host_message",
+                                        sender: "host",
+                                        threadId,
+                                        turnId,
+                                        createdAt: this.#now(),
+                                        clientId: pending.clientId,
+                                        source: pending.source,
+                                        ...(pending.sourceId === undefined
+                                          ? {}
+                                          : { sourceId: pending.sourceId }),
+                                        text: pending.text,
+                                        mode: "steer",
+                                        ...(active.deliveryAnchorId ===
+                                        undefined
+                                          ? {}
+                                          : {
+                                              deliveryAfter:
+                                                active.deliveryAnchorId,
+                                            }),
+                                      }
+                                    : {
+                                        id: this.#id(),
+                                        type: "thread_message",
+                                        threadId,
+                                        turnId,
+                                        createdAt: this.#now(),
+                                        clientId: pending.clientId,
+                                        sender: pending.sender,
+                                        content: pending.input,
+                                        mode: "steer",
+                                        messageType: pending.messageType,
+                                        ...(active.deliveryAnchorId ===
+                                        undefined
+                                          ? {}
+                                          : {
+                                              deliveryAfter:
+                                                active.deliveryAnchorId,
+                                            }),
+                                      };
+                              active.controller.signal.throwIfAborted();
+                              await this.#commit(thread, message);
+                              this.#emit({
+                                type: "item_completed",
+                                item: message,
+                              });
+                            }
+                            active.deliveryAnchorId = modelResponseId;
+                            const items = thread.items;
+                            // Thread-level settings may be appended between samples.
+                            // They do not enter model messages; anchor the reset to the
+                            // latest observed Item in this Turn under the same lock.
+                            const contextBoundaryItemId = items.findLast(
+                              (item) => item.turnId === turnId,
+                            )?.id;
+                            if (contextBoundaryItemId === undefined) {
+                              throw new AppServerError(
+                                "runtime_error",
+                                "Model sample has no canonical context boundary",
+                              );
+                            }
+                            const notice =
+                              active.contextCompactionNotice !== undefined &&
+                              active.contextCompactionNoticeIssued !== true
+                                ? active.contextCompactionNotice
+                                : undefined;
+                            const configuration =
+                              thread.effectiveConfiguration();
+                            const runtimeConfiguration =
+                              this.#runtimeConfiguration;
+                            const sample =
+                              this.#providerRegistry.acquire(configuration);
+                            try {
+                              const presentation =
+                                this.#runtime.projectToolPresentation(
+                                  items,
+                                  runtimeConfiguration.contextCompaction
+                                    .agenticEnabled &&
+                                    sample.model.contextWindow !== null,
+                                );
+                              await observeTraceSpan(
+                                this.#auxiliaryModel?.trace,
+                                { threadId, turnId, sampleId: modelResponseId },
+                                "context_materialize",
+                                async () => {
+                                  for (const context of prepareSampleContext({
+                                    threadId,
+                                    turnId,
+                                    sampleId: modelResponseId,
+                                    items,
+                                    itemList: thread.itemList,
+                                    sandbox: configuration.sandbox,
+                                    ...(sample.adapter.contextInstructions ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          instructions:
+                                            sample.adapter.contextInstructions,
+                                        }),
+                                    providerToolPresentation:
+                                      sample.adapter.prepareToolPresentation?.(
+                                        sample.selection.modelId,
+                                        presentation.modelTools,
+                                      ),
+                                    tools: presentation.modelTools,
+                                    inputModalities:
+                                      sample.model.inputModalities,
+                                    ...(notice === undefined ? {} : { notice }),
+                                    id: this.#id,
+                                    now: this.#now,
+                                  }))
+                                    await this.#commitContext(thread, context);
+                                },
+                                {},
+                                controller.signal,
+                              );
+                              const compiled = await observeTraceSpan(
+                                this.#auxiliaryModel?.trace,
+                                { threadId, turnId, sampleId: modelResponseId },
+                                "context_compile",
+                                () =>
+                                  compileItemList(thread.itemList, {
+                                    sampleId: modelResponseId,
+                                    selection: sample.selection,
+                                    inputModalities:
+                                      sample.model.inputModalities,
+                                  }),
+                                {},
+                                controller.signal,
+                              );
+                              if (notice !== undefined)
+                                active.contextCompactionNoticeIssued = true;
+                              return {
+                                compiled: true as const,
+                                ...(compiled.providerToolPresentation ===
                                 undefined
                                   ? {}
                                   : {
-                                      instructions:
-                                        sample.adapter.contextInstructions,
+                                      providerToolPresentation:
+                                        compiled.providerToolPresentation,
                                     }),
-                                providerToolPresentation:
-                                  sample.adapter.prepareToolPresentation?.(
-                                    sample.selection.modelId,
-                                    presentation.modelTools,
-                                  ),
-                                tools: presentation.modelTools,
-                                inputModalities: sample.model.inputModalities,
-                                ...(notice === undefined ? {} : { notice }),
-                                id: this.#id,
-                                now: this.#now,
-                              }))
-                                await this.#commitContext(thread, context);
-                            },
-                            {},
-                            controller.signal,
-                          );
-                          const compiled = await observeTraceSpan(
-                            this.#auxiliaryModel?.trace,
-                            { threadId, turnId, sampleId: modelResponseId },
-                            "context_compile",
-                            () =>
-                              compileItemList(thread.itemList, {
-                                sampleId: modelResponseId,
-                                selection: sample.selection,
-                                inputModalities: sample.model.inputModalities,
-                              }),
-                            {},
-                            controller.signal,
-                          );
-                          if (notice !== undefined)
-                            active.contextCompactionNoticeIssued = true;
-                          return {
-                            compiled: true as const,
-                            ...(compiled.providerToolPresentation === undefined
-                              ? {}
-                              : {
-                                  providerToolPresentation:
-                                    compiled.providerToolPresentation,
-                                }),
-                            messages: compiled.messages,
-                            presentation: {
-                              ...presentation,
-                              modelTools: compiled.tools,
-                            },
-                            selectedItemIds: compiled.selectedItemIds,
-                            modelAdapter: sample.adapter,
-                            configuration: {
-                              cwd: configuration.cwd,
-                              providerProfileId:
-                                sample.selection.providerProfileId,
-                              model: sample.selection.modelId,
-                              reasoningEffort: sample.selection.reasoningEffort,
-                              sandbox: configuration.sandbox,
-                              approvalPolicy: configuration.approvalPolicy,
-                              inputModalities: sample.model.inputModalities,
-                              contextWindow: sample.model.contextWindow,
-                              ...(runtimeConfiguration.contextCompaction
-                                .agenticEnabled &&
-                              sample.model.contextWindow !== null
-                                ? {
-                                    agenticContextCompaction: {
-                                      contextWindow: sample.model.contextWindow,
-                                    },
-                                  }
-                                : {}),
-                              ...(runtimeConfiguration.maxToolRounds ===
-                              undefined
-                                ? {}
-                                : {
-                                    maxToolRounds:
-                                      runtimeConfiguration.maxToolRounds,
-                                  }),
-                              ...(runtimeConfiguration.maxConcurrentToolBodies ===
-                              undefined
-                                ? {}
-                                : {
-                                    maxConcurrentToolBodies:
-                                      runtimeConfiguration.maxConcurrentToolBodies,
-                                  }),
-                            },
-                            contextBoundaryItemId,
-                            assertDispatchAllowed: () => {
-                              this.#assertCurrentThreadAuthority(thread);
-                              sample.assertDispatchAllowed();
-                            },
-                            release: () => sample.release(),
-                          };
-                        } catch (error) {
-                          sample.release();
-                          throw error;
-                        }
+                                messages: compiled.messages,
+                                presentation: {
+                                  ...presentation,
+                                  modelTools: compiled.tools,
+                                },
+                                selectedItemIds: compiled.selectedItemIds,
+                                modelAdapter: sample.adapter,
+                                configuration: {
+                                  cwd: configuration.cwd,
+                                  providerProfileId:
+                                    sample.selection.providerProfileId,
+                                  model: sample.selection.modelId,
+                                  reasoningEffort:
+                                    sample.selection.reasoningEffort,
+                                  sandbox: configuration.sandbox,
+                                  approvalPolicy: configuration.approvalPolicy,
+                                  inputModalities: sample.model.inputModalities,
+                                  contextWindow: sample.model.contextWindow,
+                                  ...(runtimeConfiguration.contextCompaction
+                                    .agenticEnabled &&
+                                  sample.model.contextWindow !== null
+                                    ? {
+                                        agenticContextCompaction: {
+                                          contextWindow:
+                                            sample.model.contextWindow,
+                                        },
+                                      }
+                                    : {}),
+                                  ...(runtimeConfiguration.maxToolRounds ===
+                                  undefined
+                                    ? {}
+                                    : {
+                                        maxToolRounds:
+                                          runtimeConfiguration.maxToolRounds,
+                                      }),
+                                  ...(runtimeConfiguration.maxConcurrentToolBodies ===
+                                  undefined
+                                    ? {}
+                                    : {
+                                        maxConcurrentToolBodies:
+                                          runtimeConfiguration.maxConcurrentToolBodies,
+                                      }),
+                                },
+                                contextBoundaryItemId,
+                                assertDispatchAllowed: () => {
+                                  this.#assertCurrentThreadAuthority(thread);
+                                  sample.assertDispatchAllowed();
+                                },
+                                release: () => sample.release(),
+                              };
+                            } catch (error) {
+                              sample.release();
+                              throw error;
+                            }
                           },
                         );
                         if (!("prepareCompaction" in prepared)) return prepared;
@@ -5124,165 +5140,171 @@ export class ZenAppServer {
     signal: AbortSignal;
   }): Promise<boolean> {
     const inputTokens = options.inputTokens;
-    let release: (() => void) | undefined;
+    const lease: { release?: () => void } = {};
     try {
-      const plan = await this.#withThreadMutation(options.threadId, async () => {
-      const active = this.#activeTurns.get(options.threadId);
-      if (active?.turnId !== options.turnId) return false;
-      options.signal.throwIfAborted();
-      const thread = await this.#requireThread(options.threadId);
-      const resolved = this.#providerRegistry.acquire(
-        thread.effectiveConfiguration(),
-      );
-      release = () => resolved.release();
-        const contextWindow = resolved.model.contextWindow;
-        if (contextWindow === null) return false;
-        // Provider usage describes the request that just completed. Tool results
-        // are appended afterwards, so estimate the complete projection that is
-        // about to be sampled as well. This closes the gap where a large result
-        // crosses the window between two Provider usage reports.
-        const estimate = this.#estimateContext(
-          thread.items,
-          resolved,
-          options.contextCompaction,
-        );
-        const estimatedInputTokens =
-          estimate.total +
-          this.#pendingSteerTokenEstimate(thread.items, options.turnId);
-        if (
-          estimate.toolDefinitions +
-            estimateModelInput([], [], resolved.adapter.contextInstructions)
-              .total >=
-          contextWindow
-        )
-          throw new AppServerError(
-            "context_window_exceeded",
-            "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
+      const plan = await this.#withThreadMutation(
+        options.threadId,
+        async () => {
+          const active = this.#activeTurns.get(options.threadId);
+          if (active?.turnId !== options.turnId) return false;
+          options.signal.throwIfAborted();
+          const thread = await this.#requireThread(options.threadId);
+          const resolved = this.#providerRegistry.acquire(
+            thread.effectiveConfiguration(),
           );
-        const observedInputTokens = Math.max(
-          inputTokens ?? 0,
-          estimatedInputTokens,
-        );
-        // An agent initiated reset has its own durable success/failure result
-        // and projection rules. Do not let the usage from the reset request
-        // immediately trigger a second Host reset (or attach a Host notice to
-        // the exact continuation the agent supplied).
-        if (options.agenticCompaction) {
-          active.contextCompactionNotice = undefined;
-          active.contextCompactionNoticeIssued = false;
-          return false;
-        }
-        const trigger = automaticCompactionThreshold(
-          contextWindow,
-          options.contextCompaction.triggerPercent,
-        );
-        if (observedInputTokens < trigger) {
-          active.contextCompactionNotice = undefined;
-          active.contextCompactionNoticeIssued = false;
-          return false;
-        }
-        const fallbackPercent = Math.min(
-          100,
-          Math.max(
-            options.contextCompaction.triggerPercent,
-            Math.min(99, options.contextCompaction.triggerPercent + 15),
-          ),
-        );
-        const hardFallback =
-          observedInputTokens >=
-          automaticCompactionThreshold(contextWindow, fallbackPercent);
-        // With agentic mode disabled, the Host owns automatic compaction and
-        // should act at the configured trigger rather than waiting for the
-        // emergency margin. Agentic mode gets the reminder window first.
-        const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
-        if (
-          !automaticAtTrigger &&
-          active.contextCompactionNotice === undefined
-        ) {
-          active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
-            Math.round((observedInputTokens / contextWindow) * 100),
-          )}% of the configured window. Consider calling compact_context with a concise continuation summary. ${AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE} The current Turn can continue. At ${String(fallbackPercent)}%, Host policy may automatically compact completed history before the next sample.`;
-          active.contextCompactionNoticeIssued = false;
-        }
-        if (!hardFallback && !automaticAtTrigger) return false;
-
-        // Use the same bounded retention planner as ordinary compaction. In
-        // particular, an active first Turn has no completed boundary: the
-        // planner returns undefined and we can fail closed before admitting a
-        // request that is already known to exceed the model window.
-        let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
-        try {
-          boundary = boundedCompactionBoundary(thread.items, {
-            retainedTokenBudget: contextCompactionTokenBudget(
-              contextWindow,
-              options.contextCompaction.targetPercent,
-            ),
-            estimateRetainedTokens: (retainedItems) =>
-              this.#estimateContext(
-                retainedItems,
-                resolved,
-                options.contextCompaction,
-              ).total,
-            retention: options.contextCompaction.retention,
-            allowOpenTurns: true,
-          });
-        } catch (error) {
-          throw new AppServerError(
-            "automatic_compaction_failed",
-            `Automatic context compaction could not produce a bounded projection: ${describeCompactionError(error, "bounded projection unavailable")}`,
+          lease.release = () => resolved.release();
+          const contextWindow = resolved.model.contextWindow;
+          if (contextWindow === null) return false;
+          // Provider usage describes the request that just completed. Tool results
+          // are appended afterwards, so estimate the complete projection that is
+          // about to be sampled as well. This closes the gap where a large result
+          // crosses the window between two Provider usage reports.
+          const estimate = this.#estimateContext(
+            thread.items,
+            resolved,
+            options.contextCompaction,
           );
-        }
-        if (boundary === undefined) {
-          // There is no completed Turn that can safely be summarized (for
-          // example, the very first active Turn). Never send the next sample if
-          // the post-tool projection already fills the configured window.
-          if (observedInputTokens >= contextWindow) {
+          const estimatedInputTokens =
+            estimate.total +
+            this.#pendingSteerTokenEstimate(thread.items, options.turnId);
+          if (
+            estimate.toolDefinitions +
+              estimateModelInput([], [], resolved.adapter.contextInstructions)
+                .total >=
+            contextWindow
+          )
             throw new AppServerError(
               "context_window_exceeded",
-              `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
+              "Disclosed tool definitions and static model instructions exceed the configured context window; reduce tool exposure/instructions or select a larger model window",
             );
+          const observedInputTokens = Math.max(
+            inputTokens ?? 0,
+            estimatedInputTokens,
+          );
+          // An agent initiated reset has its own durable success/failure result
+          // and projection rules. Do not let the usage from the reset request
+          // immediately trigger a second Host reset (or attach a Host notice to
+          // the exact continuation the agent supplied).
+          if (options.agenticCompaction) {
+            active.contextCompactionNotice = undefined;
+            active.contextCompactionNoticeIssued = false;
+            return false;
           }
+          const trigger = automaticCompactionThreshold(
+            contextWindow,
+            options.contextCompaction.triggerPercent,
+          );
+          if (observedInputTokens < trigger) {
+            active.contextCompactionNotice = undefined;
+            active.contextCompactionNoticeIssued = false;
+            return false;
+          }
+          const fallbackPercent = Math.min(
+            100,
+            Math.max(
+              options.contextCompaction.triggerPercent,
+              Math.min(99, options.contextCompaction.triggerPercent + 15),
+            ),
+          );
+          const hardFallback =
+            observedInputTokens >=
+            automaticCompactionThreshold(contextWindow, fallbackPercent);
+          // With agentic mode disabled, the Host owns automatic compaction and
+          // should act at the configured trigger rather than waiting for the
+          // emergency margin. Agentic mode gets the reminder window first.
+          const automaticAtTrigger = !options.contextCompaction.agenticEnabled;
           if (
-            latestCompaction(thread.items) !== undefined &&
+            !automaticAtTrigger &&
             active.contextCompactionNotice === undefined
           ) {
-            active.contextCompactionNotice =
-              "[Host context notice] No completed history beyond the current context selection is available for automatic compaction. Context has not been replaced. The active Turn may continue within the configured window.";
+            active.contextCompactionNotice = `[Host context notice] The next model context is estimated at ${String(
+              Math.round((observedInputTokens / contextWindow) * 100),
+            )}% of the configured window. Consider calling compact_context with a concise continuation summary. ${AGENTIC_CONTEXT_COMPACTION_RETENTION_GUIDANCE} The current Turn can continue. At ${String(fallbackPercent)}%, Host policy may automatically compact completed history before the next sample.`;
             active.contextCompactionNoticeIssued = false;
           }
-          return false;
-        }
-        if (!compactionBoundaryAdvances(thread.items, boundary)) {
-          return false;
-        }
-        return {
-          active,
-          append: {
-          thread,
-          boundary,
-          initiator: "automatic",
-          trigger: {
-            reason: automaticAtTrigger
-              ? "active_turn_threshold"
-              : "active_turn_fallback",
-            turnId: options.turnId,
-            ...(inputTokens === undefined
-              ? {}
-              : { providerInputTokens: inputTokens }),
-            estimatedInputTokens,
-            thresholdTokens: automaticAtTrigger
-              ? trigger
-              : automaticCompactionThreshold(contextWindow, fallbackPercent),
-          },
-          selection: resolved,
-          contextCompaction: options.contextCompaction,
-          signal: options.signal,
-          allowOpenTurns: true,
-          concurrentAdmission: true,
-          concurrentAdmissionTurnId: options.turnId,
-          } satisfies GeneratedContextCompactionOptions,
-        };
-      });
+          if (!hardFallback && !automaticAtTrigger) return false;
+
+          // Use the same bounded retention planner as ordinary compaction. In
+          // particular, an active first Turn has no completed boundary: the
+          // planner returns undefined and we can fail closed before admitting a
+          // request that is already known to exceed the model window.
+          let boundary: ReturnType<typeof latestCompletedCompactionBoundary>;
+          try {
+            boundary = boundedCompactionBoundary(thread.items, {
+              retainedTokenBudget: contextCompactionTokenBudget(
+                contextWindow,
+                options.contextCompaction.targetPercent,
+              ),
+              estimateRetainedTokens: (retainedItems) =>
+                this.#estimateContext(
+                  retainedItems,
+                  resolved,
+                  options.contextCompaction,
+                ).total,
+              retention: options.contextCompaction.retention,
+              allowOpenTurns: true,
+            });
+          } catch (error) {
+            throw new AppServerError(
+              "automatic_compaction_failed",
+              `Automatic context compaction could not produce a bounded projection: ${describeCompactionError(error, "bounded projection unavailable")}`,
+            );
+          }
+          if (boundary === undefined) {
+            // There is no completed Turn that can safely be summarized (for
+            // example, the very first active Turn). Never send the next sample if
+            // the post-tool projection already fills the configured window.
+            if (observedInputTokens >= contextWindow) {
+              throw new AppServerError(
+                "context_window_exceeded",
+                `The active Turn reached the configured context window (${String(observedInputTokens)} estimated input tokens); no completed history is available for compaction`,
+              );
+            }
+            if (
+              latestCompaction(thread.items) !== undefined &&
+              active.contextCompactionNotice === undefined
+            ) {
+              active.contextCompactionNotice =
+                "[Host context notice] No completed history beyond the current context selection is available for automatic compaction. Context has not been replaced. The active Turn may continue within the configured window.";
+              active.contextCompactionNoticeIssued = false;
+            }
+            return false;
+          }
+          if (!compactionBoundaryAdvances(thread.items, boundary)) {
+            return false;
+          }
+          return {
+            active,
+            append: {
+              thread,
+              boundary,
+              initiator: "automatic",
+              trigger: {
+                reason: automaticAtTrigger
+                  ? "active_turn_threshold"
+                  : "active_turn_fallback",
+                turnId: options.turnId,
+                ...(inputTokens === undefined
+                  ? {}
+                  : { providerInputTokens: inputTokens }),
+                estimatedInputTokens,
+                thresholdTokens: automaticAtTrigger
+                  ? trigger
+                  : automaticCompactionThreshold(
+                      contextWindow,
+                      fallbackPercent,
+                    ),
+              },
+              selection: resolved,
+              contextCompaction: options.contextCompaction,
+              signal: options.signal,
+              allowOpenTurns: true,
+              concurrentAdmission: true,
+              concurrentAdmissionTurnId: options.turnId,
+            } satisfies GeneratedContextCompactionOptions,
+          };
+        },
+      );
       if (plan === false) return false;
       await this.#appendContextCompaction(plan.append);
       await this.#withThreadMutation(options.threadId, async () => {
@@ -5296,7 +5318,7 @@ export class ZenAppServer {
       });
       return true;
     } finally {
-      release?.();
+      lease.release?.();
     }
   }
 
