@@ -309,7 +309,7 @@ function goToMessageQuoteSource(
 
 interface ThreadViewProps {
   steerRecallStore?: SteerRecallStore;
-  onRestoreRecalled?(result: RecoveredSteerRecall): boolean;
+  onRestoreRecalled?(result: RecoveredSteerRecall): boolean | Promise<boolean>;
   pendingSteer?: readonly PendingSteerInput[];
   localModelDebug?: boolean;
   debugMode?: boolean;

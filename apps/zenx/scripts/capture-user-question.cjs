@@ -10,6 +10,8 @@ const {
   session,
   nativeTheme,
   ipcMain,
+  clipboard,
+  nativeImage,
 } = require("electron");
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["darwin", "win32"].includes(process.platform));
@@ -43,6 +45,9 @@ let fixture;
 let loseNextReply = false;
 const responseAttempts = [];
 const exactReads = [];
+const ordinaryAttempts = [],
+  recallAttempts = [];
+let withdrawnReadGate, releaseWithdrawnRead;
 // Test transport fault only: the actual production handler and Host run first.
 // No renderer API/DOM substitution, no changed Host options or production hook.
 const registerHandle = ipcMain.handle.bind(ipcMain);
@@ -53,8 +58,23 @@ ipcMain.handle = (channel, listener) =>
       ? listener
       : async (event, method, params) => {
           const reply = await listener(event, method, params);
-          if (method === "zen/thread/questions/read")
+          if (method === "zen/turn/send")
+            ordinaryAttempts.push({ params, reply });
+          if (method === "zen/thread/steer/recall")
+            recallAttempts.push({ params, reply });
+          if (method === "zen/thread/questions/read") {
             exactReads.push({ params, reply });
+            if (
+              withdrawnReadGate &&
+              !withdrawnReadGate.blocked &&
+              params.threadId === withdrawnReadGate.threadId &&
+              reply.response?.status === "withdrawn"
+            ) {
+              withdrawnReadGate.blocked = true;
+              await withdrawnReadGate.wait;
+              withdrawnReadGate.delivered = true;
+            }
+          }
           if (method === "zen/thread/questions/respond") {
             assert.ok(
               fixture.questions.some(
@@ -265,6 +285,385 @@ async function cardVisible(selector) {
   await evaluate(`${query(selector)}.scrollIntoView({block:'nearest'})`);
   await pause(100);
 }
+// Read-only DOM inspection supports the real textarea and reference-chip editor.
+async function composerSnapshot() {
+  return evaluate(`(()=>{const e=document.querySelector('#thread-composer');if(!e)return null;
+    const lines=[...e.querySelectorAll('.cm-line')].map(line=>{const copy=line.cloneNode(true);copy.querySelectorAll('[data-reference-key]').forEach(chip=>chip.replaceWith('\\uFFFC'));return copy.textContent});
+    return {text:e instanceof HTMLTextAreaElement?e.value:lines.join('\\n'),references:[...e.querySelectorAll('.reference-token-details')].map(x=>x.title),images:document.querySelectorAll('.composer-images .draft-image').length}})()`);
+}
+async function typeEmptyComposer(text) {
+  await click("#thread-composer", "Native ordinary Composer input");
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e&&(e instanceof HTMLTextAreaElement||e.isContentEditable)})()`,
+      ),
+    "actual editable Composer focus",
+  );
+  assert.equal((await composerSnapshot()).text, "");
+  await window.webContents.insertText(text);
+  await until(
+    async () => (await composerSnapshot()).text === text,
+    "exact native Composer text",
+  );
+}
+async function sendComposer(mode) {
+  const count = ordinaryAttempts.length;
+  await click(
+    `.composer-send-control > button.action-orb.${mode}:not(:disabled)`,
+    "Native ordinary Send",
+  );
+  await until(
+    () => Promise.resolve(ordinaryAttempts.length === count + 1),
+    "real ordinary send receipt",
+  );
+  await until(
+    async () => (await composerSnapshot()).text === "",
+    "ordinary Send clears draft",
+  );
+  assert.equal(
+    ordinaryAttempts.at(-1).params.mode,
+    undefined,
+    "production soft send",
+  );
+  return ordinaryAttempts.at(-1);
+}
+async function originSummary(threadId) {
+  // Dedicated summary API only, never full-history polling while sending.
+  return evaluate(
+    `window.zenx.threads.list({archived:false}).then(rows=>rows.find(row=>row.threadId===${JSON.stringify(threadId)}))`,
+  );
+}
+async function originBadge(threadId, open) {
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const rows=[...document.querySelectorAll('.thread-row-shell[data-thread-id="${threadId}"] > .thread-row')];return rows.length>0&&rows.every(row=>Boolean(row.querySelector('.thread-asking-badge'))===${open})})()`,
+      ),
+    `authoritative Asking badge ${open ? "open" : "pending-hidden"}`,
+  );
+}
+async function runOrigin() {
+  const preferences = (await evaluate("window.zenx.settings.get()")).profile;
+  assert.deepEqual(preferences.pinnedThreadIds, [fixture.other]);
+  const initialSummaries = await evaluate(
+    "window.zenx.threads.list({archived:false})",
+  );
+  result.origin = {
+    batches: [],
+    fault:
+      "One actual exact withdrawn read reply delayed during native navigation; no UI or Host replacement",
+  };
+  for (const [index, key] of ["main", "other"].entries()) {
+    const threadId = fixture[key],
+      release = fixture.releaseFiles[index];
+    const row = `.thread-row-shell[data-thread-id="${threadId}"] > button.thread-row`;
+    const question = fixture.questions.find(
+      (q) => q.request.threadId === threadId,
+    );
+    const card = `.user-question-card[data-question-call-id="${question.request.callItemId}"]`;
+    const detail = `Synthetic original question detail ${key}.`,
+      newer = `Synthetic newer ordinary draft ${key}.`;
+    await selectThread(row, `Select synthetic mixed-origin ${key}`);
+    await originBadge(threadId, true);
+    const initialSummary = initialSummaries.find(
+      (summary) => summary.threadId === threadId,
+    );
+    assert.equal(initialSummary.userQuestionSummary.openCount, 1);
+    await typeEmptyComposer(
+      "!tool shell " +
+        JSON.stringify({
+          command: `node ${JSON.stringify(fixture.holdScript)} ${JSON.stringify(release)}`,
+          yield_time_ms: 180000,
+          timeout_ms: 180000,
+        }),
+    );
+    await sendComposer("send");
+    await until(
+      async () =>
+        fs.stat(release + ".started").then(
+          () => true,
+          () => false,
+        ),
+      "real active production shell tool",
+    );
+    await openInformation();
+    await cardVisible(card);
+    await click(
+      card + " .user-question-option:first-of-type input",
+      "Native original question choice",
+    );
+    await typeOnce(
+      card + " textarea",
+      detail,
+      "Native original question free text",
+    );
+    await click(
+      card + " .primary-button",
+      "Native question Send during active tool",
+    );
+    await until(
+      () => Promise.resolve(responseAttempts.length === index + 1),
+      "real pending question reply",
+    );
+    const answer = responseAttempts.at(-1);
+    assert.equal(answer.reply.question.state, "answer-pending");
+    await originBadge(threadId, false);
+    await typeEmptyComposer(`Synthetic original ordinary ${key}. @fixture`);
+    await click(
+      '.composer-suggestion-menu .selector-option:has(strong[title="fixture.txt"])',
+      "Native workspace reference selection",
+    );
+    await until(
+      async () => (await composerSnapshot()).references.length === 1,
+      "real inline file reference",
+    );
+    clipboard.writeImage(
+      nativeImage.createFromBitmap(Buffer.alloc(16 * 16 * 4, 180), {
+        width: 16,
+        height: 16,
+      }),
+    );
+    await click(
+      "#thread-composer",
+      "Focus real Composer for synthetic image paste",
+    );
+    await until(
+      () =>
+        evaluate(
+          `document.activeElement===document.querySelector('#thread-composer')`,
+        ),
+      "actual image paste focus",
+    );
+    const modifiers = [process.platform === "darwin" ? "meta" : "control"];
+    window.webContents.sendInputEvent({
+      type: "keyDown",
+      keyCode: "V",
+      modifiers,
+    });
+    window.webContents.sendInputEvent({
+      type: "keyUp",
+      keyCode: "V",
+      modifiers,
+    });
+    await until(
+      async () => (await composerSnapshot()).images === 1,
+      "native clipboard image imported",
+    );
+    clipboard.clear();
+    const original = await composerSnapshot();
+    const ordinary = await sendComposer("steer");
+    assert.equal(
+      ordinary.params.input.filter((p) => p.type === "image").length,
+      1,
+    );
+    assert.match(
+      ordinary.params.input.find((p) => p.type === "text").text,
+      /fixture\.txt/,
+    );
+    await typeEmptyComposer(newer);
+    await until(
+      () =>
+        evaluate(
+          `document.querySelector('.pending-steer-heading strong')?.textContent.includes('2')`,
+        ),
+      "two real recallable steer inputs",
+    );
+    const pendingSummary = await originSummary(threadId);
+    assert.equal(pendingSummary.userQuestionSummary.openCount, 0);
+    if (index === 1)
+      withdrawnReadGate = {
+        threadId,
+        blocked: false,
+        wait: new Promise((resolve) => {
+          releaseWithdrawnRead = resolve;
+        }),
+      };
+    await click(
+      ".pending-steer-heading button:not(:disabled)",
+      "Native one whole-batch Recall",
+    );
+    await until(
+      () => Promise.resolve(recallAttempts.length === index + 1),
+      "real whole-batch recall receipt",
+    );
+    const recall = recallAttempts.at(-1);
+    assert.equal(recall.reply.receipt.type, "user_message_steer_recalled");
+    assert.deepEqual(
+      new Set(recall.params.targets.map((t) => t.clientId)),
+      new Set([
+        answer.params.clientUserMessageId,
+        ordinary.params.clientUserMessageId,
+      ]),
+    );
+    if (index === 1) {
+      await until(
+        () => Promise.resolve(withdrawnReadGate.blocked),
+        "actual exact withdrawn preflight held",
+      );
+      await click(
+        ".new-thread-action",
+        "Navigate away during origin preflight",
+      );
+      await until(
+        async () => (await composerSnapshot())?.text === "",
+        "new draft owner settled",
+      );
+      await typeEmptyComposer("Synthetic unrelated navigation draft.");
+      releaseWithdrawnRead();
+      await until(
+        () => Promise.resolve(withdrawnReadGate.delivered),
+        "real delayed withdrawn reply delivered",
+      );
+      await pause(200);
+      assert.equal(
+        (await composerSnapshot()).text,
+        "Synthetic unrelated navigation draft.",
+      );
+      await selectThread(row, "Return to recoverable original owner");
+      await until(
+        () => evaluate(`Boolean(document.querySelector('.steer-recovery'))`),
+        "whole receipt remains recoverable",
+      );
+      assert.deepEqual(
+        await composerSnapshot(),
+        { text: newer, references: [], images: 0 },
+        "navigation blocks every ordinary origin, not partial restoration",
+      );
+      await openInformation();
+      await cardVisible(card);
+      assert.equal(
+        await evaluate(`${query(card + " textarea")}.value`),
+        detail,
+        "original question draft not overwritten",
+      );
+      await capture("07-origin-navigation-blocked-recoverable", "dock");
+      await click(
+        ".steer-recovery > div > button",
+        "Explicit restore from durable receipt",
+      );
+      await until(
+        () =>
+          evaluate(
+            `document.querySelectorAll('.steer-recovery > div > button').length===2`,
+          ),
+        "explicit merge confirmation",
+      );
+      await click(
+        ".steer-recovery > div > button:first-of-type",
+        "Confirm original input destinations",
+      );
+    }
+    await until(
+      async () =>
+        (await composerSnapshot()).text === original.text + "\n\n" + newer,
+      "ordinary draft merged once at original input",
+    );
+    assert.deepEqual(await composerSnapshot(), {
+      text: original.text + "\n\n" + newer,
+      references: ["fixture.txt"],
+      images: 1,
+    });
+    await openInformation();
+    await cardVisible(card);
+    await until(
+      () => evaluate(`!${query(card + " .primary-button")}.disabled`),
+      "withdrawn original question editable",
+    );
+    assert.equal(await evaluate(`${query(card + " textarea")}.value`), detail);
+    assert.equal(
+      await evaluate(
+        `document.querySelectorAll(${JSON.stringify(card + " input:checked")}).length`,
+      ),
+      1,
+    );
+    assert.equal(
+      await evaluate(
+        `Boolean(document.querySelector('.steer-recovery, .pending-steer-heading'))`,
+      ),
+      false,
+      "batch applied exactly once",
+    );
+    assert.equal(
+      responseAttempts.length,
+      index + 1,
+      "restore never resends answer",
+    );
+    assert.equal(
+      ordinaryAttempts.length,
+      (index + 1) * 2,
+      "restore never resends ordinary input",
+    );
+    assert.equal(
+      recallAttempts.length,
+      index + 1,
+      "one mutation per complete mixed batch",
+    );
+    await originBadge(threadId, true);
+    const restoredSummary = await originSummary(threadId);
+    assert.equal(restoredSummary.userQuestionSummary.openCount, 1);
+    assert.equal(
+      restoredSummary.userQuestionSummary.latestPublishedAt,
+      initialSummary.userQuestionSummary.latestPublishedAt,
+      "recall does not invent a new publication",
+    );
+    assert.equal(
+      restoredSummary.recentActivityAt,
+      pendingSummary.recentActivityAt,
+      "recall does not create human recency",
+    );
+    assert.deepEqual(
+      await evaluate(
+        "[...document.querySelectorAll('.pinned-thread-group .thread-row-shell')].map(row=>row.dataset.threadId)",
+      ),
+      [fixture.other],
+      "Pinned row/order unchanged",
+    );
+    await capture(
+      index === 0
+        ? "06-origin-mixed-restored-once"
+        : "08-origin-explicit-recovery-restored-once",
+      "dock",
+    );
+    result.origin.batches.push({
+      threadId,
+      answer,
+      ordinary,
+      recall,
+      original,
+      restored: await composerSnapshot(),
+      summary: {
+        initial: initialSummary,
+        pending: pendingSummary,
+        restored: restoredSummary,
+      },
+    });
+    await fs.writeFile(release, "normal release");
+    await until(
+      () =>
+        evaluate(
+          `Boolean(document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)'))`,
+        ),
+      "owned production tool exits normally with restored draft unsent",
+    );
+  }
+  const finalPreferences = (await evaluate("window.zenx.settings.get()"))
+    .profile;
+  assert.deepEqual(
+    finalPreferences.pinnedThreadIds,
+    preferences.pinnedThreadIds,
+  );
+  assert.deepEqual(finalPreferences.sidebarOrder, preferences.sidebarOrder);
+  result.receipts = responseAttempts;
+  result.notCovered = [
+    "live Desktop question publication",
+    "Windows native UI",
+    "claim-wins race",
+    "reload draft durability",
+  ];
+  result.ok = true;
+}
+
 async function run() {
   fixture = JSON.parse(
     await fs.readFile(path.join(temporary, "fixture.json"), "utf8"),
@@ -298,6 +697,7 @@ async function run() {
   const settings = await evaluate("window.zenx.settings.get()");
   assert.equal(settings.profile.defaultModel.providerProfileId, "fake");
   assert.equal(settings.hasApiKey, false);
+  if (fixture.scenario === "origin") return runOrigin();
   const mainRow = `.thread-row-shell[data-thread-id="${fixture.main}"] > button.thread-row`;
   const otherRow = `.thread-row-shell[data-thread-id="${fixture.other}"] > button.thread-row`;
   const [color, note] = fixture.questions.filter(
@@ -568,6 +968,10 @@ void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
       } catch {}
   })
   .finally(async () => {
+    releaseWithdrawnRead?.();
+    for (const release of fixture?.releaseFiles ?? [])
+      await fs.writeFile(release, "driver cleanup");
+    if (fixture?.scenario === "origin") clipboard.clear();
     await fs.writeFile(
       path.join(directory, "acceptance.json"),
       JSON.stringify(result, null, 2),

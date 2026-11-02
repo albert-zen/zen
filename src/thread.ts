@@ -20,6 +20,7 @@ import {
   ThreadUserQuestionProjection,
   type UserQuestionState,
   type UserQuestionPage,
+  type UserQuestionSummary,
 } from "./user-question-state.js";
 
 export type DerivedTurnStatus =
@@ -90,6 +91,9 @@ export class Thread {
   }
   get userQuestions(): readonly UserQuestionState[] {
     return this.#userQuestions.read(this.id, this.#itemList, this.#items);
+  }
+  get userQuestionSummary(): UserQuestionSummary {
+    return this.#userQuestions.summary(this.id, this.#itemList, this.#items);
   }
   takeUserQuestionAttentionInvalidation(): boolean {
     return this.#userQuestions.takeAttentionInvalidation(

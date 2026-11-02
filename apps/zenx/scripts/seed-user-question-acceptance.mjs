@@ -1,8 +1,16 @@
 /** Synthetic real Host publication; no manually authored tool/result journal. */
 import assert from "node:assert/strict";
+import {
+  pendingSteerMessages,
+  recoverSteerRecall,
+} from "../../../dist/src/steer-recall.js";
 import { createHostedAppServer } from "../../../dist/apps/cli/src/host.js";
 
-export async function seedUserQuestionAcceptance({ data, workspace }) {
+export async function seedUserQuestionAcceptance({
+  data,
+  workspace,
+  scenario = "cards",
+}) {
   const host = createHostedAppServer({
     cwd: workspace,
     dataDirectory: data,
@@ -12,7 +20,12 @@ export async function seedUserQuestionAcceptance({ data, workspace }) {
     toolPresentation: "direct",
     experimentalUserQuestions: true,
   });
-  const fixture = { synthetic: true, publicationGate: true, questions: [] };
+  const fixture = {
+    synthetic: true,
+    scenario,
+    publicationGate: true,
+    questions: [],
+  };
   try {
     for (const [key, title, specifications] of [
       [
@@ -73,7 +86,9 @@ export async function seedUserQuestionAcceptance({ data, workspace }) {
     ]) {
       const thread = await host.startThread();
       fixture[key] = thread.id;
-      for (const specification of specifications) {
+      const selected =
+        scenario === "origin" ? specifications.slice(0, 1) : specifications;
+      for (const specification of selected) {
         await (
           await host.startTurn(
             thread.id,
@@ -81,9 +96,12 @@ export async function seedUserQuestionAcceptance({ data, workspace }) {
           )
         ).done;
       }
-      await host.setThreadName(thread.id, title);
+      await host.setThreadName(
+        thread.id,
+        scenario === "origin" ? `Synthetic · Mixed origin ${key}` : title,
+      );
       const snapshot = await host.readThread(thread.id);
-      assert.equal(snapshot.userQuestions.length, specifications.length);
+      assert.equal(snapshot.userQuestions.length, selected.length);
       for (const question of snapshot.userQuestions) {
         assert.equal(question.state, "open");
         assert.equal(question.request.threadId, thread.id);
@@ -101,6 +119,7 @@ export async function verifyUserQuestionAcceptance({
   data,
   workspace,
   receipts,
+  origin,
 }) {
   const host = createHostedAppServer({
     cwd: workspace,
@@ -113,6 +132,70 @@ export async function verifyUserQuestionAcceptance({
   try {
     const snapshots = new Map();
     const evidence = [];
+    if (origin) {
+      for (const batch of origin.batches) {
+        const snapshot = await host.readThread(batch.threadId);
+        snapshots.set(batch.threadId, snapshot);
+        const records = snapshot.items.filter(
+          (item) => item.type === "user_message_steer_recalled",
+        );
+        assert.equal(
+          records.length,
+          1,
+          "exactly one durable whole-batch recall",
+        );
+        assert.equal(pendingSteerMessages(snapshot.items).length, 0);
+        const recovered = recoverSteerRecall(
+          snapshot.items,
+          batch.threadId,
+          batch.recall.params.recallId,
+        );
+        assert.ok(recovered);
+        assert.equal(recovered.messages.length, 2);
+        const ordinary = recovered.messages.find(
+          (item) => item.clientId === batch.ordinary.params.clientUserMessageId,
+        );
+        assert.deepEqual(ordinary.input, batch.ordinary.params.input);
+        const answer = recovered.messages.find(
+          (item) => item.clientId === batch.answer.params.clientUserMessageId,
+        );
+        assert.deepEqual(
+          answer.questionReply.answers,
+          batch.answer.params.answers,
+        );
+        const exact = await host.readUserQuestion(
+          batch.threadId,
+          batch.answer.params.questionCallItemId,
+          batch.answer.params.clientUserMessageId,
+        );
+        assert.equal(exact.response.status, "withdrawn");
+        const semantic = snapshot.itemList.filter(
+          (item) =>
+            item.role === "user" &&
+            [ordinary.clientId, answer.clientId].includes(
+              item.source.metadata?.clientId,
+            ),
+        );
+        assert.equal(
+          semantic.length,
+          0,
+          "withdrawn drafts were not resent or model-consumed",
+        );
+        evidence.push({
+          threadId: batch.threadId,
+          recallId: records[0].recallId,
+          targets: records[0].targets,
+          questionResponse: exact.response.status,
+          modelVisibleRecalledInputs: semantic.length,
+        });
+      }
+      return {
+        synthetic: true,
+        defaultOffColdHost: true,
+        boundedThreadReads: snapshots.size,
+        evidence,
+      };
+    }
     for (const { params } of receipts) {
       if (!snapshots.has(params.threadId))
         snapshots.set(params.threadId, await host.readThread(params.threadId));

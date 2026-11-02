@@ -1220,6 +1220,25 @@ button:disabled {
   white-space: nowrap;
   color: var(--color-text-secondary);
 }
+.thread-asking-badge {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--font-size-caption);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+@media (forced-colors: active) {
+  .thread-asking-badge {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
 .sidebar[data-thread-density="detailed"] .thread-title-status {
   display: none;
 }

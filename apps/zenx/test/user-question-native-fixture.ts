@@ -1,3 +1,4 @@
+import type { ToolEnvironment } from "../../../src/tool.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import { questionIpcError } from "../src/preload/user-question-ipc.js";
 import type { QuestionTransport } from "../src/renderer/src/user-question-state.js";
 
 /** Real Host, journal, native protocol, fake deterministic model; no external services. */
-export async function questionNativeFixture() {
+export async function questionNativeFixture(toolEnvironment?: ToolEnvironment) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-question-ui-"));
   const host = createHostedAppServer({
     cwd: directory,
@@ -20,6 +21,7 @@ export async function questionNativeFixture() {
     approvalPolicy: "never",
     toolPresentation: "direct",
     experimentalUserQuestions: true,
+    ...(toolEnvironment ? { toolEnvironment } : {}),
   });
   const projection = new NativeRecoveryProjection(host);
   const listeners = new Set<(method: string, params: unknown) => void>();

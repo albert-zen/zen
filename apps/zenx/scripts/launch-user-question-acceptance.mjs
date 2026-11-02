@@ -21,6 +21,8 @@ import {
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["win32", "darwin"].includes(process.platform));
 const directory = path.resolve(process.argv[2]);
+const scenario = process.argv[3] ?? "cards";
+assert.ok(["cards", "origin"].includes(scenario));
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
@@ -63,7 +65,8 @@ await writeFile(
             source: "manual",
             supportedReasoningEfforts: ["medium"],
             defaultReasoningEffort: "medium",
-            inputModalities: ["text"],
+            inputModalities:
+              scenario === "origin" ? ["text", "image"] : ["text"],
             contextWindow: 1000000,
           },
         ],
@@ -77,7 +80,30 @@ await writeFile(
     approvalPolicy: "never",
   }),
 );
-const fixture = await seedUserQuestionAcceptance({ data, workspace });
+const fixture = await seedUserQuestionAcceptance({ data, workspace, scenario });
+if (scenario === "origin") {
+  const profilePath = path.join(profile, "host-profile.json");
+  const syntheticProfile = JSON.parse(await readFile(profilePath, "utf8"));
+  syntheticProfile.pinnedThreadIds = [fixture.other];
+  await writeFile(profilePath, JSON.stringify(syntheticProfile));
+  // An ordinary production shell tool, not a Host fixture hook. Its file gate is
+  // private, process-owned and bounded; the driver releases it on every exit.
+  fixture.holdScript = path.join(temporary, "synthetic-origin-hold.cjs");
+  fixture.releaseFiles = ["main", "other"].map((key) =>
+    path.join(temporary, `release-${key}`),
+  );
+  await writeFile(
+    fixture.holdScript,
+    `const fs=require('node:fs');
+const release=process.argv[2], deadline=Date.now()+170000;
+fs.writeFileSync(release+'.started','synthetic');
+const timer=setInterval(()=>{
+  if(fs.existsSync(release)){clearInterval(timer);process.exit(0);}
+  if(Date.now()>deadline){clearInterval(timer);process.exit(2);}
+},50);
+`,
+  );
+}
 await writeFile(path.join(temporary, "fixture.json"), JSON.stringify(fixture));
 const hashes = {};
 for (const file of [
@@ -113,8 +139,9 @@ await writeFile(
       platform: process.platform,
       hashes,
       synthetic: true,
+      scenario,
       scope:
-        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published by a separate explicitly enabled Host, closed before normal Desktop starts with default-off publication. One driver-only lost IPC reply after real Host admission; no injected UI, no user data, no user device.",
+        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published by a separate explicitly enabled Host, closed before normal Desktop starts with default-off publication. Driver-only transport faults: cards loses one actual reply; origin delays one exact withdrawn read during native navigation; no injected UI, no user data, no user device.",
     },
     null,
     2,
@@ -294,12 +321,13 @@ try {
     await readFile(path.join(directory, "acceptance.json"), "utf8"),
   );
   assert.equal(result.ok, true);
-  assert.ok(result.cases.length >= 5);
-  assert.equal(result.receipts.length, 3);
+  assert.ok(result.cases.length >= (scenario === "origin" ? 3 : 5));
+  assert.equal(result.receipts.length, scenario === "origin" ? 2 : 3);
   result.coldModelInputVerification = await verifyUserQuestionAcceptance({
     data,
     workspace,
     receipts: result.receipts,
+    origin: result.origin,
   });
   await writeFile(
     path.join(directory, "acceptance.json"),
@@ -307,6 +335,8 @@ try {
   );
   validated = true;
 } finally {
+  for (const release of fixture.releaseFiles ?? [])
+    await writeFile(release, "cleanup");
   await writeFile(
     path.join(directory, "lifecycle.json"),
     JSON.stringify(

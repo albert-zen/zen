@@ -1,4 +1,4 @@
-name: Native question card slice acceptance
+name: Native question origin slice acceptance
 on:
   pull_request:
     paths:
@@ -25,9 +25,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run build --workspace @zen/zenx
-      - name: Small synthetic full production App and Host question slice
+      - name: Synthetic full production App mixed-origin recall and Asking badge
         timeout-minutes: 6
-        run: node apps/zenx/scripts/launch-user-question-acceptance.mjs "${{ runner.temp }}/user-question-ui"
+        run: node apps/zenx/scripts/launch-user-question-acceptance.mjs "${{ runner.temp }}/user-question-ui" origin
       - uses: actions/upload-artifact@v4
         if: always()
         with:

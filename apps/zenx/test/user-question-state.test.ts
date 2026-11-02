@@ -307,14 +307,19 @@ for (const late of ["ack", "check"] as const) {
     const ack = deferred<NativeQuestionRespondResult>();
     const read = deferred<Awaited<ReturnType<QuestionTransport["read"]>>>();
     let current = q;
+    let lists = 0;
     const store = createUserQuestionStore(
       {
-        list: async () => ({ questions: [current], totalPending: 1 }),
+        list: async () => {
+          lists++;
+          return { questions: [current], totalPending: 1 };
+        },
         respond: async () => ack.promise,
         read: async () => read.promise,
       },
       () => "original",
     );
+    const close = store.mount("t");
     await store.refresh("t");
     store.edit("t", "ask", reply.answers);
     const pendingAck = store.respond("t", "ask", "answer");
@@ -327,6 +332,7 @@ for (const late of ["ack", "check"] as const) {
     store.disconnect();
     current = { ...oldQuestion, state: "answered" };
     await store.refresh("t");
+    const listsBeforeLateResults = lists;
     ack.resolve({ turnId: "old-turn", question: oldQuestion });
     read.resolve({
       question: oldQuestion,
@@ -338,6 +344,12 @@ for (const late of ["ack", "check"] as const) {
     assert.equal(after.attempt!.phase, "unknown");
     assert.equal(after.attempt!.request, before.attempt!.request);
     assert.equal(after.draft, before.draft);
+    assert.equal(
+      lists,
+      listsBeforeLateResults,
+      "fenced results never trigger another list",
+    );
+    close();
   });
 }
 
