@@ -5519,7 +5519,7 @@ test("send admission is independent of a blocked automatic summary", async (t) =
   }
 });
 
-for (const action of ["recall", "continue", "stop"] as const)
+for (const action of ["recall", "continue", "stop", "settings"] as const)
   test(
     `active summary keeps staged admission and ${action} outside its lock`,
     { timeout: 10000 },
@@ -5558,12 +5558,11 @@ for (const action of ["recall", "continue", "stop"] as const)
         model,
         modelCatalog: new StaticModelCatalog([
           { id: "recording-model", isDefault: true, contextWindow: 1000 },
+          { id: "smaller-model", contextWindow: 50 },
         ]),
       });
       const thread = await server.startThread();
-      await (
-        await server.startTurn(thread.id, "seed")
-      ).done;
+      await (await server.startTurn(thread.id, "seed")).done;
       const active = await server.startTurn(thread.id, "active");
       void active.done.catch(() => undefined);
       try {
@@ -5576,17 +5575,13 @@ for (const action of ["recall", "continue", "stop"] as const)
         );
         const timely = await Promise.race([
           accepted.then(() => true),
-          new Promise<boolean>((resolve) =>
-            setTimeout(() => resolve(false), 500),
-          ),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
         ]);
         assert(timely, "pending admission must not await summary completion");
         const before = await server.readThread(thread.id);
         const pending = pendingSteerMessages(before.items);
         assert.equal(pending.length, 1);
-        assert(
-          !JSON.stringify(before.itemList).includes("private pending marker"),
-        );
+        assert(!JSON.stringify(before.itemList).includes("private pending marker"));
         if (action === "recall")
           await server.recallSteerMessages(thread.id, {
             recallId: "during-summary",
@@ -5595,6 +5590,10 @@ for (const action of ["recall", "continue", "stop"] as const)
               clientId: item.clientId,
               expectedRevision: item.revision,
             })),
+          });
+        if (action === "settings")
+          await server.updateThreadSettings(thread.id, {
+            model: "smaller-model",
           });
         const stop =
           action === "stop"
@@ -5605,18 +5604,18 @@ for (const action of ["recall", "continue", "stop"] as const)
         await active.done.catch(() => undefined);
         assert(!JSON.stringify(summaries).includes("private pending marker"));
         const after = await server.readThread(thread.id);
-        if (action === "stop") {
+        if (action === "stop" || action === "settings") {
           assert.equal(normal.length, 2);
           assert.equal(pendingSteerMessages(after.items).length, 1);
-          assert(
-            !after.items.some((item) => item.type === "context_compaction"),
-          );
+          if (action === "stop")
+            assert(!after.items.some((item) => item.type === "context_compaction"));
+          assert(!after.items.some(
+            (item) => item.type === "user_message" && item.clientId === "pending-summary",
+          ));
         } else {
           assert.equal(normal.length, 3);
           assert.equal(
-            JSON.stringify(normal[2]!.messages).includes(
-              "private pending marker",
-            ),
+            JSON.stringify(normal[2]!.messages).includes("private pending marker"),
             action === "continue",
           );
           assert.equal(after.turns.length, 2);
@@ -5628,10 +5627,13 @@ for (const action of ["recall", "continue", "stop"] as const)
     },
   );
 
-test(
-  "pending human pressure compacts before claim without entering summary",
+for (const lateArrival of [false, true])
+  test(
+  `pending pressure rechecks before claim, late arrival: ${lateArrival}`,
   { timeout: 10000 },
   async () => {
+    const summaryStarted = deferred<void>();
+    const releaseSummary = deferred<void>();
     const sampled = deferred<void>();
     const release = deferred<void>();
     const normal: ModelRequest[] = [];
@@ -5642,10 +5644,9 @@ test(
       async *stream(request): AsyncIterable<ModelEvent> {
         if (isSummaryRequest(request)) {
           summaries.push(cloneRequest(request));
-          yield {
-            type: "text_delta",
-            delta: "small completed history summary",
-          };
+          summaryStarted.resolve();
+          if (lateArrival) await releaseSummary.promise;
+          yield { type: "text_delta", delta: "small completed history summary" };
           return;
         }
         normal.push(cloneRequest(request));
@@ -5668,9 +5669,7 @@ test(
       ]),
     });
     const thread = await server.startThread();
-    await (
-      await server.startTurn(thread.id, "seed")
-    ).done;
+    await (await server.startTurn(thread.id, "seed")).done;
     const active = await server.startTurn(thread.id, "active");
     void active.done.catch(() => undefined);
     try {
@@ -5679,16 +5678,54 @@ test(
         clientId: "pressure",
       });
       release.resolve();
+      if (lateArrival) {
+        await expectSummaryStarted(summaryStarted.promise, active.done);
+        await server.stageSteerMessage(
+          thread.id,
+          active.id,
+          "LATE_OVERSIZED ".repeat(4000),
+          { clientId: "late-pressure" },
+        );
+        releaseSummary.resolve();
+      }
       await active.done;
       assert.equal(summaries.length, 1);
       assert(!JSON.stringify(summaries).includes("PENDING_PRESSURE"));
-      assert.equal(normal.length, 3);
+      assert(!JSON.stringify(summaries).includes("LATE_OVERSIZED"));
+      assert.equal(normal.length, lateArrival ? 2 : 3);
+      if (lateArrival) {
+        const after = await server.readThread(thread.id);
+        const pending = pendingSteerMessages(after.items);
+        assert.equal(pending.length, 2);
+        assert(!after.items.some(
+          (item) => item.type === "user_message" &&
+            ["pressure", "late-pressure"].includes(item.clientId ?? ""),
+        ));
+        await server.recallSteerMessages(thread.id, {
+          recallId: "late-pressure-recovery",
+          targets: pending.map((item) => ({
+            queuedItemId: item.id,
+            clientId: item.clientId,
+            expectedRevision: item.revision,
+          })),
+        });
+        return;
+      }
       assert(JSON.stringify(normal[2]!.messages).includes("PENDING_PRESSURE"));
+      const after = await server.readThread(thread.id);
+      const summaryIndex = after.items.findIndex(
+        (item) => item.type === "context_compaction",
+      );
+      const claimIndex = after.items.findIndex(
+        (item) => item.type === "user_message" && item.clientId === "pressure",
+      );
+      assert(summaryIndex >= 0 && claimIndex > summaryIndex);
       assert.equal(
         pendingSteerMessages((await server.readThread(thread.id)).items).length,
         0,
       );
     } finally {
+      releaseSummary.resolve();
       release.resolve();
       await active.done.catch(() => undefined);
     }

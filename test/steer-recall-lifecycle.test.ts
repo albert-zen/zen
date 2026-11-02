@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { ZenAppServer } from "../src/app-server.js";
+import { AppServerError, ZenAppServer } from "../src/app-server.js";
 import type { AttachmentStore } from "../src/attachment.js";
 import type { CanonicalItem, UserInput } from "../src/item.js";
 import { InMemoryThreadJournal, type ThreadJournal } from "../src/journal.js";
@@ -19,6 +19,7 @@ import {
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 import type { JsonRpcMessage } from "../src/protocol/codex/wire.js";
+import { png1x1 } from "./fixtures.js";
 
 const text = (value: string): UserInput => [{ type: "text", text: value }];
 function deferred() {
@@ -62,6 +63,11 @@ function createServer(options: {
             contextWindow: 32768,
             inputModalities:
               options.images === false ? ["text"] : ["text", "image"],
+          },
+          {
+            id: "text-only",
+            contextWindow: 32768,
+            inputModalities: ["text"],
           },
         ]),
       },
@@ -533,8 +539,9 @@ test(
   },
 );
 
-test(
-  "automatic queued successor does not claim held human steer",
+for (const source of ["human-queue", "host"] as const)
+  test(
+  `automatic ${source} successor does not claim held human steer`,
   { timeout: 10000 },
   async () => {
     const f = await running();
@@ -543,7 +550,14 @@ test(
         clientId: "held",
       });
       await f.server.interruptTurn(f.threadId, f.turn.id);
-      await f.server.queueMessage(f.threadId, "queued-next", "queued");
+      if (source === "host")
+        await f.server.wakeTurn(f.threadId, {
+          clientId: "queued",
+          source: "bootstrap",
+          text: "queued-next",
+        });
+      else
+        await f.server.queueMessage(f.threadId, "queued-next", "queued");
       await f.sampled[1]!.promise;
       const after = await f.server.readThread(f.threadId);
       assert.equal(pendingSteerMessages(after.items).length, 1);
@@ -625,7 +639,8 @@ for (const winner of ["claim", "recall"] as const)
             (winner === "claim" &&
               item.type === "user_message" &&
               item.clientId === "race") ||
-            (winner === "recall" && item.type === "user_message_steer_recalled")
+            (winner === "recall" &&
+              item.type === "user_message_steer_recalled")
           ) {
             entered.resolve();
             await releaseCommit.promise;
@@ -649,7 +664,11 @@ for (const winner of ["claim", "recall"] as const)
         }
         const outcome = withdrawal.then(
           () => "recalled",
-          () => "conflict",
+          (error: unknown) => {
+            assert(error instanceof AppServerError);
+            assert.equal(error.code, "steer_recall_conflict");
+            return "conflict";
+          },
         );
         await setImmediate();
         releaseCommit.resolve();
@@ -680,3 +699,81 @@ for (const winner of ["claim", "recall"] as const)
       }
     },
   );
+
+test(
+  "oversized pending input stays recoverable instead of claiming or dispatching",
+  { timeout: 10000 },
+  async () => {
+    const f = await running();
+    try {
+      await f.server.stageSteerMessage(
+        f.threadId,
+        f.turn.id,
+        "oversized ".repeat(15000),
+        { clientId: "oversized" },
+      );
+      f.release[0]!.resolve();
+      await f.turn.done.catch(() => undefined);
+      const after = await f.server.readThread(f.threadId);
+      assert.equal(f.requests.length, 1);
+      assert.equal(pendingSteerMessages(after.items).length, 1);
+      assert(
+        !after.items.some(
+          (item) => item.type === "user_message" && item.clientId === "oversized",
+        ),
+      );
+      await f.server.recallSteerMessages(f.threadId, {
+        recallId: "oversized-recovery",
+        targets: snapshotTargets(after.items),
+      });
+      assert.equal(
+        pendingSteerMessages((await f.server.readThread(f.threadId)).items)
+          .length,
+        0,
+      );
+    } finally {
+      for (const gate of f.release) gate.resolve();
+      await f.turn.done.catch(() => undefined);
+    }
+  },
+);
+
+test(
+  "current text-only selection rejects the whole human claim batch before mutation",
+  { timeout: 10000 },
+  async () => {
+    const f = await running();
+    try {
+      const image = await f.server.importImageBytes(png1x1());
+      await f.server.stageSteerMessage(f.threadId, f.turn.id, "text first", {
+        clientId: "text-first",
+      });
+      await f.server.stageSteerMessage(
+        f.threadId,
+        f.turn.id,
+        [{ type: "image", attachment: image }],
+        { clientId: "image-second" },
+      );
+      await f.server.updateThreadSettings(f.threadId, {
+        model: "text-only",
+      });
+      f.release[0]!.resolve();
+      await f.turn.done.catch(() => undefined);
+      const after = await f.server.readThread(f.threadId);
+      assert.equal(f.requests.length, 1);
+      const pending = pendingSteerMessages(after.items);
+      assert.equal(pending.length, 2);
+      assert.deepEqual(userIdsInTurn(after.items, f.turn.id), ["initial"]);
+      const recalled = await f.server.recallSteerMessages(f.threadId, {
+        recallId: "modality-recovery",
+        targets: snapshotTargets(after.items),
+      });
+      assert.deepEqual(recalled.messages[1]!.input, [
+        { type: "image", attachment: image },
+      ]);
+    } finally {
+      for (const gate of f.release) gate.resolve();
+      await f.turn.done.catch(() => undefined);
+    }
+  },
+);

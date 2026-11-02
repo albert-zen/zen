@@ -1742,3 +1742,19 @@ review pass. The UI proposal above remains an Experiment: no recall button,
 Composer restoration, full-App E2E, installed-build acceptance or completed
 feature is claimed. Native RPC is available only through the existing initialized
 Host boundary; no new remote-tools/Room/cross-author mutation surface is added.
+
+The backend draft now marks explicit human Start/Send, Retry and human Replace
+as the only successor admissions that carry held human steer. Common launch
+defaults to no carry: automatic queue draining, Host/Agent wakeups and queued
+promotion cannot consume held input merely because they launch another Turn.
+
+Active automatic compaction plans under the Thread fence, runs the auxiliary
+summary outside that fence, and revalidates current Thread/Turn and advancing
+context boundary at commit. Pending human pressure is an ephemeral token
+estimate only: it neither claims input nor inserts it into the summary. Sample
+preparation re-reads current pending revisions and model selection under the
+claim fence after at most one proactive compaction attempt. Input that still
+does not fit fails explicitly before claim and stays recoverable; newly arrived
+input is not silently dropped or automatically retried. This estimate is not
+provider billing or exact tokenizer accounting. These draft changes require
+race and model-budget tests; they are not an acceptance claim.
