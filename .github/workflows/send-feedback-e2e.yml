@@ -16,13 +16,7 @@ jobs:
       matrix:
         include:
           - label: pending
-            source: 12c13b536b532c6690fdf6a26b1d32d95273834d
-            count: 0
-          - label: pending
-            source: 12c13b536b532c6690fdf6a26b1d32d95273834d
-            count: 1000
-          - label: pending
-            source: 12c13b536b532c6690fdf6a26b1d32d95273834d
+            source: 5e37358e69fd7344aac25cfd3802078b92f79e2d
             count: 5000
     runs-on: macos-latest
     timeout-minutes: 25

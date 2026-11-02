@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 12c13b536b532c6690fdf6a26b1d32d95273834d
+          ref: 5e37358e69fd7344aac25cfd3802078b92f79e2d
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -22,6 +22,7 @@ jobs:
       - name: Prepare production dependencies
         run: |
           npm run build
+          node --test dist/test/context-preparation-performance.test.js
           npm run prepare:first-party-plugins --workspace @zen/zenx
       - name: Typecheck exact candidate
         id: types
@@ -31,7 +32,7 @@ jobs:
         id: tests
         continue-on-error: true
         working-directory: apps/zenx
-        run: npx --no-install tsx --test test/composer-autosize.test.ts test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts
+        run: npx --no-install tsx --test test/app-project-picker-interaction.test.ts test/composer-autosize.test.ts test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts
       - name: Build exact production App
         id: build
         continue-on-error: true
@@ -53,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 12c13b536b532c6690fdf6a26b1d32d95273834d
+          ref: 5e37358e69fd7344aac25cfd3802078b92f79e2d
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -62,5 +63,5 @@ jobs:
         timeout-minutes: 7
       - name: Print exact formatting diff only
         run: |
-          npx --no-install prettier --write ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts
-          git diff -- ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts
+          npx --no-install prettier --write ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts apps/zenx/test/app-project-picker-interaction.test.ts src/context-preparation.ts test/context-preparation-performance.test.ts
+          git diff -- ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts apps/zenx/test/app-project-picker-interaction.test.ts src/context-preparation.ts test/context-preparation-performance.test.ts
