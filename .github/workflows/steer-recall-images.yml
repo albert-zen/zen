@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          run-id: 41401906539
+          run-id: 41403239261
           github-token: ${{ github.token }}
           name: native-steer-recall-lost-reply
           path: recall
@@ -30,6 +30,6 @@ jobs:
             assert.equal(selected.length,1,name);
             const bytes=fs.readFileSync(selected[0]);assert(bytes.length>0&&bytes.length<=1048576);
             assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-            console.log('SYNTHETIC_RECALL_IMAGE '+JSON.stringify({sourceRun:41401906539,source:'279f84ff35c68979a55f35c5322c941235dff7be',name,bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
+            console.log('SYNTHETIC_RECALL_IMAGE '+JSON.stringify({sourceRun:41403239261,source:'87208215b4ba41a54a2680b0342d606fc56e998b',name,bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
           }
           NODE
