@@ -378,7 +378,10 @@ test("operation-local reads do not escape an unknown write or let close release 
       await cold.assertRecoverySafe("t");
       const recovered = await cold.readItemList("t");
       assert.equal(recovered.filter((item) => item.id === "unknown").length, 1);
-      assert.equal(recovered.some((item) => item.id === "not-admitted"), false);
+      assert.equal(
+        recovered.some((item) => item.id === "not-admitted"),
+        false,
+      );
     } finally {
       await cold.close();
     }
