@@ -15,7 +15,7 @@ export const boardManifest = {
   },
   storageVersion: 1,
   mainDocument:
-    "Read and compose the current conversation information Board. Use short document/block/event IDs. put replaces the document but preserves user-owned field values; read defaults to compact semantic state; explicitly request view:document to inspect all authored blocks, events and HTML. User draft values are unsent, never approval. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
+    "Read and compose the current conversation information Board. Use short document/block/event IDs; these are not separate storage addresses. read returns an exact contentSnapshot, including revision 0 for absence without creating state. Read view:document for the complete authored body before replacing it. Native put requires expectedRevision from that read; model callers use the opaque snapshot supplied by the model facade. put compares body revision inside the existing serial owner checks, preserves latest user field values, and returns applied:false on conflict without writing or cancelling an existing interaction. Conflicts require a fresh complete read and deliberate reconsideration; unknown outcomes are checked by reading the same owner, never automatic retry or bypassing a storage fence. User draft values are unsent, never approval. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
   provider: {
     id: "zenx-board",
     platforms: ["*"],
@@ -35,15 +35,20 @@ export const boardManifest = {
     {
       name: "zenx_board_put",
       description:
-        "Replace the current information Board document, preserving all user-owned draft values. No model delivery or execution occurs.",
+        "Replace the default Board body only when expectedRevision matches the observed contentSnapshot revision. Preserve latest user draft values and pin state. A conflict returns applied:false with current semantic state and performs no write or interaction cancellation; read the complete document before reconsidering. Unknown outcomes must be checked by read, never retried automatically. No model delivery or execution occurs.",
       inputSchema: {
         type: "object",
         properties: {
+          expectedRevision: {
+            type: "integer",
+            minimum: 0,
+            maximum: Number.MAX_SAFE_INTEGER,
+          },
           document: {
             type: "object",
           },
         },
-        required: ["document"],
+        required: ["document", "expectedRevision"],
         additionalProperties: false,
       },
       permissions: ["zenx-board.manage"],
@@ -53,7 +58,7 @@ export const boardManifest = {
     {
       name: "zenx_board_read",
       description:
-        "Read compact semantic Board state by default. Use view:document explicitly for the full authored document, blocks, events, HTML and unsent draft values; large responses use the existing output spool.",
+        "Read compact semantic Board state by default, or view:document for the full authored body, events, HTML and unsent drafts. Returns an exact owner/body-revision contentSnapshot, including known absence at revision 0 without writing state. Only a complete requested view or absence supports whole-body replacement in the model facade; inspect full-content output spools. A snapshot is version/view evidence, not approval or proof of comprehension.",
       inputSchema: {
         type: "object",
         properties: {

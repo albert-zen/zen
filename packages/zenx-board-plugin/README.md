@@ -1,11 +1,16 @@
 # Board
 
-A conversation-owned information popup, optionally pinned as a narrow rail separate from Browser/Files. A normal first-party plugin owns its current document and separately preserved user field values in the existing versioned namespace. Internal counters reject stale UI clicks and conflicting window edits; model tools need no revision tokens. There is no execution history, scheduler, auto-retry or second model runtime here.
+A conversation-owned information popup, optionally pinned as a narrow rail separate from Browser/Files. A normal first-party plugin owns its current document and separately preserved user field values in the existing versioned namespace. Body revisions reject stale replacements; draft revisions separately protect user fields and UI clicks. Model callers use opaque immutable snapshots rather than native revision numbers. There is no execution history, scheduler, auto-retry or second model runtime here.
 
 ## Agent tools
 
-- `zenx_board_put({document})`: replaces the current document, preserving user-owned values. The owner defaults to the calling Thread. Explicit `{kind:"room",roomId,threadId}` must bind that same calling Thread and a live Room member. IDs are short, meaningful and stable.
-- `zenx_board_read({owner?})`: compact semantic title, summary, field/action IDs and bounded values. It never returns HTML or injects board content into model turns. `truncated` is explicit.
+- Model `zenx_board_read({owner?, view:"document"})` returns the full authored body and an immutable `snapshot`; inspect any full-content output spool. A missing default Board returns a known-absence snapshot without creating state. A compact read still returns semantic title, summary, field/action IDs and bounded values with explicit `truncated`, but cannot authorize replacing unseen body content.
+- Model `zenx_board_put({snapshot, document})` compares the observed body version, preserving the latest user-owned values and pin state. Omitted `document.owner` follows the snapshot; an explicit owner must match it. Room references still require the calling Thread's live membership. A snapshot records the requested view/version, not approval or proof that the model understood it.
+- Native callers use `zenx_board_put({document, expectedRevision: read.contentSnapshot.revision})`; they must read the same owner first. Explicit native `{kind:"room",roomId,threadId}` must bind the calling member Thread. Missing or invalid revisions are rejected, and authored document IDs do not create a new storage address.
+
+`applied:false` is a conflict, not a successful edit: read the complete current document and reconsider deliberately. A conflict does not write body/drafts or cancel an existing user interaction. A successful replacement retains the latest draft values even if fields changed after the body read. Failed or uncertain writes are never automatically retried; read the same owner to observe current state, and respect any unavailable/fenced Host instead of claiming a missing receipt proves failure. The legacy default address is unchanged. Independent document addresses and editable body UI are separate required follow-up work, not implemented by this CAS contract.
+
+CAS compares the current Host storage authority, not fsync durability. Default Board storage is non-synchronous: a filesystem publication may succeed while its write reports failure and the in-memory authority remains older. This contract does not repair or universally fence that platform uncertainty; a read is observation, not permission to blindly overwrite or retry.
 
 A document has `id`, `title`, `summary`, `blocks`, `events`, optional `initialValues` and `html`. Convenience blocks compose freely:
 

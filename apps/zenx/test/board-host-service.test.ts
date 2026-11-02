@@ -987,6 +987,7 @@ test(
           ...(ui ? { trustedPluginUi: true as const } : {}),
         });
       await invoke("zenx_board_put", {
+        expectedRevision: 0,
         document: {
           id: "slow-check",
           owner: boardOwner,

@@ -1,5 +1,7 @@
 # ARCHITECTURE
 
+- **Board content compare-and-swap** — The existing Board plugin stores monotonic body revisions at the unchanged default owner address; native puts compare the observed revision inside the existing serial owner checks, while model snapshot refs bind that owner, revision, complete requested view and capability epoch without granting permission or proving model comprehension. Conflicts preserve body, user drafts and active interactions; uncertain outcomes are read-only recovery, never automatic replay or a new ledger.
+
 - **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.
 
 ## ItemList / Trace / current product state contract

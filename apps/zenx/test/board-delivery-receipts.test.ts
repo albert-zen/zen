@@ -86,7 +86,10 @@ async function fixture(delivery: unknown) {
       },
     ],
   };
-  await service.invoke("zenx_board_put", invokeInput({ document }));
+  await service.invoke(
+    "zenx_board_put",
+    invokeInput({ document, expectedRevision: 0 }),
+  );
   return {
     service,
     sdk,

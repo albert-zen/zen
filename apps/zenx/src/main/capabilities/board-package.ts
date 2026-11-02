@@ -67,6 +67,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     if (name === "zenx_board_ui" && !ui)
       throw new Error("Board actions require an explicit human UI event");
     const args = record(ui ? invocation.arguments.input : invocation.arguments);
+    if (name === "zenx_board_put") {
+      only(args, ["document", "expectedRevision"]);
+      contentRevision(args.expectedRevision);
+    } else if (name === "zenx_board_read") only(args, ["owner", "view"]);
     const document =
       name === "zenx_board_put"
         ? validateDocument(args.document, invocation.threadId)
@@ -97,8 +101,14 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       );
     if (!ui && owner.threadId !== invocation.threadId)
       throw new Error("Board owner must be the calling Thread");
-    await this.host.readOwner(owner);
-    if (document) {
+    const revalidate = async () => {
+      invocation.signal.throwIfAborted();
+      await this.host.readOwner(owner);
+      invocation.signal.throwIfAborted();
+    };
+    await revalidate();
+    const validateTargets = async () => {
+      if (!document) return;
       const targets = navigationTargets(
         document.events.flatMap((event) => event.actions),
       );
@@ -114,21 +124,28 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             "Board navigation requires the exact live Browser target owned by this Thread",
           );
       }
-    }
+    };
     if (name === "zenx_board_ui" && args.operation === "event")
       return await this.#event(owner, args, invocation.signal);
     if (name === "zenx_board_ui" && args.operation === "navigate")
       return await this.#navigate(owner, args, invocation.signal);
     return await this.#serial(async () => {
       const boards = await this.#boards();
+      if (name !== "zenx_board_ui") await revalidate();
       const key = boardOwnerKey(owner);
       const current = boards[key];
       if (current && current.document.owner.threadId !== owner.threadId)
         throw new Error("Board belongs to a different execution member");
       if (document) {
+        const revision = contentRevision(current ? current.revision : 0);
+        if (args.expectedRevision !== revision)
+          return { applied: false, ...contentRead(owner, current) };
+        const nextRevision = contentRevision(revision + 1);
+        await validateTargets();
+        await revalidate();
         const next: BoardSnapshot = {
           document,
-          revision: (current?.revision ?? 0) + 1,
+          revision: nextRevision,
           draftRevision: current?.draftRevision ?? 0,
           values: {
             ...(document.initialValues ?? {}),
@@ -137,7 +154,19 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           pinned: current?.pinned ?? false,
         };
         boards[key] = next;
-        await this.#save(boards);
+        try {
+          await this.#save(boards);
+        } catch (error) {
+          // A rejected write is not a CAS conflict or permission to retry. Keep
+          // any underlying storage fence, and stop this old body's interaction.
+          this.#running
+            .get(key)
+            ?.abort(new Error("Board content save is unconfirmed"));
+          throw new Error(
+            "Board content save failed or its outcome is unconfirmed; inspect this same Board before editing again, and never retry automatically",
+            { cause: error },
+          );
+        }
         // The existing in-flight interaction guard follows committed document replacement.
         // Its signal is checked again by native sidebar/tool admission after async preparation.
         this.#running
@@ -147,7 +176,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
               "Board document changed; the pending interaction was stopped. Review the replacement before running another action.",
             ),
           );
-        return semantic(next);
+        return { applied: true, ...contentRead(owner, next) };
       }
       if (name === "zenx_board_read") {
         if (
@@ -156,8 +185,8 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           args.view !== "document"
         )
           throw new Error("Board read view must be semantic or document");
-        if (!current) return null;
-        if (args.view !== "document") return semantic(current);
+        if (!current) return contentRead(owner, undefined);
+        if (args.view !== "document") return contentRead(owner, current);
         const routes: BrowserModelRoute[] = [];
         const navigationDiagnostics: Array<{
           kind: string;
@@ -195,9 +224,12 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             });
           }
         }
+        // Browser liveness awaits may outlive Room membership or cancellation.
+        // A complete body/snapshot is published only after a fresh owner check.
+        await revalidate();
         return attachBrowserSidebarTargets(
           {
-            ...current,
+            ...contentRead(owner, current, true),
             ...(navigationDiagnostics.length ? { navigationDiagnostics } : {}),
           },
           routes,
@@ -522,6 +554,34 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     if (!this.#sdk) throw new Error("Board plugin storage is unavailable");
     await this.#sdk.storage.set({ boards });
   }
+}
+function contentRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0)
+    throw new Error(
+      "Board content revision must be a nonnegative safe integer",
+    );
+  return Number(value);
+}
+function contentRead(
+  owner: BoardOwner,
+  current: BoardSnapshot | undefined,
+  completeDocument = false,
+) {
+  const contentSnapshot = {
+    owner: structuredClone(owner),
+    revision: contentRevision(current ? current.revision : 0),
+    completeDocument: !current || completeDocument,
+  };
+  return current
+    ? {
+        ...(completeDocument ? structuredClone(current) : semantic(current)),
+        contentSnapshot,
+      }
+    : { exists: false, contentSnapshot };
+}
+function only(value: Record<string, unknown>, keys: readonly string[]) {
+  if (Object.keys(value).some((key) => !keys.includes(key)))
+    throw new Error("Unknown Board argument");
 }
 function semantic(state: BoardSnapshot) {
   const fields = state.document.blocks.filter(

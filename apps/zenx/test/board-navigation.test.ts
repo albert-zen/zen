@@ -144,7 +144,7 @@ test("full authored read retains every part when an existing navigation target c
       arguments: args,
       signal: signal(),
     });
-  await invoke("zenx_board_put", { document });
+  await invoke("zenx_board_put", { expectedRevision: 0, document });
   const full = (await invoke("zenx_board_read", { view: "document" })) as any;
   assert.deepEqual(full.document, document);
   assert.deepEqual(readBrowserSidebarTargets(full), [route]);
@@ -187,7 +187,7 @@ test("full document reads distinguish unknown native observation failures and re
       arguments: args,
       signal: signal(),
     });
-  await invoke("zenx_board_put", { document });
+  await invoke("zenx_board_put", { expectedRevision: 0, document });
   f.host.options.readBrowserModelTarget = async () => {
     throw new Error("Synthetic native listing disconnected", {
       cause: new Error("Synthetic local cause"),
@@ -277,7 +277,7 @@ test("custom isolated navigation uses the exact UI owner and current document re
       signal: signal(),
       ...(ui ? { trustedPluginUi: true as const } : {}),
     });
-  await invoke("zenx_board_put", { document });
+  await invoke("zenx_board_put", { expectedRevision: 0, document });
   const input = {
     operation: "navigate",
     owner,
@@ -394,7 +394,7 @@ test("custom navigation failure keeps local cause details without a successful n
       signal: signal(),
       ...(ui ? { trustedPluginUi: true as const } : {}),
     });
-  await invoke("zenx_board_put", { document });
+  await invoke("zenx_board_put", { expectedRevision: 0, document });
   f.host.options.readBrowserModelTarget = async () => {
     throw new Error("Synthetic connection lost", {
       cause: new Error("Synthetic nested native cause"),
@@ -467,7 +467,7 @@ for (const custom of [true, false])
         },
       ],
     };
-    await invoke("zenx_board_put", { document: authored });
+    await invoke("zenx_board_put", { expectedRevision: 0, document: authored });
     const running = invoke(
       "zenx_board_ui",
       custom
@@ -483,6 +483,7 @@ for (const custom of [true, false])
     );
     await started;
     await invoke("zenx_board_put", {
+      expectedRevision: 1,
       document: { ...authored, title: "Replacement" },
     });
     release();
@@ -541,7 +542,7 @@ test("updating another owner's Board does not revoke an unrelated running intera
       },
     ],
   };
-  await invoke("zenx_board_put", { document: authored });
+  await invoke("zenx_board_put", { expectedRevision: 0, document: authored });
   const running = invoke(
     "zenx_board_ui",
     {
@@ -557,7 +558,7 @@ test("updating another owner's Board does not revoke an unrelated running intera
   const other = { kind: "thread", threadId: "other-owner" };
   await invoke(
     "zenx_board_put",
-    { document: { ...authored, owner: other } },
+    { expectedRevision: 0, document: { ...authored, owner: other } },
     false,
     other.threadId,
   );
