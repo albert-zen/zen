@@ -250,9 +250,16 @@ test("quote metadata preserves call/result pairs, immutable reuse, late replacem
   const a = turn("a", [call.id]), b = turn("b", [unrelated.id]);
   // The displayed result row can live elsewhere; quote pairing follows canonical ownership.
   const resultRow = turn("result-row", [result.id]);
+  const beforeResult = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, undefined, indexCanonicalQuoteItems([call, unrelated]));
+  assert.deepEqual(beforeResult.turns.get("a")!.quoteItems.get(call.id), [call]);
+  assert.equal(beforeResult.turns.get("result-row")!.quoteItems.size, 0);
   const initialItems = [call, result, unrelated];
-  const first = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, undefined, indexCanonicalQuoteItems(initialItems));
+  const first = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, beforeResult, indexCanonicalQuoteItems(initialItems));
   assert.deepEqual(first.turns.get("a")!.quoteItems.get(call.id), [call, result]);
+  assert.notEqual(first.turns.get("a"), beforeResult.turns.get("a"));
+  assert.notEqual(first.turns.get("result-row"), beforeResult.turns.get("result-row"));
+  assert.equal(first.turns.get("b"), beforeResult.turns.get("b"));
+  assert.deepEqual(first.turns.get("result-row")!.quoteItems.get(result.id), [result]);
   const appended = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, first, indexCanonicalQuoteItems([...initialItems, user("new")]));
   assert.equal(appended.turns.get("a"), first.turns.get("a"));
   assert.equal(appended.turns.get("b"), first.turns.get("b"));
@@ -265,4 +272,6 @@ test("quote metadata preserves call/result pairs, immutable reuse, late replacem
   const removed = indexTurnCanonicalPresentation("scope", [a, b, resultRow], new Map(), new Map(), {}, emptyTargets, changed, indexCanonicalQuoteItems([call, unrelated]));
   assert.deepEqual(removed.turns.get("a")!.quoteItems.get(call.id), [call]);
   assert.notEqual(removed.turns.get("a"), changed.turns.get("a"));
+  assert.notEqual(removed.turns.get("result-row"), changed.turns.get("result-row"));
+  assert.equal(removed.turns.get("result-row")!.quoteItems.size, 0);
 });
