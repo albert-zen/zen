@@ -262,7 +262,7 @@ export class ZenXThreadTitleCoordinator {
 
   async retry(threadId: string): Promise<ThreadTitleProjection> {
     const owner = this.#operationOwner();
-    const generating = await this.#serial(owner, async () => {
+    return await this.#serial(owner, async () => {
       const current = this.#snapshot[threadId];
       if (current === undefined)
         throw new Error("Thread has no title input to retry");
@@ -276,10 +276,11 @@ export class ZenXThreadTitleCoordinator {
       delete next.error;
       if (!(await this.#commit(next, owner)))
         throw new Error("Title ownership changed during retry");
+      // Retry owns the same generation claim as snapshot/live observations.
+      // Register it before releasing the serialized status transition.
+      this.#startGeneration(next, owner);
       return next;
     });
-    this.#startGeneration(generating, owner);
-    return generating;
   }
 
   async #initializeOwner(

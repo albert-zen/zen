@@ -576,9 +576,17 @@ function eventCoveredByCanonical(
 }
 
 function updateCommandResult(thread: Thread, result: ToolResultItem): Thread {
-  return {
-    ...thread,
-    turns: thread.turns.map((turn) => ({
+  let changed = false;
+  const turns = thread.turns.map((turn) => {
+    if (
+      !turn.items.some(
+        (item) =>
+          item.type === "commandExecution" && item.callId === result.callId,
+      )
+    )
+      return turn;
+    changed = true;
+    return {
       ...turn,
       items: turn.items.map((item) =>
         item.type === "commandExecution" && item.callId === result.callId
@@ -598,8 +606,9 @@ function updateCommandResult(thread: Thread, result: ToolResultItem): Thread {
             }
           : item,
       ),
-    })),
-  };
+    };
+  });
+  return changed ? { ...thread, turns } : thread;
 }
 
 export function projectNativeThread(
