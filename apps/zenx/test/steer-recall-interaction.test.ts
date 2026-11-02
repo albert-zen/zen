@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { Thread } from "../src/protocol-client/index.js";
 import test from "node:test";
 import type { CanonicalItem, SteerRecalledItem } from "../../../src/item.js";
 import type {
@@ -28,7 +29,7 @@ import { i18n } from "../src/renderer/src/i18n.js";
 const flush = async () => {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 };
-function staged() {
+function staged(): Thread {
   const thread = queueScenario(0);
   return {
     ...thread,

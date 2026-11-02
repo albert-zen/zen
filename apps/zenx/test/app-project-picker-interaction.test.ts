@@ -8,6 +8,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { ServerNotificationParams } from "../src/protocol-client/types.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
@@ -4869,7 +4870,7 @@ function summary(
   threadId = "thread-1",
   name = "Thread one",
   cwd = "/work/zen",
-): NativeThreadSummary {
+): Exclude<NativeThreadSummary, { status: "systemError" }> {
   return {
     threadId,
     currentMetadata: {
@@ -8225,8 +8226,14 @@ for (const claimWins of [false, true]) {
               );
             else if ("result" in message) waiter.resolve(message.result);
           } else if ("method" in message) {
-            for (const listener of listeners)
-              listener(message.method, message.params);
+            const method = message.method;
+            assert(
+              method === "zen/thread/event" ||
+                method === "model/catalog/updated",
+            );
+            const params =
+              message.params as ServerNotificationParams[typeof method];
+            for (const listener of listeners) listener(method, params);
           }
         },
       });
@@ -8407,16 +8414,19 @@ test("complete App late recall acknowledgement never navigates or refreshes the 
   const { pendingSteerMessages, recoverSteerRecall } =
     await import("../../../src/steer-recall.js");
   const first = nativeRecoveryForThread(runningThread());
-  first.thread.items.push({
-    type: "user_message_queued",
-    id: "pending-one",
-    threadId: "thread-1",
-    createdAt: "2026-11-02T00:00:00Z",
-    clientId: "pending-client",
-    input: [{ type: "text", text: "Recall only into Thread one" }],
-    deliveryMode: "steer",
-    expectedTurnId: "turn-1",
-  });
+  first.thread.items = [
+    ...first.thread.items,
+    {
+      type: "user_message_queued",
+      id: "pending-one",
+      threadId: "thread-1",
+      createdAt: "2026-11-02T00:00:00Z",
+      clientId: "pending-client",
+      input: [{ type: "text", text: "Recall only into Thread one" }],
+      deliveryMode: "steer",
+      expectedTurnId: "turn-1",
+    },
+  ];
   const second = nativeRecoveryForThread({
     ...liveThread(),
     id: "thread-2",
@@ -8491,7 +8501,7 @@ test("complete App late recall acknowledgement never navigates or refreshes the 
       recallId: requested.recallId,
       targets: requested.targets,
     };
-    first.thread.items.push(receipt);
+    first.thread.items = [...first.thread.items, receipt];
     const result = recoverSteerRecall(
       first.thread.items,
       "thread-1",
