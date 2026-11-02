@@ -59,6 +59,7 @@ import {
 } from "../../../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
 import { AskUserQuestionToolRuntime } from "../../../src/user-question-tool.js";
+import { ASK_USER_QUESTION_NAME } from "../../../src/user-question.js";
 import {
   ToolOutputSpool,
   type ToolOutputSpoolOptions,
@@ -126,6 +127,8 @@ export interface ZenHostOptions {
   maxToolRounds?: number;
   /** Host-owned model-facing tool entry points; defaults to both. */
   toolPresentation?: ToolPresentation;
+  /** Host-owned experimental publication; defaults off and changes require restart. */
+  experimentalUserQuestions?: boolean;
   /** Application-owned pinned resource; changes take effect at next Host launch. */
   experimentalRtk?: { executable: string; sha256: string };
   /** Host-owned containment limits and exact packaged Worker entry. */
@@ -185,7 +188,9 @@ export function createHostedAppServer(
 ): HostedZenAppServer {
   const reservedTool = options.toolEnvironment?.definitions.find(
     (definition) =>
-      definition.name === "apply_patch" || definition.name === "view_image",
+      definition.name === "apply_patch" ||
+      definition.name === "view_image" ||
+      definition.name === ASK_USER_QUESTION_NAME,
   );
   if (reservedTool !== undefined) {
     throw new Error(
@@ -281,10 +286,11 @@ export function createHostedAppServer(
       kind: "builtin",
       id: "apply-patch",
     });
-    toolEnvironment.registerRuntime(new AskUserQuestionToolRuntime(), {
-      kind: "builtin",
-      id: "user-question",
-    });
+    if (options.experimentalUserQuestions === true)
+      toolEnvironment.registerRuntime(new AskUserQuestionToolRuntime(), {
+        kind: "builtin",
+        id: "user-question",
+      });
     toolEnvironment.registerRuntime(
       new ViewImageToolRuntime({ attachments, journal }),
       { kind: "builtin", id: "view-image" },
@@ -621,6 +627,7 @@ function observableHostConfiguration(
     defaultSelection: options.defaultSelection ?? null,
     approvalPolicy: options.approvalPolicy,
     toolPresentation: options.toolPresentation ?? "both",
+    experimentalUserQuestions: options.experimentalUserQuestions === true,
     contextCompaction: options.contextCompaction ?? null,
     maxToolRounds: options.maxToolRounds ?? null,
     maxConcurrentToolBodies: options.maxConcurrentToolBodies ?? null,
@@ -934,6 +941,7 @@ const RESTART_CONFIGURATION_DOMAINS = [
   "dataDirectory",
   "secretEnvironmentVariables",
   "toolPresentation",
+  "experimentalUserQuestions",
   "experimentalRtk",
   "codeRuntimeOptions",
   "toolOutputSpoolOptions",
@@ -956,6 +964,8 @@ function restartDomainValue(
   options: ZenHostOptions,
   domain: (typeof RESTART_CONFIGURATION_DOMAINS)[number],
 ): unknown {
+  if (domain === "experimentalUserQuestions")
+    return options.experimentalUserQuestions === true;
   if (domain !== "codeRuntimeOptions") return options[domain];
   const codeRuntimeOptions = options.codeRuntimeOptions;
   if (codeRuntimeOptions === undefined) return undefined;

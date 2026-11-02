@@ -29,7 +29,9 @@ before that claim, not after. No remote inference acknowledgement is inferred.
 ## 1. Publish a real semantic request
 
 Add `AskUserQuestionToolRuntime` and bounded content validation, registered in
-the existing Host builtin catalog as `ask_user_question`. It has no external
+the existing Host builtin catalog as `ask_user_question` only when the trusted
+Host startup option `experimentalUserQuestions` is explicitly `true` (default
+`false`). It has no external
 side effect, secret, listener, Promise retained across turns, or new storage.
 
 - Input: authored question IDs, full prompt, optional stable-ID options,
@@ -60,7 +62,8 @@ Stable model tool description:
 > next step requires the answer. Do not poll or treat defaults as user approval.
 > Do not request secrets or use this tool instead of a permission approval flow.
 
-The Host registers this builtin; no model-facing answer tool is exposed.
+The Host owns registration; model arguments and native client requests cannot
+enable it. No model-facing answer tool is exposed.
 
 ## 2. One explicit native answer port
 
@@ -233,9 +236,18 @@ CAS has no new schema mapping; the current renderer ignores the event until its
 separate Question UI integration. Snapshot question cards are captured after the
 last asynchronous metadata read, at the same synchronous boundary as source Items.
 
-Tool registration in this isolated backend draft does not establish usable Ask
-support in CLI, Rooms or external clients. Their exposure/answer path must be
-settled before production rollout. Hidden child-thread questions require visible
+The Host-owned `experimentalUserQuestions` option defaults off. Changes use the
+existing Host pending-restart mechanism, not a dynamic client capability or new
+permission system; explicit `false` and omission are equivalent. Disabling new
+publication does not gate native list/read/respond: previously published local
+questions remain recoverable and answerable. The native capability advertises
+protocol support, not that publication is enabled or a particular client has UI.
+Synthetic acceptance fixtures opt in explicitly. Desktop's shared Host is not
+globally enabled, since that would also expose the tool to unsupported Room/PAW
+paths. CLI, Rooms and external clients remain off unless the Host owner explicitly
+selects an experimental deployment; a supported Desktop-default rollout needs a
+separate reviewed product binding and linked answer UI, not client self-report.
+Hidden child-thread questions require visible
 attention without undoing manual hiding or changing pinned membership/order.
 An Ask in the selected Thread may reveal its card but must not steal keyboard
 focus; other Threads only gain attention/automatic ordering, never forced

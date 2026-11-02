@@ -138,6 +138,7 @@ test("real Host builtin publishes from semantic call/result and restores locally
     provider: { type: "fake" as const },
     approvalPolicy: "never" as const,
     toolPresentation: "direct" as const,
+    experimentalUserQuestions: true,
   };
   let host = createHostedAppServer(options);
   try {
@@ -200,6 +201,7 @@ test("real Host failed question tool result does not publish", async () => {
     provider: { type: "fake" },
     approvalPolicy: "never",
     toolPresentation: "direct",
+    experimentalUserQuestions: true,
   });
   try {
     const thread = await host.startThread();
@@ -240,6 +242,7 @@ test("actual Host early import-fork can publish and answer new local questions a
     provider: { type: "fake" as const },
     approvalPolicy: "never" as const,
     toolPresentation: "direct" as const,
+    experimentalUserQuestions: true,
   };
   let host = createHostedAppServer(options);
   try {
