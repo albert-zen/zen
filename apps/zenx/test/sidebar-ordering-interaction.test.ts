@@ -937,3 +937,56 @@ for (const kind of ["pinned", "project", "thread"] as const) {
     });
   });
 }
+
+test("Recent keeps focus and running indicators stable until genuine message activity", async () => {
+  await withDom(async (root) => {
+    const at = (seconds: number) => new Date(seconds * 1_000).toISOString();
+    const first = {
+      ...summary("active", "active", 10, "/work/a"),
+      recentActivityAt: at(10),
+    };
+    const second = {
+      ...summary("idle", "idle", 20, "/work/a"),
+      recentActivityAt: at(20),
+    };
+    const render = async (threadRows: NativeThreadSummary[]) => {
+      await act(async () =>
+        root.render(createElement(StaticSidebar, { threadRows })),
+      );
+    };
+    const ids = () =>
+      [...document.querySelectorAll<HTMLElement>(
+        ".recent-thread-group .thread-row-shell",
+      )].map((row) => row.dataset.threadId);
+    await render([first, second]);
+    assert.deepEqual(ids(), ["idle", "active"]);
+    const activeRow = requiredButton(
+      '.recent-thread-group [data-thread-id="active"] .thread-row',
+    );
+    activeRow.focus();
+    await render([{ ...second }, {
+      ...first,
+      updatedAt: at(30),
+      lastMessage: { id: "commentary", kind: "agent", createdAt: at(30) },
+    }]);
+    assert.deepEqual(ids(), ["idle", "active"]);
+    assert.equal(document.activeElement, activeRow);
+    assert.ok(document.querySelector(
+      '.recent-thread-group [data-thread-id="active"] [aria-label="Running"]',
+    ));
+    await render([{ ...first, recentActivityAt: at(40) }, second]);
+    assert.deepEqual(ids(), ["active", "idle"]);
+    assert.equal(document.activeElement, activeRow);
+    await render([second, { ...first, recentActivityAt: at(40), updatedAt: at(50) }]);
+    assert.deepEqual(ids(), ["active", "idle"]);
+    await render([second, { ...first, status: "idle", recentActivityAt: at(60) }]);
+    assert.deepEqual(ids(), ["active", "idle"]);
+    assert.equal(document.querySelector(
+      '.recent-thread-group [data-thread-id="active"] [aria-label="Running"]',
+    ), null);
+    await render([second, { ...first, status: "idle", recentActivityAt: at(20) }]);
+    assert.deepEqual(ids(), ["active", "idle"]);
+    await render([{ ...first, status: "idle", recentActivityAt: at(20) }, second]);
+    assert.deepEqual(ids(), ["active", "idle"]);
+  });
+});

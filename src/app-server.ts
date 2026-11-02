@@ -5874,8 +5874,9 @@ export class ZenAppServer {
       recency = new ThreadRecencyProjection();
       this.#threadRecency.set(thread, recency);
     }
+    const recentActivityAt = recency.read(items);
     return {
-      recentActivityAt: recency.read(items),
+      ...(recentActivityAt === undefined ? {} : { recentActivityAt }),
       ...(turnEnd === undefined
         ? {}
         : {

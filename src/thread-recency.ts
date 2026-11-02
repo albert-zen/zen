@@ -10,7 +10,7 @@ export class ThreadRecencyProjection {
   #forked = false;
   #recentActivityAt: string | undefined;
   readonly #admissions = new Map<string, string | null>();
-  readonly #answers = new Map<string, boolean>();
+  readonly #answers = new Map<string, string | null>();
 
   read(items: readonly CanonicalItem[]): string | undefined {
     const metadata = items[0];
@@ -47,12 +47,15 @@ export class ThreadRecencyProjection {
           this.#admissions.set(key, timestamp);
         this.#accept(timestamp);
       } else if (item.type === "agent_message") {
-        this.#answers.set(item.turnId, item.incomplete !== true);
+        this.#answers.set(
+          item.turnId,
+          item.incomplete === true ? null : recordedTimestamp(item.createdAt),
+        );
       } else if (item.type === "tool_call") {
         this.#answers.delete(item.turnId);
       } else if (item.type === "turn_completed") {
-        if (item.status === "completed" && this.#answers.get(item.turnId))
-          this.#accept(recordedTimestamp(item.createdAt));
+        if (item.status === "completed")
+          this.#accept(this.#answers.get(item.turnId) ?? null);
         this.#answers.delete(item.turnId);
       } else if (item.type === "turn_aborted") {
         this.#answers.delete(item.turnId);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CanonicalItem } from "../src/item.js";
+import { Thread } from "../src/thread.js";
 import { ThreadRecencyProjection } from "../src/thread-recency.js";
 
 const at = (seconds: number) => new Date(seconds * 1_000).toISOString();
@@ -31,12 +32,12 @@ test("Recent bumps for receipt and accepted final, never commentary/tools/status
   append(fact("thread_configuration_changed", 7), 3);
   append(fact("model_usage", 8), 3);
   append(fact("agent_message", 9, { text: "final" }), 3);
-  append(fact("turn_completed", 10, { status: "completed" }), 10);
-  append(fact("thread_permissions_changed", 11), 10);
-  append(fact("turn_started", 12, { turnId: "next" }), 10);
-  append(fact("agent_message", 13, { turnId: "next", incomplete: true }), 10);
-  append(fact("turn_completed", 14, { turnId: "next", status: "failed" }), 10);
-  append(fact("turn_aborted", 15), 10);
+  append(fact("turn_completed", 10, { status: "completed" }), 9);
+  append(fact("thread_permissions_changed", 11), 9);
+  append(fact("turn_started", 12, { turnId: "next" }), 9);
+  append(fact("agent_message", 13, { turnId: "next", incomplete: true }), 9);
+  append(fact("turn_completed", 14, { turnId: "next", status: "failed" }), 9);
+  append(fact("turn_aborted", 15), 9);
 });
 
 test("queue, edited queue, steer and replacement preserve first human receipt", () => {
@@ -63,7 +64,7 @@ test("queue, edited queue, steer and replacement preserve first human receipt", 
   append(fact("host_message", 17), 12);
   append(fact("thread_message", 18), 12);
   append(fact("agent_message", 19), 12);
-  append(fact("turn_completed", 20, { status: "completed" }), 20);
+  append(fact("turn_completed", 20, { status: "completed" }), 19);
 });
 
 test("fork resets inherited activity and keeps unknown import receipts unknown", () => {
@@ -93,4 +94,41 @@ test("refresh only reads the appended suffix rather than rescanning history", ()
   });
   items.push(fact("thread_configuration_changed", 3));
   assert.equal(projection.read(items), at(2));
+});
+
+test("successful control closure without a complete final answer cannot bump Recent", () => {
+  for (const tail of [
+    [fact("turn_completed", 30, { status: "completed" })],
+    [fact("agent_message", 10), fact("tool_call", 20), fact("turn_completed", 30, { status: "completed" })],
+    [fact("agent_message", 10, { incomplete: true }), fact("turn_completed", 30, { status: "completed" })],
+  ]) {
+    assert.equal(new ThreadRecencyProjection().read([
+      fact("thread_metadata", 1), fact("user_message", 2), ...tail,
+    ]), at(2));
+  }
+});
+
+test("actual Thread snapshot replacement preserves suffix-only recency work", () => {
+  const thread = new Thread("thread", [
+    fact("thread_metadata", 1),
+    ...Array.from({ length: 10_000 }, (_, index) =>
+      fact("user_message", index + 2),
+    ),
+  ], []);
+  const projection = new ThreadRecencyProjection();
+  assert.equal(projection.read(thread.items), at(10_001));
+  thread.append(fact("agent_message", 20_000), []);
+  const snapshot = thread.items;
+  let reads = 0;
+  const observed = new Proxy(snapshot, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && /^\d+$/u.test(key) && key !== "0") {
+        assert.equal(Number(key), snapshot.length - 1, "old items must not be visited");
+        reads++;
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  assert.equal(projection.read(observed), at(10_001));
+  assert.equal(reads, 1);
 });

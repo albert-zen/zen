@@ -217,7 +217,10 @@ test("a real tool turn publishes canonical end evidence only after it stops", as
       ),
     });
     assert.ok(completed.lastTurnEnd);
-    assert.equal(completed.recentActivityAt, terminal.createdAt);
+    assert.equal(
+      completed.recentActivityAt,
+      completedItems.findLast((item) => item.type === "agent_message")?.createdAt,
+    );
     const [reloaded] = await createServer(directory).listThreadSummaries();
     assert(reloaded && reloaded.status === "idle");
     assert.deepEqual(reloaded.lastTurnEnd, completed.lastTurnEnd);
