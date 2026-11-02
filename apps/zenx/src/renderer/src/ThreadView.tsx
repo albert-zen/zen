@@ -1,3 +1,6 @@
+import { useCommittedCallback } from "./use-committed-callback.js";
+import { PendingSendRows } from "./PendingSendRows.js";
+import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
 import type { MessageQuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
@@ -176,7 +179,7 @@ export type MessageForkHandler = (
 export const MessageForkContext = createContext<MessageForkHandler | null>(
   null,
 );
-const SideChatQuoteContext = createContext<{
+export const SideChatQuoteContext = createContext<{
   add?(quote: MessageQuoteReference): void;
   focus?: { composerId: string; sequence: number };
 }>({});
@@ -199,18 +202,28 @@ export function ThreadViewActionsProvider({
   source: MessageSourceNavigator;
   children: ReactNode;
 }) {
+  const committedFork = useCommittedCallback(fork);
+  const committedSource = useCommittedCallback(source);
+  const committedConsumed = useCommittedCallback((requestId: number) =>
+    onMessageTargetConsumed?.(requestId),
+  );
+  const committedAdd = useCommittedCallback((quote: MessageQuoteReference) =>
+    addToSideChat?.(quote),
+  );
+  const canAdd = addToSideChat !== undefined;
+  const targetValue = useMemo(
+    () => ({ request: messageTarget ?? null, consumed: committedConsumed }),
+    [messageTarget, committedConsumed],
+  );
+  const sideChatValue = useMemo(
+    () => ({ add: canAdd ? committedAdd : undefined, focus: composerFocus }),
+    [canAdd, committedAdd, composerFocus],
+  );
   return (
-    <MessageForkContext.Provider value={fork}>
-      <MessageSourceNavigationContext.Provider value={source}>
-        <MessageTargetNavigationContext.Provider
-          value={{
-            request: messageTarget ?? null,
-            consumed: onMessageTargetConsumed ?? (() => {}),
-          }}
-        >
-          <SideChatQuoteContext.Provider
-            value={{ add: addToSideChat, focus: composerFocus }}
-          >
+    <MessageForkContext.Provider value={committedFork}>
+      <MessageSourceNavigationContext.Provider value={committedSource}>
+        <MessageTargetNavigationContext.Provider value={targetValue}>
+          <SideChatQuoteContext.Provider value={sideChatValue}>
             {children}
           </SideChatQuoteContext.Provider>
         </MessageTargetNavigationContext.Provider>
@@ -314,6 +327,9 @@ interface ThreadViewProps {
   workflowCommands?: readonly WorkflowCommand[];
   pluginSnapshot?: ZenXPluginSnapshot | null;
   pluginUiRegistry?: PluginUiRegistry | null;
+  onRecoverPendingSend?(clientId: string): void;
+  onDismissPendingSend?(clientId: string): void;
+  onCheckPendingSends?(): Promise<void>;
   onDraftChange(draft: string): void;
   onOpenMessageLink?(target: { kind: "file" | "browser"; value: string }): void;
   onImportImages?(files: readonly File[]): Promise<void>;
@@ -496,6 +512,9 @@ function ThreadViewContent({
   workflowCommands = [],
   pluginSnapshot = null,
   pluginUiRegistry = null,
+  onRecoverPendingSend,
+  onDismissPendingSend,
+  onCheckPendingSends,
   onDraftChange,
   onImportImages = async () => undefined,
   onPickImages = async () => undefined,
@@ -808,6 +827,12 @@ function ThreadViewContent({
     setStoppingRun(null);
     setInterruptError(null);
   }, [runKey]);
+  // Native appends replace canonicalItems; composer edits retain its identity.
+  // Keep this scoped to thread, not contextPreview, like the former row scans.
+  const turnOutcomeItems = useMemo(
+    () => indexTurnOutcomeItems(thread?.canonicalItems),
+    [thread?.canonicalItems],
+  );
   const displayedThread = thread ?? contextPreview;
   const imageContext = useMemo(
     () => ({
@@ -953,6 +978,8 @@ function ThreadViewContent({
     latestTurn?.items.at(-1)?.id,
     thread?.canonicalItems?.length,
     thread?.canonicalItems?.at(-1)?.id,
+    composer.pendingSends?.at(-1)?.clientId,
+    composer.pendingSends?.length,
   ]);
   useEffect(() => {
     followBottom();
@@ -1353,6 +1380,66 @@ function ThreadViewContent({
       : null) ??
     modelError;
 
+  // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
+  const renderedTranscriptRows = useMemo(
+    () =>
+      transcriptRows.map((row) =>
+        row.type === "turn" ? (
+          <TurnBlock
+            index={row.index}
+            key={JSON.stringify([thread?.id, row.turn.id])}
+            turn={row.turn}
+            compactionPending={
+              row.turn.id === runningTurn?.id &&
+              composer.compaction?.status === "pending"
+            }
+            contextPreview={thread === null && contextPreview !== undefined}
+            endItemId={
+              lastCanonicalTurnEnd?.turnId === row.turn.id
+                ? lastCanonicalTurnEnd.id
+                : undefined
+            }
+            stopping={interrupting && row.turn.id === runningTurn?.id}
+            approvals={approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS}
+            confirmedStopped={turnOutcomeItems.abortedTurnIds.has(row.turn.id)}
+            failureDetail={
+              turnOutcomeItems.latestFailureByTurn.get(row.turn.id) ?? null
+            }
+            usage={threadUsage?.turns[row.turn.id]}
+            wakeups={wakeups}
+            attachments={threadAttachments}
+            onOpenImage={onOpenImage}
+            onReadAttachment={onReadAttachment}
+            pluginSnapshot={pluginSnapshot}
+            pluginUiRegistry={pluginUiRegistry}
+          />
+        ) : (
+          <ContextCompactionEvent
+            key={row.compaction.item.id}
+            projection={row.compaction}
+          />
+        ),
+      ),
+    [
+      thread,
+      contextPreview,
+      transcriptRows,
+      runningTurn,
+      composer.compaction?.status,
+      lastCanonicalTurnEnd,
+      interrupting,
+      approvalsByTurn,
+      turnOutcomeItems,
+      threadUsage,
+      wakeups,
+      threadAttachments,
+      onOpenImage,
+      onReadAttachment,
+      pluginSnapshot,
+      pluginUiRegistry,
+    ],
+  );
+
   return (
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
@@ -1463,60 +1550,16 @@ function ThreadViewContent({
                       <p>{i18n.t("shell:describeOutcome")}</p>
                     </div>
                   ))
-                : transcriptRows.map((row) =>
-                    row.type === "turn" ? (
-                      <TurnBlock
-                        index={row.index}
-                        key={JSON.stringify([thread?.id, row.turn.id])}
-                        turn={row.turn}
-                        compactionPending={
-                          row.turn.id === runningTurn?.id &&
-                          composer.compaction?.status === "pending"
-                        }
-                        contextPreview={
-                          thread === null && contextPreview !== undefined
-                        }
-                        endItemId={
-                          lastCanonicalTurnEnd?.turnId === row.turn.id
-                            ? lastCanonicalTurnEnd.id
-                            : undefined
-                        }
-                        stopping={
-                          interrupting && row.turn.id === runningTurn?.id
-                        }
-                        approvals={
-                          approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS
-                        }
-                        confirmedStopped={
-                          thread?.canonicalItems?.some(
-                            (item) =>
-                              item.type === "turn_aborted" &&
-                              item.turnId === row.turn.id,
-                          ) ?? false
-                        }
-                        failureDetail={
-                          thread?.canonicalItems?.findLast(
-                            (item): item is FailureItem =>
-                              item.type === "failure" &&
-                              item.recovery === undefined &&
-                              item.turnId === row.turn.id,
-                          ) ?? null
-                        }
-                        usage={threadUsage?.turns[row.turn.id]}
-                        wakeups={wakeups}
-                        attachments={threadAttachments}
-                        onOpenImage={onOpenImage}
-                        onReadAttachment={onReadAttachment}
-                        pluginSnapshot={pluginSnapshot}
-                        pluginUiRegistry={pluginUiRegistry}
-                      />
-                    ) : (
-                      <ContextCompactionEvent
-                        key={row.compaction.item.id}
-                        projection={row.compaction}
-                      />
-                    ),
-                  )}
+                : renderedTranscriptRows}
+              {composer.pendingSends && (
+                <PendingSendRows
+                  key={thread?.id ?? composerId}
+                  messages={composer.pendingSends}
+                  onRecover={onRecoverPendingSend}
+                  onDismiss={onDismissPendingSend}
+                  onCheck={onCheckPendingSends}
+                />
+              )}
               {composer.compaction?.status === "pending" ? (
                 <ContextCompactionProgress state={composer.compaction} />
               ) : null}
