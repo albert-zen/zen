@@ -1,0 +1,69 @@
+name: Native immediate-feedback acceptance
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/send-feedback-e2e.yml
+      - apps/zenx/scripts/capture-send-feedback.cjs
+      - apps/zenx/scripts/launch-send-feedback.mjs
+      - apps/zenx/scripts/long-thread-domain-seed.mjs
+permissions:
+  contents: read
+jobs:
+  native-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: pending
+            source: a36e76de2c75a297aae6a1ecc09faefc1dfe2433
+            count: 0
+          - label: pending
+            source: a36e76de2c75a297aae6a1ecc09faefc1dfe2433
+            count: 1000
+          - label: pending
+            source: a36e76de2c75a297aae6a1ecc09faefc1dfe2433
+            count: 5000
+          - label: baseline
+            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+            count: 1000
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy only diagnostic drivers to exact product checkout
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-send-feedback.cjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/launch-send-feedback.mjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs product/apps/zenx/scripts/
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production storage and actual App
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Full native App ordinary send
+        working-directory: product
+        timeout-minutes: 12
+        run: node apps/zenx/scripts/launch-send-feedback.mjs ../results '${{ matrix.count }}' '${{ matrix.label }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-feedback-${{ matrix.label }}-${{ matrix.count }}
+          path: results
+          if-no-files-found: error
