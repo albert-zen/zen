@@ -2,6 +2,7 @@ import { localErrorDetail } from "../local-error-detail.js";
 import type { CompactionIpcReply } from "./compaction-ipc.js";
 import type {
   NativeQueueSteerResult,
+  NativeSteerRecallResult,
   NativeQueueEditResult,
 } from "../../../../src/protocol/native/wire.js";
 import type {
@@ -12,6 +13,8 @@ import type {
 const unknownType = "zenx.queue-outcome-unknown.v1";
 const rejectionType = "zenx.queue-edit-rejection.v1";
 const knownCodes = new Set([
+  "steer_recall_conflict",
+  "steer_recall_unsupported_input",
   "queue_not_found",
   "queue_already_started",
   "queue_cancelled",
@@ -65,9 +68,11 @@ export type ProtocolIpcResult<M extends ClientRequestMethod> =
     ? CompactionIpcReply
     : M extends "zen/thread/queue/edit"
       ? QueueEditIpcReply
-      : M extends "zen/thread/queue/steer"
-        ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
-        : ClientRequestResults[M];
+      : M extends "zen/thread/steer/recall"
+        ? NativeSteerRecallResult | QueueEditIpcRejection | QueueIpcUnknown
+        : M extends "zen/thread/queue/steer"
+          ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
+          : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,
@@ -94,7 +99,8 @@ export function unwrapQueueEditIpcReply(
 }
 
 export function unwrapQueueMutationIpcReply<
-  T extends NativeQueueEditResult | NativeQueueSteerResult,
+  T extends
+    NativeQueueEditResult | NativeQueueSteerResult | NativeSteerRecallResult,
 >(reply: T | QueueEditIpcRejection | QueueIpcUnknown): T {
   if (isRecord(reply) && reply.type === unknownType) {
     // No rejection code: callers must retain read-only receipt recovery, never resend.

@@ -181,6 +181,7 @@ export interface ClientRequestParams {
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryParams;
   "zen/trace/client-activation": {
@@ -289,6 +290,7 @@ export interface ClientRequestResults {
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryResult;
   "zen/trace/client-activation": { observed: boolean };
