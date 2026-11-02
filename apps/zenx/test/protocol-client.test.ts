@@ -456,6 +456,8 @@ test("reconnects and restores subscriptions with thread/resume", async () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
+    const snapshots: string[] = [];
+    client.onThreadRecovery(({ thread }) => snapshots.push(thread.id));
     const statuses: ConnectionStatus[] = [];
     const reconnected = deferred<void>();
     client.onStatus((status) => {
@@ -481,6 +483,11 @@ test("reconnects and restores subscriptions with thread/resume", async () => {
     assert(restored && restored.type === "resubscribed");
     assert.equal(restored.recovery.thread.id, started.thread.id);
     assert.equal(typeof restored.recovery.processEpoch, "string");
+    assert.deepEqual(
+      snapshots,
+      [started.thread.id],
+      "reconnect exposes the existing native snapshot without another read",
+    );
 
     const turnCompleted = deferred<void>();
     client.onNotification("zen/thread/event", (event) => {
@@ -1056,5 +1063,86 @@ test("original read at the local bearer endpoint excludes queued, opaque and pos
   } finally {
     await source.closeHostResources();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("native recovery observers see the authoritative first input before overlap and share one resume", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const item: CanonicalItem = {
+    type: "host_message",
+    id: "first",
+    threadId: "synthetic",
+    turnId: "turn",
+    clientId: "client",
+    sender: "host",
+    source: "bootstrap",
+    mode: "start",
+    text: "First native task",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  let resumes = 0;
+  server.on("connection", (socket) =>
+    socket.on("message", (data) => {
+      const request = JSON.parse(data.toString()) as {
+        id: number;
+        method: string;
+      };
+      const recovery = {
+        processEpoch: "synthetic-epoch",
+        threadId: "synthetic",
+        watermark: 1,
+        thread: { id: "synthetic", items: [item], turns: [] },
+        events: [
+          {
+            processEpoch: "synthetic-epoch",
+            threadId: "synthetic",
+            watermark: 1,
+            event: {
+              type: "item_completed",
+              item: { ...item, id: "second", text: "Later overlap" },
+            },
+          },
+        ],
+      };
+      if (request.method === "zen/thread/resume") resumes++;
+      socket.send(
+        JSON.stringify({
+          id: request.id,
+          result:
+            request.method === "zen/thread/resume"
+              ? recovery
+              : request.method === "zen/initialize"
+                ? { processEpoch: "synthetic-epoch" }
+                : {},
+        }),
+      );
+    }),
+  );
+  const client = await ZenXProtocolClient.connect(
+    clientOptions(
+      `ws://127.0.0.1:${String(address.port)}`,
+      "synthetic-input-order",
+    ),
+  );
+  try {
+    const seen: string[] = [];
+    client.onThreadRecovery(({ thread }) => {
+      seen.push(thread.items[0]!.id);
+    });
+    client.onNotification("zen/thread/event", ({ event }) => {
+      if (event.type === "item_completed") seen.push(event.item.id);
+    });
+    await Promise.all([
+      client.request("zen/thread/resume", { threadId: "synthetic" }),
+      client.request("zen/thread/resume", { threadId: "synthetic" }),
+    ]);
+    assert.equal(resumes, 1);
+    assert.deepEqual(seen, ["first", "second"]);
+  } finally {
+    client.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

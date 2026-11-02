@@ -64,6 +64,39 @@ test("failure preserves the provisional title and explicit retry can generate", 
   });
 });
 
+test("retry and concurrent snapshot/live observations launch one generation", async () => {
+  await withCoordinator(async ({ coordinator, inference }) => {
+    await coordinator.observe("thread-a", "First canonical input");
+    inference.reject(new Error("title model unavailable"));
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "failed",
+      "generation before concurrent retry",
+    );
+    const callsBeforeRetry = inference.calls;
+    const [retry, snapshot, live] = await Promise.all([
+      coordinator.retry("thread-a"),
+      coordinator.observe("thread-a", "First canonical input"),
+      coordinator.observe("thread-a", "Later live input"),
+    ]);
+    assert.deepEqual(snapshot, retry);
+    assert.deepEqual(live, retry);
+    assert.equal(inference.calls - callsBeforeRetry, 1);
+    inference.resolve("Canonical input title");
+    await waitForTitleStatus(
+      coordinator,
+      "thread-a",
+      "generated",
+      "deduplicated retry generation",
+    );
+    assert.equal(
+      coordinator.snapshot()["thread-a"]?.source,
+      "First canonical input",
+    );
+  });
+});
+
 test("manual rename before a late completion is authoritative", async () => {
   await withCoordinator(async ({ coordinator, inference, events }) => {
     await coordinator.observe("thread-a", "Original request");

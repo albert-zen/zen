@@ -129,13 +129,15 @@ test("native Host wake is typed and recovery/live replay retain distinct provena
   const recovery = nativeRecoveryForThread(thread(items.map(projected)));
   const recovered = projectNativeRecovery(recovery);
   assert.deepEqual(recovered.turns[0]!.items, items.map(projected));
-  assert.equal(recovered.preview, "");
+  assert.equal(recovered.preview, "Wake from bootstrap");
+  // Recovery and live delivery share the same first canonical input preview.
   let live = projectNativeRecovery(nativeRecoveryForThread(thread()));
   for (const item of items) {
     live = applyNativeThreadEvent(live, { type: "item_completed", item });
     live = applyNativeThreadEvent(live, { type: "item_completed", item });
   }
   assert.deepEqual(live.turns[0]!.items, recovered.turns[0]!.items);
+  assert.equal(live.preview, recovered.preview);
   assert.equal(
     live.canonicalItems!.filter((item) => item.type === "host_message").length,
     3,

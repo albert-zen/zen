@@ -95,7 +95,7 @@ import {
   SIDE_CHAT_TOOL_SNAPSHOT_CONTENT_TYPE,
   normalizeUserInput,
   validateUserInput,
-  previewFromUserMessage,
+  firstInputMessagePreview,
   sameUserInput,
 } from "./item.js";
 import {
@@ -5933,7 +5933,7 @@ export class ZenAppServer {
               ? {}
               : { forkedFromTurnId: fork.sourceTurnId }),
           }),
-      preview: firstUserMessagePreview(items),
+      preview: firstInputMessagePreview(items),
       status: thread
         .deriveTurns(
           this.#activeTurns.get(thread.id)?.turnId === undefined
@@ -6224,14 +6224,6 @@ function normalizeAppServerInput(
 
 function inputFromReplacement(item: TurnReplacementRequestedItem): UserInput {
   return item.input ?? [{ type: "text", text: item.text }];
-}
-
-function firstUserMessagePreview(items: readonly CanonicalItem[]): string {
-  const item = items.find(
-    (candidate): candidate is UserMessageItem =>
-      candidate.type === "user_message",
-  );
-  return item === undefined ? "" : previewFromUserMessage(item);
 }
 
 function latestThreadFork(
@@ -6943,7 +6935,7 @@ function threadMessageSenderKey(
 }
 
 function importedThreadDisplayName(items: readonly CanonicalItem[]): string {
-  const preview = firstUserMessagePreview(items)
+  const preview = firstInputMessagePreview(items)
     .trim()
     .replace(/\s+/gu, " ")
     .slice(0, 64);

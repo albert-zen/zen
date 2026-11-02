@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { completedThreadTurn } from "../src/main/thread-completion-notification.js";
 import { ZenXThreadTitleCoordinator } from "../src/main/thread-title-coordinator.js";
 import {
-  observeCompletedUserMessageTitle,
+  observeCompletedInputTitle,
   observeDiscoveredThreadTitle,
   observeThreadSnapshotTitle,
 } from "../src/main/thread-title-notification.js";
@@ -24,19 +25,11 @@ test("an externally-originated completed userMessage starts staged naming once",
       "thread-external",
       "Plan the cross-client release workflow",
     );
-    await observeCompletedUserMessageTitle(
-      titles,
-      "item/completed",
-      notification,
-    );
+    await observeCompletedInputTitle(titles, "item/completed", notification);
     assert.equal(titles.snapshot()["thread-external"]?.status, "generating");
     assert.equal(inference.calls, 1);
 
-    await observeCompletedUserMessageTitle(
-      titles,
-      "item/completed",
-      notification,
-    );
+    await observeCompletedInputTitle(titles, "item/completed", notification);
     assert.equal(inference.calls, 1);
     inference.resolve("Cross-client release workflow");
     await waitForTitleStatus(
@@ -56,7 +49,7 @@ test("a canonical duplicate cannot restart generation or overwrite a pre-observe
     );
     await titles.rename("thread-preobserved", "Manual authority");
 
-    await observeCompletedUserMessageTitle(
+    await observeCompletedInputTitle(
       titles,
       "item/completed",
       completedUserMessage(
@@ -105,7 +98,7 @@ test("a later dispatch notification supersedes authority observed while that dis
 test("observer bounds canonical text and logs failures without rejecting", async () => {
   const observed: string[] = [];
   const warnings: string[] = [];
-  await observeCompletedUserMessageTitle(
+  await observeCompletedInputTitle(
     {
       observe: async (_threadId, input) => {
         observed.push(input);
@@ -138,10 +131,18 @@ test("discovery catches a first message committed before resume, without changin
       },
     ],
   } as unknown as import("../src/protocol-client/index.js").Thread;
-  await observeDiscoveredThreadTitle(titles, async () => snapshot, {
-    ...snapshot,
-    turns: [],
-  });
+  let reads = 0;
+  await observeDiscoveredThreadTitle(
+    async () => {
+      reads++;
+      await observeThreadSnapshotTitle(titles, {
+        id: snapshot.id,
+        items: [canonicalInput("user_message", "first canonical IM input")],
+      } as unknown as import("../../../src/app-server.js").ThreadSnapshot);
+    },
+    { id: snapshot.id },
+  );
+  assert.equal(reads, 1);
   assert.deepEqual(observed, ["first canonical IM input"]);
   observed.length = 0;
   await observeThreadSnapshotTitle(titles, {
@@ -182,11 +183,6 @@ test("opening an unnamed existing IM thread stages its first meaningful canonica
 test("discovery failures are reported without breaking global notifications", async () => {
   const warnings: string[] = [];
   await observeDiscoveredThreadTitle(
-    {
-      observe: async () => {
-        assert.fail("No snapshot should be observed");
-      },
-    },
     async () => {
       throw new Error("Thread unavailable");
     },
@@ -194,6 +190,152 @@ test("discovery failures are reported without breaking global notifications", as
     (warning) => warnings.push(warning),
   );
   assert.match(warnings[0] ?? "", /Thread unavailable/);
+});
+
+function canonicalInput(
+  type: "user_message" | "thread_message" | "host_message",
+  text: string,
+  id = "input-a",
+): import("../../../src/item.js").DeliveredInputItem {
+  const base = {
+    id,
+    threadId: "thread-external",
+    turnId: "turn-a",
+    clientId: id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  if (type === "host_message")
+    return {
+      ...base,
+      type,
+      sender: "host",
+      source: "bootstrap",
+      mode: "start",
+      text,
+    };
+  const content = [{ type: "text" as const, text }];
+  if (type === "user_message") return { ...base, type, content };
+  return {
+    ...base,
+    type,
+    mode: "batch-next",
+    messageType: "follow_up",
+    sender: { threadId: "source", toolCallId: "tool", callId: "call" },
+    content,
+  };
+}
+
+for (const type of [
+  "user_message",
+  "thread_message",
+  "host_message",
+] as const) {
+  test(`${type} first native input stages once across live, snapshot and replay`, async () => {
+    await withCoordinator(async ({ titles, inference }) => {
+      const item = canonicalInput(type, "Plan a synthetic release");
+      const event = {
+        processEpoch: "epoch",
+        threadId: item.threadId,
+        watermark: 1,
+        event: { type: "item_completed" as const, item },
+      };
+      const stages: string[] = [];
+      titles.onChange((snapshot) =>
+        stages.push(snapshot[item.threadId]!.status),
+      );
+      await Promise.all([
+        observeCompletedInputTitle(titles, "zen/thread/event", event),
+        observeCompletedInputTitle(titles, "zen/thread/event", event),
+      ]);
+      await observeThreadSnapshotTitle(titles, {
+        id: item.threadId,
+        items: [item],
+      } as unknown as import("../../../src/app-server.js").ThreadSnapshot);
+      assert.equal(inference.calls, 1);
+      assert.deepEqual(stages, ["provisional", "generating"]);
+      assert.equal(
+        titles.snapshot()[item.threadId]?.source,
+        "Plan a synthetic release",
+      );
+      inference.resolve("Release plan");
+      await waitForTitleStatus(
+        titles,
+        item.threadId,
+        "generated",
+        "canonical input generation",
+      );
+      await titles.restart();
+      await observeCompletedInputTitle(titles, "zen/thread/event", event);
+      assert.equal(inference.calls, 1);
+      assert.equal(titles.snapshot()[item.threadId]?.title, "Release plan");
+    });
+  });
+}
+
+test("canonical input order wins over compatibility turns and skips empty controls and metadata-only wakeups", async () => {
+  const observed: string[] = [];
+  const empty = canonicalInput(
+    "host_message",
+    "[ZenX trigger wakeup]\nTrigger ID: synthetic\nTask: ",
+  );
+  const first = canonicalInput("thread_message", "First Thread request");
+  const snapshot = {
+    id: first.threadId,
+    name: null,
+    canonicalItems: [
+      {
+        ...empty,
+        type: "host_message_queued",
+        input: [{ type: "text", text: "Not delivered" }],
+      },
+      { ...empty, type: "turn_started" },
+      canonicalInput("user_message", " "),
+      empty,
+      first,
+      canonicalInput("user_message", "Later human input"),
+    ],
+    turns: [
+      {
+        items: [
+          completedUserMessage(first.threadId, "Lossy compatibility order")
+            .item,
+        ],
+      },
+    ],
+  } as unknown as import("../src/protocol-client/index.js").Thread;
+  const titles = {
+    observe: async (_id: string, input: string) => {
+      observed.push(input);
+    },
+  };
+  await observeThreadSnapshotTitle(titles, snapshot);
+  assert.deepEqual(observed, ["First Thread request"]);
+  observed.length = 0;
+  await observeThreadSnapshotTitle(titles, { ...snapshot, canonicalItems: [] });
+  assert.deepEqual(observed, [], "an empty native snapshot is authoritative");
+});
+
+test("native snapshot names protect later input without replacing newer manual ownership", async () => {
+  await withCoordinator(async ({ titles, inference }) => {
+    const snapshot = {
+      id: "thread-external",
+      name: "Saved native title",
+      items: [],
+    } as unknown as import("../../../src/app-server.js").ThreadSnapshot;
+    await observeThreadSnapshotTitle(titles, snapshot);
+    await titles.observe("thread-external", "Later incoming Thread input");
+    assert.equal(inference.calls, 0);
+    assert.equal(
+      titles.snapshot()["thread-external"]?.title,
+      "Saved native title",
+    );
+    await titles.rename("thread-external", "New manual title");
+    await observeThreadSnapshotTitle(titles, snapshot);
+    assert.equal(
+      titles.snapshot()["thread-external"]?.title,
+      "New manual title",
+    );
+  });
 });
 
 function completedUserMessage(
@@ -408,3 +550,50 @@ function abortError(signal: AbortSignal): Error {
     ? signal.reason
     : new DOMException("Title generation aborted", "AbortError");
 }
+
+test("native discovery preserves browser cleanup on completed, failed and interrupted turns", () => {
+  for (const status of ["completed", "failed", "interrupted"] as const) {
+    assert.deepEqual(
+      completedThreadTurn("zen/thread/event", {
+        processEpoch: "synthetic",
+        threadId: "thread",
+        watermark: 1,
+        event: {
+          type: "turn_completed",
+          threadId: "thread",
+          turnId: "turn",
+          status,
+        },
+      }),
+      { threadId: "thread", failed: status !== "completed" },
+    );
+    assert.deepEqual(
+      completedThreadTurn("turn/completed", {
+        threadId: "thread",
+        turn: {
+          id: "turn",
+          status,
+          items: [],
+          itemsView: "full",
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      }),
+      { threadId: "thread", failed: status !== "completed" },
+    );
+  }
+  assert.equal(
+    completedThreadTurn("zen/thread/event", {
+      processEpoch: "synthetic",
+      threadId: "thread",
+      watermark: 1,
+      event: {
+        type: "item_completed",
+        item: canonicalInput("host_message", "First native input"),
+      },
+    }),
+    undefined,
+  );
+});
