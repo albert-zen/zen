@@ -15,9 +15,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: frontend
-            source: 3819977ddd2da5698bcbee2c14fd8165f9934009
+          - label: combined
+            source: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
             count: 1000
+          - label: combined
+            source: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+            count: 5000
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
@@ -42,6 +45,10 @@ jobs:
         working-directory: product
         timeout-minutes: 7
         run: npm ci
+      - name: Emit exact formatter output for isolated frontend test
+        if: matrix.count == 1000
+        working-directory: product
+        run: npx --no-install prettier apps/zenx/test/turn-outcome-index.test.ts
       - name: Build production storage and actual App
         working-directory: product
         timeout-minutes: 8

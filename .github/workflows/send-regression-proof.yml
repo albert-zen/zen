@@ -1,0 +1,64 @@
+name: Send performance operation-count proof
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/send-regression-proof.yml
+      - scripts/prove-send-performance-regressions.mjs
+permissions:
+  contents: read
+jobs:
+  regression-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+          - variant: candidate
+            source: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          ref: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
+          persist-credentials: false
+          path: regression-source
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Overlay identical regression tests, never candidate product code
+        if: matrix.variant == 'baseline'
+        run: |
+          cp regression-source/test/domain-reconciliation-performance.test.ts product/test/
+          cp regression-source/apps/zenx/test/thread-view-component.test.ts product/apps/zenx/test/
+      - name: Install pinned source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production storage and prepare component dependencies
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run prepare:first-party-plugins --workspace @zen/zenx
+      - name: Validate exact baseline RED or candidate GREEN
+        working-directory: product
+        timeout-minutes: 8
+        run: node ../diagnostic/scripts/prove-send-performance-regressions.mjs '${{ matrix.variant }}' '${{ matrix.source }}' ../proof-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: send-regression-proof-${{ matrix.variant }}
+          path: proof-results
+          if-no-files-found: error
