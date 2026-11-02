@@ -969,7 +969,7 @@ test("Recent keeps focus and running indicators stable until genuine message act
     const activeRow = requiredButton(
       '.recent-thread-group [data-thread-id="active"] .thread-row',
     );
-    activeRow.focus();
+    await act(async () => activeRow.focus());
     await render([
       { ...second },
       {
@@ -979,7 +979,7 @@ test("Recent keeps focus and running indicators stable until genuine message act
       },
     ]);
     assert.deepEqual(ids(), ["idle", "active"]);
-    assert.equal(document.activeElement, activeRow);
+    assert.ok(document.activeElement === activeRow, "activity preserves focus");
     assert.ok(
       document.querySelector(
         '.recent-thread-group [data-thread-id="active"] [aria-label="Running"]',
@@ -987,7 +987,7 @@ test("Recent keeps focus and running indicators stable until genuine message act
     );
     await render([{ ...first, recentActivityAt: at(40) }, second]);
     assert.deepEqual(ids(), ["active", "idle"]);
-    assert.equal(document.activeElement, activeRow);
+    assert.ok(document.activeElement === activeRow, "activity preserves focus");
     await render([
       second,
       { ...first, recentActivityAt: at(40), updatedAt: at(50) },
@@ -1034,7 +1034,10 @@ test("Project activity uses Recent order while explicit Project and Pinned order
     ];
     const render = async (
       threadRows: NativeThreadSummary[],
-      sidebarOrder: ZenXSidebarOrder = { projectKeys: [], threadIdsByProject: {} },
+      sidebarOrder: ZenXSidebarOrder = {
+        projectKeys: [],
+        threadIdsByProject: {},
+      },
     ) => {
       await act(async () =>
         root.render(
@@ -1058,7 +1061,7 @@ test("Project activity uses Recent order while explicit Project and Pinned order
     const activeRow = requiredButton(
       '[data-project-key="/work/a"] [data-thread-id="active"] .thread-row',
     );
-    activeRow.focus();
+    await act(async () => activeRow.focus());
     await render([
       second,
       { ...first, updatedAt: at(100), turnSortAt: at(100) },
@@ -1082,16 +1085,25 @@ test("Project activity uses Recent order while explicit Project and Pinned order
     await render([second, newer, ...changedPins]);
     assert.deepEqual(ids(projectRows), ["active", "idle"]);
     assert.deepEqual(ids(pinnedRows), ["pin-a", "pin-b"]);
-    assert.ok(document.activeElement === activeRow, "message reorder preserves focus");
+    assert.ok(
+      document.activeElement === activeRow,
+      "message reorder preserves focus",
+    );
     assert.equal(activeRow.getAttribute("aria-current"), "page");
     const manual: ZenXSidebarOrder = {
       projectKeys: [],
       threadIdsByProject: { "/work/a": ["idle", "active"] },
     };
-    await render([{ ...newer, recentActivityAt: at(500) }, second, ...changedPins], manual);
+    await render(
+      [{ ...newer, recentActivityAt: at(500) }, second, ...changedPins],
+      manual,
+    );
     assert.deepEqual(ids(projectRows), ["idle", "active"]);
     assert.deepEqual(ids(pinnedRows), ["pin-a", "pin-b"]);
-    assert.ok(document.activeElement === activeRow, "manual preference preserves focus");
+    assert.ok(
+      document.activeElement === activeRow,
+      "manual preference preserves focus",
+    );
     assert.equal(activeRow.getAttribute("aria-current"), "page");
   });
 });

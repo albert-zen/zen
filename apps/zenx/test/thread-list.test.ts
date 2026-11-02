@@ -593,24 +593,44 @@ test("automatic Project and projectless order shares Recent recency without pers
   const at = (seconds: number) => new Date(seconds * 1_000).toISOString();
   const a = { ...summary("a", "active", 90), recentActivityAt: at(10) };
   const b = { ...summary("b", "idle", 40), recentActivityAt: at(20) };
-  const preference: ZenXSidebarOrder = { projectKeys: [], threadIdsByProject: {} };
+  const preference: ZenXSidebarOrder = {
+    projectKeys: [],
+    threadIdsByProject: {},
+  };
   const projection = {
     projects: [project("/work/zen", ["a", "b"])],
     projectlessThreadIds: ["a", "b"],
     unavailableThreadIds: [],
     lastUsedWorkspace: null,
   };
-  const assertAutomatic = (values: NativeThreadSummary[], expected: string[]) => {
-    assert.deepEqual(deriveRecentThreads(values).map((item) => item.threadId), expected);
+  const assertAutomatic = (
+    values: NativeThreadSummary[],
+    expected: string[],
+  ) => {
+    assert.deepEqual(
+      deriveRecentThreads(values).map((item) => item.threadId),
+      expected,
+    );
     for (const group of deriveProjectGroups(values, projection, preference))
-      assert.deepEqual(group.threads.map((item) => item.threadId), expected);
+      assert.deepEqual(
+        group.threads.map((item) => item.threadId),
+        expected,
+      );
     assert.deepEqual(preference, { projectKeys: [], threadIdsByProject: {} });
   };
   assertAutomatic([a, b], ["b", "a"]);
-  assertAutomatic([{ ...a, updatedAt: at(100), turnSortAt: at(100) }, b], ["b", "a"]);
+  assertAutomatic(
+    [{ ...a, updatedAt: at(100), turnSortAt: at(100) }, b],
+    ["b", "a"],
+  );
   assertAutomatic([b, { ...a, recentActivityAt: at(30) }], ["a", "b"]);
   assertAutomatic([b, { ...a, recentActivityAt: at(20) }], ["a", "b"]);
-  const legacy = { ...a, recentActivityAt: undefined, createdAt: at(5), updatedAt: at(200) };
+  const legacy = {
+    ...a,
+    recentActivityAt: undefined,
+    createdAt: at(5),
+    updatedAt: at(200),
+  };
   assertAutomatic([legacy, b], ["b", "a"]);
 });
 
@@ -625,13 +645,37 @@ test("the first manual Project move uses visible message order and remains durab
     lastUsedWorkspace: null,
   };
   const initial: ZenXSidebarOrder = { projectKeys: [], threadIdsByProject: {} };
-  const moved = moveSidebarThread(initial, [a, b, c], projection, "/work/zen", "a", "/work/zen", "c", "before");
+  const moved = moveSidebarThread(
+    initial,
+    [a, b, c],
+    projection,
+    "/work/zen",
+    "a",
+    "/work/zen",
+    "c",
+    "before",
+  );
   assert.deepEqual(moved.threadIdsByProject, { "/work/zen": ["b", "a", "c"] });
   const restored: ZenXSidebarOrder = JSON.parse(JSON.stringify(moved));
-  const changed = [{ ...c, recentActivityAt: at(100), status: "active" as const }, a, b];
-  assert.deepEqual(deriveRecentThreads(changed).map((item) => item.threadId), ["c", "b", "a"]);
-  assert.deepEqual(deriveProjectGroups(changed, projection, restored)[0]!.threads.map((item) => item.threadId), ["b", "a", "c"]);
-  assert.deepEqual(derivePinnedThreads(changed, ["a", "c", "b"]).map((item) => item.threadId), ["a", "c", "b"]);
+  const changed = [
+    { ...c, recentActivityAt: at(100), status: "active" as const },
+    a,
+    b,
+  ];
+  assert.deepEqual(
+    deriveRecentThreads(changed).map((item) => item.threadId),
+    ["c", "b", "a"],
+  );
+  assert.deepEqual(
+    deriveProjectGroups(changed, projection, restored)[0]!.threads.map(
+      (item) => item.threadId,
+    ),
+    ["b", "a", "c"],
+  );
+  assert.deepEqual(
+    derivePinnedThreads(changed, ["a", "c", "b"]).map((item) => item.threadId),
+    ["a", "c", "b"],
+  );
   assert.deepEqual(restored, moved);
   assert.deepEqual(initial, { projectKeys: [], threadIdsByProject: {} });
 });
