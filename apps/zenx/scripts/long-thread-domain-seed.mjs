@@ -22,7 +22,7 @@ export async function seedLongThread({ isolationRoot, dataDirectory, workspace, 
   const metadata=new JsonlThreadMetadataStore(path.join(data,"thread-metadata.jsonl"));
   const journal=new DomainThreadJournal({directory,trace,metadata});
   const instant=offset=>new Date(Date.UTC(2026,0,1)+offset*1000).toISOString();
-  const selection={providerProfileId,modelId,reasoningEffort:null};
+  const selection={providerProfileId,modelId,reasoningEffort:"medium"};
   const items=[{id:threadId+"-metadata",threadId,createdAt:instant(0),type:"thread_metadata",cwd,...selection,sandbox:"danger-full-access",approvalPolicy:"never"}];
   const body=(role,index)=>("Synthetic "+role+" "+index+". "+"Fixture-only ordinary history. ".repeat(Math.ceil(textLength/30))).slice(0,textLength);
   for(let index=0;index<userMessageCount;index++){
@@ -56,7 +56,7 @@ export async function seedLongThread({ isolationRoot, dataDirectory, workspace, 
 /** Independent storage reopen only after the owned production Host exits normally. */
 export async function verifyLongThread({dataDirectory,threadId,samples,userMessageCount}) {
   const trace=new FileTraceStore(path.join(dataDirectory,"trace"));
-  const journal=new DomainThreadJournal({directory:path.join(dataDirectory,"threads"),trace,metadata:new JsonlThreadMetadataStore(path.join(dataDirectory,"thread-metadata.jsonl"))});
+  const journal=new DomainThreadJournal({directory:path.join(dataDirectory,"threads"),trace,metadata:new JsonlThreadMetadataStore(path.join(dataDirectory,"thread-metadata.jsonl")),access:"read-only"});
   try {
     const facts=await journal.read(threadId);
     assert.equal(facts.filter(i=>i.type==="user_message").length,userMessageCount+samples.length);
@@ -70,6 +70,10 @@ export async function verifyLongThread({dataDirectory,threadId,samples,userMessa
     }
     const observed=await trace.read(threadId,{verifyArtifacts:false});
     assert.equal(observed.completeness,"complete");
-    return {independentReopen:true,userMessages:userMessageCount+samples.length,matchedNewMessages:samples.length,compactionFacts:0,traceCompleteness:observed.completeness};
+    const compactionAttempts=observed.records.filter(r=>["context_compaction_started","context_compaction_sample","context_compaction_finished"].includes(r.type));
+    assert.equal(compactionAttempts.length,0,"No compaction attempt anywhere in production Trace");
+    const semantic=await journal.readItemList(threadId);
+    for(const sample of samples)assert.equal(semantic.filter(i=>i.id===sample.messageId).length,1);
+    return {compactionAttempts:0,independentReopen:true,userMessages:userMessageCount+samples.length,matchedNewMessages:samples.length,compactionFacts:0,traceCompleteness:observed.completeness};
   } finally {await journal.close();await trace.flush();}
 }

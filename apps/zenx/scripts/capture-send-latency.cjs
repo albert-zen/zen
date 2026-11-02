@@ -242,7 +242,7 @@ function installObservation(nonce) {
     record.notifications.push({
       atMs:performance.now(), type:event?.type,
       itemType:event?.item?.type, itemId:event?.item?.id,
-      clientId:event?.item?.clientId, threadId:params.threadId,
+      clientId:event?.item?.clientId, threadId:params.threadId, turnId:event?.turnId ?? event?.item?.turnId,
       watermark:params.watermark,
     });
   });
@@ -312,7 +312,7 @@ async function run() {
   const beforeMessages = before.thread.turns.flatMap(t=>t.items).filter(i=>i.type==="userMessage"||i.type==="agentMessage");
   assert.equal(beforeMessages.length,manifest.visibleMessageCount,"Production Host projects every seeded message");
   assert.ok(before.thread.turns.every(t=>t.status!=="inProgress"),"No active Turn before ordinary send");
-  result.before = {turns:before.thread.turns.length,messages:beforeMessages.length,baselineKind:"existing selected idle Thread; initial production thread/read verified and warmed before timing",rendered:await evaluate("({userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('.turn-block').length})")};
+  result.before = {turns:before.thread.turns.length,messages:beforeMessages.length,baselineKind:"existing selected idle Thread; initial production thread/read verified and warmed before timing",rendered:await evaluate("({userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length})")};
   await pause(500);
   result.samples=[];
   assert.equal(await evaluate("document.querySelector('#thread-composer') instanceof HTMLTextAreaElement"),true,"Baseline is native plain-text composer");
@@ -330,7 +330,9 @@ async function run() {
     try {
       await until(async()=>await evaluate("window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined"),"real visible bubble and cleared composer");
       await until(async()=>result.ipc.slice(ipcStart).some(r=>r.finishedMs!==undefined),"real protocol receipt");
-      await until(async()=>await evaluate("window.__sendLatency.notifications.some(n=>n.type==='turn_completed' || n.itemType==='turn_completed')"),"real fake Turn terminal notification");
+      const admitted=result.ipc.slice(ipcStart).find(r=>r.finishedMs!==undefined);
+      assert.ok(admitted.receipt?.turnId,"Actual ordinary-send receipt must identify its Turn");
+      await until(async()=>await evaluate("window.__sendLatency.notifications.some(n=>n.threadId==="+JSON.stringify(threadId)+"&&n.turnId==="+JSON.stringify(admitted.receipt.turnId)+"&&(n.type==='turn_completed'||n.itemType==='turn_completed'))"),"matching real fake Turn terminal notification");
       const sample=await evaluate("window.__sendLatency.stop()");
       result.samples.push(sample);
       assert.equal(sample.trusted,true);

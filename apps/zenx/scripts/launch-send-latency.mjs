@@ -44,9 +44,9 @@ await writeFile(
     providerProfiles: [{type:"fake", displayName:"Synthetic local only",providerProfileId:"fake",models:[{id:"fake",displayName:"fake",description:"Offline ordinary-send baseline",hidden:false,source:"manual",supportedReasoningEfforts:["medium"],defaultReasoningEffort:"medium",inputModalities:["text"],contextWindow:100000000}]}],
     defaultModel: {providerProfileId:"fake",modelId:"fake"},
     titleModel: {providerProfileId:"fake",modelId:"fake"},
-    workspace: null,
-    workspaces: [],
-    lastUsedWorkspace: null,
+    workspace,
+    workspaces: [workspace],
+    lastUsedWorkspace: workspace,
     approvalPolicy: "never",
   }),
 );
@@ -274,8 +274,10 @@ try {
   assert.equal(result.ok, true);
   const persisted=await verifyLongThread({dataDirectory:data,threadId:result.seed.threadId,samples:result.samples,userMessageCount:count});
   await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
+  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
+  try { const report=JSON.parse(await readFile(path.join(directory,"full-app-measurements.json"),"utf8")); if(!report.ok)console.error("SYNTHETIC_SEND_FAILURE_JSON "+JSON.stringify(report)); } catch {}
   await writeFile(
     path.join(directory, "full-app-lifecycle.json"),
     JSON.stringify(
