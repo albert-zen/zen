@@ -1,4 +1,8 @@
-import { textFromUserInput } from "../../../../../src/item.js";
+import {
+  firstInputMessagePreview,
+  previewFromInputMessage,
+  textFromUserInput,
+} from "../../../../../src/item.js";
 import type {
   ServerNotificationMethod,
   ServerNotificationParams,
@@ -266,6 +270,10 @@ export function applyNativeThreadEvent(
     );
   }
   if (event.type === "item_completed") {
+    if (!thread.preview.trim()) {
+      const preview = previewFromInputMessage(event.item);
+      if (preview.trim()) thread = { ...thread, preview };
+    }
     if (event.item.type === "context_compaction") return thread;
     if (event.item.type === "failure") {
       // Repair diagnostics remain canonical context, not a terminal Turn error.
@@ -611,9 +619,6 @@ export function projectNativeThread(
     (item) => item.type === "thread_metadata",
   );
   if (metadata === undefined) throw new Error("Thread has no metadata item");
-  const firstMessage = snapshot.items.find(
-    (item) => item.type === "user_message",
-  );
   const fork = [...snapshot.items]
     .reverse()
     .find((item) => item.type === "thread_forked");
@@ -623,7 +628,7 @@ export function projectNativeThread(
     sessionId: snapshot.id,
     forkedFromId: fork?.sourceThreadId ?? null,
     parentThreadId: metadata.parentThreadId ?? null,
-    preview: firstMessage === undefined ? "" : userMessagePreview(firstMessage),
+    preview: firstInputMessagePreview(snapshot.items),
     ephemeral: false,
     isPinned: false,
     modelProvider: snapshot.providerProfileId,
@@ -882,18 +887,6 @@ function userMessageText(
   item: Extract<CanonicalItem, { type: "user_message" }>,
 ): string {
   return item.text ?? userInputText(item.content);
-}
-
-function userMessagePreview(
-  item: Extract<CanonicalItem, { type: "user_message" }>,
-): string {
-  const text = userMessageText(item);
-  if (text.length > 0) return text;
-  return item.content?.some((part) => part.type === "image")
-    ? "[Image]"
-    : item.content?.some((part) => part.type === "audio")
-      ? "[Audio]"
-      : "";
 }
 
 function seconds(timestamp: string): number {

@@ -795,6 +795,21 @@ test("pending images use canonical attachment refs and their preview closes afte
   const { readFile } = await import("node:fs/promises");
   const { queueImageAttachments } =
     await import("./fixtures/agent-queue-images.js");
+  // Read the fixture before rendering: a fixed number of React flushes must
+  // not race filesystem scheduling when waiting for three async thumbnails.
+  const imageBytes = await Promise.all(
+    queueImageAttachments.map(
+      async (_attachment, index) =>
+        new Uint8Array(
+          await readFile(
+            new URL(
+              `./fixtures/assets/queue-images/queue-image-${index + 1}.png`,
+              import.meta.url,
+            ),
+          ),
+        ),
+    ),
+  );
   await withRuntimeDom(async (h) => {
     const thread = staged(2);
     let reads = 0;
@@ -811,14 +826,7 @@ test("pending images use canonical attachment refs and their preview closes afte
           "only exact synthetic canonical attachments may be read",
         );
         reads++;
-        return new Uint8Array(
-          await readFile(
-            new URL(
-              `./fixtures/assets/queue-images/queue-image-${index + 1}.png`,
-              import.meta.url,
-            ),
-          ),
-        );
+        return imageBytes[index]!;
       },
     };
     await h.render(thread, props);

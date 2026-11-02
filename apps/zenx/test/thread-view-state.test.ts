@@ -918,3 +918,78 @@ test("elapsed Turn time uses identical canonical millisecond windows during reco
     "unknown canonical timing never guesses from rounded seconds",
   );
 });
+
+for (const type of ["thread_message", "host_message"] as const) {
+  test(`native ${type} populates empty preview live and on recovery without replacing a title`, () => {
+    const base = {
+      id: "input",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      clientId: "client",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const item: import("../../../src/item.js").DeliveredInputItem =
+      type === "host_message"
+        ? {
+            ...base,
+            type,
+            sender: "host",
+            mode: "start",
+            source: "bootstrap",
+            text: "First native input",
+          }
+        : {
+            ...base,
+            type,
+            mode: "batch-next",
+            messageType: "follow_up",
+            sender: { threadId: "source", toolCallId: "tool", callId: "call" },
+            content: [{ type: "text", text: "First native input" }],
+          };
+    let view = applyNativeThreadEvent(
+      { ...thread(), preview: "", name: "Manual title", canonicalItems: [] },
+      { type: "item_completed", item },
+    );
+    assert.equal(view.preview, "First native input");
+    assert.equal(view.name, "Manual title");
+    view = applyNativeThreadEvent(view, {
+      type: "item_completed",
+      item: {
+        ...base,
+        id: "later",
+        type: "user_message",
+        text: "Later human input",
+      },
+    });
+    assert.equal(view.preview, "First native input");
+    const recovered = projectNativeRecovery({
+      processEpoch: "synthetic",
+      threadId: "thread-1",
+      watermark: 0,
+      events: [],
+      thread: {
+        id: "thread-1",
+        name: "Manual title",
+        cwd: "/synthetic",
+        providerProfileId: "fake",
+        turns: [],
+        items: [
+          {
+            type: "thread_metadata",
+            id: "metadata",
+            threadId: "thread-1",
+            createdAt: base.createdAt,
+            cwd: "/synthetic",
+            provider: "fake",
+            model: "fake",
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+          },
+          item,
+        ],
+      },
+    } as unknown as NativeThreadRecoverySnapshot);
+    assert.equal(recovered.preview, "First native input");
+    assert.equal(recovered.name, "Manual title");
+  });
+}

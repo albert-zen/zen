@@ -8,7 +8,10 @@ import {
   type RequestId,
 } from "../../../../src/protocol/codex/wire.js";
 import { readBearerTokenFile } from "./auth.js";
-import type { NativeProjectedThreadEvent } from "../../../../src/protocol/native/recovery.js";
+import type {
+  NativeProjectedThreadEvent,
+  NativeThreadRecoverySnapshot,
+} from "../../../../src/protocol/native/recovery.js";
 import type {
   ClientInfo,
   ClientRequestMethod,
@@ -71,6 +74,9 @@ export class ZenXProtocolClient {
   readonly #bearerToken: string | undefined;
   readonly #reconnectPolicy: ReconnectPolicy;
   readonly #admissionReplyTimeoutMs: number;
+  readonly #recoveryHandlers = new Set<
+    (recovery: NativeThreadRecoverySnapshot) => void
+  >();
   readonly #pending = new Map<
     RequestId,
     {
@@ -196,6 +202,14 @@ export class ZenXProtocolClient {
     const result = await this.#rawRequest(method, params);
     this.#recordSubscription(method, params, result);
     return result;
+  }
+
+  /** Read-only snapshot observers run before transferred overlap, including reconnect. */
+  onThreadRecovery(
+    handler: (recovery: NativeThreadRecoverySnapshot) => void,
+  ): () => void {
+    this.#recoveryHandlers.add(handler);
+    return () => this.#recoveryHandlers.delete(handler);
   }
 
   onNotification<M extends ServerNotificationMethod>(
@@ -396,6 +410,16 @@ export class ZenXProtocolClient {
               pending.resumeThreadId,
               this.#processEpoch,
             );
+            for (const handler of this.#recoveryHandlers) {
+              try {
+                handler(recovery);
+              } catch (error) {
+                this.#emitStatus({
+                  type: "protocolError",
+                  error: asError(error),
+                });
+              }
+            }
             if (pending.publishResume) {
               this.#subscribedThreads.add(recovery.threadId);
               this.#nativeSubscriptions.add(recovery.threadId);

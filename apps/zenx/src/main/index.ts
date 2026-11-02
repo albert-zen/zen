@@ -112,11 +112,12 @@ import {
   type ZenXAutomationControlPort,
 } from "./capabilities/automation-control-package.js";
 import { createBundledAutomationPluginService } from "./automation-plugin-service.js";
+import { completedThreadTurn } from "./thread-completion-notification.js";
 import { ZenXThreadTitleCoordinator } from "./thread-title-coordinator.js";
 import { normalizeTitleOwnershipFailure } from "./thread-title-failure.js";
 import { ZenXThreadTitleStore } from "./thread-title-store.js";
 import {
-  observeCompletedUserMessageTitle,
+  observeCompletedInputTitle,
   observeDiscoveredThreadTitle,
   observeThreadSnapshotTitle,
 } from "./thread-title-notification.js";
@@ -1754,16 +1755,33 @@ function installProtocolIpc(
       window.webContents.send(ipcChannels.status, status);
     }
   });
+  manager.onThreadRecovery(({ thread }) => {
+    void observeThreadSnapshotTitle(titles, thread).catch((error: unknown) => {
+      console.warn(
+        "Could not observe native Thread snapshot for ZenX title",
+        error,
+      );
+    });
+  });
   manager.onNotification((method, params) => {
-    void observeCompletedUserMessageTitle(titles, method, params);
+    void observeCompletedInputTitle(titles, method, params);
     if (method === "thread/started") {
       const event = params as ServerNotificationParams["thread/started"];
       void observeDiscoveredThreadTitle(
-        titles,
         async (threadId) =>
-          (await manager.request("thread/resume", { threadId })).thread,
+          (await manager.request("zen/thread/resume", { threadId })).thread,
         event.thread,
       );
+    }
+    if (method === "zen/thread/event") {
+      const { event } = params as ServerNotificationParams["zen/thread/event"];
+      if (event.type === "thread_name_updated") {
+        void titles
+          .synchronizeNativeName(event.threadId, event.name)
+          .catch((error: unknown) => {
+            console.warn("Could not synchronize native Thread name", error);
+          });
+      }
     }
     if (method === "thread/name/updated") {
       const event = params as ServerNotificationParams["thread/name/updated"];
@@ -2560,10 +2578,10 @@ function installCapabilityIpc(
   marketplace: MarketplaceCatalogService,
 ): void {
   manager.onNotification((method, params) => {
-    if (method !== "turn/completed") return;
-    const event = params as ServerNotificationParams["turn/completed"];
+    const completed = completedThreadTurn(method, params);
+    if (completed === undefined) return;
     void capabilities
-      .finishBrowserTurn(event.threadId, event.turn.status !== "completed")
+      .finishBrowserTurn(completed.threadId, completed.failed)
       .catch((error) => {
         console.error("Browser turn cleanup failed", error);
       });

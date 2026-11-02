@@ -91,6 +91,10 @@ export interface AppServerStartOptions {
   assertCanPublish?(boundary: "start" | "descriptor"): void;
 }
 
+type ThreadRecoveryListener = (
+  recovery: ClientRequestResults["zen/thread/resume"],
+) => void;
+
 type NotificationListener = (
   method: ServerNotificationMethod,
   params: ServerNotificationParams[ServerNotificationMethod],
@@ -129,6 +133,7 @@ export class AppServerManager {
   readonly #options: AppServerManagerOptions;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  readonly #recoveryListeners = new Set<ThreadRecoveryListener>();
   readonly #approvalListeners = new Set<
     (event: ApprovalRequestEvent) => void
   >();
@@ -1197,6 +1202,11 @@ export class AppServerManager {
     return () => this.#statusListeners.delete(listener);
   }
 
+  onThreadRecovery(listener: ThreadRecoveryListener): () => void {
+    this.#recoveryListeners.add(listener);
+    return () => this.#recoveryListeners.delete(listener);
+  }
+
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
     return () => this.#notificationListeners.delete(listener);
@@ -1347,6 +1357,10 @@ export class AppServerManager {
   }
 
   #forwardNotifications(client: ZenXProtocolClient): void {
+    client.onThreadRecovery((recovery) => {
+      if (client !== this.#client || this.#stopping) return;
+      for (const listener of this.#recoveryListeners) listener(recovery);
+    });
     client.onStatus((status) => {
       if (client !== this.#client || this.#stopping) return;
       if (status.type === "reconnecting") {

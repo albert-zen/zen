@@ -1,0 +1,35 @@
+name: Canonical first-input Sidebar visual verification
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/canonical-input-title-ui.yml
+      - apps/zenx/test/fixtures/canonical-input-title-visual.tsx
+      - apps/zenx/scripts/*canonical-input-title-preview.mjs
+permissions:
+  contents: read
+concurrency:
+  group: canonical-input-title-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sidebar-component:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build and capture production Sidebar with synthetic inputs
+        run: |
+          node apps/zenx/scripts/build-canonical-input-title-preview.mjs "${{ runner.temp }}/canonical-input-title"
+          node apps/zenx/scripts/capture-canonical-input-title-preview.mjs "${{ runner.temp }}/canonical-input-title"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canonical-input-title-${{ github.sha }}
+          path: ${{ runner.temp }}/canonical-input-title
+          if-no-files-found: warn
+          retention-days: 14
