@@ -1,0 +1,53 @@
+name: Native full-App Recent ordering
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/recent-order-native.yml
+      - apps/zenx/scripts/capture-recent-order.cjs
+      - apps/zenx/scripts/launch-recent-order.mjs
+      - apps/zenx/scripts/recent-thread-domain-seed.mjs
+permissions:
+  contents: read
+jobs:
+  native-macos:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: e5c3fe9bf91ce0385bf730cd364b3035a82fa461
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy diagnostic drivers only
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-recent-order.cjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/launch-recent-order.mjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/recent-thread-domain-seed.mjs product/apps/zenx/scripts/
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build actual production storage and App
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Native Recent ordering with original receipt and accepted final
+        working-directory: product
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-recent-order.mjs ../results 0 recent en
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-app-recent-order
+          path: results
+          if-no-files-found: error
