@@ -1,0 +1,76 @@
+name: Analyze existing owned renderer profile artifacts
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/send-profile-analyze.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  artifact-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 41391701278
+          github-token: ${{ github.token }}
+          pattern: perturbed-owned-profile-*
+          path: profiles
+      - name: Validate CPU weights and emit exact trace window sources
+        run: |
+          node <<'NODE'
+          const fs=require("node:fs"),path=require("node:path");
+          function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(dir,e.name)):[path.join(dir,e.name)]);}
+          for(const file of walk("profiles").filter(f=>f.endsWith(".cpuprofile"))){
+           const p=JSON.parse(fs.readFileSync(file,"utf8")),d=p.timeDeltas??[];
+           const negative=d.filter(x=>x<0),bad=d.filter(x=>!Number.isFinite(x));
+           console.log("CPU_PROFILE_VALIDITY "+JSON.stringify({artifact:path.dirname(file),samples:p.samples?.length,deltas:d.length,negativeCount:negative.length,negativeMin:negative.length?Math.min(...negative):null,nonfiniteCount:bad.length,validWeights:negative.length===0&&bad.length===0&&d.length===p.samples?.length,profileDurationMs:(p.endTime-p.startTime)/1000,deltaSumMs:d.reduce((a,b)=>a+b,0)/1000}));
+           const t=JSON.parse(fs.readFileSync(path.join(path.dirname(file),"renderer-pre-feedback-trace.json"),"utf8")).traceEvents;
+           const click=t.find(e=>e.name==="zen-profile-native-send-click"),dom=t.find(e=>e.name==="zen-profile-pending-dom");
+           if(!click||!dom||click.pid!==dom.pid||click.tid!==dom.tid){console.log("TRACE_WINDOW_INVALID");continue;}
+           const events=t.filter(e=>e.pid===click.pid&&e.tid===click.tid&&e.ph==="X"&&["Layout","UpdateLayoutTree","FunctionCall","EventDispatch"].includes(e.name)&&e.ts<dom.ts&&e.ts+e.dur>click.ts);
+           console.log("PREDOM_SOURCE_EVENTS "+JSON.stringify({artifact:path.dirname(file),events:events.slice(0,80).map(e=>({name:e.name,startRelativeMs:(e.ts-click.ts)/1000,durationMs:e.dur/1000,clippedWindowMs:(Math.min(dom.ts,e.ts+e.dur)-Math.max(click.ts,e.ts))/1000,args:e.args}))}));
+          }
+          NODE
+  exact-renderer-source-snippets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b8c77b80fa547fddfa7875e11a932d37b143e473
+          persist-credentials: false
+          path: product
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 41391701278
+          github-token: ${{ github.token }}
+          pattern: perturbed-owned-profile-*
+          path: profiles
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: product
+        timeout-minutes: 7
+      - name: Rebuild exact renderer only to inspect recorded source offsets
+        working-directory: product
+        run: |
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Require identical recorded renderer hash before reporting snippets
+        working-directory: product
+        run: |
+          node <<'NODE'
+          const fs=require("node:fs"),path=require("node:path"),crypto=require("node:crypto");
+          const refs=fs.readdirSync("../profiles",{withFileTypes:true}).filter(d=>d.isDirectory()).map(d=>path.join("../profiles",d.name,"full-app-source.json")).filter(f=>fs.existsSync(f)).map(f=>JSON.parse(fs.readFileSync(f,"utf8")));
+          const file="apps/zenx/out/renderer/assets/index-Lpv3Iuib.js";
+          if(!fs.existsSync(file))throw Error("Exact recorded renderer bundle filename not reproduced; do not attribute stale offsets");
+          const bytes=fs.readFileSync(file),hash=crypto.createHash("sha256").update(bytes).digest("hex");
+          const expected=refs.map(r=>r.hashes["out/renderer/assets/index-Lpv3Iuib.js"]);
+          if(!expected.length||!expected.every(h=>h===hash))throw Error("Rebuilt renderer differs from recorded profile bundle; offsets cannot be asserted");
+          const lines=bytes.toString("utf8").split("\n");
+          for(const center of [30844,105786,50209]) console.log("VERIFIED_PROFILE_SOURCE_SNIPPET "+JSON.stringify({file,sha256:hash,zeroBasedCenter:center,lines:lines.slice(center-20,center+21).map((text,index)=>({zeroBasedLine:center-20+index,text}))}));
+          
+          NODE
