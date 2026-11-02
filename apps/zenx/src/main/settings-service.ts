@@ -953,6 +953,10 @@ export class ZenXSettingsService {
     return this.#requireProfile().computerForegroundControlEnabled === true;
   }
 
+  nativeCrossDeviceToolsEnabled(): boolean {
+    return this.#requireProfile().nativeCrossDeviceToolsEnabled === true;
+  }
+
   #auxiliaryEvidence() {
     // Each main-process operation owns a unique auxiliary partition. It never
     // writes the Host's Thread partition or owns another operation's drain.
@@ -1124,6 +1128,10 @@ export class ZenXSettingsService {
             onboardingComplete: settings.onboardingComplete,
             computerForegroundControlEnabled:
               settings.computerForegroundControlEnabled === true,
+            nativeCrossDeviceToolsEnabled:
+              settings.nativeCrossDeviceToolsEnabled ??
+              current.nativeCrossDeviceToolsEnabled ??
+              false,
             browserMode: settings.browserMode ?? current.browserMode,
             providerProfiles: settings.providerProfiles,
             defaultModel: settings.defaultModel,

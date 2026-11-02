@@ -17,7 +17,7 @@ import type {
 } from "../src/main/capabilities/browser-thread-observation.js";
 import type { ZenXBrowserBackend } from "../src/main/capabilities/browser-provider.js";
 
-test("delayed Agent opens preserve admission order but never replace human target selection", async () => {
+test("automatic previews preserve admission order and newer human selection", async () => {
   const dom = new JSDOM('<input id="composer"><div id="root"></div>', {
     url: "https://zenx.local",
     pretendToBeVisual: true,
@@ -206,17 +206,16 @@ test("delayed Agent opens preserve admission order but never replace human targe
       openResolvers[1]!();
       await newer;
     });
-    assert.equal(selected(), "Terminal");
-    assert.equal(expanded, false);
-    await act(async () => openPanel(true));
-    await act(async () => button("Page two · External · read-only").click());
+    assert.match(selected()!, /Page opened-1/);
+    assert.equal(expanded, true);
+    await act(async () => button("Terminal").click());
     await act(async () => {
       openResolvers[0]!();
       await older;
     });
-    assert.match(
-      selected()!,
-      /Page two/,
+    assert.equal(
+      selected(),
+      "Terminal",
       "older delayed open must not steal from human selection",
     );
     const starts = envelopes
@@ -241,7 +240,7 @@ test("delayed Agent opens preserve admission order but never replace human targe
       openResolvers[3]!();
       await newer;
     });
-    assert.match(selected()!, /Page two/);
+    assert.match(selected()!, /Page opened-3/);
     await act(async () => button("Terminal").click());
     document.getElementById("composer")!.focus();
     await act(async () => {

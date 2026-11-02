@@ -170,6 +170,9 @@ export interface ZenXBrowserBackend {
   ): Promise<unknown>;
   /** Bind the provider's opaque session to its trusted Thread owner. */
   bindThreadSession?(sessionId: string, threadId: string): void;
+  /** Turn cleanup: release human pages and retire unkept Agent-created pages. */
+  finishSession?(sessionId: string): Promise<void> | void;
+  keepTab?(sessionId: string, tabId: string): void;
   /** Read-only exact existing-target liveness; must never adopt or create targets. */
   hasTab?(sessionId: string, tabId: string): boolean | Promise<boolean>;
   /** Trusted human UI only: never include the unredacted URL in tool results. */
@@ -270,7 +273,7 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
   compatibility: { zenx: ">=0.1.0 <0.2.0" },
   runtime: { type: "bundled", entry: "zenx/browser" },
   mainDocument:
-    "Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
+    "For a new browsing task, prefer open to create a background task page; use an existing tab when the user's task calls for that page. New connected pages are grouped by task session automatically. New pages are temporary and close at turn/session end unless open uses keep:true for a deliverable; existing user pages are released. The Host displays the exact operated page automatically, without model UI commands. Browser actions observe by default with a small backend-captured subset and use exact backend-scoped refs. Use full:true for a broader self-contained capture. Inspect returns a bounded capture; query searches captured targets only, and cursor reads its immutable continuation. Pass since with a retained observation ref for a diff, or full:true after context loss. Every new observation has new action refs; diff targetChanges.replacements maps old refs to fresh refs. Discard prior continuation pages on every new observation or first-page diff and follow its new nextCursor for tails. Human takeover blocks Workspace mutations until the user returns control and a fresh inspection is made. If actionCompleted has observationError, inspect again without repeating the action. Unknown effects must not be replayed. Connected browsers require explicit connection discovery and approval; they never fall back to Workspace.",
   provider: {
     id: "electron-dedicated-browser",
     platforms: ["darwin", "win32", "linux"],
@@ -353,6 +356,11 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
         {
           sessionId: stringSchema(),
           url: stringSchema(),
+          keep: {
+            type: "boolean",
+            description:
+              "Keep this new page as a deliverable after the turn; defaults to false.",
+          },
           observe: observationOption(),
           baseObservationId: observationReadProperties.baseObservationId,
           full: observationReadProperties.full,
@@ -751,6 +759,33 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       : projected;
   }
 
+  async finishTurn(threadId: string, failed = false): Promise<number> {
+    const { sessions, throughSequence, operationFailed } =
+      this.#threadObservation.finishTurn(threadId);
+    if (!sessions.length) return 0;
+    const outcomes = await Promise.allSettled(
+      sessions.map(async (session) => {
+        if (this.#backend.finishSession)
+          await this.#backend.finishSession(session);
+        else await this.#backend.closeSession(session);
+      }),
+    );
+    const failure = outcomes.find((result) => result.status === "rejected");
+    this.#threadObservation.completeTurn(
+      threadId,
+      throughSequence,
+      failure?.status === "rejected"
+        ? failure.reason
+        : failed || operationFailed
+          ? new Error(
+              "Browser work did not finish successfully. Check the tool result.",
+            )
+          : undefined,
+    );
+    if (failure?.status === "rejected") throw failure.reason;
+    return throughSequence;
+  }
+
   assertModelTarget(
     route: BrowserModelRoute,
     threadId: string | undefined,
@@ -1084,12 +1119,20 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
     switch (toolName) {
       case "browser_list_tabs":
         return await this.#backend.listTabs(sessionId, invocation.signal);
-      case "browser_open":
-        return await this.#backend.open(
+      case "browser_open": {
+        if (invocation.arguments.keep === true && !this.#backend.keepTab)
+          throw new Error(
+            "This Browser provider cannot retain a deliverable page",
+          );
+        const page = await this.#backend.open(
           sessionId,
           safeBrowserUrl(requiredString(invocation.arguments, "url")),
           invocation.signal,
         );
+        if (invocation.arguments.keep === true)
+          this.#backend.keepTab?.(sessionId, page.tabId);
+        return page;
+      }
       case "browser_navigate":
         return await this.#backend.navigate(
           sessionId,
@@ -1187,6 +1230,10 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
         return { closed: true, sessionId, tabId };
       }
       case "browser_close_session":
+        if (this.#backend.finishSession) {
+          await this.#backend.finishSession(sessionId);
+          return { closed: true, sessionId };
+        }
         return {
           closedTabs: await this.#backend.closeSession(
             sessionId,

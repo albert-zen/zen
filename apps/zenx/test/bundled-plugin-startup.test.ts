@@ -432,12 +432,37 @@ test("Fleet startup commits the normal package without grants and keeps disabled
     assert.equal(installed?.source, "bundled");
     assert.equal(installed?.profileSource?.packageName, definition.packageName);
     assert.deepEqual(installed?.permissions, fleetPackage.manifest.permissions);
+    const nativeToolNames = [
+      "zenx_fleet_tools",
+      "zenx_fleet_execute",
+      "zenx_fleet_tool_status",
+    ];
+    const defaultToolNames = fleetPackage.manifest.tools
+      .map((tool) => tool.name)
+      .filter((name) => !nativeToolNames.includes(name))
+      .sort();
+    assert.deepEqual(
+      service
+        .hostSnapshot()
+        .definitions.map((tool) => tool.name)
+        .sort(),
+      defaultToolNames,
+    );
+    service.setNativeCrossDeviceToolsAllowed(true);
     assert.deepEqual(
       service
         .hostSnapshot()
         .definitions.map((tool) => tool.name)
         .sort(),
       fleetPackage.manifest.tools.map((tool) => tool.name).sort(),
+    );
+    service.setNativeCrossDeviceToolsAllowed(false);
+    assert.deepEqual(
+      service
+        .hostSnapshot()
+        .definitions.map((tool) => tool.name)
+        .sort(),
+      defaultToolNames,
     );
     const cleanCatalog = JSON.parse(await readFile(catalogFile, "utf8"));
     assert.equal("grants" in cleanCatalog, false);

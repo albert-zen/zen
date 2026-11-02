@@ -744,6 +744,38 @@ test("persists and clears the optional context compaction prompt", async () => {
   }
 });
 
+test("native cross-device tools stay off in old profiles and persist only explicit opt-in", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-native-tools-setting-"),
+  );
+  try {
+    const service = settingsFor(directory, inactiveSubscription());
+    await service.initialize({});
+    const initial = (await service.publicSettings()).profile;
+    assert.equal(initial.nativeCrossDeviceToolsEnabled, false);
+    await service.save({ ...initial, nativeCrossDeviceToolsEnabled: true });
+    const restarted = settingsFor(directory, inactiveSubscription());
+    await restarted.initialize({});
+    const persisted = (await restarted.publicSettings()).profile;
+    assert.equal(persisted.nativeCrossDeviceToolsEnabled, true);
+    assert.equal(restarted.nativeCrossDeviceToolsEnabled(), true);
+    await restarted.save({
+      ...persisted,
+      nativeCrossDeviceToolsEnabled: false,
+    });
+    assert.equal(restarted.nativeCrossDeviceToolsEnabled(), false);
+    await assert.rejects(
+      restarted.save({
+        ...persisted,
+        nativeCrossDeviceToolsEnabled: "true" as unknown as boolean,
+      }),
+      /Native cross-device tools enablement must be a boolean/u,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("persists explicit foreground computer consent across restart and allows revocation", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-foreground-setting-"),

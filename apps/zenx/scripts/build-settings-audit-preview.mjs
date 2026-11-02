@@ -48,6 +48,7 @@ await writeFile(
 );
 const sources = [
   "src/renderer/src/SettingsView.tsx",
+  "src/renderer/src/NativeCrossDeviceToolsSettings.tsx",
   "src/renderer/src/ProviderModelAdmissionControls.tsx",
   "src/renderer/src/ui/controls.tsx",
   "src/renderer/src/styles.css",

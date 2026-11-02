@@ -12,6 +12,38 @@ import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
 import { BrowserZenXCapabilityPackage } from "../src/main/capabilities/browser-provider.js";
 import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
+test("closing an expired workspace tab is idempotent but cannot close another Thread's page", async () => {
+  const f = await sharedFixture();
+  try {
+    assert.deepEqual(
+      f.browser.command(f.sender as never, "thread-a", "close", "expired"),
+      [],
+    );
+    const [tab] = f.browser.command(f.sender as never, "thread-b", "new");
+    assert.throws(
+      () => f.browser.command(f.sender as never, "thread-a", "close", tab!.id),
+      /not in this Thread/,
+    );
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-b", "list").length,
+      1,
+    );
+    assert.throws(
+      () =>
+        f.browser.command(
+          f.sender as never,
+          "thread-a",
+          "navigate",
+          "expired",
+          "https://example.test",
+        ),
+      /not in this Thread/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("Workspace Browser human view and Agent backend operate the exact same target", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-"),
@@ -2461,5 +2493,36 @@ test("Board liveness is a pure exact Thread lookup independent of loading or hum
     assert.equal(fixture.browser.hasThreadTab("thread-a", tab.tabId), false);
   } finally {
     await fixture.close();
+  }
+});
+
+test("turn cleanup closes only this session's temporary pages and releases human and kept pages", async () => {
+  const f = await sharedFixture();
+  try {
+    const human = f.browser.command(f.sender as never, "thread-a", "new")[0]!;
+    f.browser.bindThreadSession("session-a", "thread-a");
+    f.browser.bindThreadSession("session-b", "thread-b");
+    const temporary = await f.browser.open(
+      "session-a",
+      "http://localhost:3080",
+    );
+    const kept = await f.browser.open("session-a", "http://localhost:3080");
+    f.browser.keepTab("session-a", kept.tabId);
+    const other = await f.browser.open("session-b", "http://localhost:3080");
+    f.browser.finishSession("session-a");
+    const remaining = f.browser.command(f.sender as never, "thread-a", "list");
+    assert.deepEqual(
+      remaining.map((t) => t.id),
+      [human.id, kept.tabId],
+    );
+    assert.ok(!remaining.some((t) => t.id === temporary.tabId));
+    assert.equal(
+      f.browser.hasTab("session-b", other.tabId),
+      true,
+      "same-URL page in B is untouched",
+    );
+    assert.ok(remaining.every((t) => !t.temporary));
+  } finally {
+    await f.close();
   }
 });

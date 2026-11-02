@@ -42,7 +42,7 @@ export function browserNamespace(
 export const browserModelDescriptions: Readonly<Record<string, string>> = {
   list_tabs:
     "List tabs in one semantic session. Use the exact returned tab refs.",
-  open: "Open an HTTP(S) page in a background Browser tab. Observes by default.",
+  open: "Open an HTTP(S) page in a background Browser tab; new pages are grouped automatically and close at turn end unless keep=true. Observes by default.",
   navigate:
     "Navigate the exact tab. Shared Workspace tabs may require a post-takeover observation.",
   inspect:
@@ -128,6 +128,7 @@ export function buildBrowserModelDefinition<
       "x",
       "y",
       "key",
+      "keep",
       "observe",
       "full",
     ])

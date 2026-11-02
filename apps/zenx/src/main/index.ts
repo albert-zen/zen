@@ -830,6 +830,8 @@ async function bootstrapZenX(): Promise<void> {
         : {}),
       allowForegroundRequired:
         settingsService.computerForegroundControlEnabled(),
+      allowNativeCrossDeviceTools:
+        settingsService.nativeCrossDeviceToolsEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
       ...(chromeExtensionBridge === undefined
@@ -1913,6 +1915,20 @@ function installChromeBridgeIpc(options: {
       connection: options.bridge?.status() ?? { state: "waiting", tabCount: 0 },
     };
   };
+  if (app.isPackaged && options.bridge) {
+    // Extension startup connects without requiring a toolbar click. Refresh the
+    // manifests for this installed app path before the next native handshake.
+    void Promise.all(
+      ["chrome", "edge"].map((browser) =>
+        registerChromeNativeHost({
+          ...registration,
+          browser: browser as "chrome" | "edge",
+        }),
+      ),
+    ).catch((error) =>
+      console.error("Chrome connector preparation failed", error),
+    );
+  }
   ipcMain.handle(ipcChannels.chromeBridgeGet, snapshot);
   ipcMain.handle(
     ipcChannels.chromeBridgePrepare,
@@ -2269,7 +2285,11 @@ function installSettingsIpc(
         capabilityService?.setForegroundRequiredAllowed(
           update.computerForegroundControlEnabled === true,
         ) ?? false;
-      if (foregroundPolicyChanged) {
+      const nativeToolsPolicyChanged =
+        capabilityService?.setNativeCrossDeviceToolsAllowed(
+          after.nativeCrossDeviceToolsEnabled === true,
+        ) ?? false;
+      if (foregroundPolicyChanged || nativeToolsPolicyChanged) {
         await appServerManager?.refreshCapabilitiesAfterCommit();
       }
       await refreshProjects();
@@ -2539,6 +2559,15 @@ function installCapabilityIpc(
   manager: AppServerManager,
   marketplace: MarketplaceCatalogService,
 ): void {
+  manager.onNotification((method, params) => {
+    if (method !== "turn/completed") return;
+    const event = params as ServerNotificationParams["turn/completed"];
+    void capabilities
+      .finishBrowserTurn(event.threadId, event.turn.status !== "completed")
+      .catch((error) => {
+        console.error("Browser turn cleanup failed", error);
+      });
+  });
   const browserLive = new BrowserLiveObservationIpcBridge(
     capabilities,
     ipcChannels.browserLiveEvent,

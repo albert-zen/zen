@@ -280,6 +280,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 
 ### 4.6 Settings 与 onboarding
 
+- General 的“原生跨端工具调用”使用现有设置开关与 Apply 草稿流程，旧配置默认关闭。说明其调用目标设备原生工具、仍需目标独立授权，以及远端目录变化可能影响上下文缓存；保存后对后续采样生效，不要求重启。普通 Fleet 连接、远程会话与独立 Shell 功能不受此开关影响。
 - Settings 是由左下导航进入的 routed page。Host 设置使用独立底部 Apply 保存栏，未保存草稿跨页保留；即时外观设置在本页说明，重启仅按真实 configuration 状态提示。
 - Settings 明确管理 Archived Threads、Provider/Account 和 Plugins；General 可以承载其他 host-local preferences，但不能改变这些核心分区的所有权。
 - Context compaction prompt 是可选的 host-local preference；省略时使用 Core 默认。它只影响未来
@@ -699,15 +700,17 @@ Triggers use the existing clock artwork throughout navigation, workspace tabs an
 
 The Subagents panel keeps one-click inherited side-chat drafting and offers a compact model-settings action beside it. Model and reasoning overrides are local to that parent's creation form, use the current Host catalog, and apply atomically before the child becomes visible. Omitted values retain native inheritance/default semantics; a model change clears a stale effort choice. Opening fixes the parent context boundary in renderer memory; first valid Send atomically creates the configured child before delivery. Closing an unsent draft leaves no Thread. The workspace launcher plus remains the inherited one-click drafting action.
 
-### Browser and Computer observation: human-owned navigation (2026-10-29)
+### Browser operation previews in the unified workspace (2026-11-02)
 
-Workspace Agent tools use the existing ordinary Browser tab and its exact WebContents/profile. Agent actions, inspections, target discovery, frames and completion never open the workspace, select or reorder tabs, change the human's observation target, transfer focus or activate the OS. There is no Follow Agent mode or control. Human tab selection, opening, closing and navigation remain explicit; an initially unselected view offers its existing chooser rather than selecting a newly discovered target.
+Browser Use shares the existing workspace tab rail. An actual Agent operation automatically reveals and selects its exact page without moving keyboard or OS focus. Discovery alone does not create a preview. Repeated operations on one native target reuse one tab, including an already-open human page; URLs and titles never merge distinct targets. Connected-page observation is an adapter behind this same interaction, not a second workspace type or a required launcher choice.
 
-External connected pages and Computer windows/applications are read-only observations. Their target pickers require an explicit human choice and retain that exact identity across activity on other targets; no selection means catalog-only, not the Agent's latest target. A selected target may update its own observed frames and metadata naturally without changing the selected target. Stale, disconnected or retired targets remain unavailable rather than substituting another page/window. Closing an external peer tab only dismisses the view, never closes the real browser page. Exact observer/backend/connection and owner/generation fences remain authoritative; matching URLs or titles do not merge identities. Explicit external opening remains a separate human action with current-target validation. Observation never creates a Turn, dispatches input or changes model context. Read-only observation UI does not disable Agent Browser or Computer tools: those continue through their existing exact-target permission and ownership checks, including hidden targets, without opening or selecting the human view.
+An operation preview is process-local presentation, not a persisted tab descriptor. It follows the latest admitted operation, not whichever asynchronous result finishes last. A human selection or dismissal takes precedence until the next operation. Existing pages keep their tab and return to their prior state when the turn ends; temporary observations show completion briefly and disappear, restoring the previous workspace selection. Failure is visible and is never shown as a success check. Closing a connected preview never closes the real Chrome page. Native Agent-created temporary pages close at turn end unless the tool explicitly requests keeping them; existing human pages are released. Closing an expired persisted native descriptor is idempotent and never creates a replacement.
 
-The built-in Browser tab glyph has a small neutral activity mark only while its exact-owner tab has actual Agent action or inspection operations in flight, with localized operating/inspection accessible name and tooltip. Loading, permission-ready idle, human activity and settled unknown outcomes do not mean Agent active. An unsettled dispatched action stays marked after human takeover until actual settlement. The indicator never selects, opens, focuses, scrolls or reorders the workspace, and is static under reduced motion and forced colors. No decorative activity row or pulsing address border duplicates the tab icon. Static human-control and dispatched-action-finishing notices, permission details, errors, cancellation and unknown-outcome feedback remain separate and truthful; observation and UI dismissal never replay an operation.
+Exact target, connection generation and current route checks prevent accidental cross-target commands; they do not establish an immutable association with the original conversation. Future explicit resource transfer must update those routes. No cross-thread drag/transfer feature is introduced here.
 
-Native same-page/login-state and compositor validation remains distinct from synthetic renderer evidence.
+Chrome setup has one application-led connection entry: prepare the installed app connector automatically, then detect the extension connection. Installed enabled extensions connect at startup and reconnect after app/browser restarts with a fresh connection; manual disconnect and cancellation of Chrome debugger access stop reconnection. Old commands, attachments and observations are never replayed. Browser-required extension installation remains explicit; development unpacked installation is labelled as such until a published store listing exists.
+
+Computer observation retains explicit human target selection. Browser previews do not grant new execution permissions, create Turns, or activate OS windows. Existing native rendering, permission, unknown-outcome and reduced-motion requirements remain authoritative.
 
 ### 2026-10-15: Machine picker and generation throughput
 
@@ -898,3 +901,35 @@ committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消
 The exact leading legacy `[Message quote; ...]` transport is rendered through the same inline reference component as current quoted messages, retaining exact selected text and source navigation. Real line breaks appear in the expanded excerpt; source IDs belong in the explicit source details, not the message bubble or plain-text clipboard. Malformed or embedded illustrative text stays literal. New structured sends retain provenance independently of readable clipboard text.
 
 Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.
+
+### Immediate ordinary Send feedback
+
+For an existing Thread, ordinary Send/Steer immediately transfers the exact draft
+and attachments into a visibly local **Sending** row and clears the editor. This
+is presentation only, not a canonical user message or proof of delivery. The
+existing pending-admission guard prevents duplicate sends while newer typing
+remains editable. New-thread and side-chat promotion retain their existing draft
+behavior in this initial rollout.
+
+The local row has a stable client identity but never a canonical Item ID.
+Admission ACK changes its label to admitted/waiting for conversation projection,
+not model consumption; exact canonical identity removes the local copy without a
+duplicate bubble. ACK and event order must both work. Generic post-dispatch IPC
+errors are **delivery unconfirmed**, not invented rejection, and never resend
+automatically. Explicit Check delivery uses the existing authoritative recovery
+read outside the send critical path; absence is not proof of rejection.
+
+Unknown/unsent text and images remain in a recovery row. Add back to draft
+preserves newer text and images, does not send, and warns that resending an
+unconfirmed message may duplicate it. An unchanged recovered submission retains
+existing retry idempotency; merging different content creates a new submission.
+The local recovery copy is explicitly not restart-persistent; admitted canonical
+history remains recoverable through the Host. Dismiss is offered only after
+recovery to the draft. Known pre-dispatch failure may restore only its untouched
+blank editor. Changing threads does not overwrite the App-owned pending copies.
+
+Pending feedback and input clearing are measured separately from native durable
+admission and canonical message paint. Composer-only changes reuse the transcript
+subtree instead of re-mapping the whole history. Real native acceptance must cover
+the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts,
+attachments, both ACK/event orders and exactly one canonical user message.

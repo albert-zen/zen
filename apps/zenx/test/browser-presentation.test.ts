@@ -311,9 +311,17 @@ test("external read-only pages share the strip without merging same-URL identiti
     panels: [],
   } as any;
   function Harness() {
+    const [opened, setOpened] = useState([
+      "browser:1",
+      `external-browser:${targetA}`,
+      `external-browser:${targetB}`,
+    ]);
     const [selectedTab, onSelectTab] = useState("browser:1");
     return React.createElement(AuxiliaryPanel, {
       threadId: "presentation-ui-external",
+      // These peers were explicitly opened before this refresh/lifecycle test.
+      openedTabs: opened,
+      onTabsChange: setOpened,
       title: "Task",
       snapshot,
       open: true,
@@ -331,7 +339,7 @@ test("external read-only pages share the strip without merging same-URL identiti
     assert.equal(tabs().length, 3);
     assert.ok(!document.body.textContent?.includes("Attached browser"));
     const external = tabs().filter((tab) =>
-      tab.textContent?.includes("read-only"),
+      tab.id.includes("external-browser:"),
     );
     assert.equal(external.length, 2);
     await act(async () => external[0]!.click());
@@ -452,17 +460,13 @@ test("external read-only pages share the strip without merging same-URL identiti
     assert.ok(document.body.textContent?.includes("Selected page unavailable"));
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Close tab Same page · External · read-only"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="Close tab Same page"]')!
         .click(),
     );
     assert.equal(tabs().length, 2);
     await act(async () =>
       document
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="Close tab Same page · External · read-only"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="Close tab Same page"]')!
         .click(),
     );
     assert.equal(tabs().length, 1);
@@ -517,7 +521,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
       loading: false,
       mode: "live",
     };
-    let targets = [target];
+    let targets: any[] = [target];
     const listeners = new Set<(event: any) => void>();
     (dom.window as any).zenx = {
       plugins: {},
@@ -559,12 +563,18 @@ for (const state of ["dismissed", "disconnected"] as const) {
     const count = () => document.querySelectorAll('[role="tab"]').length;
     try {
       await rerender();
+      assert.equal(count(), 0, "discovery alone does not open a preview");
+      await act(async () => {
+        targets = [{ ...target, previewActive: true, previewSequence: 1 }];
+        for (const listener of [...listeners])
+          listener({ type: "targets", targets });
+      });
       assert.equal(count(), 1);
       if (state === "dismissed") {
         await act(async () =>
           document
             .querySelector<HTMLButtonElement>(
-              '[aria-label="Close tab Retained page · External · read-only"]',
+              '[aria-label="Close tab Retained page"]',
             )!
             .click(),
         );
@@ -590,6 +600,7 @@ for (const state of ["dismissed", "disconnected"] as const) {
         expected,
         `${state} identity survives an unrelated plugin snapshot`,
       );
+      targets = []; // A newly admitted provider has no prior runtime sessions.
       snapshot = {
         ...snapshot,
         plugins: [{ ...snapshot.plugins[0], admissionId: "provider-two" }],
@@ -597,17 +608,22 @@ for (const state of ["dismissed", "disconnected"] as const) {
       await rerender();
       assert.equal(
         count(),
-        state === "dismissed" ? 1 : 0,
-        "genuine provider incarnation establishes a fresh presentation scope",
+        0,
+        "a new provider never reopens a dismissed preview or substitutes its target",
       );
       if (state === "disconnected") {
         await act(async () => {
-          targets = [target];
+          // Real replacement connections publish a new generation in the ID.
+          targets = [{ ...target, id: "connected:fresh-generation" }];
           for (const listener of [...listeners])
             listener({ type: "targets", targets });
         });
       }
-      assert.equal(count(), 1);
+      assert.equal(
+        count(),
+        0,
+        "fresh discovery does not create an operation preview",
+      );
       targets = [];
       threadId = "another-thread";
       await rerender();
