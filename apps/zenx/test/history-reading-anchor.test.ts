@@ -1184,6 +1184,9 @@ for (const intent of ["owner", "outside focus"] as const) {
       const thread = twoSourceThread();
       await render(thread, null, ["source-a"]);
       await quote(0);
+      // Radix FocusScope releases the exact close callback in its unmount timer.
+      // Exercise newer intent after that signal, not act() scheduler timing.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
       assert.ok(document.querySelector("[data-reading-reveal]"));
       const outside = document.createElement("button");
       outside.textContent = "Other pane";
@@ -1311,6 +1314,165 @@ for (const retirement of ["reopen", "identity"] as const) {
         else Reflect.deleteProperty(globalThis, "CSS");
         host.remove();
       }
+    });
+  });
+}
+
+test("waiting source close absorbs only passive scroll and rebases before positioning", async () => {
+  await withLayout(async ({ viewport, turn, item, frame, frames, reads }) => {
+    let close = () => {};
+    const afterClose = new Promise<void>((resolve) => {
+      close = resolve;
+    });
+    let completed = 0;
+    revealAndPositionReadingTarget({
+      viewport,
+      turnId: "turn-a",
+      target: () => item,
+      afterClose,
+      focus: true,
+      isCurrent: () => true,
+      onComplete: () => completed++,
+    });
+    for (const top of [1000, 945, 910]) {
+      viewport.scrollTop = top;
+      viewport.dispatchEvent(new window.Event("scroll"));
+    }
+    assert.equal(frames.size, 0);
+    assert.equal(reads(), 0);
+    assert.equal(turn.dataset.readingReveal, undefined);
+    close();
+    await Promise.resolve();
+    // A delayed delivery of that same offset is not a new movement.
+    viewport.dispatchEvent(new window.Event("scroll"));
+    assert.equal(turn.dataset.readingReveal, "true");
+    frame();
+    frame();
+    frame();
+    assert.equal(completed, 1);
+    assert.equal(frames.size, 0);
+    assert.ok(
+      document.activeElement === item,
+      "Exact source receives focus after close and validation",
+    );
+  });
+});
+
+for (const intent of [
+  "wheel",
+  "pointerdown",
+  "keydown",
+  "selectionchange",
+  "focusin",
+  "blur",
+  "visibilitychange",
+  "owner",
+  "retired close",
+  "cancel",
+] as const) {
+  test(`passive scroll during source-close waiting does not weaken newer ${intent}`, async () => {
+    await withLayout(async ({ viewport, turn, item, frame, frames, reads }) => {
+      let close = () => {},
+        retire = () => {};
+      const afterClose = new Promise<void>((resolve, reject) => {
+        close = resolve;
+        retire = () => reject();
+      });
+      let current = true,
+        finished = 0,
+        completed = 0;
+      const cancel = revealAndPositionReadingTarget({
+        viewport,
+        turnId: "turn-a",
+        target: () => item,
+        afterClose,
+        focus: true,
+        isCurrent: () => current,
+        onComplete: () => completed++,
+        onFinish: () => finished++,
+      });
+      viewport.scrollTop = 945;
+      viewport.dispatchEvent(new window.Event("scroll"));
+      if (intent === "owner") current = false;
+      else if (intent === "retired close") retire();
+      else if (intent === "cancel") cancel();
+      else if (intent === "selectionchange") {
+        const range = document.createRange();
+        range.selectNodeContents(item);
+        document.getSelection()!.addRange(range);
+        document.dispatchEvent(new window.Event("selectionchange"));
+      } else if (intent === "focusin") {
+        const button = document.createElement("button");
+        document.body.append(button);
+        button.focus();
+      } else if (intent === "blur")
+        window.dispatchEvent(new window.Event("blur"));
+      else document.dispatchEvent(new window.Event(intent));
+      // Cancellation must survive another passive delivery and late exact close.
+      viewport.scrollTop = 900;
+      viewport.dispatchEvent(new window.Event("scroll"));
+      await Promise.resolve();
+      close();
+      await Promise.resolve();
+      frame();
+      frame();
+      frame();
+      assert.equal(completed, 0);
+      assert.equal(finished, 1);
+      assert.equal(frames.size, 0);
+      assert.equal(reads(), 0);
+      assert.equal(viewport.scrollTop, 900);
+      assert.equal(turn.dataset.readingReveal, undefined);
+      assert.ok(
+        document.activeElement !== item,
+        "Cancelled source cannot regain focus",
+      );
+      if (intent === "selectionchange")
+        assert.equal(document.getSelection()!.toString(), "source");
+    });
+  });
+}
+
+for (const afterClose of [false, true]) {
+  test(`scalar scroll before first positioning frame still cancels (close signal ${afterClose})`, async () => {
+    await withLayout(async ({ viewport, turn, item, frame, frames, reads }) => {
+      let close = () => {};
+      const signal = new Promise<void>((resolve) => {
+        close = resolve;
+      });
+      let completed = 0,
+        finished = 0;
+      revealAndPositionReadingTarget({
+        viewport,
+        turnId: "turn-a",
+        target: () => item,
+        ...(afterClose ? { afterClose: signal } : {}),
+        focus: true,
+        isCurrent: () => true,
+        onComplete: () => completed++,
+        onFinish: () => finished++,
+      });
+      if (afterClose) {
+        close();
+        await Promise.resolve();
+      }
+      assert.equal(turn.dataset.readingReveal, "true");
+      assert.equal(frames.size, 1);
+      viewport.scrollTop = 55;
+      viewport.dispatchEvent(new window.Event("scroll"));
+      frame();
+      frame();
+      frame();
+      assert.equal(completed, 0);
+      assert.equal(finished, 1);
+      assert.equal(reads(), 0);
+      assert.equal(frames.size, 0);
+      assert.equal(viewport.scrollTop, 55);
+      assert.equal(turn.dataset.readingReveal, undefined);
+      assert.ok(
+        document.activeElement !== item,
+        "Unexpected positioning scroll cannot focus",
+      );
     });
   });
 }

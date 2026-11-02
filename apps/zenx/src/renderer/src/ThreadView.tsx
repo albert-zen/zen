@@ -1010,7 +1010,7 @@ function ThreadViewContent({
   });
   const selectorId = useId();
 
-  const positioning = useRef<object | null>(null);
+  const positioning = useRef<{ waitingForClose: boolean } | null>(null);
   const cancelPosition = useRef<(() => void) | null>(null);
   const positionGeneration = useRef(0);
   const positionOwner = useRef<typeof readingState | null>(null);
@@ -1066,7 +1066,7 @@ function ThreadViewContent({
       cancelReadingPosition();
       const scroll = scrollRef.current;
       if (!scroll || positionOwner.current !== readingState) return () => {};
-      const operation = {};
+      const operation = { waitingForClose: target.afterClose !== undefined };
       const generation = ++positionGeneration.current;
       positioning.current = operation;
       pauseFollowing();
@@ -1077,6 +1077,11 @@ function ThreadViewContent({
           positionOwner.current === readingState &&
           positionGeneration.current === generation &&
           target.isCurrent(),
+        onCloseComplete: (top) => {
+          if (positioning.current !== operation) return;
+          operation.waitingForClose = false;
+          observedScrollTop.current = top;
+        },
         onPosition: (top) => {
           observedScrollTop.current = top;
         },
@@ -1807,8 +1812,15 @@ function ThreadViewContent({
           const target = event.currentTarget;
           const top = target.scrollTop;
           const moved = Math.abs(top - observedScrollTop.current) > 0.5;
-          if (moved) cancelReadingPosition();
           const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
+          if (positioning.current?.waitingForClose) {
+            // Passive close-layout movement is not new reading/follow intent.
+            // Pointer/key/wheel/focus/selection and owner guards stay active.
+            observedScrollTop.current = top;
+            setAtLive(atBottom);
+            return;
+          }
+          if (moved) cancelReadingPosition();
           // Native/programmatic scroll delivery can lag behind content growth.
           // A changed range alone is not reader movement. Explicitly reaching
           // the bottom restores follow intent; upward reading releases it.

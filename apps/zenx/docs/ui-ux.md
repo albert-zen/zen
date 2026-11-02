@@ -259,7 +259,7 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
 - Approval bar 位于聊天流与 Composer 之间，不塞入 Trace Group 或 Composer toolbar。
 - 用户处于实时底部时，新 Item 自动跟随；用户向上阅读后，不改变滚动位置，并显示 **Back to live**。
 - 手动上翻、键盘阅读、展开/聚焦 transcript 或选择文字后暂停跟随，即使仍在底部附近也不自动重启。空闲会话的 ResizeObserver、Composer 高度、窗口宽度与焦点变化不吸附到底部；切换线程或页面后按精确 Thread 恢复上次阅读位置。
-- 暂停阅读按精确 Thread 的稳定 Item/Turn 身份与内部 offset 恢复（像素 top 仅作兼容回退）；恢复与引用/目标跳转只允许有界 reveal 和校正，新的滚动、键盘、选区、导航或 Thread 切换取消旧意图。恢复校验真实 viewport 几何；引用/目标跳转另须确认目标未被遮挡，才保存导航位置并完成导航。不改写选区或 canonical 历史。 来源动作先等待本次 Popover/队列编辑对话框的真实退出生命周期；等待时仍可被新输入/新 owner 取消，不使用固定延迟或关闭来源检查。
+- 暂停阅读按精确 Thread 的稳定 Item/Turn 身份与内部 offset 恢复（像素 top 仅作兼容回退）；恢复与引用/目标跳转只允许有界 reveal 和校正，新的滚动、键盘、选区、导航或 Thread 切换取消旧意图。恢复校验真实 viewport 几何；引用/目标跳转另须确认目标未被遮挡，才保存导航位置并完成导航。不改写选区或 canonical 历史。 来源动作先等待本次 Popover/队列编辑对话框的真实退出生命周期；等待时仍可被新输入/新 owner 取消，不使用固定延迟或关闭来源检查。仅在等待本次真实关闭期间，没有可观察新输入的 scroll 位移更新位置基线，不保存阅读锚或恢复跟随；关闭兑现后、reveal 前即恢复普通位移取消。指针、滚轮、键盘、焦点、选区、可见性和 owner 变化始终取消。此窄阶段无法区分仅发 scroll 的辅助功能/外部滚动与布局位移，均按被动位移处理，不声称识别了其原因。
 - Back to live 返回实时底部后才恢复自动跟随。流式 patch 不得丢失 disclosure、焦点或草稿。
 - Composer（含审批条与上下文行）是浮在满高 transcript 滚动区底部的 overlay：transcript 滚动条贯穿右侧从上到下，列表底部保留与 bottom zone 等高的虚拟留白，Back to live 悬浮在 bottom zone 正上方并随其高度上移。所有可滚动表面使用统一的细滚动条。这是布局与视觉校准，不改变 live following 的交互合同。
 - Tool completion 与 Final Message / Turn completion 的到达顺序可能不同；UI 等到可展示终态后再切换完成态投影。

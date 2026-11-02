@@ -635,3 +635,239 @@ test("cross-thread sent quote source action routes exact parent/child message th
     );
   }
 });
+
+for (const newerIntent of [
+  "none",
+  "passive scroll",
+  "passive bottom",
+  "delayed scroll",
+  "positioning scroll",
+  "wheel",
+  "pointerdown",
+  "keydown",
+  "selectionchange",
+  "outside focus",
+] as const) {
+  test(`actual two-Turn no-animation source handoff survives disclosure remount: ${newerIntent}`, async () => {
+    let thread = {
+      ...runtimeThread([], "completed", "thread-a"),
+      turns: [],
+      canonicalItems: [],
+    } as Thread;
+    thread = applyNativeThreadEvent(thread, {
+      type: "turn_started",
+      threadId: "thread-a",
+      turnId: "source-turn",
+    });
+    thread = applyNativeThreadEvent(thread, {
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "source-a",
+        threadId: "thread-a",
+        turnId: "source-turn",
+        clientId: "source-client",
+        createdAt: "2026-11-02T00:00:00Z",
+        content: [{ type: "text", text: "Exact passage. More context." }],
+      },
+    });
+    thread = applyNativeThreadEvent(thread, {
+      type: "turn_completed",
+      threadId: "thread-a",
+      turnId: "source-turn",
+      status: "completed",
+    });
+    thread = append(
+      thread,
+      referenceMessage("Question", [quote], "client-a"),
+      "client-a",
+    );
+    await withView(thread, async ({ sends }) => {
+      const style = document.createElement("style");
+      style.textContent =
+        ".ui-popover { animation-name: none; animation-duration: 0s; }";
+      document.head.append(style);
+      const viewport = document.querySelector<HTMLElement>(".messages")!;
+      const target = document.querySelector<HTMLElement>(
+        '[data-sent-message-id="source-a"]',
+      )!;
+      const sourceTurn = target.closest<HTMLElement>("[data-turn-id]")!;
+      let geometryReads = 0,
+        focusCount = 0,
+        pins = 0;
+      const rect = (top: number, height: number): DOMRect => ({
+        left: 0,
+        right: 600,
+        width: 600,
+        top,
+        bottom: top + height,
+        height,
+        x: 0,
+        y: top,
+        toJSON() {},
+      });
+      viewport.getBoundingClientRect = () => {
+        geometryReads++;
+        return rect(40, 500);
+      };
+      document.querySelector<HTMLElement>(
+        ".bottom-zone",
+      )!.getBoundingClientRect = () => {
+        geometryReads++;
+        return rect(440, 100);
+      };
+      target.getBoundingClientRect = () => {
+        geometryReads++;
+        return rect(800 - viewport.scrollTop, 100);
+      };
+      document.elementFromPoint = () => target;
+      document.hasFocus = () => true;
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: "visible",
+      });
+      Object.defineProperties(viewport, {
+        scrollHeight: { configurable: true, value: 5000 },
+        clientHeight: { configurable: true, value: 400 },
+      });
+      await act(async () => {
+        viewport.scrollTop = 1000;
+        viewport.dispatchEvent(new window.Event("scroll"));
+      });
+      const trigger = document.querySelector<HTMLElement>(
+        '[data-sent-message-id="sent-item"] .reference-token-details',
+      )!;
+      await act(async () => trigger.focus());
+      await click(trigger);
+      const popup = document.querySelector<HTMLElement>(
+        ".reference-details-popover",
+      )!;
+      const source = popup.querySelector<HTMLElement>(
+        ".reference-open-source",
+      )!;
+      assert.equal(getComputedStyle(popup).animationName, "none");
+      let removal:
+        | {
+            pin: boolean;
+            focused: boolean;
+            oldTriggerConnected: boolean;
+            newTriggerSame: boolean;
+            passiveGeometryReads: number;
+          }
+        | undefined;
+      const onFocus = () => {
+        focusCount++;
+      };
+      target.addEventListener("focus", onFocus);
+      const observer = new window.MutationObserver((records) => {
+        for (const record of records) {
+          if (
+            record.target === sourceTurn &&
+            record.attributeName === "data-reading-reveal" &&
+            record.oldValue === null
+          ) {
+            pins++;
+            if (newerIntent === "positioning scroll") viewport.scrollTop -= 55;
+            if (
+              newerIntent === "positioning scroll" ||
+              newerIntent === "delayed scroll"
+            )
+              viewport.dispatchEvent(new window.Event("scroll"));
+          }
+        }
+        if (!popup.isConnected && removal === undefined) {
+          const before = geometryReads;
+          removal = {
+            pin: sourceTurn.dataset.readingReveal === "true",
+            focused: document.activeElement === target,
+            oldTriggerConnected: trigger.isConnected,
+            newTriggerSame:
+              document.querySelector(
+                '[data-sent-message-id="sent-item"] .reference-token-details',
+              ) === trigger,
+            passiveGeometryReads: 0,
+          };
+          if (newerIntent !== "none") {
+            viewport.scrollTop =
+              newerIntent === "passive bottom" ? 4600 : viewport.scrollTop - 55;
+            viewport.dispatchEvent(new window.Event("scroll"));
+            removal.passiveGeometryReads = geometryReads - before;
+          }
+          if (["wheel", "pointerdown", "keydown"].includes(newerIntent))
+            viewport.dispatchEvent(
+              new window.Event(newerIntent, { bubbles: true }),
+            );
+          else if (newerIntent === "selectionchange") {
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            document.getSelection()!.removeAllRanges();
+            document.getSelection()!.addRange(range);
+            document.dispatchEvent(new window.Event("selectionchange"));
+          } else if (newerIntent === "outside focus") {
+            const button = document.createElement("button");
+            document.body.append(button);
+            button.focus();
+          }
+        }
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ["data-reading-reveal"],
+      });
+      try {
+        await act(async () => source.focus());
+        await click(source);
+        // Drain the real Radix FocusScope close timer and bounded positioning frames.
+        for (let i = 0; i < 10; i++)
+          await act(
+            async () => new Promise((resolve) => setTimeout(resolve, 0)),
+          );
+        assert.ok(
+          removal,
+          "Actual popup was removed before its deferred close callback",
+        );
+        assert.equal(removal.pin, false);
+        assert.equal(removal.focused, false);
+        assert.equal(removal.oldTriggerConnected, false);
+        assert.equal(removal.newTriggerSame, false);
+        assert.equal(
+          removal.passiveGeometryReads,
+          0,
+          "Close-wait layout does not capture or save a new reading anchor",
+        );
+        const accepted = [
+          "none",
+          "passive scroll",
+          "passive bottom",
+          "delayed scroll",
+        ].includes(newerIntent);
+        assert.ok(
+          (document.activeElement === target) === accepted,
+          "Only a still-owned source handoff may focus the exact target",
+        );
+        assert.equal(focusCount, accepted ? 1 : 0);
+        assert.equal(
+          pins,
+          accepted || newerIntent === "positioning scroll" ? 1 : 0,
+        );
+        assert.equal(
+          viewport.scrollTop,
+          accepted ? 610 : newerIntent === "positioning scroll" ? 890 : 945,
+        );
+        assert.equal(sourceTurn.dataset.readingReveal, undefined);
+        assert.deepEqual(sends, []);
+        if (newerIntent === "selectionchange")
+          assert.ok(
+            document.getSelection()!.toString().includes("Exact passage."),
+            "New selection is preserved",
+          );
+      } finally {
+        observer.disconnect();
+        target.removeEventListener("focus", onFocus);
+      }
+    });
+  });
+}

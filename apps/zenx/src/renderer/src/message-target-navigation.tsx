@@ -49,11 +49,13 @@ export function revealAndPositionReadingTarget({
   focus = false,
   isCurrent,
   onPosition,
+  onCloseComplete,
   onComplete,
   onFinish,
 }: ReadingTargetPosition & {
   viewport: HTMLElement;
   onPosition?(top: number): void;
+  onCloseComplete?(top: number): void;
   onFinish?(): void;
 }): () => void {
   const turn = viewport.querySelector<HTMLElement>(
@@ -61,6 +63,7 @@ export function revealAndPositionReadingTarget({
   );
   let frame: number | undefined;
   let finished = false;
+  let waitingForClose = afterClose !== undefined;
   let expectedTop = viewport.scrollTop;
   const finish = () => {
     if (finished) return;
@@ -77,7 +80,10 @@ export function revealAndPositionReadingTarget({
   };
   const cancel = () => finish();
   const scrolled = () => {
-    if (Math.abs(viewport.scrollTop - expectedTop) > 0.5) finish();
+    // Source disclosure / popup removal can move the viewport before its exact
+    // close callback. Explicit input still cancels throughout this short phase.
+    if (waitingForClose) expectedTop = viewport.scrollTop;
+    else if (Math.abs(viewport.scrollTop - expectedTop) > 0.5) finish();
   };
   const selected = () => {
     if (document.getSelection()?.isCollapsed === false) finish();
@@ -210,6 +216,11 @@ export function revealAndPositionReadingTarget({
     if (!current()) {
       finish();
       return;
+    }
+    if (waitingForClose) {
+      waitingForClose = false;
+      expectedTop = viewport.scrollTop;
+      onCloseComplete?.(expectedTop);
     }
     turn.dataset.readingReveal = "true";
     frame = requestAnimationFrame(() => {
