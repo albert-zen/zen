@@ -252,14 +252,16 @@ test("receipt and close both wait for fsync, close rejects new work and drains a
 test("close failure is unknown even after successful fsync and poisons later append", async (t) => {
   const { filename, prototype, openHandle } = await fixture(t);
   const handle = await openHandle();
-  const close = prototype.close;
+  const sync = prototype.sync;
   let calls = 0;
-  t.mock.method(prototype, "close", async function (this: FileHandle) {
-    await close.call(this);
-    if (calls === 0) {
+  t.mock.method(prototype, "sync", async function (this: FileHandle) {
+    await sync.call(this);
+    const close = this.close;
+    t.mock.method(this, "close", async () => {
+      await close.call(this);
       calls++;
       throw new Error("synthetic close failure");
-    }
+    });
   });
   await assert.rejects(
     handle.append([item(2)]),
@@ -301,15 +303,15 @@ test("owner release while file close awaits remains unknown and poisons handle",
   const handle = await openHandle();
   const entered = deferred(),
     release = deferred();
-  const close = prototype.close;
-  let first = true;
-  t.mock.method(prototype, "close", async function (this: FileHandle) {
-    if (first) {
-      first = false;
+  const sync = prototype.sync;
+  t.mock.method(prototype, "sync", async function (this: FileHandle) {
+    await sync.call(this);
+    const close = this.close;
+    t.mock.method(this, "close", async () => {
       entered.resolve();
       await release.promise;
-    }
-    await close.call(this);
+      await close.call(this);
+    });
   });
   const rejected = assert.rejects(
     handle.append([item(2)]),
