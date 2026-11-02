@@ -1658,7 +1658,7 @@ function ThreadViewContent({
         ))}
         {thread?.canonicalItems ? (
           <PendingSteerPanel
-            key={thread.id}
+            key={`steer-recall:${thread.id}`}
             threadId={thread.id}
             items={thread.canonicalItems}
             pending={pendingSteer}
