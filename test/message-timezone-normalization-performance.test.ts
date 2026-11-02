@@ -9,12 +9,16 @@ import {
 test("repeated explicit valid zones construct Intl only once per input", (t) => {
   const original = Intl.DateTimeFormat;
   let calls = 0;
-  const counted = function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+  const counted = function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
     calls++;
     return Reflect.construct(original, args) as Intl.DateTimeFormat;
   } as typeof Intl.DateTimeFormat;
   t.mock.method(Intl, "DateTimeFormat", counted);
-  const expected = new original("en-US", { timeZone: "US/Eastern" }).resolvedOptions().timeZone;
+  const expected = new original("en-US", {
+    timeZone: "US/Eastern",
+  }).resolvedOptions().timeZone;
   for (let index = 0; index < 1000; index++)
     assert.equal(normalizeTimeZone("US/Eastern"), expected);
   assert.equal(calls, 1);
@@ -25,7 +29,9 @@ test("repeated explicit valid zones construct Intl only once per input", (t) => 
 test("invalid names retain validation and are not cached", (t) => {
   const original = Intl.DateTimeFormat;
   let calls = 0;
-  t.mock.method(Intl, "DateTimeFormat", function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+  t.mock.method(Intl, "DateTimeFormat", function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
     calls++;
     return Reflect.construct(original, args) as Intl.DateTimeFormat;
   } as typeof Intl.DateTimeFormat);
@@ -42,7 +48,9 @@ test("successful normalization retention is bounded to 256 inputs", (t) => {
   const zones = Intl.supportedValuesOf("timeZone").slice(0, 257);
   assert.equal(zones.length, 257);
   let calls = 0;
-  t.mock.method(Intl, "DateTimeFormat", function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+  t.mock.method(Intl, "DateTimeFormat", function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
     calls++;
     return Reflect.construct(original, args) as Intl.DateTimeFormat;
   } as typeof Intl.DateTimeFormat);
@@ -57,7 +65,9 @@ test("successful normalization retention is bounded to 256 inputs", (t) => {
 test("Intl constructor replacement invalidates prior normalization and preserves fallback", (t) => {
   const original = Intl.DateTimeFormat;
   let calls = 0;
-  const counted = function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+  const counted = function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
     calls++;
     return Reflect.construct(original, args) as Intl.DateTimeFormat;
   } as typeof Intl.DateTimeFormat;
@@ -68,7 +78,8 @@ test("Intl constructor replacement invalidates prior normalization and preserves
   } as unknown as typeof Intl.DateTimeFormat);
   assert.equal(normalizeTimeZone("UTC"), undefined);
   assert.deepEqual(captureReceiptTimezone("UTC"), {
-    timeZone: "UTC", source: "utc-fallback",
+    timeZone: "UTC",
+    source: "utc-fallback",
   });
   broken.mock.restore();
   assert.equal(normalizeTimeZone("UTC"), "UTC");
@@ -78,26 +89,37 @@ test("Intl constructor replacement invalidates prior normalization and preserves
 test("default OS timezone is read afresh and recorded-instant DST formatting is unchanged", (t) => {
   const original = Intl.DateTimeFormat;
   let hostZone = "America/New_York";
-  t.mock.method(Intl, "DateTimeFormat", function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+  t.mock.method(Intl, "DateTimeFormat", function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
     if (args.length === 0)
-      return { resolvedOptions: () => ({ timeZone: hostZone }) } as Intl.DateTimeFormat;
+      return {
+        resolvedOptions: () => ({ timeZone: hostZone }),
+      } as Intl.DateTimeFormat;
     return Reflect.construct(original, args) as Intl.DateTimeFormat;
   } as typeof Intl.DateTimeFormat);
   assert.deepEqual(captureReceiptTimezone(), {
-    timeZone: "America/New_York", source: "host",
+    timeZone: "America/New_York",
+    source: "host",
   });
   assert.deepEqual(captureReceiptTimezone("America/New_York"), {
-    timeZone: "America/New_York", source: "client",
+    timeZone: "America/New_York",
+    source: "client",
   });
   hostZone = "Asia/Tokyo";
   assert.deepEqual(captureReceiptTimezone(), {
-    timeZone: "Asia/Tokyo", source: "host",
+    timeZone: "Asia/Tokyo",
+    source: "host",
   });
   assert.deepEqual(captureReceiptTimezone("Synthetic/Unavailable"), {
-    timeZone: "Asia/Tokyo", source: "host",
+    timeZone: "Asia/Tokyo",
+    source: "host",
   });
   const zone = { timeZone: "America/New_York", source: "client" as const };
   assert.match(formatReceiptTimestamp("2026-01-15T12:00:00Z", zone), /-05:00/);
   assert.match(formatReceiptTimestamp("2026-07-15T12:00:00Z", zone), /-04:00/);
-  assert.equal(formatReceiptTimestamp("2020-01-01T00:00:00+08:00"), "2020-01-01T00:00:00+08:00");
+  assert.equal(
+    formatReceiptTimestamp("2020-01-01T00:00:00+08:00"),
+    "2020-01-01T00:00:00+08:00",
+  );
 });
