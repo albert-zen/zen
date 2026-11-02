@@ -4920,3 +4920,99 @@ test("compaction diagnostics render hosted discovery payload with tool semantics
     assert.match(projection.textContent ?? "", /openai-responses/u);
   });
 });
+
+test("long-history composer renders do not scan canonical history once per turn", async () => {
+  const count = 160;
+  let typeReads = 0;
+  const canonicalItems: CanonicalItem[] = Array.from({ length: count }, (_, i) =>
+    new Proxy(
+      {
+        id: `counted-user-${i}`,
+        threadId: "thread-1",
+        turnId: `counted-turn-${i}`,
+        type: "user_message" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        text: `Synthetic question ${i}`,
+      },
+      {
+        get(target, key, receiver) {
+          if (key === "type") typeReads++;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    ),
+  );
+  const view = {
+    ...thread(
+      canonicalItems.map((item, i) => ({
+        ...turnWithItems("completed", [
+          user(`Synthetic question ${i}`, item.id),
+          agent(`Synthetic answer ${i}`),
+        ]),
+        id: `counted-turn-${i}`,
+      })),
+    ),
+    status: { type: "idle" as const },
+    canonicalItems,
+  };
+  await withDom(async (root) => {
+    for (const text of ["", "Ordinary draft", "Ordinary draft edited"]) {
+      typeReads = 0;
+      await act(async () =>
+        root.render(
+          createElement(ThreadView, {
+            thread: view,
+            composer: editComposer(emptyComposerState(), text),
+            approvals: [],
+            onDraftChange: () => undefined,
+            onInterrupt: noop,
+            onRespondToApproval: noop,
+            onSubmit: noop,
+          }),
+        ),
+      );
+      assert.equal(document.querySelectorAll(".turn").length, count);
+      assert.ok(
+        typeReads < count * 100,
+        `Expected bounded linear canonical reads, got ${typeReads} for ${count} turns`,
+      );
+    }
+    const appended = applyNativeThreadEvent(view, {
+      type: "item_completed",
+      item: {
+        id: "new-outcome-failure",
+        threadId: view.id,
+        turnId: "counted-turn-0",
+        type: "failure",
+        createdAt: "2026-01-01T00:00:01.000Z",
+        code: "runtime_error",
+        message: "New indexed failure",
+      },
+    });
+    assert.notEqual(appended.canonicalItems, canonicalItems);
+    assert.equal(canonicalItems.length, count);
+    const failed = applyNativeThreadEvent(appended, {
+      type: "turn_completed",
+      threadId: view.id,
+      turnId: "counted-turn-0",
+      status: "failed",
+    });
+    await act(async () =>
+      root.render(
+        createElement(ThreadView, {
+          thread: failed,
+          composer: emptyComposerState(),
+          approvals: [],
+          onDraftChange: () => undefined,
+          onInterrupt: noop,
+          onRespondToApproval: noop,
+          onSubmit: noop,
+        }),
+      ),
+    );
+    assert.match(
+      requiredElement(".turn-outcome").textContent ?? "",
+      /New indexed failure/,
+    );
+  });
+});
