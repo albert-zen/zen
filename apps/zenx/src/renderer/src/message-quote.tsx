@@ -320,13 +320,17 @@ export function MessageSelectionActions({
         quote();
       }
     };
+    const scroll = (event: Event) => {
+      if (active.current?.field === event.target) return;
+      dismiss();
+    };
     document.addEventListener("selectionchange", update);
     document.addEventListener("select", update);
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("pointerup", pointerUp);
     document.addEventListener("pointercancel", pointerUp);
     document.addEventListener("keydown", keyDown);
-    document.addEventListener("scroll", dismiss, true);
+    document.addEventListener("scroll", scroll, true);
     window.addEventListener("resize", dismiss);
     window.visualViewport?.addEventListener("resize", dismiss);
     window.visualViewport?.addEventListener("scroll", dismiss);
@@ -337,7 +341,7 @@ export function MessageSelectionActions({
       document.removeEventListener("pointerup", pointerUp);
       document.removeEventListener("pointercancel", pointerUp);
       document.removeEventListener("keydown", keyDown);
-      document.removeEventListener("scroll", dismiss, true);
+      document.removeEventListener("scroll", scroll, true);
       window.removeEventListener("resize", dismiss);
       window.visualViewport?.removeEventListener("resize", dismiss);
       window.visualViewport?.removeEventListener("scroll", dismiss);

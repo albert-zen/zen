@@ -411,11 +411,12 @@ export function ThreadView(props: ThreadViewProps) {
     const calls = new Map<string, string>();
     for (const item of items ?? []) {
       index.set(item.id, [item]);
-      if (item.type === "tool_call") calls.set(item.callId, item.id);
+      if (item.type === "tool_call")
+        calls.set(JSON.stringify([item.turnId, item.callId]), item.id);
     }
     for (const item of items ?? []) {
       if (item.type !== "tool_result") continue;
-      const callId = calls.get(item.callId);
+      const callId = calls.get(JSON.stringify([item.turnId, item.callId]));
       if (callId) index.get(callId)?.push(item);
     }
     return index;

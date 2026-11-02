@@ -238,13 +238,13 @@ export function parseSentReferenceMessage(
 }
 
 export function referenceTitle(text: string, references: readonly Reference[]) {
+  const label = (reference: Reference) =>
+    reference.name || ("excerpt" in reference ? reference.excerpt : "");
   if (references.some((reference) => reference.position !== undefined))
     return inlineReferenceParts(text, references)
-      .map((part) => ("text" in part ? part.text : part.reference.name))
+      .map((part) => ("text" in part ? part.text : label(part.reference)))
       .join("");
-  return [text, ...references.map((reference) => reference.name)]
-    .filter(Boolean)
-    .join("\n");
+  return [text, ...references.map(label)].filter(Boolean).join("\n");
 }
 function isReference(value: unknown): value is Reference {
   if (!value || typeof value !== "object") return false;
