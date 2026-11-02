@@ -40,6 +40,9 @@ async function run(name, cwd, args, expectedNames, expectedFailures, validateFai
       ...args.tests], {cwd,encoding:"utf8",timeout:180000,maxBuffer:32*1024*1024});
   await writeFile(path.join(output,name+".events.jsonl"),result.stdout??"");
   await writeFile(path.join(output,name+".stderr.log"),result.stderr??"");
+  console.log(JSON.stringify({suite:name,exitCode:result.status,signal:result.signal}));
+  console.log(result.stdout??"");
+  if(result.stderr) console.error(result.stderr);
   assert.equal(result.error,undefined,name+" must execute without spawn/timeout error");
   assert.equal(result.signal,null,name+" must exit normally");
   assert.equal(result.status,expectedFailures.length?1:0,name+" expected test exit");

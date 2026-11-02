@@ -15,8 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: baseline
-            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
           - variant: candidate
             source: a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09
     steps:
