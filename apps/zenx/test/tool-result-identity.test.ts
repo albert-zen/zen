@@ -98,10 +98,9 @@ test("native tool result reuses 5000 unrelated Turns and their item arrays", () 
   assert.deepEqual(command.structuredContent, receipt.structuredContent);
   assert.notEqual(command.structuredContent, receipt.structuredContent);
   assert.deepEqual(next.canonicalItems, [receipt]);
-  assert.equal(
-    active.items[1]!.type === "commandExecution" && active.items[1].status,
-    "inProgress",
-  );
+  const unchangedCommand = active.items[1]!;
+  assert.ok(unchangedCommand.type === "commandExecution");
+  assert.equal(unchangedCommand.status, "inProgress");
 
   const backfill = complete(
     next,
