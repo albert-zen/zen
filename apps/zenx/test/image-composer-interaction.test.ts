@@ -10,6 +10,7 @@ import type { AttachmentRef } from "../../../src/attachment.js";
 import type { Thread } from "../src/protocol-client/index.js";
 import {
   addComposerImages,
+  editComposer,
   emptyComposerState,
 } from "../src/renderer/src/composer-state.js";
 
@@ -225,17 +226,30 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
   await withDom(async (_dom, root) => {
     const observers = new Map<Element, Set<() => void>>();
     class FakeResizeObserver {
-      constructor(private callback: () => void) {}
+      private targets = new Set<Element>();
+      constructor(private callback: ResizeObserverCallback) {}
+      private deliver = () =>
+        this.callback(
+          [...this.targets].map((target) => ({
+            target,
+            contentRect: target.getBoundingClientRect(),
+          })) as ResizeObserverEntry[],
+          this as unknown as ResizeObserver,
+        );
       observe(element: Element): void {
+        this.targets.add(element);
         const callbacks = observers.get(element) ?? new Set<() => void>();
-        callbacks.add(this.callback);
+        callbacks.add(this.deliver);
         observers.set(element, callbacks);
       }
+      unobserve(element: Element): void {
+        this.targets.delete(element);
+        const callbacks = observers.get(element);
+        callbacks?.delete(this.deliver);
+        if (callbacks?.size === 0) observers.delete(element);
+      }
       disconnect(): void {
-        for (const [element, callbacks] of observers) {
-          callbacks.delete(this.callback);
-          if (callbacks.size === 0) observers.delete(element);
-        }
+        for (const element of [...this.targets]) this.unobserve(element);
       }
     }
     Object.assign(globalThis, { ResizeObserver: FakeResizeObserver });
@@ -244,7 +258,10 @@ test("the Composer overlay publishes its live bottom-zone height", async () => {
         root.render(
           createElement(ThreadView, {
             approvals: [],
-            composer: emptyComposerState(),
+            composer: editComposer(
+              emptyComposerState(),
+              "A real draft whose measured height changes with width",
+            ),
             thread: emptyThread(),
             onDraftChange: () => undefined,
             onInterrupt: async () => undefined,

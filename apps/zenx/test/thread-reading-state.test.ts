@@ -99,12 +99,27 @@ async function withScrollLayout(run: (resize: () => void) => Promise<void>) {
   const previous = globalThis.ResizeObserver;
   const callbacks = new Set<() => void>();
   globalThis.ResizeObserver = class {
-    constructor(private callback: () => void) {}
-    observe() {
-      callbacks.add(this.callback);
+    private targets = new Set<Element>();
+    constructor(private callback: ResizeObserverCallback) {}
+    private deliver = () =>
+      this.callback(
+        [...this.targets].map((target) => ({
+          target,
+          contentRect: target.getBoundingClientRect(),
+        })) as ResizeObserverEntry[],
+        this as unknown as ResizeObserver,
+      );
+    observe(target: Element) {
+      this.targets.add(target);
+      callbacks.add(this.deliver);
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
+      if (this.targets.size === 0) callbacks.delete(this.deliver);
     }
     disconnect() {
-      callbacks.delete(this.callback);
+      this.targets.clear();
+      callbacks.delete(this.deliver);
     }
   } as unknown as typeof ResizeObserver;
   try {

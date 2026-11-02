@@ -223,16 +223,19 @@ export function contextForFacts(
         item.source.sequence <= boundary),
   );
   const present = new Set(contexts.map((item) => item.id));
-  for (const [index, item] of items.entries())
+  const previous: CanonicalItem[] = [];
+  for (const [index, item] of items.entries()) {
     if (!present.has(item.id)) {
       const added = contextItemsFromLegacy(
         item,
-        items.slice(0, index),
+        previous,
         Math.max(index, boundary + 1),
         contexts,
       );
       contexts.push(...added);
       for (const item of added) present.add(item.id);
     }
+    previous.push(item);
+  }
   return contexts;
 }
