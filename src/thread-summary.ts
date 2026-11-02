@@ -46,6 +46,8 @@ export interface ThreadSummary {
   updatedAt: string;
   /** Latest locally started Turn, or this Thread's creation (including forks). */
   turnSortAt?: string;
+  /** Latest human receipt or accepted final answer; not intermediate activity. */
+  recentActivityAt?: string;
   preview: string;
   status: "idle" | "active";
   forkedFromThreadId?: string;
@@ -182,6 +184,9 @@ export function isNativeThreadSummary(
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
     (value.turnSortAt === undefined || typeof value.turnSortAt === "string") &&
+    (value.recentActivityAt === undefined ||
+      (typeof value.recentActivityAt === "string" &&
+        Number.isFinite(Date.parse(value.recentActivityAt)))) &&
     (value.lastMessage === undefined ||
       (isMessageSummary(value.lastMessage) &&
         (value.lastMessage.kind === "user" ||

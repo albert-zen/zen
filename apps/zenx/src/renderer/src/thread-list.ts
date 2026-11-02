@@ -54,6 +54,22 @@ export function deriveSidebarThreads(
   );
 }
 
+/** Recent is message activity, not the project/inbox Turn-start preference. */
+export function deriveRecentThreads(
+  threads: readonly NativeThreadSummary[],
+): NativeThreadSummary[] {
+  const time = (thread: NativeThreadSummary): number =>
+    thread.status === "systemError"
+      ? 0
+      : Date.parse(thread.recentActivityAt ?? thread.createdAt) || 0;
+  // Old Hosts lack the receipt projection. Creation is a safe non-churning
+  // fallback; updatedAt and lastAgentMessage can include arbitrary work.
+  return [...threads].sort(
+    (left, right) =>
+      time(right) - time(left) || left.threadId.localeCompare(right.threadId),
+  );
+}
+
 export function derivePinnedThreads(
   threads: readonly NativeThreadSummary[],
   pinnedThreadIds: readonly string[],
