@@ -203,9 +203,15 @@ test("frozen imported context wins while prospective references and receipt line
   assert.equal(prospective.kind, "message");
   if (prospective.kind !== "message") throw new Error("message expected");
   assert.match(prospective.content.text, /America\/New_York/);
-  assert.match(
-    prospective.content.text,
-    /source received at imported exact instant/,
+  assert.ok(
+    prospective.content.text.includes(
+      '[Selected message "Imported selection"; zenx_threads_read ref=s1]\nFrozen imported bytes\n[End selected excerpt]',
+    ),
+  );
+  assert.doesNotMatch(prospective.content.text, /source received at/);
+  assert.equal(
+    frozen.content.text,
+    "[Message received at imported exact instant]\nFrozen imported bytes",
   );
   assert.doesNotMatch(prospective.content.text, /Asia\/Tokyo/);
 });
