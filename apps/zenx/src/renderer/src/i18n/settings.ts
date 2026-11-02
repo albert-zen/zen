@@ -451,6 +451,11 @@ export const en = {
   "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
     "Enter and the send button use this choice. Cmd/Ctrl+Enter guides the current reply when a queue option is selected, or queues messages together otherwise. Shift+Enter adds a new line. This setting does not change messages already queued.",
   "settingsView.foregroundComputerControl": "Foreground computer control",
+  "nativeCrossDeviceTools.title": "Native cross-device tools",
+  "nativeCrossDeviceTools.description":
+    "Let agents discover and directly call native tools on paired ZenX devices, subject to the target device's separate tools grant.",
+  "nativeCrossDeviceTools.help":
+    "Off by default. Remote tool catalogs may reduce prompt cache reuse. Apply to change the next model request. Fleet connections, remote conversations and separately authorized Shell access remain available.",
   "settingsView.highImpactAccessToTheDesktopYouAreActively":
     "High-impact access to the desktop you are actively using.",
   "settingsView.allowForegroundTakeover": "Allow foreground takeover",
@@ -1784,6 +1789,11 @@ export const zhCN: Record<keyof typeof en, string> = {
   "settingsView.enterAndTheSendButtonUseThisChoiceCmd":
     "Enter键和发送按钮使用此选项。Cmd/Ctrl + Enter在选择队列选项时引导当前回复，否则将消息排在一起。Shift + Enter可添加新行。此设置不会更改已排队的消息。",
   "settingsView.foregroundComputerControl": "前台电脑控制",
+  "nativeCrossDeviceTools.title": "原生跨端工具调用",
+  "nativeCrossDeviceTools.description":
+    "允许智能体发现并直接调用已配对 ZenX 设备上的原生工具，仍需目标设备单独授予工具权限。",
+  "nativeCrossDeviceTools.help":
+    "默认关闭。远端工具目录变化可能降低上下文缓存命中率。点击“应用”后对下一次模型请求生效。普通设备连接、远程会话和独立授权的 Shell 功能仍可使用。",
   "settingsView.highImpactAccessToTheDesktopYouAreActively":
     "对您正在使用的桌面具有高影响力的访问权限。",
   "settingsView.allowForegroundTakeover": "允许前台接管",

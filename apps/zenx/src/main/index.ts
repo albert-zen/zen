@@ -830,6 +830,8 @@ async function bootstrapZenX(): Promise<void> {
         : {}),
       allowForegroundRequired:
         settingsService.computerForegroundControlEnabled(),
+      allowNativeCrossDeviceTools:
+        settingsService.nativeCrossDeviceToolsEnabled(),
       bundledProvidersOnly: app.isPackaged,
       resourcesDirectory,
       ...(chromeExtensionBridge === undefined
@@ -2283,7 +2285,11 @@ function installSettingsIpc(
         capabilityService?.setForegroundRequiredAllowed(
           update.computerForegroundControlEnabled === true,
         ) ?? false;
-      if (foregroundPolicyChanged) {
+      const nativeToolsPolicyChanged =
+        capabilityService?.setNativeCrossDeviceToolsAllowed(
+          after.nativeCrossDeviceToolsEnabled === true,
+        ) ?? false;
+      if (foregroundPolicyChanged || nativeToolsPolicyChanged) {
         await appServerManager?.refreshCapabilitiesAfterCommit();
       }
       await refreshProjects();

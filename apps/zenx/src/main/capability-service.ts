@@ -1,4 +1,5 @@
 import type { BrowserModelRoute } from "./capabilities/model-browser-metadata.js";
+import { FLEET_TOOL_FACADES } from "./fleet-tool-router.js";
 import type { ForegroundActivityRunner } from "./foreground-activity.js";
 import type { ComputerEnvironmentPort } from "./automation-environment.js";
 import {
@@ -125,6 +126,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   readonly #foregroundActivity?: ForegroundActivityRunner;
   readonly #computerEnvironment?: ComputerEnvironmentPort;
   #foregroundRequiredAllowed: boolean;
+  #nativeCrossDeviceToolsAllowed: boolean;
   readonly #bundledProvidersOnly: boolean;
   readonly #resourcesDirectory?: string;
   readonly #bundledManifestSha256?: string;
@@ -191,6 +193,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     computerBackend?: ZenXComputerBackend;
     computerManifest?: ZenXPluginManifestV2;
     allowForegroundRequired?: boolean;
+    allowNativeCrossDeviceTools?: boolean;
     foregroundActivity?: ForegroundActivityRunner;
     computerEnvironment?: ComputerEnvironmentPort;
     bundledProvidersOnly?: boolean;
@@ -218,6 +221,8 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#computerEnvironment = options.computerEnvironment;
     this.#toolTargetTransport = options.toolTargetTransport;
     this.#foregroundRequiredAllowed = options.allowForegroundRequired ?? false;
+    this.#nativeCrossDeviceToolsAllowed =
+      options.allowNativeCrossDeviceTools === true;
     this.#pluginToolEnvironment = new ToolEnvironment();
     this.#pluginRuntimeSupervisor = new PluginRuntimeSupervisor(
       this.#pluginToolEnvironment,
@@ -229,6 +234,7 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
         ),
       {
         allowForegroundRequired: this.#foregroundRequiredAllowed,
+        allowNativeCrossDeviceTools: this.#nativeCrossDeviceToolsAllowed,
         platform: options.providerCatalogOptions?.platform ?? process.platform,
         pluginDataDirectory: path.join(
           options.userDataDirectory,
@@ -1699,6 +1705,10 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   async executeTarget(
     invocation: ToolInvocation,
   ): Promise<ToolExecutionResult> {
+    if (!this.#nativeCrossDeviceToolsAllowed)
+      throw new Error(
+        "Native cross-device tools are disabled; enable them in ZenX Settings before use",
+      );
     const required =
       invocation.name === "zenx_fleet_tools"
         ? "zenx_fleet_tools"
@@ -1718,6 +1728,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
   }
 
   async execute(invocation: ToolInvocation, generationToken?: string) {
+    if (FLEET_TOOL_FACADES.has(invocation.name)) {
+      if (!this.#nativeCrossDeviceToolsAllowed)
+        throw new Error(
+          "Native cross-device tools are disabled; enable them in ZenX Settings before use",
+        );
+      this.#registry.assertToolExposed(invocation.name);
+    }
     if (generationToken !== undefined) {
       return await this.#pluginRuntimeSupervisor.invokeHostGeneration(
         generationToken,
@@ -1727,6 +1744,13 @@ export class ZenXCapabilityService implements ZenXCapabilityHost {
     this.#registry.assertToolExposed(invocation.name);
     const prepared = this.#pluginToolEnvironment.prepare(invocation);
     return await this.#pluginToolEnvironment.execute(prepared);
+  }
+
+  setNativeCrossDeviceToolsAllowed(allowed: boolean): boolean {
+    if (this.#nativeCrossDeviceToolsAllowed === allowed) return false;
+    this.#nativeCrossDeviceToolsAllowed = allowed;
+    this.#registry.setNativeCrossDeviceToolsAllowed(allowed);
+    return true;
   }
 
   async executePluginCommand(
