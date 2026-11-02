@@ -8354,6 +8354,7 @@ for (const claimWins of [false, true]) {
               composer.value ===
               "First native pending input\n\nSecond native pending input\n\nLatest independent draft",
           );
+          assert.equal(document.querySelector("[data-queue-id]"), null);
           snapshot = await f.server.readThread(target.id);
           assert.equal(pendingSteerMessages(snapshot.items).length, 0);
           assert.equal(
@@ -8444,10 +8445,10 @@ test("complete App late recall acknowledgement never navigates or refreshes the 
       lastUsedWorkspace: "/work/zen",
     },
     {
-      threads: async (archived) => archived ? [] : [
-        summary(false),
-        summary(false, "thread-2", "Thread two"),
-      ],
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
       request: async (method, params) => {
         if (method === "zen/thread/resume") {
           const id = (params as { threadId: string }).threadId;

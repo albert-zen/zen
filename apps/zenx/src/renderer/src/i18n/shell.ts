@@ -13,7 +13,7 @@ export const en = {
   steerRecallConflict:
     "The pending messages changed or were claimed. This recall did not partially remove the batch; check the current messages.",
   steerRecallUnsupported:
-    "This batch contains input that cannot yet be restored losslessly. No messages were recalled.",
+    "This batch contains expanded skill instructions or other input that cannot yet be restored losslessly. No messages were recalled.",
   steerRecallUnknown:
     "Recall outcome is unconfirmed. Do not repeat this recall or resend these messages. Check its receipt; ordinary typing and sending are still available.",
   steerRecallCheck: "Check recall status",
@@ -962,7 +962,7 @@ export const zhCN = {
   steerRecallConflict:
     "等待中的消息已变化或已被模型领取。本次没有部分撤回，请检查当前消息。",
   steerRecallUnsupported:
-    "这一批包含暂时无法无损恢复的内容，没有撤回任何消息。",
+    "这一批包含已展开的技能指令或其他暂不支持无损恢复的内容，没有撤回任何消息。",
   steerRecallUnknown:
     "撤回结果尚未确认，请勿重复提交这次撤回或重发这些消息。可检查撤回回执；输入框仍可正常输入和发送。",
   steerRecallCheck: "检查撤回状态",

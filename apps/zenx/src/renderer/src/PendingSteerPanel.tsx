@@ -158,6 +158,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       current?.phase === "pending" ||
       current?.phase === "unknown" ||
       pending.length === 0 ||
+      !supported ||
       props.onRestore === undefined
     )
       return;

@@ -40,14 +40,6 @@ jobs:
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
-      - name: Temporary recall UI formatter output and focused synthetic checks
-        timeout-minutes: 5
-        run: |
-          npx prettier --write apps/zenx/src/renderer/src/steer-recall-state.ts apps/zenx/src/renderer/src/PendingSteerPanel.tsx apps/zenx/src/protocol-client/types.ts apps/zenx/src/protocol-client/methods.ts apps/zenx/src/preload/queue-edit-ipc.ts apps/zenx/src/main/protocol-request-ipc.ts apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/queued-messages.css apps/zenx/test/steer-recall-state.test.ts apps/zenx/test/queue-edit-ipc.test.ts apps/zenx/test/steer-recall-interaction.test.ts apps/zenx/test/app-project-picker-interaction.test.ts apps/zenx/src/renderer/src/thread-view-state.ts
-          git diff -- apps/zenx/src/renderer/src/steer-recall-state.ts apps/zenx/src/renderer/src/PendingSteerPanel.tsx apps/zenx/src/protocol-client/types.ts apps/zenx/src/protocol-client/methods.ts apps/zenx/src/preload/queue-edit-ipc.ts apps/zenx/src/main/protocol-request-ipc.ts apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/queued-messages.css apps/zenx/test/steer-recall-state.test.ts apps/zenx/test/queue-edit-ipc.test.ts apps/zenx/test/steer-recall-interaction.test.ts apps/zenx/test/app-project-picker-interaction.test.ts apps/zenx/src/renderer/src/thread-view-state.ts
-          git checkout -- apps/zenx/src/renderer/src/steer-recall-state.ts apps/zenx/src/renderer/src/PendingSteerPanel.tsx apps/zenx/src/protocol-client/types.ts apps/zenx/src/protocol-client/methods.ts apps/zenx/src/preload/queue-edit-ipc.ts apps/zenx/src/main/protocol-request-ipc.ts apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/queued-messages.css apps/zenx/test/steer-recall-state.test.ts apps/zenx/test/queue-edit-ipc.test.ts apps/zenx/test/steer-recall-interaction.test.ts apps/zenx/test/app-project-picker-interaction.test.ts apps/zenx/src/renderer/src/thread-view-state.ts
-          npm exec --workspace @zen/zenx -- tsx --test test/steer-recall-state.test.ts test/steer-recall-interaction.test.ts test/queue-edit-ipc.test.ts test/compact-command.test.ts
-          npm exec --workspace @zen/zenx -- tsx --test --test-name-pattern="complete App" test/app-project-picker-interaction.test.ts
       - run: npm run check
 
   zenx:

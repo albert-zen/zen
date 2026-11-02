@@ -336,26 +336,105 @@ test("restart only offers explicit receipt recovery; submitting Composer keeps t
 
 test("canonical recall event removes recalled entries from legacy queue projection without a Thread resume", () => {
   const thread = staged();
-  const request = { threadId: thread.id, recallId: "project-once",
+  const request = {
+    threadId: thread.id,
+    recallId: "project-once",
     targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
-      queuedItemId: item.id, clientId: item.clientId, expectedRevision: item.revision,
-    })) };
+      queuedItemId: item.id,
+      clientId: item.clientId,
+      expectedRevision: item.revision,
+    })),
+  };
   const updated = applyQueueItem(thread, receipt(request));
   assert.deepEqual(updated.queuedMessages, []);
   assert.deepEqual(pendingSteerMessages(updated.canonicalItems!), []);
-  assert.equal(updated.canonicalItems!.filter((item) => item.type === "user_message_queued").length, 2);
+  assert.equal(
+    updated.canonicalItems!.filter(
+      (item) => item.type === "user_message_queued",
+    ).length,
+    2,
+  );
 });
 
 test("receipt event keeps unrelated later next-turn and staged inputs in their own projections", () => {
   let thread = staged();
-  const request = { threadId: thread.id, recallId: "old-batch",
+  const request = {
+    threadId: thread.id,
+    recallId: "old-batch",
     targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
-      queuedItemId: item.id, clientId: item.clientId, expectedRevision: item.revision,
-    })) };
-  thread = applyQueueItem(thread, queueItem(2, [{ type: "text", text: "next turn" }]));
-  thread = applyQueueItem(thread, { ...queueItem(3, [{ type: "text", text: "later steer" }]),
-    deliveryMode: "steer", expectedTurnId: "runtime-turn" });
+      queuedItemId: item.id,
+      clientId: item.clientId,
+      expectedRevision: item.revision,
+    })),
+  };
+  thread = applyQueueItem(
+    thread,
+    queueItem(2, [{ type: "text", text: "next turn" }]),
+  );
+  thread = applyQueueItem(thread, {
+    ...queueItem(3, [{ type: "text", text: "later steer" }]),
+    deliveryMode: "steer",
+    expectedTurnId: "runtime-turn",
+  });
   const updated = applyQueueItem(thread, receipt(request));
-  assert.deepEqual(updated.queuedMessages!.map((item) => item.id), ["queue-2", "queue-3"]);
-  assert.deepEqual(pendingSteerMessages(updated.canonicalItems!).map((item) => item.id), ["queue-3"]);
+  assert.deepEqual(
+    updated.queuedMessages!.map((item) => item.id),
+    ["queue-2", "queue-3"],
+  );
+  assert.deepEqual(
+    pendingSteerMessages(updated.canonicalItems!).map((item) => item.id),
+    ["queue-3"],
+  );
+});
+
+test("unsupported whole batch makes no recall RPC", async () => {
+  await withRuntimeDom(async (h) => {
+    const original = staged();
+    const thread = {
+      ...original,
+      canonicalItems: original.canonicalItems!.map((item): CanonicalItem => {
+        if (item.type !== "user_message_queued" || item.id !== "queue-1")
+          return item;
+        return {
+          ...item,
+          input: [
+            {
+              type: "text",
+              text: "Synthetic expanded skill instructions",
+              skillSource: {
+                kind: "catalog",
+                id: "11111111-1111-1111-1111-111111111111",
+              },
+            },
+          ],
+        };
+      }),
+    };
+    const before = structuredClone(thread.canonicalItems);
+    let writes = 0;
+    let restores = 0;
+    protocol(async () => {
+      writes++;
+      throw new Error("Unsupported batch must not reach Host");
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => {
+        restores++;
+        return true;
+      },
+    });
+    const button = document.querySelector<HTMLButtonElement>(recallButton)!;
+    assert.equal(button.disabled, true);
+    await act(async () => button.click());
+    assert.equal(writes, 0);
+    assert.equal(restores, 0);
+    assert.deepEqual(thread.canonicalItems, before);
+    assert.equal(pendingSteerMessages(thread.canonicalItems!).length, 2);
+    assert.ok(
+      document
+        .querySelector(".pending-steer-panel")!
+        .textContent!.includes(i18n.t("shell:steerRecallUnsupported")),
+    );
+  });
 });
