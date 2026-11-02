@@ -9884,3 +9884,181 @@ test("native streaming deltas update the real App without reloading or cloning i
     globalThis.structuredClone = clone;
   }
 });
+
+for (const burst of [false, true]) {
+  test(`real App native text deltas reuse canonical ordering and historical metadata (${burst ? "batched" : "separate"})`, async (t) => {
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const harness = await mountThreadApp({
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory(true));
+        throw new Error(method);
+      },
+    });
+    let observing = false;
+    let canonicalVisits = 0,
+      historicalItemVisits = 0;
+    const forEach = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "forEach",
+    )!;
+    const iterator = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    )!;
+    // Observe actual immutable arrays created by App recovery. No production
+    // instrumentation or hand-rendered ThreadView substitutes for its cache.
+    Object.defineProperty(Array.prototype, "forEach", {
+      ...forEach,
+      value: function (
+        this: unknown[],
+        callback: (...args: unknown[]) => unknown,
+        thisArg?: unknown,
+      ) {
+        const canonical =
+          observing &&
+          (this[0] as { id?: string } | undefined)?.id === "thread-1-metadata";
+        return Reflect.apply(forEach.value, this, [
+          canonical
+            ? (...args: unknown[]) => {
+                canonicalVisits++;
+                return callback.apply(thisArg, args);
+              }
+            : callback,
+          thisArg,
+        ]);
+      },
+    });
+    Object.defineProperty(Array.prototype, Symbol.iterator, {
+      ...iterator,
+      value: function (this: unknown[]) {
+        const source = Reflect.apply(
+          iterator.value,
+          this,
+          [],
+        ) as IterableIterator<unknown>;
+        if (
+          !observing ||
+          !(this[0] as { id?: string } | undefined)?.id?.startsWith(
+            "derived-user-",
+          )
+        )
+          return source;
+        return {
+          next() {
+            const value = source.next();
+            if (!value.done) historicalItemVisits++;
+            return value;
+          },
+          [Symbol.iterator]() {
+            return this;
+          },
+        };
+      },
+    });
+    let watermark = 0;
+    const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      });
+    try {
+      await selectedComposer();
+      await act(async () =>
+        emit({
+          type: "item_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "incremental-answer",
+          itemType: "agent_message",
+        }),
+      );
+      const originalRows = [...document.querySelectorAll("section.turn")].slice(
+        0,
+        40,
+      );
+      const delta = (index: number) =>
+        emit({
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "incremental-answer",
+          delta: `incremental-${index} `,
+        });
+      observing = true;
+      if (burst)
+        await act(async () => {
+          for (let index = 0; index < 15; index++) delta(index);
+        });
+      else
+        for (let index = 0; index < 15; index++)
+          await act(async () => delta(index));
+      observing = false;
+      assert.match(
+        document.querySelector(".agent-surface")!.textContent!,
+        /incremental-14/u,
+      );
+      assert.deepEqual(
+        [...document.querySelectorAll("section.turn")].slice(0, 40),
+        originalRows,
+      );
+      t.diagnostic(
+        JSON.stringify({
+          burst,
+          deltas: 15,
+          canonicalVisits,
+          historicalItemVisits,
+        }),
+      );
+      assert.deepEqual(
+        { canonicalVisits, historicalItemVisits },
+        { canonicalVisits: 0, historicalItemVisits: 0 },
+      );
+      observing = true;
+      await act(async () =>
+        emit({
+          type: "item_completed",
+          item: {
+            type: "agent_message",
+            id: "incremental-backfill",
+            threadId: "thread-1",
+            turnId: "derived-history-0",
+            createdAt: "2026-11-02T00:02:00.000Z",
+            text: "Late canonical answer remains current",
+          },
+        }),
+      );
+      observing = false;
+      assert.ok(canonicalVisits > 0, "a real canonical append rebuilds order");
+      assert.ok(
+        historicalItemVisits > 0,
+        "new canonical metadata rechecks membership",
+      );
+      const backfilled = document.querySelector(
+        '[data-quote-item-id="incremental-backfill"]',
+      );
+      assert.match(backfilled?.textContent ?? "", /Late canonical answer/u);
+      assert.equal(
+        [...document.querySelectorAll("section.turn")]
+          .at(-1)
+          ?.contains(backfilled),
+        true,
+        "canonical backfill preserves existing transcript ordering semantics",
+      );
+    } finally {
+      observing = false;
+      Object.defineProperty(Array.prototype, "forEach", forEach);
+      Object.defineProperty(Array.prototype, Symbol.iterator, iterator);
+      await unmountApp(harness);
+    }
+  });
+}

@@ -967,14 +967,13 @@ function ThreadViewContent({
     () => projectContextCompactions(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
   );
+  const transcriptOrder = useMemo(
+    () => indexTranscriptOrder(displayedThread?.canonicalItems),
+    [displayedThread?.canonicalItems],
+  );
   const transcriptRows = useMemo(
-    () =>
-      buildTranscriptRows(
-        turns,
-        displayedThread?.canonicalItems,
-        contextCompactions,
-      ),
-    [contextCompactions, displayedThread?.canonicalItems, turns],
+    () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
+    [contextCompactions, transcriptOrder, turns],
   );
   const pendingApprovals = useMemo(
     () =>
@@ -2498,11 +2497,7 @@ type TranscriptRow =
       order: number;
     };
 
-function buildTranscriptRows(
-  turns: readonly Turn[],
-  canonicalItems: Thread["canonicalItems"],
-  compactions: readonly ContextCompactionProjection[],
-): TranscriptRow[] {
+function indexTranscriptOrder(canonicalItems: Thread["canonicalItems"]) {
   const fallbackStart = (canonicalItems?.length ?? 0) + 1;
   const turnEnds = new Map<string, number>();
   canonicalItems?.forEach((item, index) => {
@@ -2510,6 +2505,14 @@ function buildTranscriptRows(
       turnEnds.set(item.turnId, index);
     }
   });
+  return { fallbackStart, turnEnds };
+}
+
+function buildTranscriptRows(
+  turns: readonly Turn[],
+  { fallbackStart, turnEnds }: ReturnType<typeof indexTranscriptOrder>,
+  compactions: readonly ContextCompactionProjection[],
+): TranscriptRow[] {
   const rows: TranscriptRow[] = turns.map((turn, index) => ({
     type: "turn",
     turn,
