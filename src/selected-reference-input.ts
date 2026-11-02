@@ -75,29 +75,6 @@ function selectedSources(
   };
 }
 
-function sourceTime(
-  reference: Reference,
-  previous: readonly ContextItem[],
-): string {
-  if (reference.kind !== "message") return "source time unavailable";
-  const source = previous.find(
-    (item) => item.threadId === reference.threadId && item.id === reference.id,
-  );
-  // Only reuse the encoder's already-persisted receipt fact. In particular,
-  // createdAt may be an import/checkpoint time and is never a fallback here.
-  const first =
-    source?.kind === "message" ? source.content.parts[0] : undefined;
-  if (
-    source?.source.kind === "user_message" &&
-    source.source.metadata?.bodyStart === 1 &&
-    first?.type === "text" &&
-    first.text.startsWith("[Message received at ") &&
-    first.text.endsWith("]")
-  )
-    return `source received at ${first.text.slice(21, -1)}`;
-  return "source time unavailable";
-}
-
 /**
  * Prepare semantic parts before persistence/dispatch. Recognition is not
  * authentication: excerpts retain user role and refs never grant permission.
@@ -127,6 +104,18 @@ export function compileSelectedReferenceInput(
       // There is no native selected-file reader. Keep exact source coordinates
       // rather than minting an unusable s ref or guessing the current workspace.
       text += `[Selected file ${label}; workspace ${JSON.stringify(reference.cwd)}; relative path ${JSON.stringify(reference.path)}]`;
+    } else if (reference.kind === "text") {
+      const refs = [
+        ...new Set(
+          reference.sources.map((source) =>
+            sources.bind("message", { ...source, cwd: reference.cwd }),
+          ),
+        ),
+      ];
+      const readers = refs
+        .map((ref) => `zenx_threads_read ref=${ref}`)
+        .join("; ");
+      text += `[Selected text${readers ? `; ${readers}` : ""}]\n${reference.excerpt}\n[End selected excerpt]`;
     } else {
       const value: JsonValue =
         reference.kind === "message"
@@ -138,10 +127,10 @@ export function compileSelectedReferenceInput(
           : { id: reference.id, cwd: reference.cwd };
       const ref = sources.bind(reference.kind, value);
       if (reference.kind === "message") {
-        const messageLabel = reference.name === "ZenX" ? "" : ` ${label}`;
-        text += `[Selected message${messageLabel}; ${ref}; ${sourceTime(reference, previous)}; read-only]\n${reference.excerpt}\n[End selected excerpt]`;
-      } else
-        text += `[Selected thread ${label}; ${ref}; source time unavailable; read-only]`;
+        const messageLabel =
+          !reference.name || reference.name === "ZenX" ? "" : ` ${label}`;
+        text += `[Selected message${messageLabel}; zenx_threads_read ref=${ref}]\n${reference.excerpt}\n[End selected excerpt]`;
+      } else text += `[Selected thread ${label}; zenx_threads_read ref=${ref}]`;
     }
     cursor = reference.position === undefined ? position : position + 1;
   }
@@ -164,7 +153,7 @@ export function compileOriginalHistoryReference(
     throughItemId: item.coveredThroughItemId,
   });
   return {
-    text: `[Original conversation history; ${ref}; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]`,
+    text: `[Original conversation history; zenx_threads_read ref=${ref}]`,
     referenceBindings: sources.bindings,
   };
 }

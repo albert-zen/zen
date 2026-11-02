@@ -1,3 +1,4 @@
+import { validTextQuote } from "../../../../../src/selected-reference-protocol.js";
 import { referenceText, type Reference } from "./composer-selector.js";
 import {
   serializeSentReferenceV3,
@@ -254,7 +255,8 @@ function isReference(value: unknown): value is Reference {
         (reference.position as number) >= 0)) &&
     typeof reference.name === "string" &&
     typeof reference.cwd === "string" &&
-    ((reference.kind === "file" && typeof reference.path === "string") ||
+    ((reference.kind === "text" && validTextQuote(reference)) ||
+      (reference.kind === "file" && typeof reference.path === "string") ||
       (reference.kind === "thread" && typeof reference.id === "string") ||
       (reference.kind === "message" &&
         typeof reference.threadId === "string" &&

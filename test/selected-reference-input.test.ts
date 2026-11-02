@@ -107,7 +107,7 @@ test("actual generated envelope becomes compact persisted user content while raw
   );
   assert.match(
     semantic.content.text,
-    /Plan \/ selected paragraph.*s1.*source time unavailable/,
+    /Plan \/ selected paragraph.*zenx_threads_read ref=s1/,
   );
   for (const value of [
     source.cwd,
@@ -205,7 +205,11 @@ test("same-name different sources stay distinct; exact source repeats reuse s re
     projected.referenceBindings.map((binding) => binding.ref),
     ["s1", "s2"],
   );
-  assert.equal(textFromUserInput(projected.parts).split("; s1;").length - 1, 2);
+  assert.equal(
+    textFromUserInput(projected.parts).split("zenx_threads_read ref=s1")
+      .length - 1,
+    2,
+  );
   const scope = new ModelReferenceRegistry().scope(
     base.threadId,
     projected.referenceBindings,
@@ -249,38 +253,12 @@ test("restarts preserve exact source bindings; inherited refs reserve names but 
   );
 });
 
-test("source time comes from original persisted receipt, never checkpoint createdAt", () => {
-  const original = contextItemsFromLegacy({
-    ...base,
-    id: source.id,
-    threadId: source.threadId,
-    type: "user_message",
-    text: "original",
-    createdAt: "2026-10-20T01:02:03Z",
-  })[0]!;
-  assert.match(
-    textFromUserInput(
-      compileSelectedReferenceInput(input(), [original])!.parts,
-    ),
-    /source received at 2026-10-20T01:02:03Z/,
-  );
-  if (original.kind !== "message") throw Error("message expected");
-  const unknown = {
-    ...original,
-    createdAt: "2026-10-27T03:00:00Z",
-    content: {
-      text: "[Message receipt time unavailable]\noriginal",
-      parts: [
-        { type: "text" as const, text: "[Message receipt time unavailable]" },
-        { type: "text" as const, text: "original" },
-      ],
-    },
-  };
+test("selected quote header names its reader and ref without time or permission prose", () => {
   const text = textFromUserInput(
-    compileSelectedReferenceInput(input(), [unknown])!.parts,
+    compileSelectedReferenceInput(input(), [])!.parts,
   );
-  assert.match(text, /source time unavailable/);
-  assert.ok(!text.includes(unknown.createdAt));
+  assert.match(text, /Selected message.*zenx_threads_read ref=s1/);
+  assert.doesNotMatch(text, /source time|source received|read-only/);
 });
 
 test("compaction keeps short exact history mapping and prior s refs available across persisted selection/restart", () => {
@@ -551,7 +529,7 @@ for (const version of ["plain", "v1", "v2"] as const) {
     assert.equal(semantic.kind, "message");
     if (semantic.kind !== "message") throw Error("message expected");
     const label = version === "v2" ? ` ${JSON.stringify(source.name)}` : "";
-    const quote = `[Selected message${label}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`;
+    const quote = `[Selected message${label}; zenx_threads_read ref=s1]\n${source.excerpt}\n[End selected excerpt]`;
     assert.equal(
       textFromUserInput(semantic.content.parts.slice(1)),
       version === "plain" ? quote + "Follow up" : "Follow up\n\n" + quote,
@@ -614,7 +592,7 @@ test("main-to-side structured clipboard rebinds source in destination model cont
     if (semantic.kind !== "message") throw Error("message expected");
     assert.equal(
       textFromUserInput(semantic.content.parts.slice(1)),
-      `[Selected message ${JSON.stringify(source.name)}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`,
+      `[Selected message ${JSON.stringify(source.name)}; zenx_threads_read ref=s1]\n${source.excerpt}\n[End selected excerpt]`,
     );
     const bindings = compileSelectedReferenceInput(
       message,
@@ -633,5 +611,56 @@ test("main-to-side structured clipboard rebinds source in destination model cont
     assert.deepEqual(compileItemList([semantic]).messages, [
       { role: "user", content: semantic.content.parts },
     ]);
+  }
+});
+
+test("page excerpts preserve exact text and every reader source through clipboard and semantic compilation", () => {
+  for (const sources of [
+    [],
+    [
+      { threadId: "source-a", id: "user-a" },
+      { threadId: "source-a", id: "reason-a" },
+      { threadId: "source-a", id: "result-a" },
+    ],
+  ]) {
+    const reference: Reference = {
+      kind: "text",
+      name: "",
+      cwd: "/tmp/page",
+      excerpt: "  user\nreasoning\ntool output <literal>  ",
+      sources,
+      position: 0,
+    };
+    const item = input([reference], "\uFFFC explain");
+    const projected = compileSelectedReferenceInput(item, [])!;
+    const text = textFromUserInput(projected.parts);
+    assert.ok(text.includes(reference.excerpt));
+    assert.doesNotMatch(text, /source time|read-only|ZenX/);
+    assert.equal(projected.referenceBindings.length, sources.length);
+    const scope = new ModelReferenceRegistry().scope(
+      base.threadId,
+      projected.referenceBindings,
+    );
+    for (const [index, original] of sources.entries()) {
+      assert.ok(text.includes(`zenx_threads_read ref=s${index + 1}`));
+      assert.deepEqual(
+        decodeThreadArguments(
+          "zenx_threads_read",
+          { ref: `s${index + 1}` },
+          scope,
+          "epoch",
+        ),
+        {
+          threadId: original.threadId,
+          itemId: original.id,
+          granularity: "item",
+        },
+      );
+    }
+    if (!sources.length) assert.doesNotMatch(text, /zenx_threads_read|ref=s/);
+    assert.deepEqual(
+      compileSelectedReferenceInput(item, [])!.referenceBindings,
+      projected.referenceBindings,
+    );
   }
 });

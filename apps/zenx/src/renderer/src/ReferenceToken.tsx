@@ -34,20 +34,27 @@ export function ReferenceToken({
     setOpen(false);
     setSourceUnavailable(false);
   }, [identity]);
-  const label =
-    reference.kind === "message" ? reference.excerpt : reference.name;
-  const icon =
+  const isExcerpt = reference.kind === "message" || reference.kind === "text";
+  const sources =
     reference.kind === "message"
-      ? "quote"
-      : reference.kind === "thread"
-        ? "thread"
-        : "file";
+      ? [{ threadId: reference.threadId, id: reference.id }]
+      : reference.kind === "text"
+        ? reference.sources
+        : [];
+  const label = isExcerpt ? reference.excerpt : reference.name;
+  const icon = isExcerpt
+    ? "quote"
+    : reference.kind === "thread"
+      ? "thread"
+      : "file";
   const location =
     reference.kind === "file"
       ? `${reference.cwd.replace(/[\\/]+$/u, "")}/${reference.path}`
       : reference.kind === "thread"
         ? reference.id
-        : `${reference.threadId} / ${reference.id}`;
+        : sources
+            .map((source) => `${source.threadId} / ${source.id}`)
+            .join("\n");
   function source() {
     try {
       if (onSource?.()) {
@@ -89,7 +96,9 @@ export function ReferenceToken({
             <button
               type="button"
               className="reference-token-remove"
-              aria-label={t("removeReference", { name: reference.name })}
+              aria-label={t("removeReference", {
+                name: reference.name || label,
+              })}
               disabled={removeDisabled}
               onClick={onRemove}
             >
@@ -113,20 +122,24 @@ export function ReferenceToken({
           </button>
         </header>
         <p className="reference-content-policy">
-          {t(
-            reference.kind === "message"
-              ? "referenceExcerptIncluded"
-              : "referencePointerOnly",
-          )}
+          {t(isExcerpt ? "referenceExcerptIncluded" : "referencePointerOnly")}
         </p>
-        {reference.kind === "message" && (
+        {isExcerpt && (
           <pre className="reference-exact-excerpt">{reference.excerpt}</pre>
         )}
         <dl>
-          <dt>{t("referenceName")}</dt>
-          <dd>{reference.name}</dd>
-          <dt>{t("referenceSource")}</dt>
-          <dd>{location}</dd>
+          {reference.name && (
+            <>
+              <dt>{t("referenceName")}</dt>
+              <dd>{reference.name}</dd>
+            </>
+          )}
+          {location && (
+            <>
+              <dt>{t("referenceSource")}</dt>
+              <dd>{location}</dd>
+            </>
+          )}
           {reference.cwd && (
             <>
               <dt>{t("referenceWorkspace")}</dt>
@@ -134,11 +147,20 @@ export function ReferenceToken({
             </>
           )}
         </dl>
-        {reference.kind === "thread" ||
-        (reference.kind === "message" &&
-          navigateSource !== null &&
-          ownerThreadId !== null &&
-          ownerThreadId !== reference.threadId) ? (
+        {reference.kind === "text" ? (
+          sources.map((entry) => (
+            <MessageSourceLink
+              key={`${entry.threadId}/${entry.id}`}
+              className="reference-open-source"
+              target={{ kind: "thread", id: entry.threadId, itemId: entry.id }}
+              label={t("openReferenceSource")}
+            />
+          ))
+        ) : reference.kind === "thread" ||
+          (reference.kind === "message" &&
+            navigateSource !== null &&
+            ownerThreadId !== null &&
+            ownerThreadId !== reference.threadId) ? (
           <MessageSourceLink
             className="reference-open-source"
             target={

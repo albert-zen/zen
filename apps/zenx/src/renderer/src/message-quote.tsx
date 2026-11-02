@@ -12,20 +12,19 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import type { MessageQuoteReference } from "./composer-selector.js";
+import type {
+  MessageQuoteReference,
+  QuoteReference,
+} from "./composer-selector.js";
 import { Icon } from "./icons.js";
 import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
 
 export interface MessageSelection {
-  threadId: string;
-  id: string;
+  threadId?: string;
+  id?: string;
   excerpt: string;
+  sources?: Array<{ threadId: string; id: string }>;
 }
-
-const bodySelector = "[data-message-quote-body]";
-const ownerSelector = "[data-quote-thread-id][data-quote-item-id]";
-const excludedSelector =
-  'button, input, textarea, select, [role="button"], [contenteditable]:not([contenteditable="false"]), .markdown-code-header, [data-message-quote-ignore]';
 
 function elementFor(node: Node | null): Element | null {
   return node?.nodeType === 1
@@ -33,7 +32,7 @@ function elementFor(node: Node | null): Element | null {
     : (node?.parentElement ?? null);
 }
 
-/** Only canonical, single-message body selections become references. */
+/** Preserve native selected text; provenance is optional and never gates quoting. */
 export function readMessageSelection(
   viewport: HTMLElement,
   selection: Selection | null,
@@ -43,31 +42,68 @@ export function readMessageSelection(
   const range = selection.getRangeAt(0);
   const start = elementFor(range.startContainer);
   const end = elementFor(range.endContainer);
-  const body = start?.closest(bodySelector);
-  if (
-    !body ||
-    !viewport.contains(body) ||
-    end?.closest(bodySelector) !== body ||
-    start?.closest(excludedSelector) ||
-    end?.closest(excludedSelector)
-  )
+  if (!start || !end || !viewport.contains(start) || !viewport.contains(end))
     return null;
-  const owner = body.closest<HTMLElement>(ownerSelector);
-  if (!owner || !viewport.contains(owner)) return null;
-  // Endpoints alone do not exclude a code header/control inside a larger range.
-  for (const excluded of body.querySelectorAll(excludedSelector)) {
-    if (range.intersectsNode(excluded)) return null;
-  }
-  const threadId = owner.dataset.quoteThreadId;
-  const id = owner.dataset.quoteItemId;
   const excerpt = selection.toString();
-  if (!threadId || !id || !excerpt.trim()) return null;
-  return { threadId, id, excerpt };
+  if (!excerpt.trim()) return null;
+  const selector = "[data-quote-thread-id][data-quote-item-id]";
+  const startOwner = start.closest<HTMLElement>(selector);
+  const endOwner = end.closest<HTMLElement>(selector);
+  const chrome =
+    "button, input, textarea, select, .markdown-code-header, [data-message-quote-ignore]";
+  const owners =
+    start.closest(chrome) && end.closest(chrome)
+      ? []
+      : startOwner && startOwner === endOwner
+        ? [startOwner]
+        : [...viewport.querySelectorAll<HTMLElement>(selector)].filter(
+            (owner) => range.intersectsNode(owner),
+          );
+  const sources = owners
+    .flatMap((owner) => {
+      const threadId = owner.dataset.quoteThreadId!;
+      const ids: string[] = owner.dataset.quoteItemIds
+        ? JSON.parse(owner.dataset.quoteItemIds)
+        : [owner.dataset.quoteItemId!];
+      return ids.map((id) => ({ threadId, id }));
+    })
+    .filter(
+      (source, index, all) =>
+        all.findIndex(
+          (other) =>
+            other.threadId === source.threadId && other.id === source.id,
+        ) === index,
+    );
+  return sources.length === 1 && startOwner === endOwner
+    ? { ...sources[0]!, excerpt }
+    : { excerpt, sources };
+}
+
+export function selectionReference(
+  selection: MessageSelection,
+  cwd: string,
+): QuoteReference {
+  return selection.threadId && selection.id
+    ? {
+        kind: "message",
+        name: "",
+        cwd,
+        threadId: selection.threadId,
+        id: selection.id,
+        excerpt: selection.excerpt,
+      }
+    : {
+        kind: "text",
+        name: "",
+        cwd,
+        sources: selection.sources ?? [],
+        excerpt: selection.excerpt,
+      };
 }
 
 export function addMessageQuote(
   draft: string,
-  quote: MessageQuoteReference,
+  quote: QuoteReference,
   start?: number,
   end = start,
 ): string {
@@ -86,17 +122,29 @@ export function addMessageQuote(
   if (
     references.some(
       (reference) =>
-        reference.kind === "message" &&
-        reference.threadId === quote.threadId &&
-        reference.id === quote.id &&
-        reference.excerpt === quote.excerpt,
+        (reference.kind === "message" || reference.kind === "text") &&
+        reference.kind === quote.kind &&
+        reference.excerpt === quote.excerpt &&
+        JSON.stringify(
+          reference.kind === "message"
+            ? [reference.threadId, reference.id]
+            : reference.sources,
+        ) ===
+          JSON.stringify(
+            quote.kind === "message"
+              ? [quote.threadId, quote.id]
+              : quote.sources,
+          ),
     )
   )
     return draft;
   return withSkillDraft(text, skills, [...references, quote]);
 }
 
-type SelectionSnapshot = MessageSelection & { range: Range };
+type SelectionSnapshot = MessageSelection & {
+  range: Range;
+  field?: HTMLInputElement | HTMLTextAreaElement;
+};
 type ToolbarPosition = { left: number; top: number };
 
 function sameSelection(
@@ -109,6 +157,7 @@ function sameSelection(
     left.threadId === right.threadId &&
     left.id === right.id &&
     left.excerpt === right.excerpt &&
+    JSON.stringify(left.sources) === JSON.stringify(right.sources) &&
     left.range.startContainer === right.range.startContainer &&
     left.range.startOffset === right.range.startOffset &&
     left.range.endContainer === right.range.endContainer &&
@@ -123,10 +172,12 @@ export function MessageSelectionActions({
   disabled,
   onQuote,
   onAddToSideChat,
+  pageSelection = false,
 }: {
   viewport: RefObject<HTMLDivElement | null>;
   threadId?: string;
   disabled: boolean;
+  pageSelection?: boolean;
   onQuote(selection: MessageSelection): void;
   onAddToSideChat?(selection: MessageSelection): void;
 }) {
@@ -145,10 +196,56 @@ export function MessageSelectionActions({
   function read(): SelectionSnapshot | null {
     const element = viewport.current;
     if (!element || disabled) return null;
-    const selection = element.ownerDocument.getSelection();
-    const message = readMessageSelection(element, selection);
-    if (!message || (threadId && message.threadId !== threadId)) return null;
-    return { ...message, range: selection!.getRangeAt(0).cloneRange() };
+    const document = element.ownerDocument;
+    const selection = document.getSelection();
+    const surface = element.closest(".thread-view") ?? element;
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      const start = elementFor(selection.anchorNode);
+      const selectedSurface = start?.closest(".thread-view");
+      if (
+        selectedSurface
+          ? selectedSurface !== surface
+          : !pageSelection && !surface.contains(start)
+      )
+        return null;
+      const message = readMessageSelection(
+        pageSelection || selectedSurface ? document.body : element,
+        selection,
+      );
+      return message
+        ? { ...message, range: selection.getRangeAt(0).cloneRange() }
+        : null;
+    }
+    const field = toolbar.current?.contains(document.activeElement)
+      ? active.current?.field
+      : document.activeElement;
+    if (
+      field instanceof document.defaultView!.HTMLTextAreaElement ||
+      field instanceof document.defaultView!.HTMLInputElement
+    ) {
+      if (
+        field.type === "password" ||
+        field.selectionStart === null ||
+        field.selectionEnd === null
+      )
+        return null;
+      const fieldSurface = field.closest(".thread-view");
+      if (
+        fieldSurface
+          ? fieldSurface !== surface
+          : !pageSelection && !surface.contains(field)
+      )
+        return null;
+      const excerpt = field.value.slice(
+        field.selectionStart,
+        field.selectionEnd,
+      );
+      if (!excerpt.trim()) return null;
+      const range = document.createRange();
+      range.selectNode(field);
+      return { excerpt, sources: [], range, field };
+    }
+    return null;
   }
 
   function dismiss() {
@@ -171,6 +268,7 @@ export function MessageSelectionActions({
       threadId: current.threadId,
       id: current.id,
       excerpt: current.excerpt,
+      ...(current.sources === undefined ? {} : { sources: current.sources }),
     });
   }
 
@@ -223,6 +321,7 @@ export function MessageSelectionActions({
       }
     };
     document.addEventListener("selectionchange", update);
+    document.addEventListener("select", update);
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("pointerup", pointerUp);
     document.addEventListener("pointercancel", pointerUp);
@@ -233,6 +332,7 @@ export function MessageSelectionActions({
     window.visualViewport?.addEventListener("scroll", dismiss);
     return () => {
       document.removeEventListener("selectionchange", update);
+      document.removeEventListener("select", update);
       document.removeEventListener("pointerdown", pointerDown);
       document.removeEventListener("pointerup", pointerUp);
       document.removeEventListener("pointercancel", pointerUp);
@@ -244,7 +344,7 @@ export function MessageSelectionActions({
       active.current = null;
     };
     // onQuote is read below from the latest render, not a reason to retire a selection.
-  }, [viewport, threadId, disabled]);
+  }, [viewport, threadId, disabled, pageSelection]);
 
   // Event listeners use the latest callback without making parent rerenders dismiss selection.
   useLayoutEffect(() => {
@@ -261,7 +361,14 @@ export function MessageSelectionActions({
     const rects = Array.from(range.getClientRects());
     const first = rects[0] ?? range.getBoundingClientRect();
     const last = rects[rects.length - 1] ?? first;
-    const bounds = element.getBoundingClientRect();
+    const bounds = element.contains(snapshot.range.startContainer)
+      ? element.getBoundingClientRect()
+      : {
+          left: 0,
+          top: 0,
+          right: window.innerWidth,
+          bottom: window.innerHeight,
+        };
     const visual = window.visualViewport;
     const windowLeft = visual?.offsetLeft ?? 0;
     const windowTop = visual?.offsetTop ?? 0;
@@ -298,13 +405,7 @@ export function MessageSelectionActions({
     }
   }
 
-  if (
-    !snapshot ||
-    disabled ||
-    (threadId && snapshot.threadId !== threadId) ||
-    !viewport.current
-  )
-    return null;
+  if (!snapshot || disabled || !viewport.current) return null;
   return createPortal(
     <div
       ref={toolbar}

@@ -17,6 +17,7 @@ import {
   MessageSelectionActions,
   type MessageSelection,
   readMessageSelection,
+  selectionReference,
 } from "../src/renderer/src/message-quote.js";
 
 function selectionFixture() {
@@ -70,7 +71,7 @@ test("message selection preserves exact native text across inline formatting", (
   }
 });
 
-test("selection excludes cross-message ranges, controls and code headers but includes code", () => {
+test("selection includes cross-message ranges, controls, code headers and code", () => {
   const view = selectionFixture();
   try {
     const first = view.document.querySelector("p")!.firstChild!;
@@ -78,15 +79,24 @@ test("selection excludes cross-message ranges, controls and code headers but inc
       '[data-quote-item-id="item-b"] [data-message-quote-body]',
     )!.firstChild!;
     view.select(first, 1, other, 3);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     const header = view.document.querySelector(
       ".markdown-code-header",
     )!.firstChild!;
     view.select(header, 0, header, 2);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     const code = view.document.querySelector("code")!.firstChild!;
     view.select(first, 0, code, 5);
-    assert.equal(readMessageSelection(view.viewport, view.selection), null);
+    assert.equal(
+      readMessageSelection(view.viewport, view.selection)?.excerpt,
+      view.selection.toString(),
+    );
     view.select(code, 0, code, code.textContent!.length);
     assert.equal(
       readMessageSelection(view.viewport, view.selection)?.excerpt,
@@ -656,5 +666,37 @@ test("Add to side chat hands off exact structured selection without quoting loca
     );
   } finally {
     await view.cleanup();
+  }
+});
+
+test("page selections outside message bodies remain quotes and cross-message provenance is retained", () => {
+  const view = selectionFixture();
+  try {
+    const action = view.viewport.lastElementChild!.firstChild!;
+    view.select(action, 0, action, action.textContent!.length);
+    const plain = readMessageSelection(view.viewport, view.selection)!;
+    assert.deepEqual(selectionReference(plain, "/workspace"), {
+      kind: "text",
+      name: "",
+      cwd: "/workspace",
+      excerpt: view.selection.toString(),
+      sources: [],
+    });
+    const first = view.document.querySelector("p")!.firstChild!;
+    const other = view.document.querySelector(
+      '[data-quote-item-id="item-b"] [data-message-quote-body]',
+    )!.firstChild!;
+    view.select(first, 1, other, 3);
+    const selected = readMessageSelection(view.viewport, view.selection)!;
+    assert.deepEqual(selected.sources, [
+      { threadId: "thread /中", id: "item-a" },
+      { threadId: "thread /中", id: "item-b" },
+    ]);
+    const quote = selectionReference(selected, "/workspace");
+    const draft = addMessageQuote("note", quote);
+    assert.deepEqual(parseSkillDraft(draft).references, [quote]);
+    assert.equal(addMessageQuote(draft, quote), draft);
+  } finally {
+    view.dom.window.close();
   }
 });

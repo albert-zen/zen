@@ -376,7 +376,7 @@ try {
       assert.ok(bindings.length > 0);
       for (const binding of bindings) {
         assert.match(binding.ref, /^s[1-9][0-9]*$/u);
-        assert.ok(actualText.includes(`; ${binding.ref};`));
+        assert.ok(actualText.includes(`zenx_threads_read ref=${binding.ref}`));
         assert.equal(binding.ownerThreadId, target.id);
       }
       const compiledUser = capturedModelRequest.messages.findLast(

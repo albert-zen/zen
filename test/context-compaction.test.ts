@@ -681,7 +681,7 @@ test("agentic tool shares canonical retention planning and defaults to bounded o
   );
   assert.equal(
     semanticCompaction.content.text,
-    `${agentCompactionPrefix}handwritten summary\n[Original conversation history; s1; exact read-only prefix, subject to current permissions. Omitted content and source times are unavailable until read.]`,
+    `${agentCompactionPrefix}handwritten summary\n[Original conversation history; zenx_threads_read ref=s1]`,
   );
   assert(requests[2] !== undefined);
   assert.deepEqual(requests[2].messages[0], {
