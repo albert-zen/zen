@@ -1910,25 +1910,6 @@ function AppContent() {
     () => [...activeSummaries, ...archivedSummaries],
     [activeSummaries, archivedSummaries],
   );
-  const questionAttention = useMemo(
-    () =>
-      selectedThreadId ? (
-        <UserQuestionCards
-          threadId={selectedThreadId}
-          store={userQuestionStore}
-          disabled={
-            serverStatus.type !== "ready" ||
-            archivingThreadIds.has(selectedThreadId)
-          }
-        />
-      ) : undefined,
-    [
-      selectedThreadId,
-      userQuestionStore,
-      serverStatus.type,
-      archivingThreadIds,
-    ],
-  );
   const pinnedSummaries = derivePinnedThreads(activeSummaries, pinnedThreadIds);
   const selectedBaseSummary =
     [...activeSummaries, ...archivedSummaries].find(
@@ -1944,6 +1925,27 @@ function AppContent() {
           name: titleSnapshot[selectedBaseSummary.threadId]!.title,
         }
       : selectedBaseSummary;
+  const questionAttention = useMemo(
+    () =>
+      selectedThreadId ? (
+        <UserQuestionCards
+          threadId={selectedThreadId}
+          store={userQuestionStore}
+          disabled={
+            serverStatus.type !== "ready" ||
+            selectedSummary?.archived === true ||
+            archivingThreadIds.has(selectedThreadId)
+          }
+        />
+      ) : undefined,
+    [
+      selectedThreadId,
+      userQuestionStore,
+      serverStatus.type,
+      selectedSummary?.archived,
+      archivingThreadIds,
+    ],
+  );
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =

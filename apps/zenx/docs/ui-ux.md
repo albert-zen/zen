@@ -1071,7 +1071,11 @@ restarts pagination; additional pages remain explicitly reachable. Pending means
 admitted, not model-visible; claimed means model input, not successful inference.
 Unknown writes retain their exact identity/payload and expose read-only Check
 response. Not-found is not proof that an in-flight write failed. No reconnect,
-status event or late callback resends or clears a newer draft. Local diagnostics
+status event or late callback resends or clears a newer draft. Disconnect fences
+all outstanding response observations; reopening begins a fresh page traversal.
+Question actions use the committed private Thread owner and current writable
+state, including archive/disconnection, with no authority published during render.
+Retained handlers cannot write after owner change or unmount. Local diagnostics
 remain expandable plain text. Current Host authority, not disabled controls,
 resolves concurrent clients. Publication remains behind the default-off Host
 experiment; this slice does not enable shared Room/CLI/remote publication, change
