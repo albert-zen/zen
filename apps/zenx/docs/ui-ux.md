@@ -898,3 +898,35 @@ committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消
 The exact leading legacy `[Message quote; ...]` transport is rendered through the same inline reference component as current quoted messages, retaining exact selected text and source navigation. Real line breaks appear in the expanded excerpt; source IDs belong in the explicit source details, not the message bubble or plain-text clipboard. Malformed or embedded illustrative text stays literal. New structured sends retain provenance independently of readable clipboard text.
 
 Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.
+
+### Immediate ordinary Send feedback
+
+For an existing Thread, ordinary Send/Steer immediately transfers the exact draft
+and attachments into a visibly local **Sending** row and clears the editor. This
+is presentation only, not a canonical user message or proof of delivery. The
+existing pending-admission guard prevents duplicate sends while newer typing
+remains editable. New-thread and side-chat promotion retain their existing draft
+behavior in this initial rollout.
+
+The local row has a stable client identity but never a canonical Item ID.
+Admission ACK changes its label to admitted/waiting for conversation projection,
+not model consumption; exact canonical identity removes the local copy without a
+duplicate bubble. ACK and event order must both work. Generic post-dispatch IPC
+errors are **delivery unconfirmed**, not invented rejection, and never resend
+automatically. Explicit Check delivery uses the existing authoritative recovery
+read outside the send critical path; absence is not proof of rejection.
+
+Unknown/unsent text and images remain in a recovery row. Add back to draft
+preserves newer text and images, does not send, and warns that resending an
+unconfirmed message may duplicate it. An unchanged recovered submission retains
+existing retry idempotency; merging different content creates a new submission.
+The local recovery copy is explicitly not restart-persistent; admitted canonical
+history remains recoverable through the Host. Dismiss is offered only after
+recovery to the draft. Known pre-dispatch failure may restore only its untouched
+blank editor. Changing threads does not overwrite the App-owned pending copies.
+
+Pending feedback and input clearing are measured separately from native durable
+admission and canonical message paint. Composer-only changes reuse the transcript
+subtree instead of re-mapping the whole history. Real native acceptance must cover
+the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts,
+attachments, both ACK/event orders and exactly one canonical user message.

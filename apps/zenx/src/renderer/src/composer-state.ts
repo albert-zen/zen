@@ -13,6 +13,7 @@ export interface ComposerDraft {
 }
 
 export interface ComposerSubmission {
+  immediateFeedback?: true;
   clientObservation?: ClientSendObservation;
   clientTimezone?: string;
   intent: ComposerIntent;
@@ -26,7 +27,18 @@ export interface ComposerSubmission {
   error: string | null;
 }
 
+/** Renderer-only recovery text; never a durable admission or execution record. */
+export interface PendingSendPresentation {
+  clientId: string;
+  intent: ComposerIntent;
+  draft: ComposerDraft;
+  status: "sending" | "admitted" | "unconfirmed" | "notSent";
+  error: string | null;
+  recovered?: boolean;
+}
+
 export interface ComposerState {
+  pendingSends?: readonly PendingSendPresentation[];
   /** Local draft identity: editing away and back never restores clear authority. */
   draftRevision: number;
   /** Ephemeral UI acknowledgement of an uncertain admission, not an execution record. */
@@ -191,6 +203,143 @@ export function beginComposerSubmission(
   };
 }
 
+/**
+ * Ordinary existing-thread Send transfers the draft to an explicitly local row.
+ * The original submission still owns admission and the pending-send guard.
+ */
+export function beginImmediateComposerSubmission(
+  state: ComposerState,
+  intent: ComposerIntent,
+  expectedTurnId: string | null,
+  createId: () => string,
+  clientObservation?: ClientSendObservation,
+  timezone: () => string | undefined = clientTimeZone,
+): ComposerState {
+  const next = beginComposerSubmission(
+    state, intent, expectedTurnId, createId, clientObservation, timezone,
+  );
+  if (next === state || next.submission === null) return next;
+  const submission = next.submission;
+  return {
+    ...next,
+    submission: { ...submission, immediateFeedback: true },
+    draftRevision: next.draftRevision + 1,
+    draft: { text: "", images: [] },
+    pendingSends: [
+      ...(state.pendingSends ?? []).filter(
+        (entry) => entry.clientId !== submission.clientUserMessageId,
+      ),
+      {
+        clientId: submission.clientUserMessageId,
+        intent,
+        draft: cloneDraft(submission.draftAtSubmit),
+        status: "sending",
+        error: null,
+      },
+    ],
+  };
+}
+
+/** A read/event confirms exact identities only; absence does not prove rejection. */
+function reconcilePendingSendPresentations(
+  state: ComposerState,
+  items: readonly CanonicalItem[],
+): ComposerState {
+  if (!state.pendingSends?.length) return state;
+  const admitted = new Set<string>();
+  for (const item of items) {
+    if (
+      (item.type === "user_message" || item.type === "user_message_queued") &&
+      item.clientId !== undefined
+    ) admitted.add(item.clientId);
+  }
+  const pendingSends = state.pendingSends.filter(
+    (entry) => !admitted.has(entry.clientId),
+  );
+  return pendingSends.length === state.pendingSends.length
+    ? state
+    : { ...state, pendingSends };
+}
+
+/** Explicit recovery never overwrites a newer draft or sends anything. */
+export function recoverPendingSend(
+  state: ComposerState,
+  clientId: string,
+): ComposerState {
+  const entry = state.pendingSends?.find((item) => item.clientId === clientId);
+  if (
+    entry === undefined ||
+    entry.recovered ||
+    (entry.status !== "unconfirmed" && entry.status !== "notSent")
+  ) return state;
+  const empty = !composerDraftHasContent(state.draft);
+  const images = [...state.draft.images];
+  for (const image of entry.draft.images) {
+    if (!images.some((existing) => existing.id === image.id)) images.push(image);
+  }
+  const draft = empty
+    ? cloneDraft(entry.draft)
+    : {
+        text: [state.draft.text, entry.draft.text].filter(Boolean).join("\n\n"),
+        images,
+      };
+  const draftRevision = state.draftRevision + 1;
+  return {
+    ...state,
+    draft,
+    draftRevision,
+    // Recovering unchanged text can explicitly retry using existing idempotency.
+    // Merging into a newer draft intentionally does not inherit that identity.
+    submission:
+      empty && state.submission?.clientUserMessageId === clientId
+        ? { ...state.submission, draftRevision }
+        : state.submission,
+    pendingSends: state.pendingSends!.map((item) =>
+      item.clientId === clientId ? { ...item, recovered: true } : item,
+    ),
+  };
+}
+
+export function dismissPendingSend(
+  state: ComposerState,
+  clientId: string,
+): ComposerState {
+  const entry = state.pendingSends?.find((item) => item.clientId === clientId);
+  if (entry === undefined || !entry.recovered) return state;
+  return {
+    ...state,
+    pendingSends: state.pendingSends!.filter((item) => item.clientId !== clientId),
+  };
+}
+
+/** Before dispatch is known not sent; after dispatch, generic IPC errors are unknown. */
+export function failImmediateComposerSubmission(
+  state: ComposerState,
+  clientId: string,
+  error: string,
+  dispatched: boolean,
+): ComposerState {
+  const entry = state.pendingSends?.find((item) => item.clientId === clientId);
+  if (entry === undefined) return failComposerSubmission(state, clientId, error);
+  const failed = failComposerSubmission(state, clientId, error);
+  const next: ComposerState = {
+    ...failed,
+    pendingSends: failed.pendingSends!.map((item) =>
+      item.clientId === clientId
+        ? { ...item, status: dispatched ? "unconfirmed" : "notSent", error }
+        : item,
+    ),
+  };
+  // A known pre-dispatch failure may restore only the still-owned blank editor.
+  if (
+    !dispatched &&
+    !composerDraftHasContent(next.draft) &&
+    next.submission?.clientUserMessageId === clientId &&
+    next.draftRevision === next.submission.draftRevision + 1
+  ) return recoverPendingSend(next, clientId);
+  return next;
+}
+
 /** Reconcile only exact canonical client identity, never text or queue disappearance. */
 export function reconcileCanonicalAdmission(
   state: ComposerState,
@@ -200,6 +349,7 @@ export function reconcileCanonicalAdmission(
     status: "completed" | "failed" | "interrupted";
   },
 ): ComposerState {
+  state = reconcilePendingSendPresentations(state, items);
   const feedback = state.compaction;
   if (feedback?.operationId !== undefined) {
     const fence = items.findIndex(
@@ -238,6 +388,7 @@ export function reconcileCanonicalAdmission(
   if (
     clientId === undefined ||
     (submission?.status === "failed" &&
+      submission.immediateFeedback !== true &&
       !submission.error?.includes("outcome unknown"))
   )
     return state;
@@ -311,6 +462,13 @@ export function acceptComposerSubmission(
     ...(state.compactionObservation === undefined
       ? {}
       : { compactionObservation: state.compactionObservation }),
+    ...(state.pendingSends === undefined ? {} : {
+      pendingSends: state.pendingSends.map((entry) =>
+        entry.clientId === clientUserMessageId
+          ? { ...entry, status: "admitted" as const, error: null }
+          : entry,
+      ),
+    }),
     draftRevision: state.draftRevision,
     draft: canClearSubmittedDraft(state, submission)
       ? { text: "", images: [] }

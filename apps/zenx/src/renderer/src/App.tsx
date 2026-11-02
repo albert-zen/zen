@@ -138,6 +138,10 @@ import {
   advanceComposerDraftRevision,
   addComposerImages,
   beginComposerSubmission,
+  beginImmediateComposerSubmission,
+  failImmediateComposerSubmission,
+  recoverPendingSend,
+  dismissPendingSend,
   editComposer,
   emptyComposerState,
   dismissCompactionFeedback,
@@ -2035,9 +2039,41 @@ function AppContent() {
     );
   };
 
+  const checkPendingDelivery = async (threadId: string) => {
+    const before = threadProjectionCacheRef.current.get(threadId);
+    if (before === undefined) return;
+    // Native resume reads/subscribes; unlike the navigation wrapper it does not
+    // discard drafts or change selection. It never dispatches model/tool work.
+    const recovery = await window.zenx.protocol.request("zen/thread/resume", { threadId });
+    const current = threadProjectionCacheRef.current.get(threadId);
+    if (current === undefined || recovery.threadId !== threadId || recovery.thread.id !== threadId) return;
+    if (
+      current.processEpoch !== before.processEpoch &&
+      current.processEpoch !== recovery.processEpoch
+    ) return;
+    const projected =
+      current.processEpoch === recovery.processEpoch &&
+      current.watermark >= recovery.watermark
+        ? current
+        : replayThreadProjection(
+            projectNativeRecovery(recovery),
+            settingsFromSnapshot(threadId, nativeSettingsSnapshot(recovery.thread)),
+            current.activeTurnNotifications,
+            { processEpoch: recovery.processEpoch, watermark: recovery.watermark },
+          );
+    threadProjectionCacheRef.current.set(threadId, projected);
+    if (selectedThreadIdRef.current === threadId) {
+      setThreadDetail(projected.thread);
+      setSelectedSettings(projected.settings);
+    }
+    if (projected.thread.canonicalItems !== undefined)
+      updateComposer(threadId, (state) => reconcileCanonicalAdmission(state, projected.thread.canonicalItems!));
+  };
+
   const deliverComposerSubmission = async (
     threadId: string,
     submission: ComposerSubmission,
+    onDispatch?: () => void,
   ) => {
     if (threadProjectionCacheRef.current.get(threadId)?.processEpoch === null) {
       // Promote the draft before this read: a failed bootstrap must retry the
@@ -2117,6 +2153,7 @@ function AppContent() {
         input.push({ type: "skill", id: skill.id });
       for (const image of submission.images)
         input.push({ type: "image", attachment: image.attachment });
+      onDispatch?.();
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         input,
@@ -2146,6 +2183,7 @@ function AppContent() {
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
+      onDispatch?.();
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         input: input.map((part) =>
@@ -2168,6 +2206,7 @@ function AppContent() {
     } else if (submission.intent === "batch-next") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
+      onDispatch?.();
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         mode: "batch-next",
@@ -2191,6 +2230,7 @@ function AppContent() {
     } else if (submission.intent === "queue") {
       if (archivingThreadIdsRef.current.has(threadId))
         throw new Error(i18n.t("shell:thisThreadIsBeingArchived"));
+      onDispatch?.();
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         mode: "queue",
@@ -2218,6 +2258,7 @@ function AppContent() {
         throw new Error(
           i18n.t("shell:thisThreadIsBeingArchivedTryAgainIfArchivingFails"),
         );
+      onDispatch?.();
       await window.zenx.protocol.request("zen/turn/send", {
         threadId,
         mode: "replace",
@@ -2541,7 +2582,10 @@ function AppContent() {
       );
       return;
     }
-    const started = beginComposerSubmission(
+    const begin = intent === "start" || intent === "steer"
+      ? beginImmediateComposerSubmission
+      : beginComposerSubmission;
+    const started = begin(
       current,
       intent,
       expectedTurnId,
@@ -2556,8 +2600,11 @@ function AppContent() {
     setComposerStates(composerStatesRef.current);
     const submission = started.submission;
     if (submission === null || submission.status !== "pending") return;
+    let dispatched = false;
     try {
-      await deliverComposerSubmission(threadId, submission);
+      await deliverComposerSubmission(threadId, submission, () => {
+        dispatched = true;
+      });
       updateComposer(threadId, (state) =>
         acceptComposerSubmission(state, submission.clientUserMessageId),
       );
@@ -2578,10 +2625,11 @@ function AppContent() {
       }
     } catch (error) {
       updateComposer(threadId, (state) =>
-        failComposerSubmission(
+        failImmediateComposerSubmission(
           state,
           submission.clientUserMessageId,
           describeError(error),
+          dispatched,
         ),
       );
     }
@@ -4325,6 +4373,15 @@ function AppContent() {
                 onDismissCompaction={(threadId) =>
                   updateComposer(threadId, dismissCompactionFeedback)
                 }
+                onRecoverPendingSend={(threadId, clientId) =>
+                  updateComposer(threadId, (state) => recoverPendingSend(state, clientId))
+                }
+                onDismissPendingSend={(threadId, clientId) =>
+                  updateComposer(threadId, (state) => dismissPendingSend(state, clientId))
+                }
+                onCheckPendingSends={async (threadId) => {
+                  await checkPendingDelivery(threadId);
+                }}
                 onSubmit={submitComposer}
                 onSubmitNewThread={submitNewThreadDraft}
                 selectedSettings={selectedSettings}
@@ -5006,6 +5063,9 @@ function AgentSurface({
   onRespondToApproval,
   onCompact,
   onDismissCompaction,
+  onRecoverPendingSend,
+  onDismissPendingSend,
+  onCheckPendingSends,
   onSubmit,
   onSubmitNewThread,
   selectedSettings,
@@ -5080,6 +5140,9 @@ function AgentSurface({
   ): Promise<void>;
   onCompact(): Promise<void>;
   onDismissCompaction(threadId: string): void;
+  onRecoverPendingSend(threadId: string, clientId: string): void;
+  onDismissPendingSend(threadId: string, clientId: string): void;
+  onCheckPendingSends(threadId: string): Promise<void>;
   onSubmit(
     intent: ComposerIntent,
     expectedTurnId: string | null,
@@ -5402,6 +5465,9 @@ function AgentSurface({
             onRespondToApproval={onRespondToApproval}
             onCompact={onCompact}
             onDismissCompaction={() => onDismissCompaction(threadDetail.id)}
+            onRecoverPendingSend={(clientId) => onRecoverPendingSend(threadDetail.id, clientId)}
+            onDismissPendingSend={(clientId) => onDismissPendingSend(threadDetail.id, clientId)}
+            onCheckPendingSends={() => onCheckPendingSends(threadDetail.id)}
             onSubmit={onSubmit}
           />
         </>

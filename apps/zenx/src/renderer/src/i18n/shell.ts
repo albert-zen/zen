@@ -1,4 +1,15 @@
 export const en = {
+  pendingSendSending: "Sending…",
+  pendingSendAdmitted: "Admitted; waiting for the conversation to update",
+  pendingSendNotSent: "Not sent",
+  pendingSendUnconfirmed: "Delivery not confirmed",
+  pendingSendUnknownWarning: "This message may already have been accepted. Check delivery before sending it again. This local recovery copy is not saved across an app reload.",
+  pendingSendLocalWarning: "The request was not dispatched. This local recovery copy is not saved across an app reload.",
+  pendingSendErrorDetails: "Error details",
+  pendingSendRecovered: "Added back to your draft without replacing newer text or images.",
+  pendingSendDismiss: "Dismiss recovery copy",
+  pendingSendRecover: "Add back to draft",
+  pendingSendCheck: "Check delivery",
   startWithoutProjectOrAddFolder:
     "Start a chat without a project, or add a folder.",
   noProject: "No project",
@@ -921,6 +932,17 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  pendingSendSending: "正在发送…",
+  pendingSendAdmitted: "已接纳，等待会话更新",
+  pendingSendNotSent: "未发送",
+  pendingSendUnconfirmed: "未确认是否送达",
+  pendingSendUnknownWarning: "这条消息可能已被接纳。再次发送前请先检查送达状态。此本地恢复副本不会跨应用重新加载保存。",
+  pendingSendLocalWarning: "请求尚未派发。此本地恢复副本不会跨应用重新加载保存。",
+  pendingSendErrorDetails: "错误详情",
+  pendingSendRecovered: "已放回草稿，未覆盖你后来输入的文字或图片。",
+  pendingSendDismiss: "关闭恢复副本",
+  pendingSendRecover: "放回输入框",
+  pendingSendCheck: "检查送达状态",
   startWithoutProjectOrAddFolder: "直接创建无项目会话，或添加一个项目文件夹。",
   noProject: "无项目",
   projectlessDirectoryHint:

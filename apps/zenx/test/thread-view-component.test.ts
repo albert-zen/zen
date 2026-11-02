@@ -15,6 +15,8 @@ import { projectCompletedItem } from "../../../src/protocol/codex/mapper.js";
 import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   addComposerImages,
+  beginImmediateComposerSubmission,
+  acceptComposerSubmission,
   editComposer,
   emptyComposerState,
   type ComposerState,
@@ -5024,5 +5026,46 @@ test("long-history composer renders do not scan canonical history once per turn"
       requiredElement(".turn-outcome-details").textContent ?? "",
       /new-index-diagnostic/,
     );
+  });
+});
+
+test("ordinary send shows an honest local row and clears input before admission settles", async () => {
+  await withDom(async (root) => {
+    let composer = editComposer(emptyComposerState(), "Immediate synthetic message");
+    let sends = 0;
+    let settle!: () => void;
+    const receipt = new Promise<void>((resolve) => { settle = resolve; });
+    const view = { ...thread([]), status: { type: "idle" as const }, canonicalItems: [] };
+    const renderView = () => root.render(
+      createElement(ThreadView, {
+        thread: view, approvals: [], composer,
+        onDraftChange: (text) => { composer = editComposer(composer, text); renderView(); },
+        onInterrupt: noop, onRespondToApproval: noop,
+        onSubmit: async (intent, expectedTurnId) => {
+          sends++;
+          composer = beginImmediateComposerSubmission(composer, intent, expectedTurnId, () => "local-client");
+          renderView();
+          await receipt;
+          composer = acceptComposerSubmission(composer, "local-client");
+          renderView();
+        },
+      }),
+    );
+    await act(async () => renderView());
+    await act(async () => requiredButton('[aria-label="Send"]').click());
+    const row = requiredElement('[data-pending-send-client-id="local-client"]');
+    assert.equal(row.getAttribute("data-send-state"), "sending");
+    assert.equal(row.hasAttribute("data-sent-message-id"), false);
+    assert.match(row.textContent ?? "", /Immediate synthetic message/);
+    assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "");
+    assert.equal(document.querySelector("[data-sent-message-id]"), null);
+    assert.equal(sends, 1);
+    composer = editComposer(composer, "Newer draft");
+    await act(async () => renderView());
+    assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "Newer draft");
+    await act(async () => { settle(); await receipt; });
+    assert.equal(requiredElement('[data-pending-send-client-id="local-client"]').getAttribute("data-send-state"), "admitted");
+    assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "Newer draft");
+    assert.equal(sends, 1);
   });
 });
