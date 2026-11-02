@@ -254,6 +254,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
   Host 明确结束当前 Turn，避免发出已知超窗的模型请求；空闲 Thread 不会因此创建新 Turn。
 - **ModelUsageItem** — Provider 对一次稳定 model response 报告的 canonical 执行事实，
   保存包含 cached 部分的 total input、可选 cached input、output 与可选 reasoning output tokens。
+- **ThreadRecentActivityProjection** — Recent 单独按最新 human 原始 receipt 与成功 `turn_completed` 接受的最终 Agent 答复时间取最大值；内存增量折叠既有 journal，summary 的 `recentActivityAt` 是可重建缓存而非新权威。排队/steer 的后续 delivery 沿用首次 receipt，commentary、工具、delta、失败/取消和元数据不提升排序；旧 Host 缺字段时稳定退回创建时间。Project/Inbox 的 TurnSortAt 与 Pin/manual 顺序不变。
 - **TurnSortAt** — 原生 Thread summary 从本地 `turn_started` 的最新时间（fork 后的 Turn；没有则本线程创建时间）推导默认列表排序键，独立于 updatedAt，可随 journal 重建。
 - **SidebarThreadInformation** — 既有 host-local ThreadSummary / Project 投影与已 admit Trigger 插件显式声明的 sidebar-facts 窄只读命令组成的可丢弃 renderer 投影，在 Host 序列化前只取绑定/调度白名单字段；由 Catalog 每次真实 activation 的易失 admissionId 隔离替换回执，不因无关 catalog 通知重读，不拥有 scheduler 或 Thread 状态。
 - **CanonicalTurnEndProjection** — Thread 的结束事实只取最后 fork 边界（无 fork 时为 imported history 边界）后本地最新 `turn_started` 对应的 canonical `turn_completed` / `turn_aborted`，复制历史与 synthetic closure 不算本地执行；summary 投影 `lastTurnEnd` 的原 Item ID、Turn ID、时间、canonical 终态序号与 `completed` / `failed` / `aborted` 结果（旧投影可缺省结果，不凭文字猜测失败）；未读结束标记仅将 canonical `failed` 显示为红色圈叹号，普通结束沿用当前主题强调色，运行和重试中的 Turn 不显示结束标记，已读推进按序号而非墙钟（所有 canonical 终态含复制闭合保留固定序号槽，但只有本地执行可提示；compaction 不截断 journal）。AppServer 在既有开始/结束状态事件之前发布同一已提交生命周期 Item 的 `item_completed`，实时、恢复与重建共享同一身份，不从消息文本、兼容 phase 或临时 interrupted 状态猜测。
