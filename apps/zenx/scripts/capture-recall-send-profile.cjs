@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, session, ipcMain, contentTracing } = require("electron");
+const { summarizeSendTimeline } = require("./summarize-send-timeline.cjs");
 assert.ok(["win32", "darwin"].includes(process.platform));
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(process.versions.electron);
@@ -21,7 +22,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-send-profile-v1-diagnostic-only-not-acceptance",
+  harnessVersion: "native-send-profile-v2-short-timeline-no-cpu-not-acceptance",
   version,
   platform: process.platform,
   electron: process.versions.electron,
@@ -201,23 +202,44 @@ async function screenshot(name) {
 }
 
 // Passive renderer observer. It never changes App state, UI, requests, or receipts.
-function installObservation(nonce, profileIndex) {
-  const record = {clockDomain:"renderer", nonce, frames:[], notifications:[], instrumentation:{mutationCallbacks:0,mutationRecords:0,inspectedElements:0,rowCandidates:0,mutationCallbackMs:0,frameCallbacks:0,frameCallbackMs:0}};
+function installObservation(nonce, threadId, profileIndex) {
+  const record = {
+    clockDomain: "renderer",
+    nonce,
+    frames: [],
+    notifications: [],
+    instrumentation: {
+      mutationCallbacks: 0,
+      mutationRecords: 0,
+      inspectedElements: 0,
+      rowCandidates: 0,
+      mutationCallbackMs: 0,
+      frameCallbacks: 0,
+      frameCallbackMs: 0,
+    },
+  };
   window.__sendLatency = record;
-  const mark = (phase) => performance.mark(`zen-send-${profileIndex}-${phase}`);
-  record.longTasks=[];
-  const longTasks=new PerformanceObserver(list=>{for(const e of list.getEntries())if(record.longTasks.length<2000)record.longTasks.push({startTime:e.startTime,duration:e.duration,name:e.name});});
-  longTasks.observe({entryTypes:["longtask"]});
-  let stopped = false, frameId;
+  const mark = phase => performance.mark(`zen-send-${profileIndex}-${phase}`);
+  record.visibilitySnapshots = [];
+  const visibility = phase => { if (record.visibilitySnapshots.length < 64) record.visibilitySnapshots.push({phase,atMs:performance.now(),visibilityState:document.visibilityState,hasFocus:document.hasFocus()}); };
+  const focused = () => visibility("window-focus"), blurred = () => visibility("window-blur"), changed = () => visibility("visibilitychange");
+  window.addEventListener("focus",focused); window.addEventListener("blur",blurred); document.addEventListener("visibilitychange",changed); visibility("installed");
+  let stopped = false,
+    frameId,
+    frameNumber = 0;
   const editor = () => document.querySelector("#thread-composer");
   const value = () => {
     const e = editor();
-    return e instanceof HTMLTextAreaElement ? e.value : e?.textContent ?? null;
+    return e instanceof HTMLTextAreaElement
+      ? e.value
+      : (e?.textContent ?? null);
   };
   const capture = (event) => {
-    const button = event.target?.closest?.(".composer-send-control > button.action-orb");
+    const button = event.target?.closest?.(
+      ".composer-send-control > button.action-orb",
+    );
     if (!button || record.clickMs !== undefined) return;
-    record.clickMs = performance.now(); mark("native-click");
+    record.clickMs = performance.now(); mark("native-click"); visibility("click");
     record.trusted = event.isTrusted;
     record.disabledAtClick = button.disabled;
     record.draftAtClick = value();
@@ -226,74 +248,277 @@ function installObservation(nonce, profileIndex) {
   const findBubble = (root) => {
     if (!(root instanceof Element)) return;
     record.instrumentation.inspectedElements++;
-    const pendingRows = root.closest("article.pending-send-row") ? [root.closest("article.pending-send-row")] : [...root.querySelectorAll("article.pending-send-row")];
-    for(const row of pendingRows){ const bubble=row.querySelector(".user-bubble"); if(row.isConnected && bubble?.textContent?.trim()===nonce && record.pendingDomMs===undefined){record.pendingDomMs=performance.now();mark("pending-dom");record.pendingClientId=row.dataset.pendingSendClientId;record.pendingStateAtDom=row.dataset.sendState;record.pendingBubble=bubble;} }
+    const pendingRows = root.closest("article.pending-send-row")
+      ? [root.closest("article.pending-send-row")]
+      : [...root.querySelectorAll("article.pending-send-row")];
+    for (const row of pendingRows) {
+      const bubble = row.querySelector(".user-bubble");
+      if (
+        row.isConnected &&
+        bubble?.textContent?.trim() === nonce &&
+        row.dataset.pendingSendClientId &&
+        (record.pendingClientId === undefined ||
+          record.pendingClientId === row.dataset.pendingSendClientId)
+      ) {
+        if (record.pendingDomMs === undefined)
+          record.pendingDomMs = performance.now();
+        record.pendingClientId = row.dataset.pendingSendClientId;
+        record.pendingStateAtDom = row.dataset.sendState;
+        record.pendingBubble = bubble;
+      }
+    }
     const rows = root.closest("article.user-row[data-sent-message-id]")
-      ? [root.closest("article.user-row[data-sent-message-id]")] : root.matches("article.user-row[data-sent-message-id]")
-      ? [root] : [...root.querySelectorAll("article.user-row[data-sent-message-id]")];
-    record.instrumentation.rowCandidates+=rows.length;
+      ? [root.closest("article.user-row[data-sent-message-id]")]
+      : root.matches("article.user-row[data-sent-message-id]")
+        ? [root]
+        : [...root.querySelectorAll("article.user-row[data-sent-message-id]")];
+    record.instrumentation.rowCandidates += rows.length;
     for (const row of rows) {
       const bubble = row.querySelector(".user-bubble");
-      if (row.isConnected && bubble?.isConnected && bubble?.textContent?.trim() === nonce && record.bubbleDomMs === undefined) {
-        record.bubbleDomMs = performance.now(); mark("canonical-dom");
+      if (
+        row.isConnected &&
+        bubble?.isConnected &&
+        bubble?.textContent?.trim() === nonce &&
+        (record.messageId === undefined ||
+          record.messageId === row.dataset.sentMessageId)
+      ) {
+        if (record.bubbleDomMs === undefined)
+          record.bubbleDomMs = performance.now();
         record.messageId = row.dataset.sentMessageId;
         record.bubble = bubble;
       }
     }
   };
   const mutation = new MutationObserver((records) => {
-    if (record.clickMs === undefined || record.bubbleDomMs !== undefined) return;
-    const observedStart=performance.now();
+    if (
+      record.clickMs === undefined ||
+      (record.bubbleVisibleFrameMs !== undefined &&
+        record.feedbackSubsequentFrameMs !== undefined)
+    )
+      return;
+    const observedStart = performance.now();
     record.instrumentation.mutationCallbacks++;
-    record.instrumentation.mutationRecords+=records.length;
-    try { for (const entry of records) {
-      for (const node of entry.addedNodes) { if(record.bubbleDomMs!==undefined) break; findBubble(node); }
-      if(record.bubbleDomMs!==undefined) break;
-      if (entry.type === "characterData") findBubble(entry.target.parentElement?.closest("article.user-row") ?? null);
-    } } finally {record.instrumentation.mutationCallbackMs+=performance.now()-observedStart;}
+    record.instrumentation.mutationRecords += records.length;
+    try {
+      for (const entry of records) {
+        for (const node of entry.addedNodes) findBubble(node);
+        if (entry.type === "characterData")
+          findBubble(
+            entry.target.parentElement?.closest("article.user-row") ?? null,
+          );
+      }
+    } finally {
+      record.instrumentation.mutationCallbackMs +=
+        performance.now() - observedStart;
+    }
   });
-  mutation.observe(document.querySelector(".thread-view") ?? document.body, {subtree:true,childList:true,characterData:true});
+  mutation.observe(document.querySelector(".thread-view") ?? document.body, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+  });
   const off = window.zenx.protocol.onNotification((method, params) => {
     if (record.clickMs === undefined || method !== "zen/thread/event") return;
     const event = params.event;
     if (record.notifications.length >= 2000) return;
     record.notifications.push({
-      atMs:performance.now(), type:event?.type,
-      itemType:event?.item?.type, itemId:event?.item?.id,
-      clientId:event?.item?.clientId, threadId:params.threadId, turnId:event?.turnId ?? event?.item?.turnId,
-      watermark:params.watermark,
+      atMs: performance.now(),
+      type: event?.type,
+      itemType: event?.item?.type,
+      itemId: event?.item?.id,
+      clientId: event?.item?.clientId,
+      threadId: params.threadId,
+      turnId: event?.turnId ?? event?.item?.turnId,
+      watermark: params.watermark,
     });
   });
+  // Verification binds nodes to the real pending client or canonical event,
+  // never just to an old detached node or equal text. No full-history query.
+  const feedbackNode = () => {
+    const pending = record.pendingBubble;
+    if (
+      pending?.isConnected &&
+      pending.closest("article")?.dataset.pendingSendClientId ===
+        record.pendingClientId &&
+      pending.textContent?.trim() === nonce
+    )
+      return {
+        node: pending,
+        kind: "pending",
+        clientId: record.pendingClientId,
+      };
+    const canonical = record.bubble;
+    const admitted = record.notifications.find(
+      (n) =>
+        n.threadId === threadId &&
+        n.itemType === "user_message" &&
+        n.itemId === record.messageId &&
+        typeof n.clientId === "string",
+    );
+    if (
+      canonical?.isConnected &&
+      canonical.closest("article")?.dataset.sentMessageId ===
+        record.messageId &&
+      canonical.textContent?.trim() === nonce &&
+      admitted &&
+      (record.pendingClientId === undefined ||
+        admitted.clientId === record.pendingClientId)
+    )
+      return {
+        node: canonical,
+        kind: "canonical",
+        clientId: admitted.clientId,
+        messageId: record.messageId,
+      };
+    return null;
+  };
+  const visible = (node) => {
+    if (!node?.isConnected) return false;
+    const r = node.getBoundingClientRect(),
+      style = getComputedStyle(node),
+      v = node.closest(".messages")?.getBoundingClientRect() ?? {
+        top: 0,
+        bottom: innerHeight,
+        left: 0,
+        right: innerWidth,
+      };
+    return (
+      node.isConnected &&
+      r.width > 0 &&
+      r.height > 0 &&
+      r.bottom > Math.max(0, v.top) &&
+      r.top < Math.min(innerHeight, v.bottom) &&
+      r.right > Math.max(0, v.left) &&
+      r.left < Math.min(innerWidth, v.right) &&
+      style.visibility !== "hidden" &&
+      style.display !== "none"
+    );
+  };
   const frame = () => {
     if (stopped) return;
     const now = performance.now();
+    const currentFrame = ++frameNumber;
+    if(record.feedbackGeometryCompleteMs!==undefined && record.nextFrameEntryMs===undefined){record.nextFrameEntryMs=now;mark("next-frame-entry");visibility("next-frame-entry");}
     if (record.clickMs !== undefined) {
-      if (record.inputClearFrameMs === undefined && value() === "") {record.inputClearFrameMs = now;mark("clear-frame");}
+      if (record.inputClearFrameMs === undefined && value() === "")
+        record.inputClearFrameMs = now;
       if (record.pendingBubble && record.pendingVisibleFrameMs === undefined) {
-        const b=record.pendingBubble,r=b.getBoundingClientRect(),style=getComputedStyle(b),v=b.closest(".messages")?.getBoundingClientRect()??{top:0,bottom:innerHeight,left:0,right:innerWidth};
-        if(b.isConnected && r.width>0 && r.height>0 && r.bottom>Math.max(0,v.top) && r.top<Math.min(innerHeight,v.bottom) && r.right>Math.max(0,v.left) && r.left<Math.min(innerWidth,v.right) && style.visibility!=="hidden" && style.display!=="none"){record.pendingVisibleFrameMs=now;mark("pending-frame");record.pendingStateAtFrame=b.closest("article")?.dataset.sendState;record.pendingBounds={left:r.left,top:r.top,width:r.width,height:r.height};}
+        const b = record.pendingBubble,
+          r = b.getBoundingClientRect(),
+          style = getComputedStyle(b),
+          v = b.closest(".messages")?.getBoundingClientRect() ?? {
+            top: 0,
+            bottom: innerHeight,
+            left: 0,
+            right: innerWidth,
+          };
+        if (
+          b.isConnected &&
+          r.width > 0 &&
+          r.height > 0 &&
+          r.bottom > Math.max(0, v.top) &&
+          r.top < Math.min(innerHeight, v.bottom) &&
+          r.right > Math.max(0, v.left) &&
+          r.left < Math.min(innerWidth, v.right) &&
+          style.visibility !== "hidden" &&
+          style.display !== "none"
+        ) {
+          record.pendingVisibleFrameMs = now;
+          record.pendingStateAtFrame = b.closest("article")?.dataset.sendState;
+          record.pendingBounds = {
+            left: r.left,
+            top: r.top,
+            width: r.width,
+            height: r.height,
+          };
+        }
       }
       if (record.bubble && record.bubbleVisibleFrameMs === undefined) {
         const r = record.bubble.getBoundingClientRect();
         const style = getComputedStyle(record.bubble);
-        const viewport = record.bubble.closest(".messages")?.getBoundingClientRect() ?? {top:0,bottom:innerHeight,left:0,right:innerWidth};
-        if (record.bubble.isConnected && r.width > 0 && r.height > 0 && r.bottom > Math.max(0,viewport.top) && r.top < Math.min(innerHeight,viewport.bottom) && r.right > Math.max(0,viewport.left) && r.left < Math.min(innerWidth,viewport.right) && style.visibility !== "hidden" && style.display !== "none") {
+        const viewport = record.bubble
+          .closest(".messages")
+          ?.getBoundingClientRect() ?? {
+          top: 0,
+          bottom: innerHeight,
+          left: 0,
+          right: innerWidth,
+        };
+        if (
+          record.bubble.isConnected &&
+          r.width > 0 &&
+          r.height > 0 &&
+          r.bottom > Math.max(0, viewport.top) &&
+          r.top < Math.min(innerHeight, viewport.bottom) &&
+          r.right > Math.max(0, viewport.left) &&
+          r.left < Math.min(innerWidth, viewport.right) &&
+          style.visibility !== "hidden" &&
+          style.display !== "none"
+        ) {
           record.bubbleVisibleFrameMs = now;
-          record.bubbleBounds = {left:r.left,top:r.top,width:r.width,height:r.height};
-          requestAnimationFrame(() => {record.followingFrameMs = performance.now();});
+          record.bubbleBounds = {
+            left: r.left,
+            top: r.top,
+            width: r.width,
+            height: r.height,
+          };
+          requestAnimationFrame(() => {
+            record.followingFrameMs = performance.now();
+          });
+        }
+      }
+      // Keep v2 timestamps above unchanged. These stricter timestamps are
+      // taken only after all geometry reads, then revalidated in a later rAF.
+      if (
+        record.feedbackSubsequentFrameMs === undefined ||
+        record.clearSubsequentFrameMs === undefined
+      ) {
+        const feedback = feedbackNode();
+        const feedbackVisible = feedback !== null && visible(feedback.node);
+        const clearVisible = value() === "" && visible(editor());
+        const geometryComplete = performance.now();
+        if (feedbackVisible) {
+          if (record.feedbackGeometryCompleteMs === undefined) {
+            record.feedbackGeometryCompleteMs = geometryComplete; mark("geometry-complete"); visibility("first-geometry");
+            record.feedbackGeometryFrame = currentFrame;
+            record.feedbackGeometryKind = feedback.kind;
+            record.feedbackClientId = feedback.clientId;
+          } else if (
+            currentFrame > record.feedbackGeometryFrame &&
+            feedback.clientId === record.feedbackClientId &&
+            record.feedbackSubsequentFrameMs === undefined
+          ) {
+            record.feedbackSubsequentFrameMs = geometryComplete; mark("next-frame-geometry"); visibility("next-frame-geometry");
+            record.feedbackSubsequentKind = feedback.kind;
+            record.feedbackSubsequentMessageId = feedback.messageId ?? null;
+          }
+        }
+        if (clearVisible) {
+          if (record.clearGeometryCompleteMs === undefined) {
+            record.clearGeometryCompleteMs = geometryComplete;
+            record.clearGeometryFrame = currentFrame;
+          } else if (
+            currentFrame > record.clearGeometryFrame &&
+            record.clearSubsequentFrameMs === undefined
+          )
+            record.clearSubsequentFrameMs = geometryComplete;
         }
       }
       if (record.frames.length < 1200) record.frames.push(now);
       record.instrumentation.frameCallbacks++;
-      record.instrumentation.frameCallbackMs+=performance.now()-now;
+      record.instrumentation.frameCallbackMs += performance.now() - now;
     }
     frameId = requestAnimationFrame(frame);
   };
   frameId = requestAnimationFrame(frame);
   record.stop = () => {
-    stopped = true; cancelAnimationFrame(frameId); mutation.disconnect(); off(); longTasks.disconnect();
-    document.removeEventListener("click",capture,true);
-    const {bubble,pendingBubble,stop,...plain} = record;
+    stopped = true;
+    cancelAnimationFrame(frameId);
+    mutation.disconnect();
+    off();
+    document.removeEventListener("click", capture, true);
+    window.removeEventListener("focus",focused);window.removeEventListener("blur",blurred);document.removeEventListener("visibilitychange",changed);
+    const { bubble, pendingBubble, stop, ...plain } = record;
     return plain;
   };
 }
@@ -328,9 +553,11 @@ async function reviewAndPublishProfile(rawPath) {
  const reasonCodes=profileReviewReasons(raw,secrets,[config,JSON.stringify(parsed)],[process.cwd(),temporary]);
  result.profile.review={passed:false,knownCredentialCount:secrets.length,privateConfigurationCount:1,reasonCodes};
  assert.equal(reasonCodes.length,0,"Raw profile withheld: private review did not pass");
- const published=path.join(directory,"owned-native-send-profile.reviewed.json");
- await fs.copyFile(rawPath,published);
- result.profile.traceFile=path.basename(published);
+ const summary=summarizeSendTimeline(JSON.parse(raw),result.profile,result.samples);
+ summary.review={passed:true,knownCredentialCount:secrets.length,privateConfigurationCount:1};
+ const published=path.join(directory,"owned-native-send-profile.summary.json");
+ await fs.writeFile(published,JSON.stringify(summary,null,2),{flag:"wx",mode:0o600});
+ result.profile.traceFile="private-only-not-exported"; result.profile.summaryFile=path.basename(published);
  result.profile.review.passed=true;
  } catch {
   if(!result.profile.review)result.profile.review={passed:false,reasonCodes:["review-input-unavailable-or-invalid"]};
@@ -381,11 +608,12 @@ async function run() {
   await pause(500);
   result.processResourcesBefore=app.getAppMetrics().map(({type,cpu,memory})=>({type,cpu,memory}));
   result.samples=[];
-  result.profile={acceptance:false,reason:"Tracing and sampling overhead: none of these timings are acceptance evidence",electron:process.versions.electron,mainPid:process.pid,rendererPid:window.webContents.getOSProcessId(),api:"Electron 43.2.0 contentTracing.startRecording(TraceConfig)/stopRecording"};
-  const categories=["toplevel","devtools.timeline","disabled-by-default-devtools.timeline","disabled-by-default-devtools.timeline.frame","v8","v8.execute","disabled-by-default-v8.cpu_profiler","blink.user_timing","input","latencyInfo","renderer.scheduler","cc"];
+  result.profile={acceptance:false,reason:"Timeline overhead: none of these timings are acceptance evidence; CPU sampling disabled",electron:process.versions.electron,mainPid:process.pid,rendererPid:window.webContents.getOSProcessId(),api:"Electron 43.2.0 contentTracing.startRecording(TraceConfig)/stopRecording"};
+  const categories=["toplevel","devtools.timeline","disabled-by-default-devtools.timeline","disabled-by-default-devtools.timeline.frame","v8","blink.user_timing"];
+  result.profile.backgroundThrottling=window.webContents.getLastWebPreferences().backgroundThrottling??null;
   result.profile.requestedCategories=categories;
   result.profile.availableCategories=await contentTracing.getCategories();
-  await contentTracing.startRecording({recording_mode:"record-until-full",included_categories:categories,trace_buffer_size_in_kb:131072});
+  await contentTracing.startRecording({recording_mode:"record-until-full",included_categories:categories,excluded_categories:["disabled-by-default-v8.cpu_profiler","disabled-by-default-v8.cpu_profiler.hires"],trace_buffer_size_in_kb:131072});
   traceStarted=true;
   result.profile.processesBefore=app.getAppMetrics().map(({pid,type,cpu,memory,name,serviceName})=>({pid,type,cpu,memory,name,serviceName}));
   assert.equal(await evaluate("document.querySelector('#thread-composer') instanceof HTMLTextAreaElement"),true,"Baseline is native plain-text composer");
@@ -397,12 +625,12 @@ async function run() {
     await window.webContents.insertText(nonce);
     await until(async()=>await evaluate("document.querySelector('#thread-composer')?.value === "+JSON.stringify(nonce)),"native text input committed");
     await until(async()=>await evaluate("Boolean(document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)'))"),"actual Send enabled");
-    await evaluate("("+installObservation.toString()+")("+JSON.stringify(nonce)+","+repetition+")");
+    await evaluate("("+installObservation.toString()+")("+JSON.stringify(nonce)+","+JSON.stringify(threadId)+","+repetition+")");
     await screenshot("messages-"+manifest.visibleMessageCount+"-sample-"+repetition+"-before.png");
     const ipcStart=result.ipc.length;
     await click("document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)')","Native Send ordinary text");
     try {
-      await until(async()=>await evaluate("window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined"),"real visible bubble and cleared composer");
+      await until(async()=>await evaluate("window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined && window.__sendLatency?.feedbackSubsequentFrameMs !== undefined && window.__sendLatency?.clearSubsequentFrameMs !== undefined"),"real visible bubble and cleared composer");
       await until(async()=>result.ipc.slice(ipcStart).some(r=>r.finishedMs!==undefined),"real protocol receipt");
       const admitted=result.ipc.slice(ipcStart).find(r=>r.finishedMs!==undefined);
       assert.ok(admitted.receipt?.turnId,"Actual ordinary-send receipt must identify its Turn");
@@ -419,6 +647,10 @@ async function run() {
       sample.clickToPendingVisibleFrameMs=sample.pendingVisibleFrameMs===undefined?null:sample.pendingVisibleFrameMs-sample.clickMs;
       sample.firstVisibleFeedbackMs=Math.min(sample.bubbleVisibleFrameMs,sample.pendingVisibleFrameMs??Infinity)-sample.clickMs;
       sample.firstVisibleFeedbackKind=(sample.pendingVisibleFrameMs??Infinity)<sample.bubbleVisibleFrameMs?"pending":"canonical";
+      sample.clickToFeedbackGeometryCompleteMs=sample.feedbackGeometryCompleteMs-sample.clickMs;
+      sample.clickToFeedbackSubsequentFrameMs=sample.feedbackSubsequentFrameMs-sample.clickMs;
+      sample.clickToClearGeometryCompleteMs=sample.clearGeometryCompleteMs-sample.clickMs;
+      sample.clickToClearSubsequentFrameMs=sample.clearSubsequentFrameMs-sample.clickMs;
       sample.feedbackTargetMs=200;
       sample.feedbackWithinTarget=sample.firstVisibleFeedbackMs<=200;
       sample.ipc=result.ipc.slice(ipcStart);

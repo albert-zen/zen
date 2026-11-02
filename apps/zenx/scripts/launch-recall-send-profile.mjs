@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import {
   mkdtemp,
+  open,
   mkdir,
   writeFile,
   readFile,
@@ -18,7 +19,7 @@ import { seedLongThread, verifyLongThread } from "./long-thread-domain-seed.mjs"
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["win32", "darwin"].includes(process.platform));
-const directory = path.resolve(process.argv[2]);
+const uploadDirectory = path.resolve(process.argv[2]);
 const version = "current";
 const count = Number(process.argv[3]);
 assert.ok([0,1000,5000].includes(count));
@@ -26,22 +27,18 @@ const sourceLabel = process.argv[4] ?? "baseline";
 const pairCase = process.argv[5] ?? null;
 const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arch(),cpuModel:os.cpus()[0]?.model,cpuCount:os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem(),uptimeSeconds:os.uptime()});
 const hostBefore=hostSnapshot();
-const expected = {
-  baseline:"6aa0a5055530eeb018cc41a3ce486603756c06bb",
-  pending:"400bac27dd80c0238360dd2632c5c41972566d4b",
-  profile:"400bac27dd80c0238360dd2632c5c41972566d4b",
-  frontend:"3819977ddd2da5698bcbee2c14fd8165f9934009",
-  backend:"8e036167d864ae5d452dccc411970352ce26e433",
-  combined:"a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09",
-}[sourceLabel];
+const expected = { profile:"3d8f9cd24109f7fbf7abaca32c1bae4ade130f80" }[sourceLabel];
 assert.ok(expected,"Only independently identified source snapshots are allowed");
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   expected,
 );
 assert.equal(execFileSync("git",["diff","--name-only","HEAD"],{encoding:"utf8"}).trim(),"","Tracked production checkout must be unchanged");
-await mkdir(directory, { recursive: true });
+await mkdir(uploadDirectory, { recursive: true });
 const temporary = await mkdtemp(path.join(os.tmpdir(), "zenx-owned-full-app-"));
+const directory=path.join(temporary,"measurements");
+await mkdir(directory,{mode:0o700});
+const privateLog=await open(path.join(temporary,"native-process.log"),"wx",0o600);
 const profile = path.join(temporary, "profile"),
   data = path.join(temporary, "zen-data"),
   home = path.join(temporary, "home"),
@@ -81,6 +78,7 @@ for (const file of [
   "scripts/capture-send-feedback.cjs",
   "scripts/launch-send-feedback.mjs",
   "scripts/long-thread-domain-seed.mjs",
+  "scripts/summarize-send-timeline.cjs",
 ])
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
@@ -149,7 +147,7 @@ const child = spawn(
   ],
   {
     env: environment,
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", privateLog.fd, privateLog.fd],
     detached: process.platform === "darwin",
   },
 );
@@ -293,11 +291,18 @@ try {
   assert.ok(result.samples.every(s=>Number.isFinite(s.firstVisibleFeedbackMs)&&s.firstVisibleFeedbackMs>=0&&Number.isFinite(s.clickToClearFrameMs)&&s.clickToClearFrameMs>=0),"Finite nonnegative feedback and clear measurements required");
   const persisted=await verifyLongThread({dataDirectory:data,threadId:result.seed.threadId,samples:result.samples,userMessageCount:count});
   await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
-  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,sourceLabel,harnessVersion:result.harnessVersion,historyReadPolicy:result.historyReadPolicy,pairCase,hostBefore,hostAfter:hostSnapshot(),appBefore:result.processResourcesBefore,appAfter:result.processResourcesAfter,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({firstVisibleFeedbackMs:s.firstVisibleFeedbackMs,firstVisibleFeedbackKind:s.firstVisibleFeedbackKind,clickToPendingDomMs:s.clickToPendingDomMs,clickToPendingVisibleFrameMs:s.clickToPendingVisibleFrameMs,pendingStateAtFrame:s.pendingStateAtFrame,feedbackWithinTarget:s.feedbackWithinTarget,clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,clickToCanonicalNotificationMs:s.clickToCanonicalNotificationMs,instrumentation:s.instrumentation,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
+  /* Private full measurement stays with its fixture. */
+  const summary=JSON.parse(await readFile(path.join(directory,"owned-native-send-profile.summary.json"),"utf8"));
+  assert.equal(summary.review?.passed,true); assert.equal(summary.acceptance,false);
+  summary.sourceCommit=expected;
+  summary.hashes={capture:hashes["scripts/capture-send-feedback.cjs"],launcher:hashes["scripts/launch-send-feedback.mjs"],statistics:hashes["scripts/summarize-send-timeline.cjs"]};
+  summary.independentStorage={independentReopen:persisted.independentReopen,userMessages:persisted.userMessages,matchedNewMessages:persisted.matchedNewMessages,compactionAttempts:persisted.compactionAttempts,compactionFacts:persisted.compactionFacts,traceCompleteness:persisted.traceCompleteness};
+  await writeFile(path.join(uploadDirectory,"owned-native-send-profile.summary.json"),JSON.stringify(summary,null,2),{flag:"wx"});
+  console.log("GATE_REVIEWED_TIMELINE_SUMMARY "+JSON.stringify(summary));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
   if(sourceLabel==="pending") assert.ok(result.samples.every(s=>s.feedbackWithinTarget && s.clickToClearFrameMs<=200),"Actual first visible feedback and input clear must each meet 200ms target in every observed sample; see verified numeric output, no threshold relaxation");
 } finally {
-  try { const report=JSON.parse(await readFile(path.join(directory,"full-app-measurements.json"),"utf8")); if(!report.ok)console.error("SYNTHETIC_SEND_FAILURE_JSON "+JSON.stringify(report)); } catch {}
+  await privateLog.close();
   await writeFile(
     path.join(directory, "full-app-lifecycle.json"),
     JSON.stringify(
