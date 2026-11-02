@@ -20,20 +20,31 @@ function sameEntries<T>(
   entries: readonly (readonly [string, T])[],
   equal: (a: T, b: T) => boolean = Object.is,
 ): boolean {
-  return previous.size === entries.length && entries.every(([key, value]) =>
-    previous.has(key) && equal(previous.get(key)!, value),
+  return (
+    previous.size === entries.length &&
+    entries.every(
+      ([key, value]) => previous.has(key) && equal(previous.get(key)!, value),
+    )
   );
 }
 function sameAttachments(
   previous: ZenXThreadAttachmentProjection,
-  entries: readonly (readonly [string, ZenXThreadAttachmentProjection[string]])[],
+  entries: readonly (readonly [
+    string,
+    ZenXThreadAttachmentProjection[string],
+  ])[],
 ): boolean {
-  return Object.keys(previous).length === entries.length &&
+  return (
+    Object.keys(previous).length === entries.length &&
     entries.every(([key, value]) => {
       const before = previous[key];
-      return before !== undefined && before.length === value.length &&
-        before.every((attachment, index) => attachment === value[index]);
-    });
+      return (
+        before !== undefined &&
+        before.length === value.length &&
+        before.every((attachment, index) => attachment === value[index])
+      );
+    })
+  );
 }
 // Tool targets are small deterministic projection values, not callable authority.
 // Re-evaluate the whole trusted-binding projection before comparing; later
@@ -57,25 +68,31 @@ export function indexTurnCanonicalPresentation(
   for (const turn of turns) {
     const inputEntries: [string, UserMessage][] = [];
     const forkEntries: [string, string | undefined][] = [];
-    const attachmentEntries: [string, ZenXThreadAttachmentProjection[string]][] = [];
+    const attachmentEntries: [
+      string,
+      ZenXThreadAttachmentProjection[string],
+    ][] = [];
     const targetEntries: [string, ToolActionTarget][] = [];
     // Item IDs, not text or current turn status, select canonical metadata.
     // This preserves imported history and late canonical backfills.
     for (const item of turn.items) {
       const input = inputs.get(item.id);
       if (input !== undefined) inputEntries.push([item.id, input]);
-      if (forkItems.has(item.id)) forkEntries.push([item.id, forkItems.get(item.id)]);
+      if (forkItems.has(item.id))
+        forkEntries.push([item.id, forkItems.get(item.id)]);
       const media = attachments[item.id];
       if (media !== undefined) attachmentEntries.push([item.id, media]);
       const target = toolTargets.get(item.id);
       if (target !== undefined) targetEntries.push([item.id, target]);
     }
     const old = before?.get(turn.id);
-    if (old !== undefined &&
+    if (
+      old !== undefined &&
       sameEntries(old.inputs, inputEntries) &&
       sameEntries(old.forkItems, forkEntries) &&
       sameAttachments(old.attachments, attachmentEntries) &&
-      sameEntries(old.toolTargets, targetEntries, sameTarget)) {
+      sameEntries(old.toolTargets, targetEntries, sameTarget)
+    ) {
       next.set(turn.id, old);
     } else {
       next.set(turn.id, {

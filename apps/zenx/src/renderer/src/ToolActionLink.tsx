@@ -23,7 +23,8 @@ export function ToolActionTargetsProvider({
 }) {
   const targets = useMemo(
     () =>
-      projectedTargets ?? projectToolActionTargets(thread?.id ?? "", thread?.canonicalItems ?? []),
+      projectedTargets ??
+      projectToolActionTargets(thread?.id ?? "", thread?.canonicalItems ?? []),
     [projectedTargets, thread?.id, thread?.canonicalItems],
   );
   return <Targets.Provider value={targets}>{children}</Targets.Provider>;
