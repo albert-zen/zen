@@ -29,12 +29,12 @@ assert.equal(count,0);
 const sourceLabel = process.argv[4] ?? "pending";
 assert.equal(sourceLabel,"pending");
 const pairCase = process.argv[5];
-assert.ok(["recall-wins","claim-wins"].includes(pairCase));
+assert.ok(["recall-wins","claim-wins","navigation"].includes(pairCase));
 const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arch(),cpuModel:os.cpus()[0]?.model,cpuCount:os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem(),uptimeSeconds:os.uptime()});
 const hostBefore=hostSnapshot();
 const expected = {
   baseline:"6aa0a5055530eeb018cc41a3ce486603756c06bb",
-  pending:"c5b387c306d6015e3034cdacbf199edc4b8f70c2",
+  pending:"279f84ff35c68979a55f35c5322c941235dff7be",
   frontend:"3819977ddd2da5698bcbee2c14fd8165f9934009",
   backend:"8e036167d864ae5d452dccc411970352ce26e433",
   combined:"a8c7615b11b3a8f63c4d251a6fe5da5b82e13f09",
@@ -312,14 +312,14 @@ try {
    assert.equal(queued.length,2);
    for(const [index,record] of result.sends.entries()){
     const canonical=facts.filter(i=>i.type==="user_message"&&i.clientId===record.params.clientUserMessageId);
-    const expectedCount=pairCase==="recall-wins"&&index>0?0:1;
+    const expectedCount=pairCase!=="claim-wins"&&index>0?0:1;
     assert.equal(canonical.length,expectedCount);
     if(index>0){const q=queued.filter(i=>i.clientId===record.params.clientUserMessageId);assert.equal(q.length,1);assert.equal(q[0].deliveryMode,"steer");assert.equal(q[0].expectedTurnId,result.turnId);assert.equal(semantic.filter(i=>i.id===q[0].id).length,0);}
     for(const item of canonical){assert(contentFromUserMessage(item).some(p=>p.type==="text"&&p.text===result.nonces[index]));assert.equal(semantic.filter(i=>i.id===item.id).length,1);}
    }
    const recalls=facts.filter(i=>i.type==="user_message_steer_recalled");
-   assert.equal(recalls.length,pairCase==="recall-wins"?1:0);
-   if(pairCase==="recall-wins"){
+   assert.equal(recalls.length,pairCase!=="claim-wins"?1:0);
+   if(pairCase!=="claim-wins"){
     assert.equal(recalls[0].id,result.recall.receipt.receipt.id);
     assert.deepEqual(recalls[0].targets,result.recall.params.targets);
     assert.equal(semantic.filter(i=>i.id===recalls[0].id).length,0);

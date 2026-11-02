@@ -17,13 +17,17 @@ jobs:
       matrix:
         include:
           - label: pending
-            source: c5b387c306d6015e3034cdacbf199edc4b8f70c2
+            source: 279f84ff35c68979a55f35c5322c941235dff7be
             count: 0
             case: recall-wins
           - label: pending
-            source: c5b387c306d6015e3034cdacbf199edc4b8f70c2
+            source: 279f84ff35c68979a55f35c5322c941235dff7be
             count: 0
             case: claim-wins
+          - label: pending
+            source: 279f84ff35c68979a55f35c5322c941235dff7be
+            count: 0
+            case: navigation
     runs-on: macos-latest
     timeout-minutes: 25
     steps:

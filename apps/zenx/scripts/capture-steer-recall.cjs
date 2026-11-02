@@ -167,8 +167,8 @@ const networkReady = app.whenReady().then(() => {
 const crypto=require("node:crypto"),childProcess=require("node:child_process");
 const {syncBuiltinESMExports}=require("node:module");
 const controlNonce=crypto.randomUUID(),waiters=new Map();
-let ownedBackend,notificationGate=false,heldNotifications=[];
-result.ipc=[];result.hostEvents=[];
+let ownedBackend,notificationGate=false,heldNotifications=[],recallReplyGate;
+result.ipc=[];result.hostEvents=[];result.resumeRequests=[];
 const originalFork=childProcess.fork;
 childProcess.fork=function(modulePath,args,options){
  const owned=String(modulePath).replaceAll("\\","/").endsWith("/app-server-host.js");
@@ -187,9 +187,10 @@ const originalHandle=ipcMain.handle.bind(ipcMain);
 ipcMain.handle=function(channel,handler){
  if(channel!=="zenx:protocol:request")return originalHandle(channel,handler);
  return originalHandle(channel,async(event,method,params)=>{
+  if(["zen/thread/resume","thread/resume"].includes(method))result.resumeRequests.push({method,threadId:params?.threadId});
   if(!["zen/turn/send","zen/thread/steer/recall"].includes(method))return handler(event,method,params);
   const record={method,params:structuredClone(params)};result.ipc.push(record);
-  try{const receipt=await handler(event,method,params);record.receipt=structuredClone(receipt);return receipt;}
+  try{const receipt=await handler(event,method,params);record.realHandlerReceipt=structuredClone(receipt);if(method==="zen/thread/steer/recall"&&recallReplyGate)await recallReplyGate.wait;record.receipt=structuredClone(receipt);return receipt;}
   catch(error){record.error=String(error);throw error;}
  });
 };
@@ -253,7 +254,7 @@ async function run() {
   assert.equal(manifest.userMessageCount,0);
   assert.equal(await evaluate("document.querySelector('#thread-composer') instanceof HTMLTextAreaElement"),true);
   result.threadId=threadId;result.caseId=process.env.SYNTHETIC_RECALL_CASE;
-  assert(["recall-wins","claim-wins"].includes(result.caseId));
+  assert(["recall-wins","claim-wins","navigation"].includes(result.caseId));
   const originalSend=window.webContents.send.bind(window.webContents);
   window.webContents.send=function(channel,...args){
    if(channel==="zenx:protocol:notification"&&args[0]==="zen/thread/event"&&args[1]?.threadId===threadId){
@@ -289,14 +290,40 @@ async function run() {
    assert.deepEqual(result.claimedProvider.requests[1].noncePresent,[true,true,true]);
    for(const record of sends.slice(1))assert(result.hostEvents.some(n=>n.event?.item?.type==="user_message"&&n.event.item.clientId===record.params.clientUserMessageId),"actual claim before stale UI recall");
   }
+  if(result.caseId==="navigation"){notificationGate=true;let release;const wait=new Promise(done=>{release=done});recallReplyGate={wait,release};}
   const recallIndex=result.ipc.length;
   await click("document.querySelector('.pending-steer-heading button:not(:disabled)')","Actual whole-batch Recall");
+
+  if(result.caseId==="navigation"){
+   await until(async()=>Boolean(result.ipc[recallIndex]?.realHandlerReceipt?.receipt),"real recall committed while reply and notifications held");
+   await click("document.querySelector('.new-thread-action:not(:disabled)')","Native navigate to different draft before recall reply");
+   await until(async()=>await evaluate("Boolean(document.querySelector('.new-thread-composer-context'))"),"actual new-thread draft surface");
+   result.navigationDraft="Synthetic other thread draft "+crypto.randomUUID();
+   await typeNative(result.navigationDraft);
+   result.navigationResumeBaseline=result.resumeRequests.filter(r=>r.threadId===threadId).length;
+   recallReplyGate.release();releaseNotifications();
+  }
   await until(async()=>result.ipc.length===recallIndex+1&&Boolean(result.ipc[recallIndex].receipt),"actual native whole-batch recall reply");
+  if(result.caseId==="navigation"){
+   await pause(200);
+   assert.equal(await evaluate("Boolean(document.querySelector('.new-thread-composer-context'))"),true,"late recall does not navigate");
+   assert.equal(await evaluate("document.querySelector('#thread-composer')?.value"),result.navigationDraft,"late recall cannot overwrite another draft");
+   assert.equal(result.resumeRequests.filter(r=>r.threadId===threadId).length,result.navigationResumeBaseline,"late recall ACK must not request original Thread resume");
+   await screenshot("navigation-other-draft-preserved.png");
+   await revealThreadWithSidebarWheel(threadTarget);
+   await click(threadTarget,"Native return to original recalled Thread");
+   await until(async()=>await evaluate("Boolean(document.querySelector('.steer-recovery button:not(:disabled)'))"),"actual durable recall recovery available");
+   assert.equal(await evaluate("document.querySelector('#thread-composer')?.value"),newerDraft,"return does not silently restore recalled messages");
+   await click("document.querySelector('.steer-recovery button:not(:disabled)')","Native explicit recall recovery request");
+   await until(async()=>await evaluate("document.querySelectorAll('.steer-recovery button').length===2"),"actual recovery confirmation");
+   await click("document.querySelector('.steer-recovery button:not(:disabled)')","Native confirm whole recalled batch merge");
+  }
+
   const recall=result.ipc[recallIndex];result.recall=recall;
   assert.equal(recall.method,"zen/thread/steer/recall");
   assert.equal(recall.params.threadId,threadId);assert.equal(recall.params.targets.length,2);
   assert.deepEqual(recall.params.targets.map(t=>t.clientId),sends.slice(1).map(s=>s.params.clientUserMessageId));
-  if(result.caseId==="recall-wins"){
+  if(result.caseId!=="claim-wins"){
    assert.equal(recall.receipt.receipt?.type,"user_message_steer_recalled");
    await until(async()=>await evaluate("document.querySelector('#thread-composer')?.value==="+JSON.stringify(nonces[1]+"\n\n"+nonces[2]+"\n\n"+newerDraft)),"whole ordered batch restored before newer draft");
    assert.equal(await evaluate("document.querySelector('.pending-steer-heading')===null"),true,"withdrawn shelf removed");
@@ -317,7 +344,7 @@ async function run() {
   assert(finalProvider.requests.every(r=>r.finished&&!r.aborted));
   assert.deepEqual(finalProvider.requests[0].noncePresent,[true,false,false]);
   assert(finalProvider.requests.every(r=>r.threadId===threadId&&r.turnId===result.turnId),"every actual model request belongs to exact selected Thread and Turn");
-  if(result.caseId==="recall-wins"){
+  if(result.caseId!=="claim-wins"){
    assert.equal(finalProvider.requests.length,1);
    assert(finalProvider.requests.every(r=>!r.noncePresent[1]&&!r.noncePresent[2]),"withdrawn text absent every actual model request");
   }else assert.equal(finalProvider.requests.length,2);
@@ -334,6 +361,7 @@ void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
   console.error("SYNTHETIC_RECALL_CAPTURE_ERROR "+JSON.stringify({error:result.error,waitingFor:result.waitingFor,pendingOperation:result.pendingOperation}));
   if(window&&!window.isDestroyed())try{await screenshot("recall-failure.png")}catch{}
  }).finally(async()=>{
+  recallReplyGate?.release();
   releaseNotifications();
   if(ownedBackend?.connected)try{await control("disarm")}catch(error){result.cleanupGate=String(error);}
   await fs.writeFile(path.join(directory,"full-app-measurements.json"),JSON.stringify(result,null,2));
