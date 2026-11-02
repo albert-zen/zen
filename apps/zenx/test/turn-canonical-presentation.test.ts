@@ -126,35 +126,118 @@ test("attachment identity changes refresh only owning turn, including same-hash 
 });
 test("global cross-turn tool target projection is retained and backfilled target refreshes its consumer", () => {
   const stamp = { threadId: "thread", createdAt: "2026-01-01T00:00:00.000Z" };
-  const call: CanonicalItem = { ...stamp, type: "tool_call", id: "call-item", callId: "call",
-    turnId: "turn-b", name: "zenx_threads_send", arguments: {} };
-  const result: CanonicalItem = { ...stamp, type: "tool_result", id: "result", callId: "call",
-    turnId: "turn-b", exitCode: 0, output: JSON.stringify({ ref: "thread-ref", message: "message-ref" }) };
-  const earlierCall: CanonicalItem = { ...stamp, type: "tool_call", id: "discovery-call",
-    callId: "discovery", turnId: "turn-a", name: "zenx_threads_list", arguments: {} };
-  const earlierBindings: CanonicalItem = { ...stamp, type: "tool_result", id: "discovery-result",
-    callId: "discovery", turnId: "turn-a", exitCode: 0, output: "{}",
+  const call: CanonicalItem = {
+    ...stamp,
+    type: "tool_call",
+    id: "call-item",
+    callId: "call",
+    turnId: "turn-b",
+    name: "zenx_threads_send",
+    arguments: {},
+  };
+  const result: CanonicalItem = {
+    ...stamp,
+    type: "tool_result",
+    id: "result",
+    callId: "call",
+    turnId: "turn-b",
+    exitCode: 0,
+    output: JSON.stringify({ ref: "thread-ref", message: "message-ref" }),
+  };
+  const earlierCall: CanonicalItem = {
+    ...stamp,
+    type: "tool_call",
+    id: "discovery-call",
+    callId: "discovery",
+    turnId: "turn-a",
+    name: "zenx_threads_list",
+    arguments: {},
+  };
+  const earlierBindings: CanonicalItem = {
+    ...stamp,
+    type: "tool_result",
+    id: "discovery-result",
+    callId: "discovery",
+    turnId: "turn-a",
+    exitCode: 0,
+    output: "{}",
     referenceBindings: [
-      { ref: "thread-ref", ownerThreadId: "thread", namespace: "threads", kind: "thread",
-        value: { id: "other-thread", device: "local" } },
-      { ref: "message-ref", ownerThreadId: "thread", namespace: "threads", kind: "item",
-        value: { id: "earlier-turn-message", threadId: "other-thread", device: "local" } },
+      {
+        ref: "thread-ref",
+        ownerThreadId: "thread",
+        namespace: "threads",
+        kind: "thread",
+        value: { id: "other-thread", device: "local" },
+      },
+      {
+        ref: "message-ref",
+        ownerThreadId: "thread",
+        namespace: "threads",
+        kind: "item",
+        value: {
+          id: "earlier-turn-message",
+          threadId: "other-thread",
+          device: "local",
+        },
+      },
     ],
   };
-  const a = turn("turn-a", ["discovery-call"]), b = turn("turn-b", ["call-item"]);
-  const first = indexTurnCanonicalPresentation("thread", [a, b], new Map(), new Map(), {},
-    projectToolActionTargets("thread", [call, result]), undefined);
-  const second = indexTurnCanonicalPresentation("thread", [a, b], new Map(), new Map(), {},
-    projectToolActionTargets("thread", [earlierCall, earlierBindings, call, result]), first);
-  assert.deepEqual(first.turns.get("turn-b")!.toolTargets.get("call-item"),
-    { label: "message", unavailable: "missing" });
+  const a = turn("turn-a", ["discovery-call"]),
+    b = turn("turn-b", ["call-item"]);
+  const first = indexTurnCanonicalPresentation(
+    "thread",
+    [a, b],
+    new Map(),
+    new Map(),
+    {},
+    projectToolActionTargets("thread", [call, result]),
+    undefined,
+  );
+  const second = indexTurnCanonicalPresentation(
+    "thread",
+    [a, b],
+    new Map(),
+    new Map(),
+    {},
+    projectToolActionTargets("thread", [
+      earlierCall,
+      earlierBindings,
+      call,
+      result,
+    ]),
+    first,
+  );
+  assert.deepEqual(first.turns.get("turn-b")!.toolTargets.get("call-item"), {
+    label: "message",
+    unavailable: "missing",
+  });
   assert.equal(first.turns.get("turn-a"), second.turns.get("turn-a"));
   assert.notEqual(first.turns.get("turn-b"), second.turns.get("turn-b"));
   assert.deepEqual(second.turns.get("turn-b")!.toolTargets.get("call-item"), {
-    label: "message", target: { kind: "thread", id: "other-thread", itemId: "earlier-turn-message" },
+    label: "message",
+    target: {
+      kind: "thread",
+      id: "other-thread",
+      itemId: "earlier-turn-message",
+    },
   });
-  const again = indexTurnCanonicalPresentation("thread", [a, b], new Map(), new Map(), {},
-    projectToolActionTargets("thread", [earlierCall, earlierBindings, call, result]), second);
-  assert.equal(again.turns.get("turn-b"), second.turns.get("turn-b"),
-    "equal reprojected targets retain the existing per-turn context identity");
+  const again = indexTurnCanonicalPresentation(
+    "thread",
+    [a, b],
+    new Map(),
+    new Map(),
+    {},
+    projectToolActionTargets("thread", [
+      earlierCall,
+      earlierBindings,
+      call,
+      result,
+    ]),
+    second,
+  );
+  assert.equal(
+    again.turns.get("turn-b"),
+    second.turns.get("turn-b"),
+    "equal reprojected targets retain the existing per-turn context identity",
+  );
 });

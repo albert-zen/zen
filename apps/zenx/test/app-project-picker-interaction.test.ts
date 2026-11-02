@@ -8309,10 +8309,9 @@ test(
         if (key === "shell:copyAssistantMessage") counts.agent++;
         if (key === "shell:forkFromMessage") counts.fork++;
       }
-      return (originalTranslate as unknown as (...values: unknown[]) => unknown).apply(
-        i18n,
-        args,
-      );
+      return (
+        originalTranslate as unknown as (...values: unknown[]) => unknown
+      ).apply(i18n, args);
     }) as unknown as typeof i18n.t;
     const harness = await mountThreadApp({
       onNotification: (listener) => {
@@ -8366,13 +8365,28 @@ test(
         threadId: "thread-1",
         turnId: "next",
       });
-      t.diagnostic(JSON.stringify({ phase: "started", counts, renderedHistoricalTurnNumbers }));
+      t.diagnostic(
+        JSON.stringify({
+          phase: "started",
+          counts,
+          renderedHistoricalTurnNumbers,
+        }),
+      );
       // latestTurnEnd intentionally drops the previous last end when a newer
       // canonical turn_started exists. Only that Turn loses its endItemId prop.
-      assert.deepEqual(renderedHistoricalTurnNumbers, [historicalTurns],
-        "only the previous latest end may rerender; the other 4999 Turns stay unchanged");
-      assert.ok(counts.user <= 2, "only the changed end-owner input may rerender");
-      assert.ok(counts.agent <= 2, "unrelated AgentMessage contexts stay stable");
+      assert.deepEqual(
+        renderedHistoricalTurnNumbers,
+        [historicalTurns],
+        "only the previous latest end may rerender; the other 4999 Turns stay unchanged",
+      );
+      assert.ok(
+        counts.user <= 2,
+        "only the changed end-owner input may rerender",
+      );
+      assert.ok(
+        counts.agent <= 2,
+        "unrelated AgentMessage contexts stay stable",
+      );
       assert.ok(counts.fork <= 2, "unrelated fork controls stay stable");
       const boundaryCounts = { ...counts };
       await emit({
@@ -8387,9 +8401,18 @@ test(
           text: "New synthetic input",
         },
       });
-      t.diagnostic(JSON.stringify({ phase: "new-input", counts, renderedHistoricalTurnNumbers }));
+      t.diagnostic(
+        JSON.stringify({
+          phase: "new-input",
+          counts,
+          renderedHistoricalTurnNumbers,
+        }),
+      );
       assert.equal(counts.turns, boundaryCounts.turns);
-      assert.ok(counts.user - boundaryCounts.user <= 2, "only the actual new input may render");
+      assert.ok(
+        counts.user - boundaryCounts.user <= 2,
+        "only the actual new input may render",
+      );
       assert.equal(counts.agent, boundaryCounts.agent);
       assert.equal(counts.fork, boundaryCounts.fork);
       assert.ok(document.querySelector('[data-sent-message-id="next-user"]'));
@@ -8407,13 +8430,29 @@ test(
           text: "Late canonical correction",
         },
       });
-      t.diagnostic(JSON.stringify({ phase: "late-backfill", counts, renderedHistoricalTurnNumbers }));
+      t.diagnostic(
+        JSON.stringify({
+          phase: "late-backfill",
+          counts,
+          renderedHistoricalTurnNumbers,
+        }),
+      );
       assert.deepEqual(renderedHistoricalTurnNumbers, [historicalTurns, 1]);
-      assert.ok(counts.user > beforeBackfill.user && counts.user - beforeBackfill.user <= 2);
-      assert.ok(counts.agent > beforeBackfill.agent && counts.agent - beforeBackfill.agent <= 2);
-      assert.ok(counts.fork > beforeBackfill.fork && counts.fork - beforeBackfill.fork <= 2);
+      assert.ok(
+        counts.user > beforeBackfill.user &&
+          counts.user - beforeBackfill.user <= 2,
+      );
+      assert.ok(
+        counts.agent > beforeBackfill.agent &&
+          counts.agent - beforeBackfill.agent <= 2,
+      );
+      assert.ok(
+        counts.fork > beforeBackfill.fork &&
+          counts.fork - beforeBackfill.fork <= 2,
+      );
       assert.match(
-        document.querySelector(".turn")?.textContent ?? "",
+        document.querySelector('[data-read-message-id="late-history-answer"]')
+          ?.textContent ?? "",
         /Late canonical correction/u,
       );
     } finally {
