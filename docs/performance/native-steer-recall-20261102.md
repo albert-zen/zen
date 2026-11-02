@@ -55,3 +55,17 @@ This closes the four explicitly assigned native cases within their stated fake-p
 After the fourth case's behavioral/storage assertions passed, full-page PNG inspection found that the recovered composer was correct and the batch was no longer actionable, **but the old “Recall outcome is unconfirmed” warning remained visible after successful read-only recovery**. Therefore the functional pass above must not be read as complete UI acceptance.
 
 The observed recovered image SHA-256 is `313a4eed87fea7d87e68bc8870bdd66224692bc1aa0f7291b52fdba5d0dba9f0`, from [artifact-only image readback 41402842948](https://github.com/albert-zen/zen/actions/runs/41402842948), exact279f. The source success transition spreads the prior attempt, including its error. The author is correcting that state transition and adding regression coverage; the native case now additionally requires the unknown warning to disappear on authoritative recovery success while the real notification remains held. Only this fourth case needs repeating on the corrected source. This visible defect and the earlier functional pass are both retained.
+
+
+### Corrected recovery warning: native and full-image verification passed
+
+The narrowly corrected product `87208215b4ba41a54a2680b0342d606fc56e998b` explicitly constructs the ready session without retaining the old error and adds a regression test. Against279f, only the PendingSteerPanel success transition and its test changed.
+
+[Native repeat 41403239261](https://github.com/albert-zen/zen/actions/runs/41403239261), job125139460584, **passed** the fourth case with the added assertion that the old unknown warning disappears immediately after authoritative read-only recovery **while the real notification is still held**. All prior duplicate/actionability/latest-draft/model-input/receipt/storage checks also passed unchanged. The first three cases were not rerun for this narrow success-state correction; their exact279f evidence remains separately identified above.
+
+[Artifact-only readback 41403782765](https://github.com/albert-zen/zen/actions/runs/41403782765), job125141137941, supplied two full-page PNGs that were actually inspected. The unknown-state image correctly shows a disabled Recall action and a read-only Check action. The recovered image shows the two recalled messages followed by the latest draft, with **no stale unknown panel or warning**.
+
+- Unknown image SHA-256: `ee69fb955b798c07ae68fc3057b476c1da28945a7b7e9a4d6bdedde3570f6f78`.
+- Corrected recovered image SHA-256: `504d578cdbfd663e5db7e21ea4af49d4d787f530654d159f7cd59ac05f30f66e`.
+
+Thus the four assigned native functional cases and the specifically discovered recovery-warning visual defect are closed within the declared scope. No benchmark was rerun or relabelled, and the earlier fixture failure and real UI defect remain documented. The feature author owns embedding the exact screenshots in PR616; aggregate CI and merge decisions are still separate.
