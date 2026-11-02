@@ -15,7 +15,7 @@ The model receives a compact header such as `[Selected message; zenx_threads_rea
 
 ## Broader check limits
 
-The full ZenX suite ran 5,117 tests: 5,077 passed, 18 failed, 22 skipped. Failures include macOS realpath/login-PATH differences and unrelated integration failures/timeouts. The source-Find and Fleet-shell failures were separately reproduced on unchanged main `6aa0a505`; the other failures are not all independently classified. The full Core command first hit a Python dependency download timeout, then stalled after failures in the unrelated IM plugin when reusing the local environment; the task-owned run was stopped. No full-suite green result is claimed. Full logs remain in the local task artifacts.
+The full ZenX suite ran 5,117 tests: 5,077 passed, 18 failed, 22 skipped. Failures include macOS realpath/login-PATH differences and unrelated integration failures/timeouts. The source-Find and Fleet-shell failures were separately reproduced on unchanged main `6aa0a505`; the other failures are not all independently classified. The full Core command first hit a Python dependency download timeout, then stalled after failures in the unrelated IM plugin when reusing the local environment; the task-owned run was stopped. No full-suite green result is claimed. Full logs remain in the local task artifacts. The subsequent [failure audit](failure-audit.md) identifies and fixes one missed test-fixture update, reproduces eleven failures on unchanged main (including an intermittent focus test), and records six failures not reproduced in targeted runs.
 
 ## Real browser captures
 
