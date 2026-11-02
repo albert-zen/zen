@@ -265,7 +265,7 @@ test("streaming a long conversation does not clone or redraw the information cat
       "memoized surface still uses latest navigation closure",
     );
     threads = threads.map((row, index) =>
-      index === 1
+      index === 1 && row.status !== "systemError"
         ? { ...row, name: "Updated child", status: "active" as const }
         : row,
     );

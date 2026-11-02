@@ -8918,7 +8918,7 @@ test("native streaming deltas update the real App without reloading or cloning i
       );
     };
     summaries = summaries.map((row, index) =>
-      index === 1
+      index === 1 && row.status !== "systemError"
         ? { ...row, name: "Changed live child", status: "active" as const }
         : row,
     );
