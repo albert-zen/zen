@@ -1663,3 +1663,5 @@ admission's time and zone. Existing records without this context keep their exac
 recorded timestamp; replay never consults the current zone or clock.
 
 The experimental owned semantic append capability validates its own existing prefix under the exact journal owner, appends and fsyncs only new batches, and poisons uncertain outcomes; it remains disconnected from Domain admission until source-backed recovery and invalidation are independently verified.
+
+The experimental owned Trace source session serializes authoritative source publication before the existing Trace queue, shares its lane across canonical namespace instances, and expires internal append scopes without making its generation a recovery or dispatch authority; Domain activation still requires independently verified source projection and recovery.
