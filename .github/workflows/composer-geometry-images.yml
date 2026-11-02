@@ -1,0 +1,33 @@
+name: Read synthetic geometry screenshots
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/composer-geometry-images.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  read-existing-synthetic-artifact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: 41395198231
+          github-token: ${{ github.token }}
+          name: full-app-composer-geometry-en-zh
+          path: geometry
+      - name: Emit only two bounded synthetic full-page images
+        run: |
+          node <<'NODE'
+          const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict');
+          function walk(p){return fs.readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(p,e.name)):[path.join(p,e.name)]);}
+          const files=walk('geometry');
+          for(const locale of ['en','zh-CN']){
+            const matches=files.filter(f=>path.basename(f)==='geometry-'+locale+'-narrow-empty.png');
+            assert.equal(matches.length,1);
+            const bytes=fs.readFileSync(matches[0]);assert(bytes.length>0&&bytes.length<=1048576,'bounded PNG');
+            assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+            console.log('SYNTHETIC_GEOMETRY_IMAGE '+JSON.stringify({sourceRun:41395198231,source:'5e37358e69fd7344aac25cfd3802078b92f79e2d',locale,frame:'full-page narrow-empty before fixture close failure',bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),base64:bytes.toString('base64')}));
+          }
+          NODE
