@@ -136,6 +136,14 @@ export class StorageWriterOwnership {
     )
       throw new Error("Storage writer inode replaced; refusing mutation");
   }
+  /** Bind an owned storage capability to this exact journal namespace. */
+  assertDirectory(directory: string): void {
+    StorageWriterOwnership.prototype.assertHeld.call(this);
+    if (path.resolve(directory) !== path.resolve(path.dirname(this.#filename)))
+      throw new Error("Storage writer namespace mismatch");
+    if (!lstatSync(path.dirname(this.#filename)).isDirectory())
+      throw new Error("Storage writer directory must not be an alias");
+  }
   /** Domain owner calls only after model/tool/Trace and its queued I/O are drained. */
   close(): void {
     const fd = this.#fd;
