@@ -1,3 +1,4 @@
+import { runtimeCommand } from "./fixtures/agent-runtime-data.js";
 import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
@@ -8492,6 +8493,255 @@ test(
       observing = false;
       i18n.t = originalTranslate;
       await unmountApp(harness);
+    }
+  },
+);
+
+test(
+  "real App tool results preserve 5000 historical Turns and keep late tool quotes current",
+  { timeout: 180000 },
+  async (t) => {
+    const historicalTurns = 5000;
+    const command = (id: string) => ({
+      ...runtimeCommand(id, "echo synthetic", "inProgress"),
+      callId: `${id}-call`,
+    });
+    const historical: Thread = {
+      ...liveThread(),
+      status: { type: "active", activeFlags: [] },
+      turns: Array.from({ length: historicalTurns }, (_, index) => ({
+        id: `tool-history-${index}`,
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: index + 10,
+        completedAt: index + 11,
+        durationMs: 1000,
+        items: [
+          {
+            type: "userMessage",
+            id: `tool-history-user-${index}`,
+            clientId: null,
+            content: [
+              {
+                type: "text",
+                text: "Synthetic historical input",
+                text_elements: [],
+              },
+            ],
+          },
+          ...(index === 0 ? [command("old-tool")] : []),
+          {
+            type: "agentMessage",
+            id: `tool-history-agent-${index}`,
+            text: "Synthetic historical answer",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+        ],
+      })),
+    };
+    historical.turns.push({
+      id: "active-tool-turn",
+      itemsView: "full",
+      status: "inProgress",
+      error: null,
+      startedAt: 6000,
+      completedAt: null,
+      durationMs: null,
+      items: [command("active-tool")],
+    });
+    const recovery = resumed(historical);
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const consoleMessages: string[] = [];
+    t.mock.method(console, "error", (...values: unknown[]) => {
+      consoleMessages.push(values.map(String).join(" "));
+    });
+    t.mock.method(console, "warn", (...values: unknown[]) => {
+      consoleMessages.push(values.map(String).join(" "));
+    });
+    const renderedHistoricalTurnNumbers: number[] = [];
+    let observing = false;
+    const originalTranslate = i18n.t;
+    t.mock.method(i18n, "t", ((...args: unknown[]) => {
+      const options = args[1] as { number?: number } | undefined;
+      if (
+        observing &&
+        args[0] === "shell:turnNumber" &&
+        typeof options?.number === "number" &&
+        options.number <= historicalTurns
+      )
+        renderedHistoricalTurnNumbers.push(options.number);
+      return (
+        originalTranslate as unknown as (...values: unknown[]) => unknown
+      ).apply(i18n, args);
+    }) as unknown as typeof i18n.t);
+    const harness = await mountThreadApp({
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume") return recovery;
+        throw new Error(`Unexpected protocol request: ${method}`);
+      },
+    });
+    let watermark = 0;
+    const emitResult = async (
+      callId: string,
+      turnId: string,
+      id: string,
+      output: string,
+    ) => {
+      assert.ok(notify, "native event subscription is mounted");
+      await act(async () =>
+        notify!("zen/thread/event", {
+          threadId: "thread-1",
+          processEpoch: "test-process-epoch",
+          watermark: ++watermark,
+          event: {
+            type: "item_completed",
+            item: {
+              type: "tool_result",
+              id,
+              threadId: "thread-1",
+              turnId,
+              createdAt: "2026-10-30T00:00:00.000Z",
+              callId,
+              output,
+              exitCode: 0,
+            },
+          },
+        }),
+      );
+    };
+    try {
+      await selectedComposer();
+      assert.equal(
+        document.querySelectorAll(".turn").length,
+        historicalTurns + 1,
+      );
+      const firstTurn = document.querySelector(".turn")!;
+      const firstMessage = firstTurn.querySelector(".agent-copy");
+      const activeTurn = document.querySelector(".turn.inProgress")!;
+      await act(async () => {
+        firstTurn.querySelector<HTMLButtonElement>(".turn-toggle")!.click();
+        activeTurn
+          .querySelector<HTMLButtonElement>(".trace-item-toggle")!
+          .click();
+      });
+      await act(async () =>
+        firstTurn
+          .querySelector<HTMLButtonElement>(".trace-item-toggle")!
+          .click(),
+      );
+      const activeDetails = activeTurn.querySelector(".trace-tool-detail")!;
+      const oldDetails = firstTurn.querySelector(".trace-tool-detail")!;
+      assert.ok(
+        activeDetails !== null && oldDetails !== null,
+        "both tool details are mounted",
+      );
+      assert.equal(
+        activeDetails.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["active-tool"]),
+      );
+      observing = true;
+      await emitResult(
+        "active-tool-call",
+        "active-tool-turn",
+        "active-tool-result",
+        "Fresh active output",
+      );
+      assert.deepEqual(
+        renderedHistoricalTurnNumbers,
+        [],
+        "active tool completion does not rerender old Turn bodies",
+      );
+      assert.match(activeDetails.textContent ?? "", /Fresh active output/u);
+      assert.equal(
+        activeDetails.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["active-tool", "active-tool-result"]),
+      );
+      assert.ok(
+        firstTurn.querySelector(".agent-copy") === firstMessage,
+        "historical message DOM is retained",
+      );
+      assert.ok(
+        document.querySelector(".turn") === firstTurn,
+        "historical Turn DOM is retained",
+      );
+
+      await emitResult(
+        "missing-call",
+        "missing-turn",
+        "unmatched-result",
+        "Canonical unmatched result",
+      );
+      assert.deepEqual(
+        renderedHistoricalTurnNumbers,
+        [],
+        "unmatched result does not invalidate any Turn",
+      );
+      assert.equal(
+        activeDetails.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["active-tool", "active-tool-result"]),
+      );
+
+      await emitResult(
+        "old-tool-call",
+        "tool-history-0",
+        "old-tool-result",
+        "Late historical output",
+      );
+      assert.deepEqual(
+        renderedHistoricalTurnNumbers,
+        [1],
+        "late result updates only its historical Turn",
+      );
+      assert.match(oldDetails.textContent ?? "", /Late historical output/u);
+      assert.equal(
+        oldDetails.getAttribute("data-quote-item-ids"),
+        JSON.stringify(["old-tool", "old-tool-result"]),
+      );
+
+      await emitResult(
+        "active-tool-call",
+        "active-tool-turn",
+        "replacement-result",
+        "Replacement active output",
+      );
+      assert.deepEqual(
+        renderedHistoricalTurnNumbers,
+        [1],
+        "replacement leaves historical Turns reusable",
+      );
+      assert.match(
+        activeDetails.textContent ?? "",
+        /Replacement active output/u,
+      );
+      assert.doesNotMatch(
+        activeDetails.textContent ?? "",
+        /Fresh active output/u,
+      );
+      assert.equal(
+        activeDetails.getAttribute("data-quote-item-ids"),
+        JSON.stringify([
+          "active-tool",
+          "active-tool-result",
+          "replacement-result",
+        ]),
+      );
+    } finally {
+      observing = false;
+      await unmountApp(harness);
+      assert.deepEqual(
+        consoleMessages,
+        [],
+        "no React/DOM warnings or errors are accepted",
+      );
     }
   },
 );
