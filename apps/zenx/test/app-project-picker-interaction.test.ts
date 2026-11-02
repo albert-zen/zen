@@ -3264,7 +3264,9 @@ test("late canonical queue ID settles only the original unknown submission, not 
     assert.notEqual(sends[1]!.clientUserMessageId, clientId);
     const newClientId = sends[1]!.clientUserMessageId;
     const pending = await waitFor(() =>
-      document.querySelector(`[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`),
+      document.querySelector(
+        `[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`,
+      ),
     );
     assert.match(pending.textContent ?? "", /new draft after reconnect/u);
     assert.equal(composer.value, "");
@@ -3289,7 +3291,11 @@ test("late canonical queue ID settles only the original unknown submission, not 
       }),
     );
     assert.equal(composer.value, "Even newer local draft");
-    assert.ok(document.querySelector(`[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`));
+    assert.ok(
+      document.querySelector(
+        `[data-pending-send-client-id="${newClientId}"][data-send-state="unconfirmed"]`,
+      ),
+    );
     assert.match(document.body.textContent ?? "", /outcome unknown/u);
     assert.equal(sends.length, 2);
   } finally {
@@ -3330,9 +3336,14 @@ test("unconfirmed Send keeps a recoverable row and requires explicit recovery be
     const pending = document.querySelector('[data-send-state="unconfirmed"]');
     assert.ok(pending);
     assert.match(pending.textContent ?? "", /Retry this message/u);
-    assert.equal(turnStartRequests.length, 1, "unknown outcomes never automatically resend");
-    const recover = [...pending.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Add back to draft");
+    assert.equal(
+      turnStartRequests.length,
+      1,
+      "unknown outcomes never automatically resend",
+    );
+    const recover = [
+      ...pending.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Add back to draft");
     assert.ok(recover);
     await invokeButtonClick(recover);
     assert.equal(composer.value, "Retry this message");
@@ -7465,11 +7476,17 @@ for (const scenario of ["idle", "steer", "queue", "new"] as const) {
       startProjectThread: async (workspace) => started(liveThread(), workspace),
       request: async (method, params) => {
         if (method === "zen/thread/resume")
-          return resumed(scenario === "steer" || scenario === "queue" ? runningThread() : liveThread());
+          return resumed(
+            scenario === "steer" || scenario === "queue"
+              ? runningThread()
+              : liveThread(),
+          );
         if (method === "zen/turn/send") {
           sendTimes.push(performance.now());
           sendModes.push((params as { mode?: unknown }).mode);
-          sendClientIds.push((params as { clientUserMessageId: string }).clientUserMessageId);
+          sendClientIds.push(
+            (params as { clientUserMessageId: string }).clientUserMessageId,
+          );
           return admission.promise;
         }
         throw new Error(`Unexpected ${method}`);
@@ -7507,16 +7524,28 @@ for (const scenario of ["idle", "steer", "queue", "new"] as const) {
       if (immediate) {
         const pending = document.querySelector('[data-send-state="sending"]');
         assert.ok(pending);
-        assert.match(pending.textContent ?? "", /Synthetic delayed title send/u);
+        assert.match(
+          pending.textContent ?? "",
+          /Synthetic delayed title send/u,
+        );
         assert.equal(pending.hasAttribute("data-sent-message-id"), false);
-        assert.equal(pending.getAttribute("data-pending-send-client-id"), sendClientIds[0]);
+        assert.equal(
+          pending.getAttribute("data-pending-send-client-id"),
+          sendClientIds[0],
+        );
       } else {
-        assert.equal(document.querySelector("[data-pending-send-client-id]"), null);
+        assert.equal(
+          document.querySelector("[data-pending-send-client-id]"),
+          null,
+        );
       }
       await act(async () => title.resolve(undefined));
       await waitFor(() => sendTimes.length === 1);
-      assert.deepEqual(sendModes, [scenario === "queue" ? "queue" : undefined],
-        "running-thread fixture must distinguish actual steer from legacy queue");
+      assert.deepEqual(
+        sendModes,
+        [scenario === "queue" ? "queue" : undefined],
+        "running-thread fixture must distinguish actual steer from legacy queue",
+      );
       t.diagnostic(
         JSON.stringify({
           scenario,
@@ -7535,9 +7564,14 @@ for (const scenario of ["idle", "steer", "queue", "new"] as const) {
         immediate ? "" : "Synthetic delayed title send",
       );
       if (immediate) {
-        const pending = document.querySelector('[data-send-state="unconfirmed"]');
+        const pending = document.querySelector(
+          '[data-send-state="unconfirmed"]',
+        );
         assert.ok(pending);
-        assert.match(pending.textContent ?? "", /Synthetic delayed title send/u);
+        assert.match(
+          pending.textContent ?? "",
+          /Synthetic delayed title send/u,
+        );
       }
       assert.match(
         document.body.textContent ?? "",
@@ -7618,10 +7652,18 @@ test("send presentation shows honest pending before admission and canonical iden
       threadId: "thread-1",
     });
     await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
-    assert.equal(document.querySelectorAll(".user-row[data-sent-message-id]").length, 0);
-    const pending = document.querySelector(`[data-pending-send-client-id="${clientId}"][data-send-state="sending"]`);
+    assert.equal(
+      document.querySelectorAll(".user-row[data-sent-message-id]").length,
+      0,
+    );
+    const pending = document.querySelector(
+      `[data-pending-send-client-id="${clientId}"][data-send-state="sending"]`,
+    );
     assert.ok(pending);
-    assert.match(pending.textContent ?? "", /Synthetic canonically admitted message/u);
+    assert.match(
+      pending.textContent ?? "",
+      /Synthetic canonically admitted message/u,
+    );
     assert.equal(document.querySelectorAll(".turn-duration").length, 0);
     assert.equal(composer.value, "");
     const committedAt = performance.now();
@@ -7637,8 +7679,13 @@ test("send presentation shows honest pending before admission and canonical iden
         text: "Synthetic canonically admitted message",
       },
     });
-    const bubble = document.querySelector('.user-row[data-sent-message-id="admitted-user"]');
-    assert.equal(document.querySelector(`[data-pending-send-client-id="${clientId}"]`), null);
+    const bubble = document.querySelector(
+      '.user-row[data-sent-message-id="admitted-user"]',
+    );
+    assert.equal(
+      document.querySelector(`[data-pending-send-client-id="${clientId}"]`),
+      null,
+    );
     assert.ok(bubble);
     assert.match(
       bubble.textContent ?? "",
