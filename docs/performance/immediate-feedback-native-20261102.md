@@ -85,3 +85,19 @@ The child profile window was 23625.3 ms. Process CPU usage was 14536.3 ms user +
 All listed counters had zero errors/in-flight calls at stop, with no dropped phase spans. **Do not sum nested phase wall times.** One semantic-exists span lasted 6854.5 ms, but an awaited operation can be delayed by unrelated synchronous work on the same event loop; this is not evidence of 6.85 seconds of disk I/O. Other concurrent Host operations may contribute during the measured window. The main IPC duration also includes profiler start/stop/result-transfer overhead and is excluded from baseline comparisons.
 
 The strong source-level investigation priorities from this run are repeated `contextForFacts` work and timezone normalization, not an unmeasured claim that fsync alone caused the slowdown. Renderer feedback latency and durable-admission latency remain separate unresolved acceptance requirements.
+
+## Narrow empty-autosize experiment: not a 5000-turn fix
+
+Exact source `12c13b536b532c6690fdf6a26b1d32d95273834d`, [unchanged native acceptance run 41393576560](https://github.com/albert-zen/zen/actions/runs/41393576560):
+
+| Prior turns | Pending DOM, ms | First visible / input clear, ms | Canonical bubble visible, ms | Strict outcome |
+|---|---|---|---|---|
+| 0 | 17.5 / 28.8 / 12.1 | 21.2 / 29.7 / 13.4 | 673.6 / 190.1 / 142.1 | PASS |
+| 1000 | 89.5 / 62.9 / 97.2 | 126.9 / 72.4 / 135.7 | 2947.8 / 4388.8 / 3514.0 | PASS this three-sample run |
+| 5000 | 613.4 / 357.1 / 276.8 | 767.1 / 386.0 / 324.9 | 28747.0 / 21996.9 / 25809.7 | **FAIL all three** |
+
+All nine sends passed exact identity, independent storage reopen, complete Trace and zero-compaction checks. Independent hosted runners and three samples per size do not establish a stable tail-latency guarantee or causal improvement. The 5000-turn failure is retained.
+
+The initial check run had 134/136 tests pass with typecheck/build successful: one existing test required inline height `36px` while the experiment intentionally delegates empty height to CSS `auto`; another existing ResizeObserver stub supplied no entries and failed `entries.find`. These are not presented as a passing check run. Test/format successor `284d1c8` keeps the measured product behavior and corrects the fixtures; new checks are separate. Real narrow/localized-placeholder and multiline-to-empty geometry acceptance remains outstanding; jsdom call counts are not visual proof.
+
+A narrowly combined source `5e37358e69fd7344aac25cfd3802078b92f79e2d` overlays exactly the two PR614 context-prefix files onto that same UI candidate. Its intermediate native run is **5000 turns only**, not an unnecessary full variant matrix. Later release acceptance must still use the complete required history sizes and strict feedback/durable metrics separately.

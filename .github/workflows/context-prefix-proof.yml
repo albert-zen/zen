@@ -1,0 +1,60 @@
+name: Context prefix operation-count proof
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/context-prefix-proof.yml
+      - scripts/prove-context-prefix-regression.mjs
+permissions:
+  contents: read
+jobs:
+  context-prefix-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+          - variant: candidate
+            source: 4c7fbb79d65e91e01d14cfc02a9bfd861e2e79f0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c7fbb79d65e91e01d14cfc02a9bfd861e2e79f0
+          persist-credentials: false
+          path: regression-source
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Overlay only identical regression test on baseline
+        if: matrix.variant == 'baseline'
+        run: cp regression-source/test/context-preparation-performance.test.ts product/test/
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build pinned source and identical test
+        working-directory: product
+        timeout-minutes: 6
+        run: npm run build
+      - name: Verify exact expected assertion RED or complete GREEN
+        working-directory: product
+        timeout-minutes: 4
+        run: node ../diagnostic/scripts/prove-context-prefix-regression.mjs '${{ matrix.variant }}' '${{ matrix.source }}' ../proof-results context-prefix
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: context-prefix-proof-${{ matrix.variant }}
+          path: proof-results
+          if-no-files-found: error
