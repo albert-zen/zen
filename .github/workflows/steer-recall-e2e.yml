@@ -1,0 +1,78 @@
+name: Native staged-steer whole-batch recall correctness
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/steer-recall-e2e.yml
+      - apps/zenx/scripts/capture-steer-recall.cjs
+      - apps/zenx/scripts/launch-steer-recall.mjs
+      - apps/zenx/scripts/long-thread-domain-seed.mjs
+      - apps/zenx/scripts/diagnostic/synthetic-steer-gate.ts
+permissions:
+  contents: read
+jobs:
+  native-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: pending
+            source: c5b387c306d6015e3034cdacbf199edc4b8f70c2
+            count: 0
+            case: recall-wins
+          - label: pending
+            source: c5b387c306d6015e3034cdacbf199edc4b8f70c2
+            count: 0
+            case: claim-wins
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy only diagnostic drivers to exact product checkout
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-steer-recall.cjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/launch-steer-recall.mjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/diagnostic/synthetic-steer-gate.ts product/apps/zenx/src/main/
+          node <<'NODE'
+          const fs=require("node:fs");
+          const file="product/apps/zenx/src/main/app-server-host.ts";
+          const base=fs.readFileSync(file,"utf8");
+          const marker='process.on("message",';
+          if(base.split(marker).length!==2)throw Error("Expected exactly one real Host message hook");
+          const source='import { installSyntheticSteerGate } from "./synthetic-steer-gate.js";\n'+base.replace(marker,'installSyntheticSteerGate();\n\n'+marker);
+          fs.writeFileSync(file,source);
+          NODE
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production storage and actual App
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run prepare:first-party-plugins --workspace @zen/zenx
+          npm run typecheck:prepared --workspace @zen/zenx
+          npm run build --workspace @zen/zenx
+      - name: Full native App real staged steer and recall
+        working-directory: product
+        timeout-minutes: 12
+        run: node apps/zenx/scripts/launch-steer-recall.mjs ../results '${{ matrix.count }}' '${{ matrix.label }}' '${{ matrix.case }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-steer-recall-${{ matrix.case }}
+          path: results
+          if-no-files-found: error
