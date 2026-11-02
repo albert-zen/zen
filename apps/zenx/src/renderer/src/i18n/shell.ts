@@ -955,7 +955,8 @@ export const zhCN = {
   steerRecalling: "正在撤回…",
   steerHeldNotice:
     "这些消息尚未进入模型；你明确发起、重试或替换下一轮时会一并提交，可先全部撤回。",
-  steerWaitingNotice: "正在等待当前模型、工具或压缩工作到达下一次输入边界。撤回不会中断这些工作。",
+  steerWaitingNotice:
+    "正在等待当前模型、工具或压缩工作到达下一次输入边界。撤回不会中断这些工作。",
   steerPendingDetails: "查看等待中的消息",
   steerStructuredInput: "引用或附件",
   steerImageCount: "图片：{{count}} 张",

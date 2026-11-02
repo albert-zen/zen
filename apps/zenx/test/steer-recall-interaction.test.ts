@@ -443,12 +443,23 @@ test("unsupported whole batch makes no recall RPC", async () => {
   });
 });
 
-test("receipt shelf does not rescan 5000 unchanged items on Composer rerenders", async (t) => {
+test("receipt shelf does not rescan 5000 unchanged items on parent rerenders", async () => {
   await withRuntimeDom(async () => {
     const items: CanonicalItem[] = Array.from({ length: 5000 }, (_, index) =>
       queueItem(index, [{ type: "text", text: "Synthetic history" }]),
     );
-    const filter = t.mock.method(items, "filter");
+    const countFilters = (current: CanonicalItem[]) => {
+      let calls = 0;
+      Object.defineProperty(current, "filter", {
+        configurable: true,
+        value(...args: unknown[]) {
+          calls++;
+          return Reflect.apply(Array.prototype.filter, current, args);
+        },
+      });
+      return () => calls;
+    };
+    const filterCount = countFilters(items);
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -469,21 +480,81 @@ test("receipt shelf does not rescan 5000 unchanged items on Composer rerenders",
     };
     try {
       await render("thread-1");
-      assert.equal(filter.mock.callCount(), 1);
+      assert.equal(filterCount(), 1);
       for (let input = 0; input < 12; input++) await render("thread-1");
-      assert.equal(filter.mock.callCount(), 1);
+      assert.equal(filterCount(), 1);
       assert.equal(container.textContent, "");
       await render("thread-2");
-      assert.equal(filter.mock.callCount(), 2);
+      assert.equal(filterCount(), 2);
       const replacement = [...items];
-      const replacementFilter = t.mock.method(replacement, "filter");
+      const replacementFilterCount = countFilters(replacement);
       await render("thread-2", replacement);
-      assert.equal(replacementFilter.mock.callCount(), 1);
+      assert.equal(replacementFilterCount(), 1);
       await render("thread-2", replacement);
-      assert.equal(replacementFilter.mock.callCount(), 1);
+      assert.equal(replacementFilterCount(), 1);
     } finally {
       await act(async () => root.unmount());
       container.remove();
     }
+  });
+});
+
+test("successful read-only Check clears the previous unknown warning before canonical notifications", async () => {
+  await withRuntimeDom(async (h) => {
+    const thread = staged();
+    let request!: NativeSteerRecallParams;
+    const calls: string[] = [];
+    let restores = 0;
+    let reads = 0;
+    protocol(async (method, value) => {
+      calls.push(method);
+      if (method === "zen/thread/steer/recall") {
+        request = value as NativeSteerRecallParams;
+        throw new Error("Actual recall reply lost");
+      }
+      assert.equal(method, "zen/thread/read");
+      if (++reads === 1) throw new Error("Automatic read reply lost");
+      return {
+        thread: {
+          id: thread.id,
+          items: [...thread.canonicalItems!, receipt(request)],
+        },
+      };
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => {
+        restores++;
+        return true;
+      },
+    });
+    await h.click(recallButton);
+    await flush();
+    assert.equal(restores, 0);
+    assert.ok(
+      document.body.textContent!.includes(i18n.t("shell:steerRecallUnknown")),
+    );
+    const check = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".pending-steer-panel button",
+      ),
+    ].find(
+      (button) => button.textContent === i18n.t("shell:steerRecallCheck"),
+    )!;
+    assert.ok(check);
+    await act(async () => check.click());
+    await flush();
+    assert.equal(restores, 1);
+    assert.equal(
+      document.body.textContent!.includes(i18n.t("shell:steerRecallUnknown")),
+      false,
+    );
+    assert.equal(document.querySelector(recallButton), null);
+    assert.equal(document.querySelector("[data-queue-id]"), null);
+    assert.deepEqual(calls, [
+      "zen/thread/steer/recall",
+      "zen/thread/read",
+      "zen/thread/read",
+    ]);
   });
 });
