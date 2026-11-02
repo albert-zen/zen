@@ -1,3 +1,5 @@
+import { parseSkillDraft, withSkillDraft } from "./skill-draft.js";
+import { normalizeInlineReferences } from "./reference-draft.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
 export type ComposerIntent =
   "start" | "batch-next" | "queue" | "steer" | "replace";
@@ -261,6 +263,27 @@ function reconcilePendingSendPresentations(
     : { ...state, pendingSends };
 }
 
+/** Decode once per draft, preserve UTF-16 token positions, and encode one header. */
+function mergeRecoveredDraftText(newer: string, recovered: string): string {
+  const newerDraft = parseSkillDraft(newer);
+  const recoveredDraft = parseSkillDraft(recovered);
+  const first = normalizeInlineReferences(newerDraft.text, newerDraft.references);
+  const second = normalizeInlineReferences(recoveredDraft.text, recoveredDraft.references);
+  const separator = first.text.length > 0 && second.text.length > 0 ? "\n\n" : "";
+  const offset = first.text.length + separator.length;
+  return withSkillDraft(
+    first.text + separator + second.text,
+    [...newerDraft.skills, ...recoveredDraft.skills],
+    [
+      ...first.references,
+      ...second.references.map((reference) => ({
+        ...reference,
+        position: reference.position! + offset,
+      })),
+    ],
+  );
+}
+
 /** Explicit recovery never overwrites a newer draft or sends anything. */
 export function recoverPendingSend(
   state: ComposerState,
@@ -280,7 +303,7 @@ export function recoverPendingSend(
   const draft = empty
     ? cloneDraft(entry.draft)
     : {
-        text: [state.draft.text, entry.draft.text].filter(Boolean).join("\n\n"),
+        text: mergeRecoveredDraftText(state.draft.text, entry.draft.text),
         images,
       };
   const draftRevision = state.draftRevision + 1;

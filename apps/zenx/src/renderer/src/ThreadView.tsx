@@ -1540,6 +1540,7 @@ function ThreadViewContent({
                 : renderedTranscriptRows}
               {composer.pendingSends && (
                 <PendingSendRows
+                  key={thread?.id ?? composerId}
                   messages={composer.pendingSends}
                   onRecover={onRecoverPendingSend}
                   onDismiss={onDismissPendingSend}

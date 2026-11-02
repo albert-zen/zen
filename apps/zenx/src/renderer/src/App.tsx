@@ -5401,9 +5401,7 @@ function AgentSurface({
                 threadId: threadDetail.id,
               });
             }}
-            approvals={approvals.filter(
-              (approval) => approval.params.threadId === threadDetail.id,
-            )}
+            approvals={approvals}
             composer={composerStates[threadDetail.id] ?? emptyComposerState()}
             composerDisabled={threadArchiving}
             imageCapabilityError={imageCapabilityMessage(

@@ -1,3 +1,5 @@
+import { parseSkillDraft, withSkillDraft } from "../src/renderer/src/skill-draft.js";
+import { referenceMessage, parseSentReferenceContent } from "../src/renderer/src/reference-draft.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { UserMessageItem } from "../../../src/item.js";
@@ -124,4 +126,55 @@ test("legacy new-thread and side-chat admission retains its previous draft contr
   const legacy = beginComposerSubmission(editComposer(emptyComposerState(), "Legacy"), "start", null, () => "legacy");
   assert.equal(legacy.draft.text, "Legacy");
   assert.equal(legacy.pendingSends, undefined);
+});
+
+test("recovery merges plain newer text with original references without exposing a second header", () => {
+  const original = withSkillDraft("Original question", [], [
+    { kind: "file", name: "original.ts", cwd: "/synthetic", path: "original.ts" },
+  ]);
+  const pending = beginImmediateComposerSubmission(
+    editComposer(emptyComposerState(), original), "start", null, () => "ref-original",
+  );
+  const failed = failImmediateComposerSubmission(editComposer(pending, "Newer text"), "ref-original", "IPC closed", true);
+  const recovered = recoverPendingSend(failed, "ref-original");
+  const decoded = parseSkillDraft(recovered.draft.text);
+  assert.equal(decoded.references.length, 1);
+  assert.equal(decoded.references[0]?.name, "original.ts");
+  assert.match(decoded.text, /^Newer text\n\nOriginal question/);
+  assert.equal(decoded.text.charAt(decoded.references[0]!.position!), "\uFFFC");
+  assert.doesNotMatch(decoded.text, /\[zenx-references:/);
+});
+
+test("recovery preserves both drafts' positioned references, UTF-16 offsets, skills and images", () => {
+  const newerText = "😀 newer \uFFFC";
+  const oldText = "Old \uFFFC";
+  const newerSkill = { id: "11111111-1111-1111-1111-111111111111", name: "new_skill" };
+  const oldSkill = { id: "22222222-2222-2222-2222-222222222222", name: "old_skill" };
+  const original = withSkillDraft(oldText, [oldSkill], [
+    { kind: "file", name: "old.ts", cwd: "/synthetic", path: "old.ts", position: oldText.indexOf("\uFFFC") },
+  ]);
+  const newer = withSkillDraft(newerText, [newerSkill], [
+    { kind: "file", name: "new.ts", cwd: "/synthetic", path: "new.ts", position: newerText.indexOf("\uFFFC") },
+  ]);
+  const pending = beginImmediateComposerSubmission(
+    addComposerImages(editComposer(emptyComposerState(), original), [image("old-image")]),
+    "start", null, () => "structured-original",
+  );
+  const edited = addComposerImages(editComposer(pending, newer), [image("new-image")]);
+  const failed = failImmediateComposerSubmission(edited, "structured-original", "IPC closed", true);
+  const recovered = recoverPendingSend(failed, "structured-original");
+  const decoded = parseSkillDraft(recovered.draft.text);
+  assert.deepEqual(decoded.skills, [newerSkill, oldSkill]);
+  assert.deepEqual(decoded.references.map((ref) => ref.name), ["new.ts", "old.ts"]);
+  assert.equal(decoded.references[0]?.position, newerText.indexOf("\uFFFC"));
+  assert.equal(decoded.references[1]?.position, newerText.length + 2 + oldText.indexOf("\uFFFC"));
+  for (const reference of decoded.references)
+    assert.equal(decoded.text.charAt(reference.position!), "\uFFFC");
+  assert.equal([...decoded.text].filter((char) => char === "\uFFFC").length, decoded.references.length);
+  assert.deepEqual(recovered.draft.images.map((entry) => entry.id), ["new-image", "old-image"]);
+  assert.doesNotMatch(decoded.text, /\[zenx-references:/);
+  const sent = referenceMessage(decoded.text, decoded.references, "merged-new-id");
+  assert.equal(parseSentReferenceContent(sent, "merged-new-id").references.length, 2);
+  const next = beginImmediateComposerSubmission(recovered, "start", null, () => "merged-new-id");
+  assert.equal(next.submission?.clientUserMessageId, "merged-new-id");
 });

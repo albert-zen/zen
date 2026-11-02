@@ -1,3 +1,5 @@
+import { parseSkillDraft } from "./skill-draft.js";
+import { referenceTitle } from "./reference-draft.js";
 import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { PendingSendPresentation } from "./composer-state.js";
@@ -24,7 +26,13 @@ export const PendingSendRows = memo(function PendingSendRows({
     catch (error) { setCheckError(String(error)); }
     finally { setChecking(false); }
   };
-  return messages.map((message) => (
+  return messages.map((message) => {
+    const draft = parseSkillDraft(message.draft.text);
+    const displayText = [
+      referenceTitle(draft.text, draft.references),
+      ...draft.skills.map((skill) => skill.name),
+    ].filter(Boolean).join("\n");
+    return (
     <article
       className="user-row pending-send-row"
       key={message.clientId}
@@ -32,8 +40,8 @@ export const PendingSendRows = memo(function PendingSendRows({
       data-send-state={message.status}
     >
       <div className="user-bubble">
-        {message.draft.text && (
-          <p className="pending-send-content">{message.draft.text}</p>
+        {displayText && (
+          <p className="pending-send-content">{displayText}</p>
         )}
         {message.draft.images.length > 0 && (
           <ul aria-label={t("attachedImages")}>
@@ -70,5 +78,6 @@ export const PendingSendRows = memo(function PendingSendRows({
       )}
       {checkError && <p role="alert">{checkError}</p>}
     </article>
-  ));
+    );
+  });
 });

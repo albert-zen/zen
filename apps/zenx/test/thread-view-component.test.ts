@@ -16,6 +16,7 @@ import type { ApprovalCardState } from "../src/renderer/src/approval-state.js";
 import {
   addComposerImages,
   beginImmediateComposerSubmission,
+  failImmediateComposerSubmission,
   acceptComposerSubmission,
   editComposer,
   emptyComposerState,
@@ -5068,4 +5069,88 @@ test("ordinary send shows an honest local row and clears input before admission 
     assert.equal(requiredElement<HTMLTextAreaElement>("textarea").value, "Newer draft");
     assert.equal(sends, 1);
   });
+});
+
+test("checking an old thread cannot disable or report a delivery error in the new thread", async () => {
+  await withDom(async (root) => {
+    let rejectOld!: (error: Error) => void;
+    const oldRead = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
+    const pending = (id: string) => failImmediateComposerSubmission(
+      beginImmediateComposerSubmission(editComposer(emptyComposerState(), id), "start", null, () => id),
+      id, "Unknown original receipt", true,
+    );
+    const renderView = (id: string) => root.render(
+      createElement(ThreadView, {
+        thread: { ...thread([]), id },
+        composer: pending(id),
+        approvals: [],
+        onDraftChange: () => undefined,
+        onInterrupt: noop,
+        onRespondToApproval: noop,
+        onSubmit: noop,
+        onCheckPendingSends: () => id === "thread-a" ? oldRead : Promise.resolve(),
+      }),
+    );
+    await act(async () => renderView("thread-a"));
+    const checkButton = () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Check delivery",
+    )!;
+    await act(async () => checkButton().click());
+    assert.equal(checkButton().disabled, true);
+    await act(async () => renderView("thread-b"));
+    assert.equal(checkButton().disabled, false);
+    await act(async () => { rejectOld(new Error("Old A read failed")); await oldRead.catch(() => undefined); });
+    assert.equal(checkButton().disabled, false);
+    assert.doesNotMatch(document.body.textContent ?? "", /Old A read failed/);
+    assert.ok(document.querySelector('[data-pending-send-client-id="thread-b"]'));
+  });
+});
+
+test("stable App transcript props avoid visiting all turn IDs for composer-only changes", async () => {
+  const count = 160;
+  let idReads = 0;
+  const turns = Array.from({ length: count }, (_, i) => ({
+    ...turnWithItems("completed", [user(`Question ${i}`, `user-${i}`), agent(`Answer ${i}`)]),
+    get id() { idReads++; return `memo-turn-${i}`; },
+  }));
+  const view = { ...thread(turns), canonicalItems: [] };
+  const approvals: ApprovalCardState[] = [];
+  await withDom(async (root) => {
+    const renderView = (text: string) => root.render(
+      createElement(ThreadView, {
+        thread: view, approvals, composer: editComposer(emptyComposerState(), text),
+        onDraftChange: () => undefined, onInterrupt: noop,
+        onRespondToApproval: noop, onSubmit: noop,
+      }),
+    );
+    await act(async () => renderView(""));
+    idReads = 0;
+    await act(async () => renderView("Typing is not a history update"));
+    assert.ok(idReads < count, `Composer-only render revisited ${idReads} turn IDs`);
+    assert.equal(document.querySelectorAll(".turn").length, count);
+  });
+});
+
+test("local sending presentation hides draft framing but keeps readable skill and reference names", async () => {
+  const { PendingSendRows } = await import("../src/renderer/src/PendingSendRows.js");
+  const { withSkillDraft } = await import("../src/renderer/src/skill-draft.js");
+  const raw = withSkillDraft(
+    "Use this file",
+    [{ id: "11111111-1111-1111-1111-111111111111", name: "synthetic_skill" }],
+    [{ kind: "file", name: "example.ts", cwd: "/synthetic", path: "example.ts" }],
+  );
+  const html = renderToStaticMarkup(createElement(PendingSendRows, {
+    messages: [{
+      clientId: "presentation-only",
+      intent: "start",
+      draft: { text: raw, images: [] },
+      status: "sending",
+      error: null,
+    }],
+  }));
+  assert.match(html, /Use this file/);
+  assert.match(html, /synthetic_skill/);
+  assert.match(html, /example.ts/);
+  assert.doesNotMatch(html, /\[skill:11111111/);
+  assert.doesNotMatch(html, /data-sent-message-id/);
 });
