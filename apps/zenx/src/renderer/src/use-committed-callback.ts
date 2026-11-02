@@ -8,9 +8,12 @@ export function useCommittedCallback<Args extends unknown[], Result>(
   useLayoutEffect(() => {
     committed.current = callback;
   });
-  useLayoutEffect(() => () => {
-    committed.current = null;
-  }, []);
+  useLayoutEffect(
+    () => () => {
+      committed.current = null;
+    },
+    [],
+  );
   return useCallback((...args: Args) => {
     const current = committed.current;
     if (current === null) throw new Error("UI action is no longer available");
