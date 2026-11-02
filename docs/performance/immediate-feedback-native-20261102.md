@@ -162,3 +162,24 @@ Production DomainThreadJournal seeded 5000 completed turns / 10,000 visible mess
 | 3 | 130.2 | 149.9 | 3497.9 | 1185.1 |
 
 Independent read-only storage reopening verified all three exact new message identities once, 5003 total user messages, complete Trace, zero compaction facts and zero compaction attempts. Pending rows were honestly marked sending, not durably confirmed. This is n=3 on one disposable hosted Mac runner; frame opportunity is not physical-pixel timing. Separate runners and host load prevent attributing the difference from the earlier 617 numbers to page quotes. Canonical/IPC delays remain separately reported.
+
+## Current-base quote-aware per-Turn contexts (#620): bounded same-runner comparison
+
+Exact production baseline A `ad4c029d31b848d7a46c2bf9db64b4504cb5a1e2` and candidate B `07dccde9020847bd694da240ce7a9f79386cd379` were each built once and run on **the same hosted native Mac**, in fixed **A1 then B1** order with a fresh private profile per block. Each block contains three ordinary native sends with 5000 prior completed turns, 5000 user rows, 5000 assistant rows and 5000 rendered Turn blocks. Neither tracked production checkout was modified.
+
+[Run 41412125280](https://github.com/albert-zen/zen/actions/runs/41412125280), job `125167314404`, diagnostic source `b8f4df339a700a5091a163c0d265710f654ea6ff`, finished **RED as designed because baseline A missed the unchanged gate once**. A's failure did not suppress B. B passed all three samples; the workflow did not turn the overall baseline failure green.
+
+| Source | Pending DOM, ms | First visible pending / input clear, ms | Canonical-visible frame, ms | Actual main IPC, ms |
+|---|---|---|---|---|
+| A: current production baseline | 156.0 / 220.4 / 170.4 | 176.6 / **314.5** / 199.9 | 6122.1 / 7620.6 / 4853.1 | 2210.9 / 2976.3 / 1804.9 |
+| B: quote-aware per-Turn contexts | 90.4 / 141.9 / 147.4 | **113.0 / 162.7 / 171.6** | 3677.1 / 1675.7 / 2608.3 | 1998.6 / 1293.2 / 2156.0 |
+
+Both first-visible feedback **and** input clear had to be finite, nonnegative and <=200 ms in **every** sample, including A. Pending rows were the real product's `sending` state, not confirmed receipt. Canonical notification times were A 3848.6 / 5370.0 / 3235.8 ms and B 3173.1 / 1482.9 / 2335.1 ms, on the renderer's own clock. Main IPC durations use a separate clock and are not subtracted from renderer timestamps.
+
+All six messages passed real protocol request/client/message identity matching and final canonical projection verification. Both normal Host shutdowns were followed by independent read-only production-storage reopen: **5003 user messages, exactly three matched new messages, complete Trace, zero compaction facts and zero compaction attempts**. The v2 capture (`b5ea8ee73ba37ac819f136c98afb5804e59fdf58`) and history/verification helper (`5bab856b381aadccc8005e975d156142f380a4ed`) were unchanged. There were zero full-history reads between samples.
+
+[Full JSON and whole-window synthetic before/after screenshots](https://github.com/albert-zen/zen/actions/runs/41412125280/artifacts/13125329176) are retained in artifact `native-turn-quote-same-runner-ab-5000`; ZIP SHA256 `2ed436ee8bfab159712ad1d0d0461fd212e3380c3bee81c1357ebc7195e89305`. Passive observer mutation callbacks totaled A 33.6 / 0.0 / 0.1 ms and B 1.3 / 0.1 / 0.1 ms; frame callback work was 0.3–0.4 ms per sample. These counters do not prove zero total measurement disturbance.
+
+**Limit:** fixed A→B and n=3 per source, not a randomized/counterbalanced study or p95 estimate. The runner had three virtual M1 CPUs, and one-minute load and free memory changed between blocks (A start roughly 14.9 / 1.23 GiB; B start roughly 21.0 / 2.85 GiB). The observed candidate passed this bounded feedback/clear acceptance and had lower canonical-frame times in these samples; this does not establish a stable causal speedup, a user's-device guarantee, or that long-history durable latency is solved. Candidate actual IPC still took 1.29–2.16 seconds and canonical visibility 1.68–3.68 seconds. Full repository CI, independent source review and merge approval remain separate.
+
+After independent source/CI acceptance and root's visual inspection of the full B1 sample-3 after screenshot (empty composer, canonical user bubble, normal full App), [#620](https://github.com/albert-zen/zen/pull/620) merged as `8a1fda8d94e713bb8a6be3b9ec8019a875dfa895`. This merge does not alter the RED A/B workflow conclusion or expand its bounded performance claim.
