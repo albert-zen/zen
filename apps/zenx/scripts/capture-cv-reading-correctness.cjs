@@ -87,14 +87,103 @@ async function until(check, label) {
   }
   diagnosticFailure("ui-readiness-timeout");
 }
+// Diagnostic identities are bounded public UI classes/roles and this fixture's IDs, never text or paths.
+function inputTargetIdentity(element) {
+  const classes = new Set([
+    "reference-open-source",
+    "reference-token-details",
+    "reference-token",
+    "reference-details-popover",
+    "queued-message-editor",
+    "queue-row-edit",
+    "queue-preview-text",
+    "queue-row",
+    "cm-content",
+    "thread-row",
+    "thread-row-shell",
+    "user-row",
+    "back-live",
+  ]);
+  const roles = new Set(["button", "dialog", "group", "textbox", "link"]);
+  const tags = new Set([
+    "BUTTON",
+    "DIV",
+    "SPAN",
+    "SVG",
+    "PATH",
+    "P",
+    "ARTICLE",
+    "SECTION",
+    "TEXTAREA",
+    "INPUT",
+    "A",
+  ]);
+  const lineage = [];
+  for (
+    let node = element instanceof Element ? element : null;
+    node && lineage.length < 6;
+    node = node.parentElement
+  ) {
+    const id =
+      node.dataset?.quoteItemId ??
+      node.dataset?.sentMessageId ??
+      node.dataset?.turnId ??
+      node.dataset?.threadId ??
+      node.dataset?.queueId;
+    lineage.push({
+      tag: tags.has(node.tagName) ? node.tagName : "OTHER",
+      role: roles.has(node.getAttribute("role"))
+        ? node.getAttribute("role")
+        : null,
+      classes: [...node.classList].filter((name) => classes.has(name)),
+      fixtureId:
+        typeof id === "string" &&
+        /^synthetic-cv-(?:reading(?:-turn-\d+(?:-user|-agent)?)?|other|queue)$/.test(
+          id,
+        )
+          ? id
+          : null,
+    });
+  }
+  return lineage;
+}
+function inspectClickTarget(element, identify) {
+  if (!(element instanceof Element))
+    return {
+      rendererPreflightMs: performance.now(),
+      targetPresent: false,
+      targetContainsHit: false,
+      point: null,
+      targetBounds: null,
+      targetIdentity: [],
+      hitIdentity: [],
+    };
+  const rect = element.getBoundingClientRect(),
+    point = {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    };
+  const hit = document.elementFromPoint(point.x, point.y);
+  return {
+    rendererPreflightMs: performance.now(),
+    targetPresent: true,
+    point,
+    targetBounds: {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+    targetContainsHit: element.contains(hit),
+    targetIdentity: identify(element),
+    hitIdentity: identify(hit),
+  };
+}
 async function click(expression, label) {
   result.pendingOperation = label;
   await until(
     async () => Boolean(await evaluate(`Boolean(${expression})`)),
     label,
-  );
-  const p = await evaluate(
-    `(()=>{const e=${expression},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(!e.contains(document.elementFromPoint(x,y))){const describe=n=>{const b=n.getBoundingClientRect(),s=getComputedStyle(n);return {tag:n.tagName,id:n.id,className:typeof n.className==='string'?n.className:n.className.baseVal,bounds:{left:b.left,top:b.top,width:b.width,height:b.height},zIndex:s.zIndex,visibility:s.visibility,pointerEvents:s.pointerEvents}};throw Error('Obscured target: '+${JSON.stringify(label)}+' '+JSON.stringify({target:describe(e),point:{x,y},hitStack:document.elementsFromPoint(x,y).slice(0,5).map(describe)}))}return {x:Math.round(x),y:Math.round(y)}})()`,
   );
   window.show();
   window.focus();
@@ -103,6 +192,14 @@ async function click(expression, label) {
     async () => window.isFocused() && window.webContents.isFocused(),
     "Owned native window and renderer focus",
   );
+  const observed = await evaluate(
+    `(${inspectClickTarget.toString()})(${expression}, ${inputTargetIdentity.toString()})`,
+  );
+  const dispatch = { label, preflight: observed, mainDispatchMs: null };
+  (result.inputDispatches ??= []).push(dispatch);
+  check(observed.targetContainsHit, "native-click-preflight-hit-mismatch");
+  const p = observed.point;
+  dispatch.mainDispatchMs = performance.now();
   window.webContents.sendInputEvent({
     type: "mouseDown",
     button: "left",
@@ -194,7 +291,7 @@ const networkReady = app.whenReady().then(() => {
 
 // All observer helpers read current DOM; only their own bounded diagnostic state is written.
 // No DOM insertion, property assignment, focus(), scrollTo(), Range mutation or RPC write.
-function installObservation() {
+function installObservation(identify) {
   const q = (selector) => document.querySelector(selector);
   const bounds = () => {
     const view = q(".messages"),
@@ -296,6 +393,7 @@ function installObservation() {
     const view = q(".messages"),
       target = item(id),
       popup = q(".reference-details-popover"),
+      sourceButton = popup?.querySelector(".reference-open-source") ?? null,
       dialog = q(".queued-message-editor");
     const events = [],
       closes = { popup: null, dialog: null },
@@ -303,6 +401,18 @@ function installObservation() {
         top: view.scrollTop,
         popup: !!popup,
         dialog: !!dialog,
+        popupConnected: popup?.isConnected ?? false,
+        popupState: popup?.dataset.state ?? null,
+        sourceIdentity: identify(sourceButton),
+        sourceConnected: sourceButton?.isConnected ?? false,
+        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches,
+        popupAnimationName: popup
+          ? getComputedStyle(popup).animationName
+          : null,
+        dialogAnimationName: dialog
+          ? getComputedStyle(dialog).animationName
+          : null,
         popupAnimation: popup
           ? getComputedStyle(popup).animationDuration
           : null,
@@ -337,12 +447,20 @@ function installObservation() {
             push(name + "-closed-presence", {
               animationName: getComputedStyle(node).animationName,
               animationDuration: getComputedStyle(node).animationDuration,
+              connected: node.isConnected,
+              state: node.dataset.state,
+              reducedMotion: window.matchMedia(
+                "(prefers-reduced-motion: reduce)",
+              ).matches,
             });
             if (name === "popup") resolveClosing(true);
           }
           if (!node.isConnected && closes[name] === null) {
             closes[name] = performance.now();
-            push(name + "-removed");
+            push(name + "-removed", {
+              connected: node.isConnected,
+              lastState: node.dataset.state ?? null,
+            });
           }
         }
       const pin =
@@ -366,6 +484,15 @@ function installObservation() {
       push("input", {
         kind: e.type,
         trusted: e.isTrusted,
+        targetIdentity: identify(e.target),
+        exactSource: Boolean(
+          sourceButton &&
+          (e.target === sourceButton || sourceButton.contains(e.target)),
+        ),
+        sourceConnected: sourceButton?.isConnected ?? false,
+        withinSavedPopup: Boolean(popup?.contains(e.target)),
+        point:
+          typeof e.clientX === "number" ? { x: e.clientX, y: e.clientY } : null,
         popupConnected: popup?.isConnected ?? false,
         popupState: popup?.dataset.state ?? null,
         sidebarThreadId:
@@ -373,6 +500,13 @@ function installObservation() {
       });
     const focus = (e) =>
       push("focus", {
+        targetIdentity: identify(e.target),
+        exactSource: Boolean(
+          sourceButton &&
+          (e.target === sourceButton || sourceButton.contains(e.target)),
+        ),
+        popupConnected: popup?.isConnected ?? false,
+        popupState: popup?.dataset.state ?? null,
         target:
           e.target === target
             ? "target"
@@ -389,7 +523,13 @@ function installObservation() {
     });
     view.addEventListener("scroll", scroll);
     document.addEventListener("focusin", focus, true);
-    for (const type of ["wheel", "pointerdown", "keydown", "selectionchange"])
+    for (const type of [
+      "wheel",
+      "pointerdown",
+      "click",
+      "keydown",
+      "selectionchange",
+    ])
       document.addEventListener(type, input, true);
     timeline = { id, initial, events, closes };
     window.__readingProof.closing = () => closing;
@@ -398,7 +538,13 @@ function installObservation() {
       observer.disconnect();
       view.removeEventListener("scroll", scroll);
       document.removeEventListener("focusin", focus, true);
-      for (const type of ["wheel", "pointerdown", "keydown", "selectionchange"])
+      for (const type of [
+        "wheel",
+        "pointerdown",
+        "click",
+        "keydown",
+        "selectionchange",
+      ])
         document.removeEventListener(type, input, true);
     };
     return initial;
@@ -612,6 +758,7 @@ async function settledNavigation(id) {
     trace = await read(() => window.__readingProof.finish());
   result.lastGeometry = observe("geometry", m);
   result.lastTimeline = observe("timeline", trace);
+  assertSourceClick(trace);
   check(m?.focused && m.uncovered, "actual-target-uncovered-and-focused");
   const height = m.bounds.bottom - m.bounds.top;
   if (m.height > height)
@@ -664,7 +811,22 @@ async function settledNavigation(id) {
   );
   return { geometry: m, timeline: trace };
 }
+function assertSourceClick(timeline) {
+  check(
+    timeline.events.some(
+      (event) =>
+        event.type === "input" &&
+        event.kind === "click" &&
+        event.trusted &&
+        event.exactSource &&
+        event.sourceConnected &&
+        event.withinSavedPopup,
+    ),
+    "source-action-click-not-observed",
+  );
+}
 function assertWaitingCancellation(timeline, kind, sidebarThreadId = null) {
+  assertSourceClick(timeline);
   const input = timeline.events.find(
     (e) =>
       e.type === "input" &&
@@ -757,7 +919,9 @@ async function run() {
   await waitForFixtureRow(fixture.threadId);
   result.stage = "fixture-thread-selection";
   await chooseThread(fixture.threadId);
-  await read(installObservation);
+  await evaluate(
+    `(${installObservation.toString()})(${inputTargetIdentity.toString()})`,
+  );
   const initial = await read(() => ({
     turns: document.querySelectorAll(".messages [data-turn-id]").length,
     users: document.querySelectorAll(".messages [data-sent-message-id]").length,
@@ -1230,6 +1394,8 @@ async function verifyPackagedRuntime() {
   };
 }
 const failureReasons = new Set([
+  "native-click-preflight-hit-mismatch",
+  "source-action-click-not-observed",
   "cv-visibility-api-supported",
   "navigation-target-focus-observed",
   "navigation-reveal-pin-observed",
@@ -1298,6 +1464,8 @@ void verifyPackagedRuntime()
     ].includes(result.reason)
       ? "fixture-window-not-reached"
       : [
+            "native-click-preflight-hit-mismatch",
+            "source-action-click-not-observed",
             "resize-window-width-applied",
             "selection-resize-width-not-applied",
             "navigation-scroll-branch-not-observed",
