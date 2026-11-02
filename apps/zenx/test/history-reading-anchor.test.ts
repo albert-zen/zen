@@ -118,7 +118,10 @@ test("reading anchor capture is identity-based and bounded, never walks historic
       itemId: "item-a",
       offset: 20,
     });
-    assert.equal(findReadingAnchor(viewport, anchor!), item);
+    assert.ok(
+      findReadingAnchor(viewport, anchor!) === item,
+      "Resolved anchor is the exact expected DOM item",
+    );
     assert.ok(reads() <= 12, `bounded geometry reads: ${reads()}`);
   });
 });
@@ -204,7 +207,7 @@ test("stale owners and missing targets never focus, consume or endlessly retry",
     frame();
     frame();
     assert.equal(viewport.scrollTop, 0);
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
     revealAndPositionReadingTarget({
       viewport,
       turnId: "turn-a",
@@ -237,7 +240,7 @@ test("navigation validates the real uncovered geometry before focus or consume",
     frame();
     frame();
     assert.equal(completed, 0);
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
   });
 });
 
@@ -252,13 +255,13 @@ test("navigation into an available viewport focuses only after positioning and v
       focus: true,
       onComplete: () => completed++,
     });
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
     frame();
     assert.equal(completed, 0);
     frame();
     frame();
     assert.equal(completed, 1);
-    assert.equal(document.activeElement, item);
+    assert.ok(document.activeElement === item, "Exact expected focus identity");
     assert.equal(item.dataset.messageTarget, "true");
   });
 });
@@ -480,7 +483,10 @@ test("actual ThreadView cancels cold correction on new scrolling and thread swit
         3500,
         "another exact Thread starts live, never inherits A's pending restore",
       );
-      assert.equal(document.querySelector(".back-live"), null);
+      assert.ok(
+        document.querySelector(".back-live") === null,
+        "Expected DOM presence or absence",
+      );
     } finally {
       layout.restore();
     }
@@ -676,9 +682,9 @@ test("actual quote navigation reveals a collapsed intermediate source, and newer
   await withNavigationView(async ({ render, layout }) => {
     const thread = twoSourceThread();
     await render(thread, null, ["source-a", "source-b"]);
-    assert.equal(
-      document.querySelector('[data-quote-item-id="source-a"]'),
-      null,
+    assert.ok(
+      document.querySelector('[data-quote-item-id="source-a"]') === null,
+      "Expected DOM presence or absence",
     );
     await act(async () => {
       document.querySelector<HTMLElement>(".messages")!.scrollTop = 0;
@@ -779,7 +785,7 @@ test("a header covering the target's leading edge prevents consume even if its c
     frame();
     frame();
     assert.equal(completed, 0);
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
   });
 });
 
@@ -809,11 +815,20 @@ test("empty view stays empty through resize", async () => {
     try {
       await h.render(anchoredThread(), { thread: null });
       assert.ok(document.querySelector(".thread-empty"));
-      assert.equal(document.querySelector("[data-turn-id]"), null);
+      assert.ok(
+        document.querySelector("[data-turn-id]") === null,
+        "Expected DOM presence or absence",
+      );
       await layout.resize();
       await layout.settle();
-      assert.equal(document.querySelector("[data-reading-reveal]"), null);
-      assert.equal(document.querySelector(".back-live"), null);
+      assert.ok(
+        document.querySelector("[data-reading-reveal]") === null,
+        "Expected DOM presence or absence",
+      );
+      assert.ok(
+        document.querySelector(".back-live") === null,
+        "Expected DOM presence or absence",
+      );
     } finally {
       layout.restore();
     }
@@ -844,7 +859,7 @@ test("navigation may land at a clamped start if the entire short target is genui
     frame();
     frame();
     assert.equal(completed, 1);
-    assert.equal(document.activeElement, item);
+    assert.ok(document.activeElement === item, "Exact expected focus identity");
     assert.equal(viewport.scrollTop, 0);
   });
 });
@@ -868,7 +883,10 @@ test("a newer focus outside the ThreadView cancels a pending navigation", async 
     frame();
     frame();
     assert.equal(completed, 0);
-    assert.equal(document.activeElement, outside);
+    assert.ok(
+      document.activeElement === outside,
+      "Exact expected focus identity",
+    );
   });
 });
 
@@ -893,7 +911,7 @@ test("navigation to a tall target validates its leading visible region without r
     frame();
     frame();
     assert.equal(completed, 1);
-    assert.equal(document.activeElement, item);
+    assert.ok(document.activeElement === item, "Exact expected focus identity");
     assert.equal(item.getBoundingClientRect().top, 48);
     assert.ok(item.getBoundingClientRect().bottom > 440);
     assert.deepEqual(hits, [50, 438]);
@@ -1001,7 +1019,7 @@ test("a tall target with its visible trailing region covered is not consumed", a
     frame();
     frame();
     assert.equal(completed, 0);
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
   });
 });
 
@@ -1021,7 +1039,7 @@ test("a tall target that cannot move beyond a one-pixel viewport sliver is not a
     frame();
     frame();
     assert.equal(completed, 0);
-    assert.notEqual(document.activeElement, item);
+    assert.ok(document.activeElement !== item, "Exact expected focus identity");
   });
 });
 
@@ -1042,10 +1060,16 @@ test("unchanged ResizeObserver delivery does not restart an already aligned read
       const focused = document.activeElement;
       for (let i = 0; i < 4; i++) {
         await layout.resize();
-        assert.equal(document.querySelector("[data-reading-reveal]"), null);
+        assert.ok(
+          document.querySelector("[data-reading-reveal]") === null,
+          "Expected DOM presence or absence",
+        );
         await layout.settle();
         assert.equal(layout.scroll().scrollTop, 1730);
-        assert.equal(document.activeElement, focused);
+        assert.ok(
+          document.activeElement === focused,
+          "Exact expected focus identity",
+        );
       }
     } finally {
       layout.restore();
@@ -1076,9 +1100,18 @@ test("ordinary reference Escape close still restores its trigger after a prior s
       ),
     );
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-    assert.equal(document.querySelector(".reference-details-popover"), null);
-    assert.equal(document.activeElement, trigger);
-    assert.equal(document.querySelector("[data-reading-reveal]"), null);
+    assert.ok(
+      document.querySelector(".reference-details-popover") === null,
+      "Expected DOM presence or absence",
+    );
+    assert.ok(
+      document.activeElement === trigger,
+      "Exact expected focus identity",
+    );
+    assert.ok(
+      document.querySelector("[data-reading-reveal]") === null,
+      "Expected DOM presence or absence",
+    );
   });
 });
 
@@ -1124,7 +1157,10 @@ test("a quote source handoff survives the actual Radix outgoing-popover lifecycl
       document.elementFromPoint = () =>
         outgoing.isConnected ? outgoing : source;
       await layout.settle();
-      assert.notEqual(document.activeElement, source);
+      assert.ok(
+        document.activeElement !== source,
+        "Exact expected focus identity",
+      );
       await act(async () => {
         const ended = new window.Event("animationend", { bubbles: true });
         Object.defineProperty(ended, "animationName", { value: "ui-exit" });
@@ -1155,9 +1191,18 @@ for (const intent of ["owner", "outside focus"] as const) {
       if (intent === "owner") await render({ ...thread, id: "other-thread" });
       await act(async () => outside.focus());
       await layout.settle();
-      assert.equal(document.activeElement, outside);
-      assert.equal(document.querySelector("[data-message-target]"), null);
-      assert.equal(document.querySelector("[data-reading-reveal]"), null);
+      assert.ok(
+        document.activeElement === outside,
+        "Exact expected focus identity",
+      );
+      assert.ok(
+        document.querySelector("[data-message-target]") === null,
+        "Expected DOM presence or absence",
+      );
+      assert.ok(
+        document.querySelector("[data-reading-reveal]") === null,
+        "Expected DOM presence or absence",
+      );
     });
   });
 }

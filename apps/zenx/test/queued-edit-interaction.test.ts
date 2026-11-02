@@ -962,7 +962,10 @@ for (const replacement of ["thread", "selection"] as const) {
       });
       try {
         await h.click(".reference-open-source");
-        assert.equal(editor(), null);
+        assert.ok(
+          editor() === null,
+          "Expected source dialog or reveal marker to be absent",
+        );
         assert.equal(
           focused,
           0,
@@ -1108,7 +1111,10 @@ for (const order of ["popup first", "dialog first", "new intent"] as const) {
           "no navigation scroll while outgoing layers still exist",
         );
         assert.equal(focused, 0);
-        assert.equal(document.querySelector("[data-reading-reveal]"), null);
+        assert.ok(
+          document.querySelector("[data-reading-reveal]") === null,
+          "Expected source dialog or reveal marker to be absent",
+        );
         const end = async (...nodes: HTMLElement[]) => {
           await act(async () => {
             for (const node of nodes)
@@ -1148,7 +1154,10 @@ for (const order of ["popup first", "dialog first", "new intent"] as const) {
         assert.equal(focused, order === "new intent" ? 0 : 1);
         if (order !== "new intent")
           assert.equal(document.activeElement === target, true);
-        assert.equal(document.querySelector("[data-reading-reveal]"), null);
+        assert.ok(
+          document.querySelector("[data-reading-reveal]") === null,
+          "Expected source dialog or reveal marker to be absent",
+        );
       } finally {
         globalThis.getComputedStyle = computedStyle;
         if (css) Object.defineProperty(globalThis, "CSS", css);
