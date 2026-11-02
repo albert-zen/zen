@@ -50,7 +50,7 @@ function fixture() {
           "next-frame-entry",
           "next-frame-geometry",
         ].map((phase, i) => ({
-          ph: "R",
+          ph: "I",
           pid: 2,
           tid: 22,
           name: `zen-send-${index}-${phase}`,
@@ -120,6 +120,11 @@ test("only whitelisted phase counts and states survive; CPU deltas and arbitrary
 const invalid = {
   "missing marker": (f) => f.trace.traceEvents.pop(),
   "duplicate marker": (f) => f.trace.traceEvents.push(f.trace.traceEvents[2]),
+  "cross-phase duplicate marker": (f) =>
+    f.trace.traceEvents.push({ ...f.trace.traceEvents[2], ph: "R" }),
+  "unknown marker phase": (f) => {
+    f.trace.traceEvents[2].ph = "X";
+  },
   "wrong renderer PID": (f) => (f.profile.rendererPid = 99),
   "wrong marker thread": (f) => (f.trace.traceEvents[2].tid = 23),
   "reversed marker clock": (f) => (f.trace.traceEvents[3].ts = 1),
@@ -150,3 +155,55 @@ for (const [name, mutate] of Object.entries(invalid))
       message: "Invalid private timeline input",
     });
   });
+
+test("Chrome instant user-timing marks and legacy R marks identify the same ordered windows", () => {
+  const f = fixture();
+  assert.equal(f.trace.traceEvents[2].ph, "I");
+  const current = summarizeSendTimeline(f.trace, f.profile, f.samples);
+  for (const event of f.trace.traceEvents) if (event.ph === "I") event.ph = "R";
+  assert.deepEqual(
+    summarizeSendTimeline(f.trace, f.profile, f.samples),
+    current,
+  );
+});
+
+test("launcher failure reporting permits fixed phase/reason enums only", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const source = fs.readFileSync(
+    path.join(__dirname, "launch-recall-send-profile.mjs"),
+    "utf8",
+  );
+  const code = source.slice(
+    source.indexOf("function safeDiagnosticFailure("),
+    source.indexOf("let cleanupSafe = false;"),
+  );
+  const context = vm.createContext({});
+  vm.runInContext(code, context);
+  const report = (value) =>
+    JSON.parse(JSON.stringify(context.safeDiagnosticFailure(value)));
+  assert.deepEqual(
+    report({
+      diagnosticFailure: {
+        stage: "timeline-summary",
+        reasonCodes: [
+          "timeline-contract-invalid",
+          "/Users/private/token",
+          { secret: "not allowed" },
+        ],
+      },
+      error: "raw error",
+    }),
+    { stage: "timeline-summary", reasonCodes: ["timeline-contract-invalid"] },
+  );
+  assert.deepEqual(
+    report({
+      diagnosticFailure: {
+        stage: "/Users/private/token",
+        reasonCodes: "secret",
+      },
+    }),
+    { stage: "unclassified", reasonCodes: [] },
+  );
+});

@@ -52,7 +52,7 @@ async function fixture() {
           "next-frame-entry",
           "next-frame-geometry",
         ].map((phase, i) => ({
-          ph: "R",
+          ph: "I",
           pid: 2,
           tid: 22,
           name: `zen-send-${index}-${phase}`,
@@ -193,3 +193,23 @@ for (const [name, mutate] of Object.entries(failures)) {
     },
   );
 }
+
+test("invalid timeline reports a fixed summary stage without publishing raw or summary", async () => {
+  const f = await fixture();
+  try {
+    const trace = JSON.parse(f.raw);
+    trace.traceEvents.pop();
+    await fs.writeFile(f.rawPath, JSON.stringify(trace));
+    await assert.rejects(f.run(), {
+      message: "Profile review failed; raw trace remains private",
+    });
+    assert.equal(f.result.profile.reviewStage, "timeline-summary");
+    assert.equal(
+      f.result.profile.review.reasonCodes.join(),
+      "timeline-contract-invalid",
+    );
+    assert.deepEqual(await fs.readdir(f.directory), []);
+  } finally {
+    await f.cleanup();
+  }
+});

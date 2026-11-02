@@ -535,6 +535,7 @@ function profileReviewReasons(raw, secrets, configurations, allowedRoots) {
  return [...reasons];
 }
 async function reviewAndPublishProfile(rawPath) {
+ result.profile.reviewStage="private-review";
  try {
  const secrets=[];
  for(const [relative,required] of [["profile/runtime/app-server.token",true],["profile/runtime/plugin-dev.token",false]]){
@@ -553,8 +554,10 @@ async function reviewAndPublishProfile(rawPath) {
  const reasonCodes=profileReviewReasons(raw,secrets,[config,JSON.stringify(parsed)],[process.cwd(),temporary]);
  result.profile.review={passed:false,knownCredentialCount:secrets.length,privateConfigurationCount:1,reasonCodes};
  assert.equal(reasonCodes.length,0,"Raw profile withheld: private review did not pass");
+ result.profile.reviewStage="timeline-summary";
  const summary=summarizeSendTimeline(JSON.parse(raw),result.profile,result.samples);
  summary.review={passed:true,knownCredentialCount:secrets.length,privateConfigurationCount:1};
+ result.profile.reviewStage="summary-write";
  const published=path.join(directory,"owned-native-send-profile.summary.json");
  await fs.writeFile(published,JSON.stringify(summary,null,2),{flag:"wx",mode:0o600});
  result.profile.traceFile="private-only-not-exported"; result.profile.summaryFile=path.basename(published);
@@ -562,6 +565,7 @@ async function reviewAndPublishProfile(rawPath) {
  } catch {
   if(!result.profile.review)result.profile.review={passed:false,reasonCodes:["review-input-unavailable-or-invalid"]};
   result.profile.review.passed=false;
+  if(!result.profile.review.reasonCodes.length)result.profile.review.reasonCodes=[result.profile.reviewStage==="timeline-summary"?"timeline-contract-invalid":result.profile.reviewStage==="summary-write"?"summary-write-failed":"review-input-unavailable-or-invalid"];
   throw new Error("Profile review failed; raw trace remains private");
  }
 }
@@ -694,6 +698,7 @@ async function run() {
 }
 void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
   .then(run).catch(async error=>{
+    result.diagnosticFailure={stage:"capture",reasonCodes:["capture-contract-failed"]};
     result.error=String(error.stack||error);
     if(window&&!window.isDestroyed())try{result.inputFailureState=await evaluate("(()=>{const e=document.querySelector('#thread-composer'),a=document.activeElement;return {activeTag:a?.tagName,activeId:a?.id,activeClass:typeof a?.className==='string'?a.className:null,composerExists:Boolean(e),composerDisabled:e?.disabled,composerValue:e?.value,hasComposerFocus:a===e}})()");}catch{}
     console.error("SYNTHETIC_SEND_CAPTURE_ERROR "+JSON.stringify({error:result.error,waitingFor:result.waitingFor,pendingOperation:result.pendingOperation}));
@@ -705,7 +710,7 @@ void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
       const rawPath=await contentTracing.stopRecording(path.join(temporary,"owned-native-send-profile.private.json"));
       await reviewAndPublishProfile(rawPath);
       result.profile.traceStopped=true;
-    }catch(error){result.profile.traceError="Profile collection or private review failed";result.ok=false;}
+    }catch(error){result.diagnosticFailure??={stage:result.profile.reviewStage??"trace-collection",reasonCodes:result.profile.review?.reasonCodes??["trace-collection-failed"]};result.profile.traceError="Profile collection or private review failed";result.ok=false;}
     await fs.writeFile(path.join(directory,"full-app-measurements.json"),JSON.stringify(result,null,2));
     process.exitCode=result.ok?0:1;
     app.quit();

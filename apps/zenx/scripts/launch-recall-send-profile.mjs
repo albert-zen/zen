@@ -268,6 +268,16 @@ async function waitOwnedPosixGroup(child, timeoutMs) {
     throw error;
   }
 }
+// The only failure detail allowed outside the owned private fixture.
+function safeDiagnosticFailure(result) {
+  const stages = ["capture", "trace-collection", "private-review", "timeline-summary", "summary-write"];
+  const allowed = ["capture-contract-failed", "trace-collection-failed", "known-credential-literal", "private-configuration-content", "credential-or-configuration-pattern", "non-fixture-user-path", "review-input-unavailable-or-invalid", "timeline-contract-invalid", "summary-write-failed"];
+  const failure = result?.diagnosticFailure;
+  return {
+    stage: stages.includes(failure?.stage) ? failure.stage : "unclassified",
+    reasonCodes: Array.isArray(failure?.reasonCodes) ? failure.reasonCodes.filter(code => allowed.includes(code)).slice(0, allowed.length) : [],
+  };
+}
 let cleanupSafe = false;
 let observedClose;
 child.once("close", (code, signal) => {
@@ -281,6 +291,7 @@ try {
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
+  if(!result.ok)console.error("PRIVATE_DIAGNOSTIC_FAILURE "+JSON.stringify(safeDiagnosticFailure(result)));
   assert.equal(result.ok, true);
   assert.equal(sourceLabel,"profile");
   assert.equal(result.profile?.acceptance,false);

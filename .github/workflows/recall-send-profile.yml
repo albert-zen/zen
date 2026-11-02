@@ -1,5 +1,5 @@
 name: Owned short native send timeline (not acceptance)
-# One authorized diagnostic; only this workflow edit triggers, not script backups.
+# Corrected Chromium instant-mark projection; this edit triggers one approved retry.
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]

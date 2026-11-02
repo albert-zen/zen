@@ -107,7 +107,8 @@ function summarizeSendTimeline(trace, profile, samples) {
     valid(sample.clockDomain === "renderer");
     const marks = markNames.map((name) => {
       const found = events.filter(
-        (e) => e.name === `zen-send-${index}-${name}` && e.ph === "R",
+        (e) =>
+          e.name === `zen-send-${index}-${name}` && ["I", "R"].includes(e.ph),
       );
       valid(
         found.length === 1 &&
