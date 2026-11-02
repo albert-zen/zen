@@ -1,5 +1,5 @@
 name: Packaged CV reading correctness (synthetic, no latency acceptance)
-# Diagnostic revision 2: exact-row readiness fix; original bootstrap failure retained.
+# Diagnostic revision 3: descendant CV probe and complete case evidence; both prior failures retained.
 on:
   push:
     branches: [diagnostic/cv-reading-correctness-20261102]

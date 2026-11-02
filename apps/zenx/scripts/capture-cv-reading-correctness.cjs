@@ -48,6 +48,15 @@ function diagnosticFailure(code) {
   error.diagnosticCode = code;
   throw error;
 }
+// Preserve each observed value before testing it; a failed case must not lose the failing measurement.
+function observe(name, value) {
+  const entry = result.cases.at(-1);
+  if (entry) entry.observations[name] = value;
+  return value;
+}
+function check(condition, code) {
+  if (!condition) diagnosticFailure(code);
+}
 function diagnosticEvaluation(expression) {
   return `(async()=>{try{return {ok:true,value:JSON.parse(JSON.stringify(await (${expression})??null))}}catch{return {ok:false}}})()`;
 }
@@ -266,11 +275,18 @@ function installObservation() {
     const turn = q(`[data-turn-id=${JSON.stringify(a.turnId)}]`),
       e = a.itemId ? item(a.itemId) : turn;
     if (!e || (!turn?.contains(e) && e !== turn)) return null;
+    const viewport = bounds(),
+      rect = e.getBoundingClientRect();
     return {
       turnId: turn.dataset.turnId,
       itemId: a.itemId,
-      offset: bounds().top - e.getBoundingClientRect().top,
+      offset: viewport.top - rect.top,
       top: q(".messages").scrollTop,
+      viewport,
+      targetTop: rect.top,
+      targetHeight: rect.height,
+      targetWidth: rect.width,
+      targetLeft: rect.left,
     };
   };
   let stop = () => {},
@@ -541,11 +557,41 @@ async function openSent(index) {
   );
 }
 async function observeSource(id) {
-  await read((id) => window.__readingProof.begin(id), id);
+  observe(
+    "sourceInitial",
+    await read((id) => window.__readingProof.begin(id), id),
+  );
   await click(
     element(".reference-details-popover .reference-open-source"),
     "open-source",
   );
+}
+function anchorHasVisibleLayout(anchor) {
+  return (
+    anchor.targetHeight > 0 &&
+    anchor.targetWidth > 0 &&
+    anchor.viewport.bottom > anchor.viewport.top &&
+    anchor.viewport.right > anchor.viewport.left &&
+    anchor.targetTop + anchor.targetHeight > anchor.viewport.top &&
+    anchor.targetTop < anchor.viewport.bottom &&
+    anchor.targetLeft + anchor.targetWidth > anchor.viewport.left &&
+    anchor.targetLeft < anchor.viewport.right
+  );
+}
+function observedExitAnimation(trace, type) {
+  return trace.events.some((event) => {
+    if (event.type !== type) return false;
+    const names = event.animationName.split(",").map((name) => name.trim());
+    const durations = event.animationDuration
+      .split(",")
+      .map((duration) => duration.trim());
+    return names.some(
+      (name, index) =>
+        name === "ui-exit" &&
+        /^\d*\.?\d+(ms|s)$/.test(durations[index % durations.length]) &&
+        parseFloat(durations[index % durations.length]) > 0,
+    );
+  });
 }
 async function settledNavigation(id) {
   await until(
@@ -564,29 +610,41 @@ async function settledNavigation(id) {
   await frames();
   const m = await read((id) => window.__readingProof.measure(id), id),
     trace = await read(() => window.__readingProof.finish());
-  result.lastGeometry = m;
-  result.lastTimeline = trace;
-  assert.ok(m?.focused && m.uncovered, "actual-target-uncovered-and-focused");
+  result.lastGeometry = observe("geometry", m);
+  result.lastTimeline = observe("timeline", trace);
+  check(m?.focused && m.uncovered, "actual-target-uncovered-and-focused");
   const height = m.bounds.bottom - m.bounds.top;
   if (m.height > height)
-    assert.ok(
+    check(
       Math.abs(m.top - (m.bounds.top + Math.min(8, height / 4))) <= 2,
       "tall-leading-edge-aligned",
     );
   else
-    assert.ok(
+    check(
       m.top >= m.bounds.top - 2 && m.bottom <= m.bounds.bottom + 2,
       "short-entire-target-visible",
     );
-  assert.ok(
-    trace.events.some(
-      (e) => e.type === "popup-closed-presence" && e.animationName !== "none",
-    ),
+  check(
+    observedExitAnimation(trace, "popup-closed-presence"),
     "actual-popup-exit-presence-observed",
   );
-  assert.ok(trace.closes.popup !== null, "actual-popup-removed");
+  check(trace.closes.popup !== null, "actual-popup-removed");
+  check(
+    trace.events.some((e) => e.type === "focus" && e.target === "target"),
+    "navigation-target-focus-observed",
+  );
+  check(
+    trace.events.some((e) => e.type === "pin-added"),
+    "navigation-reveal-pin-observed",
+  );
+  check(
+    trace.events.some(
+      (e) => e.type === "scroll" && Math.abs(e.top - trace.initial.top) > 0.5,
+    ),
+    "navigation-scroll-branch-not-observed",
+  );
   const lastClose = Math.max(trace.closes.popup, trace.closes.dialog ?? 0);
-  assert.ok(
+  check(
     trace.events
       .filter(
         (e) => e.type === "scroll" && Math.abs(e.top - trace.initial.top) > 0.5,
@@ -594,7 +652,7 @@ async function settledNavigation(id) {
       .every((e) => e.at >= lastClose),
     "no-scroll-before-actual-close",
   );
-  assert.ok(
+  check(
     trace.events
       .filter(
         (e) =>
@@ -614,14 +672,14 @@ function assertWaitingCancellation(timeline, kind, sidebarThreadId = null) {
       e.trusted &&
       (sidebarThreadId === null || e.sidebarThreadId === sidebarThreadId),
   );
-  assert.ok(
+  check(
     input?.popupConnected &&
       input.popupState === "closed" &&
       timeline.closes.popup !== null &&
       input.at < timeline.closes.popup,
     "cancellation-input-missed-closing-presence",
   );
-  assert.ok(
+  check(
     !timeline.events.some((e) => e.type === "pin-added"),
     "canceled-navigation-must-not-pin",
   );
@@ -630,22 +688,22 @@ async function record(name, runCase) {
   result.stage = name;
   delete result.lastGeometry;
   delete result.lastTimeline;
-  const entry = { name, passed: false, evidence: null };
+  const entry = { name, passed: false, observations: {}, evidence: null };
   result.cases.push(entry);
   try {
     entry.evidence = await runCase();
-    entry.passed = true;
     await screenshot(name);
+    entry.passed = true;
   } catch (error) {
-    entry.evidence = {
+    entry.failureSnapshot = {
       lastGeometry: result.lastGeometry ?? null,
       lastTimeline: result.lastTimeline ?? null,
     };
     try {
-      entry.evidence.currentTimeline = await read(() =>
+      entry.failureSnapshot.currentTimeline = await read(() =>
         window.__readingProof.finish(),
       );
-      entry.evidence.currentAnchor = await read(() =>
+      entry.failureSnapshot.currentAnchor = await read(() =>
         window.__readingProof.anchor(),
       );
     } catch {}
@@ -704,34 +762,46 @@ async function run() {
     turns: document.querySelectorAll(".messages [data-turn-id]").length,
     users: document.querySelectorAll(".messages [data-sent-message-id]").length,
   }));
-  assert.equal(initial.turns, 1000);
-  assert.equal(initial.users, 1000);
   result.initial = initial;
+  check(initial.turns === 1000, "fixture-turn-count");
+  check(initial.users === 1000, "fixture-user-count");
   await record("cv-skip", async () => {
     const value = await read(() => {
       const e = document.querySelector('.turn[data-history-layout="auto"]');
       if (!e) return null;
-      const s = getComputedStyle(e);
+      const probe = e.querySelector(":scope > .user-row");
+      const s = getComputedStyle(e),
+        supported = typeof probe?.checkVisibility === "function";
       return {
         turnId: e.dataset.turnId,
+        probePresent: probe !== null,
+        supported,
+        probeItemId:
+          probe?.dataset.sentMessageId ?? probe?.dataset.quoteItemId ?? null,
         contentVisibility: s.contentVisibility,
         intrinsicBlockSize: s.containIntrinsicBlockSize,
-        ignoringAuto: e.checkVisibility(),
-        includingAuto: e.checkVisibility({ contentVisibilityAuto: true }),
+        ignoringAuto: supported ? probe.checkVisibility() : null,
+        includingAuto: supported
+          ? probe.checkVisibility({ contentVisibilityAuto: true })
+          : null,
       };
     });
-    assert.ok(value);
-    assert.equal(value.contentVisibility, "auto");
-    assert.equal(value.ignoringAuto, true);
-    assert.equal(value.includingAuto, false);
+    observe("skip", value);
+    check(value !== null, "cv-eligible-turn-present");
+    check(value.probePresent, "cv-user-content-probe-present");
+    check(value.supported, "cv-visibility-api-supported");
+    check(value.contentVisibility === "auto", "cv-container-auto-style");
+    check(value.ignoringAuto === true, "cv-content-visible-ignoring-auto");
+    check(value.includingAuto === false, "cv-content-actually-skipped");
     return value;
   });
   await record("short-quote-close", async () => {
     await openSent(0);
     await observeSource(fixture.shortId);
     const e = await settledNavigation(fixture.shortId);
-    assert.ok(
+    check(
       e.geometry.height < e.geometry.bounds.bottom - e.geometry.bounds.top,
+      "short-fixture-target-height",
     );
     return e;
   });
@@ -739,8 +809,9 @@ async function run() {
     await openSent(1);
     await observeSource(fixture.tallId);
     const e = await settledNavigation(fixture.tallId);
-    assert.ok(
+    check(
       e.geometry.height > e.geometry.bounds.bottom - e.geometry.bounds.top,
+      "tall-fixture-target-height",
     );
     return e;
   });
@@ -751,33 +822,47 @@ async function run() {
       window.__readingProof.oldView = document.querySelector(".messages");
       return window.__readingProof.anchor();
     });
-    assert.ok(before);
+    observe("before", before);
+    check(before !== null, "cold-anchor-present");
     await chooseThread(fixture.otherId);
-    assert.equal(
+    const oldDomConnected = observe(
+      "oldDomConnected",
       await read(() => window.__readingProof.oldView.isConnected),
-      false,
     );
+    check(oldDomConnected === false, "cold-original-dom-unmounted");
     await chooseThread(fixture.threadId);
     await frames();
     const after = await read(
       (a) => window.__readingProof.measureAnchor(a),
       before,
     );
-    assert.ok(after);
-    assert.ok(
+    observe("after", after);
+    check(after !== null, "cold-same-anchor-present");
+    check(anchorHasVisibleLayout(after), "cold-anchor-visible-layout");
+    check(
       Math.abs(after.offset - before.offset) <= 2,
       "cold-restore-same-anchor-offset",
     );
     return { before, after, oldDomUnmounted: true };
   });
   await record("resize-anchor", async () => {
-    const before = await read(() => window.__readingProof.anchor());
-    assert.ok(before);
+    const before = observe(
+      "before",
+      await read(() => window.__readingProof.anchor()),
+    );
+    check(before !== null, "resize-anchor-present");
     await read(
       (id) => window.__readingProof.begin(id),
       before.itemId ?? fixture.tallId,
     );
-    const values = [];
+    const values = observe("values", []);
+    observe(
+      "overflowAnchor",
+      await read(
+        () =>
+          getComputedStyle(document.querySelector(".messages")).overflowAnchor,
+      ),
+    );
     for (const width of [1024, 1280]) {
       window.setSize(width, 820);
       await frames();
@@ -785,9 +870,12 @@ async function run() {
         (a) => window.__readingProof.measureAnchor(a),
         before,
       );
-      assert.ok(actual);
-      values.push({ width, ...actual });
-      assert.ok(
+      const windowSize = window.getSize();
+      values.push({ width, windowSize, actual });
+      check(windowSize[0] === width, "resize-window-width-applied");
+      check(actual !== null, "resize-same-anchor-present");
+      check(anchorHasVisibleLayout(actual), "resize-anchor-visible-layout");
+      check(
         Math.abs(actual.offset - before.offset) <= 2,
         "width-resize-preserves-anchor-offset",
       );
@@ -822,10 +910,24 @@ async function run() {
           x: Math.round(s.right - 1),
           y: Math.round(s.top + 10),
         },
+        sourceBounds: {
+          left: r.left,
+          right: r.right,
+          top: r.top,
+          bottom: r.bottom,
+        },
+        assistantBounds: {
+          left: s.left,
+          right: s.right,
+          top: s.top,
+          bottom: s.bottom,
+        },
+        viewportBounds: v,
         within: r.top >= v.top && s.top + 15 < v.bottom,
       };
     }, fixture.shortId);
-    assert.ok(points?.within, "two-real-message-selection-endpoints-visible");
+    observe("points", points);
+    check(points?.within, "two-real-message-selection-endpoints-visible");
     window.webContents.sendInputEvent({
       type: "mouseDown",
       button: "left",
@@ -849,7 +951,11 @@ async function run() {
       ...points.to,
     });
     await until(
-      async () => await read(() => !getSelection().isCollapsed),
+      async () =>
+        observe(
+          "selectionCollapsed",
+          await read(() => getSelection().isCollapsed),
+        ) === false,
       "native-selection-created",
     );
     const before = await read(() => ({
@@ -861,18 +967,24 @@ async function run() {
         "[data-quote-item-id], [data-sent-message-id]",
       )?.dataset.quoteItemId,
     }));
-    assert.ok(
+    observe("selectionBefore", before);
+    check(
       before.text.includes("Synthetic short source") &&
         before.text.includes("Synthetic assistant 400"),
       "native-drag-crosses-message-boundary",
     );
     window.setSize(1120, 820);
     await frames();
-    assert.equal(
-      await read(() => getSelection().toString()),
-      before.text,
-      "resize-does-not-rewrite-selection",
+    const resizedWindow = observe(
+      "selectionResizeWindowSize",
+      window.getSize(),
     );
+    check(resizedWindow[0] === 1120, "selection-resize-width-not-applied");
+    const after = observe(
+      "selectionAfterResize",
+      await read(() => getSelection().toString()),
+    );
+    check(after === before.text, "resize-does-not-rewrite-selection");
     window.setSize(1280, 820);
     await frames();
     return before;
@@ -892,14 +1004,42 @@ async function run() {
         ),
       "rich-queue-editor",
     );
-    await click(
-      element(".queued-message-editor .cm-content"),
-      "focus-queue-draft",
+    const editor = observe(
+      "queueEditor",
+      await read(() => {
+        const content = document.querySelector(
+            ".queued-message-editor .cm-content",
+          ),
+          chips = [
+            ...document.querySelectorAll(
+              '.queued-message-editor [data-reference-kind="message"] .reference-token-details',
+            ),
+          ];
+        return {
+          contentPresent: content !== null,
+          contentEditable: content?.isContentEditable ?? false,
+          referenceCount: chips.length,
+          labels: chips.slice(0, 3).map((chip) => chip.title),
+        };
+      }),
     );
+    check(
+      editor.contentPresent && editor.contentEditable,
+      "queue-real-rich-editor-present",
+    );
+    check(editor.referenceCount === 2, "queue-two-reference-chips-present");
+    // The real EditorSession open effect owns autofocus. Do not center-click its interactive reference chips.
+    // Wait for that actual focus, then use only the original native keyboard input (no focus fallback).
     await until(
       async () =>
-        await read(() =>
-          document.activeElement?.classList.contains("cm-content"),
+        observe(
+          "queueEditorFocused",
+          await read(() => {
+            const content = document.querySelector(
+              ".queued-message-editor .cm-content",
+            );
+            return content !== null && document.activeElement === content;
+          }),
         ),
       "queue-editor-real-focus",
     );
@@ -907,11 +1047,14 @@ async function run() {
     window.webContents.insertText(" UNSAVED synthetic reading draft");
     await until(
       async () =>
-        await read(() =>
-          document
-            .querySelector(".queued-message-editor .cm-content")
-            .textContent.includes("UNSAVED synthetic reading draft"),
-        ),
+        observe(
+          "queueDraftAfterInput",
+          await read(
+            () =>
+              document.querySelector(".queued-message-editor .cm-content")
+                ?.textContent ?? null,
+          ),
+        )?.includes("UNSAVED synthetic reading draft") === true,
       "queue-draft-input-confirmed",
     );
     await click(
@@ -920,14 +1063,15 @@ async function run() {
     );
     await observeSource(fixture.shortId);
     const evidence = await settledNavigation(fixture.shortId);
-    assert.ok(evidence.timeline.initial.dialog);
-    assert.ok(
-      evidence.timeline.events.some(
-        (e) =>
-          e.type === "dialog-closed-presence" && e.animationName !== "none",
-      ),
+    check(
+      evidence.timeline.initial.dialog,
+      "queue-dialog-present-before-handoff",
     );
-    assert.ok(evidence.timeline.closes.dialog !== null);
+    check(
+      observedExitAnimation(evidence.timeline, "dialog-closed-presence"),
+      "actual-dialog-exit-presence-observed",
+    );
+    check(evidence.timeline.closes.dialog !== null, "actual-dialog-removed");
     await click(
       element(
         `[data-queue-id=${JSON.stringify(fixture.queueId)}] .queue-row-edit`,
@@ -936,17 +1080,25 @@ async function run() {
     );
     await until(
       async () =>
-        await read(() =>
-          document
-            .querySelector(".queued-message-editor .cm-content")
-            ?.textContent.includes("UNSAVED synthetic reading draft"),
-        ),
+        observe(
+          "queueDraftAfterReopen",
+          await read(
+            () =>
+              document.querySelector(".queued-message-editor .cm-content")
+                ?.textContent ?? null,
+          ),
+        )?.includes("UNSAVED synthetic reading draft") === true,
       "unsaved-queue-draft-retained",
     );
     key("Escape");
     await until(
       async () =>
-        await read(() => !document.querySelector(".queued-message-editor")),
+        observe(
+          "queueDialogAfterEscape",
+          await read(() =>
+            Boolean(document.querySelector(".queued-message-editor")),
+          ),
+        ) === false,
       "ordinary-escape-close",
     );
     return { ...evidence, unsavedDraftRetained: true };
@@ -962,7 +1114,8 @@ async function run() {
         ),
       ]),
     );
-    assert.equal(
+    const closingPresence = observe(
+      "closingPresenceBeforeInput",
       await read(() =>
         Boolean(
           document.querySelector(
@@ -970,7 +1123,9 @@ async function run() {
           ),
         ),
       ),
-      true,
+    );
+    check(
+      closingPresence === true,
       "actual-closing-presence-still-current-before-input",
     );
     await wheel(90);
@@ -980,18 +1135,23 @@ async function run() {
       "popup-removed-after-wheel",
     );
     await frames();
-    const timeline = await read(() => window.__readingProof.finish());
-    assertWaitingCancellation(timeline, "wheel");
-    assert.ok(
-      !timeline.events.some((e) => e.type === "focus" && e.target === "target"),
+    const timeline = observe(
+      "timeline",
+      await read(() => window.__readingProof.finish()),
     );
-    assert.equal(
+    assertWaitingCancellation(timeline, "wheel");
+    check(
+      !timeline.events.some((e) => e.type === "focus" && e.target === "target"),
+      "canceled-navigation-must-not-focus",
+    );
+    const focused = observe(
+      "targetFocused",
       await read(
         (id) => window.__readingProof.item(id) === document.activeElement,
         fixture.shortId,
       ),
-      false,
     );
+    check(focused === false, "canceled-target-not-current-focus");
     return timeline;
   });
   await record("waiting-owner-cancels", async () => {
@@ -1005,7 +1165,8 @@ async function run() {
         ),
       ]),
     );
-    assert.equal(
+    const closingPresence = observe(
+      "closingPresenceBeforeInput",
       await read(() =>
         Boolean(
           document.querySelector(
@@ -1013,23 +1174,30 @@ async function run() {
           ),
         ),
       ),
-      true,
+    );
+    check(
+      closingPresence === true,
       "actual-closing-presence-still-current-before-input",
     );
     await chooseThread(fixture.otherId);
     await frames();
-    const timeline = await read(() => window.__readingProof.finish());
-    assertWaitingCancellation(timeline, "pointerdown", fixture.otherId);
-    assert.ok(
-      !timeline.events.some((e) => e.type === "focus" && e.target === "target"),
+    const timeline = observe(
+      "timeline",
+      await read(() => window.__readingProof.finish()),
     );
-    assert.equal(
+    assertWaitingCancellation(timeline, "pointerdown", fixture.otherId);
+    check(
+      !timeline.events.some((e) => e.type === "focus" && e.target === "target"),
+      "canceled-navigation-must-not-focus",
+    );
+    const present = observe(
+      "oldTargetPresent",
       await read(
         (id) => Boolean(window.__readingProof.item(id)),
         fixture.shortId,
       ),
-      false,
     );
+    check(present === false, "canceled-old-owner-target-unmounted");
     return timeline;
   });
   result.stage = "complete";
@@ -1062,8 +1230,39 @@ async function verifyPackagedRuntime() {
   };
 }
 const failureReasons = new Set([
+  "cv-visibility-api-supported",
+  "navigation-target-focus-observed",
+  "navigation-reveal-pin-observed",
+  "navigation-scroll-branch-not-observed",
+  "queue-real-rich-editor-present",
+  "queue-two-reference-chips-present",
+
+  "fixture-turn-count",
+  "fixture-user-count",
+  "cv-eligible-turn-present",
+  "cv-user-content-probe-present",
+  "cv-container-auto-style",
+  "cv-content-visible-ignoring-auto",
+  "cv-content-actually-skipped",
+  "short-fixture-target-height",
+  "tall-fixture-target-height",
+  "cold-anchor-present",
+  "cold-original-dom-unmounted",
+  "cold-same-anchor-present",
+  "cold-anchor-visible-layout",
+  "resize-anchor-visible-layout",
+  "resize-anchor-present",
+  "resize-window-width-applied",
+  "selection-resize-width-not-applied",
+  "resize-same-anchor-present",
+  "queue-dialog-present-before-handoff",
+  "actual-dialog-exit-presence-observed",
+  "actual-dialog-removed",
+  "canceled-navigation-must-not-focus",
+  "canceled-target-not-current-focus",
+  "canceled-old-owner-target-unmounted",
+
   "correctness-assertion-or-owned-driver-failed",
-  "true",
   "renderer-observation-failed",
   "ui-readiness-timeout",
   "actual-target-uncovered-and-focused",
@@ -1073,8 +1272,6 @@ const failureReasons = new Set([
   "actual-popup-removed",
   "no-scroll-before-actual-close",
   "no-positioning-or-focus-before-actual-close",
-  "fake",
-  "auto",
   "cold-restore-same-anchor-offset",
   "width-resize-preserves-anchor-offset",
   "two-real-message-selection-endpoints-visible",
@@ -1091,7 +1288,7 @@ void verifyPackagedRuntime()
   )
   .then(run)
   .catch(async (error) => {
-    const code = error?.diagnosticCode ?? error?.message;
+    const code = error?.diagnosticCode;
     result.reason = failureReasons.has(code)
       ? code
       : "correctness-assertion-or-owned-driver-failed";
@@ -1100,7 +1297,15 @@ void verifyPackagedRuntime()
       "actual-closing-presence-still-current-before-input",
     ].includes(result.reason)
       ? "fixture-window-not-reached"
-      : "assertion-or-driver-failure";
+      : [
+            "resize-window-width-applied",
+            "selection-resize-width-not-applied",
+            "navigation-scroll-branch-not-observed",
+            "actual-popup-exit-presence-observed",
+            "actual-dialog-exit-presence-observed",
+          ].includes(result.reason)
+        ? "fixture-branch-not-reached"
+        : "assertion-or-driver-failure";
     if (window && !window.isDestroyed())
       try {
         await screenshot("failure");
