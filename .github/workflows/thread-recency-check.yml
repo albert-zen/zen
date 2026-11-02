@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e5c3fe9bf91ce0385bf730cd364b3035a82fa461
+          ref: 946da208624e8295fec7e05a57d030589c9fdc7a
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -30,7 +30,7 @@ jobs:
       - name: Production recency and actual Sidebar interaction regressions
         id: tests
         continue-on-error: true
-        run: node --import tsx --test test/thread-recency.test.ts test/thread-summary.test.ts test/user-message-timestamps.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts
+        run: node --import tsx --test test/thread-recency.test.ts test/thread-summary.test.ts test/user-message-timestamps.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts apps/zenx/test/app-server-manager.test.ts apps/zenx/test/sidebar-preferences-interaction.test.ts
       - name: Require every real check to pass
         if: always()
         env:
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e5c3fe9bf91ce0385bf730cd364b3035a82fa461
+          ref: 946da208624e8295fec7e05a57d030589c9fdc7a
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -55,5 +55,5 @@ jobs:
         timeout-minutes: 7
       - name: Print exact formatting diff only
         run: |
-          npx --no-install prettier --write src/thread-recency.ts test/thread-recency.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts test/thread-summary.test.ts src/app-server.ts
-          git diff -- src/thread-recency.ts test/thread-recency.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts test/thread-summary.test.ts src/app-server.ts
+          npx --no-install prettier --write apps/zenx/test/app-server-manager.test.ts apps/zenx/test/sidebar-preferences-interaction.test.ts
+          git diff -- apps/zenx/test/app-server-manager.test.ts apps/zenx/test/sidebar-preferences-interaction.test.ts
