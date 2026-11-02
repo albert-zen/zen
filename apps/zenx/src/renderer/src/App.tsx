@@ -583,6 +583,10 @@ function AppContent() {
     null,
   );
   const threadUsageLoadEpoch = useRef(0);
+  const threadUsageReady = useRef(false);
+  const threadUsageReads = useRef(
+    new Map<string, { epoch: number; selectionEpoch: number }>(),
+  );
   const threadSummaryLoadEpoch = useRef(0);
   const projectLoadEpoch = useRef(0);
   const modelCatalogLoadEpoch = useRef(0);
@@ -1230,27 +1234,60 @@ function AppContent() {
   };
 
   const refreshThreadUsage = (threadId: string) => {
+    if (!threadUsageReady.current || selectedThreadIdRef.current !== threadId)
+      return;
     const epoch = ++threadUsageLoadEpoch.current;
-    void window.zenx.modelUsage
-      .forThread(threadId)
-      .then((usage) => {
-        if (
-          selectedThreadIdRef.current === threadId &&
-          threadUsageLoadEpoch.current === epoch
-        )
+    const pending = threadUsageReads.current.get(threadId);
+    if (pending !== undefined) {
+      // Keep only the latest demand, including a return to the same Thread.
+      pending.epoch = epoch;
+      pending.selectionEpoch = selectionEpoch.current;
+      return;
+    }
+    const request = { epoch, selectionEpoch: selectionEpoch.current };
+    threadUsageReads.current.set(threadId, request);
+    const ownsRequest = () =>
+      threadUsageReads.current.get(threadId) === request;
+    const isCurrent = () =>
+      ownsRequest() &&
+      threadUsageReady.current &&
+      selectedThreadIdRef.current === threadId &&
+      selectionEpoch.current === request.selectionEpoch &&
+      threadUsageLoadEpoch.current === request.epoch;
+    const read = async (): Promise<void> => {
+      const readingEpoch = request.epoch;
+      try {
+        const usage = await window.zenx.modelUsage.forThread(threadId);
+        if (isCurrent() && request.epoch === readingEpoch)
           setThreadUsage(usage);
-      })
-      .catch((error: unknown) => {
-        if (
-          selectedThreadIdRef.current === threadId &&
-          threadUsageLoadEpoch.current === epoch
-        )
+      } catch (error) {
+        if (isCurrent() && request.epoch === readingEpoch)
           setRequestError(
             i18n.t("shell:threadUsageLoadFailed", {
               error: describeError(error),
             }),
           );
-      });
+      } finally {
+        // An old connection's completion cannot revive or remove a new owner.
+        if (ownsRequest()) {
+          if (isCurrent() && request.epoch !== readingEpoch) void read();
+          else threadUsageReads.current.delete(threadId);
+        }
+      }
+    };
+    void read();
+  };
+
+  const refreshRecoveredThreadUsage = () => {
+    const threadId = selectedThreadIdRef.current;
+    // A plugin may have opened a Thread before the initial status IPC settles.
+    // Do not hydrate again or race a cold resume that still owns this read.
+    if (
+      threadId !== null &&
+      pendingResumeProjectionRef.current === null &&
+      threadProjectionCacheRef.current.get(threadId)?.processEpoch != null
+    )
+      refreshThreadUsage(threadId);
   };
 
   const exitDebugMode = () => {
@@ -1275,7 +1312,7 @@ function AppContent() {
     pendingResumeProjectionRef.current = { epoch, threadId, notifications: [] };
     retainNewThreadDraftUnsentInput();
     confirmNewThreadDraft(null);
-    const usageEpoch = ++threadUsageLoadEpoch.current;
+    threadUsageLoadEpoch.current += 1;
     selectedThreadIdRef.current = threadId;
     if (!preserveNavigation) {
       setDebugThreadId(debugMode ? threadId : null);
@@ -1357,26 +1394,7 @@ function AppContent() {
               }),
             );
         });
-      void window.zenx.modelUsage
-        .forThread(threadId)
-        .then((usage) => {
-          if (
-            selectionEpoch.current === epoch &&
-            threadUsageLoadEpoch.current === usageEpoch
-          )
-            setThreadUsage(usage);
-        })
-        .catch((error: unknown) => {
-          if (
-            selectionEpoch.current === epoch &&
-            threadUsageLoadEpoch.current === usageEpoch
-          )
-            setRequestError(
-              i18n.t("shell:threadUsageLoadFailed", {
-                error: describeError(error),
-              }),
-            );
-        });
+      refreshThreadUsage(threadId);
       void window.zenx.settings
         .markWorkspaceUsed(result.thread.cwd)
         .then(() => loadProjects())
@@ -1419,6 +1437,7 @@ function AppContent() {
 
   useEffect(() => {
     let active = true;
+    let statusObserved = false;
     const endNotifications = createThreadEndNotificationObserver(
       conversationReadStore(),
       () => window.zenx.protocol.request("zen/initialize", {}),
@@ -1476,6 +1495,13 @@ function AppContent() {
     };
     const disposeStatus = window.zenx.protocol.onStatus((status) => {
       if (!active) return;
+      statusObserved = true;
+      const becameReady = status.type === "ready" && !threadUsageReady.current;
+      threadUsageReady.current = status.type === "ready";
+      if (status.type !== "ready" || status.reconnected) {
+        threadUsageLoadEpoch.current += 1;
+        threadUsageReads.current.clear();
+      }
       setServerStatus(status);
       if (status.type !== "ready") endNotifications.disconnect();
       if (status.type === "ready") {
@@ -1486,7 +1512,7 @@ function AppContent() {
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
           void resumeThread(selectedThreadIdRef.current, true);
-        }
+        } else if (becameReady) refreshRecoveredThreadUsage();
       } else if (status.type === "reconnecting") {
         for (const id of Object.keys(composerStatesRef.current))
           updateComposer(id, markCompactionOutcomeUnknown);
@@ -1517,6 +1543,8 @@ function AppContent() {
         if (!active) return;
         if (method === "model/catalog/updated") {
           void loadModels();
+          if (selectedThreadIdRef.current !== null)
+            refreshThreadUsage(selectedThreadIdRef.current);
           return;
         }
         const nativeEvent =
@@ -1697,7 +1725,8 @@ function AppContent() {
           }
           if (
             projected.event.type === "item_completed" ||
-            projected.event.type === "turn_completed"
+            projected.event.type === "turn_completed" ||
+            projected.event.type === "thread_settings_updated"
           ) {
             if (selectedThreadIdRef.current === projected.threadId)
               refreshThreadUsage(projected.threadId);
@@ -1756,6 +1785,10 @@ function AppContent() {
         }
         if (method === "thread/settings/updated") {
           setModelUpdateError(null);
+          refreshThreadUsage(
+            (params as ServerNotificationParams["thread/settings/updated"])
+              .threadId,
+          );
         }
       },
     );
@@ -1780,7 +1813,8 @@ function AppContent() {
     void window.zenx.protocol
       .getStatus()
       .then((status) => {
-        if (!active) return;
+        if (!active || statusObserved) return;
+        threadUsageReady.current = status.type === "ready";
         setServerStatus(status);
         if (status.type === "ready") {
           void endNotifications.connect();
@@ -1788,6 +1822,7 @@ function AppContent() {
           void loadThreadSummaries();
           void loadProjects();
           void loadModels();
+          refreshRecoveredThreadUsage();
         }
       })
       .catch(
@@ -1795,6 +1830,9 @@ function AppContent() {
       );
     return () => {
       active = false;
+      threadUsageReady.current = false;
+      threadUsageLoadEpoch.current += 1;
+      threadUsageReads.current.clear();
       endNotifications.disconnect();
       if (endNotificationsRef.current === endNotifications)
         endNotificationsRef.current = null;
