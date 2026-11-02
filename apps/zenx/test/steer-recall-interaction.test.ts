@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import type { Thread } from "../src/protocol-client/index.js";
 import test from "node:test";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { PendingSteerPanel } from "../src/renderer/src/PendingSteerPanel.js";
 import type { CanonicalItem, SteerRecalledItem } from "../../../src/item.js";
 import type {
   NativeSteerRecallParams,
@@ -437,6 +440,62 @@ test("unsupported whole batch makes no recall RPC", async () => {
         .querySelector(".pending-steer-panel")!
         .textContent!.includes(i18n.t("shell:steerRecallUnsupported")),
     );
+  });
+});
+
+test("receipt shelf does not rescan 5000 unchanged items on parent rerenders", async () => {
+  await withRuntimeDom(async () => {
+    const items: CanonicalItem[] = Array.from({ length: 5000 }, (_, index) =>
+      queueItem(index, [{ type: "text", text: "Synthetic history" }]),
+    );
+    const countFilters = (current: CanonicalItem[]) => {
+      let calls = 0;
+      Object.defineProperty(current, "filter", {
+        configurable: true,
+        value(...args: unknown[]) {
+          calls++;
+          return Reflect.apply(Array.prototype.filter, current, args);
+        },
+      });
+      return () => calls;
+    };
+    const filterCount = countFilters(items);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const store = createSteerRecallStore();
+    const render = async (threadId: string, current = items) => {
+      await act(async () => {
+        root.render(
+          createElement(PendingSteerPanel, {
+            threadId,
+            items: current,
+            pending: [],
+            runningTurnId: null,
+            store,
+            onRestore: () => true,
+          }),
+        );
+      });
+    };
+    try {
+      await render("thread-1");
+      assert.equal(filterCount(), 1);
+      for (let input = 0; input < 12; input++) await render("thread-1");
+      assert.equal(filterCount(), 1);
+      assert.equal(container.textContent, "");
+      await render("thread-2");
+      assert.equal(filterCount(), 2);
+      const replacement = [...items];
+      const replacementFilterCount = countFilters(replacement);
+      await render("thread-2", replacement);
+      assert.equal(replacementFilterCount(), 1);
+      await render("thread-2", replacement);
+      assert.equal(replacementFilterCount(), 1);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 });
 

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type {
   CanonicalItem,
@@ -55,11 +61,16 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     };
   }, []);
 
-  const receiptItems = props.items.filter(
-    (item): item is SteerRecalledItem =>
-      item.type === "user_message_steer_recalled" &&
-      item.threadId === props.threadId,
+  const canonicalReceipts = useMemo(
+    () =>
+      props.items.filter(
+        (item): item is SteerRecalledItem =>
+          item.type === "user_message_steer_recalled" &&
+          item.threadId === props.threadId,
+      ),
+    [props.items, props.threadId],
   );
+  const receiptItems = [...canonicalReceipts];
   if (
     session?.result &&
     !receiptItems.some((item) => item.id === session.result!.receipt.id)

@@ -4,9 +4,9 @@ export const en = {
   steerRecallAll: "Recall all to composer",
   steerRecalling: "Recalling…",
   steerHeldNotice:
-    "These messages have not entered the model. Your next explicit send or continuation will include them unless recalled first.",
+    "These messages have not entered the model. They will join the next turn you explicitly start, retry or replace. You can recall them first.",
   steerWaitingNotice:
-    "Waiting for the current tool or compaction to finish. Recall does not interrupt that work.",
+    "Waiting for the current model, tool or compaction work to reach the next input boundary. Recall does not interrupt that work.",
   steerPendingDetails: "View waiting messages",
   steerStructuredInput: "References or attachments",
   steerImageCount: "Images: {{count}}",
@@ -954,8 +954,9 @@ export const zhCN = {
   steerRecallAll: "全部撤回到输入框",
   steerRecalling: "正在撤回…",
   steerHeldNotice:
-    "这些消息尚未进入模型；再次发送或继续时会一并提交，可先全部撤回。",
-  steerWaitingNotice: "正在等待当前工具或压缩结束。撤回不会中断这些工作。",
+    "这些消息尚未进入模型；你明确发起、重试或替换下一轮时会一并提交，可先全部撤回。",
+  steerWaitingNotice:
+    "正在等待当前模型、工具或压缩工作到达下一次输入边界。撤回不会中断这些工作。",
   steerPendingDetails: "查看等待中的消息",
   steerStructuredInput: "引用或附件",
   steerImageCount: "图片：{{count}} 张",

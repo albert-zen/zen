@@ -2974,7 +2974,7 @@ test("passive UI activation pending or failed never gates admission or consumes 
   assert.equal(
     diagnostic.mock.callCount(),
     4,
-    "both activations in each degraded/rejected case produce explicit diagnostics",
+    `both activations in each degraded/rejected case produce explicit diagnostics: ${JSON.stringify(diagnostic.mock.calls.map((call) => call.arguments))}`,
   );
 });
 
