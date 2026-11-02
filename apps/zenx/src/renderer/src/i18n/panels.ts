@@ -1,5 +1,6 @@
 export const en = {
   mainConversation: "Main chat · {{title}}",
+  informationNoTriggers: "No triggers for this conversation.",
   boardLoading: "Loading information…",
   boardEmptyTitle: "Nothing here yet",
   boardEmptyDescription:
@@ -1050,6 +1051,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  informationNoTriggers: "此会话尚无触发器。",
   mainConversation: "主聊天 · {{title}}",
   boardLoading: "正在加载信息…",
   boardEmptyTitle: "还没有信息板",

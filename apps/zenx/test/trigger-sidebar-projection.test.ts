@@ -103,13 +103,14 @@ test("production sidebar command projects before cloning and never visits privat
           id: "trigger",
           threadId: "thread",
           kind: "timer",
+          label: "Daily",
           active: false,
           timer: { nextRunAt: 2_000_000_000_000 },
         },
       ],
     });
     const serialized = JSON.stringify(facts);
-    assert.ok(Buffer.byteLength(serialized) < 150);
+    assert.ok(Buffer.byteLength(serialized) < 180);
     assert.doesNotMatch(serialized, /PRIVATE|prompt|history|program|rooms/);
     t.diagnostic(
       `Production full list: ${fullBytes} bytes; sidebar-facts: ${Buffer.byteLength(serialized)} bytes.`,
@@ -128,6 +129,7 @@ test("sidebar facts are detached and bounded by trigger identity count, independ
     id: String(index).padEnd(MAX_ID_BYTES, "i"),
     threadId: "t".repeat(MAX_ID_BYTES),
     sourceError: "PRIVATE_SOURCE_DIAGNOSTIC",
+    label: "l".repeat(256),
   }));
   const service = serviceFor(snapshot);
   const plugin = new ZenXTriggersCapabilityPackage(service);
@@ -144,7 +146,7 @@ test("sidebar facts are detached and bounded by trigger identity count, independ
       (entry) => entry.name === "zenx_triggers_sidebar_facts",
     )!;
     assert.ok(Buffer.byteLength(first) < tool.maxOutputBytes!);
-    assert.ok(Buffer.byteLength(first) < 320_000);
+    assert.ok(Buffer.byteLength(first) < 400_000);
     snapshot.rooms.push(...snapshot.rooms);
     assert.equal(JSON.stringify(service.sidebarFacts()), first);
     facts.triggers[0]!.timer!.nextRunAt = 123;

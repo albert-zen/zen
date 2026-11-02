@@ -75,6 +75,8 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 
 ## 核心概念
 
+- **Desktop question attention** — An App-owned disposable view cache reads bounded native question pages and exact response identities, keeps per-request drafts separate from Composer and Board, and treats uncertain writes as read-only reconciliation; it adds no execution authority, publication permission, or persistent answer ledger.
+
 - **Native asynchronous user questions** — A direct builtin publishes an immutable semantic call/result pair; native response admission validates the exact Thread/request under the ordinary start/recallable-steer mutation boundary, preserves human reply provenance in semantic ItemList and existing pending-input Trace facts, and derives attention without a question store, durable reservation, permission grant, or change to manual pinned order. Its disposable Thread-owned question index folds discriminators during existing decode/append work and only rebuilds on relevant semantic publication/input/control facts; ordinary snapshots do not walk or parse question history. Publication requires the Host-owned, default-off `experimentalUserQuestions` startup option; disabling it does not remove native reads or response admission for existing questions.
 
 - **ZenX 更新内容** — Renderer 仅展示随构建分发、以稳定条目 ID 标识的本地更新说明；打开状态为易失 UI 状态，不联网、不检查更新、不进入 Core journal。

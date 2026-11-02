@@ -649,6 +649,8 @@ export function projectNativeThread(
     ...(snapshot.itemList === undefined
       ? {}
       : { itemList: structuredClone(snapshot.itemList) }),
+    userQuestions: snapshot.userQuestions,
+    userQuestionsPage: snapshot.userQuestionsPage,
     queuedMessages: projectedQueue(snapshot.items),
     turns: snapshot.turns.map((turn) => {
       const started = turn.items.find((item) => item.type === "turn_started");

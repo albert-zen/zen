@@ -491,3 +491,62 @@ test("lost recall ACK remains unknown data without falsely authorizing a write r
   );
   assert.equal(writes, 1);
 });
+
+test("question native methods preserve rejected versus uncertain outcome through actual main/preload serialization", async () => {
+  const { unwrapQuestionIpcReply } =
+    await import("../src/preload/user-question-ipc.js");
+  for (const code of [
+    "invalid_request",
+    "question_response_pending",
+    "question_state_unavailable",
+    "thread_not_found",
+    "operation_forbidden",
+    "provider_unavailable",
+    "model_unavailable",
+    "context_window_unknown",
+    "reasoning_effort_unknown",
+    "reasoning_effort_unavailable",
+    "admission_outcome_unknown",
+    "future_code",
+  ]) {
+    const bridge = boundary(async (method, params) => {
+      assert.equal(method, "zen/thread/questions/respond");
+      assert.deepEqual(params, { threadId: "synthetic" });
+      throw Object.assign(new Error("Synthetic question failure"), {
+        data: { zenCode: code },
+        cause: new Error("Local diagnostic evidence"),
+      });
+    });
+    const reply = await bridge.request("zen/thread/questions/respond", {
+      threadId: "synthetic",
+    });
+    assert.throws(
+      () => unwrapQuestionIpcReply(reply),
+      (error: unknown) => {
+        const result = error as Error & {
+          questionRejected: boolean;
+          localDiagnosticDetail: string;
+        };
+        assert.equal(
+          result.questionRejected,
+          code === "invalid_request" || code === "question_response_pending",
+        );
+        assert.match(result.localDiagnosticDetail, /Local diagnostic evidence/);
+        return true;
+      },
+    );
+  }
+  for (const method of [
+    "zen/thread/questions/list",
+    "zen/thread/questions/read",
+    "zen/thread/questions/respond",
+  ]) {
+    const result = { synthetic: "plain native DTO" };
+    assert.deepEqual(
+      unwrapQuestionIpcReply(
+        await boundary(async () => result).request(method, {}),
+      ),
+      result,
+    );
+  }
+});
