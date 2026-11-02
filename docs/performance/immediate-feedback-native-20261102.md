@@ -64,4 +64,24 @@ Nested categories overlap; do not sum these with JavaScript event durations. At 
 
 The exact rebuilt renderer SHA256 matched both recorded artifact hashes before mapping source offsets. Relevant sampled source locations include `useReadVisibleMessage` scanning all `[data-read-message-id]` nodes, `followBottom` reading/writing scroll geometry, and `ComposerEditor` writing auto height then reading scrollHeight/computed style. These are source-backed investigation leads, **not proof that any one caused the slow tail**.
 
-A separate [explicitly instrumented owned Host diagnostic](https://github.com/albert-zen/zen/actions/runs/41392944620) is now running to distinguish actual storage/recovery work during one 5000-turn native send. It preserves the real durable path but is not benchmark timing: only the exact declared child-source instrumentation is allowed, its source and built Host are hashed, nested phase counters remain nonadditive, and the private inspector opens no TCP port.
+A separate [explicitly instrumented owned Host diagnostic](https://github.com/albert-zen/zen/actions/runs/41392944620) completed successfully to examine actual storage/recovery work during one 5000-turn native send. It preserves the real durable path but is not benchmark timing: only the exact declared child-source instrumentation is allowed, its source and built Host are hashed, nested phase counters remain nonadditive, and the private inspector opens no TCP port.
+
+### Actual owned Host: CPU and recovery work is material
+
+[Instrumented Host run 41392944620](https://github.com/albert-zen/zen/actions/runs/41392944620), exact base `b8c77b80` with only declared diagnostic child-source instrumentation, completed one real 5000-turn send and passed independent persisted identity, complete Trace, and zero-compaction checks.
+
+The child profile window was 23625.3 ms. Process CPU usage was 14536.3 ms user + 1289.5 ms system; event-loop utilization 99.45%, maximum sampled event-loop delay 7298.1 ms. Unlike the renderer profiles, this Host CPU profile had aligned, finite, nonnegative deltas (3118 samples), so weighted stack attribution is valid. Its largest self-sample weights were two `contextForFacts` stacks totaling 13302.0 ms and two `normalizeTimeZone` stacks totaling 2750.1 ms. These are sampling-weighted elapsed attribution, not separate OS CPU-accounting counters or proof of a proposed fix.
+
+| Actual phase | Calls completed | Aggregated elapsed wall time |
+|---|---:|---:|
+| Domain assertRecoverySafe | 1 | 2134.4 ms |
+| Domain public reconcileCompilation | 1 | 1376.0 ms |
+| Trace read | 8 | 2211.6 ms |
+| Semantic exists | 13 | 7437.5 ms |
+| Semantic read | 5 | 2160.7 ms |
+| Domain append | 2 | 14043.3 ms |
+| Semantic append | 1 | 816.0 ms |
+
+All listed counters had zero errors/in-flight calls at stop, with no dropped phase spans. **Do not sum nested phase wall times.** One semantic-exists span lasted 6854.5 ms, but an awaited operation can be delayed by unrelated synchronous work on the same event loop; this is not evidence of 6.85 seconds of disk I/O. Other concurrent Host operations may contribute during the measured window. The main IPC duration also includes profiler start/stop/result-transfer overhead and is excluded from baseline comparisons.
+
+The strong source-level investigation priorities from this run are repeated `contextForFacts` work and timezone normalization, not an unmeasured claim that fsync alone caused the slowdown. Renderer feedback latency and durable-admission latency remain separate unresolved acceptance requirements.
