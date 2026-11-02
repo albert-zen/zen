@@ -4924,23 +4924,25 @@ test("compaction diagnostics render hosted discovery payload with tool semantics
 test("long-history composer renders do not scan canonical history once per turn", async () => {
   const count = 160;
   let typeReads = 0;
-  const canonicalItems: CanonicalItem[] = Array.from({ length: count }, (_, i) =>
-    new Proxy(
-      {
-        id: `counted-user-${i}`,
-        threadId: "thread-1",
-        turnId: `counted-turn-${i}`,
-        type: "user_message" as const,
-        createdAt: "2026-01-01T00:00:00.000Z",
-        text: `Synthetic question ${i}`,
-      },
-      {
-        get(target, key, receiver) {
-          if (key === "type") typeReads++;
-          return Reflect.get(target, key, receiver);
+  const canonicalItems: CanonicalItem[] = Array.from(
+    { length: count },
+    (_, i) =>
+      new Proxy(
+        {
+          id: `counted-user-${i}`,
+          threadId: "thread-1",
+          turnId: `counted-turn-${i}`,
+          type: "user_message" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          text: `Synthetic question ${i}`,
         },
-      },
-    ),
+        {
+          get(target, key, receiver) {
+            if (key === "type") typeReads++;
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      ),
   );
   const view = {
     ...thread(

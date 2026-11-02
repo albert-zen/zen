@@ -100,8 +100,7 @@ test("outcome indexing visits each item once and per-turn lookups never rescan h
     );
     const counted = new Proxy(source, {
       get(target, key, receiver) {
-        if (typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key))
-          visits++;
+        if (typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key)) visits++;
         return Reflect.get(target, key, receiver);
       },
     });
