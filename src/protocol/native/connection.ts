@@ -34,6 +34,8 @@ import {
   NATIVE_THREAD_FORK_METHOD,
   NATIVE_THREAD_CREATE_CHILD_CONFIGURED_METHOD,
   NATIVE_QUEUE_CANCEL_METHOD,
+  NATIVE_STEER_RECALL_METHOD,
+  type NativeSteerRecallParams,
   NATIVE_QUEUE_EDIT_METHOD,
   NATIVE_QUEUE_STEER_METHOD,
   NATIVE_THREAD_MESSAGE_METHOD,
@@ -109,6 +111,7 @@ export class NativeConnection {
         NATIVE_TURN_SEND_UNARCHIVED_METHOD,
         NATIVE_TURN_RETRY_METHOD,
         NATIVE_QUEUE_CANCEL_METHOD,
+        NATIVE_STEER_RECALL_METHOD,
         NATIVE_QUEUE_EDIT_METHOD,
         NATIVE_QUEUE_STEER_METHOD,
       ].includes(message.method) &&
@@ -859,6 +862,59 @@ export class NativeConnection {
       }
       return;
     }
+    if (message.method === NATIVE_STEER_RECALL_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !isRecord(params) ||
+          typeof params.threadId !== "string" ||
+          params.threadId.trim().length === 0 ||
+          typeof params.recallId !== "string" ||
+          !Array.isArray(params.targets)
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Thread, recall ID and exact pending snapshot are required",
+          );
+        if (this.#appServer === undefined)
+          throw new AppServerError(
+            "unavailable",
+            "Steer recall is unavailable",
+          );
+        const request = params as unknown as NativeSteerRecallParams;
+        this.#subscriptions.add(request.threadId);
+        const result = await this.#appServer.recallSteerMessages(
+          request.threadId,
+          request,
+        );
+        if (!this.#closed) send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          send({
+            id: message.id,
+            error:
+              error instanceof AppServerError
+                ? {
+                    code: -32602,
+                    message: error.message,
+                    data: { zenCode: error.code },
+                  }
+                : {
+                    code: -32603,
+                    message:
+                      "Steer recall outcome is unconfirmed. Read the Thread and exact recall ID; do not automatically replay.",
+                  },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_QUEUE_CANCEL_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         send({
@@ -1043,9 +1099,14 @@ export class NativeConnection {
           const turn = await this.#appServer.sendMessage(
             params.threadId,
             input,
-            options,
+            { ...options, recallableSteer: true },
           );
-          result = { turnId: turn.id };
+          result = {
+            turnId: turn.id,
+            ...(turn.admission === undefined
+              ? {}
+              : { admission: turn.admission }),
+          };
           void turn.done.catch(() => undefined);
         } else if (params.mode === "queue" || params.mode === "batch-next") {
           result = {
@@ -1074,13 +1135,18 @@ export class NativeConnection {
           if (typeof params.expectedTurnId !== "string")
             throw new Error("expectedTurnId is required");
           if (params.mode === "steer") {
-            const turn = await this.#appServer.steerTurn(
+            const turn = await this.#appServer.stageSteerMessage(
               params.threadId,
               params.expectedTurnId,
               input,
               options,
             );
-            result = { turnId: turn.id };
+            result = {
+              turnId: turn.id,
+              ...(turn.admission === undefined
+                ? {}
+                : { admission: turn.admission }),
+            };
             void turn.done.catch(() => undefined);
           } else if (params.mode === "replace") {
             const replacement = await this.#appServer.replaceTurn(

@@ -26,6 +26,26 @@ export function pendingQueuedMessages(
       item.clientId !== undefined
     ) {
       delivered.add(item.clientId);
+    } else if (item.type === "user_message_steer_recalled") {
+      // A malformed/stale batch must never partially hide valid pending input.
+      const targets = item.targets.map((target) => {
+        const prior = queued.get(target.queuedItemId);
+        return prior?.type === "user_message_queued" &&
+          prior.deliveryMode === "steer" &&
+          prior.threadId === item.threadId &&
+          prior.clientId === target.clientId &&
+          prior.revision === target.expectedRevision &&
+          !delivered.has(prior.clientId) &&
+          !cancelled.has(prior.id)
+          ? prior
+          : undefined;
+      });
+      if (
+        targets.length > 0 &&
+        targets.every((target) => target !== undefined) &&
+        new Set(targets.map((target) => target?.id)).size === targets.length
+      )
+        for (const target of targets) cancelled.add(target!.id);
     } else if (
       item.type === "host_message_cancelled" ||
       item.type === "thread_message_cancelled" ||
