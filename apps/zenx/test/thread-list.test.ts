@@ -4,6 +4,7 @@ import test from "node:test";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import {
   deriveInboxSections,
+  deriveRecentThreads,
   deriveSidebarThreads,
   derivePinnedThreads,
   deriveProjectGroups,
@@ -553,4 +554,19 @@ test("projectless Threads share one visible group while their real cwd stays in 
     ),
     [b.currentMetadata.cwd, a.currentMetadata.cwd],
   );
+});
+
+test("Recent uses receipt/final recency with stable ties and safe legacy fallback", () => {
+  const a = { ...summary("a", "active", 90), recentActivityAt: new Date(20_000).toISOString() };
+  const b = { ...summary("b", "idle", 40), recentActivityAt: new Date(30_000).toISOString() };
+  const ids = (values: NativeThreadSummary[]) => deriveRecentThreads(values).map((value) => value.threadId);
+  assert.deepEqual(ids([a, b]), ["b", "a"]);
+  assert.deepEqual(ids([{ ...a, updatedAt: new Date(200_000).toISOString() }, b]), ["b", "a"]);
+  const tied = { ...a, recentActivityAt: b.recentActivityAt };
+  assert.deepEqual(ids([b, tied]), ["a", "b"]);
+  assert.deepEqual(ids([tied, b]), ["a", "b"]);
+  const legacy = summary("legacy", "idle", 10);
+  assert.deepEqual(ids([legacy, b]), ["b", "legacy"]);
+  assert.deepEqual(ids([{ ...legacy, updatedAt: new Date(999_000).toISOString() }, b]), ["b", "legacy"]);
+  assert.deepEqual(derivePinnedThreads([a, b], ["a", "b"]).map((value) => value.threadId), ["a", "b"]);
 });

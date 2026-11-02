@@ -1,3 +1,4 @@
+import { ThreadRecencyProjection } from "./thread-recency.js";
 import { captureReceiptTimezone } from "./message-timezone.js";
 import {
   observeTraceSpan,
@@ -524,6 +525,7 @@ export class ZenAppServer {
     string,
     { clientId: string; result: Promise<ReplaceTurnResult> }
   >();
+  readonly #threadRecency = new WeakMap<Thread, ThreadRecencyProjection>();
   #threadSummaries: Map<string, NativeThreadSummary> | undefined;
   #threadSummaryLoad: Promise<void> | undefined;
   #threadSummaryWrites: Promise<void> = Promise.resolve();
@@ -5867,7 +5869,13 @@ export class ZenAppServer {
       (item) => item.type === "agent_message",
     );
     const turnEnd = latestTurnEnd(items);
+    let recency = this.#threadRecency.get(thread);
+    if (recency === undefined) {
+      recency = new ThreadRecencyProjection();
+      this.#threadRecency.set(thread, recency);
+    }
     return {
+      recentActivityAt: recency.read(items),
       ...(turnEnd === undefined
         ? {}
         : {

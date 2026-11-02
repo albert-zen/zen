@@ -114,6 +114,7 @@ test("rebuilds native summaries and follows canonical and product metadata chang
       createdAt: started.items[0]?.createdAt,
       updatedAt: archived[0]?.updatedAt,
       turnSortAt: started.items[0]?.createdAt,
+      recentActivityAt: started.items[0]?.createdAt,
       preview: "",
       status: "idle",
     });
@@ -193,6 +194,11 @@ test("a real tool turn publishes canonical end evidence only after it stops", as
       "the real runtime committed pre-tool commentary",
     );
     assert.equal(running.lastTurnEnd, undefined);
+    const runningItems = (await server.readThread(thread.id)).items;
+    assert.equal(
+      running.recentActivityAt,
+      runningItems.findLast((item) => item.type === "user_message")?.createdAt,
+    );
     releaseApproval();
     await turn.done;
     const [completed] = await server.listThreadSummaries();
@@ -211,9 +217,11 @@ test("a real tool turn publishes canonical end evidence only after it stops", as
       ),
     });
     assert.ok(completed.lastTurnEnd);
+    assert.equal(completed.recentActivityAt, terminal.createdAt);
     const [reloaded] = await createServer(directory).listThreadSummaries();
     assert(reloaded && reloaded.status === "idle");
     assert.deepEqual(reloaded.lastTurnEnd, completed.lastTurnEnd);
+    assert.equal(reloaded.recentActivityAt, completed.recentActivityAt);
   } finally {
     releaseApproval();
     await removeDirectory(directory);

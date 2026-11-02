@@ -509,7 +509,7 @@ function formattedTimestamp(
   return timestamp === null ? null : format(timestamp, zone);
 }
 
-function recordedTimestamp(value: string | undefined): string | null {
+export function recordedTimestamp(value: string | undefined): string | null {
   // Never infer a timezone or obtain the current time for incomplete old records.
   if (
     typeof value !== "string" ||
