@@ -1,3 +1,4 @@
+import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
 import type { MessageQuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
@@ -808,6 +809,12 @@ function ThreadViewContent({
     setStoppingRun(null);
     setInterruptError(null);
   }, [runKey]);
+  // Native appends replace canonicalItems; composer edits retain its identity.
+  // Keep this scoped to thread, not contextPreview, like the former row scans.
+  const turnOutcomeItems = useMemo(
+    () => indexTurnOutcomeItems(thread?.canonicalItems),
+    [thread?.canonicalItems],
+  );
   const displayedThread = thread ?? contextPreview;
   const imageContext = useMemo(
     () => ({
@@ -1487,19 +1494,12 @@ function ThreadViewContent({
                         approvals={
                           approvalsByTurn.get(row.turn.id) ?? EMPTY_APPROVALS
                         }
-                        confirmedStopped={
-                          thread?.canonicalItems?.some(
-                            (item) =>
-                              item.type === "turn_aborted" &&
-                              item.turnId === row.turn.id,
-                          ) ?? false
-                        }
+                        confirmedStopped={turnOutcomeItems.abortedTurnIds.has(
+                          row.turn.id,
+                        )}
                         failureDetail={
-                          thread?.canonicalItems?.findLast(
-                            (item): item is FailureItem =>
-                              item.type === "failure" &&
-                              item.recovery === undefined &&
-                              item.turnId === row.turn.id,
+                          turnOutcomeItems.latestFailureByTurn.get(
+                            row.turn.id,
                           ) ?? null
                         }
                         usage={threadUsage?.turns[row.turn.id]}

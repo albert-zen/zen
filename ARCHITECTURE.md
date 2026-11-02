@@ -1659,3 +1659,5 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+ZenX's turn-outcome lookup is a disposable renderer index of the current immutable canonical-item array: one pass preserves any recorded abort and the last non-recovery failure in array order, without changing admission, Turn status, stored history or recovery authority.
