@@ -884,7 +884,10 @@ export class NativeConnection {
             "Thread, recall ID and exact pending snapshot are required",
           );
         if (this.#appServer === undefined)
-          throw new AppServerError("unavailable", "Steer recall is unavailable");
+          throw new AppServerError(
+            "unavailable",
+            "Steer recall is unavailable",
+          );
         const request = params as unknown as NativeSteerRecallParams;
         this.#subscriptions.add(request.threadId);
         const result = await this.#appServer.recallSteerMessages(
@@ -1100,7 +1103,9 @@ export class NativeConnection {
           );
           result = {
             turnId: turn.id,
-            ...(turn.admission === undefined ? {} : { admission: turn.admission }),
+            ...(turn.admission === undefined
+              ? {}
+              : { admission: turn.admission }),
           };
           void turn.done.catch(() => undefined);
         } else if (params.mode === "queue" || params.mode === "batch-next") {
@@ -1138,7 +1143,9 @@ export class NativeConnection {
             );
             result = {
               turnId: turn.id,
-              ...(turn.admission === undefined ? {} : { admission: turn.admission }),
+              ...(turn.admission === undefined
+                ? {}
+                : { admission: turn.admission }),
             };
             void turn.done.catch(() => undefined);
           } else if (params.mode === "replace") {

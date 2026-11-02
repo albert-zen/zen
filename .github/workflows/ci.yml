@@ -40,11 +40,6 @@ jobs:
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
-      - name: Show temporary backend recall formatting diagnostic
-        run: |
-          npx prettier --write src/app-server.ts src/protocol/native/wire.ts src/protocol/native/connection.ts test/steer-recall-server.test.ts src/steer-recall.ts test/steer-recall-lifecycle.test.ts test/native-admission-307-integration.test.ts
-          git diff -- src/app-server.ts src/protocol/native/wire.ts src/protocol/native/connection.ts test/steer-recall-server.test.ts src/steer-recall.ts test/steer-recall-lifecycle.test.ts test/native-admission-307-integration.test.ts
-          git restore -- src/app-server.ts src/protocol/native/wire.ts src/protocol/native/connection.ts test/steer-recall-server.test.ts src/steer-recall.ts test/steer-recall-lifecycle.test.ts test/native-admission-307-integration.test.ts
       - run: npm run check
 
   zenx:

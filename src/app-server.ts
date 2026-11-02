@@ -2146,10 +2146,15 @@ export class ZenAppServer {
                 "invalid_request",
                 "Recallable steer requires a stable client ID",
               );
-            return await this.stageSteerMessage(threadId, active.turnId, input, {
-              ...options,
-              clientId: options.clientId,
-            });
+            return await this.stageSteerMessage(
+              threadId,
+              active.turnId,
+              input,
+              {
+                ...options,
+                clientId: options.clientId,
+              },
+            );
           }
           await active.ready;
           return await this.steerTurn(threadId, active.turnId, input, options);
@@ -2815,64 +2820,73 @@ export class ZenAppServer {
         error instanceof Error ? error.message : "Invalid recall snapshot",
       );
     }
-    return await this.#withThreadMutation<SteerRecallResult>(threadId, async () => {
-      const thread = await this.#requireThread(threadId);
-      const items = thread.items;
-      const previous = items.find(
-        (item) =>
-          item.type === "user_message_steer_recalled" &&
-          item.recallId === receipt.recallId,
-      );
-      if (previous?.type === "user_message_steer_recalled") {
-        if (!sameSteerRecallTargets(previous.targets, receipt.targets))
-          throw new AppServerError(
-            "idempotency_conflict",
-            "Recall ID was already used for another exact snapshot",
+    return await this.#withThreadMutation<SteerRecallResult>(
+      threadId,
+      async () => {
+        const thread = await this.#requireThread(threadId);
+        const items = thread.items;
+        const previous = items.find(
+          (item) =>
+            item.type === "user_message_steer_recalled" &&
+            item.recallId === receipt.recallId,
+        );
+        if (previous?.type === "user_message_steer_recalled") {
+          if (!sameSteerRecallTargets(previous.targets, receipt.targets))
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Recall ID was already used for another exact snapshot",
+            );
+          const recovered = recoverSteerRecall(
+            items,
+            threadId,
+            receipt.recallId,
           );
-        const recovered = recoverSteerRecall(items, threadId, receipt.recallId);
-        if (recovered === undefined)
-          throw new AppServerError(
-            "recall_receipt_unavailable",
-            "The recall receipt cannot be recovered from its original inputs",
-          );
-        return { status: "already_recalled", ...recovered };
-      }
-      const pending = pendingSteerMessages(items);
-      const byId = new Map(pending.map((item) => [item.id, item]));
-      for (const target of receipt.targets) {
-        const current = byId.get(target.queuedItemId);
-        if (
-          current === undefined ||
-          current.threadId !== threadId ||
-          current.clientId !== target.clientId ||
-          current.revision !== target.expectedRevision ||
-          this.#reservedQueuedItems.get(threadId)?.has(current.id)
-        )
-          throw new AppServerError(
-            "steer_recall_conflict",
-            "The pending snapshot changed; no messages were recalled",
-          );
-        // Match the existing Composer round-trip shape, without provider work.
-        if (
-          current.input.some(
-            (part, index) =>
-              part.type !== "image" &&
-              (part.type !== "text" ||
-                part.skillSource !== undefined ||
-                index !== 0),
+          if (recovered === undefined)
+            throw new AppServerError(
+              "recall_receipt_unavailable",
+              "The recall receipt cannot be recovered from its original inputs",
+            );
+          return { status: "already_recalled", ...recovered };
+        }
+        const pending = pendingSteerMessages(items);
+        const byId = new Map(pending.map((item) => [item.id, item]));
+        for (const target of receipt.targets) {
+          const current = byId.get(target.queuedItemId);
+          if (
+            current === undefined ||
+            current.threadId !== threadId ||
+            current.clientId !== target.clientId ||
+            current.revision !== target.expectedRevision ||
+            this.#reservedQueuedItems.get(threadId)?.has(current.id)
           )
-        )
-          throw new AppServerError(
-            "steer_recall_unsupported_input",
-            "The whole snapshot must support lossless Composer restoration",
-          );
-      }
-      const selected = new Set(receipt.targets.map((target) => target.queuedItemId));
-      const messages = pending.filter((item) => selected.has(item.id));
-      await this.#commit(thread, receipt);
-      this.#emit({ type: "item_completed", item: receipt });
-      return { status: "recalled", receipt, messages };
-    });
+            throw new AppServerError(
+              "steer_recall_conflict",
+              "The pending snapshot changed; no messages were recalled",
+            );
+          // Match the existing Composer round-trip shape, without provider work.
+          if (
+            current.input.some(
+              (part, index) =>
+                part.type !== "image" &&
+                (part.type !== "text" ||
+                  part.skillSource !== undefined ||
+                  index !== 0),
+            )
+          )
+            throw new AppServerError(
+              "steer_recall_unsupported_input",
+              "The whole snapshot must support lossless Composer restoration",
+            );
+        }
+        const selected = new Set(
+          receipt.targets.map((target) => target.queuedItemId),
+        );
+        const messages = pending.filter((item) => selected.has(item.id));
+        await this.#commit(thread, receipt);
+        this.#emit({ type: "item_completed", item: receipt });
+        return { status: "recalled", receipt, messages };
+      },
+    );
   }
 
   /** A canonical cancellation cannot undo a launched or delivered input. */
@@ -3545,7 +3559,9 @@ export class ZenAppServer {
             (item.type === "user_message_queue_cancelled" &&
               item.clientId === options.clientId) ||
             (item.type === "user_message_steer_recalled" &&
-              item.targets.some((target) => target.clientId === options.clientId)),
+              item.targets.some(
+                (target) => target.clientId === options.clientId,
+              )),
         )
       )
         throw new AppServerError(
@@ -3885,7 +3901,8 @@ export class ZenAppServer {
                     ) {
                       // Only this independently authorized successor may carry held
                       // inputs. A concurrent recall can win until this fenced claim.
-                      if (heldSteerIds.size > 0) controller.signal.throwIfAborted();
+                      if (heldSteerIds.size > 0)
+                        controller.signal.throwIfAborted();
                       const held = pendingSteerMessages(thread.items).filter(
                         (pending) => heldSteerIds.has(pending.id),
                       );
@@ -4029,49 +4046,56 @@ export class ZenAppServer {
                                   content: pending.input,
                                   ...(pending.receiptTimezone === undefined
                                     ? {}
-                                    : { receiptTimezone: pending.receiptTimezone }),
+                                    : {
+                                        receiptTimezone:
+                                          pending.receiptTimezone,
+                                      }),
                                   ...(active.deliveryAnchorId === undefined
                                     ? {}
-                                    : { deliveryAfter: active.deliveryAnchorId }),
+                                    : {
+                                        deliveryAfter: active.deliveryAnchorId,
+                                      }),
                                 }
                               : pending.type === "host_message_queued"
-                              ? {
-                                  id: this.#id(),
-                                  type: "host_message",
-                                  sender: "host",
-                                  threadId,
-                                  turnId,
-                                  createdAt: this.#now(),
-                                  clientId: pending.clientId,
-                                  source: pending.source,
-                                  ...(pending.sourceId === undefined
-                                    ? {}
-                                    : { sourceId: pending.sourceId }),
-                                  text: pending.text,
-                                  mode: "steer",
-                                  ...(active.deliveryAnchorId === undefined
-                                    ? {}
-                                    : {
-                                        deliveryAfter: active.deliveryAnchorId,
-                                      }),
-                                }
-                              : {
-                                  id: this.#id(),
-                                  type: "thread_message",
-                                  threadId,
-                                  turnId,
-                                  createdAt: this.#now(),
-                                  clientId: pending.clientId,
-                                  sender: pending.sender,
-                                  content: pending.input,
-                                  mode: "steer",
-                                  messageType: pending.messageType,
-                                  ...(active.deliveryAnchorId === undefined
-                                    ? {}
-                                    : {
-                                        deliveryAfter: active.deliveryAnchorId,
-                                      }),
-                                };
+                                ? {
+                                    id: this.#id(),
+                                    type: "host_message",
+                                    sender: "host",
+                                    threadId,
+                                    turnId,
+                                    createdAt: this.#now(),
+                                    clientId: pending.clientId,
+                                    source: pending.source,
+                                    ...(pending.sourceId === undefined
+                                      ? {}
+                                      : { sourceId: pending.sourceId }),
+                                    text: pending.text,
+                                    mode: "steer",
+                                    ...(active.deliveryAnchorId === undefined
+                                      ? {}
+                                      : {
+                                          deliveryAfter:
+                                            active.deliveryAnchorId,
+                                        }),
+                                  }
+                                : {
+                                    id: this.#id(),
+                                    type: "thread_message",
+                                    threadId,
+                                    turnId,
+                                    createdAt: this.#now(),
+                                    clientId: pending.clientId,
+                                    sender: pending.sender,
+                                    content: pending.input,
+                                    mode: "steer",
+                                    messageType: pending.messageType,
+                                    ...(active.deliveryAnchorId === undefined
+                                      ? {}
+                                      : {
+                                          deliveryAfter:
+                                            active.deliveryAnchorId,
+                                        }),
+                                  };
                           active.controller.signal.throwIfAborted();
                           await this.#commit(thread, message);
                           this.#emit({ type: "item_completed", item: message });
@@ -4666,7 +4690,10 @@ export class ZenAppServer {
     options: SteerTurnOptions & { clientId: string },
   ): Promise<TurnHandle> {
     if (options.clientId.trim().length === 0)
-      throw new AppServerError("invalid_request", "A stable client ID is required");
+      throw new AppServerError(
+        "invalid_request",
+        "A stable client ID is required",
+      );
     return await this.#withThreadMutation<TurnHandle>(threadId, async () => {
       const thread = await this.#requireThread(threadId);
       if (options.requireUnarchived === true)
@@ -4683,7 +4710,8 @@ export class ZenAppServer {
           item.clientId === options.clientId,
       );
       const delivered = items.find(
-        (item) => item.type === "user_message" && item.clientId === options.clientId,
+        (item) =>
+          item.type === "user_message" && item.clientId === options.clientId,
       );
       if (original?.type === "user_message_queued") {
         if (
@@ -4699,7 +4727,10 @@ export class ZenAppServer {
         if (delivered?.type === "user_message")
           return {
             id: delivered.turnId,
-            done: active?.turnId === delivered.turnId ? active.done : Promise.resolve(),
+            done:
+              active?.turnId === delivered.turnId
+                ? active.done
+                : Promise.resolve(),
             admission: {
               state: "admitted",
               clientId: options.clientId,
@@ -4707,14 +4738,17 @@ export class ZenAppServer {
               turnId: delivered.turnId,
             },
           };
-        if (!pendingSteerMessages(items).some((item) => item.id === original.id))
+        if (
+          !pendingSteerMessages(items).some((item) => item.id === original.id)
+        )
           throw new AppServerError(
             "queue_id_cancelled",
             "This input was withdrawn; use a fresh ID for a new send",
           );
         return {
           id: expectedTurnId,
-          done: active?.turnId === expectedTurnId ? active.done : Promise.resolve(),
+          done:
+            active?.turnId === expectedTurnId ? active.done : Promise.resolve(),
           admission: {
             state: "queued",
             clientId: options.clientId,
@@ -4740,7 +4774,10 @@ export class ZenAppServer {
         active.controller.signal.aborted ||
         this.#isTerminal(thread, expectedTurnId)
       )
-        throw new AppServerError("turn_not_running", "The target Turn is not running");
+        throw new AppServerError(
+          "turn_not_running",
+          "The target Turn is not running",
+        );
       await this.#validateInput(input, active.inputModalities);
       const queued: QueuedUserMessageItem = {
         id: this.#id(),
