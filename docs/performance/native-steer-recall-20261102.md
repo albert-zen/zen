@@ -48,3 +48,10 @@ Independent read-only reopening found two staged facts, exactly one recall contr
 The [first attempt 41401044397](https://github.com/albert-zen/zen/actions/runs/41401044397) reached the real unknown state and passed no-auto-restore/resend checks, then failed because the fixture's macOS end-of-document key chord did not move the caret to the asserted end position. It never reached Check and is **not** counted as passed. The repeat changed only the native editing fixture to the already verified native Select All path; product code and all behavioral/storage gates remained unchanged.
 
 This closes the four explicitly assigned native cases within their stated fake-provider/text-input scope. It does not establish general network reliability, real-provider latency or unsupported-input coverage. Repository-wide CI and merge approval remain separate.
+
+
+### Visual follow-up found a real remaining UI defect
+
+After the fourth case's behavioral/storage assertions passed, full-page PNG inspection found that the recovered composer was correct and the batch was no longer actionable, **but the old “Recall outcome is unconfirmed” warning remained visible after successful read-only recovery**. Therefore the functional pass above must not be read as complete UI acceptance.
+
+The observed recovered image SHA-256 is `313a4eed87fea7d87e68bc8870bdd66224692bc1aa0f7291b52fdba5d0dba9f0`, from [artifact-only image readback 41402842948](https://github.com/albert-zen/zen/actions/runs/41402842948), exact279f. The source success transition spreads the prior attempt, including its error. The author is correcting that state transition and adding regression coverage; the native case now additionally requires the unknown warning to disappear on authoritative recovery success while the real notification remains held. Only this fourth case needs repeating on the corrected source. This visible defect and the earlier functional pass are both retained.
