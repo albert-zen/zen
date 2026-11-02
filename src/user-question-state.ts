@@ -1,6 +1,7 @@
 import type { ContextItem } from "./item-list.js";
 import { textFromUserInput, type CanonicalItem } from "./item.js";
 import { pendingQueuedMessages } from "./input-queue.js";
+import { recordedTimestamp } from "./model.js";
 import {
   ASK_USER_QUESTION_NAME,
   USER_QUESTION_PUBLICATION_KIND,
@@ -29,6 +30,12 @@ export interface UserQuestionState {
 }
 
 export const USER_QUESTION_PAGE_SIZE = 32;
+export interface UserQuestionSummary {
+  /** Answerable request groups, excluding pending/claimed/unavailable replies. */
+  openCount: number;
+  /** Original local publication time, retained after response or recall. */
+  latestPublishedAt?: string;
+}
 export interface UserQuestionPage {
   questions: readonly UserQuestionState[];
   totalPending: number;
@@ -60,11 +67,15 @@ export class ThreadUserQuestionProjection {
   #importedThrough = -1;
   #dirty = false;
   readonly #localCalls = new Set<string>();
-  readonly #callKeys = new Map<string, string>();
+  readonly #callKeys = new Map<
+    string,
+    { callItemId: string; resultSeen: boolean }
+  >();
   readonly #replyClients = new Map<string, string>();
   readonly #queuedIds = new Map<string, string>();
   readonly #attentionCandidates = new Set<string>();
   #value: readonly UserQuestionState[] = emptyQuestions;
+  #summary: UserQuestionSummary = { openCount: 0 };
   readonly #byRequest = new Map<
     string,
     { question: UserQuestionState; position: number }
@@ -83,6 +94,7 @@ export class ThreadUserQuestionProjection {
       this.#replyClients.clear();
       this.#queuedIds.clear();
       this.#value = emptyQuestions;
+      this.#summary = { openCount: 0 };
       this.#byRequest.clear();
       this.#pending = [];
       this.#dirty = false;
@@ -93,8 +105,15 @@ export class ThreadUserQuestionProjection {
       item.name === ASK_USER_QUESTION_NAME &&
       item.parentCallId === undefined &&
       item.imported === undefined
-    )
+    ) {
       this.#localCalls.add(item.id);
+      // Compilation repair can append a missing semantic call after its result.
+      // Index only known local Ask candidates; ordinary tool results need no map.
+      this.#callKeys.set(JSON.stringify([item.turnId, item.callId]), {
+        callItemId: item.id,
+        resultSeen: false,
+      });
+    }
     if (
       item.type === "user_message_queued" &&
       item.questionReply !== undefined
@@ -141,20 +160,25 @@ export class ThreadUserQuestionProjection {
       item.content.name === ASK_USER_QUESTION_NAME &&
       this.#localCalls.has(item.id)
     ) {
-      this.#callKeys.set(
-        JSON.stringify([item.turnId, item.content.callId]),
-        item.id,
-      );
-      this.#dirty = true;
+      const key = JSON.stringify([item.turnId, item.content.callId]);
+      const resultSeen = this.#callKeys.get(key)?.resultSeen ?? false;
+      this.#callKeys.set(key, { callItemId: item.id, resultSeen });
+      // Skip bare call work only when this candidate has no earlier result.
+      if (resultSeen) {
+        this.#dirty = true;
+        this.#attentionCandidates.add(item.id);
+      }
     } else if (
       item.kind === "tool_result" &&
       this.#callKeys.size !== 0 &&
       this.#callKeys.has(JSON.stringify([item.turnId, item.content.callId]))
     ) {
       this.#dirty = true;
-      this.#attentionCandidates.add(
-        this.#callKeys.get(JSON.stringify([item.turnId, item.content.callId]))!,
-      );
+      const candidate = this.#callKeys.get(
+        JSON.stringify([item.turnId, item.content.callId]),
+      )!;
+      candidate.resultSeen = true;
+      this.#attentionCandidates.add(candidate.callItemId);
     } else if (
       item.kind === "message" &&
       item.source.metadata?.questionReply !== undefined
@@ -196,13 +220,36 @@ export class ThreadUserQuestionProjection {
         : readUserQuestions(threadId, contexts, facts);
     this.#byRequest.clear();
     this.#pending = [];
+    let openCount = 0;
+    let latestPublishedAt: string | undefined;
     this.#value.forEach((question, position) => {
       const entry = { question, position };
       this.#byRequest.set(question.request.callItemId, entry);
       if (question.state !== "answered" && question.state !== "cancelled")
         this.#pending.push(entry);
+      if (question.state === "open") openCount++;
+      const timestamp = recordedTimestamp(question.createdAt);
+      if (
+        timestamp !== null &&
+        (latestPublishedAt === undefined ||
+          Date.parse(timestamp) > Date.parse(latestPublishedAt))
+      )
+        latestPublishedAt = timestamp;
     });
+    this.#summary = {
+      openCount,
+      ...(latestPublishedAt === undefined ? {} : { latestPublishedAt }),
+    };
     this.#dirty = false;
+  }
+
+  summary(
+    threadId: string,
+    contexts: readonly ContextItem[],
+    facts: readonly CanonicalItem[],
+  ): UserQuestionSummary {
+    this.#refresh(threadId, contexts, facts);
+    return { ...this.#summary };
   }
 
   read(
