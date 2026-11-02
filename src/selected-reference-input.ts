@@ -137,9 +137,10 @@ export function compileSelectedReferenceInput(
             }
           : { id: reference.id, cwd: reference.cwd };
       const ref = sources.bind(reference.kind, value);
-      if (reference.kind === "message")
-        text += `[Selected message ${label}; ${ref}; ${sourceTime(reference, previous)}; read-only]\n${reference.excerpt}\n[End selected excerpt]`;
-      else
+      if (reference.kind === "message") {
+        const messageLabel = reference.name === "ZenX" ? "" : ` ${label}`;
+        text += `[Selected message${messageLabel}; ${ref}; ${sourceTime(reference, previous)}; read-only]\n${reference.excerpt}\n[End selected excerpt]`;
+      } else
         text += `[Selected thread ${label}; ${ref}; source time unavailable; read-only]`;
     }
     cursor = reference.position === undefined ? position : position + 1;

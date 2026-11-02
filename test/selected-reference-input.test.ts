@@ -550,8 +550,8 @@ for (const version of ["plain", "v1", "v2"] as const) {
     const semantic = persisted(item);
     assert.equal(semantic.kind, "message");
     if (semantic.kind !== "message") throw Error("message expected");
-    const label = version === "v2" ? source.name : "ZenX";
-    const quote = `[Selected message ${JSON.stringify(label)}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`;
+    const label = version === "v2" ? ` ${JSON.stringify(source.name)}` : "";
+    const quote = `[Selected message${label}; s1; source time unavailable; read-only]\n${source.excerpt}\n[End selected excerpt]`;
     assert.equal(
       textFromUserInput(semantic.content.parts.slice(1)),
       version === "plain" ? quote + "Follow up" : "Follow up\n\n" + quote,
