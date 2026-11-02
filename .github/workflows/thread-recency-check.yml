@@ -30,7 +30,10 @@ jobs:
       - name: Production recency and actual Sidebar interaction regressions
         id: tests
         continue-on-error: true
-        run: node --import tsx --test test/thread-recency.test.ts test/thread-summary.test.ts test/user-message-timestamps.test.ts apps/zenx/test/thread-list.test.ts apps/zenx/test/sidebar-ordering-interaction.test.ts apps/zenx/test/app-server-manager.test.ts apps/zenx/test/sidebar-preferences-interaction.test.ts
+        run: |
+          node --import tsx --test test/thread-recency.test.ts test/thread-summary.test.ts test/user-message-timestamps.test.ts
+          cd apps/zenx
+          node --import tsx --test test/thread-list.test.ts test/sidebar-ordering-interaction.test.ts test/app-server-manager.test.ts test/sidebar-preferences-interaction.test.ts
       - name: Require every real check to pass
         if: always()
         env:
