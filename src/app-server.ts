@@ -1,4 +1,7 @@
-import { captureReceiptTimezone } from "./message-timezone.js";
+import {
+  captureReceiptTimezone,
+  formatReceiptTimestamp,
+} from "./message-timezone.js";
 import {
   observeTraceSpan,
   recordTraceObservation,
@@ -27,6 +30,13 @@ import {
   pendingQueuedMessages,
   type PendingQueuedInput,
 } from "./input-queue.js";
+import {
+  pendingSteerMessages,
+  pendingNextTurnMessages,
+  recoverSteerRecall,
+  sameSteerRecallTargets,
+  type RecoveredSteerRecall,
+} from "./steer-recall.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { decodeCanonicalItem } from "./item.js";
@@ -88,6 +98,8 @@ import type {
   QueuedUserMessageItem,
   QueuedUserMessageCancelledItem,
   QueuedUserMessageEditedItem,
+  SteerRecallTarget,
+  SteerRecalledItem,
 } from "./item.js";
 import {
   contentFromUserMessage,
@@ -212,6 +224,8 @@ export interface DeleteThreadResult {
 export interface TurnHandle {
   id: string;
   done: Promise<void>;
+  /** Staged human ingress is admitted, not yet model-claimed. */
+  admission?: QueuedInputAdmission;
 }
 
 /** Canonical queue identity captured inside the Thread mutation. */
@@ -261,6 +275,15 @@ export interface QueuedEditResult extends QueuedCancellationTarget {
   revision: number;
   editItemId: string;
   status: "edited" | "already_edited";
+}
+
+export interface SteerRecallRequest {
+  recallId: string;
+  targets: readonly SteerRecallTarget[];
+}
+
+export interface SteerRecallResult extends RecoveredSteerRecall {
+  status: "recalled" | "already_recalled";
 }
 
 export interface CompactThreadOptions {
@@ -2078,14 +2101,15 @@ export class ZenAppServer {
   async sendMessage(
     threadId: string,
     input: RequestedUserInput,
-    options: SteerTurnOptions = {},
+    options: SteerTurnOptions & { recallableSteer?: true } = {},
   ): Promise<TurnHandle> {
     for (let attempt = 0; attempt < 8; attempt++) {
       const thread = await this.#requireThread(threadId);
+      const items = thread.items;
       const duplicate =
         options.clientId === undefined
           ? undefined
-          : thread.items.find(
+          : items.find(
               (item): item is UserMessageItem =>
                 item.type === "user_message" &&
                 item.clientId === options.clientId,
@@ -2093,6 +2117,21 @@ export class ZenAppServer {
       // startTurn performs canonical identity/input validation before any execution.
       if (duplicate !== undefined)
         return await this.startTurn(threadId, input, options);
+      if (options.recallableSteer === true && options.clientId !== undefined) {
+        const staged = items.find(
+          (item) =>
+            item.type === "user_message_queued" &&
+            item.deliveryMode === "steer" &&
+            item.clientId === options.clientId,
+        );
+        if (staged?.type === "user_message_queued")
+          return await this.stageSteerMessage(
+            threadId,
+            staged.expectedTurnId!,
+            input,
+            { ...options, clientId: options.clientId },
+          );
+      }
       const active = this.#activeTurns.get(threadId);
       if (active?.controller.signal.aborted) {
         await Promise.allSettled([active.done]);
@@ -2104,6 +2143,22 @@ export class ZenAppServer {
           !active.controller.signal.aborted &&
           !this.#isTerminal(thread, active.turnId)
         ) {
+          if (options.recallableSteer === true) {
+            if (options.clientId === undefined)
+              throw new AppServerError(
+                "invalid_request",
+                "Recallable steer requires a stable client ID",
+              );
+            return await this.stageSteerMessage(
+              threadId,
+              active.turnId,
+              input,
+              {
+                ...options,
+                clientId: options.clientId,
+              },
+            );
+          }
           await active.ready;
           return await this.steerTurn(threadId, active.turnId, input, options);
         }
@@ -2472,6 +2527,14 @@ export class ZenAppServer {
             "queue_cancelled",
             "This queued message was cancelled",
           );
+        if (
+          pending.type === "user_message_queued" &&
+          pending.deliveryMode === "steer"
+        )
+          throw new AppServerError(
+            "steer_already_pending",
+            "This steer already waits for the next model input boundary",
+          );
         if (pending.revision !== target.expectedRevision)
           throw new AppServerError(
             "queue_revision_conflict",
@@ -2736,6 +2799,99 @@ export class ZenAppServer {
     });
   }
 
+  /** One durable receipt withdraws the exact whole snapshot, never a loop of cancels. */
+  async recallSteerMessages(
+    threadId: string,
+    requested: SteerRecallRequest,
+  ): Promise<SteerRecallResult> {
+    let receipt: SteerRecalledItem;
+    try {
+      const candidate = decodeCanonicalItem({
+        id: this.#id(),
+        type: "user_message_steer_recalled",
+        threadId,
+        createdAt: this.#now(),
+        recallId: requested.recallId,
+        targets: requested.targets,
+      });
+      if (candidate.type !== "user_message_steer_recalled")
+        throw new Error("Invalid recall control");
+      receipt = structuredClone(candidate);
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid recall snapshot",
+      );
+    }
+    return await this.#withThreadMutation<SteerRecallResult>(
+      threadId,
+      async () => {
+        const thread = await this.#requireThread(threadId);
+        const items = thread.items;
+        const previous = items.find(
+          (item) =>
+            item.type === "user_message_steer_recalled" &&
+            item.recallId === receipt.recallId,
+        );
+        if (previous?.type === "user_message_steer_recalled") {
+          if (!sameSteerRecallTargets(previous.targets, receipt.targets))
+            throw new AppServerError(
+              "idempotency_conflict",
+              "Recall ID was already used for another exact snapshot",
+            );
+          const recovered = recoverSteerRecall(
+            items,
+            threadId,
+            receipt.recallId,
+          );
+          if (recovered === undefined)
+            throw new AppServerError(
+              "recall_receipt_unavailable",
+              "The recall receipt cannot be recovered from its original inputs",
+            );
+          return { status: "already_recalled", ...recovered };
+        }
+        const pending = pendingSteerMessages(items);
+        const byId = new Map(pending.map((item) => [item.id, item]));
+        for (const target of receipt.targets) {
+          const current = byId.get(target.queuedItemId);
+          if (
+            current === undefined ||
+            current.threadId !== threadId ||
+            current.clientId !== target.clientId ||
+            current.revision !== target.expectedRevision ||
+            this.#reservedQueuedItems.get(threadId)?.has(current.id)
+          )
+            throw new AppServerError(
+              "steer_recall_conflict",
+              "The pending snapshot changed; no messages were recalled",
+            );
+          // Match the existing Composer round-trip shape, without provider work.
+          if (
+            current.input.some(
+              (part, index) =>
+                part.type !== "image" &&
+                (part.type !== "text" ||
+                  part.skillSource !== undefined ||
+                  index !== 0),
+            )
+          )
+            throw new AppServerError(
+              "steer_recall_unsupported_input",
+              "The whole snapshot must support lossless Composer restoration",
+            );
+        }
+        const selected = new Set(
+          receipt.targets.map((target) => target.queuedItemId),
+        );
+        const messages = pending.filter((item) => selected.has(item.id));
+        await this.#commit(thread, receipt);
+        this.#emit({ type: "item_completed", item: receipt });
+        return { status: "recalled", receipt, messages };
+      },
+    );
+  }
+
   /** A canonical cancellation cannot undo a launched or delivered input. */
   async cancelQueuedMessages(
     threadId: string,
@@ -2844,7 +3000,7 @@ export class ZenAppServer {
     }
     if (this.#activeTurns.has(threadId) || this.#drainingQueues.has(threadId))
       return;
-    let first = pendingQueuedMessages(thread.items)[0];
+    let first = pendingNextTurnMessages(thread.items)[0];
     if (first === undefined) return;
     // Claim the admission before the first asynchronous validation. A second
     // explicit resume observes the same result, not a duplicate launch.
@@ -2878,7 +3034,7 @@ export class ZenAppServer {
     let attemptId: string;
     let batch: PendingQueuedInput[];
     while (true) {
-      const pending = pendingQueuedMessages(thread.items)[0];
+      const pending = pendingNextTurnMessages(thread.items)[0];
       if (pending === undefined) {
         this.#drainingQueues.delete(threadId);
         settleFirst({ type: "admitted" }); // canceled while preflight was in flight
@@ -3007,7 +3163,7 @@ export class ZenAppServer {
         throw new QueueBatchChanged();
       throw new QueueAdmissionRejection(first, attemptId, error);
     }
-    const pending = pendingQueuedMessages(thread.items);
+    const pending = pendingNextTurnMessages(thread.items);
     const batch = [first];
     if (first.deliveryMode === "batch-next") {
       // Capture a bounded FIFO admission boundary; later appends and legacy
@@ -3081,7 +3237,7 @@ export class ZenAppServer {
             );
           return;
         }
-        const queued = pendingQueuedMessages(thread.items)[0];
+        const queued = pendingNextTurnMessages(thread.items)[0];
         if (queued === undefined) {
           if (!admittedFirst) onFirstAdmission?.({ type: "admitted" });
           return;
@@ -3197,7 +3353,9 @@ export class ZenAppServer {
       };
     } = {},
   ): Promise<TurnHandle> {
-    return await this.#launchTurn(threadId, input, options);
+    return await this.#launchTurn(threadId, input, options, {
+      carryHeldHumanSteer: true,
+    });
   }
 
   /** Explicit continuation, never replay of a previous Turn or tool call. */
@@ -3224,7 +3382,10 @@ export class ZenAppServer {
       threadId,
       [{ type: "text", text: language === "zh-CN" ? "继续" : "Go on" }],
       { ...options, requireUnarchived: true },
-      { expectedTerminalTurnId: expectedTurnId },
+      {
+        expectedTerminalTurnId: expectedTurnId,
+        carryHeldHumanSteer: true,
+      },
     );
   }
 
@@ -3353,6 +3514,8 @@ export class ZenAppServer {
       };
     },
     internal: {
+      /** Explicit human successor authority; automatic queue/Host launches omit it. */
+      carryHeldHumanSteer?: boolean;
       preparedInput?: boolean;
       /** Explicit retry fence, evaluated under the same admission lock. */
       expectedTerminalTurnId?: string;
@@ -3403,13 +3566,28 @@ export class ZenAppServer {
         options.clientId !== undefined &&
         thread.items.some(
           (item) =>
-            item.type === "user_message_queue_cancelled" &&
-            item.clientId === options.clientId,
+            (item.type === "user_message_queue_cancelled" &&
+              item.clientId === options.clientId) ||
+            (item.type === "user_message_steer_recalled" &&
+              item.targets.some(
+                (target) => target.clientId === options.clientId,
+              )),
         )
       )
         throw new AppServerError(
           "queue_id_cancelled",
           "This queued client ID was canceled; use a new ID for a new message",
+        );
+      if (
+        internal.preparedInput !== true &&
+        options.clientId !== undefined &&
+        pendingSteerMessages(thread.items).some(
+          (item) => item.clientId === options.clientId,
+        )
+      )
+        throw new AppServerError(
+          "idempotency_conflict",
+          "Pending steer identity cannot be reused to start another Turn",
         );
       // Only delivered user messages prove execution. Queue/replacement intents
       // still need their prepared internal launch, even with the same client ID.
@@ -3507,7 +3685,7 @@ export class ZenAppServer {
             "retry_target_changed",
             "Retry requires the latest failed or stopped Turn",
           );
-        if (pendingQueuedMessages(thread.items).length > 0)
+        if (pendingNextTurnMessages(thread.items).length > 0)
           throw new AppServerError(
             "queue_pending",
             "Queued input must be resolved before retrying",
@@ -3647,6 +3825,12 @@ export class ZenAppServer {
         admitted.operation.release();
         throw error;
       }
+      const heldSteerIds = new Set(
+        internal.carryHeldHumanSteer === true
+          ? pendingSteerMessages(thread.items).map((item) => item.id)
+          : [],
+      );
+      let heldSteerClaimed = false;
       const ready = deferred<void>();
       let highestInputTokens: number | undefined;
       let executionSucceeded = false;
@@ -3721,6 +3905,43 @@ export class ZenAppServer {
                           "Recovery no longer owns the active Turn",
                         );
                     }
+                    if (
+                      !heldSteerClaimed &&
+                      (item.type === "user_message" ||
+                        item.type === "thread_message" ||
+                        item.type === "host_message")
+                    ) {
+                      // Only this independently authorized successor may carry held
+                      // inputs. A concurrent recall can win until this fenced claim.
+                      if (heldSteerIds.size > 0)
+                        controller.signal.throwIfAborted();
+                      const held = pendingSteerMessages(thread.items).filter(
+                        (pending) => heldSteerIds.has(pending.id),
+                      );
+                      for (const pending of held)
+                        await this.#validateInput(
+                          pending.input,
+                          resolved.model.inputModalities,
+                        );
+                      for (const pending of held) {
+                        controller.signal.throwIfAborted();
+                        const carried: UserMessageItem = {
+                          id: this.#id(),
+                          type: "user_message",
+                          threadId,
+                          turnId,
+                          createdAt: this.#now(),
+                          clientId: pending.clientId,
+                          content: pending.input,
+                          ...(pending.receiptTimezone === undefined
+                            ? {}
+                            : { receiptTimezone: pending.receiptTimezone }),
+                        };
+                        await this.#commit(thread, carried);
+                        this.#emit({ type: "item_completed", item: carried });
+                      }
+                      heldSteerClaimed = true;
+                    }
                     await this.#commit(thread, item);
                     if (
                       (item.type === "user_message" ||
@@ -3767,8 +3988,12 @@ export class ZenAppServer {
                     this.#auxiliaryModel?.trace,
                     { threadId, turnId, sampleId: modelResponseId },
                     "context_preparation",
-                    async () =>
-                      await this.#withThreadMutation(threadId, async () => {
+                    async () => {
+                      let attemptedCompaction = false;
+                      for (;;) {
+                        const prepared = await this.#withThreadMutation(
+                          threadId,
+                          async () => {
                         this.#assertCurrentThreadAuthority(thread);
                         await this.#journal.assertRecoverySafe?.(threadId);
                         this.#assertCurrentThreadAuthority(thread);
@@ -3778,6 +4003,49 @@ export class ZenAppServer {
                             "turn_not_running",
                             `Turn ${turnId} is not running on thread ${threadId}`,
                           );
+                        }
+                        active.controller.signal.throwIfAborted();
+                        const pendingItems = thread.items;
+                        const pendingTokens = this.#pendingSteerTokenEstimate(
+                          pendingItems,
+                          turnId,
+                        );
+                        if (pendingTokens > 0) {
+                          const preview = this.#providerRegistry.acquire(
+                            thread.effectiveConfiguration(),
+                          );
+                          try {
+                            const window = preview.model.contextWindow;
+                            if (window !== null) {
+                              const total =
+                                this.#estimateContext(
+                                  pendingItems,
+                                  preview,
+                                  this.#runtimeConfiguration.contextCompaction,
+                                ).total + pendingTokens;
+                              if (pendingTokens >= window)
+                                throw new AppServerError(
+                                  "context_window_exceeded",
+                                  "Pending human input alone exceeds the model window; it remains pending and can be recalled",
+                                );
+                              if (
+                                !attemptedCompaction &&
+                                total >= automaticCompactionThreshold(
+                                  window,
+                                  this.#runtimeConfiguration.contextCompaction
+                                    .triggerPercent,
+                                )
+                              )
+                                return { prepareCompaction: true as const };
+                              if (total >= window)
+                                throw new AppServerError(
+                                  "context_window_exceeded",
+                                  "Pending human input does not fit the prepared context; it remains pending and can be recalled",
+                                );
+                            }
+                          } finally {
+                            preview.release();
+                          }
                         }
                         // Agent guidance that arrived during initial admission joins this
                         // Turn in arrival order after its fixed initial input batch.
@@ -3789,10 +4057,13 @@ export class ZenAppServer {
                           (resolved.model.contextWindow ?? 32_768) * 2,
                         );
                         for (const pending of pendingQueuedMessages(
-                          thread.items,
+                          pendingItems,
                         )) {
                           if (
                             !(
+                              (pending.type === "user_message_queued" &&
+                                pending.deliveryMode === "steer" &&
+                                pending.expectedTurnId === turnId) ||
                               (pending.type === "thread_message_queued" &&
                                 pending.messageType === "guidance") ||
                               (pending.type === "host_message_queued" &&
@@ -3803,56 +4074,87 @@ export class ZenAppServer {
                               ?.has(pending.id)
                           )
                             continue;
-                          const inputBytes = Buffer.byteLength(
-                            JSON.stringify(pending.input),
-                          );
-                          if (
-                            guidanceCount >= 8 ||
-                            (guidanceCount > 0 &&
-                              guidanceBytes + inputBytes > guidanceBudget)
-                          )
-                            break;
-                          guidanceCount++;
-                          guidanceBytes += inputBytes;
-                          const message: ThreadMessageItem | HostMessageItem =
-                            pending.type === "host_message_queued"
+                          // Native human steer keeps its prior all-visible-next-sample
+                          // semantics. Only Agent/Host backlog uses this existing budget.
+                          if (pending.type !== "user_message_queued") {
+                            const inputBytes = Buffer.byteLength(
+                              JSON.stringify(pending.input),
+                            );
+                            if (
+                              guidanceCount >= 8 ||
+                              (guidanceCount > 0 &&
+                                guidanceBytes + inputBytes > guidanceBudget)
+                            )
+                              continue;
+                            guidanceCount++;
+                            guidanceBytes += inputBytes;
+                          }
+                          const message:
+                            | UserMessageItem
+                            | ThreadMessageItem
+                            | HostMessageItem =
+                            pending.type === "user_message_queued"
                               ? {
                                   id: this.#id(),
-                                  type: "host_message",
-                                  sender: "host",
+                                  type: "user_message",
                                   threadId,
                                   turnId,
                                   createdAt: this.#now(),
                                   clientId: pending.clientId,
-                                  source: pending.source,
-                                  ...(pending.sourceId === undefined
+                                  content: pending.input,
+                                  ...(pending.receiptTimezone === undefined
                                     ? {}
-                                    : { sourceId: pending.sourceId }),
-                                  text: pending.text,
-                                  mode: "steer",
+                                    : {
+                                        receiptTimezone:
+                                          pending.receiptTimezone,
+                                      }),
                                   ...(active.deliveryAnchorId === undefined
                                     ? {}
                                     : {
                                         deliveryAfter: active.deliveryAnchorId,
                                       }),
                                 }
-                              : {
-                                  id: this.#id(),
-                                  type: "thread_message",
-                                  threadId,
-                                  turnId,
-                                  createdAt: this.#now(),
-                                  clientId: pending.clientId,
-                                  sender: pending.sender,
-                                  content: pending.input,
-                                  mode: "steer",
-                                  messageType: pending.messageType,
-                                  ...(active.deliveryAnchorId === undefined
-                                    ? {}
-                                    : {
-                                        deliveryAfter: active.deliveryAnchorId,
-                                      }),
-                                };
+                              : pending.type === "host_message_queued"
+                                ? {
+                                    id: this.#id(),
+                                    type: "host_message",
+                                    sender: "host",
+                                    threadId,
+                                    turnId,
+                                    createdAt: this.#now(),
+                                    clientId: pending.clientId,
+                                    source: pending.source,
+                                    ...(pending.sourceId === undefined
+                                      ? {}
+                                      : { sourceId: pending.sourceId }),
+                                    text: pending.text,
+                                    mode: "steer",
+                                    ...(active.deliveryAnchorId === undefined
+                                      ? {}
+                                      : {
+                                          deliveryAfter:
+                                            active.deliveryAnchorId,
+                                        }),
+                                  }
+                                : {
+                                    id: this.#id(),
+                                    type: "thread_message",
+                                    threadId,
+                                    turnId,
+                                    createdAt: this.#now(),
+                                    clientId: pending.clientId,
+                                    sender: pending.sender,
+                                    content: pending.input,
+                                    mode: "steer",
+                                    messageType: pending.messageType,
+                                    ...(active.deliveryAnchorId === undefined
+                                      ? {}
+                                      : {
+                                          deliveryAfter:
+                                            active.deliveryAnchorId,
+                                        }),
+                                  };
+                          active.controller.signal.throwIfAborted();
                           await this.#commit(thread, message);
                           this.#emit({ type: "item_completed", item: message });
                         }
@@ -3997,7 +4299,21 @@ export class ZenAppServer {
                           sample.release();
                           throw error;
                         }
-                      }),
+                          },
+                        );
+                        if (!("prepareCompaction" in prepared)) return prepared;
+                        attemptedCompaction = true;
+                        await this.#handleActiveTurnCompaction({
+                          threadId,
+                          turnId,
+                          contextCompaction:
+                            this.#runtimeConfiguration.contextCompaction,
+                          inputTokens: undefined,
+                          agenticCompaction: false,
+                          signal: controller.signal,
+                        });
+                      }
+                    },
                     {
                       clientIds: [
                         ...new Set(
@@ -4400,6 +4716,7 @@ export class ZenAppServer {
           },
           {
             turnId: replacementIntent.successorTurnId,
+            carryHeldHumanSteer: replacementIntent.sender === undefined,
             preparedInput: true,
             replacementClientId: replacementIntent.clientId,
             ...(replacementIntent.sender === undefined
@@ -4436,6 +4753,128 @@ export class ZenAppServer {
       return await planned.pending;
     }
     throw new Error("Turn replacement did not produce a result");
+  }
+
+  /** Native human input is durable pending control until the next sample claims it. */
+  async stageSteerMessage(
+    threadId: string,
+    expectedTurnId: string,
+    requestedInput: RequestedUserInput,
+    options: SteerTurnOptions & { clientId: string },
+  ): Promise<TurnHandle> {
+    if (options.clientId.trim().length === 0)
+      throw new AppServerError(
+        "invalid_request",
+        "A stable client ID is required",
+      );
+    return await this.#withThreadMutation<TurnHandle>(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      if (options.requireUnarchived === true)
+        await this.#requireUnarchived(threadId);
+      const input = await this.#prepareSkillInput(
+        thread,
+        requestedInput,
+        options.clientId,
+      );
+      const items = thread.items;
+      const original = items.find(
+        (item) =>
+          item.type === "user_message_queued" &&
+          item.clientId === options.clientId,
+      );
+      const delivered = items.find(
+        (item) =>
+          item.type === "user_message" && item.clientId === options.clientId,
+      );
+      if (original?.type === "user_message_queued") {
+        if (
+          original.deliveryMode !== "steer" ||
+          original.expectedTurnId !== expectedTurnId ||
+          !sameUserInput(original.input, input)
+        )
+          throw new AppServerError(
+            "idempotency_conflict",
+            "Steer client ID belongs to different input or Turn",
+          );
+        const active = this.#activeTurns.get(threadId);
+        if (delivered?.type === "user_message")
+          return {
+            id: delivered.turnId,
+            done:
+              active?.turnId === delivered.turnId
+                ? active.done
+                : Promise.resolve(),
+            admission: {
+              state: "admitted",
+              clientId: options.clientId,
+              queuedItemId: original.id,
+              turnId: delivered.turnId,
+            },
+          };
+        if (
+          !pendingSteerMessages(items).some((item) => item.id === original.id)
+        )
+          throw new AppServerError(
+            "queue_id_cancelled",
+            "This input was withdrawn; use a fresh ID for a new send",
+          );
+        return {
+          id: expectedTurnId,
+          done:
+            active?.turnId === expectedTurnId ? active.done : Promise.resolve(),
+          admission: {
+            state: "queued",
+            clientId: options.clientId,
+            queuedItemId: original.id,
+          },
+        };
+      }
+      if (
+        delivered !== undefined ||
+        items.some(
+          (item) =>
+            item.type === "turn_replacement_requested" &&
+            item.clientId === options.clientId,
+        )
+      )
+        throw new AppServerError(
+          "idempotency_conflict",
+          "Steer client ID belongs to another input operation",
+        );
+      const active = this.#activeTurns.get(threadId);
+      if (
+        active?.turnId !== expectedTurnId ||
+        active.controller.signal.aborted ||
+        this.#isTerminal(thread, expectedTurnId)
+      )
+        throw new AppServerError(
+          "turn_not_running",
+          "The target Turn is not running",
+        );
+      await this.#validateInput(input, active.inputModalities);
+      const queued: QueuedUserMessageItem = {
+        id: this.#id(),
+        type: "user_message_queued",
+        threadId,
+        createdAt: this.#now(),
+        clientId: options.clientId,
+        input,
+        deliveryMode: "steer",
+        expectedTurnId,
+        receiptTimezone: captureReceiptTimezone(options.clientTimezone),
+      };
+      await this.#commit(thread, queued);
+      this.#emit({ type: "item_completed", item: queued });
+      return {
+        id: expectedTurnId,
+        done: active.done,
+        admission: {
+          state: "queued",
+          clientId: options.clientId,
+          queuedItemId: queued.id,
+        },
+      };
+    });
   }
 
   async steerTurn(
@@ -4658,6 +5097,24 @@ export class ZenAppServer {
     });
   }
 
+  #pendingSteerTokenEstimate(
+    items: readonly CanonicalItem[],
+    turnId: string,
+  ): number {
+    return estimateModelMessageInputTokens(
+      pendingSteerMessages(items)
+        .filter((item) => item.expectedTurnId === turnId)
+        .map((item) => ({
+          role: "user" as const,
+          content: item.input,
+          userTimestamp: formatReceiptTimestamp(
+            item.createdAt,
+            item.receiptTimezone,
+          ),
+        })),
+    );
+  }
+
   async #handleActiveTurnCompaction(options: {
     threadId: string;
     turnId: string;
@@ -4667,14 +5124,17 @@ export class ZenAppServer {
     signal: AbortSignal;
   }): Promise<boolean> {
     const inputTokens = options.inputTokens;
-    return await this.#withThreadMutation(options.threadId, async () => {
+    let release: (() => void) | undefined;
+    try {
+      const plan = await this.#withThreadMutation(options.threadId, async () => {
       const active = this.#activeTurns.get(options.threadId);
       if (active?.turnId !== options.turnId) return false;
+      options.signal.throwIfAborted();
       const thread = await this.#requireThread(options.threadId);
       const resolved = this.#providerRegistry.acquire(
         thread.effectiveConfiguration(),
       );
-      try {
+      release = () => resolved.release();
         const contextWindow = resolved.model.contextWindow;
         if (contextWindow === null) return false;
         // Provider usage describes the request that just completed. Tool results
@@ -4686,7 +5146,9 @@ export class ZenAppServer {
           resolved,
           options.contextCompaction,
         );
-        const estimatedInputTokens = estimate.total;
+        const estimatedInputTokens =
+          estimate.total +
+          this.#pendingSteerTokenEstimate(thread.items, options.turnId);
         if (
           estimate.toolDefinitions +
             estimateModelInput([], [], resolved.adapter.contextInstructions)
@@ -4793,7 +5255,9 @@ export class ZenAppServer {
         if (!compactionBoundaryAdvances(thread.items, boundary)) {
           return false;
         }
-        await this.#appendContextCompaction({
+        return {
+          active,
+          append: {
           thread,
           boundary,
           initiator: "automatic",
@@ -4814,14 +5278,26 @@ export class ZenAppServer {
           contextCompaction: options.contextCompaction,
           signal: options.signal,
           allowOpenTurns: true,
-        });
-        active.contextCompactionNotice = undefined;
-        active.contextCompactionNoticeIssued = false;
-        return true;
-      } finally {
-        resolved.release();
-      }
-    });
+          concurrentAdmission: true,
+          concurrentAdmissionTurnId: options.turnId,
+          } satisfies GeneratedContextCompactionOptions,
+        };
+      });
+      if (plan === false) return false;
+      await this.#appendContextCompaction(plan.append);
+      await this.#withThreadMutation(options.threadId, async () => {
+        if (
+          this.#activeTurns.get(options.threadId) === plan.active &&
+          !plan.active.controller.signal.aborted
+        ) {
+          plan.active.contextCompactionNotice = undefined;
+          plan.active.contextCompactionNoticeIssued = false;
+        }
+      });
+      return true;
+    } finally {
+      release?.();
+    }
   }
 
   async #commitFinalResponse(
@@ -4860,6 +5336,9 @@ export class ZenAppServer {
         pendingSteer ||
         pendingQueuedMessages(thread.items).some(
           (item) =>
+            (item.type === "user_message_queued" &&
+              item.deliveryMode === "steer" &&
+              item.expectedTurnId === turnId) ||
             (item.type === "thread_message_queued" &&
               item.messageType === "guidance") ||
             (item.type === "host_message_queued" && item.intent === "steer"),
@@ -6388,6 +6867,11 @@ function remapForkItems(
     const copied = structuredClone(item) as CanonicalItem;
     Object.assign(copied, { id: remap(item.id), threadId });
     if (copied.type === "thread_metadata") delete copied.parentThreadId;
+    if (copied.type === "user_message_steer_recalled")
+      copied.targets = copied.targets.map((target) => ({
+        ...target,
+        queuedItemId: remap(target.queuedItemId),
+      }));
     if (copied.type === "thread_restored")
       copied.deletionItemId = remap(copied.deletionItemId);
     if (

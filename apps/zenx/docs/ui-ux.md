@@ -899,3 +899,130 @@ committed Item 或开始时 canonical 前缀之后新提交的匹配压缩才消
 The exact leading legacy `[Message quote; ...]` transport is rendered through the same inline reference component as current quoted messages, retaining exact selected text and source navigation. Real line breaks appear in the expanded excerpt; source IDs belong in the explicit source details, not the message bubble or plain-text clipboard. Malformed or embedded illustrative text stays literal. New structured sends retain provenance independently of readable clipboard text.
 
 Copying or cutting a capsule between main and side-chat composers preserves its exact source and selected text through structured clipboard metadata; external plain-text applications receive readable text with real line breaks and no injected source IDs. Pasting into a plain or rich Composer preserves surrounding draft text and existing capsules, positions the caret after the inserted content, and never sends automatically. Cut/paste participates in native editor undo/redo; malformed or mismatched clipboard metadata falls back to ordinary text rather than guessing a source.
+
+### Experiment / TBD: pending steer 全部撤回到输入框（2026-11-02）
+
+**设计提案，未实施、未通过完整 App 验收，不覆盖本文已生效规则。**
+普通消息发送性能修复独立进行，不以本功能为前置条件。
+
+#### 范围与入口
+
+初版只覆盖当前私有 Thread 的人类 steer：Host 已持久接纳，但尚未由下一次
+模型输入准备过程 claim 的消息。“全部”是点击时的精确快照，不包含后来到达的
+消息、其他 Thread、Host/Agent 输入或明确选择 Next turn / Each turn 的队列。
+Side chat 必须使用自身精确 Thread，只有实现验证归属和权限后才能纳入；不承诺
+Room 或跨作者撤回，也不根据消息正文推断作者。
+
+工具执行或压缩期间仍可接纳普通消息为 pending steer。撤回不停止 Turn、
+不中断工具或压缩、不跳过完成边界、不删除已进入模型上下文的内容。
+
+Composer 上方的待处理区域显示“等待进入模型 · N 条”和“全部撤回到输入框”；
+单条时使用“撤回到输入框”。采用清楚的文字按钮，不以停止或删除图标替代含义。
+内容、图片和引用继续可见，真正被截断的内容可展开。
+
+状态区分接纳中、等待进入模型、正在撤回、已进入模型输入、撤回结果尚未确认、
+已撤回。只有权威 pending 状态可撤回；不能根据没有首 token、正在工具调用或
+没有 provider dispatch 记录推断。已撤回与已恢复到输入框是两个事实。
+
+#### 原子批次
+
+请求包含精确 Thread、唯一操作 ID，以及快照中所有消息的 ID、client ID 和
+revision。服务端在 admission / model-input claim 共用的 Thread mutation fence
+内校验全批来源、权限、状态和版本。任一目标已 claim、已变化或不合法，整批不执行；
+不能以逐条 Cancel 或多个请求模拟原子撤回。
+
+全批符合时提交一个持久批次控制事实，持久成功后才能 ACK。点击后新到达的消息
+不纳入快照。冲突显示“消息状态已变化，本次没有撤回。请查看仍在等待的消息。”
+刷新状态后由用户再次明确操作，不自动扩大目标或重试。
+
+**拟议生命周期：保留已有投递策略，不自动启动新 Turn。**
+正常完成检查发现绑定当前 Turn 的 pending steer 时，继续同一个 Turn 的处理循环，
+不是创建新 Turn。Stop、执行错误或进程崩溃后，未 claim 的消息保留为 held，
+不自动运行、恢复或调度任何 Turn。它们仍可全部撤回，界面明确显示：
+“这些消息尚未进入模型；再次发送/继续时会一并提交，可先全部撤回”。
+
+下一次由用户独立明确授权的发送、继续、Retry 或 Replace 接纳，才按原始接纳顺序
+携带这些 held 消息，位于该次新输入之前；具体入口仍遵循已有权限和投递策略。
+这不是自动重试、自动新建 Turn，也不是将 steer 转换为 follow-up。绑定已终止
+Turn 的 pending 状态不可用于复活该 Turn。普通 next-turn 队列选择及 queue_pending
+检查必须区分 held steer，避免把合法显式 Retry 错挡为尚有普通队列。
+
+上述为兼容既有策略的设计决定，尚未实现。claim / recall / 正常完成 / Stop /
+error / crash / 下一次显式接纳的全部竞态及顺序须通过原生验收。
+
+#### 合并回输入框
+
+仅在权威成功回执确认后恢复。按原始接纳顺序合并各条正文，以两个换行隔开；
+不注入编号、时间、来源 ID 或其他元数据。现有草稿完整保留在最后，中间以空行
+分隔。使用最新草稿的原子 reducer 合并，不用点击时旧快照覆盖之后的输入。
+
+图片按原消息顺序及每条内部顺序恢复，再保留现有草稿图片；相同图片不擅自去重。
+保留 AttachmentRef，给草稿元素分配唯一身份；撤回投影的移除不能释放仍被回执
+或草稿引用的附件。多条消息下次成为一条消息，图片使用现有 Composer 图片区，
+不宣称原来的多模态逐消息分段完全不变。
+
+文件、Thread、选中文本等引用保留结构、位置及来源。每条先以自己的原 client ID
+解码引用，再合并结构化草稿；下一次显式发送使用新的 client ID 编码。禁止拼接
+序列化引用头，禁止把图片转换为文件指针。不能无损转换的技能、音频等输入明确
+说明阻碍；不能先撤回再丢弃，也不能把部分恢复伪装成全部成功。
+
+普通成功无需确认弹窗，不自动发送。仅发起操作的仍存活窗口可以自动合并。
+Composer 正在提交、目标 Thread 已切换或无法安全合并时，保留恢复卡片：
+“已撤回 N 条，内容已保留。恢复到输入框”。不自动导航、不抢焦点、不改写未决
+submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
+
+#### 失败、未知与崩溃恢复
+
+明确未提交的失败保留待处理消息及草稿，展示原因和可展开的本机原始错误详情。
+传输异常显示“撤回结果尚未确认”，保留操作 ID 和目标快照，通过只读查询确认
+精确回执。“检查结果”不是重放；没有证据不自动取消、不恢复文本、不重新发送。
+
+不全局锁住 Composer，不等待压缩结束。新的普通消息可独立发送，使用独立身份，
+不加入旧撤回快照；仅禁止对相同未决批次重复操作。
+
+持久 RecallReceipt / 批次控制事实通过原始输入及已提交编辑事实保留可恢复的
+结构化内容，不新增一份可编辑历史。**不因此把普通 Composer 草稿改为 Host
+持久存储，不承诺跨窗口自动插入 exactly-once。**
+
+其他窗口更新撤回状态，但不自动插入自己的草稿。窗口关闭、崩溃或重启后，
+从精确回执提供用户明确操作的恢复卡片。如果可能已经恢复过，明示
+“再次恢复会追加到当前草稿”，由用户决定，绝不自动追加或发送。
+一次内存合并不能成为永久交付证据，不能据此丢弃原始恢复依据及附件引用。
+
+旧版本已经提交为模型语义 user_message 的 steer 不获得追溯撤回能力，
+不能仅凭未发现 dispatch 就从 ItemList 移除。
+
+#### 可访问性与验收
+
+使用共享按钮、本地化、焦点和错误组件；完整中英文及数量文案，键盘可达，
+至少 44px 操作目标，状态不只依赖颜色。仍在原 Composer 的成功恢复可返回输入焦点；
+用户已导航或正在其他区域编辑则不抢焦点。不新增发送/撤销快捷键。
+390 × 600 窄窗口中批准请求、待处理内容、错误和 Composer 均须可达。
+
+完整真实 App 验收至少覆盖：
+
+- 长对话普通发送及时反馈；工具/压缩期间 pending steer 可见，撤回不终止工作。
+- claim 赢得竞态则全批不执行；任一 revision 变化或权限失效同样全批失败。
+- 点击后新到消息不被旧快照包含；目标 Turn 结束行为符合明确的既有策略。
+- 空草稿、已有草稿、请求期间输入、正在提交、切换 Thread 均不丢失内容。
+- 多正文、重复图片、结构化引用及特殊字符正确合并；不支持输入不被扁平化。
+- 明确失败、响应丢失、重复查询不重复撤回、插入或自动发送。
+- 发起窗口关闭/崩溃后可明确恢复；其他窗口不自动插入。
+- 撤回输入不进入后续模型请求；已 claim 输入不能撤回；ItemList 不改写。
+- 中英文、键盘、窄窗、深浅色完整页面截图绑定精确源码与 bundle SHA。
+
+未运行的测试标明未验证；单组件测试、示意图及未运行 CI 不是完整 E2E 通过。
+
+#### 已查阅依据（固定源码）
+
+- [普通 steer 当前直接提交 user_message](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L4441)。
+- [现有队列取消逐条提交](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740)，不可直接冒充原子批次恢复。
+- [已有草稿、图片及客户端绑定引用转换](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-draft.ts)。
+- [已有精确编辑回执的未知结果查询](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-request.ts)。
+- [T3 Code 待处理消息 UI](https://github.com/pingdotgg/t3code/blob/5cc99e1c23980d7995a13c47f969b47cb68ed1be/apps/web/src/components/chat/MessagesTimeline.tsx#L1780-L1870)
+  区分 queued / sending，提供 “Cancel and return to the composer”。仅借鉴状态与
+  操作文案，不以此证明它或本提案具有原子批次、跨窗口恢复或后端竞态安全。
+
+本提案的初期后端草稿只将有稳定 client ID 的 native 人类普通发送及显式 steer
+接到 Core staged admission。旧 Core/CAS steerTurn 保留立即模型语义兼容行为，
+不显示可撤回承诺。后端草稿及其单测不代表输入框恢复、完整 App 或安装版本已验收。

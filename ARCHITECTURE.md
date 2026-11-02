@@ -1661,3 +1661,86 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+## Proposed / not implemented: pending steer atomic recall (2026-11-02)
+
+This is a design proposal, not an implemented guarantee or an override of the
+existing three durable domains. The proposed user-visible contract is the
+Experiment / TBD pending-steer section in [ZenX UI/UX](apps/zenx/docs/ui-ux.md).
+
+Today ordinary steerTurn directly commits user_message; the existing queued
+cancellation method commits per target. Neither permits claiming that all
+unconsumed ordinary steer can already be atomically recalled. Existing committed
+model-semantic Items must not be deleted, rewritten, or retrospectively treated
+as pending merely because provider dispatch has not been observed.
+
+Proposed admission stages new steer through the existing pending-input domain,
+then claims it under the same Thread mutation fence at model-input preparation.
+Claim/delivery creates the irrevocable model-semantic input boundary. HTTP
+dispatch, first token and renderer state are not that boundary. All actual
+compiler/admission paths must use the same authority before this can ship.
+
+A single durable batch control fact identifies the operation and exact message,
+client and revision snapshot; all targets pass validation or none is withdrawn.
+The receipt is recoverable from existing original input and committed edits, not
+a second editable transcript or a fourth journal. New arrivals are not silently
+added, and critical control persistence must precede ACK.
+
+RecallReceipt retains recoverable structured input and attachment references.
+It is not a normal Composer draft store. The initiating live window may safely
+merge into the latest renderer-local draft; other windows do not auto-insert.
+Crash/restart offers explicit recovery from the receipt. Automatic cross-window
+exactly-once draft insertion and Host-persisted normal drafts are out of scope.
+Unknown outcomes use exact receipt reads, never automatic command replay or send.
+
+Initial scope is human steer in an exact private Thread, not Host/Agent messages,
+Rooms or implicit cross-author authority. Side-chat support requires verified
+routing to its own Thread, not fallback to the selected main Thread.
+
+Proposed lifecycle preserves existing delivery policy. A normal final-commit
+check that finds pending steer bound to the active Turn continues that same
+Turn's runtime loop; it does not start another Turn. Stop, error or crash leaves
+unclaimed steer held and recoverable without scheduling or automatically
+resuming any Turn. Held input remains recallable.
+
+Only a subsequent independently authorized explicit send/continue/retry/replace
+admission carries held input in original admission order before fresh input,
+subject to the existing entrypoint permissions and delivery policy. This is not
+automatic replay, Turn resurrection or conversion to follow-up. Ordinary
+next-turn queue selection and queue_pending checks must distinguish held steer
+so they do not incorrectly block explicit Retry. The UI must disclose that
+these inputs have not entered the model and will accompany the next explicit
+send/continue unless recalled first.
+
+This is a proposal, not an implementation or test result. Claim/recall/final
+commit/Stop/error/crash/successor-admission races and exact ordering require
+native tests before acceptance.
+
+Source baseline: [ordinary steer](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L4441),
+[queued cancellation](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740),
+[existing draft codec](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/apps/zenx/src/renderer/src/queue-edit-draft.ts).
+
+### Backend draft checkpoint: native human staging and atomic recall
+
+This draft connects native human ingress with a stable client ID to Core-owned
+stageSteerMessage (or sendMessage with recallableSteer), and adds the native
+zen/thread/steer/recall command. Both omitted-mode native sends and explicit
+native steer use that staged path, including while initial admission is waiting.
+Legacy Core/CAS steerTurn retains its immediate model-semantic compatibility
+behavior and is not recallable. No adapter owns a parallel queue or compiler.
+
+Exact pending revisions are claimed under the existing Thread mutation fence at
+sample preparation. Normal final completion with pending bound steer continues
+the same Turn. Stop/error/crash leaves held inputs unscheduled; existing
+next-Turn queue selection excludes them. An independently authorized successor
+claims its held snapshot before its first fresh input; a recall can win until
+that fenced claim. Existing original inputs/edits plus one atomic control receipt
+provide recovery through zen/thread/read; no dedicated recovery endpoint or
+persistent Composer store is added. Receipt IDs fence explicit duplicate writes,
+but clients must read after unknown transport outcomes rather than replay.
+
+This checkpoint is backend-only and unaccepted until native tests and independent
+review pass. The UI proposal above remains an Experiment: no recall button,
+Composer restoration, full-App E2E, installed-build acceptance or completed
+feature is claimed. Native RPC is available only through the existing initialized
+Host boundary; no new remote-tools/Room/cross-author mutation surface is added.

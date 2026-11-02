@@ -40,6 +40,11 @@ jobs:
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
+      - name: Show temporary pending claim formatting diagnostic
+        run: |
+          npx prettier --write src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts
+          git diff -- src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts
+          git restore -- src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts
       - run: npm run check
 
   zenx:
