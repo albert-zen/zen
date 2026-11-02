@@ -40,6 +40,11 @@ jobs:
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
+      - name: Show temporary recall-test formatting diagnostic
+        run: |
+          npx prettier --write test/steer-recall.test.ts
+          git diff -- test/steer-recall.test.ts
+          git restore -- test/steer-recall.test.ts
       - run: npm run check
 
   zenx:
