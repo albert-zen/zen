@@ -4,6 +4,8 @@ on:
     paths:
       - .github/workflows/information-board.yml
       - apps/zenx/scripts/*information-board*
+      - apps/zenx/src/renderer/src/App.tsx
+      - apps/zenx/test/app-project-picker-interaction.test.ts
       - apps/zenx/src/renderer/src/plugin-information-host.tsx
       - apps/zenx/src/renderer/src/ConversationInformationCards.tsx
       - apps/zenx/src/renderer/src/BackgroundShellStatus.tsx

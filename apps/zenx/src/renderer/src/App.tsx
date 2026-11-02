@@ -1508,8 +1508,18 @@ function AppContent() {
           void loadModels();
           return;
         }
+        const nativeEvent =
+          method === "zen/thread/event"
+            ? (params as ServerNotificationParams["zen/thread/event"]).event
+            : null;
+        // Streaming text lives in the active projection, not the canonical
+        // summary/project catalog. Keep every non-delta invalidation unchanged.
+        const nativeTextDelta =
+          nativeEvent?.type === "item_delta" ||
+          nativeEvent?.type === "reasoning_summary_delta" ||
+          nativeEvent?.type === "reasoning_content_delta";
         if (
-          method === "zen/thread/event" ||
+          (method === "zen/thread/event" && !nativeTextDelta) ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"

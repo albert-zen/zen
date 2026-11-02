@@ -342,6 +342,15 @@ async function run() {
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   window.setSize(1000, 820);
   await capture("08b-open-dock-to-overlay", "overlay");
+  // Native layout at our exact responsive boundary, not only a spacious window.
+  window.setSize(1184, 820);
+  await capture("08c-920px-allocation-dock", "dock");
+  assert.equal(result.cases.at(-1).geometry.workspace.width, 920);
+  assert.equal(result.cases.at(-1).geometry.chat.width, 556);
+  assert.ok(result.cases.at(-1).geometry.composer.width >= 480);
+  window.setSize(1183, 820);
+  await capture("08d-919px-allocation-overlay", "overlay");
+  assert.equal(result.cases.at(-1).geometry.workspace.width, 919);
   assert.equal(result.cases.at(-1).geometry.composerIdentity, true);
   assert.equal(
     result.cases.at(-1).geometry.draft,
