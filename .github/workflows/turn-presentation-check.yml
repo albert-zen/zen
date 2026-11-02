@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 2dc10ce0f10a6d75eda6cb23bc988092bd87e6e0
+          ref: 07dccde9020847bd694da240ce7a9f79386cd379
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +31,7 @@ jobs:
         id: tests
         continue-on-error: true
         working-directory: apps/zenx
-        run: npx --no-install tsx --test test/turn-canonical-presentation.test.ts test/app-project-picker-interaction.test.ts test/composer-autosize.test.ts test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts test/message-quote.test.ts test/message-quote-sent.test.ts test/message-quote-serialization.test.ts test/side-chat-quote-target.test.ts
+        run: npx --no-install tsx --test test/turn-canonical-presentation.test.ts test/app-project-picker-interaction.test.ts test/composer-autosize.test.ts test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts test/message-quote.test.ts test/message-quote-sent.test.ts test/message-quote-serialization.test.ts test/side-chat-quote-target.test.ts test/inline-reference-codec.test.ts test/selected-reference-authority.test.ts test/self-control-usability.test.ts
       - name: Build exact production App
         id: build
         continue-on-error: true
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 2dc10ce0f10a6d75eda6cb23bc988092bd87e6e0
+          ref: 07dccde9020847bd694da240ce7a9f79386cd379
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
