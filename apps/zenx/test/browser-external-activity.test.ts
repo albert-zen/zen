@@ -317,7 +317,22 @@ test("real Host activity never presents a peer tab; explicit selection keeps its
       /Page two/,
       "hidden activity is not replayed on return",
     );
-    await act(async () => button("Page three · External · read-only").click());
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="New workspace tab"]')!
+        .click(),
+    );
+    await act(async () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".workspace-tab-types button",
+        ),
+      ]
+        .find(
+          (node) => node.querySelector("strong")?.textContent === "Page three",
+        )!
+        .click(),
+    );
     assert.match(selected()!, /Page three/);
     assert.deepEqual([...activeFrames.values()], ["three"]);
     await act(async () =>
