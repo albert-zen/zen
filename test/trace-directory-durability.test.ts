@@ -41,8 +41,7 @@ test("warm Trace keeps data and thread syncs without repeating ancestor syncs", 
     process.platform === "win32"
       ? ["file"]
       : ["directory", "directory", "directory", "file", "directory"];
-  const warm =
-    process.platform === "win32" ? ["file"] : ["file", "directory"];
+  const warm = process.platform === "win32" ? ["file"] : ["file", "directory"];
   assert.equal((await store.record(event())).durability, "durable");
   assert.deepEqual(calls.splice(0), initial);
   assert.equal((await store.record(event())).durability, "durable");
@@ -125,8 +124,7 @@ test(
     t.mock.method(prototype, "sync", async function (this: FileHandle) {
       const directory = (await this.stat()).isDirectory();
       calls.push(directory ? "directory" : "file");
-      if (fail && directory)
-        throw new Error("Synthetic ancestor sync failure");
+      if (fail && directory) throw new Error("Synthetic ancestor sync failure");
       await sync.call(this);
     });
     assert.equal((await store.record(event())).durability, "degraded");
@@ -141,10 +139,10 @@ test(
     assert.equal(calls.filter((kind) => kind === "file").length, 2);
     assert.equal(calls.filter((kind) => kind === "directory").length, 5);
     const read = await store.read("thread");
-    assert.deepEqual(read.records.map((record) => record.type), [
-      "trace_capture_gap",
-      "synthetic",
-    ]);
+    assert.deepEqual(
+      read.records.map((record) => record.type),
+      ["trace_capture_gap", "synthetic"],
+    );
   },
 );
 

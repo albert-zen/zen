@@ -1030,9 +1030,7 @@ async function readOwnedFile(filename: string): Promise<Buffer> {
     await file.close();
   }
 }
-async function privateDirectory(
-  directory: string,
-): Promise<{
+async function privateDirectory(directory: string): Promise<{
   dev: number;
   ino: number;
   created: boolean;
