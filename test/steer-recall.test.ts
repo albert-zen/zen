@@ -79,7 +79,10 @@ test("atomic projection removes exact snapshot and retains later arrivals", () =
   const late = queued("late");
   const receipt = recalled([second, first]);
   const items = [first, second, receipt, late];
-  assert.deepEqual(pending(items).map((item) => item.id), ["late"]);
+  assert.deepEqual(
+    pending(items).map((item) => item.id),
+    ["late"],
+  );
   const result = recover(items, "thread", receipt.recallId);
   const ids = result?.messages.map((item) => item.id);
   assert.deepEqual(ids, ["first", "second"]);
@@ -167,7 +170,10 @@ test("held projection never invents delivery after a terminal Turn", () => {
     createdAt,
     reason: "stopped",
   };
-  assert.deepEqual(pending([input, stopped]).map((item) => item.id), ["one"]);
+  assert.deepEqual(
+    pending([input, stopped]).map((item) => item.id),
+    ["one"],
+  );
   assert.deepEqual(contextItemsFromLegacy(input), []);
 });
 
