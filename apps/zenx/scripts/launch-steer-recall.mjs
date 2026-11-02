@@ -29,7 +29,7 @@ assert.equal(count,0);
 const sourceLabel = process.argv[4] ?? "pending";
 assert.equal(sourceLabel,"pending");
 const pairCase = process.argv[5];
-assert.ok(["recall-wins","claim-wins","navigation"].includes(pairCase));
+assert.ok(["recall-wins","claim-wins","navigation","lost-reply"].includes(pairCase));
 const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arch(),cpuModel:os.cpus()[0]?.model,cpuCount:os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem(),uptimeSeconds:os.uptime()});
 const hostBefore=hostSnapshot();
 const expected = {
@@ -320,7 +320,7 @@ try {
    const recalls=facts.filter(i=>i.type==="user_message_steer_recalled");
    assert.equal(recalls.length,pairCase!=="claim-wins"?1:0);
    if(pairCase!=="claim-wins"){
-    assert.equal(recalls[0].id,result.recall.receipt.receipt.id);
+    assert.equal(recalls[0].id,(result.recall.realHandlerReceipt??result.recall.receipt).receipt.id);
     assert.deepEqual(recalls[0].targets,result.recall.params.targets);
     assert.equal(semantic.filter(i=>i.id===recalls[0].id).length,0);
     assert(!JSON.stringify(semantic).includes(result.nonces[1])&&!JSON.stringify(semantic).includes(result.nonces[2]),"withdrawn nonces never semantic model history");
@@ -330,7 +330,7 @@ try {
    persisted={independentReopen:true,queued:2,canonicalUserMessages:facts.filter(i=>i.type==="user_message").length,recallFacts:recalls.length,semanticItems:semantic.length,traceCompleteness:observed.completeness,compactionFacts:0,compactionAttempts:0};
   }finally{await journal.close();await trace.flush();}
   await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
-  console.log("SYNTHETIC_STEER_RECALL_VERIFIED_JSON "+JSON.stringify({sourceCommit:expected,caseId:pairCase,diagnosticProviderGate:true,notPerformanceAcceptance:true,provider:result.provider,recallRequest:result.recall.params,recallResult:result.recall.receipt,persisted,noAutomaticResend:result.ipc.filter(r=>r.method==="zen/turn/send").length===3}));
+  console.log("SYNTHETIC_STEER_RECALL_VERIFIED_JSON "+JSON.stringify({sourceCommit:expected,caseId:pairCase,diagnosticProviderGate:true,notPerformanceAcceptance:true,provider:result.provider,recallRequest:result.recall.params,recallResult:result.recall.receipt,realHandlerReceipt:result.recall.realHandlerReceipt,replyDelivered:result.recall.receipt!==undefined,recoveryReads:result.recoveryReads,recoveryCheckpoint:result.lostReplyRecoveryCheckpoint,scenario:pairCase==="lost-reply"?"durable recall reply and first automatic read reply both lost; explicit Check succeeds":pairCase,persisted,noAutomaticResend:result.ipc.filter(r=>r.method==="zen/turn/send").length===3}));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
   try { const report=JSON.parse(await readFile(path.join(directory,"full-app-measurements.json"),"utf8")); if(!report.ok)console.error("SYNTHETIC_SEND_FAILURE_JSON "+JSON.stringify(report)); } catch {}

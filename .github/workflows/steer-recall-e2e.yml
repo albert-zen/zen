@@ -19,15 +19,7 @@ jobs:
           - label: pending
             source: 279f84ff35c68979a55f35c5322c941235dff7be
             count: 0
-            case: recall-wins
-          - label: pending
-            source: 279f84ff35c68979a55f35c5322c941235dff7be
-            count: 0
-            case: claim-wins
-          - label: pending
-            source: 279f84ff35c68979a55f35c5322c941235dff7be
-            count: 0
-            case: navigation
+            case: lost-reply
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
