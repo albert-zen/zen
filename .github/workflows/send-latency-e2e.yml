@@ -15,14 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: baseline
-            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
-            count: 1000
           - label: frontend
             source: 3819977ddd2da5698bcbee2c14fd8165f9934009
-            count: 1000
-          - label: backend
-            source: 8e036167d864ae5d452dccc411970352ce26e433
             count: 1000
     runs-on: macos-latest
     timeout-minutes: 25

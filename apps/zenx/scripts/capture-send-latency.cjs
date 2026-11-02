@@ -324,6 +324,7 @@ async function run() {
   for(let repetition=0;repetition<3;repetition++) {
     const nonce = "Synthetic latency message "+manifest.visibleMessageCount+" "+repetition+" "+require("node:crypto").randomUUID();
     await click("document.querySelector('#thread-composer:not(:disabled)')","Focus actual composer");
+    await until(async()=>await evaluate("document.activeElement === document.querySelector('#thread-composer')"),"actual textarea has native focus");
     await window.webContents.insertText(nonce);
     await until(async()=>await evaluate("document.querySelector('#thread-composer')?.value === "+JSON.stringify(nonce)),"native text input committed");
     await until(async()=>await evaluate("Boolean(document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)'))"),"actual Send enabled");
@@ -374,6 +375,7 @@ async function run() {
 void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
   .then(run).catch(async error=>{
     result.error=String(error.stack||error);
+    if(window&&!window.isDestroyed())try{result.inputFailureState=await evaluate("(()=>{const e=document.querySelector('#thread-composer'),a=document.activeElement;return {activeTag:a?.tagName,activeId:a?.id,activeClass:typeof a?.className==='string'?a.className:null,composerExists:Boolean(e),composerDisabled:e?.disabled,composerValue:e?.value,hasComposerFocus:a===e}})()");}catch{}
     console.error("SYNTHETIC_SEND_CAPTURE_ERROR "+JSON.stringify({error:result.error,waitingFor:result.waitingFor,pendingOperation:result.pendingOperation}));
     if(window&&!window.isDestroyed())try{await screenshot("send-latency-failure.png")}catch{}
   }).finally(async()=>{
