@@ -288,7 +288,7 @@ async function cardVisible(selector) {
 // Read-only DOM inspection supports the real textarea and reference-chip editor.
 async function composerSnapshot() {
   return evaluate(`(()=>{const e=document.querySelector('#thread-composer');if(!e)return null;
-    const lines=[...e.querySelectorAll('.cm-line')].map(line=>{const copy=line.cloneNode(true);copy.querySelectorAll('[data-reference-key]').forEach(chip=>chip.replaceWith('\\uFFFC'));return copy.textContent});
+    const lines=[...e.querySelectorAll('.cm-line')].map(line=>{const copy=line.cloneNode(true);copy.querySelectorAll('.cm-placeholder').forEach(node=>node.remove());copy.querySelectorAll('[data-reference-key]').forEach(chip=>chip.replaceWith('\\uFFFC'));return copy.textContent});
     return {text:e instanceof HTMLTextAreaElement?e.value:lines.join('\\n'),references:[...e.querySelectorAll('.reference-token-details')].map(x=>x.title),images:document.querySelectorAll('.composer-images .draft-image').length}})()`);
 }
 async function typeEmptyComposer(text) {
