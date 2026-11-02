@@ -54,7 +54,7 @@ export function deriveSidebarThreads(
   );
 }
 
-/** Recent is message activity, not the project/inbox Turn-start preference. */
+/** Shared automatic Recent/Project order; explicit manual preferences stay separate. */
 export function deriveRecentThreads(
   threads: readonly NativeThreadSummary[],
 ): NativeThreadSummary[] {
@@ -130,7 +130,7 @@ export function deriveInboxSections(
   pendingApprovalThreadIds: ReadonlySet<string> = new Set(),
   watchingThreadIds: ReadonlySet<string> = new Set(),
 ): InboxSection[] {
-  const sorted = sortByRecency(threads);
+  const sorted = sortByTurnStart(threads);
   return [
     {
       key: "needs",
@@ -181,7 +181,7 @@ export function deriveProjectGroups(
   const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
   const groups: ProjectGroup[] = projection.projects
     .map((project) => {
-      const stableThreads = sortByRecency(
+      const stableThreads = deriveRecentThreads(
         project.threadIds.flatMap((threadId) => {
           const thread = byId.get(threadId);
           return thread === undefined ? [] : [thread];
@@ -226,7 +226,7 @@ export function deriveProjectGroups(
       workspace: null,
       configured: false,
       isDefault: false,
-      threads: sortByRecency(projectless),
+      threads: deriveRecentThreads(projectless),
     });
   const unavailable = projection.unavailableThreadIds.flatMap((threadId) => {
     const thread = byId.get(threadId);
@@ -299,7 +299,7 @@ export function moveSidebarThread(
     return preference;
   }
   const byId = new Map(threads.map((thread) => [thread.threadId, thread]));
-  const stableThreads = sortByRecency(
+  const stableThreads = deriveRecentThreads(
     project.threadIds.flatMap((threadId) => {
       const thread = byId.get(threadId);
       return thread === undefined ? [] : [thread];
@@ -403,7 +403,7 @@ function wakeupLabel(value: string): string | null {
   return i18n.t("shell:triggerWakeup");
 }
 
-function sortByRecency(
+function sortByTurnStart(
   threads: readonly NativeThreadSummary[],
 ): NativeThreadSummary[] {
   return [...threads].sort((left, right) => {
