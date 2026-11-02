@@ -27,9 +27,7 @@ function resizeComposerEditor(textarea: HTMLTextAreaElement): void {
   const contentHeight = textarea.scrollHeight;
   const style = window.getComputedStyle(textarea);
   const declaredMinHeight = Number.parseFloat(style.minHeight);
-  const minHeight = Number.isFinite(declaredMinHeight)
-    ? declaredMinHeight
-    : 36;
+  const minHeight = Number.isFinite(declaredMinHeight) ? declaredMinHeight : 36;
   const declaredMaxHeight = Number.parseFloat(style.maxHeight);
   const maxHeight = Number.isFinite(declaredMaxHeight)
     ? declaredMaxHeight

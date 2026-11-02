@@ -1292,7 +1292,7 @@ test("composer textarea grows to its cap, scrolls, and shrinks after deletion", 
 
     contentHeight = 24;
     await act(async () => root.render(props("")));
-    assert.equal(textarea.style.height, "36px");
+    assert.equal(textarea.style.height, "auto", "empty layout returns to CSS and rows rather than cached pixels");
     assert.equal(textarea.style.overflowY, "hidden");
   });
 });
@@ -3518,15 +3518,16 @@ async function withInputPreviewLayout(
     },
   });
   globalThis.ResizeObserver = class {
-    constructor(private callback: () => void) {}
+    constructor(private callback: ResizeObserverCallback) {}
+    private deliver = () => this.callback([], this as unknown as ResizeObserver);
     observe() {
-      callbacks.add(this.callback);
+      callbacks.add(this.deliver);
     }
     unobserve() {
-      callbacks.delete(this.callback);
+      callbacks.delete(this.deliver);
     }
     disconnect() {
-      callbacks.delete(this.callback);
+      callbacks.delete(this.deliver);
     }
   } as unknown as typeof ResizeObserver;
   try {
