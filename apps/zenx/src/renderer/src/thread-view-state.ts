@@ -169,6 +169,7 @@ export function applyNativeThreadEvent(
       event.item.type === "thread_message" ||
       event.item.type === "user_message_queued" ||
       event.item.type === "user_message_queue_cancelled" ||
+      event.item.type === "user_message_steer_recalled" ||
       event.item.type === "user_message_queue_edited" ||
       event.item.type === "user_message"
     ) {

@@ -46,6 +46,7 @@ export type ItemType =
   | "user_message_queued"
   | "user_message_queue_cancelled"
   | "user_message_queue_edited"
+  | "user_message_steer_recalled"
   | "user_message"
   | "host_message"
   | "host_message_queued"
@@ -77,6 +78,7 @@ const CANONICAL_ITEM_TYPES = {
   user_message_queued: true,
   user_message_queue_cancelled: true,
   user_message_queue_edited: true,
+  user_message_steer_recalled: true,
   user_message: true,
   host_message: true,
   host_message_queued: true,
@@ -613,8 +615,10 @@ export interface QueuedUserMessageItem extends ItemBase {
   type: "user_message_queued";
   clientId: string;
   input: UserInput;
-  /** Explicit native manual choice; absent preserves legacy FIFO turns. */
-  deliveryMode?: "batch-next";
+  /** Explicit native choice; absent preserves legacy FIFO turns. */
+  deliveryMode?: "batch-next" | "steer";
+  /** Steer remains bound to its admitted Turn, including after that Turn ends. */
+  expectedTurnId?: string;
 }
 
 /** A replacement input revision; the initial queued Item owns identity/order. */
@@ -632,6 +636,20 @@ export interface QueuedUserMessageCancelledItem extends ItemBase {
   type: "user_message_queue_cancelled";
   queuedItemId: string;
   clientId: string;
+}
+
+/** Exact pending revision snapshot; caller order does not change queue order. */
+export interface SteerRecallTarget {
+  queuedItemId: string;
+  clientId: string;
+  expectedRevision: number;
+}
+
+/** Atomic control receipt; original inputs/edits retain recoverable content. */
+export interface SteerRecalledItem extends ItemBase {
+  type: "user_message_steer_recalled";
+  recallId: string;
+  targets: readonly SteerRecallTarget[];
 }
 
 export interface CodeStateItem extends ItemBase {
@@ -653,6 +671,7 @@ export type CanonicalItem =
   | QueuedUserMessageItem
   | QueuedUserMessageCancelledItem
   | QueuedUserMessageEditedItem
+  | SteerRecalledItem
   | ThreadMetadataItem
   | ThreadForkedItem
   | ThreadInstructionItem
@@ -1169,7 +1188,40 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "user_message_queued":
       requireNonEmptyString(item.clientId, `${type}.clientId`);
       validateUserInput(item.input, `${type}.input`);
+      if (item.deliveryMode !== undefined)
+        requireEnum(
+          item.deliveryMode,
+          ["batch-next", "steer"],
+          `${type}.deliveryMode`,
+        );
+      if (item.deliveryMode === "steer") {
+        requireNoTurnId(item);
+        requireNonEmptyString(item.expectedTurnId, `${type}.expectedTurnId`);
+      } else if (item.expectedTurnId !== undefined) {
+        throw new Error("Only staged steer may bind an expected Turn");
+      }
       break;
+    case "user_message_steer_recalled": {
+      requireNoTurnId(item);
+      requireNonEmptyString(item.recallId, `${type}.recallId`);
+      if (!Array.isArray(item.targets) || item.targets.length < 1)
+        throw new Error("Recall requires a nonempty exact snapshot");
+      const ids = new Set<string>();
+      const clients = new Set<string>();
+      for (const value of item.targets) {
+        const target = requireRecord(value, "recall target");
+        const id = requireNonEmptyString(target.queuedItemId, "queuedItemId");
+        const client = requireNonEmptyString(target.clientId, "clientId");
+        requireSafeInteger(target.expectedRevision, "expectedRevision");
+        if ((target.expectedRevision as number) < 0)
+          throw new Error("Recall revision must be nonnegative");
+        if (ids.has(id) || clients.has(client))
+          throw new Error("Recall targets must have distinct identities");
+        ids.add(id);
+        clients.add(client);
+      }
+      break;
+    }
     case "user_message_queue_edited":
       requireNoTurnId(item);
       requireNonEmptyString(item.queuedItemId, `${type}.queuedItemId`);

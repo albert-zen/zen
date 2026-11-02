@@ -1684,3 +1684,54 @@ Canonical presentation metadata is scoped to each rendered Turn. Full trusted ca
 Browser operation previews are an ephemeral projection of exact Host target activity in the existing workspace tab rail; operation admission order selects the preview, while turn completion releases existing pages and retires temporary pages/observations without persisting a second execution state.
 
 The per-Turn presentation bundle also preserves quote-source metadata introduced by native Item quotations: full canonical call/result pairing happens before partitioning, and unchanged member identities reuse the quote map. Late result additions, replacements, and removals invalidate the owning quote consumer without freezing its canonical source.
+
+## Native pending steer and atomic recall
+
+Native human Send/Steer with a stable client ID stages input through Core's
+existing pending-input domain whenever the Thread is busy. The immutable
+`user_message_queued` fact uses `deliveryMode: steer`; it confirms admission,
+not model consumption. A native start can race into this same staged path.
+Renderer submission and local Sending copies reconcile only their exact client
+identity and matching admission kind; ordinary next-turn queue facts cannot
+confirm a start/steer submission. Legacy Core/CAS `steerTurn` retains its immediate
+model-semantic compatibility behavior and is not retroactively recallable.
+
+`zen/thread/steer/recall` validates the exact Thread, operation ID and complete
+message/client/revision snapshot under the same Thread mutation fence used for
+model-input claim. All targets pass or none are withdrawn. One durable control
+fact precedes ACK; original input and committed edits reconstruct the receipt
+through `zen/thread/read`, without a fourth journal, another editable transcript,
+or a persistent Composer store. New arrivals are excluded from the old snapshot.
+Once claimed, input becomes irrevocable model semantics; HTTP dispatch, first
+token and renderer status are not this boundary. Unknown transport outcomes
+permit exact read-only receipt reconciliation, never automatic command replay.
+
+Normal final completion with pending steer bound to the active Turn continues
+that same Turn. Stop/error/crash leaves unclaimed input held and unscheduled.
+Only an independently authorized human Start/Send, Retry or Replace carries held
+human steer, in admission order before fresh input. Automatic queue draining,
+Host/Agent wakeups and queued promotion do not acquire that authority. Existing
+ordinary next-Turn selection and queue-pending checks exclude held steer.
+
+Active automatic compaction plans under the Thread fence, runs its auxiliary
+summary outside it, then revalidates Thread/Turn and context boundary at commit.
+Pending-human pressure is an ephemeral estimate, not a claim or summary input.
+Sample preparation re-reads exact revisions and model selection under the claim
+fence after at most one proactive compaction attempt. Input that still does not
+fit fails before claim and remains recoverable; new arrivals are not dropped or
+automatically retried. Ordinary send admission does not wait for compaction.
+
+ZenX's pending/recalled view is disposable projection of these control facts.
+The initiating mounted view may merge a confirmed receipt into the latest
+App-owned draft only while its exact Thread/page remains selected and the
+Composer is not submitting. View authority changes only after committed render
+and is invalidated on unmount. Other windows, navigation and reload provide
+explicit recovery without automatic insertion, sending, focus or navigation.
+Structured references and ordered images survive the merge; unsupported input
+is rejected before recall. Applied-in-this-window markers are not durable proof.
+The same-thread canonical receipt also invalidates the older queue projection.
+
+This implementation does not add Room, Host/Agent or cross-author recall,
+remote-tool recall, automatic cross-window exactly-once insertion or Ask User
+Question behavior. Acceptance evidence is recorded separately against the exact
+combined source version; historical branch checks do not accept an integration.

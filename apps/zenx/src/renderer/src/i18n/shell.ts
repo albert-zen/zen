@@ -13,6 +13,34 @@ export const en = {
   pendingSendDismiss: "Dismiss recovery copy",
   pendingSendRecover: "Add back to draft",
   pendingSendCheck: "Check delivery",
+  steerPendingLabel: "Messages waiting for the model",
+  steerPendingCount: "Waiting for the model: {{count}}",
+  steerRecallAll: "Recall all to composer",
+  steerRecalling: "Recalling…",
+  steerHeldNotice:
+    "These messages have not entered the model. They will join the next turn you explicitly start, retry or replace. You can recall them first.",
+  steerWaitingNotice:
+    "Waiting for the current model, tool or compaction work to reach the next input boundary. Recall does not interrupt that work.",
+  steerPendingDetails: "View waiting messages",
+  steerStructuredInput: "References or attachments",
+  steerImageCount: "Images: {{count}}",
+  steerRecallConflict:
+    "The pending messages changed or were claimed. This recall did not partially remove the batch; check the current messages.",
+  steerRecallUnsupported:
+    "This batch contains expanded skill instructions or other input that cannot yet be restored losslessly. No messages were recalled.",
+  steerRecallUnknown:
+    "Recall outcome is unconfirmed. Do not repeat this recall or resend these messages. Check its receipt; ordinary typing and sending are still available.",
+  steerRecallCheck: "Check recall status",
+  steerRecoveryAvailable: "Recoverable recalled batches: {{count}}",
+  steerRecoveryNotice:
+    "Restore only if you still need these messages. Other windows and restarts never insert them automatically.",
+  steerRecoveryConfirm:
+    "This content may already have been restored. Continue to combine it before your current draft, keeping images and references?",
+  steerRecoveryMerge: "Combine with current draft",
+  steerRecoveryCancel: "Cancel",
+  steerRecoveryRestore: "Restore to composer",
+  steerRecoveryBusy:
+    "The composer is sending or no longer selected. The recalled content is safe here; restore it when ready.",
   startWithoutProjectOrAddFolder:
     "Start a chat without a project, or add a folder.",
   noProject: "No project",
@@ -948,6 +976,33 @@ export const zhCN = {
   pendingSendDismiss: "关闭恢复副本",
   pendingSendRecover: "放回输入框",
   pendingSendCheck: "检查送达状态",
+  steerPendingLabel: "等待进入模型的消息",
+  steerPendingCount: "等待进入模型：{{count}} 条",
+  steerRecallAll: "全部撤回到输入框",
+  steerRecalling: "正在撤回…",
+  steerHeldNotice:
+    "这些消息尚未进入模型；你明确发起、重试或替换下一轮时会一并提交，可先全部撤回。",
+  steerWaitingNotice:
+    "正在等待当前模型、工具或压缩工作到达下一次输入边界。撤回不会中断这些工作。",
+  steerPendingDetails: "查看等待中的消息",
+  steerStructuredInput: "引用或附件",
+  steerImageCount: "图片：{{count}} 张",
+  steerRecallConflict:
+    "等待中的消息已变化或已被模型领取。本次没有部分撤回，请检查当前消息。",
+  steerRecallUnsupported:
+    "这一批包含已展开的技能指令或其他暂不支持无损恢复的内容，没有撤回任何消息。",
+  steerRecallUnknown:
+    "撤回结果尚未确认，请勿重复提交这次撤回或重发这些消息。可检查撤回回执；输入框仍可正常输入和发送。",
+  steerRecallCheck: "检查撤回状态",
+  steerRecoveryAvailable: "可恢复的撤回记录：{{count}} 批",
+  steerRecoveryNotice:
+    "仅在仍需要这些消息时恢复。其他窗口及重启后不会自动插入输入框。",
+  steerRecoveryConfirm:
+    "这些内容可能已经恢复过。是否继续放到现有草稿之前，并保留全部图片和引用？",
+  steerRecoveryMerge: "合并到现有草稿",
+  steerRecoveryCancel: "取消",
+  steerRecoveryRestore: "恢复到输入框",
+  steerRecoveryBusy: "输入框正在发送或已切换。撤回内容仍安全保留，可稍后恢复。",
   startWithoutProjectOrAddFolder: "直接创建无项目会话，或添加一个项目文件夹。",
   noProject: "无项目",
   projectlessDirectoryHint:
