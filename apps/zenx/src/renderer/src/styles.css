@@ -1578,13 +1578,15 @@ button:disabled {
   width: 100%;
   max-width: var(--conversation-width);
   margin: 0 auto;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 24px;
 }
 .new-thread-draft-surface .messages {
   display: grid;
 }
 .new-thread-draft-surface .messages-inner {
+  display: grid;
   min-height: 100%;
 }
 .thread-empty,
