@@ -1204,12 +1204,8 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     case "user_message_steer_recalled": {
       requireNoTurnId(item);
       requireNonEmptyString(item.recallId, `${type}.recallId`);
-      if (
-        !Array.isArray(item.targets) ||
-        item.targets.length < 1 ||
-        item.targets.length > 128
-      )
-        throw new Error("Recall requires 1–128 exact targets");
+      if (!Array.isArray(item.targets) || item.targets.length < 1)
+        throw new Error("Recall requires a nonempty exact snapshot");
       const ids = new Set<string>();
       const clients = new Set<string>();
       for (const value of item.targets) {

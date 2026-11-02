@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pendingQueuedMessages } from "../src/input-queue.js";
 import { contextItemsFromLegacy } from "../src/item-list.js";
+import { projectCompletedItem } from "../src/protocol/codex/mapper.js";
 import {
   decodeCanonicalItem,
   type CanonicalItem,
@@ -9,9 +10,9 @@ import {
   type SteerRecalledItem,
 } from "../src/item.js";
 import {
-  pendingSteerMessages,
-  recoverSteerRecall,
-  sameSteerRecallTargets,
+  pendingSteerMessages as pending,
+  recoverSteerRecall as recover,
+  sameSteerRecallTargets as same,
 } from "../src/steer-recall.js";
 
 const createdAt = "2026-11-02T00:00:00.000Z";
@@ -48,6 +49,7 @@ test("staged steer and recall are control facts, never model context", () => {
   for (const item of [input, receipt]) {
     assert.deepEqual(decodeCanonicalItem(item), item);
     assert.deepEqual(contextItemsFromLegacy(item), []);
+    assert.equal(projectCompletedItem(item), null);
   }
   assert.throws(() =>
     decodeCanonicalItem({ ...input, expectedTurnId: undefined }),
@@ -67,11 +69,6 @@ test("recall decoder rejects empty, duplicate and invalid snapshots", () => {
     [{ ...receipt.targets[0], expectedRevision: -1 }],
     [{ ...receipt.targets[0], expectedRevision: 0.5 }],
     [{ ...receipt.targets[0], clientId: "" }],
-    Array.from({ length: 129 }, (_, index) => ({
-      queuedItemId: `queue-${index}`,
-      clientId: `client-${index}`,
-      expectedRevision: 0,
-    })),
   ])
     assert.throws(() => decodeCanonicalItem({ ...receipt, targets }));
 });
@@ -82,14 +79,12 @@ test("atomic projection removes exact snapshot and retains later arrivals", () =
   const late = queued("late");
   const receipt = recalled([second, first]);
   const items = [first, second, receipt, late];
-  assert.deepEqual(pendingSteerMessages(items).map((item) => item.id), ["late"]);
-  const result = recoverSteerRecall(items, "thread", receipt.recallId);
-  assert.deepEqual(result?.messages.map((item) => item.id), ["first", "second"]);
-  assert.equal(
-    recoverSteerRecall(items, "other-thread", receipt.recallId),
-    undefined,
-  );
-  assert.equal(recoverSteerRecall(items, "thread", "unknown"), undefined);
+  assert.deepEqual(pending(items).map((item) => item.id), ["late"]);
+  const result = recover(items, "thread", receipt.recallId);
+  const ids = result?.messages.map((item) => item.id);
+  assert.deepEqual(ids, ["first", "second"]);
+  assert.equal(recover(items, "other-thread", receipt.recallId), undefined);
+  assert.equal(recover(items, "thread", "unknown"), undefined);
   assert.equal(first.input[0]?.type, "text");
   assert.equal(items.length, 4);
 });
@@ -105,9 +100,9 @@ test("one stale, wrong-source or claimed target never partially cancels a batch"
       expectedRevision: index,
     })),
   };
-  assert.equal(pendingSteerMessages([first, second, changed]).length, 2);
+  assert.equal(pending([first, second, changed]).length, 2);
   assert.equal(
-    recoverSteerRecall([first, second, changed], "thread", "recall-op"),
+    recover([first, second, changed], "thread", "recall-op"),
     undefined,
   );
   const { expectedTurnId: _boundTurn, ...unbound } = second;
@@ -126,15 +121,11 @@ test("one stale, wrong-source or claimed target never partially cancels a batch"
     content: second.input,
   };
   assert.deepEqual(
-    pendingSteerMessages([first, second, delivered, receipt]).map((item) => item.id),
+    pending([first, second, delivered, receipt]).map((item) => item.id),
     ["first"],
   );
   assert.equal(
-    recoverSteerRecall(
-      [first, second, delivered, receipt],
-      "thread",
-      "recall-op",
-    ),
+    recover([first, second, delivered, receipt], "thread", "recall-op"),
     undefined,
   );
 });
@@ -160,10 +151,10 @@ test("recovery uses the pre-recall edit, not original or later hostile edits", (
   const later = { ...edited, id: "later", revision: 2, input: first.input };
   const items = [first, edited, receipt, later];
   assert.deepEqual(
-    recoverSteerRecall(items, "thread", "recall-op")?.messages[0]?.input,
+    recover(items, "thread", "recall-op")?.messages[0]?.input,
     edited.input,
   );
-  assert.deepEqual(pendingSteerMessages(items), []);
+  assert.deepEqual(pending(items), []);
 });
 
 test("held projection never invents delivery after a terminal Turn", () => {
@@ -176,19 +167,16 @@ test("held projection never invents delivery after a terminal Turn", () => {
     createdAt,
     reason: "stopped",
   };
-  assert.deepEqual(
-    pendingSteerMessages([input, stopped]).map((item) => item.id),
-    ["one"],
-  );
+  assert.deepEqual(pending([input, stopped]).map((item) => item.id), ["one"]);
   assert.deepEqual(contextItemsFromLegacy(input), []);
 });
 
 test("recall identity is order independent but exact and duplicate-safe", () => {
   const targets = recalled([queued("one"), queued("two")]).targets;
-  assert.equal(sameSteerRecallTargets(targets, [...targets].reverse()), true);
-  assert.equal(sameSteerRecallTargets(targets, [targets[0]!, targets[0]!]), false);
+  assert.equal(same(targets, [...targets].reverse()), true);
+  assert.equal(same(targets, [targets[0]!, targets[0]!]), false);
   assert.equal(
-    sameSteerRecallTargets(
+    same(
       targets,
       targets.map((target) => ({
         ...target,
@@ -197,4 +185,16 @@ test("recall identity is order independent but exact and duplicate-safe", () => 
     ),
     false,
   );
+});
+
+test("all pending recall has no arbitrary row-count cap or chunked outcome", () => {
+  const batch = Array.from({ length: 300 }, (_, index) =>
+    queued(`many-${index}`),
+  );
+  const receipt = recalled(batch);
+  assert.deepEqual(decodeCanonicalItem(receipt), receipt);
+  const items = [...batch, receipt];
+  assert.deepEqual(pending(items), []);
+  const recovered = recover(items, "thread", receipt.recallId);
+  assert.equal(recovered?.messages.length, 300);
 });
