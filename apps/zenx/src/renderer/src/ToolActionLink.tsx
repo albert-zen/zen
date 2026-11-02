@@ -14,15 +14,18 @@ import {
 const Targets = createContext<ReadonlyMap<string, ToolActionTarget>>(new Map());
 export function ToolActionTargetsProvider({
   thread,
+  targets: projectedTargets,
   children,
 }: {
   thread: Thread | null;
+  targets?: ReadonlyMap<string, ToolActionTarget>;
   children: ReactNode;
 }) {
   const targets = useMemo(
     () =>
+      projectedTargets ??
       projectToolActionTargets(thread?.id ?? "", thread?.canonicalItems ?? []),
-    [thread?.id, thread?.canonicalItems],
+    [projectedTargets, thread?.id, thread?.canonicalItems],
   );
   return <Targets.Provider value={targets}>{children}</Targets.Provider>;
 }
