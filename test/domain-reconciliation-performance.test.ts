@@ -204,6 +204,7 @@ function nextUser(id: string): CanonicalItem {
   return {
     id,
     threadId: "t",
+    turnId: `turn-${id}`,
     createdAt: "2026-11-02T01:00:00.000Z",
     type: "user_message",
     clientId: id,
@@ -247,8 +248,16 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
       assert.equal(traceReads, 1);
       assert.equal(semanticReads, 1);
       second = await journal.append(nextUser("second"));
-      assert.equal(traceReads, 2, "a new admission must read current Trace again");
-      assert.equal(semanticReads, 2, "no semantic snapshot survives the operation");
+      assert.equal(
+        traceReads,
+        2,
+        "a new admission must read current Trace again",
+      );
+      assert.equal(
+        semanticReads,
+        2,
+        "no semantic snapshot survives the operation",
+      );
     } finally {
       traceMock.mock.restore();
       itemsMock.mock.restore();
@@ -260,7 +269,9 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
       nextUser("first"),
       nextUser("second"),
     ]);
-    const bytes = await readFile(path.join(options.directory, "items", "t.jsonl"));
+    const bytes = await readFile(
+      path.join(options.directory, "items", "t.jsonl"),
+    );
     const observed = await options.trace.read("t");
     await assert.rejects(
       journal.append(nextUser("second")),
@@ -287,7 +298,9 @@ test("append includes a repaired suffix and preserves exact frozen source bytes"
     const semantic = await journal.readItemList("t");
     await journal.close();
     const directory = path.join(options.root, "frozen-append");
-    const trace = new FileTraceStore(path.join(options.root, "frozen-append-trace"));
+    const trace = new FileTraceStore(
+      path.join(options.root, "frozen-append-trace"),
+    );
     const frozen = structuredClone(semantic);
     const first = frozen[0]!;
     if (first.kind !== "message") throw new Error("Expected message fixture");
@@ -311,7 +324,10 @@ test("append includes a repaired suffix and preserves exact frozen source bytes"
     const receipt = await journal.append(nextUser("after-repair"));
     assert.deepEqual(receipt.slice(0, -1), frozen);
     assert.deepEqual(receipt, await journal.readItemList("t"));
-    assert.deepEqual((await readFile(filename)).subarray(0, bytes.length), bytes);
+    assert.deepEqual(
+      (await readFile(filename)).subarray(0, bytes.length),
+      bytes,
+    );
     assert.equal(receipt.at(-1)?.id, "after-repair");
     await trace.flush();
   } finally {
