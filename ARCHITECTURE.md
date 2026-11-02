@@ -1695,11 +1695,24 @@ Initial scope is human steer in an exact private Thread, not Host/Agent messages
 Rooms or implicit cross-author authority. Side-chat support requires verified
 routing to its own Thread, not fallback to the selected main Thread.
 
-Unresolved implementation decision: when the target Turn ends before pending
-steer is claimed, use the established delivery policy and document its exact
-outcome. This feature must not implicitly start or resurrect a Turn or convert
-steer to follow-up. The chosen outcome and all claim/recall/Turn-end races require
-native tests before implementation acceptance.
+Proposed lifecycle preserves existing delivery policy. A normal final-commit
+check that finds pending steer bound to the active Turn continues that same
+Turn's runtime loop; it does not start another Turn. Stop, error or crash leaves
+unclaimed steer held and recoverable without scheduling or automatically
+resuming any Turn. Held input remains recallable.
+
+Only a subsequent independently authorized explicit send/continue/retry/replace
+admission carries held input in original admission order before fresh input,
+subject to the existing entrypoint permissions and delivery policy. This is not
+automatic replay, Turn resurrection or conversion to follow-up. Ordinary
+next-turn queue selection and queue_pending checks must distinguish held steer
+so they do not incorrectly block explicit Retry. The UI must disclose that
+these inputs have not entered the model and will accompany the next explicit
+send/continue unless recalled first.
+
+This is a proposal, not an implementation or test result. Claim/recall/final
+commit/Stop/error/crash/successor-admission races and exact ordering require
+native tests before acceptance.
 
 Source baseline: [ordinary steer](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L4441),
 [queued cancellation](https://github.com/albert-zen/zen/blob/6aa0a5055530eeb018cc41a3ce486603756c06bb/src/app-server.ts#L2740),
