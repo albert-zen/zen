@@ -33,3 +33,11 @@ After owned Host shutdown, independent read-only production-storage reopening ve
 They visibly show initial C/B/A, B selected while A runs below it, and A moving above B without changing selection. The fourth reload screenshot has Recent below the fold after scroll reset: **reload order is supported by DOM assertions, not by that screenshot**. No claim is made that it visually displays the Recent order.
 
 Earlier focused run 41404253272 had 70/70 tests passing but failed ZenX typecheck on the newly added Sidebar fixture's union return type. The author corrected fixture typing and applied exact hosted formatting; the successful e5c3 checks above retain all assertions. Full repository CI and merge approval remain separately owned.
+
+## Current-main integration replay — 2026-11-02
+
+Product `76446de04e526d32fd49f2f2bf79e596f5aeef67` combines Recent #619 with main #610. [Run 41412721713](https://github.com/albert-zen/zen/actions/runs/41412721713), job `125169212679`: passed using the unchanged capture/seed assertions and only repinned workflow/launcher source.
+
+All five full-App order checks and selected-B preservation passed; 12 running-state observations; reload retained A/B/C. Independent production-storage reopen matched both native sends exactly, A's actual tool turn, complete Trace and zero compaction attempts. [Artifact `13125609175`](https://github.com/albert-zen/zen/actions/runs/41412721713/artifacts/13125609175), SHA-256 `3c82482cf090f605efdf6fa613d52265843e154e046c09b54ab3f652e049d3af`.
+
+The same dynamic-coverage limitation above remains: no guaranteed intermediate event in the stable interval. This run predates #620's independent per-Turn presentation change and is not a claim of native replay on that later combination.
