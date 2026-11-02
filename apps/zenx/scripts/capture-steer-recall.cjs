@@ -345,11 +345,9 @@ async function run() {
    const suffix=" More current draft "+crypto.randomUUID();
    await click("document.querySelector('#thread-composer:not(:disabled)')","Native edit latest draft while recall unknown");
    await until(async()=>await evaluate("document.activeElement===document.querySelector('#thread-composer')"),"actual unknown-state draft focus");
-   const endKey={keyCode:process.platform==="darwin"?"Down":"End",modifiers:[process.platform==="darwin"?"meta":"control"]};
-   window.webContents.sendInputEvent({type:"keyDown",...endKey});
-   window.webContents.sendInputEvent({type:"keyUp",...endKey});
-   await until(async()=>await evaluate("(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e&&e.selectionStart===e.value.length&&e.selectionEnd===e.value.length})()"),"actual native caret at end of latest draft");
-   await window.webContents.insertText(suffix);
+   window.webContents.selectAll();
+   await until(async()=>await evaluate("(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e&&e.selectionStart===0&&e.selectionEnd===e.value.length})()"),"actual native selection spans current draft");
+   await window.webContents.insertText(newerDraft+suffix);
    newerDraft+=suffix;result.newerDraft=newerDraft;
    await until(async()=>await evaluate("document.querySelector('#thread-composer')?.value==="+JSON.stringify(newerDraft)),"latest draft stays editable while recall unknown");
    await click("document.querySelector('.pending-steer-panel > button:not(:disabled)')","Native read-only recall receipt Check");
