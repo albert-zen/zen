@@ -66,6 +66,8 @@ export interface ZenXHostProfile {
   onboardingComplete: boolean;
   /** Missing in an older v3 profile means the high-impact tools stay off. */
   computerForegroundControlEnabled?: boolean;
+  /** Explicit caller-side opt-in; existing profiles keep generic Fleet tools off. */
+  nativeCrossDeviceToolsEnabled?: boolean;
   /** Legacy field: user-session now enables an external browser alongside Workspace. */
   browserMode?: "isolated" | "user-session";
   providerProfiles: ZenXProviderProfile[];
@@ -110,6 +112,7 @@ export type ZenXSettingsUpdate = Pick<
   ZenXHostProfile,
   | "onboardingComplete"
   | "computerForegroundControlEnabled"
+  | "nativeCrossDeviceToolsEnabled"
   | "browserMode"
   | "providerProfiles"
   | "defaultModel"
@@ -331,6 +334,11 @@ export function validateHostProfile(
   const maxToolRounds = optionalMaximumToolRounds(value.maxToolRounds);
   const toolPresentation = validateToolPresentation(value.toolPresentation);
   if (
+    value.nativeCrossDeviceToolsEnabled !== undefined &&
+    typeof value.nativeCrossDeviceToolsEnabled !== "boolean"
+  )
+    throw new Error("Native cross-device tools enablement must be a boolean");
+  if (
     value.experimentalRtkEnabled !== undefined &&
     typeof value.experimentalRtkEnabled !== "boolean"
   )
@@ -438,6 +446,7 @@ export function validateHostProfile(
     onboardingComplete: value.onboardingComplete === true,
     computerForegroundControlEnabled:
       value.computerForegroundControlEnabled === true,
+    nativeCrossDeviceToolsEnabled: value.nativeCrossDeviceToolsEnabled === true,
     ...(value.browserMode === undefined
       ? {}
       : { browserMode: value.browserMode }),

@@ -58,6 +58,7 @@ import { threadModelIdentity, threadTitle } from "./thread-list.js";
 import { PluginSettingsSurfaces } from "./PluginProductPage.js";
 import { ChromeConnectionSettings } from "./ChromeConnectionSettings.js";
 import { FleetSettings } from "./FleetSettings.js";
+import { NativeCrossDeviceToolsSettings } from "./NativeCrossDeviceToolsSettings.js";
 import { LanguageSettings } from "./LanguageSettings.js";
 import {
   MAX_MODELS_PER_PROVIDER,
@@ -235,6 +236,8 @@ export function SettingsView({
         onboardingComplete: true,
         computerForegroundControlEnabled:
           draft.computerForegroundControlEnabled === true,
+        nativeCrossDeviceToolsEnabled:
+          draft.nativeCrossDeviceToolsEnabled === true,
         browserMode: draft.browserMode ?? "isolated",
         providerProfiles: draft.providerProfiles,
         defaultModel: draft.defaultModel,
@@ -542,6 +545,16 @@ export function SettingsView({
                   onImportSession={onImportSession}
                 />
                 <ChromeConnectionSettings draft={draft} setDraft={setDraft} />
+                <NativeCrossDeviceToolsSettings
+                  enabled={draft.nativeCrossDeviceToolsEnabled === true}
+                  disabled={
+                    busy !== null ||
+                    settings.configuration?.status === "unconfirmed"
+                  }
+                  onChange={(nativeCrossDeviceToolsEnabled) =>
+                    setDraft({ ...draft, nativeCrossDeviceToolsEnabled })
+                  }
+                />
                 <RtkSettingsCard
                   draft={draft}
                   settings={settings}
