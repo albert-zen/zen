@@ -284,16 +284,17 @@ export class DomainThreadJournal implements ThreadJournal {
         this.#live.set(item.threadId, [item]);
         return semantic;
       }
-      await this.#reconcileCompilation(item.threadId);
+      const compiled = await this.#reconcileCompilation(item.threadId);
       const previous = await this.#read(item.threadId);
       if (previous.some((i) => i.id === item.id))
         throw new Error(
           "Duplicate canonical Item identity; reconcile instead of retrying",
         );
-      const contexts = await this.#items.read(item.threadId);
-      const trace = await this.trace.read(item.threadId, {
-        verifyArtifacts: false,
-      });
+      const contexts =
+        compiled?.contexts ?? (await this.#items.read(item.threadId));
+      const trace =
+        compiled?.trace ??
+        (await this.trace.read(item.threadId, { verifyArtifacts: false }));
       const sequence =
         Math.max(
           previous.length - 1,
@@ -351,11 +352,17 @@ export class DomainThreadJournal implements ThreadJournal {
   }
   /** Rebuild missing compiled artifacts only. Never invokes tools, models or effects. */
   async reconcileCompilation(threadId: string): Promise<void> {
-    return this.#operation(threadId, () =>
-      this.#reconcileCompilation(threadId),
-    );
+    return this.#operation(threadId, async () => {
+      await this.#reconcileCompilation(threadId);
+    });
   }
-  async #reconcileCompilation(threadId: string): Promise<void> {
+  async #reconcileCompilation(threadId: string): Promise<
+    | {
+        contexts: ContextItem[];
+        trace: Awaited<ReturnType<TraceReader["read"]>>;
+      }
+    | undefined
+  > {
     if (this.#uncertain.has(threadId))
       throw new ThreadJournalAppendOutcomeUnknownError(
         "Source fact durability unknown",
@@ -445,6 +452,11 @@ export class DomainThreadJournal implements ThreadJournal {
       await this.#writeFence(threadId);
       await this.#items.create(threadId, missing);
     } else if (missing.length) await this.#items.append(threadId, missing);
+    // Reuse only inside the caller's existing serialized operation, never across admissions.
+    return {
+      contexts: missing.length === 0 ? contexts : [...contexts, ...missing],
+      trace: observed,
+    };
   }
   async readItemList(threadId: string): Promise<ContextItem[]> {
     if (!(await this.#items.exists(threadId)) && this.#owner !== undefined)
