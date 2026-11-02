@@ -187,6 +187,8 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
         {t("boardLoading")}
       </p>
     );
+  if (!session.snapshot && !error && sdk.context.hasConversationInformation)
+    return null;
   if (!session.snapshot)
     return (
       <div className="board-empty">
