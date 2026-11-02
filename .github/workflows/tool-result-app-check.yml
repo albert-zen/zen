@@ -1,0 +1,33 @@
+name: Early exact-source tool-result full-App regression
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths: [.github/workflows/tool-result-app-check.yml]
+permissions:
+  contents: read
+jobs:
+  exact-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 674a3638324d0bbc575c974d1be23d191f9f0a06
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install exact-source dependencies
+        run: npm ci
+        timeout-minutes: 7
+      - name: Build required Core and prepare production plugins
+        run: |
+          npm run build
+          npm --workspace apps/zenx run prepare:first-party-plugins
+      - name: Early ZenX typecheck
+        run: npm --workspace apps/zenx run typecheck:prepared
+      - name: Exact full-App 5000-Turn tool-result regression
+        working-directory: apps/zenx
+        run: npx --no-install tsx --test --test-name-pattern='real App tool results preserve 5000' test/app-project-picker-interaction.test.ts
+      - name: Assert tracked candidate unchanged
+        run: test -z "$(git diff --name-only HEAD)"
