@@ -6809,8 +6809,17 @@ export class ZenAppServer {
       recency = new ThreadRecencyProjection();
       this.#threadRecency.set(thread, recency);
     }
-    const recentActivityAt = recency.read(items);
+    const ordinaryActivityAt = recency.read(items);
+    const userQuestionSummary = thread.userQuestionSummary;
+    const publishedAt = userQuestionSummary.latestPublishedAt;
+    const recentActivityAt =
+      publishedAt !== undefined &&
+      (ordinaryActivityAt === undefined ||
+        Date.parse(publishedAt) > Date.parse(ordinaryActivityAt))
+        ? publishedAt
+        : ordinaryActivityAt;
     return {
+      userQuestionSummary,
       ...(recentActivityAt === undefined ? {} : { recentActivityAt }),
       ...(turnEnd === undefined
         ? {}

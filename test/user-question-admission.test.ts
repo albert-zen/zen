@@ -15,6 +15,7 @@ import { AskUserQuestionToolRuntime } from "../src/user-question-tool.js";
 import { ASK_USER_QUESTION_NAME } from "../src/user-question.js";
 import { readUserQuestions } from "../src/user-question-state.js";
 import { pendingSteerMessages } from "../src/steer-recall.js";
+import { ThreadRecencyProjection } from "../src/thread-recency.js";
 import type { ModelAdapter, ModelRequest } from "../src/model.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
@@ -290,6 +291,110 @@ test("active answer stays pending; atomic recall reopens and old intent cannot r
     }),
     { code: "steer_recall_conflict" },
   );
+});
+
+test("actual native summary counts only open requests and never re-dates publication on answer or recall", async (t) => {
+  const f = await fixture(t, { pause: true });
+  const summary = async () => {
+    const value = await f.server.readThreadSummary(f.thread.id);
+    assert.notEqual(value.status, "systemError");
+    if (value.status === "systemError") throw new Error(value.error);
+    return value;
+  };
+  const open = await summary();
+  assert.equal(open.status, "active");
+  assert.deepEqual(open.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: f.question.createdAt,
+  });
+  assert.equal(open.recentActivityAt, f.question.createdAt);
+  assert.equal(
+    open.lastTurnEnd,
+    undefined,
+    "publication does not wait for final answer",
+  );
+  const answer = await f.answer("summary-answer");
+  const pending = (await f.snapshot()).items.find(
+    (item) => item.id === answer.turn.admission!.queuedItemId,
+  )!;
+  const received = await summary();
+  assert.deepEqual(received.userQuestionSummary, {
+    openCount: 0,
+    latestPublishedAt: f.question.createdAt,
+  });
+  assert.equal(received.recentActivityAt, pending.createdAt);
+  assert.equal((await f.read("summary-answer")).response.status, "pending");
+  await f.answer("summary-answer");
+  assert.deepEqual(
+    (await summary()).userQuestionSummary,
+    received.userQuestionSummary,
+  );
+  const target = {
+    queuedItemId: pending.id,
+    clientId: "summary-answer",
+    expectedRevision: 0,
+  };
+  await assert.rejects(
+    f.server.recallSteerMessages(f.thread.id, {
+      recallId: "stale-summary-recall",
+      targets: [{ ...target, expectedRevision: 99 }],
+    }),
+    { code: "steer_recall_conflict" },
+  );
+  assert.deepEqual(await summary(), received);
+  await f.server.recallSteerMessages(f.thread.id, {
+    recallId: "summary-recall",
+    targets: [target],
+  });
+  const reopened = await summary();
+  assert.deepEqual(reopened.userQuestionSummary, open.userQuestionSummary);
+  assert.equal(reopened.recentActivityAt, received.recentActivityAt);
+  await f.server.respondToUserQuestion(f.thread.id, {
+    questionCallItemId: f.question.request.callItemId,
+    clientId: "summary-cancel",
+    outcome: "cancel",
+  });
+  assert.equal((await summary()).userQuestionSummary!.openCount, 0);
+  assert.equal((await f.read("summary-cancel")).response.status, "pending");
+  f.release.resolve();
+  await f.initial.done;
+  const closed = await summary();
+  assert.deepEqual(closed.userQuestionSummary, received.userQuestionSummary);
+  assert.equal((await f.read("summary-cancel")).response.status, "claimed");
+  assert.equal(
+    closed.recentActivityAt,
+    new ThreadRecencyProjection().read((await f.snapshot()).items),
+    "after publication, real human receipt/final answer retain ordinary ordering",
+  );
+});
+
+test("native summary covers all pending pages and retains accepted time after every request closes", async (t) => {
+  const f = await fixture(t, { questionCount: 35 });
+  const first = await f.server.listUserQuestions(f.thread.id);
+  const second = await f.server.listUserQuestions(f.thread.id, first.nextAfter);
+  const questions = [...first.questions, ...second.questions];
+  const latestPublishedAt = questions
+    .map((q) => q.createdAt)
+    .sort()
+    .at(-1)!;
+  const read = async () => {
+    const summary = await f.server.readThreadSummary(f.thread.id);
+    assert.notEqual(summary.status, "systemError");
+    return summary.status === "systemError"
+      ? undefined
+      : summary.userQuestionSummary;
+  };
+  assert.deepEqual(await read(), { openCount: 35, latestPublishedAt });
+  for (let i = 0; i < questions.length; i++) {
+    const response = await f.server.respondToUserQuestion(f.thread.id, {
+      questionCallItemId: questions[i]!.request.callItemId,
+      clientId: `summary-close-${i}`,
+      outcome: "cancel",
+    });
+    await response.turn.done;
+    assert.deepEqual(await read(), { openCount: 34 - i, latestPublishedAt });
+  }
+  assert.equal((await f.snapshot()).userQuestions!.length, 0);
 });
 
 test("held answer after an interrupted Turn is claimed only by explicit ordinary successor", async (t) => {

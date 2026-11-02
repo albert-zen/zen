@@ -81,7 +81,7 @@ test("actual Thread folds question discriminators in existing decode/append and 
         return Reflect.get(target, key, receiver) as unknown;
       },
     });
-  for (const method of ["read", "page", "get"] as const) {
+  for (const method of ["read", "page", "get", "summary"] as const) {
     const original = ThreadUserQuestionProjection.prototype[method];
     t.mock.method(
       ThreadUserQuestionProjection.prototype,
@@ -103,6 +103,7 @@ test("actual Thread folds question discriminators in existing decode/append and 
   const thread = new Thread(threadId, facts, contexts);
   assert.equal(observed, facts.length + contexts.length);
   assert.equal(thread.userQuestions.length, 0);
+  assert.deepEqual(thread.userQuestionSummary, { openCount: 0 });
   const coldEntries = entries;
   assert.equal(coldEntries, 0);
   assert.equal(parses, 0);
@@ -113,6 +114,7 @@ test("actual Thread folds question discriminators in existing decode/append and 
     assert.equal(thread.userQuestionPage().questions.length, 0);
     assert.equal(thread.userQuestion("missing"), undefined);
     assert.equal(thread.takeUserQuestionAttentionInvalidation(), false);
+    assert.deepEqual(thread.userQuestionSummary, { openCount: 0 });
   }
   assert.equal(entries, 0);
   assert.equal(parses, 0);
@@ -124,6 +126,7 @@ test("actual Thread folds question discriminators in existing decode/append and 
     text: "Next ordinary message",
   });
   assert.equal(thread.userQuestions.length, 0);
+  assert.deepEqual(thread.userQuestionSummary, { openCount: 0 });
   assert.equal(entries, 0);
   assert.equal(observed, 2);
   assert.equal(parses, 0);
@@ -176,6 +179,13 @@ test("long-history Ask projection invalidates only relevant commits and equals c
   });
   assert.equal(thread.userQuestions[0]!.state, "open");
   assert.equal(parses, 1);
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: createdAt,
+  });
+  for (let i = 0; i < 100; i++)
+    assert.equal(thread.userQuestionSummary.openCount, 1);
+  assert.equal(parses, 1, "hot summaries never reparse publication schemas");
   parses = 0;
   for (let i = 0; i < 50; i++) {
     thread.append({
@@ -198,6 +208,7 @@ test("long-history Ask projection invalidates only relevant commits and equals c
       output: "ordinary output",
     });
     assert.equal(thread.userQuestions[0]!.state, "open");
+    assert.equal(thread.userQuestionSummary.openCount, 1);
   }
   assert.equal(
     parses,
@@ -223,6 +234,10 @@ test("long-history Ask projection invalidates only relevant commits and equals c
     ],
   });
   assert.equal(thread.userQuestions[0]!.state, "answer-pending");
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 0,
+    latestPublishedAt: createdAt,
+  });
   assert.equal(parses, 1);
   thread.append({
     ...base,
@@ -238,6 +253,10 @@ test("long-history Ask projection invalidates only relevant commits and equals c
     ],
   });
   assert.equal(thread.userQuestions[0]!.state, "open");
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: createdAt,
+  });
   assert.equal(parses, 2);
   assert.deepEqual(
     thread.userQuestions,
@@ -246,6 +265,10 @@ test("long-history Ask projection invalidates only relevant commits and equals c
   assert.deepEqual(
     thread.userQuestions,
     new Thread(threadId, thread.items, thread.itemList).userQuestions,
+  );
+  assert.deepEqual(
+    thread.userQuestionSummary,
+    new Thread(threadId, thread.items, thread.itemList).userQuestionSummary,
   );
   const mutable = thread.userQuestions;
   mutable[0]!.specification.questions[0]!.prompt = "Mutated caller copy";
@@ -319,6 +342,10 @@ test("early fork of long imported history clears the old import cutoff for a new
     }),
   });
   assert.equal(thread.userQuestions[0]!.state, "open");
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: createdAt,
+  });
   assert.deepEqual(
     thread.userQuestions,
     readUserQuestions(threadId, thread.itemList, thread.items),
@@ -342,9 +369,10 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
       name: ASK_USER_QUESTION_NAME,
       arguments: specification,
     });
-  const complete = (index: number) =>
+  const complete = (index: number, time = createdAt) =>
     thread.append({
       ...base,
+      createdAt: time,
       id: `result-${index}`,
       turnId: "turn",
       type: "tool_result",
@@ -358,10 +386,14 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
       }),
     });
   for (let i = 1; i < 35; i++) complete(i);
+  assert.equal(thread.userQuestionSummary.openCount, 34);
   const before = thread.userQuestionPage();
   assert.equal(before.questions[0]!.request.callItemId, "call-1");
   assert.equal(thread.takeUserQuestionAttentionInvalidation(), true);
-  complete(0);
+  const latePublicationAt = "2026-11-02T00:00:20.000Z";
+  complete(0, latePublicationAt);
+  assert.equal(thread.userQuestionSummary.openCount, 35);
+  assert.equal(thread.userQuestionSummary.latestPublishedAt, latePublicationAt);
   assert.equal(thread.takeUserQuestionAttentionInvalidation(), true);
   assert.equal(thread.userQuestion("call-0")!.state, "open");
   // A cursor is not a snapshot token. The invalidation makes the client restart.
@@ -381,5 +413,77 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
       ].map((q) => q.request.callItemId),
     ).size,
     35,
+  );
+});
+
+test("long-history summary does not rebuild for an Ask call before its result", (t) => {
+  const { facts, contexts } = history();
+  const thread = new Thread(threadId, facts, contexts);
+  const call = (id: string) =>
+    thread.append({
+      ...base,
+      id,
+      turnId: "turn",
+      type: "tool_call",
+      callId: id,
+      name: ASK_USER_QUESTION_NAME,
+      arguments: specification,
+    });
+  const result = (id: string, callId: string, time: string, valid = true) =>
+    thread.append({
+      ...base,
+      createdAt: time,
+      id,
+      turnId: "turn",
+      type: "tool_result",
+      callId,
+      exitCode: 0,
+      executionStatus: "completed",
+      output: JSON.stringify({
+        kind: valid ? USER_QUESTION_PUBLICATION_KIND : "not-a-publication",
+        version: 1,
+        request: { threadId, callItemId: callId },
+      }),
+    });
+  call("first");
+  assert.deepEqual(thread.userQuestionSummary, { openCount: 0 });
+  result("first-result", "first", createdAt);
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: createdAt,
+  });
+  const parse = JSON.parse;
+  let parses = 0;
+  t.mock.method(JSON, "parse", (...args: Parameters<typeof JSON.parse>) => {
+    parses++;
+    return parse(...args);
+  });
+  call("still-unpublished");
+  for (let i = 0; i < 100; i++)
+    assert.deepEqual(thread.userQuestionSummary, {
+      openCount: 1,
+      latestPublishedAt: createdAt,
+    });
+  assert.equal(parses, 0, "a bare Ask call cannot change accepted summary");
+  result(
+    "invalid-result",
+    "still-unpublished",
+    "2026-11-02T00:00:05.000Z",
+    false,
+  );
+  assert.deepEqual(thread.userQuestionSummary, {
+    openCount: 1,
+    latestPublishedAt: createdAt,
+  });
+  result("duplicate-first-result", "first", "2026-11-02T00:00:10.000Z");
+  assert.equal(thread.userQuestion("first")!.state, "unavailable");
+  assert.deepEqual(
+    thread.userQuestionSummary,
+    { openCount: 0, latestPublishedAt: createdAt },
+    "a duplicate/contradictory source cannot mint a newer publication timestamp",
+  );
+  assert.deepEqual(
+    thread.userQuestionSummary,
+    new Thread(threadId, thread.items, thread.itemList).userQuestionSummary,
   );
 });

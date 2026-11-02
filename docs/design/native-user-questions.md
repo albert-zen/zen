@@ -195,6 +195,19 @@ human-message ordering remains separate; pinned membership/order stays manual.
 Ordinary model completion does not clear unanswered questions. No model withdrawal
 operation is included in this slice.
 
+Native `ThreadSummary.userQuestionSummary` carries `{openCount, latestPublishedAt?}`.
+It counts request groups in exact `open` state, not authored subquestions, pending
+responses or unavailable cards. Zero open is not proof an answer was model-visible;
+attention pages still contain pending/unavailable states. The timestamp is the max
+original successful local result time across all published requests, including
+closed ones. Answer/claim/recall never re-date it. A real explicit Answer or Cancel
+is an ordinary human input and retains its original receipt promotion; later
+Question status changes do not promote again. The existing `recentActivityAt` is
+the max of ordinary human/final-answer recency and accepted local publication time,
+so Recent and default Project lists share the same sorter and stable Thread-ID tie.
+New normal summaries provide zero when empty; legacy/unavailable summaries can
+omit this projection. Imported/forked old questions do not count or promote.
+
 ## 5. Performance, transport and rollout boundary
 
 The Thread owns a disposable index, populated while existing decode/append work
@@ -202,7 +215,14 @@ already visits each source record. No-Ask snapshots do not scan historical array
 or parse JSON. Ordinary messages/tools/status do not reparse old publications.
 Relevant question results, bound responses and native withdrawal/claim facts
 invalidate it; a cold rebuild from actual persisted sources must equal the live
-projection. This cache is not a fourth authority.
+projection. The two summary scalars are computed inside that same existing indexing
+pass, not by cloning schemas or rescanning history on summary reads. Call-only
+bookkeeping does not dirty accepted attention before its result. Compilation repair
+can append a missing call after its result; the existing local candidate index
+retains result-seen evidence so that repaired call invalidates the projection even
+after an earlier incomplete read. Existing native
+commits refresh summaries before attention invalidation; no additional per-token
+or compiler-item summary refresh is introduced. This cache is not a fourth authority.
 
 The native transport bounds the snapshot to a page of pending/current
 attention cards, excluding historical answered schemas. A page budget is not a
