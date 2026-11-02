@@ -1,4 +1,4 @@
-name: Native long-thread send baseline
+name: Native ordinary-send isolated A-B
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]
@@ -14,13 +14,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        prior-user-messages: [5000]
+        include:
+          - label: baseline
+            source: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+            count: 1000
+          - label: frontend
+            source: 3819977ddd2da5698bcbee2c14fd8165f9934009
+            count: 1000
+          - label: backend
+            source: 8e036167d864ae5d452dccc411970352ce26e433
+            count: 1000
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6aa0a5055530eeb018cc41a3ce486603756c06bb
+          ref: ${{ matrix.source }}
           persist-credentials: false
           path: product
       - uses: actions/checkout@v4
@@ -48,10 +57,10 @@ jobs:
       - name: Full native App ordinary send
         working-directory: product
         timeout-minutes: 12
-        run: node apps/zenx/scripts/launch-send-latency.mjs ../results '${{ matrix.prior-user-messages }}'
+        run: node apps/zenx/scripts/launch-send-latency.mjs ../results '${{ matrix.count }}' '${{ matrix.label }}'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-${{ matrix.prior-user-messages }}
+          name: native-send-${{ matrix.label }}-${{ matrix.count }}
           path: results
           if-no-files-found: error

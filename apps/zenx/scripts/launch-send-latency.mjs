@@ -22,7 +22,13 @@ const directory = path.resolve(process.argv[2]);
 const version = "current";
 const count = Number(process.argv[3]);
 assert.ok([0,1000,5000].includes(count));
-const expected = "6aa0a5055530eeb018cc41a3ce486603756c06bb";
+const sourceLabel = process.argv[4] ?? "baseline";
+const expected = {
+  baseline:"6aa0a5055530eeb018cc41a3ce486603756c06bb",
+  frontend:"3819977ddd2da5698bcbee2c14fd8165f9934009",
+  backend:"8e036167d864ae5d452dccc411970352ce26e433",
+}[sourceLabel];
+assert.ok(expected,"Only independently identified source snapshots are allowed");
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   expected,
@@ -79,7 +85,7 @@ await writeFile(
     {
       version,
       sourceCommit: expected,
-      comparisonRole:"unmodified-production-baseline",
+      comparisonRole:sourceLabel==="baseline"?"unmodified-production-baseline":"isolated-"+sourceLabel+"-candidate",
       priorUserMessages:count,
       priorCompletedTurns:count,
       visibleHistoricalMessages:count*2,
@@ -274,7 +280,7 @@ try {
   assert.equal(result.ok, true);
   const persisted=await verifyLongThread({dataDirectory:data,threadId:result.seed.threadId,samples:result.samples,userMessageCount:count});
   await writeFile(path.join(directory,"independent-storage-verification.json"),JSON.stringify(persisted,null,2));
-  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
+  console.log("SYNTHETIC_SEND_BASELINE_JSON "+JSON.stringify({sourceCommit:expected,sourceLabel,priorUserMessages:count,priorCompletedTurns:count,visibleHistoricalMessages:count*2,rendered:result.before.rendered,seed:result.seed,samples:result.samples.map(s=>({clickToBubbleDomMs:s.clickToBubbleDomMs,clickToVisibleFrameMs:s.clickToVisibleFrameMs,clickToClearFrameMs:s.clickToClearFrameMs,ipcDurationMs:s.ipc[0].durationMs,requestId:s.ipc[0].requestId,messageId:s.messageId})),persisted}));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } finally {
   try { const report=JSON.parse(await readFile(path.join(directory,"full-app-measurements.json"),"utf8")); if(!report.ok)console.error("SYNTHETIC_SEND_FAILURE_JSON "+JSON.stringify(report)); } catch {}
