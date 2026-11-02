@@ -296,6 +296,15 @@ export function useReadVisibleMessage({
     let frame: number | undefined;
     const check = () => {
       if (generation.current !== token) return;
+      // Match advance's same-ID no-op before searching the rendered history.
+      // Read the current snapshot each time so preference resets can be read again.
+      if (
+        conversationReadStore().getSnapshot()[scope][conversationId]?.id ===
+          message.id ||
+        document.visibilityState !== "visible" ||
+        !document.hasFocus()
+      )
+        return;
       const target = Array.from(
         root.querySelectorAll<HTMLElement>("[data-read-message-id]"),
       ).find((element) => element.dataset.readMessageId === message.id);
