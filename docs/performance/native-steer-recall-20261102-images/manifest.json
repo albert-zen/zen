@@ -1,0 +1,33 @@
+{
+  "scope": "Actual complete production Electron App on disposable owned macOS CI; synthetic workspace, messages and FakeModel only. Not a performance benchmark or user-device capture.",
+  "sourceCommit": "279f84ff35c68979a55f35c5322c941235dff7be",
+  "sourceRun": 41399317890,
+  "artifactReadbackRun": 41400007957,
+  "artifactReadbackJob": 125129588604,
+  "images": [
+    {
+      "path": "recall-wins-restored-current-draft.png",
+      "bytes": 90741,
+      "sha256": "63818168313cc21f5ec25fa6e91d6355de12c931a87a5b86ac867b2b9dbd6951",
+      "gitBlobSha": "9fbd679b04cabd255ee29ce3718b24ce910f38c4"
+    },
+    {
+      "path": "claim-wins-real-conflict-stale-ui.png",
+      "bytes": 95379,
+      "sha256": "b99f34e9f23f1bb6ac7e56186dbdaaa4a3eb53f503222ee6d2776fc09bf07e09",
+      "gitBlobSha": "b0b4095228832be6f505a83415bbfc83844a8922"
+    },
+    {
+      "path": "navigation-other-draft-preserved.png",
+      "bytes": 64865,
+      "sha256": "c923cffad4f0f3af0b2894cef14a8846277a16eceb72e4be75f5bfb66ebb5424",
+      "gitBlobSha": "2f39faa8fc19235ee06649a2639d7cbe897abb83"
+    },
+    {
+      "path": "navigation-final-complete-app.png",
+      "bytes": 104090,
+      "sha256": "8961b383258eb37c42ea43fa66e70753c4ead5047ebfb49bb12d749e670224a9",
+      "gitBlobSha": "226c3832ebb7f6ae9d8b51f14717c1f788516c31"
+    }
+  ]
+}
