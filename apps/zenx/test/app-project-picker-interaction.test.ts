@@ -8247,3 +8247,96 @@ test("Add to side chat keeps a delayed local draft in its original workspace wit
     await unmountApp(harness);
   }
 });
+
+
+test("real App canonical append preserves 5000 historical Turn and message renders", { timeout: 180000 }, async () => {
+  const historicalTurns = 5000;
+  const historical: Thread = {
+    ...liveThread(),
+    turns: Array.from({ length: historicalTurns }, (_, index) => ({
+      id: `history-${index}`,
+      itemsView: "full" as const,
+      status: "completed" as const,
+      error: null,
+      startedAt: index + 10,
+      completedAt: index + 11,
+      durationMs: 1000,
+      items: [
+        { id: `user-${index}`, type: "userMessage" as const, clientId: `client-${index}`,
+          content: [{ type: "text" as const, text: "Synthetic historical input", text_elements: [] }] },
+        { id: `agent-${index}`, type: "agentMessage" as const,
+          text: "Synthetic historical answer", phase: "final_answer" as const, memoryCitation: null },
+      ],
+    })),
+  };
+  const recovery = resumed(historical);
+  let notify: Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const counts = { turns: 0, user: 0, agent: 0, fork: 0 };
+  let observing = false;
+  const originalTranslate = i18n.t;
+  i18n.t = ((...args: unknown[]) => {
+    if (observing) {
+      const key = args[0];
+      const options = args[1] as { number?: number } | undefined;
+      if (key === "shell:turnNumber" && typeof options?.number === "number" &&
+          options.number <= historicalTurns) counts.turns++;
+      if (key === "shell:copyUserMessage") counts.user++;
+      if (key === "shell:copyAssistantMessage") counts.agent++;
+      if (key === "shell:forkFromMessage") counts.fork++;
+    }
+    return (originalTranslate as (...values: unknown[]) => unknown).apply(i18n, args);
+  }) as typeof i18n.t;
+  const harness = await mountThreadApp({
+    onNotification: (listener) => { notify = listener; return () => { notify = undefined; }; },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return recovery;
+      throw new Error(`Unexpected protocol request: ${method}`);
+    },
+  });
+  let watermark = 0;
+  const emit = async (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () => notify?.("zen/thread/event", {
+      threadId: "thread-1", processEpoch: "test-process-epoch", watermark: ++watermark, event,
+    }));
+  try {
+    await selectedComposer();
+    assert.equal(document.querySelectorAll(".turn").length, historicalTurns);
+    assert.equal(document.querySelectorAll(".agent-copy").length, historicalTurns);
+    observing = true;
+    await emit({ type: "item_completed", item: {
+      type: "turn_started", id: "next-start", threadId: "thread-1", turnId: "next",
+      createdAt: new Date().toISOString(),
+      selection: { providerProfileId: "fake", modelId: "fake", reasoningEffort: "medium" },
+    } });
+    await emit({ type: "turn_started", threadId: "thread-1", turnId: "next" });
+    assert.equal(counts.turns, 0, "canonical append must not rerender unchanged historical TurnBlocks");
+    assert.equal(counts.user, 0, "input context must not bypass historical Turn memo");
+    assert.equal(counts.agent, 0, "fork metadata must not wake historical AgentMessage");
+    assert.equal(counts.fork, 0, "fork controls must not receive unrelated canonical broadcasts");
+    await emit({ type: "item_completed", item: {
+      type: "user_message", id: "next-user", threadId: "thread-1", turnId: "next",
+      clientId: "next-client", createdAt: new Date().toISOString(), text: "New synthetic input",
+    } });
+    assert.equal(counts.turns, 0);
+    assert.ok(counts.user <= 2, "only the actual new input may render");
+    assert.equal(counts.agent, 0);
+    assert.equal(counts.fork, 0);
+    assert.ok(document.querySelector('[data-sent-message-id="next-user"]'));
+    // A genuine late append to an old Turn must still update that Turn and its
+    // canonical descendant; the optimization is not a frozen history cache.
+    const beforeUser = counts.user;
+    await emit({ type: "item_completed", item: {
+      type: "agent_message", id: "late-history-answer", threadId: "thread-1",
+      turnId: "history-0", createdAt: new Date().toISOString(), text: "Late canonical correction",
+    } });
+    assert.ok(counts.turns > 0 && counts.turns <= 2);
+    assert.ok(counts.user > beforeUser && counts.user - beforeUser <= 2);
+    assert.ok(counts.agent > 0 && counts.agent <= 2);
+    assert.ok(counts.fork > 0 && counts.fork <= 2);
+    assert.match(document.querySelector(".turn")?.textContent ?? "", /Late canonical correction/u);
+  } finally {
+    observing = false;
+    i18n.t = originalTranslate;
+    await unmountApp(harness);
+  }
+});

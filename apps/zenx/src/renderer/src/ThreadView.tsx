@@ -146,6 +146,12 @@ import { activeTurn } from "./thread-view-state.js";
 import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import { ToolActionLink, ToolActionTargetsProvider } from "./ToolActionLink.js";
+import { projectToolActionTargets } from "./tool-action-targets.js";
+import {
+  indexTurnCanonicalPresentation,
+  type TurnCanonicalPresentation,
+  type TurnCanonicalPresentationIndex,
+} from "./turn-canonical-presentation.js";
 import {
   MessageTargetNavigationContext,
   useMessageTargetNavigation,
@@ -240,7 +246,7 @@ const CanonicalInputContentContext = createContext<
 
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
-  items: Map<string, string | undefined>;
+  items: ReadonlyMap<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
@@ -356,6 +362,7 @@ interface ThreadViewProps {
 const EMPTY_APPROVALS: readonly ApprovalCardState[] = [];
 const EMPTY_WAKEUPS: readonly TriggerHistoryEntry[] = [];
 const EMPTY_ATTACHMENTS: ZenXThreadAttachmentProjection = {};
+const EMPTY_FORK_ITEMS: ReadonlyMap<string, string | undefined> = new Map();
 const unavailableImageReader = async (): Promise<Uint8Array> => {
   throw new Error(i18n.t("shell:imageReaderUnavailable"));
 };
@@ -363,7 +370,9 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 export function ThreadView(props: ThreadViewProps) {
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
-  debuggingRef.current = debugging;
+  useLayoutEffect(() => {
+    debuggingRef.current = debugging;
+  }, [debugging]);
   const readingState = useThreadReadingState(
     props.thread?.id ?? props.composerId,
   );
@@ -401,7 +410,9 @@ export function ThreadView(props: ThreadViewProps) {
     [props.thread?.id, items],
   );
   const forkSourceRef = useRef(forkSource);
-  forkSourceRef.current = forkSource;
+  useLayoutEffect(() => {
+    forkSourceRef.current = forkSource;
+  }, [forkSource]);
   const mounted = useRef(true);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -409,31 +420,45 @@ export function ThreadView(props: ThreadViewProps) {
       mounted.current = false;
     };
   }, []);
-  const forkContext = useMemo(
-    () =>
-      forkSource === null
-        ? null
-        : {
-            ...forkSource,
-            // A Turn finishing may fold or remount its message controls. Only leaving
-            // the source viewport or losing the canonical Item invalidates ownership.
-            isCurrent: (itemId: string) =>
-              mounted.current &&
-              !debuggingRef.current &&
-              forkSourceRef.current?.threadId === forkSource.threadId &&
-              forkSourceRef.current.items.has(itemId),
-          },
-    [forkSource],
+  const sourceThreadId = props.thread?.id ?? null;
+  const isForkCurrent = useCallback(
+    (itemId: string) =>
+      mounted.current &&
+      !debuggingRef.current &&
+      sourceThreadId !== null &&
+      forkSourceRef.current?.threadId === sourceThreadId &&
+      forkSourceRef.current.items.has(itemId),
+    [sourceThreadId],
   );
+  const displayedThread = props.thread ?? props.contextPreview;
+  const toolTargets = useMemo(
+    () => projectToolActionTargets(props.thread?.id ?? "", props.thread?.canonicalItems ?? []),
+    [props.thread?.id, props.thread?.canonicalItems],
+  );
+  const attachments = canonicalAttachments ?? props.threadAttachments ?? EMPTY_ATTACHMENTS;
+  const committedPresentation = useRef<TurnCanonicalPresentationIndex | undefined>(undefined);
+  const presentation = useMemo(
+    () => indexTurnCanonicalPresentation(
+      JSON.stringify([sourceThreadId, displayedThread?.id ?? props.composerId]),
+      displayedThread?.turns ?? [],
+      canonicalInputs,
+      forkSource?.items ?? EMPTY_FORK_ITEMS,
+      attachments,
+      toolTargets,
+      committedPresentation.current,
+    ),
+    [sourceThreadId, displayedThread?.id, displayedThread?.turns, props.composerId,
+      canonicalInputs, forkSource, attachments, toolTargets],
+  );
+  useLayoutEffect(() => {
+    committedPresentation.current = presentation;
+  }, [presentation]);
   // Native history and its image placeholders commit together, even while a
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
   return (
-    <ToolActionTargetsProvider thread={props.thread}>
       <ThreadReadingContext.Provider value={readingState}>
-        <CanonicalInputContentContext.Provider value={canonicalInputs}>
-          <CanonicalMessageForkContext.Provider value={forkContext}>
             <MessageSourceViewportContext.Provider
               value={props.thread?.id ?? null}
             >
@@ -457,21 +482,27 @@ export function ThreadView(props: ThreadViewProps) {
                 ) : (
                   <ThreadViewContent
                     {...props}
-                    threadAttachments={
-                      canonicalAttachments ?? props.threadAttachments
-                    }
+                    threadAttachments={attachments}
+                    canonicalPresentation={presentation}
+                    sourceThreadId={sourceThreadId}
+                    isForkCurrent={isForkCurrent}
                   />
                 )}
               </div>
             </MessageSourceViewportContext.Provider>
-          </CanonicalMessageForkContext.Provider>
-        </CanonicalInputContentContext.Provider>
       </ThreadReadingContext.Provider>
-    </ToolActionTargetsProvider>
   );
 }
 
+interface ThreadViewContentProps extends ThreadViewProps {
+  canonicalPresentation: TurnCanonicalPresentationIndex;
+  sourceThreadId: string | null;
+  isForkCurrent(itemId: string): boolean;
+}
 function ThreadViewContent({
+  canonicalPresentation,
+  sourceThreadId,
+  isForkCurrent,
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -528,7 +559,7 @@ function ThreadViewContent({
   onRespondToApproval,
   onSubmit,
   onOpenMessageLink,
-}: ThreadViewProps) {
+}: ThreadViewContentProps) {
   useTranslation("shell");
   const readingState = useContext(ThreadReadingContext)!;
   const wakeups =
@@ -1407,7 +1438,10 @@ function ThreadViewContent({
             }
             usage={threadUsage?.turns[row.turn.id]}
             wakeups={wakeups}
-            attachments={threadAttachments}
+            canonicalPresentation={canonicalPresentation.turns.get(row.turn.id)!}
+            sourceThreadId={sourceThreadId}
+            isForkCurrent={isForkCurrent}
+            imageCwd={displayedThread?.cwd}
             onOpenImage={onOpenImage}
             onReadAttachment={onReadAttachment}
             pluginSnapshot={pluginSnapshot}
@@ -1432,7 +1466,10 @@ function ThreadViewContent({
       turnOutcomeItems,
       threadUsage,
       wakeups,
-      threadAttachments,
+      canonicalPresentation,
+      sourceThreadId,
+      isForkCurrent,
+      displayedThread?.cwd,
       onOpenImage,
       onReadAttachment,
       pluginSnapshot,
@@ -2592,7 +2629,10 @@ const TurnBlock = memo(function TurnBlock({
   contextPreview = false,
   index,
   wakeups,
-  attachments,
+  canonicalPresentation,
+  sourceThreadId,
+  isForkCurrent,
+  imageCwd,
   onOpenImage,
   onReadAttachment,
   pluginSnapshot,
@@ -2609,7 +2649,10 @@ const TurnBlock = memo(function TurnBlock({
   contextPreview?: boolean;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
-  attachments: ZenXThreadAttachmentProjection;
+  canonicalPresentation: TurnCanonicalPresentation;
+  sourceThreadId: string | null;
+  isForkCurrent(itemId: string): boolean;
+  imageCwd: string | undefined;
   onOpenImage(
     attachment: AttachmentRef,
     name: string,
@@ -2621,6 +2664,19 @@ const TurnBlock = memo(function TurnBlock({
   usage?: ModelUsageAggregate;
   failureDetail?: FailureItem | null;
 }) {
+  const attachments = canonicalPresentation.attachments;
+  const forkContext = useMemo(
+    () => sourceThreadId === null ? null : {
+      threadId: sourceThreadId,
+      items: canonicalPresentation.forkItems,
+      isCurrent: isForkCurrent,
+    },
+    [sourceThreadId, canonicalPresentation.forkItems, isForkCurrent],
+  );
+  const imageContext = useMemo(
+    () => ({ cwd: imageCwd, attachments, read: onReadAttachment, open: onOpenImage }),
+    [imageCwd, attachments, onReadAttachment, onOpenImage],
+  );
   const { i18n: activeI18n } = useTranslation("shell");
   const turnStatus = contextPreview ? "interrupted" : turn.status;
   const projection = useMemo(
@@ -2711,6 +2767,10 @@ const TurnBlock = memo(function TurnBlock({
     );
   };
   return (
+    <CanonicalInputContentContext.Provider value={canonicalPresentation.inputs}>
+      <CanonicalMessageForkContext.Provider value={forkContext}>
+        <ThreadImagesContext.Provider value={imageContext}>
+          <ToolActionTargetsProvider thread={null} targets={canonicalPresentation.toolTargets}>
     <section
       ref={sectionRef}
       className={`turn ${turn.status}`}
@@ -2856,6 +2916,10 @@ const TurnBlock = memo(function TurnBlock({
         </div>
       )}
     </section>
+          </ToolActionTargetsProvider>
+        </ThreadImagesContext.Provider>
+      </CanonicalMessageForkContext.Provider>
+    </CanonicalInputContentContext.Provider>
   );
 });
 
