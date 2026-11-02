@@ -28,7 +28,7 @@ assert.ok(["en","zh-CN"].includes(geometryLocale));
 const pairCase=null;
 const hostSnapshot=()=>({platform:os.platform(),release:os.release(),arch:os.arch(),cpuModel:os.cpus()[0]?.model,cpuCount:os.cpus().length,loadAverage:os.loadavg(),freeMemoryBytes:os.freemem(),totalMemoryBytes:os.totalmem(),uptimeSeconds:os.uptime()});
 const hostBefore=hostSnapshot();
-const expected = "e5c3fe9bf91ce0385bf730cd364b3035a82fa461";
+const expected = "76446de04e526d32fd49f2f2bf79e596f5aeef67";
 assert.ok(expected,"Only independently identified source snapshots are allowed");
 assert.equal(
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
