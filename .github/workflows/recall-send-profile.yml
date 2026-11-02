@@ -1,0 +1,59 @@
+name: Owned native send phase profile (not acceptance)
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/recall-send-profile.yml
+      - apps/zenx/scripts/capture-recall-send-profile.cjs
+      - apps/zenx/scripts/launch-recall-send-profile.mjs
+permissions:
+  contents: read
+jobs:
+  native-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: profile
+            source: 400bac27dd80c0238360dd2632c5c41972566d4b
+            count: 5000
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy only diagnostic drivers to exact product checkout
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-recall-send-profile.cjs product/apps/zenx/scripts/capture-send-feedback.cjs
+          cp diagnostic/apps/zenx/scripts/launch-recall-send-profile.mjs product/apps/zenx/scripts/launch-send-feedback.mjs
+          cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs product/apps/zenx/scripts/
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production storage and actual App
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Profile full native App ordinary send (diagnostic only)
+        working-directory: product
+        timeout-minutes: 12
+        run: node apps/zenx/scripts/launch-send-feedback.mjs ../results '${{ matrix.count }}' '${{ matrix.label }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owned-native-recall-send-profile-400bac
+          path: results
+          if-no-files-found: error
