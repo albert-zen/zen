@@ -1,0 +1,77 @@
+name: Native full-App composer geometry
+on:
+  push:
+    branches: [diagnostic/send-latency-e2e-20261102]
+    paths:
+      - .github/workflows/composer-geometry.yml
+      - apps/zenx/scripts/capture-composer-geometry.cjs
+      - apps/zenx/scripts/launch-composer-geometry.mjs
+      - apps/zenx/scripts/long-thread-domain-seed.mjs
+permissions:
+  contents: read
+jobs:
+  native-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: pending
+            source: 5e37358e69fd7344aac25cfd3802078b92f79e2d
+            count: 0
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source }}
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy only diagnostic drivers to exact product checkout
+        run: |
+          cp diagnostic/apps/zenx/scripts/capture-composer-geometry.cjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/launch-composer-geometry.mjs product/apps/zenx/scripts/
+          cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs product/apps/zenx/scripts/
+      - name: Install exact source dependencies
+        working-directory: product
+        timeout-minutes: 7
+        run: npm ci
+      - name: Build production storage and actual App
+        working-directory: product
+        timeout-minutes: 8
+        run: |
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: English real App geometry
+        id: en
+        continue-on-error: true
+        working-directory: product
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-composer-geometry.mjs ../results/en 0 pending en
+      - name: Chinese real App geometry
+        id: zh
+        continue-on-error: true
+        working-directory: product
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-composer-geometry.mjs ../results/zh-CN 0 pending zh-CN
+      - name: Require both locales
+        if: always()
+        env:
+          EN_RESULT: ${{ steps.en.outcome }}
+          ZH_RESULT: ${{ steps.zh.outcome }}
+        run: |
+          printf 'en=%s zh-CN=%s\n' "$EN_RESULT" "$ZH_RESULT"
+          test "$EN_RESULT" = success
+          test "$ZH_RESULT" = success
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-app-composer-geometry-en-zh
+          path: results
+          if-no-files-found: error
