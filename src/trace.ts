@@ -118,6 +118,10 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   readonly #next = new Map<string, number>();
   readonly #artifactQueues = new Map<string, Promise<unknown>>();
   readonly #segments = new Map<string, string>();
+  readonly #initializedDirectories = new Map<
+    string,
+    readonly { dev: number; ino: number }[]
+  >();
   readonly #gaps = new Map<string, { count: number; error: string }>();
   readonly #onFailure: ((issue: TraceIssue) => void) | undefined;
   #failedRecords = 0;
@@ -494,13 +498,26 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   }
   async #initialize(threadId: string): Promise<void> {
     // Recheck on every append: cached readiness cannot legitimize a replaced directory alias.
-    await privateDirectory(this.directory);
-    await privateDirectory(path.join(this.directory, "artifacts"));
-    await privateDirectory(path.join(this.directory, "threads"));
-    await privateDirectory(this.#threadPath(threadId));
-    await syncDirectory(this.directory);
-    await syncDirectory(path.dirname(this.directory));
-    await syncDirectory(path.join(this.directory, "threads"));
+    const directories = [
+      await privateDirectory(this.directory),
+      await privateDirectory(path.join(this.directory, "artifacts")),
+      await privateDirectory(path.join(this.directory, "threads")),
+      await privateDirectory(this.#threadPath(threadId)),
+    ];
+    const initialized = this.#initializedDirectories.get(threadId);
+    if (
+      directories.some(
+        (directory, index) =>
+          directory.created ||
+          directory.permissionsChanged ||
+          directory.dev !== initialized?.[index]?.dev ||
+          directory.ino !== initialized?.[index]?.ino,
+      )
+    ) {
+      await syncDirectory(this.directory);
+      await syncDirectory(path.dirname(this.directory));
+      await syncDirectory(path.join(this.directory, "threads"));
+    }
     if (!this.#next.has(threadId)) {
       const prior = await this.#readStored(threadId, false);
       this.#next.set(
@@ -511,6 +528,8 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         ) + 1,
       );
     }
+    // Only directory-entry durability is remembered; every append still validates paths.
+    this.#initializedDirectories.set(threadId, directories);
   }
   #allocate(threadId: string): number {
     const value = this.#next.get(threadId)!;
@@ -957,12 +976,13 @@ function validateRecord(value: TraceRecord): void {
     assertArtifactRef(artifact.ref);
   }
 }
-async function assertRealDirectory(directory: string): Promise<void> {
+async function assertRealDirectory(directory: string): Promise<Stats> {
   const metadata = await lstat(directory);
   if (!metadata.isDirectory() || metadata.isSymbolicLink())
     throw new Error(
       "Trace storage must be an owned real directory, not an alias",
     );
+  return metadata;
 }
 function assertOwnedRegularFile(metadata: Stats): void {
   if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1)
@@ -994,10 +1014,24 @@ async function readOwnedFile(filename: string): Promise<Buffer> {
     await file.close();
   }
 }
-async function privateDirectory(directory: string): Promise<void> {
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await assertRealDirectory(directory);
+async function privateDirectory(
+  directory: string,
+): Promise<{
+  dev: number;
+  ino: number;
+  created: boolean;
+  permissionsChanged: boolean;
+}> {
+  const created = await mkdir(directory, { recursive: true, mode: 0o700 });
+  const metadata = await assertRealDirectory(directory);
   if (process.platform !== "win32") await chmod(directory, 0o700);
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    created: created !== undefined,
+    permissionsChanged:
+      process.platform !== "win32" && (metadata.mode & 0o777) !== 0o700,
+  };
 }
 async function syncDirectory(directory: string): Promise<boolean> {
   if (process.platform === "win32") return false;
