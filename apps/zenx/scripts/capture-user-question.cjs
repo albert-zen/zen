@@ -435,17 +435,10 @@ async function runOrigin() {
         ),
       "actual image paste focus",
     );
-    const modifiers = [process.platform === "darwin" ? "meta" : "control"];
-    window.webContents.sendInputEvent({
-      type: "keyDown",
-      keyCode: "V",
-      modifiers,
-    });
-    window.webContents.sendInputEvent({
-      type: "keyUp",
-      keyCode: "V",
-      modifiers,
-    });
+    assert.equal(clipboard.readImage().isEmpty(), false);
+    // Native Chromium edit command consumes the real CI system clipboard and
+    // dispatches the normal trusted paste path; no renderer value/event injection.
+    window.webContents.paste();
     await until(
       async () => (await composerSnapshot()).images === 1,
       "native clipboard image imported",
