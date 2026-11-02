@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b8c77b80fa547fddfa7875e11a932d37b143e473
+          ref: 12c13b536b532c6690fdf6a26b1d32d95273834d
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +31,7 @@ jobs:
         id: tests
         continue-on-error: true
         working-directory: apps/zenx
-        run: npx --no-install tsx --test test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts
+        run: npx --no-install tsx --test test/composer-autosize.test.ts test/committed-conversation-context.test.ts test/immediate-send-feedback.test.ts test/composer-state.test.ts test/thread-view-component.test.ts
       - name: Build exact production App
         id: build
         continue-on-error: true
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b8c77b80fa547fddfa7875e11a932d37b143e473
+          ref: 12c13b536b532c6690fdf6a26b1d32d95273834d
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -62,5 +62,5 @@ jobs:
         timeout-minutes: 7
       - name: Print exact formatting diff only
         run: |
-          npx --no-install prettier --write ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts
-          git diff -- ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts
+          npx --no-install prettier --write ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts
+          git diff -- ARCHITECTURE.md apps/zenx/docs/ui-ux.md apps/zenx/src/renderer/src/App.tsx apps/zenx/src/renderer/src/PendingSendRows.tsx apps/zenx/src/renderer/src/ThreadView.tsx apps/zenx/src/renderer/src/composer-state.ts apps/zenx/src/renderer/src/i18n/shell.ts apps/zenx/src/renderer/src/styles.css apps/zenx/test/immediate-send-feedback.test.ts apps/zenx/test/thread-view-component.test.ts apps/zenx/src/renderer/src/use-committed-callback.ts apps/zenx/test/committed-conversation-context.test.ts apps/zenx/src/renderer/src/Composer.tsx apps/zenx/test/composer-autosize.test.ts

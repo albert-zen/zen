@@ -45,4 +45,23 @@ Canonical notification after native click (same renderer clock) at 1000 turns: 2
 
 All nine candidate sends passed independent persistence, exact identity, complete Trace and zero-compaction checks. The performance failures are deliberately retained. Pending DOM-to-visible gaps were 25.9 / 28.6 / 31.1 ms at 1000 turns and 82.5 / 32.7 / 61.0 ms at 5000; most residual delay in these samples precedes insertion of the pending DOM, but these timestamps alone do not identify a specific React or layout operation.
 
-A separately labeled, **profiling-perturbed, non-acceptance** [owned renderer profile run](https://github.com/albert-zen/zen/actions/runs/41391701278) is pending. It uses the same exact source, one real native send per history size, bounded Long Animation Frame / long-task entries plus in-process Electron debugger CPU and timeline recording. It does not attach to a user app, open a debugging port, substitute a React profiling build, or reuse its timings as benchmark samples.
+A separately labeled, **profiling-perturbed, non-acceptance** [owned renderer profile run](https://github.com/albert-zen/zen/actions/runs/41391701278) completed successfully. It uses the same exact source, one real native send per history size, bounded Long Animation Frame / long-task entries plus in-process Electron debugger CPU and timeline recording. It does not attach to a user app, open a debugging port, substitute a React profiling build, or reuse its timings as benchmark samples.
+
+### What the renderer profile establishes — and does not
+
+One profiled send per history size did **not reproduce the worst unprofiled tail**. Same-renderer native click to handler activation was 1.0 ms (1000 turns) / 0.8 ms (5000); handler activation to pending DOM was 48.6 / 108.8 ms. This is not an acceptance rerun and does not erase previous failures.
+
+Trace user-timing marks were present, ordered, same process/thread, with no capped events. Within native click to pending DOM, event-name union durations were:
+
+| Prior turns | Entire pre-DOM interval | UpdateLayoutTree | Layout |
+|---|---:|---:|---:|
+| 1000 | 49.528 ms | 18.306 ms | 6.283 ms |
+| 5000 | 109.554 ms | 40.213 ms | 23.443 ms |
+
+Nested categories overlap; do not sum these with JavaScript event durations. At 5000 turns the first style recalculation visited 5061 elements (39.673 ms) and the first document layout reported 205415 total layout objects (17.976 ms), versus 1061 / 41415 at 1000 turns. This supports real synchronous style/layout work before local feedback, not a particular caller stack.
+
+[Artifact-only validation](https://github.com/albert-zen/zen/actions/runs/41392469861) found negative V8 sample deltas in **both** CPU profiles: 5 at 1000 turns (minimum -2487 microseconds), 6 at 5000 (minimum -8038). Consequently, weighted CPU rankings and percentages are **invalid and are not evidence**. Raw profiles are retained; no negative samples were silently discarded. Long Animation Frame entries were supported but had no script attribution.
+
+The exact rebuilt renderer SHA256 matched both recorded artifact hashes before mapping source offsets. Relevant sampled source locations include `useReadVisibleMessage` scanning all `[data-read-message-id]` nodes, `followBottom` reading/writing scroll geometry, and `ComposerEditor` writing auto height then reading scrollHeight/computed style. These are source-backed investigation leads, **not proof that any one caused the slow tail**.
+
+A separate [explicitly instrumented owned Host diagnostic](https://github.com/albert-zen/zen/actions/runs/41392944620) is now running to distinguish actual storage/recovery work during one 5000-turn native send. It preserves the real durable path but is not benchmark timing: only the exact declared child-source instrumentation is allowed, its source and built Host are hashed, nested phase counters remain nonadditive, and the private inspector opens no TCP port.
