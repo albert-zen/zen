@@ -1660,3 +1660,5 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+The experimental owned semantic append capability validates its own existing prefix under the exact journal owner, appends and fsyncs only new batches, and poisons uncertain outcomes; it remains disconnected from Domain admission until source-backed recovery and invalidation are independently verified.
