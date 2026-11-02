@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { FileItemListStore } from "../src/item-list-store.js";
 import { type ContextItem } from "../src/item-list.js";
 import { ThreadJournalAppendOutcomeUnknownError } from "../src/journal.js";
-import { openOwnedItemListAppend } from "../src/owned-item-list-append.js";
+import { openOwnedItemListAppend, type OwnedItemListAppendHandle } from "../src/owned-item-list-append.js";
 import { StorageWriterOwnership } from "../src/storage-writer-ownership.js";
 
 const item = (index: number): ContextItem => ({
@@ -29,15 +29,24 @@ async function fixture(t: TestContext, count = 2) {
   const file = await open(filename, "r");
   const prototype = Object.getPrototypeOf(file) as FileHandle;
   await file.close();
-  t.after(async () => { owner.close(); await rm(root, { recursive: true, force: true }); });
-  return { root, owner, store, filename, prototype };
+  const handles: OwnedItemListAppendHandle[] = [];
+  const openHandle = async () => {
+    const handle = await openOwnedItemListAppend(owner, root, "thread");
+    handles.push(handle);
+    return handle;
+  };
+  t.after(async () => {
+    await Promise.all(handles.map((handle) => handle.close()));
+    owner.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  return { root, owner, store, filename, prototype, openHandle };
 }
 
 test("owned warm append reads no historical payload and writes only new bytes", async (t) => {
-  const { root, owner, store, filename, prototype } = await fixture(t, 1000);
+  const { store, filename, prototype, openHandle } = await fixture(t, 1000);
   const prefix = await readFile(filename);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
-  t.after(() => handle.close());
+  const handle = await openHandle();
   handle.initialItems[0]!.id = "caller-mutation";
   let reads = 0, writes = 0, syncs = 0;
   const read = prototype.readFile, write = prototype.write, sync = prototype.sync;
@@ -65,13 +74,13 @@ test("owned warm append reads no historical payload and writes only new bytes", 
 });
 
 test("capability requires exact real owner namespace and exclusive per-owner file claim", async (t) => {
-  const { root, owner } = await fixture(t);
+  const { root, owner, openHandle } = await fixture(t);
   await assert.rejects(openOwnedItemListAppend({} as StorageWriterOwnership, root, "thread"));
   await assert.rejects(openOwnedItemListAppend(owner, path.join(root, "other"), "thread"), /namespace/);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
+  const handle = await openHandle();
   await assert.rejects(openOwnedItemListAppend(owner, root, "thread"), /already open/);
   await handle.close();
-  const reopened = await openOwnedItemListAppend(owner, root, "thread");
+  const reopened = await openHandle();
   owner.close();
   await assert.rejects(reopened.append([item(2)]), /closed/);
   await reopened.close();
@@ -79,8 +88,8 @@ test("capability requires exact real owner namespace and exclusive per-owner fil
 
 test("same-size mutation, replacement and hard link invalidate private prefix proof", async (t) => {
   for (const mutation of ["bytes", "replacement", "hardlink"]) {
-    const { root, owner, filename } = await fixture(t);
-    const handle = await openOwnedItemListAppend(owner, root, "thread");
+    const { filename, openHandle } = await fixture(t);
+    const handle = await openHandle();
     const original = await readFile(filename);
     if (mutation === "bytes") {
       await writeFile(filename, original.toString().replace("synthetic 0", "synthetic X"));
@@ -99,9 +108,9 @@ test("same-size mutation, replacement and hard link invalidate private prefix pr
 });
 
 test("partial append is unknown, preserves old prefix, poisons handle and never repairs on readonly open", async (t) => {
-  const { root, owner, store, filename, prototype } = await fixture(t);
+  const { root, owner, store, filename, prototype, openHandle } = await fixture(t);
   const prefix = await readFile(filename);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
+  const handle = await openHandle();
   const write = prototype.write;
   let calls = 0;
   t.mock.method(prototype, "write", async function (this: FileHandle, bytes: Uint8Array, offset: number) {
@@ -122,8 +131,8 @@ test("partial append is unknown, preserves old prefix, poisons handle and never 
 });
 
 test("sync failure cannot acknowledge readable complete bytes and never retries", async (t) => {
-  const { root, owner, filename, prototype } = await fixture(t);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
+  const { filename, prototype, openHandle } = await fixture(t);
+  const handle = await openHandle();
   t.mock.method(prototype, "sync", async function () { throw new Error("synthetic sync failure"); });
   await assert.rejects(handle.append([item(2)]), ThreadJournalAppendOutcomeUnknownError);
   const after = await readFile(filename);
@@ -133,8 +142,8 @@ test("sync failure cannot acknowledge readable complete bytes and never retries"
 });
 
 test("receipt and close both wait for fsync, close rejects new work and drains accepted snapshot", async (t) => {
-  const { root, owner, store, prototype } = await fixture(t);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
+  const { store, prototype, openHandle } = await fixture(t);
+  const handle = await openHandle();
   const entered = deferred(), release = deferred();
   const sync = prototype.sync;
   t.mock.method(prototype, "sync", async function (this: FileHandle) {
@@ -148,18 +157,21 @@ test("receipt and close both wait for fsync, close rejects new work and drains a
   batch[0]!.id = "caller-mutation";
   await entered.promise;
   const closing = handle.close().then(() => { closed = true; });
-  await assert.rejects(handle.append([item(3)]), /closed/);
-  assert.equal(admitted, false);
-  assert.equal(closed, false);
-  release.resolve();
+  try {
+    await assert.rejects(handle.append([item(3)]), /closed/);
+    assert.equal(admitted, false);
+    assert.equal(closed, false);
+  } finally {
+    release.resolve();
+  }
   assert.deepEqual(await pending, [item(2)]);
   await closing;
   assert.equal((await store.read("thread")).at(-1)!.id, "item-2");
 });
 
 test("close failure is unknown even after successful fsync and poisons later append", async (t) => {
-  const { root, owner, filename, prototype } = await fixture(t);
-  const handle = await openOwnedItemListAppend(owner, root, "thread");
+  const { filename, prototype, openHandle } = await fixture(t);
+  const handle = await openHandle();
   const close = prototype.close;
   let calls = 0;
   t.mock.method(prototype, "close", async function (this: FileHandle) {
@@ -174,5 +186,25 @@ test("close failure is unknown even after successful fsync and poisons later app
   await assert.rejects(handle.append([item(3)]), /explicit recovery/);
   assert.equal(calls, 1);
   assert.deepEqual(await readFile(filename), bytes);
+  await handle.close();
+});
+
+test("premature owner release cannot produce a receipt after pending fsync", async (t) => {
+  const { owner, prototype, openHandle } = await fixture(t);
+  const handle = await openHandle();
+  const entered = deferred(), release = deferred();
+  const sync = prototype.sync;
+  t.mock.method(prototype, "sync", async function (this: FileHandle) {
+    entered.resolve();
+    await release.promise;
+    await sync.call(this);
+  });
+  const pending = handle.append([item(2)]);
+  const rejected = assert.rejects(pending, ThreadJournalAppendOutcomeUnknownError);
+  await entered.promise;
+  // The caller must drain before close; the capability does not own this API.
+  owner.close();
+  release.resolve();
+  await rejected;
   await handle.close();
 });

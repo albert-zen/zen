@@ -4,7 +4,7 @@ This experiment adds no Domain admission fast path yet. Durable Trace facts and 
 
 ## Boundary
 
-A real StorageWriterOwnership for the exact journal directory may open one capability per owner/file. The factory itself reads and validates the existing complete JSONL prefix and records private identity/stat metadata and an ID set. The initial array returned to callers is a separate disposable copy. A new batch is snapshotted and validated before its ordered append. Every append checks the live owner, real directories, nonaliased file identity and exact expected size/mtime/ctime. It writes only new bytes and file-syncs; the namespace entry already exists and no replacement is performed. Any uncertain write, sync, close, or detected file change poisons this handle. No rollback, truncation, replay, or repair occurs here. Closing drains accepted writes before releasing the capability claim; callers must close capabilities before releasing the owner.
+A real StorageWriterOwnership for the exact journal directory may open one capability per owner/file. The factory itself reads and validates the existing complete JSONL prefix and records private identity/stat metadata and an ID set. The initial array returned to callers is a separate disposable copy. A new batch is snapshotted and validated before its ordered append. Every nonempty append checks the live owner, real directories, nonaliased file identity and exact expected size/mtime/ctime. It writes only new bytes and file-syncs; the namespace entry already exists and no replacement is performed. Any uncertain write, sync, close, or detected file change poisons this handle. No rollback, truncation, replay, or repair occurs here. Closing drains accepted writes before releasing the capability claim; callers must close capabilities before releasing the owner.
 
 Default FileItemListStore behavior and all readonly paths are unchanged. DomainThreadJournal does not import this module.
 
@@ -19,3 +19,5 @@ Default FileItemListStore behavior and all readonly paths are unchanged. DomainT
 The implementation follows DeepSeek Harness's validated-new-batch, lifetime-owner, append-and-fsync pattern, not its live-event buffering or retry-on-rollback behavior. Reference: deepseek-ai/deepseek-harness ce7073d51254c26cd63b22a60835b8f948deb447, session-persistence-jsonl/src/storage.ts and index.ts.
 
 Stat identity/size/time checks are out-of-band change fences, not a cryptographic proof against arbitrary historical-byte tampering with forged metadata; explicit public reads retain full validation. This foundation does not redefine supported editing or repair behavior.
+
+An empty batch is a no-op, not a prefix validation or model-dispatch authorization. The capability does not intercept StorageWriterOwnership.close(); integration must await capability close (which drains accepted I/O) before releasing that OS owner.
