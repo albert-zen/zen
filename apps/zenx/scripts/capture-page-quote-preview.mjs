@@ -95,6 +95,10 @@ await withPreviewBrowser(
       "[...document.querySelectorAll('.trace-item-toggle')].forEach(button => { if (button.getAttribute('aria-expanded') !== 'true') button.click(); })",
     );
     await waitFor("document.querySelector('.trace-detail-markdown')");
+    await evaluate(`(async () => {
+      await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    })()`);
     const reasoning = await select(
       "document.querySelector('.trace-detail-markdown')",
       "reasoning",
