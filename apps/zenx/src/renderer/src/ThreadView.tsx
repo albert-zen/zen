@@ -1,6 +1,10 @@
 import { PendingSteerPanel } from "./PendingSteerPanel.js";
 import type { SteerRecallStore } from "./steer-recall-state.js";
-import { pendingSteerMessages, type PendingSteerInput, type RecoveredSteerRecall } from "../../../../../src/steer-recall.js";
+import {
+  pendingSteerMessages,
+  type PendingSteerInput,
+  type RecoveredSteerRecall,
+} from "../../../../../src/steer-recall.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
 import type { MessageQuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
@@ -264,7 +268,6 @@ function goToMessageQuoteSource(
 interface ThreadViewProps {
   steerRecallStore?: SteerRecallStore;
   onRestoreRecalled?(result: RecoveredSteerRecall): boolean;
-  onRefreshRecall?(): void;
   pendingSteer?: readonly PendingSteerInput[];
   localModelDebug?: boolean;
   debugMode?: boolean;
@@ -359,9 +362,12 @@ export function ThreadView(props: ThreadViewProps) {
   const queueThread = useMemo(() => {
     if (props.thread === null || pendingSteer.length === 0) return props.thread;
     const ids = new Set(pendingSteer.map((item) => item.id));
-    return { ...props.thread, queuedMessages: props.thread.queuedMessages?.filter(
-      (item) => !ids.has(item.id),
-    ) };
+    return {
+      ...props.thread,
+      queuedMessages: props.thread.queuedMessages?.filter(
+        (item) => !ids.has(item.id),
+      ),
+    };
   }, [props.thread, pendingSteer]);
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
@@ -478,7 +484,6 @@ export function ThreadView(props: ThreadViewProps) {
 function ThreadViewContent({
   steerRecallStore,
   onRestoreRecalled,
-  onRefreshRecall,
   pendingSteer = [],
   composerId = "thread-composer",
   composerSendMode = "soft",
@@ -1660,7 +1665,6 @@ function ThreadViewContent({
             runningTurnId={runningTurn?.id ?? null}
             store={steerRecallStore}
             onRestore={onRestoreRecalled}
-            onRefresh={onRefreshRecall}
           />
         ) : null}
         {thread ? (

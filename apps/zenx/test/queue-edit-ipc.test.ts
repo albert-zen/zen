@@ -406,14 +406,26 @@ test("unknown queue envelope preserves causal details without a rejection code o
 });
 
 test("whole-batch recall is allowlisted and its exact receipt survives real main/preload serialization", async () => {
-  const recall = { threadId: "thread", recallId: "recall", targets: [
-    { queuedItemId: "one", clientId: "client-one", expectedRevision: 2 },
-    { queuedItemId: "two", clientId: "client-two", expectedRevision: 0 },
-  ] };
-  const result = { status: "recalled", receipt: {
-    type: "user_message_steer_recalled", id: "receipt", threadId: "thread",
-    createdAt: "2026-11-02T00:00:00Z", recallId: recall.recallId, targets: recall.targets,
-  }, messages: [] };
+  const recall = {
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
+      { queuedItemId: "one", clientId: "client-one", expectedRevision: 2 },
+      { queuedItemId: "two", clientId: "client-two", expectedRevision: 0 },
+    ],
+  };
+  const result = {
+    status: "recalled",
+    receipt: {
+      type: "user_message_steer_recalled",
+      id: "receipt",
+      threadId: "thread",
+      createdAt: "2026-11-02T00:00:00Z",
+      recallId: recall.recallId,
+      targets: recall.targets,
+    },
+    messages: [],
+  };
   const calls: unknown[] = [];
   const bridge = boundary(async (method, request) => {
     calls.push({ method, request });
@@ -421,22 +433,35 @@ test("whole-batch recall is allowlisted and its exact receipt survives real main
   });
   const reply = await bridge.request("zen/thread/steer/recall", recall);
   assert.deepEqual(reply, result);
-  assert.deepEqual(calls, [{ method: "zen/thread/steer/recall", request: recall }]);
+  assert.deepEqual(calls, [
+    { method: "zen/thread/steer/recall", request: recall },
+  ]);
 });
 
 test("recall conflict stays a known refusal after Electron strips thrown Error fields", async () => {
   const bridge = boundary(async () => {
-    throw Object.assign(new Error("Claim won"), { data: { zenCode: "steer_recall_conflict" } });
+    throw Object.assign(new Error("Claim won"), {
+      data: { zenCode: "steer_recall_conflict" },
+    });
   });
   const reply = await bridge.request("zen/thread/steer/recall", {
-    threadId: "thread", recallId: "recall", targets: [
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
       { queuedItemId: "one", clientId: "client-one", expectedRevision: 0 },
     ],
   });
-  assert.throws(() => unwrapQueueMutationIpcReply(reply as Parameters<
-    typeof unwrapQueueMutationIpcReply>[0]), (error: unknown) =>
-    typeof error === "object" && error !== null && "data" in error &&
-    (error.data as { zenCode: string }).zenCode === "steer_recall_conflict");
+  assert.throws(
+    () =>
+      unwrapQueueMutationIpcReply(
+        reply as Parameters<typeof unwrapQueueMutationIpcReply>[0],
+      ),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "data" in error &&
+      (error.data as { zenCode: string }).zenCode === "steer_recall_conflict",
+  );
 });
 
 test("lost recall ACK remains unknown data without falsely authorizing a write retry", async () => {
@@ -446,13 +471,23 @@ test("lost recall ACK remains unknown data without falsely authorizing a write r
     throw new Error("Transport closed after commit");
   });
   const reply = await bridge.request("zen/thread/steer/recall", {
-    threadId: "thread", recallId: "recall", targets: [
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
       { queuedItemId: "one", clientId: "client-one", expectedRevision: 0 },
     ],
   });
-  assert.equal((reply as { type: string }).type, "zenx.queue-outcome-unknown.v1");
+  assert.equal(
+    (reply as { type: string }).type,
+    "zenx.queue-outcome-unknown.v1",
+  );
   assert.equal((reply as { data?: unknown }).data, undefined);
-  assert.throws(() => unwrapQueueMutationIpcReply(reply as Parameters<
-    typeof unwrapQueueMutationIpcReply>[0]), /Transport closed/);
+  assert.throws(
+    () =>
+      unwrapQueueMutationIpcReply(
+        reply as Parameters<typeof unwrapQueueMutationIpcReply>[0],
+      ),
+    /Transport closed/,
+  );
   assert.equal(writes, 1);
 });

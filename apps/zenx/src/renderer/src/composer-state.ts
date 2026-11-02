@@ -156,10 +156,7 @@ export function beginComposerSubmission(
   clientObservation?: ClientSendObservation,
   timezone: () => string | undefined = clientTimeZone,
 ): ComposerState {
-  if (
-    state.submission?.status === "pending"
-  )
-    return state;
+  if (state.submission?.status === "pending") return state;
   const text = state.draft.text.trim();
   if (!composerDraftHasContent(state.draft)) return state;
   const retry =

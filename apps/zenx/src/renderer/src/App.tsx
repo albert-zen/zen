@@ -1,4 +1,8 @@
-import { createSteerRecallStore, restoreRecalledComposer, type SteerRecallStore } from "./steer-recall-state.js";
+import {
+  createSteerRecallStore,
+  restoreRecalledComposer,
+  type SteerRecallStore,
+} from "./steer-recall-state.js";
 import type { RecoveredSteerRecall } from "../../../../../src/steer-recall.js";
 import { SideChatQuoteChooser } from "./SideChatQuoteChooser.js";
 import { chooseSideChatQuoteTarget } from "./side-chat-quote-target.js";
@@ -2009,10 +2013,13 @@ function AppContent() {
       selectedThreadIdRef.current !== threadId ||
       recallPageRef.current !== "agent" ||
       archivingThreadIdsRef.current.has(threadId)
-    ) return false;
+    )
+      return false;
     let restored = false;
     updateComposer(threadId, (state) => {
-      const next = restoreRecalledComposer(state, result, () => crypto.randomUUID());
+      const next = restoreRecalledComposer(state, result, () =>
+        crypto.randomUUID(),
+      );
       restored = next !== state;
       return next;
     });
@@ -2274,9 +2281,7 @@ function AppContent() {
     if (intent !== "start" || expectedTurnId !== null) return;
     const current = newThreadDraftRef.current;
     if (current === null) return;
-    if (
-      isCompactCommand(current.composer.draft.text)
-    ) {
+    if (isCompactCommand(current.composer.draft.text)) {
       await handleCompactCommand({
         threadId: null,
         active: false,
@@ -2497,9 +2502,7 @@ function AppContent() {
       return;
     const threadId = threadDetail.id;
     const current = composerStatesRef.current[threadId] ?? emptyComposerState();
-    if (
-      isCompactCommand(current.draft.text)
-    ) {
+    if (isCompactCommand(current.draft.text)) {
       await handleCompactCommand({
         threadId,
         active:
@@ -5311,8 +5314,9 @@ function AgentSurface({
             }
             queueEditStore={queueEditStore}
             steerRecallStore={steerRecallStore}
-            onRestoreRecalled={(result) => onRestoreRecalled(threadDetail.id, result)}
-            onRefreshRecall={() => onRecoverQueuedEdit(threadDetail.id)}
+            onRestoreRecalled={(result) =>
+              onRestoreRecalled(threadDetail.id, result)
+            }
             onSteerQueued={(params) =>
               requestQueuedSteer(params, () =>
                 onRecoverQueuedEdit(params.threadId),

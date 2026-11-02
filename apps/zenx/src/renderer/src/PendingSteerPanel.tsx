@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import type { CanonicalItem, SteerRecalledItem } from "../../../../../src/item.js";
+import type {
+  CanonicalItem,
+  SteerRecalledItem,
+} from "../../../../../src/item.js";
 import {
   recoverSteerRecall,
   type PendingSteerInput,
@@ -26,7 +29,6 @@ export interface PendingSteerPanelProps {
   runningTurnId: string | null;
   store?: SteerRecallStore;
   onRestore?(result: RecoveredSteerRecall): boolean;
-  onRefresh?(): void;
 }
 
 /** Native pending control facts only; receipt never means model consumption. */
@@ -34,7 +36,11 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   const { t } = useTranslation("shell");
   const [fallback] = useState(createSteerRecallStore);
   const store = props.store ?? fallback;
-  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+  const snapshot = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
   const session = snapshot.sessions[props.threadId];
   const owner = useRef(Symbol("recall-view"));
   const mounted = useRef(true);
@@ -44,7 +50,9 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   const receiptItems = props.items.filter(
@@ -52,16 +60,22 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       item.type === "user_message_steer_recalled" &&
       item.threadId === props.threadId,
   );
-  if (session?.result && !receiptItems.some(
-    (item) => item.id === session.result!.receipt.id,
-  )) receiptItems.push(session.result.receipt);
-  const recoverable = receiptItems.filter((item) => !snapshot.applied.has(item.id));
+  if (
+    session?.result &&
+    !receiptItems.some((item) => item.id === session.result!.receipt.id)
+  )
+    receiptItems.push(session.result.receipt);
+  const recoverable = receiptItems.filter(
+    (item) => !snapshot.applied.has(item.id),
+  );
   const recalledIds = new Set(
     session?.result?.receipt.targets.map((target) => target.queuedItemId) ?? [],
   );
   const pending = props.pending.filter((item) => !recalledIds.has(item.id));
   const busy = session?.phase === "pending" || session?.phase === "unknown";
-  const held = pending.some((item) => item.expectedTurnId !== props.runningTurnId);
+  const held = pending.some(
+    (item) => item.expectedTurnId !== props.runningTurnId,
+  );
   const supported = pending.every(
     (item) => queuedInputDraft(item.input, item.id, item.clientId) !== null,
   );
@@ -76,15 +90,17 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       attempt.owner === owner.current &&
       latest.current.threadId === attempt.request.threadId &&
       latest.current.onRestore?.(result)
-    ) store.applied(result.receipt.id);
-    latest.current.onRefresh?.();
+    )
+      store.applied(result.receipt.id);
   };
 
   useEffect(() => {
     const current = store.getSnapshot().sessions[props.threadId];
     if (current?.phase !== "pending" && current?.phase !== "unknown") return;
     const recovered = recoverSteerRecall(
-      props.items, props.threadId, current.request.recallId,
+      props.items,
+      props.threadId,
+      current.request.recallId,
     );
     if (recovered !== undefined) {
       const outcome = resolveRecallRead(current.request, props.items);
@@ -100,21 +116,34 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       });
       if (recovered.thread.id !== attempt.request.threadId)
         throw new Error("Mismatched recovery Thread");
-      if (store.getSnapshot().sessions[attempt.request.threadId]?.request.recallId !==
-        attempt.request.recallId ||
-        store.getSnapshot().sessions[attempt.request.threadId]?.result) return;
-      const outcome = resolveRecallRead(attempt.request, recovered.thread.items);
+      if (
+        store.getSnapshot().sessions[attempt.request.threadId]?.request
+          .recallId !== attempt.request.recallId ||
+        store.getSnapshot().sessions[attempt.request.threadId]?.result
+      )
+        return;
+      const outcome = resolveRecallRead(
+        attempt.request,
+        recovered.thread.items,
+      );
       if (outcome.state === "recalled") finish(attempt, outcome.result);
-      else store.set(attempt.request.threadId, {
-        ...attempt,
-        phase: outcome.state === "conflict" ? "failed" : "unknown",
-        error: t(outcome.state === "conflict" ? "steerRecallConflict" : "steerRecallUnknown"),
-      });
-      latest.current.onRefresh?.();
+      else
+        store.set(attempt.request.threadId, {
+          ...attempt,
+          phase: outcome.state === "conflict" ? "failed" : "unknown",
+          error: t(
+            outcome.state === "conflict"
+              ? "steerRecallConflict"
+              : "steerRecallUnknown",
+          ),
+        });
     } catch {
-      if (store.getSnapshot().sessions[attempt.request.threadId]?.request.recallId !==
-        attempt.request.recallId ||
-        store.getSnapshot().sessions[attempt.request.threadId]?.result) return;
+      if (
+        store.getSnapshot().sessions[attempt.request.threadId]?.request
+          .recallId !== attempt.request.recallId ||
+        store.getSnapshot().sessions[attempt.request.threadId]?.result
+      )
+        return;
       store.set(attempt.request.threadId, {
         ...attempt,
         phase: "unknown",
@@ -125,8 +154,13 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
 
   const recall = async () => {
     const current = store.getSnapshot().sessions[props.threadId];
-    if (current?.phase === "pending" || current?.phase === "unknown" ||
-      pending.length === 0 || props.onRestore === undefined) return;
+    if (
+      current?.phase === "pending" ||
+      current?.phase === "unknown" ||
+      pending.length === 0 ||
+      props.onRestore === undefined
+    )
+      return;
     const request: NativeSteerRecallParams = {
       threadId: props.threadId,
       recallId: crypto.randomUUID(),
@@ -149,19 +183,38 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
       finish(attempt, validateRecallReply(request, reply));
     } catch (error) {
       const current = store.getSnapshot().sessions[attempt.request.threadId];
-      if (current?.request.recallId !== attempt.request.recallId || current.result) return;
-      const code = typeof error === "object" && error !== null &&
-        "data" in error && typeof error.data === "object" &&
-        error.data !== null && "zenCode" in error.data
-        ? error.data.zenCode : undefined;
-      if (["steer_recall_conflict", "idempotency_conflict", "invalid_request",
-        "steer_recall_unsupported_input", "operation_forbidden",
-        "thread_not_found"].includes(String(code))) {
+      if (
+        current?.request.recallId !== attempt.request.recallId ||
+        current.result
+      )
+        return;
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "data" in error &&
+        typeof error.data === "object" &&
+        error.data !== null &&
+        "zenCode" in error.data
+          ? error.data.zenCode
+          : undefined;
+      if (
+        [
+          "steer_recall_conflict",
+          "idempotency_conflict",
+          "invalid_request",
+          "steer_recall_unsupported_input",
+          "operation_forbidden",
+          "thread_not_found",
+        ].includes(String(code))
+      ) {
         store.set(props.threadId, {
           ...attempt,
           phase: "failed",
-          error: t(code === "steer_recall_unsupported_input"
-            ? "steerRecallUnsupported" : "steerRecallConflict"),
+          error: t(
+            code === "steer_recall_unsupported_input"
+              ? "steerRecallUnsupported"
+              : "steerRecallConflict",
+          ),
         });
       } else await readOutcome(attempt);
     }
@@ -169,9 +222,10 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
 
   const restore = (receipt: SteerRecalledItem) => {
     if (store.getSnapshot().applied.has(receipt.id)) return;
-    const result = session?.result?.receipt.id === receipt.id
-      ? session.result
-      : recoverSteerRecall(props.items, props.threadId, receipt.recallId);
+    const result =
+      session?.result?.receipt.id === receipt.id
+        ? session.result
+        : recoverSteerRecall(props.items, props.threadId, receipt.recallId);
     if (result === undefined || recalledDrafts(result) === null) return;
     if (props.onRestore?.(result)) {
       store.applied(receipt.id);
@@ -183,51 +237,106 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
   if (pending.length === 0 && recoverable.length === 0 && !session?.error)
     return null;
   return (
-    <section className="pending-steer-panel" aria-label={t("steerPendingLabel")}>
-      {pending.length > 0 ? <>
-        <div className="pending-steer-heading">
-          <strong>{t("steerPendingCount", { count: pending.length })}</strong>
-          <button type="button" onClick={() => void recall()}
-            disabled={busy || !supported || props.onRestore === undefined}>
-            {session?.phase === "pending" ? t("steerRecalling") : t("steerRecallAll")}
-          </button>
-        </div>
-        <p>{t(held ? "steerHeldNotice" : "steerWaitingNotice")}</p>
-        {!supported ? <p role="status">{t("steerRecallUnsupported")}</p> : null}
-        <details>
-          <summary>{t("steerPendingDetails")}</summary>
-          <ol>{pending.map((item) => {
-            const draft = queuedInputDraft(item.input, item.id, item.clientId);
-            const text = draft === null ? "" : parseSkillDraft(draft.text).text;
-            return <li key={item.id}>
-              {text.slice(0,240) || t("steerStructuredInput")}
-              {draft?.images.length ? ` · ${t("steerImageCount", { count: draft.images.length })}` : ""}
-            </li>;
-          })}</ol>
-        </details>
-      </> : null}
+    <section
+      className="pending-steer-panel"
+      aria-label={t("steerPendingLabel")}
+    >
+      {pending.length > 0 ? (
+        <>
+          <div className="pending-steer-heading">
+            <strong>{t("steerPendingCount", { count: pending.length })}</strong>
+            <button
+              type="button"
+              onClick={() => void recall()}
+              disabled={busy || !supported || props.onRestore === undefined}
+            >
+              {session?.phase === "pending"
+                ? t("steerRecalling")
+                : t("steerRecallAll")}
+            </button>
+          </div>
+          <p>{t(held ? "steerHeldNotice" : "steerWaitingNotice")}</p>
+          {!supported ? (
+            <p role="status">{t("steerRecallUnsupported")}</p>
+          ) : null}
+          <details>
+            <summary>{t("steerPendingDetails")}</summary>
+            <ol>
+              {pending.map((item) => {
+                const draft = queuedInputDraft(
+                  item.input,
+                  item.id,
+                  item.clientId,
+                );
+                const text =
+                  draft === null ? "" : parseSkillDraft(draft.text).text;
+                return (
+                  <li key={item.id}>
+                    {text.slice(0, 240) || t("steerStructuredInput")}
+                    {draft?.images.length
+                      ? ` · ${t("steerImageCount", { count: draft.images.length })}`
+                      : ""}
+                  </li>
+                );
+              })}
+            </ol>
+          </details>
+        </>
+      ) : null}
       {session?.error ? <p role="status">{session.error}</p> : null}
       {restoreError ? <p role="status">{restoreError}</p> : null}
-      {session?.phase === "unknown" ? <button type="button"
-        onClick={() => void readOutcome(session)}>{t("steerRecallCheck")}</button> : null}
-      {recoverable.length > 0 ? <details className="steer-recovery"
-        open={session?.phase === "ready" && session.result !== undefined &&
-          !snapshot.applied.has(session.result.receipt.id)}>
-        <summary>{t("steerRecoveryAvailable", { count: recoverable.length })}</summary>
-        <p>{t("steerRecoveryNotice")}</p>
-        {recoverable.map((receipt) => <div key={receipt.id}>
-          <time dateTime={receipt.createdAt}>{new Date(receipt.createdAt).toLocaleString(
-            undefined, { timeZoneName: "short" },
-          )}</time>
-          {confirm === receipt.id ? <>
-            <p>{t("steerRecoveryConfirm")}</p>
-            <button type="button" onClick={() => restore(receipt)}
-              disabled={props.onRestore === undefined}>{t("steerRecoveryMerge")}</button>
-            <button type="button" onClick={() => setConfirm(null)}>{t("steerRecoveryCancel")}</button>
-          </> : <button type="button" onClick={() => setConfirm(receipt.id)}
-            disabled={props.onRestore === undefined}>{t("steerRecoveryRestore")}</button>}
-        </div>)}
-      </details> : null}
+      {session?.phase === "unknown" ? (
+        <button type="button" onClick={() => void readOutcome(session)}>
+          {t("steerRecallCheck")}
+        </button>
+      ) : null}
+      {recoverable.length > 0 ? (
+        <details
+          className="steer-recovery"
+          open={
+            session?.phase === "ready" &&
+            session.result !== undefined &&
+            !snapshot.applied.has(session.result.receipt.id)
+          }
+        >
+          <summary>
+            {t("steerRecoveryAvailable", { count: recoverable.length })}
+          </summary>
+          <p>{t("steerRecoveryNotice")}</p>
+          {recoverable.map((receipt) => (
+            <div key={receipt.id}>
+              <time dateTime={receipt.createdAt}>
+                {new Date(receipt.createdAt).toLocaleString(undefined, {
+                  timeZoneName: "short",
+                })}
+              </time>
+              {confirm === receipt.id ? (
+                <>
+                  <p>{t("steerRecoveryConfirm")}</p>
+                  <button
+                    type="button"
+                    onClick={() => restore(receipt)}
+                    disabled={props.onRestore === undefined}
+                  >
+                    {t("steerRecoveryMerge")}
+                  </button>
+                  <button type="button" onClick={() => setConfirm(null)}>
+                    {t("steerRecoveryCancel")}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirm(receipt.id)}
+                  disabled={props.onRestore === undefined}
+                >
+                  {t("steerRecoveryRestore")}
+                </button>
+              )}
+            </div>
+          ))}
+        </details>
+      ) : null}
     </section>
   );
 }

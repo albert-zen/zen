@@ -8158,3 +8158,209 @@ test("Add to side chat keeps a delayed local draft in its original workspace wit
     await unmountApp(harness);
   }
 });
+
+
+for (const claimWins of [false, true]) {
+  test("complete App and real native Host: " + (claimWins
+    ? "claimed batch cannot be recalled or overwrite a newer draft"
+    : "whole pending batch restores into the latest Composer before any model claim"),
+  { timeout: 15_000 }, async () => {
+    const { fixture } = await import("../../../test/thread-message-fixture.js");
+    const { NativeConnection } = await import("../../../src/protocol/native/connection.js");
+    const { NativeRecoveryProjection } = await import("../../../src/protocol/native/recovery.js");
+    const { pendingSteerMessages } = await import("../../../src/steer-recall.js");
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const secondEntered = deferred<void>();
+    const releaseSecond = deferred<void>();
+    const recallEntered = deferred<void>();
+    const releaseRecall = deferred<void>();
+    const observed: import("../../../src/model.js").ModelRequest[] = [];
+    const f = fixture({
+      provider: "fake",
+      async *stream(request) {
+        observed.push(request);
+        if (observed.length === 1) {
+          entered.resolve();
+          await release.promise;
+        } else {
+          secondEntered.resolve();
+          await releaseSecond.promise;
+        }
+        yield { type: "text_delta", delta: "Synthetic gated provider reply" };
+      },
+    });
+    const native = new NativeRecoveryProjection(f.server);
+    const listeners = new Set<Parameters<Window["zenx"]["protocol"]["onNotification"]>[0]>();
+    const replies = new Map<number, {
+      resolve(value: unknown): void; reject(reason: unknown): void;
+    }>();
+    let nextId = 0;
+    const calls: string[] = [];
+    const connection = new NativeConnection({
+      appServer: f.server,
+      projection: native,
+      send(message) {
+        if ("id" in message && typeof message.id === "number") {
+          const waiter = replies.get(message.id);
+          if (!waiter) return;
+          replies.delete(message.id);
+          if ("error" in message) waiter.reject(Object.assign(
+            new Error(message.error.message), { data: message.error.data }));
+          else if ("result" in message) waiter.resolve(message.result);
+        } else if ("method" in message) {
+          for (const listener of listeners) listener(message.method, message.params);
+        }
+      },
+    });
+    const request = async (method: string, params?: unknown): Promise<unknown> => {
+      calls.push(method);
+      if (method === "zen/thread/steer/recall" && claimWins) {
+        recallEntered.resolve();
+        await releaseRecall.promise;
+      }
+      const id = ++nextId;
+      return await new Promise((resolve, reject) => {
+        replies.set(id, { resolve, reject });
+        void connection.receive({ id, method, params }).catch(reject);
+      });
+    };
+    await request("zen/initialize", {});
+    const target = await f.server.startThread();
+    const active = await f.server.startTurn(target.id, "Initial model input");
+    await entered.promise;
+    let harness: AppHarness | undefined;
+    try {
+      harness = await mountApp({
+        projects: [{ key: target.cwd, workspace: target.cwd, configured: true,
+          isDefault: true, threadIds: [target.id] }],
+        unavailableThreadIds: [], lastUsedWorkspace: target.cwd,
+      }, {
+        composerSendMode: "soft",
+        threads: async (archived) => archived ? [] : [
+          { ...summary(false, target.id, "Native recall Thread", target.cwd),
+            status: "active" },
+        ],
+        request,
+        onNotification: (listener) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+      });
+      let composer = await selectedComposer();
+      for (const text of ["First native pending input", "Second native pending input"]) {
+        await setTextareaValue(composer, text);
+        const send = await waitFor(() =>
+          document.querySelector<HTMLButtonElement>(".composer-actions .action-orb.send"));
+        await invokePrimarySubmit(send);
+        await waitFor(() => composer.value === "");
+      }
+      let snapshot = await f.server.readThread(target.id);
+      assert.equal(pendingSteerMessages(snapshot.items).length, 2);
+      assert.equal(snapshot.items.filter((item) => item.type === "user_message").length, 1);
+      assert.equal(observed.length, 1);
+      await setTextareaValue(composer, "Latest independent draft");
+      const recall = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(".pending-steer-heading button"));
+      await act(async () => { recall.click(); });
+      if (claimWins) {
+        await recallEntered.promise;
+        await act(async () => { release.resolve(); await secondEntered.promise; });
+        await act(async () => { releaseRecall.resolve(); });
+        await waitFor(() => document.querySelector(".pending-steer-panel")?.textContent
+          ?.includes(i18n.t("shell:steerRecallConflict")));
+        assert.equal(composer.value, "Latest independent draft");
+        snapshot = await f.server.readThread(target.id);
+        assert.equal(snapshot.items.filter((item) => item.type === "user_message_steer_recalled").length, 0);
+        assert.equal(snapshot.items.filter((item) => item.type === "user_message").length, 3);
+        assert.equal(observed.length, 2);
+      } else {
+        await waitFor(() => composer.value ===
+          "First native pending input\n\nSecond native pending input\n\nLatest independent draft");
+        snapshot = await f.server.readThread(target.id);
+        assert.equal(pendingSteerMessages(snapshot.items).length, 0);
+        assert.equal(snapshot.items.filter((item) => item.type === "user_message_steer_recalled").length, 1);
+        assert.equal(snapshot.items.filter((item) => item.type === "user_message_queued").length, 2);
+        assert.equal(snapshot.items.filter((item) => item.type === "user_message").length, 1);
+        await act(async () => { release.resolve(); await active.done; });
+        assert.equal(observed.length, 1);
+        assert.doesNotMatch(JSON.stringify(observed), /First native pending input|Second native pending input/);
+      }
+      assert.equal(calls.filter((method) => method === "zen/thread/steer/recall").length, 1);
+      assert.equal((await f.server.readThread(target.id)).turns.length, 1);
+    } finally {
+      release.resolve();
+      releaseSecond.resolve();
+      releaseRecall.resolve();
+      await active.done;
+      if (harness) await unmountApp(harness);
+      connection.close();
+      native.close();
+    }
+  });
+}
+
+test("complete App late recall acknowledgement never navigates or refreshes the newly selected Thread", async () => {
+  const { pendingSteerMessages, recoverSteerRecall } = await import("../../../src/steer-recall.js");
+  const first = nativeRecoveryForThread(runningThread());
+  first.thread.items.push({
+    type: "user_message_queued", id: "pending-one", threadId: "thread-1",
+    createdAt: "2026-11-02T00:00:00Z", clientId: "pending-client",
+    input: [{ type: "text", text: "Recall only into Thread one" }],
+    deliveryMode: "steer", expectedTurnId: "turn-1",
+  });
+  const second = nativeRecoveryForThread({ ...liveThread(), id: "thread-2", name: "Thread two" });
+  const ack = deferred<import("../../../src/protocol/native/wire.js").NativeSteerRecallResult>();
+  let requested: import("../../../src/protocol/native/wire.js").NativeSteerRecallParams | undefined;
+  const resumes: string[] = [];
+  const harness = await mountApp({
+    projects: [{ key: "/work/zen", workspace: "/work/zen", configured: true,
+      isDefault: true, threadIds: ["thread-1", "thread-2"] }],
+    unavailableThreadIds: [], lastUsedWorkspace: "/work/zen",
+  }, {
+    threads: async () => [summary(false), summary(false, "thread-2", "Thread two")],
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") {
+        const id = (params as { threadId: string }).threadId;
+        resumes.push(id);
+        return id === "thread-1" ? first : second;
+      }
+      if (method === "zen/thread/steer/recall") {
+        requested = params as typeof requested;
+        return ack.promise;
+      }
+      throw new Error("Unexpected navigation side effect: " + method);
+    },
+  });
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Thread one draft");
+    const recall = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".pending-steer-heading button"));
+    await act(async () => recall.click());
+    assert.ok(requested);
+    const row = [...document.querySelectorAll<HTMLButtonElement>(".thread-row")]
+      .find((entry) => entry.textContent?.includes("Thread two"));
+    assert.ok(row);
+    await act(async () => row.click());
+    await waitFor(() => resumes.includes("thread-2"));
+    const secondComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"));
+    await setTextareaValue(secondComposer, "Thread two independent draft");
+    const receipt: import("../../../src/item.js").SteerRecalledItem = {
+      type: "user_message_steer_recalled", id: "recall-receipt", threadId: "thread-1",
+      createdAt: "2026-11-02T00:00:01Z", recallId: requested.recallId, targets: requested.targets,
+    };
+    first.thread.items.push(receipt);
+    const result = recoverSteerRecall(first.thread.items, "thread-1", requested.recallId)!;
+    assert.ok(result);
+    const before = [...resumes];
+    await act(async () => ack.resolve({ ...result, status: "recalled" }));
+    assert.deepEqual(resumes, before);
+    assert.equal(secondComposer.value, "Thread two independent draft");
+    assert.equal(pendingSteerMessages(first.thread.items).length, 0);
+    assert.equal(document.querySelector(".pending-steer-panel"), null);
+  } finally {
+    await unmountApp(harness);
+  }
+});

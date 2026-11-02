@@ -70,9 +70,9 @@ export type ProtocolIpcResult<M extends ClientRequestMethod> =
       ? QueueEditIpcReply
       : M extends "zen/thread/steer/recall"
         ? NativeSteerRecallResult | QueueEditIpcRejection | QueueIpcUnknown
-      : M extends "zen/thread/queue/steer"
-        ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
-        : ClientRequestResults[M];
+        : M extends "zen/thread/queue/steer"
+          ? NativeQueueSteerResult | QueueEditIpcRejection | QueueIpcUnknown
+          : ClientRequestResults[M];
 
 export function queueEditIpcRejection(
   error: unknown,
@@ -99,7 +99,8 @@ export function unwrapQueueEditIpcReply(
 }
 
 export function unwrapQueueMutationIpcReply<
-  T extends NativeQueueEditResult | NativeQueueSteerResult | NativeSteerRecallResult,
+  T extends
+    NativeQueueEditResult | NativeQueueSteerResult | NativeSteerRecallResult,
 >(reply: T | QueueEditIpcRejection | QueueIpcUnknown): T {
   if (isRecord(reply) && reply.type === unknownType) {
     // No rejection code: callers must retain read-only receipt recovery, never resend.
