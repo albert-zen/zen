@@ -1676,6 +1676,10 @@ ZenX conversation action contexts use stable UI delegates whose targets update o
 
 Composer autosizing restores an empty textarea to its CSS/rows baseline without synchronous geometry reads. Nonempty content retains min/max bounded measurement; one width observer lives with the actual editor rather than each draft revision. This is a narrow layout experiment, not a claimed long-history latency acceptance; transcript following, history retention and native admission are unchanged.
 
+Canonical presentation metadata is scoped to each rendered Turn. Full trusted canonical indexes still resolve input, attachment and cross-Turn tool-target dependencies; unchanged per-Turn bundles reuse committed references so unrelated appends do not broadcast through historical message contexts. Current fork authority is checked against the latest committed viewport/thread membership, debug state and mount lifetime, never a cached row bundle. Recovery, missing items and true late backfills invalidate affected bundles rather than freezing history.
+
 ### Browser operation presentation and turn cleanup
 
 Browser operation previews are an ephemeral projection of exact Host target activity in the existing workspace tab rail; operation admission order selects the preview, while turn completion releases existing pages and retires temporary pages/observations without persisting a second execution state.
+
+The per-Turn presentation bundle also preserves quote-source metadata introduced by native Item quotations: full canonical call/result pairing happens before partitioning, and unchanged member identities reuse the quote map. Late result additions, replacements, and removals invalidate the owning quote consumer without freezing its canonical source.

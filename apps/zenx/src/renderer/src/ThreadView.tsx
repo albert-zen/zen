@@ -150,6 +150,13 @@ import { activeTurn } from "./thread-view-state.js";
 import type { PluginUiRegistry } from "./plugin-ui-host.js";
 import { ToolResultRenderer } from "./ToolResultRenderer.js";
 import { ToolActionLink, ToolActionTargetsProvider } from "./ToolActionLink.js";
+import { projectToolActionTargets } from "./tool-action-targets.js";
+import {
+  indexTurnCanonicalPresentation,
+  indexCanonicalQuoteItems,
+  type TurnCanonicalPresentation,
+  type TurnCanonicalPresentationIndex,
+} from "./turn-canonical-presentation.js";
 import {
   MessageTargetNavigationContext,
   useMessageTargetNavigation,
@@ -244,7 +251,7 @@ const CanonicalInputContentContext = createContext<
 
 const CanonicalMessageForkContext = createContext<{
   threadId: string;
-  items: Map<string, string | undefined>;
+  items: ReadonlyMap<string, string | undefined>;
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
@@ -378,6 +385,7 @@ interface ThreadViewProps {
 const EMPTY_APPROVALS: readonly ApprovalCardState[] = [];
 const EMPTY_WAKEUPS: readonly TriggerHistoryEntry[] = [];
 const EMPTY_ATTACHMENTS: ZenXThreadAttachmentProjection = {};
+const EMPTY_FORK_ITEMS: ReadonlyMap<string, string | undefined> = new Map();
 const unavailableImageReader = async (): Promise<Uint8Array> => {
   throw new Error(i18n.t("shell:imageReaderUnavailable"));
 };
@@ -385,7 +393,9 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 export function ThreadView(props: ThreadViewProps) {
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
-  debuggingRef.current = debugging;
+  useLayoutEffect(() => {
+    debuggingRef.current = debugging;
+  }, [debugging]);
   const readingState = useThreadReadingState(
     props.thread?.id ?? props.composerId,
   );
@@ -422,23 +432,11 @@ export function ThreadView(props: ThreadViewProps) {
           },
     [props.thread?.id, items],
   );
-  const quoteItems = useMemo(() => {
-    const index = new Map<string, CanonicalItem[]>();
-    const calls = new Map<string, string>();
-    for (const item of items ?? []) {
-      index.set(item.id, [item]);
-      if (item.type === "tool_call")
-        calls.set(JSON.stringify([item.turnId, item.callId]), item.id);
-    }
-    for (const item of items ?? []) {
-      if (item.type !== "tool_result") continue;
-      const callId = calls.get(JSON.stringify([item.turnId, item.callId]));
-      if (callId) index.get(callId)?.push(item);
-    }
-    return index;
-  }, [items]);
+  const quoteItems = useMemo(() => indexCanonicalQuoteItems(items ?? []), [items]);
   const forkSourceRef = useRef(forkSource);
-  forkSourceRef.current = forkSource;
+  useLayoutEffect(() => {
+    forkSourceRef.current = forkSource;
+  }, [forkSource]);
   const mounted = useRef(true);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -446,71 +444,108 @@ export function ThreadView(props: ThreadViewProps) {
       mounted.current = false;
     };
   }, []);
-  const forkContext = useMemo(
-    () =>
-      forkSource === null
-        ? null
-        : {
-            ...forkSource,
-            // A Turn finishing may fold or remount its message controls. Only leaving
-            // the source viewport or losing the canonical Item invalidates ownership.
-            isCurrent: (itemId: string) =>
-              mounted.current &&
-              !debuggingRef.current &&
-              forkSourceRef.current?.threadId === forkSource.threadId &&
-              forkSourceRef.current.items.has(itemId),
-          },
-    [forkSource],
+  const sourceThreadId = props.thread?.id ?? null;
+  const isForkCurrent = useCallback(
+    (itemId: string) =>
+      mounted.current &&
+      !debuggingRef.current &&
+      sourceThreadId !== null &&
+      forkSourceRef.current?.threadId === sourceThreadId &&
+      forkSourceRef.current.items.has(itemId),
+    [sourceThreadId],
   );
+  const displayedThread = props.thread ?? props.contextPreview;
+  const toolTargets = useMemo(
+    () =>
+      projectToolActionTargets(
+        props.thread?.id ?? "",
+        props.thread?.canonicalItems ?? [],
+      ),
+    [props.thread?.id, props.thread?.canonicalItems],
+  );
+  const attachments =
+    canonicalAttachments ?? props.threadAttachments ?? EMPTY_ATTACHMENTS;
+  const committedPresentation = useRef<
+    TurnCanonicalPresentationIndex | undefined
+  >(undefined);
+  const presentation = useMemo(
+    () =>
+      indexTurnCanonicalPresentation(
+        JSON.stringify([
+          sourceThreadId,
+          displayedThread?.id ?? props.composerId,
+        ]),
+        displayedThread?.turns ?? [],
+        canonicalInputs,
+        forkSource?.items ?? EMPTY_FORK_ITEMS,
+        attachments,
+        toolTargets,
+        committedPresentation.current,
+        quoteItems,
+      ),
+    [
+      sourceThreadId,
+      displayedThread?.id,
+      displayedThread?.turns,
+      props.composerId,
+      canonicalInputs,
+      forkSource,
+      attachments,
+      toolTargets,
+      quoteItems,
+    ],
+  );
+  useLayoutEffect(() => {
+    committedPresentation.current = presentation;
+  }, [presentation]);
   // Native history and its image placeholders commit together, even while a
   // separate media refresh/payload read is pending. A newer canonical snapshot
   // also removes old references synchronously; never merge stale Host results.
 
   return (
-    <ToolActionTargetsProvider thread={props.thread}>
-      <ThreadReadingContext.Provider value={readingState}>
-        <CanonicalInputContentContext.Provider value={canonicalInputs}>
-          <CanonicalQuoteItemsContext.Provider value={quoteItems}>
-            <CanonicalMessageForkContext.Provider value={forkContext}>
-              <MessageSourceViewportContext.Provider
-                value={props.thread?.id ?? null}
-              >
-                <div className="thread-conversation-surface">
-                  {debugging && props.thread && items !== undefined ? (
-                    <ThreadDebugger
-                      key={props.thread.id}
-                      thread={props.thread}
-                      items={props.thread.itemList}
-                      currentSettings={{
-                        provider: props.thread.modelProvider,
-                        model: props.selectedModel,
-                        effort: props.selectedReasoningEffort,
-                        permission: props.permissionMode,
-                      }}
-                      localModelDebug={props.localModelDebug}
-                      onExit={props.onExitDebug}
-                      onOpenMessageLink={props.onOpenMessageLink}
-                      onReadAttachment={props.onReadAttachment}
-                    />
-                  ) : (
-                    <ThreadViewContent
-                      {...props}
-                      threadAttachments={
-                        canonicalAttachments ?? props.threadAttachments
-                      }
-                    />
-                  )}
-                </div>
-              </MessageSourceViewportContext.Provider>
-            </CanonicalMessageForkContext.Provider>
-          </CanonicalQuoteItemsContext.Provider>
-        </CanonicalInputContentContext.Provider>
-      </ThreadReadingContext.Provider>
-    </ToolActionTargetsProvider>
+    <ThreadReadingContext.Provider value={readingState}>
+      <MessageSourceViewportContext.Provider value={props.thread?.id ?? null}>
+        <div className="thread-conversation-surface">
+          {debugging && props.thread && items !== undefined ? (
+            <ThreadDebugger
+              key={props.thread.id}
+              thread={props.thread}
+              items={props.thread.itemList}
+              currentSettings={{
+                provider: props.thread.modelProvider,
+                model: props.selectedModel,
+                effort: props.selectedReasoningEffort,
+                permission: props.permissionMode,
+              }}
+              localModelDebug={props.localModelDebug}
+              onExit={props.onExitDebug}
+              onOpenMessageLink={props.onOpenMessageLink}
+              onReadAttachment={props.onReadAttachment}
+            />
+          ) : (
+            <ThreadViewContent
+              {...props}
+              threadAttachments={attachments}
+              canonicalPresentation={presentation}
+              sourceThreadId={sourceThreadId}
+              isForkCurrent={isForkCurrent}
+            />
+          )}
+        </div>
+      </MessageSourceViewportContext.Provider>
+    </ThreadReadingContext.Provider>
   );
 }
 
+interface ThreadViewContentProps extends ThreadViewProps {
+  canonicalPresentation: TurnCanonicalPresentationIndex;
+  sourceThreadId: string | null;
+  isForkCurrent(itemId: string): boolean;
+}
 function ThreadViewContent({
+  canonicalPresentation,
+  sourceThreadId,
+  isForkCurrent,
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -567,7 +602,7 @@ function ThreadViewContent({
   onRespondToApproval,
   onSubmit,
   onOpenMessageLink,
-}: ThreadViewProps) {
+}: ThreadViewContentProps) {
   useTranslation("shell");
   const readingState = useContext(ThreadReadingContext)!;
   const wakeups =
@@ -1446,7 +1481,12 @@ function ThreadViewContent({
             }
             usage={threadUsage?.turns[row.turn.id]}
             wakeups={wakeups}
-            attachments={threadAttachments}
+            canonicalPresentation={canonicalPresentation.turns.get(
+              row.turn.id,
+            )!}
+            sourceThreadId={sourceThreadId}
+            isForkCurrent={isForkCurrent}
+            imageCwd={displayedThread?.cwd}
             onOpenImage={onOpenImage}
             onReadAttachment={onReadAttachment}
             pluginSnapshot={pluginSnapshot}
@@ -1471,7 +1511,10 @@ function ThreadViewContent({
       turnOutcomeItems,
       threadUsage,
       wakeups,
-      threadAttachments,
+      canonicalPresentation,
+      sourceThreadId,
+      isForkCurrent,
+      displayedThread?.cwd,
       onOpenImage,
       onReadAttachment,
       pluginSnapshot,
@@ -2598,7 +2641,10 @@ const TurnBlock = memo(function TurnBlock({
   contextPreview = false,
   index,
   wakeups,
-  attachments,
+  canonicalPresentation,
+  sourceThreadId,
+  isForkCurrent,
+  imageCwd,
   onOpenImage,
   onReadAttachment,
   pluginSnapshot,
@@ -2615,7 +2661,10 @@ const TurnBlock = memo(function TurnBlock({
   contextPreview?: boolean;
   index: number;
   wakeups: readonly TriggerHistoryEntry[];
-  attachments: ZenXThreadAttachmentProjection;
+  canonicalPresentation: TurnCanonicalPresentation;
+  sourceThreadId: string | null;
+  isForkCurrent(itemId: string): boolean;
+  imageCwd: string | undefined;
   onOpenImage(
     attachment: AttachmentRef,
     name: string,
@@ -2627,6 +2676,27 @@ const TurnBlock = memo(function TurnBlock({
   usage?: ModelUsageAggregate;
   failureDetail?: FailureItem | null;
 }) {
+  const attachments = canonicalPresentation.attachments;
+  const forkContext = useMemo(
+    () =>
+      sourceThreadId === null
+        ? null
+        : {
+            threadId: sourceThreadId,
+            items: canonicalPresentation.forkItems,
+            isCurrent: isForkCurrent,
+          },
+    [sourceThreadId, canonicalPresentation.forkItems, isForkCurrent],
+  );
+  const imageContext = useMemo(
+    () => ({
+      cwd: imageCwd,
+      attachments,
+      read: onReadAttachment,
+      open: onOpenImage,
+    }),
+    [imageCwd, attachments, onReadAttachment, onOpenImage],
+  );
   const { i18n: activeI18n } = useTranslation("shell");
   const turnStatus = contextPreview ? "interrupted" : turn.status;
   const projection = useMemo(
@@ -2717,151 +2787,168 @@ const TurnBlock = memo(function TurnBlock({
     );
   };
   return (
-    <section
-      ref={sectionRef}
-      className={`turn ${turn.status}`}
-      data-read-message-id={complete ? endItemId : undefined}
-      aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
-    >
-      {projection.inputItems.map(renderInputItem)}
-      {complete ? (
-        <button
-          className="turn-toggle"
-          type="button"
-          aria-expanded={expanded}
-          aria-controls={historyId}
-          onClick={() => {
-            setProtectedOpen(false);
-            setExpanded(!expanded);
-          }}
-        >
-          <span className="turn-work-label">
-            {(contextPreview && turn.status === "inProgress") ||
-            turn.status === "failed" ||
-            confirmedStopped
-              ? i18n.t("shell:turnActivityHistory")
-              : completedTurnLabel(turn)}
-          </span>
-          <Icon name="chevron-down" size={14} />
-        </button>
-      ) : (
-        <RunningTurnLabel
-          recovery={turn.liveRecovery}
-          // Input admission can precede context preparation. Only an observed
-          // pending compaction, before runtime output, claims Preparing.
-          preparing={
-            compactionPending &&
-            turn.items.every((item) =>
-              ["userMessage", "threadMessage", "hostMessage"].includes(
-                item.type,
-              ),
-            )
-          }
-          // turn_started is durable before the initial message is committed.
-          // Keep that preparation visible without claiming elapsed agent work
-          // ahead of the actual input (or an already-observed runtime item).
-          startedAt={
-            turn.liveRecovery || turn.items.length === 0 ? null : turn.startedAt
-          }
-          activity={activity}
-          stopping={stopping}
-          approval={approvals.length > 0}
-          compact={compactRunningStatus}
-        />
-      )}
-      {!complete || expanded ? (
-        <div className="turn-history" id={historyId}>
-          {projection.history.map((node) =>
-            node.kind === "input" ? (
-              renderInputItem(node.item)
-            ) : (
-              <DisplayNode
-                key={node.kind === "agent" ? node.item.id : node.id}
-                node={node}
-                activeProcess={
-                  !complete &&
-                  !stopping &&
-                  approvals.length === 0 &&
-                  node === latestProcess
-                }
-                turn={turn}
-                turnStatus={turnStatus}
-                approvals={approvals}
-                usage={usage}
-                pluginSnapshot={pluginSnapshot}
-                pluginUiRegistry={pluginUiRegistry}
-              />
-            ),
-          )}
-          {!complete && projection.finalItem !== null ? (
-            <AgentMessage
-              item={projection.finalItem}
-              showActions={false}
-              turn={turn}
-              usage={usage}
-            />
-          ) : null}
-        </div>
-      ) : null}
-      {complete && !expanded
-        ? projection.history
-            .filter(
-              (node): node is Extract<TurnDisplayNode, { kind: "input" }> =>
-                node.kind === "input",
-            )
-            .map((node) => renderInputItem(node.item))
-        : null}
-      {complete && projection.finalItem !== null ? (
-        <div className="turn-final">
-          <AgentMessage
-            item={projection.finalItem}
-            showActions
-            turn={turn}
-            usage={usage}
-          />
-        </div>
-      ) : null}
-      {projection.terminalFallback === null ? null : (
-        <div
-          className={`turn-outcome workflow-status${turn.status === "failed" ? " failed" : ""}`}
-          role="status"
-        >
-          <div className="turn-outcome-heading">
-            <Icon
-              name={turn.status === "failed" ? "warning" : "stop"}
-              size={14}
-            />
-            <strong>
-              {confirmedStopped
-                ? i18n.t("shell:stopped")
-                : turn.status === "failed"
-                  ? i18n.t(
-                      failureDetail?.retried
-                        ? "shell:automaticRetryStopped"
-                        : "shell:executionStopped",
+    <CanonicalQuoteItemsContext.Provider value={canonicalPresentation.quoteItems}>
+    <CanonicalInputContentContext.Provider value={canonicalPresentation.inputs}>
+      <CanonicalMessageForkContext.Provider value={forkContext}>
+        <ThreadImagesContext.Provider value={imageContext}>
+          <ToolActionTargetsProvider
+            thread={null}
+            targets={canonicalPresentation.toolTargets}
+          >
+            <section
+              ref={sectionRef}
+              className={`turn ${turn.status}`}
+              data-read-message-id={complete ? endItemId : undefined}
+              aria-label={i18n.t("shell:turnNumber", { number: index + 1 })}
+            >
+              {projection.inputItems.map(renderInputItem)}
+              {complete ? (
+                <button
+                  className="turn-toggle"
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls={historyId}
+                  onClick={() => {
+                    setProtectedOpen(false);
+                    setExpanded(!expanded);
+                  }}
+                >
+                  <span className="turn-work-label">
+                    {(contextPreview && turn.status === "inProgress") ||
+                    turn.status === "failed" ||
+                    confirmedStopped
+                      ? i18n.t("shell:turnActivityHistory")
+                      : completedTurnLabel(turn)}
+                  </span>
+                  <Icon name="chevron-down" size={14} />
+                </button>
+              ) : (
+                <RunningTurnLabel
+                  recovery={turn.liveRecovery}
+                  // Input admission can precede context preparation. Only an observed
+                  // pending compaction, before runtime output, claims Preparing.
+                  preparing={
+                    compactionPending &&
+                    turn.items.every((item) =>
+                      ["userMessage", "threadMessage", "hostMessage"].includes(
+                        item.type,
+                      ),
                     )
-                  : i18n.t("shell:interrupted")}
-            </strong>
-          </div>
-          {confirmedStopped ? (
-            <p>{i18n.t("shell:stoppedNote")}</p>
-          ) : turn.status === "failed" ? (
-            <TurnFailureOutcome
-              text={
-                failureDetail?.message ??
-                turn.error?.message ??
-                projection.terminalFallback ??
-                ""
-              }
-              retried={failureDetail?.retried}
-              diagnosticId={failureDetail?.diagnosticId}
-            />
-          ) : (
-            <p>{i18n.t("shell:interruptedNote")}</p>
-          )}
-        </div>
-      )}
-    </section>
+                  }
+                  // turn_started is durable before the initial message is committed.
+                  // Keep that preparation visible without claiming elapsed agent work
+                  // ahead of the actual input (or an already-observed runtime item).
+                  startedAt={
+                    turn.liveRecovery || turn.items.length === 0
+                      ? null
+                      : turn.startedAt
+                  }
+                  activity={activity}
+                  stopping={stopping}
+                  approval={approvals.length > 0}
+                  compact={compactRunningStatus}
+                />
+              )}
+              {!complete || expanded ? (
+                <div className="turn-history" id={historyId}>
+                  {projection.history.map((node) =>
+                    node.kind === "input" ? (
+                      renderInputItem(node.item)
+                    ) : (
+                      <DisplayNode
+                        key={node.kind === "agent" ? node.item.id : node.id}
+                        node={node}
+                        activeProcess={
+                          !complete &&
+                          !stopping &&
+                          approvals.length === 0 &&
+                          node === latestProcess
+                        }
+                        turn={turn}
+                        turnStatus={turnStatus}
+                        approvals={approvals}
+                        usage={usage}
+                        pluginSnapshot={pluginSnapshot}
+                        pluginUiRegistry={pluginUiRegistry}
+                      />
+                    ),
+                  )}
+                  {!complete && projection.finalItem !== null ? (
+                    <AgentMessage
+                      item={projection.finalItem}
+                      showActions={false}
+                      turn={turn}
+                      usage={usage}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+              {complete && !expanded
+                ? projection.history
+                    .filter(
+                      (
+                        node,
+                      ): node is Extract<TurnDisplayNode, { kind: "input" }> =>
+                        node.kind === "input",
+                    )
+                    .map((node) => renderInputItem(node.item))
+                : null}
+              {complete && projection.finalItem !== null ? (
+                <div className="turn-final">
+                  <AgentMessage
+                    item={projection.finalItem}
+                    showActions
+                    turn={turn}
+                    usage={usage}
+                  />
+                </div>
+              ) : null}
+              {projection.terminalFallback === null ? null : (
+                <div
+                  className={`turn-outcome workflow-status${turn.status === "failed" ? " failed" : ""}`}
+                  role="status"
+                >
+                  <div className="turn-outcome-heading">
+                    <Icon
+                      name={turn.status === "failed" ? "warning" : "stop"}
+                      size={14}
+                    />
+                    <strong>
+                      {confirmedStopped
+                        ? i18n.t("shell:stopped")
+                        : turn.status === "failed"
+                          ? i18n.t(
+                              failureDetail?.retried
+                                ? "shell:automaticRetryStopped"
+                                : "shell:executionStopped",
+                            )
+                          : i18n.t("shell:interrupted")}
+                    </strong>
+                  </div>
+                  {confirmedStopped ? (
+                    <p>{i18n.t("shell:stoppedNote")}</p>
+                  ) : turn.status === "failed" ? (
+                    <TurnFailureOutcome
+                      text={
+                        failureDetail?.message ??
+                        turn.error?.message ??
+                        projection.terminalFallback ??
+                        ""
+                      }
+                      retried={failureDetail?.retried}
+                      diagnosticId={failureDetail?.diagnosticId}
+                    />
+                  ) : (
+                    <p>{i18n.t("shell:interruptedNote")}</p>
+                  )}
+                </div>
+              )}
+            </section>
+          </ToolActionTargetsProvider>
+        </ThreadImagesContext.Provider>
+      </CanonicalMessageForkContext.Provider>
+    </CanonicalInputContentContext.Provider>
+    </CanonicalQuoteItemsContext.Provider>
   );
 });
 
