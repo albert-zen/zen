@@ -918,7 +918,63 @@ async function run() {
     ),
     "No compaction anywhere in observed baseline lifecycle",
   );
+  await capturePostTimingLayout();
   result.ok = true;
+}
+// Runs only after all three timed sends and final canonical verification.
+async function capturePostTimingLayout() {
+  const settle = () =>
+    evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+  await settle();
+  const history = await evaluate(
+    "(()=>{const root=document.querySelector('.messages-inner'),last=root?.lastElementChild,prior=last?.previousElementSibling;const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}};if(!root||!last?.matches('.turn')||!prior?.matches('.turn'))throw Error('Actual canonical tail Turns required');return {display:getComputedStyle(root).display,gap:parseFloat(getComputedStyle(root).rowGap),width:root.getBoundingClientRect().width,rows:[prior,last].map(e=>({rect:rect(e),display:getComputedStyle(e).display,marginTop:parseFloat(getComputedStyle(e).marginTop)||0,marginBottom:parseFloat(getComputedStyle(e).marginBottom)||0}))}})()",
+  );
+  assert.equal(history.gap, 24);
+  assert.ok(
+    history.rows.every(
+      (row) =>
+        row.display === "grid" && Math.abs(row.rect.width - history.width) < 1,
+    ),
+  );
+  const [prior, last] = history.rows;
+  assert.ok(
+    Math.abs(
+      last.rect.top -
+        prior.rect.top -
+        prior.rect.height -
+        history.gap -
+        prior.marginBottom -
+        last.marginTop,
+    ) < 1,
+    "Visible tail spacing preserves grid gap and existing margins",
+  );
+  await screenshot("messages-post-timing-history.png");
+  await click(
+    "document.querySelector('.new-thread-action:not(:disabled)')",
+    "Post-timing: open actual new Thread draft",
+  );
+  await until(
+    async () =>
+      await evaluate(
+        "Boolean(document.querySelector('.new-thread-draft-surface .new-thread-draft-empty'))",
+      ),
+    "actual new Thread draft after timing",
+  );
+  await settle();
+  const newThread = await evaluate(
+    "(()=>{const root=document.querySelector('.new-thread-draft-surface .messages-inner'),empty=root?.querySelector('.new-thread-draft-empty');if(!root||!empty)throw Error('Actual new Thread empty view required');return {display:getComputedStyle(root).display,innerHeight:root.getBoundingClientRect().height,emptyHeight:empty.getBoundingClientRect().height,emptyWidth:empty.getBoundingClientRect().width,draft:document.querySelector('#thread-composer')?.value}})()",
+  );
+  assert.equal(newThread.display, "grid");
+  assert.ok(
+    newThread.emptyHeight > 0 &&
+      newThread.emptyWidth > 0 &&
+      Math.abs(newThread.emptyHeight - newThread.innerHeight) < 1,
+  );
+  assert.equal(newThread.draft, "");
+  await screenshot("messages-post-timing-new-thread.png");
+  result.postTimingLayout = { timingComplete: true, history, newThread };
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
   .then(run)

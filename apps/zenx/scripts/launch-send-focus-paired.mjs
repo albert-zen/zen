@@ -40,8 +40,8 @@ const hostSnapshot = () => ({
 });
 const hostBefore = hostSnapshot();
 const expected = {
-  baseline: "363c45cb2ebe9eb63313398b5a06b7a6ffa25d50",
-  focus: "3d8f9cd24109f7fbf7abaca32c1bae4ade130f80",
+  baseline: "50ae16e1811a186fbf29fa6dfb721d8e328275a7",
+  flex: "18fb553683bdfc0eb254487d44dec4688c299b94",
 }[sourceLabel];
 assert.ok(
   expected,
@@ -337,6 +337,12 @@ try {
     "native-feedback-v3-post-geometry-and-subsequent-frame",
   );
   assert.equal(result.samples.length, 3);
+  assert.equal(result.postTimingLayout?.timingComplete, true);
+  assert.equal(
+    result.postTimingLayout.history.display,
+    sourceLabel === "baseline" ? "grid" : "flex",
+  );
+  assert.equal(result.postTimingLayout.newThread.display, "grid");
   for (const sample of result.samples) {
     for (const field of [
       "clickToFeedbackGeometryCompleteMs",

@@ -1,4 +1,4 @@
-name: Same-source Send focus handoff A/B (verified frames)
+name: Same-source history flow A/B (verified frames, post-timing geometry)
 on:
   push:
     branches: [diagnostic/send-latency-e2e-20261102]
@@ -16,14 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 363c45cb2ebe9eb63313398b5a06b7a6ffa25d50
+          ref: 50ae16e1811a186fbf29fa6dfb721d8e328275a7
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 3d8f9cd24109f7fbf7abaca32c1bae4ade130f80
+          ref: 18fb553683bdfc0eb254487d44dec4688c299b94
           persist-credentials: false
-          path: focus
+          path: flex
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -33,7 +33,7 @@ jobs:
           node-version: 22
       - name: Copy identical passive drivers, leaving product tracked files unchanged
         run: |
-          for source in baseline focus; do
+          for source in baseline flex; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
@@ -45,8 +45,8 @@ jobs:
           npm ci
           npm run build
           npm run build --workspace @zen/zenx
-      - name: Build exact focus candidate once
-        working-directory: focus
+      - name: Build exact flex candidate once
+        working-directory: flex
         timeout-minutes: 10
         run: |
           npm ci
@@ -60,7 +60,7 @@ jobs:
         run: |
           failed=0
           for case in A1 B1; do
-            case "$case" in A*) source=baseline ;; B*) source=focus ;; esac
+            case "$case" in A*) source=baseline ;; B*) source=flex ;; esac
             echo "PAIRED_CASE_BEGIN $case $source"
             set +e
             (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case")
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-focus-same-source-ab-5000
+          name: native-send-history-flow-ab-5000
           path: |
             results/*/full-app-*.json
             results/*/independent-storage-verification.json
