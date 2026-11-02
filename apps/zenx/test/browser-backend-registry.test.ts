@@ -1242,3 +1242,109 @@ function observationTarget(
   assert.ok(target, "manual choice uses an exact discovered target");
   return target.id;
 }
+
+test("turn cleanup retires only captured sessions and its late receipt cannot end a new preview", async () => {
+  const workspace = fixture("Workspace");
+  const connected = fixture("Chrome");
+  let release!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  connected.backend.finishSession = async () => {
+    await cleanup;
+  };
+  const registry = new BrowserBackendRegistry(
+    workspace.backend,
+    connected.backend,
+  );
+  const events: BrowserThreadEvent[] = [];
+  const stop = registry.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
+  const open = () =>
+    registry.invoke("browser_connected_open", {
+      name: "browser_connected_open",
+      callId: "open",
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: {
+        sessionId: "task",
+        url: "http://localhost:3080",
+        observe: false,
+      },
+      signal: new AbortController().signal,
+    });
+  try {
+    await open();
+    const old = events
+      .flatMap((e) => (e.type === "targets" ? e.targets : []))
+      .at(-1)!;
+    const ending = registry.finishTurn("thread");
+    await open();
+    const current = events
+      .flatMap((e) => (e.type === "targets" ? e.targets : []))
+      .at(-1)!;
+    assert.notEqual(current.id, old.id);
+    release();
+    await ending;
+    const ended = events.filter((e) => e.type === "turn-ended");
+    assert.equal(
+      ended.length,
+      1,
+      "backends aggregate into one lifecycle receipt",
+    );
+    assert.ok(ended[0]!.type === "turn-ended");
+    assert.equal(ended[0]!.throughSequence, old.previewSequence);
+    assert.ok(current.previewSequence! > ended[0]!.throughSequence);
+    const latest = events.filter((e) => e.type === "targets").at(-1)!;
+    assert.ok(
+      latest.type === "targets" &&
+        latest.targets.some((t) => t.id === current.id),
+    );
+  } finally {
+    release();
+    stop();
+    await registry.close();
+  }
+});
+
+test("explicit session close retires its temporary pages and completes its operation preview", async () => {
+  const workspace = fixture("Workspace"),
+    connected = fixture("Chrome");
+  let finished = 0;
+  connected.backend.finishSession = async () => {
+    finished++;
+  };
+  const registry = new BrowserBackendRegistry(
+    workspace.backend,
+    connected.backend,
+  );
+  const events: BrowserThreadEvent[] = [];
+  const stop = registry.observeThread(
+    { threadId: "thread", frames: false },
+    (e) => events.push(e),
+  );
+  const invoke = (op: string, args: Record<string, unknown> = {}) =>
+    registry.invoke(`browser_connected_${op}`, {
+      name: op,
+      callId: op,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", ...args },
+      signal: new AbortController().signal,
+    });
+  try {
+    await invoke("open", { url: "http://localhost:3080", observe: false });
+    await invoke("close_session");
+    assert.equal(finished, 1);
+    assert.ok(
+      events.some(
+        (e) => e.type === "turn-ended" && !e.failed && e.throughSequence > 0,
+      ),
+    );
+  } finally {
+    stop();
+    await registry.close();
+  }
+});

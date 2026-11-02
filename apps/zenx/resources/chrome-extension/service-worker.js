@@ -2,31 +2,97 @@ const NATIVE_HOST = "com.zenx.chrome_bridge";
 const PROTOCOL_VERSION = 3;
 const READY_TIMEOUT_MS = 5000;
 const GROUPING_RESPONSE_BUDGET_MS = 500;
+const AUTO_CONNECT_KEY = "zenxBrowserAutoConnect";
+const RECONNECT_ALARM = "zenx-browser-reconnect";
 let connection;
 let actionChain = Promise.resolve();
+let autoConnect = false;
+let restoreQueued = false;
+const storageReady = (async () => {
+  await chrome.storage.local.setAccessLevel({
+    accessLevel: "TRUSTED_CONTEXTS",
+  });
+  const stored = await chrome.storage.local.get(AUTO_CONNECT_KEY);
+  autoConnect = stored[AUTO_CONNECT_KEY] !== false;
+})();
 
 chrome.action.onClicked.addListener(() => {
-  actionChain = actionChain.then(handleAction, handleAction);
+  enqueue(handleAction);
 });
+chrome.runtime.onStartup.addListener(restoreConnection);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RECONNECT_ALARM) restoreConnection();
+});
+restoreConnection();
+
+function enqueue(action) {
+  actionChain = actionChain.then(action, action).catch(showConnectionError);
+}
+
+function restoreConnection() {
+  if (restoreQueued) return;
+  restoreQueued = true;
+  enqueue(async () => {
+    try {
+      await storageReady;
+      if (!autoConnect) return;
+      await ensureReconnectAlarm();
+      if (connection === undefined) await connectBrowser();
+    } finally {
+      restoreQueued = false;
+    }
+  });
+}
+
+async function ensureReconnectAlarm() {
+  if (!(await chrome.alarms.get(RECONNECT_ALARM)))
+    await chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
+}
 
 async function handleAction() {
-  if (connection !== undefined) {
-    await disconnect(connection);
+  await storageReady;
+  if (autoConnect) {
+    await stopConnecting();
     return;
   }
+  await chrome.storage.local.set({ [AUTO_CONNECT_KEY]: true });
+  autoConnect = true;
+  await ensureReconnectAlarm();
+  await connectBrowser();
+}
+
+async function stopConnecting(persistedRevocation) {
+  // Revoke in memory immediately; cleanup cannot authorize a queued reconnect.
+  autoConnect = false;
+  const closing =
+    connection === undefined ? Promise.resolve() : disconnect(connection);
+  await (persistedRevocation ??
+    chrome.storage.local.set({ [AUTO_CONNECT_KEY]: false }));
+  await chrome.alarms.clear(RECONNECT_ALARM);
+  await closing;
+  await chrome.action.setBadgeText({ text: "" });
+  await chrome.action.setTitle({ title: "Connect this browser to ZenX" });
+}
+
+async function showConnectionError(error) {
+  await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
+  await chrome.action.setBadgeText({ text: "!" });
+  await chrome.action.setTitle({
+    title: `ZenX connection failed: ${describeError(error)}${autoConnect ? ". Will reconnect automatically; click to disconnect." : ""}`,
+  });
+}
+
+async function connectBrowser() {
+  if (!autoConnect || connection !== undefined) return;
   let identity;
   try {
     identity = await browserIdentity();
   } catch (error) {
-    await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
-    await chrome.action.setBadgeText({ text: "!" });
-    await chrome.action.setTitle({
-      title: `ZenX connection failed: ${describeError(error)}`,
-    });
+    await showConnectionError(error);
     return;
   }
   const session = {
-    port: chrome.runtime.connectNative(NATIVE_HOST),
+    port: undefined,
     tabs: new Map(),
     recentUrls: new Map(),
     removed: new Set(),
@@ -40,6 +106,7 @@ async function handleAction() {
   };
   connection = session;
   try {
+    session.port = chrome.runtime.connectNative(NATIVE_HOST);
     await new Promise((resolve, reject) => {
       const timer = setTimeout(
         () => reject(new Error("ZenX did not answer the Chrome connector")),
@@ -109,11 +176,7 @@ async function handleAction() {
   } catch (error) {
     await disconnect(session);
     if (connection !== undefined) return;
-    await chrome.action.setBadgeBackgroundColor({ color: "#a33a3a" });
-    await chrome.action.setBadgeText({ text: "!" });
-    await chrome.action.setTitle({
-      title: `ZenX connection failed: ${describeError(error)}`,
-    });
+    await showConnectionError(error);
   }
 }
 
@@ -174,7 +237,16 @@ chrome.debugger.onDetach.addListener((source, reason) => {
     return;
   }
   // Cancel in Chrome's debugger banner revokes the entire browser connection.
+  // The Chrome debugger banner is an explicit revocation, not a transport loss.
+  autoConnect = false;
+  // Start persistence in this Chrome event callback, before waiting for a
+  // pending attach/disconnect or a queued native handshake to settle.
+  const persistedRevocation = chrome.storage.local.set({
+    [AUTO_CONNECT_KEY]: false,
+  });
+  void persistedRevocation.catch(showConnectionError);
   void disconnect(session);
+  enqueue(() => stopConnecting(persistedRevocation));
 });
 
 function updateTab(tab, changeInfo = {}) {
@@ -283,8 +355,20 @@ async function runCommand(session, message) {
       // to report creation failure or to create another tab on retry.
       result = {
         targetId: `chrome-tab-${tab.id}`,
-        grouping: await boundedGrouping(session, tab),
+        grouping: await boundedGrouping(
+          session,
+          tab,
+          typeof message.params?.zenxSessionId === "string"
+            ? message.params.zenxSessionId
+            : "default",
+        ),
       };
+    } else if (message.method === "Target.closeTarget") {
+      if (!session.owned.has(message.tabId))
+        throw new Error("Only this connection's created pages may be retired");
+      await chrome.tabs.remove(message.tabId);
+      session.owned.delete(message.tabId);
+      result = { success: true };
     } else {
       const tabId = message.tabId;
       if (!session.tabs.has(tabId))
@@ -317,7 +401,7 @@ async function runCommand(session, message) {
   }
 }
 
-async function boundedGrouping(session, tab) {
+async function boundedGrouping(session, tab, taskId) {
   if (session.groupingStalled)
     return {
       status: "unavailable",
@@ -326,7 +410,7 @@ async function boundedGrouping(session, tab) {
     };
   const ticket = { active: true };
   const grouping = session.groupingChain.then(() =>
-    groupCreatedTab(session, tab, ticket),
+    groupCreatedTab(session, tab, ticket, taskId),
   );
   session.groupingChain = grouping.then(() => {});
   let timer;
@@ -356,7 +440,7 @@ async function boundedGrouping(session, tab) {
   }
 }
 
-async function groupCreatedTab(session, tab, ticket) {
+async function groupCreatedTab(session, tab, ticket, taskId) {
   let groupId;
   const abandoned = () => !ticket.active || connection !== session;
   try {
@@ -384,7 +468,7 @@ async function groupCreatedTab(session, tab, ticket) {
         status: "unavailable",
         reason: "Tab or connection changed; grouping left unchanged",
       };
-    let existingId = session.groups.get(tab.windowId);
+    let existingId = session.groups.get(JSON.stringify([taskId, tab.windowId]));
     if (existingId !== undefined) {
       try {
         const existing = await chrome.tabGroups.get(existingId);
@@ -397,7 +481,8 @@ async function groupCreatedTab(session, tab, ticket) {
       } catch {
         existingId = undefined;
       }
-      if (existingId === undefined) session.groups.delete(tab.windowId);
+      if (existingId === undefined)
+        session.groups.delete(JSON.stringify([taskId, tab.windowId]));
     }
     // Recheck after asynchronous group lookup. Never reclaim a tab the user
     // moved or grouped, and never restore an older connection's visual group.
@@ -421,7 +506,7 @@ async function groupCreatedTab(session, tab, ticket) {
     if (!Number.isSafeInteger(groupId) || groupId < 0)
       throw new Error("Browser returned an invalid tab group");
     if (abandoned()) return { status: "grouped", groupId };
-    session.groups.set(tab.windowId, groupId);
+    session.groups.set(JSON.stringify([taskId, tab.windowId]), groupId);
     if (existingId === undefined) {
       const created = await chrome.tabGroups.get(groupId);
       // Name only the fresh unnamed group. Reused/user-renamed groups are not
@@ -447,13 +532,17 @@ function disconnect(session) {
   if (session.closing !== undefined) return session.closing;
   if (connection === session) connection = undefined;
   session.rejectReady?.(new Error("Chrome disconnected"));
-  session.port.disconnect();
+  session.port?.disconnect();
   session.closing = Promise.all(
     [...session.attachments.keys()].map((tabId) => detach(session, tabId)),
   ).then(async () => {
     if (connection !== undefined) return;
-    await chrome.action.setBadgeText({ text: "" });
-    await chrome.action.setTitle({ title: "Connect Chrome to ZenX" });
+    await chrome.action.setBadgeText({ text: autoConnect ? "…" : "" });
+    await chrome.action.setTitle({
+      title: autoConnect
+        ? "Waiting for ZenX; reconnecting automatically. Click to disconnect."
+        : "Connect this browser to ZenX",
+    });
   });
   // Reconnect waits for old pending debugger attaches to be released.
   actionChain = actionChain.then(

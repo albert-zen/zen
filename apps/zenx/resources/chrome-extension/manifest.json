@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "ZenX Browser Bridge",
-  "version": "3.1.0",
-  "description": "Connect this browser to ZenX once to work together across existing and new web tabs.",
+  "version": "3.3.0",
+  "minimum_chrome_version": "120",
+  "description": "Use existing pages or automatically grouped task tabs with ZenX. Reconnects when ZenX restarts.",
   "icons": {
     "16": "icons/zenx-16.png",
     "32": "icons/zenx-32.png",
@@ -15,7 +16,8 @@
     "tabGroups",
     "debugger",
     "nativeMessaging",
-    "storage"
+    "storage",
+    "alarms"
   ],
   "background": {
     "service_worker": "service-worker.js"

@@ -57,6 +57,12 @@ export function ChromeConnectionSettings({
   const selectedMode = draft.browserMode ?? "isolated";
   const connected = snapshot?.connection.state === "connected";
   const tabCount = snapshot?.connection.tabCount ?? 0;
+  const selectedConnected =
+    snapshot?.connection.connections?.some(
+      (connection) =>
+        connection.browser === registrationBrowser &&
+        connection.state === "connected",
+    ) ?? connected;
   return (
     <div
       id="browser-settings"
@@ -128,99 +134,73 @@ export function ChromeConnectionSettings({
           </label>
           <div className="settings-row">
             <div>
-              <strong>
-                {t("chromeConnectionSettings.1RegisterTheLocalConnector")}
-              </strong>
+              <strong>{t("chromeConnectionSettings.connectChrome")}</strong>
               <span>
                 {t(
-                  "chromeConnectionSettings.letChromeConnectToThisInstalledZenxApp",
-                )}
-              </span>
-            </div>
-            <div className="settings-actions">
-              {(
-                registrationBrowser === "edge"
-                  ? snapshot?.edgeNativeHostRegistered
-                  : snapshot?.nativeHostRegistered
-              ) ? (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    void run("remove", () =>
-                      window.zenx.chromeBridge.remove(registrationBrowser),
-                    )
-                  }
-                >
-                  {busy === "remove"
-                    ? t("chromeConnectionSettings.removing")
-                    : t("chromeConnectionSettings.removeConnector")}
-                </button>
-              ) : (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={busy !== null || snapshot?.packaged === false}
-                  onClick={() =>
-                    void run("prepare", () =>
-                      window.zenx.chromeBridge.prepare(registrationBrowser),
-                    )
-                  }
-                >
-                  {busy === "prepare"
-                    ? t("chromeConnectionSettings.registering")
-                    : t("chromeConnectionSettings.registerConnector")}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="settings-row">
-            <div>
-              <strong>
-                {t("chromeConnectionSettings.2LoadTheZenxExtension")}
-              </strong>
-              <span>
-                {t(
-                  "chromeConnectionSettings.openChromeExtensionsEnableDeveloperModeChooseLoadUnpacked",
+                  connected
+                    ? "chromeConnectionSettings.connectionReady"
+                    : "chromeConnectionSettings.connectionAutomatic",
                 )}
               </span>
             </div>
             <button
               className="secondary-button"
               type="button"
-              disabled={busy !== null}
+              disabled={
+                busy !== null ||
+                snapshot?.packaged === false ||
+                selectedConnected
+              }
               onClick={() =>
-                void run("open", async () => {
-                  await window.zenx.chromeBridge.openExtension();
-                  return await window.zenx.chromeBridge.get();
-                })
+                void run("connect", () =>
+                  window.zenx.chromeBridge.prepare(registrationBrowser),
+                )
               }
             >
-              {busy === "open"
-                ? t("chromeConnectionSettings.opening")
-                : t("chromeConnectionSettings.showExtensionFolder")}
+              {selectedConnected
+                ? t("chromeConnectionSettings.chromeConnected")
+                : busy === "connect"
+                  ? t("chromeConnectionSettings.connecting")
+                  : t("chromeConnectionSettings.connectChrome")}
             </button>
           </div>
-          <div className="settings-row">
-            <div>
-              <strong>
-                {t("chromeConnectionSettings.3ConnectYourBrowser")}
-              </strong>
-              <span>
-                {t(
-                  "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd",
-                )}
-              </span>
-            </div>
-            <span className={connected ? "status-good" : "status-muted"}>
-              {connected
-                ? t("chromeConnectionSettings.tabsAvailable", {
-                    count: tabCount,
+          {connected ? (
+            <p className="settings-note">
+              {t("chromeConnectionSettings.tabsAvailable", { count: tabCount })}
+            </p>
+          ) : null}
+          {!selectedConnected &&
+          (registrationBrowser === "edge"
+            ? snapshot?.edgeNativeHostRegistered
+            : snapshot?.nativeHostRegistered) ? (
+            <p className="settings-note" role="status">
+              {t("chromeConnectionSettings.waitingAutomatically")}
+            </p>
+          ) : null}
+          {!selectedConnected ? (
+            <details>
+              <summary>
+                {t("chromeConnectionSettings.installationHelp")}
+              </summary>
+              <p className="settings-note">
+                {t("chromeConnectionSettings.developmentInstall")}
+              </p>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy !== null}
+                onClick={() =>
+                  void run("open", async () => {
+                    await window.zenx.chromeBridge.prepare(registrationBrowser);
+                    await window.zenx.chromeBridge.openExtension();
+                    return await window.zenx.chromeBridge.get();
                   })
-                : t("chromeConnectionSettings.waitingForChrome")}
-            </span>
-          </div>
+                }
+              >
+                {t("chromeConnectionSettings.showExtensionFolder")}
+              </button>
+            </details>
+          ) : null}
           <p className="settings-note">
             {t(
               "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn",

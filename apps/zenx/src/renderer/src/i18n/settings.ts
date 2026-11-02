@@ -652,6 +652,18 @@ export const en = {
   "pluginAccessReview.relaunchZenxIfMacosAsksThenReturnHereZenx":
     "Relaunch ZenX if macOS asks, then return here. ZenX checks both access paths again when this page opens.",
   "pluginAccessReview.openBrowserSettings": "Open Browser settings",
+  "chromeConnectionSettings.connectChrome": "Connect browser",
+  "chromeConnectionSettings.connecting": "Preparing connection…",
+  "chromeConnectionSettings.connectionReady":
+    "Ready. Restarting ZenX or Chrome reconnects automatically.",
+  "chromeConnectionSettings.connectionAutomatic":
+    "Allow this installed ZenX app to connect. An installed, enabled extension connects automatically.",
+  "chromeConnectionSettings.waitingAutomatically":
+    "Waiting for the browser extension. No toolbar click is needed unless you previously disconnected it.",
+  "chromeConnectionSettings.installationHelp":
+    "Extension not installed or connection unavailable?",
+  "chromeConnectionSettings.developmentInstall":
+    "This development build has no Chrome Web Store listing yet. Install once from chrome://extensions using Developer mode → Load unpacked, then select the extension folder. Reload an older installed extension once after updating ZenX. If you explicitly disconnected it, click its toolbar icon to allow connecting again.",
   "chromeConnectionSettings.browser": "Browser",
   "chromeConnectionSettings.connectedInstances": "Connected browser instances",
   "chromeConnectionSettings.instanceConnected": "Connected",
@@ -659,7 +671,7 @@ export const en = {
     "The built-in ZenX browser remains available. Each connected browser instance requests its own tool approval; previous unscoped approvals are not reused.",
   "chromeConnectionSettings.enableExternalBrowser":
     "Connect Chrome and Edge alongside ZenX",
-  "chromeConnectionSettings.connectorBrowser": "Browser to register",
+  "chromeConnectionSettings.connectorBrowser": "Browser",
   "chromeConnectionSettings.chooseWhereBrowserToolsWork":
     "Use the ZenX browser and a connected external browser together.",
   "chromeConnectionSettings.browserMode": "Browser mode",
@@ -677,9 +689,9 @@ export const en = {
     "Open chrome://extensions or edge://extensions, enable Developer mode, choose Load unpacked, then select the folder opened here.",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. Connect your browser",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "Click the ZenX extension once in Chrome or Edge. Existing and new web tabs become available without connecting each tab. Click the extension again to disconnect the whole browser.",
+    "Click the ZenX extension once in Chrome or Edge. Existing and new web tabs become available, and the extension remembers your connection choice across ZenX and browser restarts. Click again to disconnect and stop automatic reconnection.",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "Keep using your usual browser windows and signed-in pages. Chrome, Edge and multiple browser profiles can connect together. Reload the updated extension in each browser; approval labels show only the browser and a short random instance ID. You and the Agent work in the same tabs; the sidebar shows the Agent’s latest view. Closing ZenX or disabling the extension ends the connection.",
+    "Keep using your usual browser windows and signed-in pages. Chrome, Edge and multiple profiles can connect together. The Agent’s current page appears automatically in the workspace. While ZenX is closed the extension waits and checks every 30 seconds; reopening ZenX restores the connection. Chrome may delay checks while sleeping. Clicking Disconnect or cancelling Chrome debugger access stops reconnection.",
   "contextCompactionPanel.contextCompaction": "Context compaction",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "Control when history is summarized and which original items the model keeps.",
@@ -1971,13 +1983,24 @@ export const zhCN: Record<keyof typeof en, string> = {
   "pluginAccessReview.relaunchZenxIfMacosAsksThenReturnHereZenx":
     "如果 macOS 提示，请重新启动 ZenX，然后返回这里。页面打开时，ZenX 会重新检查两项权限。",
   "pluginAccessReview.openBrowserSettings": "打开浏览器设置",
+  "chromeConnectionSettings.connectChrome": "连接浏览器",
+  "chromeConnectionSettings.connecting": "正在准备连接…",
+  "chromeConnectionSettings.connectionReady":
+    "已就绪。重启 ZenX 或 Chrome 后会自动重连。",
+  "chromeConnectionSettings.connectionAutomatic":
+    "允许当前 ZenX 应用连接浏览器。已安装并启用的扩展会自动连接。",
+  "chromeConnectionSettings.waitingAutomatically":
+    "正在等待浏览器扩展。无需点击工具栏；之前主动断开过连接时除外。",
+  "chromeConnectionSettings.installationHelp": "未安装扩展或仍未连接？",
+  "chromeConnectionSettings.developmentInstall":
+    "当前开发版本尚未上架 Chrome 商店。首次安装需在 chrome://extensions 开启开发者模式、选择“加载已解压的扩展程序”并选中扩展目录。更新 ZenX 后，旧扩展需要重新加载一次；若你曾主动断开连接，需点击扩展图标重新允许连接。",
   "chromeConnectionSettings.browser": "浏览器",
   "chromeConnectionSettings.connectedInstances": "已连接的浏览器实例",
   "chromeConnectionSettings.instanceConnected": "已连接",
   "chromeConnectionSettings.workspaceAlwaysAvailable":
     "ZenX 内置浏览器始终可用。每个已连接的浏览器实例分别请求工具授权，不沿用旧版未指定实例的授权。",
   "chromeConnectionSettings.enableExternalBrowser": "同时连接外部浏览器",
-  "chromeConnectionSettings.connectorBrowser": "注册的浏览器",
+  "chromeConnectionSettings.connectorBrowser": "选择浏览器",
   "chromeConnectionSettings.chooseWhereBrowserToolsWork":
     "同时使用内置浏览器和已连接的外部浏览器。",
   "chromeConnectionSettings.browserMode": "浏览器模式",
@@ -1993,9 +2016,9 @@ export const zhCN: Record<keyof typeof en, string> = {
     "打开 chrome://extensions 或 edge://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，然后选取此处打开的文件夹。",
   "chromeConnectionSettings.3ConnectYourBrowser": "3. 连接浏览器",
   "chromeConnectionSettings.clickTheZenxExtensionOnceInChromeExistingAnd":
-    "在 Chrome 或 Edge 中点击一次 ZenX 扩展程序。现有和新打开的网页标签页都会可用，无需逐个连接。再次点击扩展程序即可断开整个浏览器。",
+    "在 Chrome 或 Edge 中点击一次 ZenX 扩展程序，现有和新打开的网页标签页都会可用，并会记住连接选择，在 ZenX 或浏览器重启后自动重连。再次点击即可断开并停止自动重连。",
   "chromeConnectionSettings.keepUsingYourUsualChromeWindowsAndSignedIn":
-    "你可以继续使用平常的浏览器窗口和已登录的页面。Chrome、Edge 和多个浏览器配置文件可以同时连接。请在各浏览器中重新加载新版扩展；授权标签仅显示浏览器名称与随机实例编号。你和智能体共用同一批标签页；侧边栏显示智能体最近看到的页面。关闭 ZenX 或停用扩展程序会断开连接。",
+    "你可以继续使用平常的浏览器窗口和已登录的页面。Chrome、Edge 和多个配置文件可以同时连接。Agent 操作的页面会自动显示在工作区。ZenX 关闭时扩展等待，每 30 秒检查一次，重新打开 ZenX 后自动连接。休眠时 Chrome 可能延迟检查。点击断开或取消 Chrome 调试访问后，将停止自动重连。",
   "contextCompactionPanel.contextCompaction": "上下文压缩",
   "contextCompactionPanel.controlWhenHistoryIsSummarizedAndWhichOriginalItems":
     "设置何时总结历史记录，以及模型保留哪些原始条目。",

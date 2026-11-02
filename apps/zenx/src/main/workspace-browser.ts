@@ -50,6 +50,7 @@ import {
 } from "./capabilities/observation-capture.js";
 
 export interface WorkspaceBrowserTab {
+  temporary?: boolean;
   id: string;
   threadId: string;
   title: string;
@@ -78,6 +79,7 @@ export type WorkspaceBrowserCommand =
   | "return-control";
 
 interface Tab {
+  temporarySession?: string;
   appearance?: "light" | "dark";
   backgroundColor?: string;
   id: string;
@@ -256,6 +258,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           canGoForward: web.navigationHistory.canGoForward(),
           sharedWithAgent: true,
           agentInspectionsInFlight: this.#inspections.get(tab.id) ?? 0,
+          temporary: tab.temporarySession !== undefined,
           ...this.#controlSummary(tab),
           ...(tab.error ? { error: tab.error } : {}),
         };
@@ -503,6 +506,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       try {
         const safeUrl = workspaceBrowserUrl(url);
         const popup = this.#new(threadId, tab.owner);
+        popup.temporarySession = tab.temporarySession;
         void this.#load(popup, safeUrl).catch(() => undefined);
         publish();
       } catch (error) {
@@ -596,6 +600,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       return this.#workspaceSnapshot(threadId);
     }
     const tab = typeof tabId === "string" ? this.#tabs.get(tabId) : undefined;
+    // Sidebar descriptors survive app restart; native pages do not. Closing an
+    // already absent page is complete, while a live foreign page stays guarded.
+    if (command === "close" && typeof tabId === "string" && tabId && !tab)
+      return this.#workspaceSnapshot(threadId);
     if (!tab || tab.threadId !== threadId)
       throw new Error("Browser tab is not in this Thread");
     const web = tab.view.webContents;
@@ -603,6 +611,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       case "take-control":
       case "return-control": {
         const control = command === "take-control" ? "human" : "agent";
+        if (control === "human") tab.temporarySession = undefined;
         if (tab.control !== control) {
           tab.control = control;
           tab.handoffMode = true;
@@ -815,6 +824,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     const threadId = this.#requireSessionThread(sessionId);
     const safeUrl = workspaceBrowserUrl(url);
     const tab = this.#new(threadId);
+    tab.temporarySession = sessionId;
     try {
       await this.#mutate(
         sessionId,
@@ -1701,6 +1711,20 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       },
       { allowQuarantinedClose: true },
     );
+  }
+
+  keepTab(sessionId: string, tabId: string): void {
+    this.#requireAgentTab(sessionId, tabId).temporarySession = undefined;
+    this.#publish(this.#requireSessionThread(sessionId));
+  }
+
+  finishSession(sessionId: string): void {
+    const threadId = this.#requireSessionThread(sessionId);
+    for (const tab of [...this.#tabs.values()]) {
+      if (tab.temporarySession === sessionId) this.#closeTab(tab);
+    }
+    this.closeSession(sessionId);
+    this.#publish(threadId);
   }
 
   closeSession(sessionId: string): number {

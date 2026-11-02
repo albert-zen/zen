@@ -2044,9 +2044,7 @@ test("General offers an additional browser connection and reports an extension-f
     },
   });
   try {
-    const browser = await waitFor(
-      async () => await labeledSelect("Browser to register"),
-    );
+    const browser = await waitFor(async () => await labeledSelect("Browser"));
     assert.deepEqual(
       Array.from(browser.options).map((option) => option.textContent?.trim()),
       ["Google Chrome", "Microsoft Edge"],
@@ -2107,15 +2105,13 @@ test("General registers only the explicitly selected Edge connector", async () =
     },
   });
   try {
-    const select = await waitFor(
-      async () => await labeledSelect("Browser to register"),
-    );
-    assert.ok(exactButton("Remove connector"));
+    const select = await waitFor(async () => await labeledSelect("Browser"));
+    assert.ok(exactButton("Connect browser"));
     await changeControl(select, "edge");
     assert.equal(prepared.length, 0);
-    await click(exactButtonRequired("Register connector"));
+    await click(exactButtonRequired("Connect browser"));
     assert.deepEqual(prepared, ["edge"]);
-    assert.ok(exactButton("Remove connector"));
+    assert.ok(exactButton("Connect browser"));
     assert.match(
       document.body.textContent ?? "",
       /built-in ZenX browser remains available/,
@@ -2183,7 +2179,10 @@ test("General reports a browser connection with multiple available tabs", async 
       document.body.textContent ?? "",
       /Only one external browser/,
     );
-    assert.match(document.body.textContent ?? "", /Existing and new web tabs/u);
+    assert.match(
+      document.body.textContent ?? "",
+      /current page appears automatically/u,
+    );
     assert.doesNotMatch(
       document.body.textContent ?? "",
       /one current tab|only to the selected tab/u,

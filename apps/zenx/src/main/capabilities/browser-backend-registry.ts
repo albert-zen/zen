@@ -18,6 +18,7 @@ import type { ZenXCapabilityPackage, ZenXPluginManifestV2 } from "./types.js";
 import type {
   BrowserThreadListener,
   BrowserThreadRequest,
+  BrowserThreadEvent,
   BrowserThreadTarget,
 } from "./browser-thread-observation.js";
 
@@ -61,7 +62,7 @@ export function concurrentBrowserManifest(): ZenXPluginManifestV2 {
         "backend_isolation",
       ],
     },
-    mainDocument: `${workspace.mainDocument.replaceAll("browser_", workspacePrefix)} Browser backends coexist: browser_workspace_* uses the shared Workspace browser; browser_connected_* uses only the explicitly enabled external connection. Start with each backend's list_tabs using a sessionId. Results identify backendId. Pass returned tabId, observationId, targetId and cursor unchanged to tools in the same namespace; cross-backend references reject. An unavailable external connection never redirects to the Workspace browser. Closing a connected tab/session only detaches ZenX and leaves the user's page open. Approvals for one tool namespace do not approve the other. Only one external browser connection is supported at a time; disconnect it explicitly before connecting another.`,
+    mainDocument: `${workspace.mainDocument.replaceAll("browser_", workspacePrefix)} Browser backends coexist: browser_workspace_* uses the shared Workspace browser; browser_connected_* uses only the explicitly enabled external connection. For existing pages use list_tabs; for a new task prefer open with a semantic session name. Results identify backendId. Pass returned tabId, observationId, targetId and cursor unchanged to tools in the same namespace; cross-backend references reject. An unavailable external connection never redirects to the Workspace browser. Closing a connected tab releases it; closing its session also retires unkept pages created by the Agent. Existing user pages remain open. Approvals for one tool namespace do not approve the other. Only one external browser connection is supported at a time; disconnect it explicitly before connecting another.`,
     permissions: [
       ...workspace.permissions,
       ...connected.permissions.map((permission) => ({
@@ -156,7 +157,14 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     syncPackages: () => void;
     stop: () => void;
     retire: () => void;
+    finish: (
+      event: Extract<BrowserThreadEvent, { type: "turn-ended" }>,
+    ) => void;
   }>();
+  readonly #finishingThreads = new Map<
+    string,
+    { throughSequence: number; failed: boolean }
+  >();
   #closed = false;
 
   constructor(
@@ -571,6 +579,8 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
       refresh,
       syncPackages: () => syncPackages(),
       stop,
+      finish: (event: Extract<BrowserThreadEvent, { type: "turn-ended" }>) =>
+        send(event),
       retire: () => {
         send({ type: "targets", targets: [] });
         send({
@@ -601,6 +611,22 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
           { threadId: request.threadId, frames: false },
           (event) => {
             if (!active || this.#packages.get(backendId) !== capability) return;
+            if (event.type === "turn-ended") {
+              const finishing = this.#finishingThreads.get(request.threadId);
+              if (finishing) {
+                finishing.failed ||= event.failed;
+                finishing.throughSequence = Math.max(
+                  finishing.throughSequence,
+                  event.throughSequence,
+                );
+              }
+              if (
+                !request.frames &&
+                !this.#finishingThreads.has(request.threadId)
+              )
+                send(event);
+              return;
+            }
             if (event.type === "activity") {
               if (!request.frames)
                 send({
@@ -645,6 +671,37 @@ export class BrowserBackendRegistry implements ZenXCapabilityPackage {
     this.#observers.add(observer);
     syncPackages();
     return stop;
+  }
+
+  async finishTurn(threadId: string, failed = false): Promise<void> {
+    const finishing = { throughSequence: 0, failed };
+    this.#finishingThreads.set(threadId, finishing);
+    try {
+      const results = await Promise.allSettled(
+        [...this.#packages.values()].map((p) => p.finishTurn(threadId, failed)),
+      );
+      const failure = results.find((r) => r.status === "rejected");
+      const throughSequence = Math.max(
+        finishing.throughSequence,
+        ...results.map((r) => (r.status === "fulfilled" ? r.value : 0)),
+      );
+      for (const observer of [...this.#observers]) {
+        if (observer.threadId === threadId)
+          observer.finish({
+            type: "turn-ended",
+            threadId,
+            throughSequence,
+            failed: finishing.failed || failure !== undefined,
+            ...(failure?.status === "rejected"
+              ? { message: String(failure.reason) }
+              : {}),
+          });
+      }
+      if (failure?.status === "rejected") throw failure.reason;
+    } finally {
+      if (this.#finishingThreads.get(threadId) === finishing)
+        this.#finishingThreads.delete(threadId);
+    }
   }
 
   async close(): Promise<void> {
