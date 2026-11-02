@@ -993,3 +993,26 @@ for (const type of ["thread_message", "host_message"] as const) {
     assert.equal(recovered.name, "Manual title");
   });
 }
+
+test("active Turn lookup does not copy immutable history and observes replacement status", () => {
+  const first = turn("first", "inProgress");
+  const latest = turn("latest", "inProgress");
+  const turns = [first, turn("middle", "completed"), latest];
+  Object.defineProperty(turns, Symbol.iterator, {
+    value: () => {
+      throw new Error("Active lookup must not copy the Turn list");
+    },
+  });
+  Object.freeze(turns);
+  assert.equal(activeTurn(thread(turns)), latest);
+  const ended = [first, turns[1]!, { ...latest, status: "completed" as const }];
+  Object.freeze(ended);
+  assert.equal(activeTurn(thread(ended)), first);
+  assert.equal(
+    activeTurn(
+      thread([{ ...first, status: "interrupted" }, ...ended.slice(1)]),
+    ),
+    null,
+  );
+  assert.equal(activeTurn(thread()), null);
+});

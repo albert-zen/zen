@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import { link, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { decodeContextItem, type ContextItem } from "./item-list.js";
@@ -31,7 +32,23 @@ export class FileItemListStore {
   }
   async exists(threadId: string): Promise<boolean> {
     try {
-      await this.#bytes(threadId);
+      const filename = this.#path(threadId);
+      await assertOwnedFile(filename);
+      // Probe readability without materializing the entire semantic history.
+      // Keep the same owned-file gate; an existence result is not validation.
+      const file = await open(
+        filename,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.nlink !== 1)
+          throw new Error(
+            `Storage file must be an unaliased regular file: ${filename}`,
+          );
+      } finally {
+        await file.close();
+      }
       return true;
     } catch (error) {
       if (isMissing(error)) return false;
