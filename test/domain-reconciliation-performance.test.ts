@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { DomainThreadJournal } from "../src/domain-journal.js";
 import { FileItemListStore } from "../src/item-list-store.js";
 import type { CanonicalItem } from "../src/item.js";
+import type { ContextItem } from "../src/item-list.js";
 import { JsonlThreadMetadataStore } from "../src/thread-metadata.js";
 import { FileTraceStore } from "../src/trace.js";
 
@@ -192,6 +193,197 @@ test("frozen imported semantic sources remain exact and conflicts still fail clo
     );
     assert.deepEqual(await readFile(filename), before);
     await trace.flush();
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+function nextUser(id: string): CanonicalItem {
+  return {
+    id,
+    threadId: "t",
+    createdAt: "2026-11-02T01:00:00.000Z",
+    type: "user_message",
+    clientId: id,
+    text: `Synthetic appended input ${id}`,
+  };
+}
+
+test("append reuses only its own reconciliation reads and keeps exact receipts", async (t) => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    const original = facts(32);
+    await journal.create(original);
+    let traceReads = 0;
+    let semanticReads = 0;
+    const readTrace = FileTraceStore.prototype.read;
+    const readItems = FileItemListStore.prototype.read;
+    const traceMock = t.mock.method(
+      FileTraceStore.prototype,
+      "read",
+      function (
+        this: FileTraceStore,
+        ...args: Parameters<FileTraceStore["read"]>
+      ) {
+        traceReads++;
+        return readTrace.apply(this, args);
+      },
+    );
+    const itemsMock = t.mock.method(
+      FileItemListStore.prototype,
+      "read",
+      function (this: FileItemListStore, threadId: string) {
+        semanticReads++;
+        return readItems.call(this, threadId);
+      },
+    );
+    let first: ContextItem[] = [];
+    let second: ContextItem[] = [];
+    try {
+      first = await journal.append(nextUser("first"));
+      assert.equal(traceReads, 1);
+      assert.equal(semanticReads, 1);
+      second = await journal.append(nextUser("second"));
+      assert.equal(traceReads, 2, "a new admission must read current Trace again");
+      assert.equal(semanticReads, 2, "no semantic snapshot survives the operation");
+    } finally {
+      traceMock.mock.restore();
+      itemsMock.mock.restore();
+    }
+    assert.deepEqual(second, await journal.readItemList("t"));
+    assert.deepEqual(second.slice(0, -1), first);
+    assert.deepEqual(await journal.read("t"), [
+      ...original,
+      nextUser("first"),
+      nextUser("second"),
+    ]);
+    const bytes = await readFile(path.join(options.directory, "items", "t.jsonl"));
+    const observed = await options.trace.read("t");
+    await assert.rejects(
+      journal.append(nextUser("second")),
+      /Duplicate canonical/,
+    );
+    assert.deepEqual(await options.trace.read("t"), observed);
+    assert.deepEqual(
+      await readFile(path.join(options.directory, "items", "t.jsonl")),
+      bytes,
+    );
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("append includes a repaired suffix and preserves exact frozen source bytes", async () => {
+  const options = await setup();
+  let journal = new DomainThreadJournal(options);
+  try {
+    const original = facts(3);
+    await journal.create(original);
+    const semantic = await journal.readItemList("t");
+    await journal.close();
+    const directory = path.join(options.root, "frozen-append");
+    const trace = new FileTraceStore(path.join(options.root, "frozen-append-trace"));
+    const frozen = structuredClone(semantic);
+    const first = frozen[0]!;
+    if (first.kind !== "message") throw new Error("Expected message fixture");
+    first.content = {
+      text: "Exact frozen import",
+      parts: [{ type: "text", text: "Exact frozen import" }],
+    };
+    journal = new DomainThreadJournal({ ...options, directory, trace });
+    await journal.create(original, frozen);
+    const filename = path.join(directory, "items", "t.jsonl");
+    const bytes = await readFile(filename);
+    await journal.close();
+    await writeFile(
+      filename,
+      frozen
+        .slice(0, -2)
+        .map((item) => JSON.stringify(item))
+        .join("\n") + "\n",
+    );
+    journal = new DomainThreadJournal({ ...options, directory, trace });
+    const receipt = await journal.append(nextUser("after-repair"));
+    assert.deepEqual(receipt.slice(0, -1), frozen);
+    assert.deepEqual(receipt, await journal.readItemList("t"));
+    assert.deepEqual((await readFile(filename)).subarray(0, bytes.length), bytes);
+    assert.equal(receipt.at(-1)?.id, "after-repair");
+    await trace.flush();
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("operation-local reads do not escape an unknown write or let close release early", async () => {
+  const options = await setup();
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const journal = new DomainThreadJournal({
+    ...options,
+    async onItemListAppendPhase(phase) {
+      if (phase !== "published") return;
+      entered();
+      await gate;
+      throw new Error("Synthetic unknown publication");
+    },
+  });
+  try {
+    await journal.create(facts(1));
+    const pending = journal.append(nextUser("unknown"));
+    const rejected = assert.rejects(pending, {
+      name: "ThreadJournalAppendOutcomeUnknownError",
+    });
+    await reached;
+    let closed = false;
+    const closing = journal.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    assert.equal(closed, false);
+    release();
+    await rejected;
+    await closing;
+    await assert.rejects(journal.append(nextUser("not-admitted")), /closed/);
+    const cold = new DomainThreadJournal(options);
+    try {
+      await cold.assertRecoverySafe("t");
+      const recovered = await cold.readItemList("t");
+      assert.equal(recovered.filter((item) => item.id === "unknown").length, 1);
+      assert.equal(recovered.some((item) => item.id === "not-admitted"), false);
+    } finally {
+      await cold.close();
+    }
+  } finally {
+    release();
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("absent reconciliation keeps the public void contract and initial publication", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    assert.equal(await journal.reconcileCompilation("t"), undefined);
+    assert.deepEqual(await journal.append(facts(0)[0]!), []);
+    assert.deepEqual(
+      await journal.append(nextUser("initial")),
+      await journal.readItemList("t"),
+    );
   } finally {
     await journal.close();
     await options.trace.flush();
