@@ -668,7 +668,38 @@ export class ChromeExtensionBridge {
           type: "cdp-command",
           requestId,
           method,
-          params: { url: params.url },
+          params: {
+            url: params.url,
+            ...(typeof params.zenxSessionId === "string" &&
+            params.zenxSessionId.length <= 512
+              ? { zenxSessionId: params.zenxSessionId }
+              : {}),
+          },
+        }),
+      );
+      return;
+    }
+    if (method === "Target.closeTarget") {
+      const tab = [...connection.tabs.values()].find(
+        (tab) => targetId(tab) === params.targetId,
+      );
+      if (!tab || connection.native?.readyState !== WebSocket.OPEN) {
+        this.#reply(socket, id, undefined, {
+          code: -32000,
+          message: "Created Chrome page is unavailable",
+        });
+        return;
+      }
+      const requestId = randomUUID();
+      // Do not attach this receipt to the retiring tab: onRemoved is expected
+      // before Chrome resolves tabs.remove, and must not turn success into error.
+      connection.pending.set(requestId, { socket, id });
+      connection.native.send(
+        JSON.stringify({
+          type: "cdp-command",
+          requestId,
+          method,
+          tabId: tab.id,
         }),
       );
       return;

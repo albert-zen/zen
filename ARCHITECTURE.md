@@ -1453,6 +1453,8 @@ Browser observation IPC accepts bounded opaque target addresses without parsing 
 
 Extension-created tab groups are ephemeral visual organization scoped to the current native connection and browser window; group membership is not target authorization, and ZenX never repairs a user's tab moves or overwrites a renamed existing group.
 
+The Chrome/Edge extension remembers only explicit browser connection intent in trusted local extension storage. Worker/browser startup and a 30-second Chrome alarm can establish a fresh Native Messaging transport after ZenX restarts; every connection still receives a new Host generation and cannot restore target ownership, debugger attachments, observations, pending commands or approvals. Explicit toolbar disconnect and debugger cancellation revoke remembered intent. This is connection lifecycle only, never tool retry/replay, application launch, or another Host recovery authority.
+
 ### Browser targeted input
 
 Browser coordinate click and named-key input are transient, observation-bound CDP operations: one captured screenshot, CSS viewport, page-local focus and document/control generation authorize a bounded event pair on the exact tab; uncertain held input blocks further mutations until that tab is closed, with no OS-input fallback, automatic retry, or durable recovery state. CDP acknowledgement and exact Host fences authorize the planned pair; page-consumable event counters are supplementary interference evidence. Bounded open-shadow resolution and mutation observation reuse this per-document state; exact-node CDP shadow metadata distinguishes ordinary containers from actual closed roots without a tag denylist, while known closed or untracked surfaces remain locally unsupported. Structured probe denials have a bounded shared classification; arbitrary Runtime exceptions are never classified as native-surface refusal.
@@ -1473,9 +1475,9 @@ The first exact trusted browser inspection reserves its own 10-second observatio
 
 The Browser catalog/activity IPC lane is an independent read-only renderer subscription; it cannot request frames or authorize external opening, and replacing it never retires the exact-target frame subscription.
 
-Browser operation activity is a disposable Host projection of the existing invocation, provider session incarnation and exact observer target. It travels over the read-only catalog lane with registry connection-generation fencing; it is not an operation journal, action authorization, cancellation proof or retry authority. Browser and Computer observation selection is human-owned: omitted targets receive catalogs only, and Agent activity never selects a target or opens a panel. Exact selected targets may continue emitting their own frames without navigating the human UI.
+Browser operation activity is a disposable Host projection of the existing invocation, provider session incarnation and exact observer target. It travels over the read-only catalog lane with registry connection-generation fencing; it is not an operation journal, action authorization, cancellation proof or retry authority. Omitted targets receive catalogs only. Browser operations project an exact temporary preview in the unified workspace; Computer observation retains human selection. Neither grants execution authority.
 
-Browser activity ordering uses a process-local monotonic Host invocation sequence carried only through the current async call; it carries observation provenance, never presentation or selection authority. Per-target failure generations prevent an older successful operation from clearing a warning caused by a later failure. Neither projection creates dispatch, retry or durable execution authority.
+Browser activity ordering uses a process-local monotonic Host invocation sequence carried only through the current async call; it carries observation provenance and orders the temporary Browser preview, never execution authority. Per-target failure generations prevent an older successful operation from clearing a warning caused by a later failure. Neither projection creates dispatch, retry or durable execution authority.
 
 ### Queued input promotion
 
@@ -1661,3 +1663,7 @@ The semantic compiler freezes the receipt's local time, IANA name, instant-speci
 UTC offset and source in message content. Queue/replacement lineage uses the first
 admission's time and zone. Existing records without this context keep their exact
 recorded timestamp; replay never consults the current zone or clock.
+
+### Browser operation presentation and turn cleanup
+
+Browser operation previews are an ephemeral projection of exact Host target activity in the existing workspace tab rail; operation admission order selects the preview, while turn completion releases existing pages and retires temporary pages/observations without persisting a second execution state.

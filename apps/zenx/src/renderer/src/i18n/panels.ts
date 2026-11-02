@@ -621,6 +621,8 @@ export const en = {
     "Ask the Agent to open or inspect a tab for this thread.",
   browserPanelWidth: "Browser panel width",
   workspaceBrowserTarget: "ZenX · ",
+  workspaceBrowserClosed:
+    "This browser page is unavailable. Close this tab or open a new page.",
   connectedBrowserTarget: "External · ",
   browser: "Browser",
   restoreBrowserPanel: "Restore browser panel",
@@ -1618,6 +1620,8 @@ export const zhCN = {
   askTheAgentToOpenOrInspect: "请让 Agent 为此会话打开或检查标签页。",
   browserPanelWidth: "浏览器面板宽度",
   workspaceBrowserTarget: "内置 · ",
+  workspaceBrowserClosed:
+    "此浏览器页面已不可用。你可以关闭此标签页或打开新网页。",
   connectedBrowserTarget: "外部 · ",
   browser: "浏览器",
   restoreBrowserPanel: "恢复浏览器面板",

@@ -436,7 +436,7 @@ export function userBrowserManifest(): ZenXPluginManifestV2 {
       ...tool,
       description:
         tool.name === "browser_close_session"
-          ? "Detach ZenX capability state from one user-browser session without closing tabs, clearing storage, or changing the user profile."
+          ? "End this user-browser session: retire unkept Agent-created pages and release existing user pages without clearing storage or changing the user profile."
           : tool.name === "browser_close"
             ? "Detach one explicit user-browser tab from this ZenX session without closing the user's tab."
             : tool.description

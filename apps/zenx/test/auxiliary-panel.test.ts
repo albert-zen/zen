@@ -182,7 +182,12 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
     menus: [],
   };
   function Harness() {
-    const [selectedTab, onSelectTab] = useState("browser");
+    const [selectedTab, onSelectTab] = useState(
+      "external-browser:connected:fixture",
+    );
+    const [openedTabs, onTabsChange] = useState([
+      "external-browser:connected:fixture",
+    ]);
     const [open, onOpenChange] = useState(true);
     return React.createElement(AuxiliaryPanel, {
       threadId: "thread-a",
@@ -191,6 +196,8 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
       open,
       onOpenChange,
       selectedTab,
+      openedTabs,
+      onTabsChange,
       onSelectTab,
     });
   }
@@ -203,11 +210,7 @@ test("side tabs suspend Browser frames, render Markdown and escaped source, and 
           ".workspace-tab-types button",
         ),
       ].find((e) => e.querySelector("strong")?.textContent === name)!;
-    await act(async () =>
-      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-        .find((tab) => tab.textContent?.startsWith("Connected page"))!
-        .click(),
-    );
+
     assert.equal(requests.at(-1)?.frames, true);
     const subscriptionsBeforeSwitch = requests.length;
     const stoppedBeforeSwitch = stopped;

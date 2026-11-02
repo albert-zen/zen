@@ -6,6 +6,263 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 import { AuxiliaryPanel } from "../src/renderer/src/auxiliary-panel.js";
 import type { WorkspaceBrowserTab } from "../src/main/workspace-browser.js";
+import {
+  applySidebarPatch,
+  emptySidebarState,
+} from "../src/thread-sidebar-state.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
+
+test("Chrome operations automatically present one exact preview; discovery and dismissal never create a native page", async () => {
+  const dom = new JSDOM(
+    '<button id="thread-browser-toggle">Workspace</button><div id="root"></div>',
+    {
+      url: "https://zenx.local/",
+      pretendToBeVisual: true,
+    },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const commands: string[] = [];
+  const target = {
+    id: "connected:chrome-page",
+    sessionId: "chrome",
+    tabId: "1",
+    title: "Chrome reference",
+    url: "https://example.test",
+    backendId: "connected",
+    mode: "live",
+    loading: false,
+  } as const;
+  const listeners = new Set<(event: BrowserThreadEvent) => void>();
+  (window as any).zenx = {
+    workspaceBrowser: {
+      onChanged: () => () => {},
+      command: async (_owner: string, command: string) => {
+        commands.push(command);
+        return [];
+      },
+    },
+    browserObservation: {
+      subscribe(
+        _request: unknown,
+        listener: (event: BrowserThreadEvent) => void,
+      ) {
+        listeners.add(listener);
+        listener({ type: "targets", targets: [target] });
+        return () => listeners.delete(listener);
+      },
+    },
+  };
+  const snapshot = {
+    plugins: [{ id: "browser", enabled: true, available: true }],
+    panels: [],
+  } as unknown as ZenXPluginSnapshot;
+  function Harness() {
+    const [selectedTab, onSelectTab] = useState("");
+    const [open, onOpenChange] = useState(false);
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "a",
+      title: "Task",
+      open,
+      onOpenChange,
+      snapshot,
+      presentationState: emptySidebarState("a"),
+      onTabsChange(ids) {
+        assert.deepEqual(
+          ids,
+          [],
+          "temporary previews never enter durable tab order",
+        );
+      },
+      selectedTab,
+      onSelectTab,
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "catalog discovery must not open a preview",
+    );
+    assert.equal(
+      document.querySelectorAll(".workspace-tab-types button").length,
+      3,
+      "the launcher has one Browser type alongside files and terminal; it does not expose Chrome as another type",
+    );
+    let sequence = 0;
+    const operate = async () => {
+      sequence++;
+      await act(async () => {
+        for (const listener of [...listeners])
+          listener({
+            type: "targets",
+            targets: [
+              {
+                ...target,
+                previewActive: true,
+                previewSequence: sequence,
+                activityCount: 1,
+              },
+            ],
+          });
+      });
+    };
+    document.getElementById("thread-browser-toggle")!.focus();
+    await operate();
+    assert.equal(
+      document.activeElement?.id,
+      "thread-browser-toggle",
+      "automatic opening never moves keyboard focus",
+    );
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    assert.match(
+      document.querySelector('[role="tab"]')?.textContent ?? "",
+      /Chrome reference/,
+    );
+    assert.equal(
+      document.querySelector('[role="tab"]')?.getAttribute("aria-selected"),
+      "true",
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label^="Close tab"]')!
+        .click(),
+    );
+    await act(async () => {
+      for (const listener of [...listeners])
+        listener({
+          type: "targets",
+          targets: [
+            { ...target, previewActive: true, previewSequence: sequence },
+          ],
+        });
+    });
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "the same operation cannot reopen a dismissed preview",
+    );
+    await operate();
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 1);
+    await act(async () => {
+      for (const listener of [...listeners])
+        listener({
+          type: "turn-ended",
+          threadId: "a",
+          throughSequence: sequence,
+          failed: false,
+        });
+      for (const listener of [...listeners])
+        listener({ type: "targets", targets: [] });
+    });
+    assert.equal(
+      document
+        .querySelector("[data-browser-outcome]")
+        ?.getAttribute("data-browser-outcome"),
+      "completed",
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1250)));
+    assert.equal(
+      document.querySelectorAll('[role="tab"]').length,
+      0,
+      "the temporary presentation retires after completion",
+    );
+    assert.deepEqual(
+      commands,
+      ["list"],
+      "preview selection and dismissal never create or close native pages",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("a restored missing Browser descriptor explains its state and can be dismissed without closing a native page", async () => {
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+    pretendToBeVisual: true,
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    React,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const commands: string[] = [];
+  (window as any).zenx = {
+    workspaceBrowser: {
+      onChanged: () => () => {},
+      command: async (_owner: string, command: string) => {
+        commands.push(command);
+        if (command !== "list")
+          throw Error("Browser tab is not in this Thread");
+        return [];
+      },
+    },
+  };
+  let saved = applySidebarPatch(emptySidebarState("a"), {
+    open: true,
+    tabs: [{ kind: "browser", id: "expired-native-page" }],
+    selectedTab: "browser:expired-native-page",
+  });
+  function Harness() {
+    const [state, setState] = useState(saved);
+    return React.createElement(AuxiliaryPanel, {
+      threadId: "a",
+      title: "Task",
+      open: true,
+      onOpenChange() {},
+      snapshot: null,
+      presentationState: state,
+      selectedTab: state.selectedTab ?? "",
+      onSelectTab() {},
+      onRemoveTab(id) {
+        saved = applySidebarPatch(saved, {
+          tabs: saved.tabs.filter(
+            (tab) => `browser:${"id" in tab ? tab.id : ""}` !== id,
+          ),
+          selectedTab: null,
+        });
+        setState(saved);
+      },
+    });
+  }
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.match(
+      document.querySelector('[role="status"]')?.textContent ?? "",
+      /page.*unavailable/i,
+    );
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label^="Close tab"]')!
+        .click(),
+    );
+    assert.equal(saved.tabs.length, 0);
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 0);
+    assert.deepEqual(
+      commands,
+      ["list"],
+      "dismissal must not address a dead native resource",
+    );
+    await act(async () =>
+      root.render(React.createElement(Harness, { key: "restart" })),
+    );
+    assert.equal(document.querySelectorAll('[role="tab"]').length, 0);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
 
 test("shared browser pages are peer workspace tabs and the type picker unmounts the native view", async () => {
   const dom = new JSDOM('<div id="root"></div>', {
