@@ -30,3 +30,19 @@ The 5000-turn candidate rendered all 10000 historical user/assistant rows. First
 Separate named suite gates real handler dispatch or forwarding of real notifications/replies, never invents an admission. Assertions cover blocked admission local feedback, canonical-before-ACK, ACK-before-canonical, generic lost-reply unknown state, no automatic resend, and preservation/explicit restoration of a newer draft.
 
 Initial [fault run 41389737321](https://github.com/albert-zen/zen/actions/runs/41389737321) verified the first blocked-admission and newer-draft-preservation case but failed the **fixture reset**: synthetic Mac Meta+A did not select all, so Backspace removed only the last character. Other cases did not execute. It is not an overall pass or a product fault. The narrowly repaired fixture uses Electron native selectAll, verifies actual textarea focus/selection range, then native Backspace. No JavaScript DOM value assignment. Fault-only repeat [41390456335](https://github.com/albert-zen/zen/actions/runs/41390456335) **passed all four named cases**: blocked true admission, canonical before held ACK, true ACK before ordered canonical delivery, and generic lost reply after true admission. It verified no auto resend, explicit native restore appending to a newer draft, no late clearing/duplication, and four unique canonical messages after independent storage reopen. The lost-reply real handler result remains separate from the deliberately undelivered renderer reply. Fault timings are excluded from performance results.
+
+## Stable-context follow-up remains below acceptance
+
+Exact follow-up production source `b8c77b80fa547fddfa7875e11a932d37b143e473`, unchanged v2 native driver. [Native run 41390735989](https://github.com/albert-zen/zen/actions/runs/41390735989); [134/134 targeted tests, typecheck and production build passed](https://github.com/albert-zen/zen/actions/runs/41390736199). These are independent hosted samples, not a same-machine statistically established speedup.
+
+| Prior turns | Pending DOM, ms | First visible pending / clear, ms | Canonical bubble visible, ms | Strict outcome |
+|---|---|---|---|---|
+| 0 | 107.4 / 12.7 / 17.0 | 123.5 / 14.2 / 17.8 | 1439.4 / 311.3 / 202.5 | PASS |
+| 1000 | 99.7 / 72.0 / 230.1 | 125.6 / 100.6 / 261.2 | 2875.2 / 2514.6 / 2773.6 | **FAIL: third sample over 200 ms** |
+| 5000 | 227.4 / 254.5 / 827.1 | 309.9 / 287.2 / 888.1 | 20469.9 / 17425.6 / 21475.2 | **FAIL: all three over 200 ms** |
+
+Canonical notification after native click (same renderer clock) at 1000 turns: 2024.3 / 1619.6 / 1893.4 ms; at 5000: 17533.3 / 13513.0 / 15318.1 ms. Main actual IPC duration at 1000: 1903.6 / 1545.0 / 1644.2 ms; at 5000: 17294.9 / 12218.9 / 14442.4 ms. Renderer and main-process clocks are never subtracted from one another.
+
+All nine candidate sends passed independent persistence, exact identity, complete Trace and zero-compaction checks. The performance failures are deliberately retained. Pending DOM-to-visible gaps were 25.9 / 28.6 / 31.1 ms at 1000 turns and 82.5 / 32.7 / 61.0 ms at 5000; most residual delay in these samples precedes insertion of the pending DOM, but these timestamps alone do not identify a specific React or layout operation.
+
+A separately labeled, **profiling-perturbed, non-acceptance** [owned renderer profile run](https://github.com/albert-zen/zen/actions/runs/41391701278) is pending. It uses the same exact source, one real native send per history size, bounded Long Animation Frame / long-task entries plus in-process Electron debugger CPU and timeline recording. It does not attach to a user app, open a debugging port, substitute a React profiling build, or reuse its timings as benchmark samples.
