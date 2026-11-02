@@ -103,6 +103,7 @@ export function applyNativeThreadEvent(
 ): Thread {
   if (
     event.type === "model_catalog_updated" ||
+    event.type === "user_question_attention_invalidated" ||
     event.type === "context_compaction_status"
   )
     return thread;

@@ -1,5 +1,9 @@
 import { normalizeTimeZone, type ReceiptTimezone } from "./message-timezone.js";
 import {
+  parseUserQuestionReply,
+  type UserQuestionReply,
+} from "./user-question.js";
+import {
   validateModelReferenceBindings,
   type ModelReferenceBinding,
 } from "./model-references.js";
@@ -269,6 +273,8 @@ export type UserInputPart =
 export type UserInput = readonly UserInputPart[];
 
 interface UserMessageItemBase extends ItemBase {
+  /** Native-validated semantic reply provenance; never accepted from generic send metadata. */
+  questionReply?: UserQuestionReply;
   receiptTimezone?: ReceiptTimezone;
   type: "user_message";
   turnId: string;
@@ -385,6 +391,7 @@ export type QueuedInputItem =
 export type DeliveredInputItem =
   UserMessageItem | ThreadMessageItem | HostMessageItem;
 export interface InitialInputMessage {
+  questionReply?: UserQuestionReply;
   hostInput?: HostWakeupInput;
   input: UserInput;
   clientId: string;
@@ -611,6 +618,7 @@ export type ContextCompactionItem =
   ProviderGeneratedContextCompactionItem | AgenticContextCompactionItem;
 
 export interface QueuedUserMessageItem extends ItemBase {
+  questionReply?: UserQuestionReply;
   receiptTimezone?: ReceiptTimezone;
   type: "user_message_queued";
   clientId: string;
@@ -800,6 +808,13 @@ export function decodeCanonicalItem(value: unknown): CanonicalItem {
     throw new Error(`Unknown canonical Item type: ${rawType}`);
   }
   const type = rawType as ItemType;
+
+  if (item.questionReply !== undefined) {
+    if (type !== "user_message" && type !== "user_message_queued")
+      throw new Error("questionReply requires human input");
+    // Historical copies keep the original request's Thread identity inert.
+    parseUserQuestionReply(item.questionReply);
+  }
 
   if (type === "turn_started" || type === "context_compaction") {
     if (item.workspaceInstructions !== undefined) {

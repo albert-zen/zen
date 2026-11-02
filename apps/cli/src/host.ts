@@ -58,6 +58,7 @@ import {
   type ThreadSummaryProjection,
 } from "../../../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
+import { AskUserQuestionToolRuntime } from "../../../src/user-question-tool.js";
 import {
   ToolOutputSpool,
   type ToolOutputSpoolOptions,
@@ -279,6 +280,10 @@ export function createHostedAppServer(
     toolEnvironment.registerRuntime(new ApplyPatchToolRuntime(), {
       kind: "builtin",
       id: "apply-patch",
+    });
+    toolEnvironment.registerRuntime(new AskUserQuestionToolRuntime(), {
+      kind: "builtin",
+      id: "user-question",
     });
     toolEnvironment.registerRuntime(
       new ViewImageToolRuntime({ attachments, journal }),

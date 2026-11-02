@@ -22,6 +22,10 @@ import {
   NATIVE_MODEL_CATALOG_UPDATED_METHOD,
   NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
   NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
+  NATIVE_USER_QUESTIONS_CAPABILITY,
+  NATIVE_QUESTION_RESPOND_METHOD,
+  NATIVE_QUESTION_LIST_METHOD,
+  NATIVE_QUESTION_READ_METHOD,
   NATIVE_THREAD_DELETE_METHOD,
   NATIVE_THREAD_DELETED_LIST_METHOD,
   NATIVE_THREAD_RESTORE_METHOD,
@@ -110,6 +114,7 @@ export class NativeConnection {
         "zen/turn/send",
         NATIVE_TURN_SEND_UNARCHIVED_METHOD,
         NATIVE_TURN_RETRY_METHOD,
+        NATIVE_QUESTION_RESPOND_METHOD,
         NATIVE_QUEUE_CANCEL_METHOD,
         NATIVE_STEER_RECALL_METHOD,
         NATIVE_QUEUE_EDIT_METHOD,
@@ -224,6 +229,169 @@ export class NativeConnection {
       return;
     }
 
+    if (
+      message.method === NATIVE_QUESTION_LIST_METHOD ||
+      message.method === NATIVE_QUESTION_READ_METHOD
+    ) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        const list = message.method === NATIVE_QUESTION_LIST_METHOD;
+        const keys = list
+          ? ["threadId", "afterQuestionCallItemId"]
+          : ["threadId", "questionCallItemId", "clientUserMessageId"];
+        const boundedId = (id: unknown): id is string =>
+          typeof id === "string" && id.trim().length > 0 && id.length <= 512;
+        if (
+          !this.#appServer ||
+          !isRecord(params) ||
+          Object.keys(params).some((key) => !keys.includes(key)) ||
+          !boundedId(params.threadId) ||
+          (list
+            ? params.afterQuestionCallItemId !== undefined &&
+              !boundedId(params.afterQuestionCallItemId)
+            : !boundedId(params.questionCallItemId) ||
+              !boundedId(params.clientUserMessageId))
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Provide exact bounded question read identities",
+          );
+        const result = list
+          ? await this.#appServer.listUserQuestions(
+              params.threadId,
+              params.afterQuestionCallItemId as string | undefined,
+            )
+          : await this.#appServer.readUserQuestion(
+              params.threadId,
+              params.questionCallItemId as string,
+              params.clientUserMessageId as string,
+            );
+        if (!this.#closed) send({ id: message.id, result });
+      } catch (error) {
+        if (!this.#closed)
+          send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message:
+                error instanceof AppServerError
+                  ? error.message
+                  : "Question read is unconfirmed; keep the original response identity",
+              data: {
+                zenCode:
+                  error instanceof AppServerError
+                    ? error.code
+                    : "question_read_unknown",
+              },
+            },
+          });
+      }
+      return;
+    }
+    if (message.method === NATIVE_QUESTION_RESPOND_METHOD) {
+      if (!this.#initialized && !this.#isInitialized()) {
+        send({
+          id: message.id,
+          error: { code: -32600, message: "Not initialized" },
+        });
+        return;
+      }
+      try {
+        const params = message.params;
+        if (
+          !this.#appServer ||
+          !isRecord(params) ||
+          Object.keys(params).some(
+            (key) =>
+              ![
+                "threadId",
+                "questionCallItemId",
+                "clientUserMessageId",
+                "clientTimezone",
+                "clientObservation",
+                "outcome",
+                "answers",
+              ].includes(key),
+          ) ||
+          typeof params.threadId !== "string" ||
+          !params.threadId.trim() ||
+          params.threadId.length > 512 ||
+          typeof params.questionCallItemId !== "string" ||
+          !params.questionCallItemId.trim() ||
+          params.questionCallItemId.length > 512 ||
+          typeof params.clientUserMessageId !== "string" ||
+          !params.clientUserMessageId.trim() ||
+          params.clientUserMessageId.length > 512 ||
+          (params.outcome !== "answer" && params.outcome !== "cancel") ||
+          (params.outcome === "cancel" && params.answers !== undefined) ||
+          (params.clientTimezone !== undefined &&
+            normalizeTimeZone(params.clientTimezone) === undefined)
+        )
+          throw new AppServerError(
+            "invalid_request",
+            "Provide exact Thread/question/client identity and an answer or explicit cancellation",
+          );
+        const result = await this.#appServer.respondToUserQuestion(
+          params.threadId,
+          {
+            questionCallItemId: params.questionCallItemId,
+            clientId: params.clientUserMessageId,
+            ...(params.outcome === "answer"
+              ? {
+                  outcome: "answer" as const,
+                  answers:
+                    params.answers as import("../../user-question.js").UserQuestionAnswer[],
+                }
+              : { outcome: "cancel" as const }),
+          },
+          {
+            ...(params.clientTimezone === undefined
+              ? {}
+              : { clientTimezone: params.clientTimezone as string }),
+            ...(this.#requestApproval === undefined
+              ? {}
+              : { requestApproval: this.#requestApproval }),
+          },
+        );
+        if (!this.#closed)
+          send({
+            id: message.id,
+            result: {
+              turnId: result.turn.id,
+              ...(result.turn.admission === undefined
+                ? {}
+                : { admission: result.turn.admission }),
+              question: result.question,
+            },
+          });
+      } catch (error) {
+        if (!this.#closed)
+          send({
+            id: message.id,
+            error: {
+              code: error instanceof AppServerError ? -32602 : -32603,
+              message:
+                error instanceof AppServerError
+                  ? error.message
+                  : "Question response outcome is unconfirmed. Read the original request and client identity before retrying.",
+              data: {
+                zenCode:
+                  error instanceof AppServerError
+                    ? error.code
+                    : "admission_outcome_unknown",
+              },
+            },
+          });
+      }
+      return;
+    }
     if (message.method === NATIVE_TURN_WAKE_METHOD) {
       if (!this.#initialized && !this.#isInitialized()) {
         send({
@@ -1234,6 +1402,7 @@ export class NativeConnection {
               : [
                   NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY,
                   NATIVE_INLINE_IMAGE_INPUT_CAPABILITY,
+                  NATIVE_USER_QUESTIONS_CAPABILITY,
                 ],
         },
       });

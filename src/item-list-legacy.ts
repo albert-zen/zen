@@ -27,6 +27,7 @@ import {
 } from "./item-list.js";
 
 const carried = [
+  "questionReply",
   "clientId",
   "receiptTimezone",
   "deliveryAfter",
