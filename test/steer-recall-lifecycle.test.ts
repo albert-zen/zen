@@ -35,6 +35,7 @@ function createServer(options: {
   runtime?: AgentRuntime;
   model?: ModelAdapter;
   images?: boolean;
+  terminalFailure?: boolean;
 }) {
   const model = options.model ?? {
     provider: "queue-edit",
@@ -51,6 +52,9 @@ function createServer(options: {
       options.runtime ??
       new AgentRuntime({
         toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+        ...(options.terminalFailure === true
+          ? { sampleRetry: { maxAttempts: 1 } }
+          : {}),
       }),
     providerRegistry: new ProviderRegistry([
       {
@@ -113,7 +117,7 @@ async function running(failFirst = false) {
     },
   };
   const journal = new InMemoryThreadJournal();
-  const server = createServer({ journal, model });
+  const server = createServer({ journal, model, terminalFailure: failFirst });
   const thread = await server.startThread();
   const turn = await server.startTurn(thread.id, "initial", {
     clientId: "initial",
@@ -250,6 +254,20 @@ for (const ending of ["stop", "error"] as const)
           f.release[0]!.resolve();
           await f.turn.done.catch(() => undefined);
         }
+        const stopped = await f.server.readThread(f.threadId);
+        assert.equal(
+          stopped.turns.find((turn) => turn.id === f.turn.id)?.status,
+          ending === "stop" ? "interrupted" : "failed",
+        );
+        if (ending === "error")
+          assert(
+            stopped.items.some(
+              (item) =>
+                item.type === "failure" &&
+                item.turnId === f.turn.id &&
+                item.message.includes("synthetic provider failure"),
+            ),
+          );
         await f.server.resumeQueue(f.threadId);
         await setImmediate();
         assert.equal(f.requests.length, 1);
@@ -541,36 +559,42 @@ test(
 
 for (const source of ["human-queue", "host"] as const)
   test(
-  `automatic ${source} successor does not claim held human steer`,
-  { timeout: 10000 },
-  async () => {
-    const f = await running();
-    try {
-      await f.server.stageSteerMessage(f.threadId, f.turn.id, "held-private", {
-        clientId: "held",
-      });
-      await f.server.interruptTurn(f.threadId, f.turn.id);
-      if (source === "host")
-        await f.server.wakeTurn(f.threadId, {
-          clientId: "queued",
-          source: "bootstrap",
-          text: "queued-next",
-        });
-      else
-        await f.server.queueMessage(f.threadId, "queued-next", "queued");
-      await f.sampled[1]!.promise;
-      const after = await f.server.readThread(f.threadId);
-      assert.equal(pendingSteerMessages(after.items).length, 1);
-      assert(!JSON.stringify(f.requests[1]!.messages).includes("held-private"));
-      assert(JSON.stringify(f.requests[1]!.messages).includes("queued-next"));
-      f.release[1]!.resolve();
-      await setImmediate();
-    } finally {
-      for (const gate of f.release) gate.resolve();
-      await f.turn.done.catch(() => undefined);
-    }
-  },
-);
+    `automatic ${source} successor does not claim held human steer`,
+    { timeout: 10000 },
+    async () => {
+      const f = await running();
+      try {
+        await f.server.stageSteerMessage(
+          f.threadId,
+          f.turn.id,
+          "held-private",
+          {
+            clientId: "held",
+          },
+        );
+        await f.server.interruptTurn(f.threadId, f.turn.id);
+        if (source === "host")
+          await f.server.wakeTurn(f.threadId, {
+            clientId: "queued",
+            source: "bootstrap",
+            text: "queued-next",
+          });
+        else await f.server.queueMessage(f.threadId, "queued-next", "queued");
+        await f.sampled[1]!.promise;
+        const after = await f.server.readThread(f.threadId);
+        assert.equal(pendingSteerMessages(after.items).length, 1);
+        assert(
+          !JSON.stringify(f.requests[1]!.messages).includes("held-private"),
+        );
+        assert(JSON.stringify(f.requests[1]!.messages).includes("queued-next"));
+        f.release[1]!.resolve();
+        await setImmediate();
+      } finally {
+        for (const gate of f.release) gate.resolve();
+        await f.turn.done.catch(() => undefined);
+      }
+    },
+  );
 
 test(
   "fork remaps recall receipt anchors without changing parent recovery",
@@ -639,8 +663,7 @@ for (const winner of ["claim", "recall"] as const)
             (winner === "claim" &&
               item.type === "user_message" &&
               item.clientId === "race") ||
-            (winner === "recall" &&
-              item.type === "user_message_steer_recalled")
+            (winner === "recall" && item.type === "user_message_steer_recalled")
           ) {
             entered.resolve();
             await releaseCommit.promise;
@@ -719,7 +742,8 @@ test(
       assert.equal(pendingSteerMessages(after.items).length, 1);
       assert(
         !after.items.some(
-          (item) => item.type === "user_message" && item.clientId === "oversized",
+          (item) =>
+            item.type === "user_message" && item.clientId === "oversized",
         ),
       );
       await f.server.recallSteerMessages(f.threadId, {

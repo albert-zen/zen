@@ -40,18 +40,6 @@ jobs:
           url."git@github.com:albert-zen/im-agent-sdk.git".insteadOf
           "https://github.com/albert-zen/im-agent-sdk.git"
       - run: npm ci
-      - name: Show temporary recall regression formatting diagnostic
-        run: |
-          npx prettier --write src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts test/host-wake-defaults.test.ts
-          git diff -- src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts test/host-wake-defaults.test.ts
-          git restore -- src/app-server.ts test/steer-recall-lifecycle.test.ts test/context-compaction.test.ts test/host-wake-defaults.test.ts
-      - name: Diagnose bounded recall and native CLI regressions
-        timeout-minutes: 5
-        run: |
-          npm run build
-          echo "RECALL_DIAGNOSTIC focused synthetic tests begin"
-          node --test --test-timeout=30000 dist/test/host-wake-defaults.test.js dist/test/steer-recall*.test.js dist/test/context-compaction.test.js
-          echo "RECALL_DIAGNOSTIC focused synthetic tests complete"
       - run: npm run check
 
   zenx:

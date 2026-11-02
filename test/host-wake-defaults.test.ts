@@ -222,7 +222,10 @@ test("native omitted human mode and Host mode both soft steer; explicit queue re
       },
     });
     assert.equal(sent.find((m) => m.id === 1)?.result.turnId, active.id);
-    assert.equal(sent.find((m) => m.id === 1)?.result.admission.state, "queued");
+    assert.equal(
+      sent.find((m) => m.id === 1)?.result.admission.state,
+      "queued",
+    );
     await connection.receive({
       id: 2,
       method: "zen/turn/wake",
@@ -249,13 +252,19 @@ test("native omitted human mode and Host mode both soft steer; explicit queue re
     const pending = pendingQueuedMessages(snapshot.items);
     assert.equal(pending.length, 2);
     assert.equal(pendingSteerMessages(snapshot.items).length, 1);
-    assert(pending.some(
-      (item) => item.clientId === "human-later" &&
-        item.type === "user_message_queued" && item.deliveryMode !== "steer",
-    ));
-    assert(!snapshot.items.some(
-      (item) => item.type === "user_message" && item.clientId === "human-2",
-    ));
+    assert(
+      pending.some(
+        (item) =>
+          item.clientId === "human-later" &&
+          item.type === "user_message_queued" &&
+          item.deliveryMode !== "steer",
+      ),
+    );
+    assert(
+      !snapshot.items.some(
+        (item) => item.type === "user_message" && item.clientId === "human-2",
+      ),
+    );
     await connection.receive({
       id: 4,
       method: "zen/turn/wake",
@@ -601,10 +610,14 @@ test(
       );
       assert(admission?.type === "user_message_queued");
       assert.equal(admission.deliveryMode, "steer");
-      assert(snapshot.items.some(
-        (item) => item.type === "user_message" &&
-          item.clientId === admission.clientId && item.turnId === active.id,
-      ));
+      assert(
+        snapshot.items.some(
+          (item) =>
+            item.type === "user_message" &&
+            item.clientId === admission.clientId &&
+            item.turnId === active.id,
+        ),
+      );
     } finally {
       f.release.resolve();
       stop();
