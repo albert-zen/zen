@@ -189,7 +189,7 @@ function Fixture() {
             color: "var(--color-text-secondary)",
           }}
         >
-          workspace-demo <Icon name="chevron-right" /> {title}
+          workspace-demo <Icon name="chevron-right" /> {view.name}
         </div>
       </header>
       <Sidebar

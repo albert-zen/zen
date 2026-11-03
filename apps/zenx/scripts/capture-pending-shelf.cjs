@@ -166,12 +166,35 @@ app
     await until("Boolean(document.querySelector('.queue-row-edit'))");
     await screenshot("queue-human-edit-entry");
     await click(".queue-row-edit");
-    await until("Boolean(document.querySelector('[role=dialog]'))");
+    await until(
+      "(()=>{const d=document.querySelector('.queued-message-editor[data-state=open]');return !!d&&getComputedStyle(d).opacity==='1'})()",
+    );
+    await evaluate(
+      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+    const editor = await evaluate(
+      "(()=>{const d=document.querySelector('.queued-message-editor'),r=d.getBoundingClientRect(),e=d.querySelector('textarea'),save=d.querySelector('.queue-editor-save'),b=save.getBoundingClientRect();return {width:r.width,height:r.height,top:r.top,bottom:r.bottom,text:e.value,saveHit:save.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2)),opacity:getComputedStyle(d).opacity,viewport:innerHeight}})()",
+    );
+    assert.equal(editor.opacity, "1");
+    assert.ok(editor.width > 300 && editor.height > 100);
+    assert.ok(editor.top >= 0 && editor.bottom <= editor.viewport);
+    assert.equal(
+      editor.saveHit,
+      true,
+      "Visible editor save control is not occluded",
+    );
+    assert.equal(
+      editor.text,
+      "最后补一份简短的验证结论，说明哪些行为已经通过。",
+    );
     await screenshot("queue-human-edit-open");
+    await click(".queue-editor-close");
+    await until("!document.querySelector('.queued-message-editor')");
     result.cases.push({
       name: "queue-human-edit",
+      editor,
       boundary:
-        "Production Queue editor over synthetic human input; native save is stubbed",
+        "Production Queue editor over synthetic human input; native save is stubbed, open/close and actual rendered dialog checked",
     });
     window.setContentSize(800, 500);
     await window.loadFile(path.join(temporary, "pending-send-visual.html"));
