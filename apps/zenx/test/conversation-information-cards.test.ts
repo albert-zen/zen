@@ -276,13 +276,11 @@ test("streaming a long conversation does not clone or redraw the information cat
       /Updated child active/,
     );
     active = false;
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(
-          '.conversation-information-section > header button[aria-label="Refresh"]',
-        )!
-        .click(),
-    );
+    // Returning focus re-reads bounded trigger facts; there is no manual
+    // refresh control in the always-visible card header.
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
+    });
     assert.match(
       document.querySelector(".information-trigger-list")!.textContent!,
       /Live triggerPaused/,
