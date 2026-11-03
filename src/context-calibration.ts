@@ -6,7 +6,11 @@ import type {
   ModelTool,
   ProviderToolPresentation,
 } from "./model.js";
-import { estimateModelInput, type ModelInputEstimate } from "./model-usage.js";
+import {
+  estimateModelInput,
+  type ModelInputEstimate,
+  type ImageDimensionEstimate,
+} from "./model-usage.js";
 
 export interface ContextEstimateRequest {
   threadId: string;
@@ -18,6 +22,8 @@ export interface ContextEstimateRequest {
   selection: CanonicalProviderSelection;
   inputModalities?: readonly string[] | null;
   instructionsMaterialized?: boolean;
+  /** Preflight only; never used to create or serialize model-visible media. */
+  imageDimensions?: ImageDimensionEstimate;
 }
 interface Receipt {
   adapter: number;
@@ -57,6 +63,7 @@ export class ContextCalibration {
         ? undefined
         : request.adapter.contextInstructions,
       request.providerToolPresentation,
+      request.imageDimensions,
     );
     let adapterId = this.#adapterIds.get(request.adapter);
     if (adapterId === undefined) {
@@ -72,6 +79,9 @@ export class ContextCalibration {
         providerToolPresentation: request.providerToolPresentation,
         instructions: request.adapter.contextInstructions ?? "",
         modalities: request.inputModalities ?? null,
+        ...(request.imageDimensions === undefined
+          ? {}
+          : { imageDimensionEstimate: true }),
         boundary:
           request.items.findLast((item) => item.type === "context_compaction")
             ?.id ?? null,

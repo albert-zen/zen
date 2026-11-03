@@ -355,6 +355,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
         const bytes = await this.#attachments.read(part.attachment);
         return {
           type: "input_image",
+          ...(part.detail === undefined ? {} : { detail: part.detail }),
           image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
           detail: "auto",
         };

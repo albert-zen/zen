@@ -1,3 +1,5 @@
+import type { AttachmentStore } from "./attachment.js";
+import { prepareSampleImages } from "./image-preparation.js";
 import { randomUUID } from "node:crypto";
 import { textFromUserInput, type JsonValue } from "./item.js";
 import {
@@ -18,6 +20,8 @@ import { observeModelWithTrace } from "./trace-model.js";
 import type { RuntimeTrace } from "./trace.js";
 
 export interface AuxiliaryModelOptions {
+  attachments?: Pick<AttachmentStore, "read" | "importBytes">;
+  supportsImageDetailOriginal?: boolean | null;
   adapter: ModelAdapter;
   trace: RuntimeTrace;
   itemListStore: Pick<FileItemListStore, "create">;
@@ -65,6 +69,7 @@ export function streamAuxiliaryModel(
     configuration: options.configuration,
     selection: options.selection,
     inputModalities: options.inputModalities,
+    supportsImageDetailOriginal: options.supportsImageDetailOriginal,
   });
   const ownerId = `auxiliary-${randomUUID()}`;
   const sampleId = randomUUID();
@@ -81,6 +86,24 @@ export function streamAuxiliaryModel(
     frozen.selection,
   );
   return (async function* () {
+    if (options.attachments !== undefined)
+      items.push(
+        ...(await prepareSampleImages({
+          threadId: ownerId,
+          sampleId,
+          itemList: items,
+          selection: frozen.selection ?? {
+            providerProfileId: adapter.provider,
+            modelId: frozen.model,
+          },
+          inputModalities: frozen.inputModalities ?? null,
+          supportsImageDetailOriginal:
+            frozen.supportsImageDetailOriginal ?? null,
+          attachments: options.attachments,
+          id: randomUUID,
+          now: () => new Date().toISOString(),
+        })),
+      );
     for (const item of items) {
       const receipt = await trace.record({
         threadId: ownerId,

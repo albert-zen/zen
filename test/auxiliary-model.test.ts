@@ -276,3 +276,66 @@ test("semantic bundle write failure keeps committed source facts but never dispa
   assert.ok(records.every((record) => record.type === "context_source"));
   assert.deepEqual(await f.itemListStore.listThreadIds(), []);
 });
+
+test("auxiliary compaction media is prepared before durable bundle capture and cold replay", async (t) => {
+  const f = await fixture(t);
+  const sharp = (await import("sharp")).default;
+  const { InMemoryAttachmentStore } = await import("../src/attachment.js");
+  const attachments = new InMemoryAttachmentStore();
+  const original = await attachments.importBytes(
+    await sharp({
+      create: { width: 2048, height: 2048, channels: 3, background: "purple" },
+    })
+      .png()
+      .toBuffer(),
+  );
+  let prepared:
+    Parameters<NonNullable<AuxiliaryModelOptions["onPrepared"]>>[0] | undefined;
+  let sent: any;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://synthetic.invalid/v1",
+    apiKey: "synthetic-not-real",
+    provider: "synthetic",
+    attachments,
+    fetch: async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return complete();
+    },
+  });
+  for await (const _event of streamAuxiliaryModel({
+    ...f,
+    adapter,
+    attachments,
+    purpose: "compaction",
+    model: "image-model",
+    reasoningEffort: "medium",
+    selection: { providerProfileId: "synthetic", modelId: "image-model" },
+    inputModalities: ["text", "image"],
+    signal: new AbortController().signal,
+    messages: [
+      { role: "user", content: [{ type: "image", attachment: original }] },
+    ],
+    tools: [],
+    onPrepared: (value) => {
+      prepared = value;
+    },
+  })) {
+    /* drain */
+  }
+  assert.ok(prepared);
+  const cold = await f.itemListStore.read(prepared.ownerId);
+  assert(cold.some((i) => i.source.kind === "image_preparation"));
+  const compiled = compileItemList(cold, {
+    sampleId: prepared.sampleId,
+    selection: { providerProfileId: "synthetic", modelId: "image-model" },
+  });
+  assert.deepEqual(compiled.messages, prepared.messages);
+  const image = sent.messages
+    .flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
+    .find((p: any) => p.type === "image_url");
+  const metadata = await sharp(
+    Buffer.from(image.image_url.url.split(",")[1], "base64"),
+  ).metadata();
+  assert.deepEqual([metadata.width, metadata.height], [1600, 1600]);
+  assert.equal(original.width, 2048);
+});

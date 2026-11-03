@@ -20,6 +20,8 @@ export interface ModelCatalogEntryInput {
   supportedReasoningEfforts?: readonly ReasoningEffort[] | null;
   defaultReasoningEffort?: ReasoningEffort | null;
   inputModalities?: readonly ModelInputModality[] | null;
+  /** Explicit provider/model capability; absence/null is Unknown, never inferred from image input. */
+  supportsImageDetailOriginal?: boolean | null;
   contextWindow?: number | null;
   source?: ModelCatalogSource;
 }
@@ -36,6 +38,7 @@ export interface ModelCatalogEntry {
   defaultReasoningEffort: ReasoningEffort | null;
   /** null means Unknown; [] means known to accept no supported input modality. */
   inputModalities: readonly ModelInputModality[] | null;
+  supportsImageDetailOriginal?: boolean | null;
   /** null means incomplete discovery/legacy metadata and is not runnable. */
   contextWindow: number | null;
   source: ModelCatalogSource;
@@ -135,6 +138,14 @@ export function normalizeModelCatalogEntry(
         : null
       : entry.inputModalities,
   );
+  if (
+    entry.supportsImageDetailOriginal !== undefined &&
+    entry.supportsImageDetailOriginal !== null &&
+    typeof entry.supportsImageDetailOriginal !== "boolean"
+  )
+    throw new Error(
+      `Original image detail capability must be boolean or null for model ${id}`,
+    );
   const contextWindow = entry.contextWindow ?? null;
   if (
     contextWindow !== null &&
@@ -153,6 +164,9 @@ export function normalizeModelCatalogEntry(
     supportedReasoningEfforts,
     defaultReasoningEffort,
     inputModalities,
+    ...(entry.supportsImageDetailOriginal === undefined
+      ? {}
+      : { supportsImageDetailOriginal: entry.supportsImageDetailOriginal }),
     contextWindow,
     source,
   });
