@@ -12,7 +12,7 @@ import {
   applyCompactionStatus,
   markCompactionOutcomeUnknown,
 } from "./compaction-feedback.js";
-import { ConversationInformationCards } from "./ConversationInformationCards.js";
+import { EditableInformationPanel } from "./EditableInformationPanel.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -4471,10 +4471,15 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                managedBoard
                 contextContent={
-                  !selectedRoomId && selectedThreadId ? (
-                    <ConversationInformationCards
-                      threadId={selectedThreadId}
+                  selectedRoomId || selectedThreadId ? (
+                    <EditableInformationPanel
+                      owner={
+                        selectedRoomId
+                          ? { kind: "room", roomId: selectedRoomId }
+                          : { kind: "thread", threadId: selectedThreadId! }
+                      }
                       threads={informationThreads}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}

@@ -1,3 +1,7 @@
+import type {
+  NativeInformationApi,
+  NativeInformationUpdate,
+} from "../native-information.js";
 import { subscribeBrowserObservation } from "./browser-observation-ipc.js";
 import type {
   SidebarOwner,
@@ -84,6 +88,12 @@ import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-brid
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  information: {
+    read: (owner: SidebarOwner | string) =>
+      ipcRenderer.invoke(ipcChannels.informationRead, owner),
+    update: (request: NativeInformationUpdate) =>
+      ipcRenderer.invoke(ipcChannels.informationUpdate, request),
+  } satisfies NativeInformationApi,
   threadSidebar: {
     read: (threadId: SidebarOwner | string) =>
       ipcRenderer.invoke(ipcChannels.threadSidebarRead, threadId),

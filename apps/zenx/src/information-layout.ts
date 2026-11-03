@@ -1,4 +1,5 @@
 import type { SidebarOwner } from "./thread-sidebar-state.js";
+import { normalizeBoardInstanceKey } from "../../../packages/zenx-board-plugin/src/board.js";
 
 /** Static definitions only: neither provider availability nor provider content. */
 export const informationCatalog = [
@@ -10,7 +11,7 @@ export const informationCatalog = [
   { type: "room-members", title: "Room members", source: "room" },
   {
     type: "board",
-    title: "Board (existing default document)",
+    title: "Board",
     source: "owner",
   },
 ] as const;
@@ -22,7 +23,7 @@ type Configurations = {
   triggers: { filter: "all" | "timer" | "event"; showPaused: boolean };
   shell: Record<never, never>;
   "room-members": Record<never, never>;
-  board: { instanceKey: "default" };
+  board: { instanceKey: string };
 };
 export type InformationBinding =
   { kind: "owner" } | { kind: "member"; resourceThreadId: string };
@@ -101,11 +102,7 @@ export function informationConfig(type: InformationType, value: unknown = {}) {
   }
   if (type === "board") {
     only(config, ["instanceKey"]);
-    if (config.instanceKey !== undefined && config.instanceKey !== "default")
-      throw Error(
-        "Independent Board documents are not available in this contract checkpoint",
-      );
-    return { instanceKey: "default" as const };
+    return { instanceKey: normalizeBoardInstanceKey(config.instanceKey) };
   }
   only(config, []);
   return {};
@@ -370,6 +367,8 @@ export function bindInformationEdits(
     callerThreadId: string;
     current: InformationLayout;
     defaults: InformationLayout;
+    /** Already live-admitted member choices from a trusted human entry point. */
+    editableThreadIds?: readonly string[];
     newId(): string;
   },
 ): InformationOperation[] {
@@ -378,13 +377,28 @@ export function bindInformationEdits(
   if (!Array.isArray(input.operations) || input.operations.length === 0)
     throw Error("Information operations required");
   const current = parseInformationLayout(context.current);
+  const editable = (widget: InformationWidget) =>
+    canEditInformationWidget(widget, context.callerThreadId) ||
+    (widget.binding.kind === "member" &&
+      context.editableThreadIds?.includes(widget.binding.resourceThreadId));
   return input.operations.map((value) => {
     const edit = object(value);
     let operation: InformationOperation;
     if (edit.op === "add") {
       only(edit, ["op", "type", "config", "before"]);
       const definition = informationDefinition(edit.type);
-      const config = informationConfig(definition.type, edit.config);
+      let config = informationConfig(definition.type, edit.config);
+      if (
+        definition.type === "board" &&
+        !Object.hasOwn(object(edit.config ?? {}), "instanceKey") &&
+        current.widgets.some(
+          (widget) =>
+            widget.type === "board" && widget.config.instanceKey === "default",
+        )
+      )
+        config = informationConfig("board", {
+          instanceKey: `board-${context.newId()}`,
+        });
       if (definition.source === "room" && context.owner.kind !== "room")
         throw Error("Room information requires a Room owner");
       operation = {
@@ -409,7 +423,7 @@ export function bindInformationEdits(
       only(edit, ["op"]);
       if (
         [...current.widgets, ...context.defaults.widgets].some(
-          (widget) => !canEditInformationWidget(widget, context.callerThreadId),
+          (widget) => !editable(widget),
         )
       )
         throw Error("Cannot reset another member's information instances");
@@ -418,15 +432,22 @@ export function bindInformationEdits(
       const id = text(edit.id);
       const widget = current.widgets.find((widget) => widget.id === id);
       if (!widget) throw Error("Information instance is no longer present");
-      if (
-        edit.op !== "move" &&
-        !canEditInformationWidget(widget, context.callerThreadId)
-      )
+      if (edit.op !== "move" && !editable(widget))
         throw Error(
           "Another member's information instance may only be preserved or moved",
         );
       operation = parseInformationOperations({ operations: [edit] })
         .operations[0]!;
+      if (
+        widget.type === "board" &&
+        operation.op === "set" &&
+        operation.config !== undefined &&
+        "instanceKey" in operation.config &&
+        operation.config.instanceKey !== widget.config.instanceKey
+      )
+        throw Error(
+          "A placed Board document cannot be retargeted; remove its placement and add the desired address",
+        );
     }
     applyInformationOperation(current, operation);
     return operation;
@@ -443,7 +464,14 @@ export function informationConfigSchema(type: InformationType) {
             showPaused: { type: "boolean" },
           }
         : type === "board"
-          ? { instanceKey: { const: "default" } }
+          ? {
+              instanceKey: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                pattern: "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+              },
+            }
           : {},
     additionalProperties: false,
   };

@@ -47,7 +47,7 @@ export interface ThreadSidebarUpdate {
   expectedRevision: number;
   patch: ThreadSidebarPatch;
 }
-export type SidebarAdmission = () => void;
+export type SidebarAdmission = () => void | Promise<void>;
 /** Internal Host provenance; IPC does not accept this from renderer payloads. */
 export type SidebarChangeSource =
   { kind: "ui" | "host" } | { kind: "tool"; threadId: string; callId: string };

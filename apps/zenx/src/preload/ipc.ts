@@ -1,4 +1,6 @@
 export const ipcChannels = {
+  informationRead: "zenx:information:read",
+  informationUpdate: "zenx:information:update",
   threadSidebarRead: "zenx:thread-sidebar:read",
   threadSidebarUpdate: "zenx:thread-sidebar:update",
   threadSidebarChanged: "zenx:thread-sidebar:changed",

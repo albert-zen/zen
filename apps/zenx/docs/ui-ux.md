@@ -935,3 +935,11 @@ admission and canonical message paint. Composer-only changes reuse the transcrip
 subtree instead of re-mapping the whole history. Real native acceptance must cover
 the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts,
 attachments, both ACK/event orders and exactly one canonical user message.
+
+### Editable conversation information
+
+Thread and actual Room owners share the same native information layout. PAW uses its existing Room binding and never a third owner. The default typed components are related pull requests, lineage, related artifacts, triggers, background commands and the legacy default Board, with Room members added for Room owners. Thread-source defaults in a Room use only its actual current assistant member; an empty Room never invents one. Provider availability is independent of component placement: missing admitted PR/artifact bridges render explicitly unavailable, not an observed zero.
+
+Customize exposes add, remove placement, hide/show, collapse, reorder by drag or accessible up/down controls and Alt+arrow keys, and each type's defined configuration (currently Trigger filter/paused visibility and explicit Board document address on add). Additional Boards have independent body addresses, drafts, actions and iframe sessions within the same owner. Authored document IDs are not addresses. Removing a placement keeps its Board content; Reset restores default order/visibility and hides extra placements without deleting or rebinding content. A placed Board cannot be retargeted through configuration.
+
+Human native edits and model facade edits use the same typed operations and existing owner revision/CAS store, with their own admitted source authority. Conflict and uncertain-outcome edits remain as window-local drafts across closing/reopening; reads do not repeat writes, and a fresh review plus explicit Reapply is required. An in-flight edit cannot be repeated by reopening its panel. Background layout changes do not open or focus the panel. Asking attention is a separate, unhideable slot outside the customizable list and does not depend on any widget being visible or on a Turn remaining active. The Asking store and answer authority remain independent.

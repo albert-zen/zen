@@ -1,6 +1,6 @@
 import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type {
   BoardBlock,
   BoardEventResult,
@@ -14,7 +14,7 @@ import {
 } from "./plugin-ui-host.js";
 import {
   BoardUiSession,
-  conversationKey,
+  boardUiSessionKey,
   message,
   type BoardConversation,
 } from "./board-ui-state.js";
@@ -28,14 +28,16 @@ export function registerBoardUi(registry: PluginUiRegistry) {
 export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   const { t } = useTranslation("panels");
   const owner = sdk.context.owner as BoardConversation;
-  const key = `${String(sdk.context.admissionId ?? "fixture")}:${conversationKey(owner)}`;
-  const commands = useRef(sdk.commands);
-  commands.current = sdk.commands;
+  const instanceKey = sdk.context.instanceKey as string | undefined;
+  const key = boardUiSessionKey(owner, instanceKey, sdk.context.admissionId);
   const session = useMemo(() => {
     let current = sessions.get(key);
     if (!current) {
-      current = new BoardUiSession(owner, (input) =>
-        commands.current.execute("ui", input),
+      // Keep a cached/in-flight document bound to its own admitted command port.
+      current = new BoardUiSession(
+        owner,
+        (input) => sdk.commands.execute("ui", input),
+        instanceKey,
       );
       sessions.set(key, current);
     }
@@ -101,7 +103,10 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
             "Board changed; review the current document before navigating",
           );
         setLocalError(null);
-        const result = (await commands.current.execute("ui", {
+        const result = (await sdk.commands.execute("ui", {
+          ...(session.instanceKey === "default"
+            ? {}
+            : { instanceKey: session.instanceKey }),
           operation: "navigate",
           owner: captured.document.owner,
           revision: captured.revision,
@@ -139,6 +144,10 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
       },
       commands: {
         execute: async (command: string, input?: unknown) => {
+          if (!currentDocument())
+            throw new Error(
+              "Board changed; review the current document before interacting",
+            );
           if (command === "navigate") {
             const target = (
               input as { target?: BoardNavigationTarget } | undefined
@@ -232,6 +241,7 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
       ))}
       {board.html ? (
         <IsolatedPluginSurface
+          key={key}
           className="board-custom"
           bundleHtml={board.html}
           exportName="board"

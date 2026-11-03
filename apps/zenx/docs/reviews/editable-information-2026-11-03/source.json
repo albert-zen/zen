@@ -1,0 +1,27 @@
+{
+  "commit": "44f9b7a02e8ac5bc728a5589888b34aac4a300fe",
+  "scope": "Actual production editable information panel, Board, information host and isolated frame components with synthetic in-memory ports and an outer chat scaffold. This is a Chromium component preview, not native Electron or real Host acceptance. Question card is a separate synthetic attention-slot probe. No private data, model calls or external writes. Source hashes bind screenshots to code.",
+  "sources": {
+    "src/renderer/src/EditableInformationPanel.tsx": "9b317e439fe4b1f12241c7b9c6dc4928faf65928bf0701dc151eb87dd74bf5c3",
+    "src/renderer/src/ConversationInformationCards.tsx": "876ae6848c506974a688912bd1b165a5337b4c69aee5e7aa6a29701276474d81",
+    "src/renderer/src/board-ui.tsx": "80ce40e16b583b72bbb037ef2d5b41920aff9f7e28f6d6fe0a8dc6a78cd497b3",
+    "src/renderer/src/board-ui-state.ts": "0e4009a8e0730e32058551f01e6fc594b4f8864889ed1b12bf10b4029cac614e",
+    "src/renderer/src/plugin-information-host.tsx": "81c0b304122529be481761f21636166c97a8c6e8d181befeb497e85677a1bc7e",
+    "src/renderer/src/plugin-ui-host.tsx": "23e73a7e37330fff47332d96e1cf6c16e80aea31205f43139ae77670b1d43608",
+    "src/information-layout.ts": "0d0cad6f3539c0e8afd6ab93d6c58fc1dba558588f38fcb7cdf6e173a0b2620b",
+    "src/native-information.ts": "58ab39fadca0ad8927b0315d32b3ed6278c6a82d10127be1a0aa45b36370b308",
+    "src/renderer/src/i18n/panels.ts": "c7988afbdcd0c4d16b7ce19a280c9d99a30de614a3c1171bca3b117dbfcab723",
+    "src/renderer/src/styles.css": "f5f280ead82ae7dd63f1926ac5532562223e270e439b5c7b9af43396578b74ee",
+    "src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "src/renderer/src/shell-thread-panel.css": "8379fad2aa59d8b26307bdc2449a13fad51799811eef60db2ed6eb456b193da8",
+    "src/renderer/src/subagents.css": "dc6603d37925f8d9661ff1cd56edd0b3a06d4e8864ff87710caa161a965c1561",
+    "src/renderer/public/plugin-frame.html": "384d294a16fcfb191b7c972e5e2393407214364da8f3f3acf8bf7a87739e319a",
+    "scripts/information-layout-preview.tsx": "78e3fb43df8f9acae4c9373695bed26e9f4d0fc459f8a94a8a00212b81e0fb33",
+    "scripts/build-information-layout-preview.mjs": "f4e1082298efdcc16bef7622199c27b056aeba5ae0458c96f5458c12b803e3b4",
+    "scripts/capture-information-layout-preview.mjs": "62027644c4dc953602295b46655f0a319d18c23d25f9a053f53b8682328667af"
+  },
+  "workingTreeAtCapture": true,
+  "captureMethod": "Supported cloud-browser controls through Sites managed preview relay. External-script wrapper avoids live-reload injection into isolated-document strings; production component source hashes are unchanged.",
+  "fullNativeAppAcceptance": false,
+  "localChromiumAttempt": "Blocked: Unix-domain socket() EPERM, also on approved escalated retry. Not counted as a passed capture."
+}

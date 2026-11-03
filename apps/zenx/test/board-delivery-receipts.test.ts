@@ -49,12 +49,10 @@ async function fixture(delivery: unknown) {
   const sdk = createFixturePluginHost({ pluginId: "zenx-board" }).sdk;
   let sends = 0;
   let executions = 0;
-  let checks = 0;
-  let rejectOwnerAfter: number | undefined;
+  let revokeAfterDelivery = false;
   const service = new ZenXBoardCapabilityPackage({
     readOwner: async (value: BoardOwner) => {
-      checks++;
-      if (rejectOwnerAfter !== undefined && checks >= rejectOwnerAfter)
+      if (revokeAfterDelivery && sends > 0)
         throw new Error("Exact member removed");
       return value;
     },
@@ -96,7 +94,7 @@ async function fixture(delivery: unknown) {
     document,
     counts: () => ({ sends, executions }),
     rejectNextAction: () => {
-      rejectOwnerAfter = checks + 3;
+      revokeAfterDelivery = true;
     },
     run: (extra: Record<string, unknown> = {}) =>
       service.invoke(
