@@ -1986,6 +1986,10 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       mountedUserRows: 5003,
       selectedMarkerCount: Infinity,
       copiedMarkerCount: "NEVER_EXPORT",
+      selectedMessageCount: Infinity,
+      copiedMessageCount: 10006,
+      canonicalMessageOrder: "NEVER_EXPORT",
+      fullLastAssistantCopied: true,
       menuToSelectionMs: Infinity,
       clearToRestoreMs: 12.5,
       text: "NEVER_EXPORT",
@@ -2013,6 +2017,10 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.equal(result.selectAll.mountedUserRows, 5003);
   assert.equal(result.selectAll.selectedMarkerCount, null);
   assert.equal(result.selectAll.copiedMarkerCount, null);
+  assert.equal(result.selectAll.selectedMessageCount, null);
+  assert.equal(result.selectAll.copiedMessageCount, 10006);
+  assert.equal(result.selectAll.canonicalMessageOrder, null);
+  assert.equal(result.selectAll.fullLastAssistantCopied, true);
   assert.equal(result.selectAll.menuToSelectionMs, null);
   assert.equal(result.selectAll.clearToRestoreMs, 12.5);
   assert.equal(result.selection.selectionOwnedByTarget, false);
@@ -2143,6 +2151,14 @@ async function nativeSelectAllFixture(fault, sharedDom) {
         id: `owned-${i}`,
         content: [{ type: "text", text }],
       },
+      {
+        type: "agentMessage",
+        id: `assistant-${i}`,
+        text:
+          i < 5000
+            ? `Synthetic assistant ${i}. Complete owned reply.`
+            : `Echo: ${text}`,
+      },
     ],
   }));
   const mount = (all) => {
@@ -2154,9 +2170,13 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     scroller.innerHTML = indices
       .map(
         (i) =>
-          `<section class="turn" data-transcript-row-key="row-${i}"><article class="user-row" data-sent-message-id="owned-${i}">${markers[i]}</article></section>`,
+          `<section class="turn" data-transcript-row-key="row-${i}"><article class="user-row" data-sent-message-id="owned-${i}">${markers[i]}</article><article class="agent-copy" data-read-message-id="assistant-${i}">${turns[i].items[1].text}</article></section>`,
       )
       .join("");
+    if (all && fault === "duplicate-assistant-id")
+      scroller.querySelector(
+        '[data-read-message-id="assistant-2501"]',
+      ).dataset.readMessageId = "assistant-2500";
     if (all && fault === "duplicate-user-id")
       scroller.querySelector(
         '[data-sent-message-id="owned-2501"]',
@@ -2225,6 +2245,21 @@ async function nativeSelectAllFixture(fault, sharedDom) {
       if (fault !== "no-native-selection") {
         const range = d.createRange();
         range.selectNodeContents(scroller);
+        if (fault === "truncated-final-assistant") {
+          const lastUser = scroller.querySelector(
+            '[data-sent-message-id="owned-5002"]',
+          );
+          range.setEnd(lastUser.firstChild, lastUser.firstChild.length);
+        }
+        if (fault === "partial-final-assistant") {
+          const lastAssistant = scroller.querySelector(
+            '[data-read-message-id="assistant-5002"]',
+          );
+          range.setEnd(
+            lastAssistant.firstChild,
+            lastAssistant.firstChild.length - 1,
+          );
+        }
         w.getSelection().removeAllRanges();
         w.getSelection().addRange(range);
       }
@@ -2249,6 +2284,8 @@ async function nativeSelectAllFixture(fault, sharedDom) {
         clipboardText = w.getSelection().toString();
         if (fault === "copy-missing-row")
           clipboardText = clipboardText.replace(markers[2500], "");
+        if (fault === "copy-missing-assistant")
+          clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
         if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
       } else {
         assert.equal(action, "deleteBackward:");
@@ -2351,6 +2388,9 @@ test("full native Select All diagnostic executes every shipped evaluate expressi
   assert.equal(quality.selectedMarkerCount, 5003);
   assert.equal(quality.copiedMarkerCount, 5003);
   assert.equal(quality.restoredMountedRows, 8);
+  assert.equal(quality.mountedMessageRows, 10006);
+  assert.equal(quality.selectedMessageCount, 10006);
+  assert.equal(quality.copiedMessageCount, 10006);
   for (const field of ["menuToSelectionMs", "clearToRestoreMs"])
     assert.ok(Number.isFinite(quality[field]) && quality[field] >= 0);
   for (const [name, value] of Object.entries(quality))
@@ -2403,6 +2443,42 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         assert.equal(run.nativeCopyCalls, 0, fault);
       if (["copy-missing-row", "copy-lost-selection"].includes(fault))
         assert.equal(run.clipboardCleared, true, fault);
+    }
+  } finally {
+    sharedDom.window.close();
+  }
+});
+
+test("native canonical message oracle rejects unselected or partial final assistant, invalid assistant IDs and missing copied reply", async () => {
+  const sharedDom = new JSDOM("", { runScripts: "outside-only" });
+  try {
+    for (const fault of [
+      "truncated-final-assistant",
+      "partial-final-assistant",
+      "duplicate-assistant-id",
+      "copy-missing-assistant",
+    ]) {
+      const run = await nativeSelectAllFixture(fault, sharedDom);
+      assert.ok(run.error, fault);
+      const quality = run.result.nativeSelectAllQuality;
+      assert.equal(quality.mountedMessageRows, 10006);
+      assert.equal(quality.selectedMarkerCount, 5003);
+      if (fault === "copy-missing-assistant") {
+        assert.equal(quality.selectedMessageCount, 10006);
+        assert.equal(quality.copiedMessageCount, 10005);
+        assert.equal(quality.fullLastAssistantCopied, false);
+        assert.equal(run.clipboardCleared, true);
+      } else {
+        assert.equal(run.nativeCopyCalls, 0);
+        if (fault === "duplicate-assistant-id") {
+          assert.equal(quality.canonicalMessageOrder, false);
+          assert.equal(quality.selectedMessageCount, 10006);
+        } else {
+          assert.equal(quality.canonicalMessageOrder, true);
+          assert.equal(quality.selectedMessageCount, 10005);
+          assert.equal(quality.fullLastAssistantSelected, false);
+        }
+      }
     }
   } finally {
     sharedDom.window.close();

@@ -1737,6 +1737,30 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   const users = canonicalTurns.flatMap((turn) =>
     turn.items.filter((item) => item.type === "userMessage"),
   );
+  const messages = canonicalTurns
+    .flatMap((turn) =>
+      turn.items.filter(
+        (item) => item.type === "userMessage" || item.type === "agentMessage",
+      ),
+    )
+    .map((item) => ({
+      id: item.id,
+      type: item.type,
+      text:
+        item.type === "agentMessage"
+          ? item.text
+          : item.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+    }));
+  assert.equal(messages.length, 10006);
+  assert.equal(
+    messages.filter((item) => item.type === "agentMessage").length,
+    5003,
+  );
+  assert.equal(messages.at(-1).type, "agentMessage");
+  assert.ok(messages.every((item) => item.text.trim().length > 0));
   const markers = [
     ...Array.from({ length: 5000 }, (_, i) => `Synthetic user ${i}.`),
     ...samples.map((sample) => sample.nonce),
@@ -1756,11 +1780,14 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   const prepared = await evaluate(`(()=>{
     const scroll=document.querySelector('.messages');
     const anchor=()=>{const s=document.querySelector('.messages'),bounds=s.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(innerHeight,bounds.bottom,document.querySelector('.bottom-zone')?.getBoundingClientRect().top??innerHeight);const row=Array.from(s.querySelectorAll('[data-transcript-row-key]')).filter(n=>n.getBoundingClientRect().bottom>top).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0],rect=row?.getBoundingClientRect();return row&&rect.top<bottom&&rect.bottom>top?{key:row.dataset.transcriptRowKey,offset:rect.top-bounds.top}:null};
-    const expectedIds=${JSON.stringify(users.map((user) => user.id))},markers=${JSON.stringify(markers)},before=anchor();
+    const expectedIds=${JSON.stringify(users.map((user) => user.id))},markers=${JSON.stringify(markers)},messages=${JSON.stringify(messages)},before=anchor();
+    const normalize=text=>text.replace(/\\s+/g,' ').trim(),messageTexts=messages.map(message=>normalize(message.text));
+    const orderedMessages=text=>{text=normalize(text);let end=0,count=0;for(const expected of messageTexts){const at=text.indexOf(expected,end);if(at<0)break;end=at+expected.length;count++;}return count};
+    const lastAssistant=text=>normalize(text).includes(messageTexts.at(-1));
     const orderedMarkers=text=>{let end=0,count=0;for(const marker of markers){const at=text.indexOf(marker,end);if(at<0)break;end=at+marker.length;count++;}return count};
-    window.__nativeSelectAllQuality={before,anchor,orderedMarkers,inspect:()=>{
-      const s=document.querySelector('.messages'),selection=getSelection(),text=selection?.toString()??'',ids=Array.from(s.querySelectorAll('article.user-row')).map(n=>n.dataset.sentMessageId),current=anchor();
-      return {fullDom:s.dataset.nativeTranscriptSelection==='complete',mountedUserRows:ids.length,canonicalOrder:ids.length===expectedIds.length&&ids.every((id,i)=>id===expectedIds[i]),selectedMarkerCount:orderedMarkers(text),earliestMarkerSelected:text.includes(markers[0]),latestMarkerSelected:text.includes(markers.at(-1)),selectionActive:Boolean(selection&&!selection.isCollapsed),readerAnchorPreserved:Boolean(before&&current&&before.key===current.key&&Math.abs(before.offset-current.offset)<=2)};
+    window.__nativeSelectAllQuality={before,anchor,orderedMarkers,orderedMessages,lastAssistant,inspect:()=>{
+      const s=document.querySelector('.messages'),selection=getSelection(),text=selection?.toString()??'',ids=Array.from(s.querySelectorAll('article.user-row')).map(n=>n.dataset.sentMessageId),rows=Array.from(s.querySelectorAll('article.user-row,article.agent-copy')),current=anchor();
+      return {fullDom:s.dataset.nativeTranscriptSelection==='complete',mountedUserRows:ids.length,canonicalOrder:ids.length===expectedIds.length&&ids.every((id,i)=>id===expectedIds[i]),mountedMessageRows:rows.length,canonicalMessageOrder:rows.length===messages.length&&rows.every((row,i)=>row.matches('article.user-row')?messages[i].type==='userMessage'&&row.dataset.sentMessageId===messages[i].id:messages[i].type==='agentMessage'&&row.dataset.readMessageId===messages[i].id),selectedMessageCount:orderedMessages(text),fullLastAssistantSelected:lastAssistant(text),selectedMarkerCount:orderedMarkers(text),earliestMarkerSelected:text.includes(markers[0]),latestMarkerSelected:text.includes(markers.at(-1)),selectionActive:Boolean(selection&&!selection.isCollapsed),readerAnchorPreserved:Boolean(before&&current&&before.key===current.key&&Math.abs(before.offset-current.offset)<=2)};
     }};
     return {boundedBefore:scroll.querySelectorAll('section.turn').length<200,pausedBefore:Boolean(document.querySelector('.back-live')),anchorCaptured:Boolean(before)};
   })()`);
@@ -1778,9 +1805,12 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
       state.fullDom &&
       state.selectionActive &&
       state.canonicalOrder &&
+      state.canonicalMessageOrder &&
+      state.selectedMessageCount === 10006 &&
+      state.fullLastAssistantSelected &&
       state.selectedMarkerCount === 5003
     );
-  }, "product Edit Select All reaches Cocoa selection of all 5000 historical and three sent users");
+  }, "product Edit Select All reaches Cocoa selection of all canonical users and assistant replies");
   result.nativeSelectAllQuality.menuToSelectionMs =
     performance.now() - menuStarted;
   assert.equal(result.nativeSelectAllQuality.readerAnchorPreserved, true);
@@ -1813,7 +1843,7 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
     const copy = await evaluate(`(async()=>{
       await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
       const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
-      return {clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
+      return {clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
     })()`);
     Object.assign(result.nativeSelectAllQuality, copy);
     assert.equal(
@@ -1821,6 +1851,8 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
       true,
     );
     assert.equal(copy.copiedMarkerCount, 5003);
+    assert.equal(copy.copiedMessageCount, 10006);
+    assert.equal(copy.fullLastAssistantCopied, true);
     await screenshot("native-select-all.png");
   } finally {
     clipboard.clear();

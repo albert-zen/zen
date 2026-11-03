@@ -616,6 +616,9 @@ function projectFailureTranscriptQuality(capture) {
             "afterTiming",
             "fullDom",
             "canonicalOrder",
+            "canonicalMessageOrder",
+            "fullLastAssistantSelected",
+            "fullLastAssistantCopied",
             "earliestMarkerSelected",
             "latestMarkerSelected",
             "selectionActive",
@@ -630,6 +633,9 @@ function projectFailureTranscriptQuality(capture) {
           ].map((key) => [key, boolean(all[key])]),
           ...[
             "mountedUserRows",
+            "mountedMessageRows",
+            "selectedMessageCount",
+            "copiedMessageCount",
             "selectedMarkerCount",
             "copiedMarkerCount",
             "restoredMountedRows",
@@ -955,6 +961,9 @@ try {
     "afterTiming",
     "fullDom",
     "canonicalOrder",
+    "canonicalMessageOrder",
+    "fullLastAssistantSelected",
+    "fullLastAssistantCopied",
     "earliestMarkerSelected",
     "latestMarkerSelected",
     "selectionActive",
@@ -980,6 +989,16 @@ try {
     assert.equal(
       selectAll?.[field],
       5003,
+      `Native Select All quality: ${field}`,
+    );
+  for (const field of [
+    "mountedMessageRows",
+    "selectedMessageCount",
+    "copiedMessageCount",
+  ])
+    assert.equal(
+      selectAll?.[field],
+      10006,
       `Native Select All quality: ${field}`,
     );
   assert.ok(
