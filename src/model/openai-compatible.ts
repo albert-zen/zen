@@ -865,6 +865,7 @@ async function toChatUserContent(
         content.push({
           type: "image_url",
           image_url: {
+            ...(part.detail === undefined ? {} : { detail: part.detail }),
             url: `data:${part.attachment.mediaType};base64,${data}`,
           },
         });

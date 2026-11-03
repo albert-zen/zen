@@ -116,6 +116,7 @@ export interface RuntimeConfiguration {
   approvalPolicy: ApprovalPolicy;
   /** null preserves the existing Unknown capability semantics. */
   inputModalities?: readonly string[] | null;
+  supportsImageDetailOriginal?: boolean | null;
   contextWindow?: number | null;
   /** Present only when Host admission enables agent-authored context resets. */
   agenticContextCompaction?: {
@@ -1771,6 +1772,12 @@ export class AgentRuntime {
         (item) => item.id === toolCall.id,
       );
       prepared = this.#tools.prepare({
+        ...(options.configuration.supportsImageDetailOriginal === undefined
+          ? {}
+          : {
+              supportsImageDetailOriginal:
+                options.configuration.supportsImageDetailOriginal,
+            }),
         modelReferences: modelReferenceHistory(options.thread),
         ...(traceOutput === undefined ? {} : { traceOutput }),
         callId: toolCall.callId,

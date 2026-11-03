@@ -1,11 +1,14 @@
 import { formatReceiptTimestamp } from "../src/message-timezone.js";
 import { DomainThreadJournal } from "../src/domain-journal.js";
 import { FileTraceStore } from "../src/trace.js";
+import { FileItemListStore } from "../src/item-list-store.js";
+import { estimateModelMessageInputTokens } from "../src/model-usage.js";
 import { compileItemList } from "../src/item-list.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import test from "node:test";
 
 import { png1x1 } from "./fixtures.js";
@@ -816,6 +819,197 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
   }
 });
 
+test("compaction budgets the frozen prepared image rather than excerpting its raw ref", async () => {
+  for (const [detail, supportsOriginal, sourceWidth, expectedWidth] of [
+    [undefined, undefined, 4096, 1600],
+    ["original", true, 2600, 2600],
+    ["original", false, 4096, 1600],
+    ["original", null, 4096, 1600],
+  ] as const) {
+    const attachments = new InMemoryAttachmentStore();
+    const requests: ModelMessage[][] = [];
+    const model: ModelAdapter = {
+      provider: "image-provider",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        requests.push(structuredClone(request.messages));
+        yield { type: "text_delta", delta: "summary or answer" };
+      },
+    };
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      attachments,
+      model,
+      contextWindow: 10_000,
+      ...(supportsOriginal === undefined
+        ? {}
+        : { supportsImageDetailOriginal: supportsOriginal }),
+    });
+    const original = await attachments.importBytes(
+      await sharp({
+        create: {
+          width: sourceWidth,
+          height: sourceWidth,
+          channels: 3,
+          background: "blue",
+        },
+      })
+        .png()
+        .toBuffer(),
+    );
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, [
+        { type: "image", attachment: original, ...(detail ? { detail } : {}) },
+      ])
+    ).done;
+    const terminal = (await server.readThread(thread.id)).items.findLast(
+      (item) => item.type === "turn_completed",
+    );
+    assert.equal(
+      terminal?.type === "turn_completed" ? terminal.status : undefined,
+      "completed",
+      `First Turn did not complete for ${String(detail)}/${String(supportsOriginal)}`,
+    );
+    await server.compactThread(thread.id, { includeOriginalReference: false });
+    const summary = requests[1]!;
+    const images = summary.flatMap((message) =>
+      message.role === "user" && "content" in message
+        ? message.content.filter((part) => part.type === "image")
+        : message.role === "tool"
+          ? (message.modelContent ?? []).filter((part) => part.type === "image")
+          : [],
+    );
+    assert.equal(images.length, 1);
+    assert.equal(images[0]!.attachment.width, expectedWidth);
+    assert.equal(JSON.stringify(summary).includes("[excerpt]"), false);
+    assert.deepEqual(
+      [original.width, original.height],
+      [sourceWidth, sourceWidth],
+    );
+  }
+});
+
+test("compaction never dispatches a prepared request over its frozen window", async () => {
+  for (const [useAuxiliary, compactionWindow] of [
+    [false, 5_000],
+    [true, 5_000],
+    [false, 10_000],
+    [true, 10_000],
+  ] as const) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "zen-compact-budget-"));
+    try {
+      const attachments = new InMemoryAttachmentStore();
+      const requests: Array<{ model: string; messages: ModelMessage[] }> = [];
+      const bodies: Array<Record<string, unknown>> = [];
+      const chat = capturingCompatibleModel(attachments, bodies);
+      const model: ModelAdapter = {
+        provider: "image-provider",
+        async *stream(request): AsyncIterable<ModelEvent> {
+          requests.push({
+            model: request.model,
+            messages: structuredClone(request.messages),
+          });
+          yield* chat.stream(request);
+        },
+      };
+      const itemListStore = new FileItemListStore(path.join(root, "auxiliary"));
+      const server = createServer({
+        journal: new InMemoryThreadJournal(),
+        attachments,
+        model,
+        contextWindow: 10_000,
+        smallContextWindow: compactionWindow,
+        ...(useAuxiliary
+          ? {
+              auxiliaryModel: {
+                trace: new FileTraceStore(path.join(root, "trace")),
+                itemListStore,
+              },
+            }
+          : {}),
+      });
+      const original = await attachments.importBytes(
+        await sharp({
+          create: {
+            width: 4096,
+            height: 4096,
+            channels: 3,
+            background: "blue",
+          },
+        })
+          .png()
+          .toBuffer(),
+      );
+      const thread = await server.startThread();
+      await (
+        await server.startTurn(thread.id, [
+          { type: "text", text: "X".repeat(8000) },
+          { type: "image", attachment: original },
+        ])
+      ).done;
+      await server.updateThreadSettings(thread.id, {
+        selection: {
+          providerProfileId: model.provider,
+          modelId: "small-model",
+        },
+      });
+      await server.compactThread(thread.id, {
+        includeOriginalReference: false,
+      });
+      assert(requests.some((request) => request.model === "small-model"));
+      for (const request of requests.filter(
+        (request) => request.model === "small-model",
+      ))
+        assert(
+          estimateModelMessageInputTokens(request.messages) <= compactionWindow,
+        );
+      const compactionBodies = bodies.filter(
+        (body) => body.model === "small-model",
+      );
+      assert(compactionBodies.length > 0);
+      const wireImages = compactionBodies.flatMap((body) =>
+        (
+          body.messages as Array<{
+            content: Array<{ type: string; image_url?: { url: string } }>;
+          }>
+        ).flatMap((message) =>
+          Array.isArray(message.content)
+            ? message.content.filter((part) => part.type === "image_url")
+            : [],
+        ),
+      );
+      // Healthy windows preserve the image through real Chat serialization;
+      // tight windows excerpt the complete oversized source group instead.
+      assert.equal(wireImages.length, compactionWindow === 10_000 ? 1 : 0);
+      if (compactionWindow === 10_000) {
+        const metadata = await sharp(
+          Buffer.from(wireImages[0]!.image_url!.url.split(",")[1]!, "base64"),
+        ).metadata();
+        assert.deepEqual([metadata.width, metadata.height], [1600, 1600]);
+      }
+      if (useAuxiliary) {
+        for (const ownerId of await itemListStore.listThreadIds()) {
+          const items = await itemListStore.read(ownerId);
+          const prepared = items.find(
+            (item) => item.source.kind === "image_preparation",
+          );
+          const sampleId = prepared?.source.metadata?.onlySampleId;
+          const compiled = compileItemList(items, {
+            ...(typeof sampleId === "string" ? { sampleId } : {}),
+            inputModalities: ["text", "image"],
+          });
+          assert(
+            estimateModelMessageInputTokens(compiled.messages) <=
+              compactionWindow,
+          );
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 function createServer(options: {
   journal: ThreadJournal;
   attachments: AttachmentStore;
@@ -823,6 +1017,12 @@ function createServer(options: {
   inputModalities?: readonly "text"[] | null;
   cwd?: string;
   extraTools?: readonly ToolRuntime[];
+  contextWindow?: number;
+  smallContextWindow?: number;
+  auxiliaryModel?: ConstructorParameters<
+    typeof ZenAppServer
+  >[0]["auxiliaryModel"];
+  supportsImageDetailOriginal?: boolean | null;
 }): ZenAppServer {
   const model = options.model ?? echoModel();
   const catalog = new StaticModelCatalog([
@@ -831,7 +1031,10 @@ function createServer(options: {
       isDefault: true,
       supportedReasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
-      contextWindow: 32_768,
+      contextWindow: options.contextWindow ?? 32_768,
+      ...(options.supportsImageDetailOriginal === undefined
+        ? {}
+        : { supportsImageDetailOriginal: options.supportsImageDetailOriginal }),
       inputModalities:
         options.inputModalities === undefined
           ? ["text", "image"]
@@ -847,8 +1050,24 @@ function createServer(options: {
       inputModalities: ["text"],
       source: "manual",
     },
+    ...(options.smallContextWindow === undefined
+      ? []
+      : [
+          {
+            id: "small-model",
+            isDefault: false,
+            supportedReasoningEfforts: ["medium"] as const,
+            defaultReasoningEffort: "medium" as const,
+            contextWindow: options.smallContextWindow,
+            inputModalities: ["text", "image"] as const,
+            source: "manual" as const,
+          },
+        ]),
   ]);
   return new ZenAppServer({
+    ...(options.auxiliaryModel === undefined
+      ? {}
+      : { auxiliaryModel: options.auxiliaryModel }),
     journal: options.journal,
     attachments: options.attachments,
     runtime: new AgentRuntime({

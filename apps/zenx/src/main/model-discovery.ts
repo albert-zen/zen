@@ -18,20 +18,24 @@ const DEFAULT_SUBSCRIPTION_MODELS_ENDPOINT =
 // adapter pin. No locally installed Codex client is required for discovery.
 const SUBSCRIPTION_CATALOG_CLIENT_VERSION = "0.153.4";
 
-export type DiscoveredModelCatalogEntry = Required<
-  Pick<
-    ModelCatalogEntryInput,
-    | "id"
-    | "displayName"
-    | "description"
-    | "hidden"
-    | "source"
-    | "supportedReasoningEfforts"
-    | "defaultReasoningEffort"
-    | "inputModalities"
-    | "contextWindow"
-  >
->;
+export type DiscoveredModelCatalogEntry = Pick<
+  ModelCatalogEntryInput,
+  "supportsImageDetailOriginal"
+> &
+  Required<
+    Pick<
+      ModelCatalogEntryInput,
+      | "id"
+      | "displayName"
+      | "description"
+      | "hidden"
+      | "source"
+      | "supportedReasoningEfforts"
+      | "defaultReasoningEffort"
+      | "inputModalities"
+      | "contextWindow"
+    >
+  >;
 
 export interface OpenAiSubscriptionDiscoveryResult {
   readonly models: readonly DiscoveredModelCatalogEntry[];
@@ -277,6 +281,9 @@ export async function discoverOpenAiCompatibleCatalog(options: {
       inputModalities:
         providerModalities ?? catalog?.inputModalities ?? TEXT_ONLY_INPUT,
       contextWindow: catalog?.contextWindow ?? null,
+      ...(typeof value.supports_image_detail_original === "boolean"
+        ? { supportsImageDetailOriginal: value.supports_image_detail_original }
+        : {}),
     });
   });
   return {
@@ -355,6 +362,11 @@ function readSubscriptionModels(
         supportedReasoningEfforts: Object.freeze(efforts),
         defaultReasoningEffort: defaultEffort,
         inputModalities: Object.freeze(modalities),
+        ...(typeof value.supports_image_detail_original === "boolean"
+          ? {
+              supportsImageDetailOriginal: value.supports_image_detail_original,
+            }
+          : {}),
         contextWindow: contextWindow ?? preset?.contextWindow ?? null,
       }),
     });
@@ -489,6 +501,12 @@ function readCachedSubscriptionCatalog(
         ]),
         defaultReasoningEffort: candidate.defaultReasoningEffort,
         inputModalities: Object.freeze([...candidate.inputModalities]),
+        ...(typeof candidate.supportsImageDetailOriginal === "boolean"
+          ? {
+              supportsImageDetailOriginal:
+                candidate.supportsImageDetailOriginal,
+            }
+          : {}),
         contextWindow: readPositiveInteger(candidate.contextWindow),
       }),
     );

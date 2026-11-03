@@ -1,4 +1,9 @@
 import {
+  prepareSampleImages,
+  preparedImageDimensions,
+  unavailableImageTokenEstimate,
+} from "./image-preparation.js";
+import {
   parseUserQuestionReply,
   normalizeUserQuestionReply,
   renderUserQuestionReply,
@@ -22,6 +27,7 @@ import {
 } from "./trace-observation.js";
 import type { TraceEvent, TraceReceipt } from "./trace.js";
 import {
+  CompactionBudgetExceededError,
   materializeAuxiliaryInputs,
   streamAuxiliaryModel,
   type AuxiliaryModelOptions,
@@ -4525,6 +4531,24 @@ export class ZenAppServer {
                                     now: this.#now,
                                   }))
                                     await this.#commitContext(thread, context);
+                                  for (const context of await prepareSampleImages(
+                                    {
+                                      threadId,
+                                      turnId,
+                                      sampleId: modelResponseId,
+                                      itemList: thread.itemList,
+                                      selection: sample.selection,
+                                      supportsImageDetailOriginal:
+                                        sample.model
+                                          .supportsImageDetailOriginal ?? null,
+                                      inputModalities:
+                                        sample.model.inputModalities,
+                                      attachments: this.#attachments,
+                                      id: this.#id,
+                                      now: this.#now,
+                                    },
+                                  ))
+                                    await this.#commitContext(thread, context);
                                 },
                                 {},
                                 controller.signal,
@@ -4571,6 +4595,14 @@ export class ZenAppServer {
                                   sandbox: configuration.sandbox,
                                   approvalPolicy: configuration.approvalPolicy,
                                   inputModalities: sample.model.inputModalities,
+                                  ...(sample.model
+                                    .supportsImageDetailOriginal === undefined
+                                    ? {}
+                                    : {
+                                        supportsImageDetailOriginal:
+                                          sample.model
+                                            .supportsImageDetailOriginal,
+                                      }),
                                   contextWindow: sample.model.contextWindow,
                                   ...(runtimeConfiguration.contextCompaction
                                     .agenticEnabled &&
@@ -5387,6 +5419,20 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
     });
+    const imageTokens = unavailableImageTokenEstimate(
+      contexts,
+      resolved.model.supportsImageDetailOriginal ?? null,
+    );
+    const hasUnavailableEstimate = compiled.messages.some((message) =>
+      (message.role === "user" && "content" in message
+        ? message.content
+        : message.role === "tool"
+          ? (message.modelContent ?? [])
+          : []
+      ).some(
+        (part) => part.type === "image" && imageTokens(part) !== undefined,
+      ),
+    );
     return this.#runtime.estimateContextInput({
       threadId,
       items,
@@ -5397,6 +5443,27 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
       instructionsMaterialized: true,
+      ...(hasUnavailableEstimate ? { imageTokens } : {}),
+      ...(compiled.messages.some((message) =>
+        (message.role === "user" && "content" in message
+          ? message.content
+          : message.role === "tool"
+            ? (message.modelContent ?? [])
+            : []
+        ).some((part) => part.type === "image"),
+      )
+        ? {
+            imageDimensions: (part: import("./item.js").ImageUserInputPart) =>
+              preparedImageDimensions(
+                part.attachment.width!,
+                part.attachment.height!,
+                part.detail === "original" &&
+                  resolved.model.supportsImageDetailOriginal === true
+                  ? "original"
+                  : "high",
+              ),
+          }
+        : {}),
     });
   }
 
@@ -5968,6 +6035,7 @@ export class ZenAppServer {
     operationId: string,
     concurrentAdmission = false,
   ) {
+    const contextWindow = selection.model.contextWindow;
     const assertDispatchAllowed = () => {
       this.#assertCurrentThreadAuthority(thread);
       const lease = selection as Partial<ProviderSelectionLease>;
@@ -5977,11 +6045,15 @@ export class ZenAppServer {
     if (this.#auxiliaryModel !== undefined) {
       yield* streamAuxiliaryModel({
         ...this.#auxiliaryModel,
+        attachments: this.#attachments,
+        supportsImageDetailOriginal:
+          selection.model.supportsImageDetailOriginal ?? null,
         adapter: selection.adapter,
         purpose: "compaction",
         configuration: {
           compaction: { ownerThreadId: thread.id, operationId },
         },
+        contextWindow,
         onPrepared: async ({ ownerId, sampleId }) => {
           await this.observeTrace({
             threadId: thread.id,
@@ -6003,7 +6075,7 @@ export class ZenAppServer {
     }
     // Direct AppServer embeddings own their supplied journal; production Host always supplies the auxiliary stores.
     const sampleId = this.#id();
-    const inputs = materializeAuxiliaryInputs(
+    const inputs: ContextItem[] = materializeAuxiliaryInputs(
       thread.id,
       messages,
       [],
@@ -6016,6 +6088,20 @@ export class ZenAppServer {
         metadata: { ...item.source.metadata, onlySampleId: sampleId },
       },
     }));
+    inputs.push(
+      ...(await prepareSampleImages({
+        threadId: thread.id,
+        sampleId,
+        itemList: inputs,
+        selection: selection.selection,
+        inputModalities: selection.model.inputModalities,
+        supportsImageDetailOriginal:
+          selection.model.supportsImageDetailOriginal ?? null,
+        attachments: this.#attachments,
+        id: this.#id,
+        now: this.#now,
+      })),
+    );
     for (const item of inputs) {
       if (concurrentAdmission)
         await this.#withThreadMutation(thread.id, async () => {
@@ -6029,6 +6115,7 @@ export class ZenAppServer {
       selection: selection.selection,
       inputModalities: selection.model.inputModalities,
     });
+    assertCompactionRequestBudget(compiled.messages, contextWindow);
     yield* selection.adapter.stream({
       ...compiled,
       model: selection.selection.modelId,
@@ -6175,6 +6262,12 @@ export class ZenAppServer {
       messages: sourceMessages,
       summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
+      supportsImageDetailOriginal:
+        options.selection.model.supportsImageDetailOriginal === true,
+      imageTokens: unavailableImageTokenEstimate(
+        sourceContext,
+        options.selection.model.supportsImageDetailOriginal ?? null,
+      ),
       signal: options.signal,
       stream: (messages) =>
         this.#streamCompactionInput(
@@ -7445,6 +7538,29 @@ function remapForkContext(
       const value = metadata[key];
       if (typeof value === "string") metadata[key] = remap(value);
     }
+    // copied is a structured clone; narrow this one writable address rather
+    // than treating a readonly JsonValue array as preparation metadata.
+    const preparation = metadata.imagePreparation as
+      | { occurrence?: Record<string, import("./item.js").JsonValue> }
+      | undefined;
+    if (
+      preparation !== null &&
+      typeof preparation === "object" &&
+      !Array.isArray(preparation)
+    ) {
+      const occurrence = preparation.occurrence;
+      if (
+        occurrence !== null &&
+        typeof occurrence === "object" &&
+        !Array.isArray(occurrence) &&
+        typeof occurrence.itemId === "string"
+      ) {
+        preparation.occurrence = {
+          ...occurrence,
+          itemId: remap(occurrence.itemId),
+        };
+      }
+    }
     for (const key of ["mediaOccurrence", "omittedMedia"]) {
       const occurrences = metadata[key];
       if (Array.isArray(occurrences))
@@ -7678,6 +7794,21 @@ function automaticCompactionThreshold(
   return contextCompactionTokenBudget(contextWindow, triggerPercent);
 }
 
+/** Validate the durable, compiled view, including image-preparation notices. */
+function assertCompactionRequestBudget(
+  messages: readonly ModelMessage[],
+  contextWindow: number | null,
+): void {
+  if (
+    contextWindow === null ||
+    estimateModelMessageInputTokens(messages) > contextWindow
+  )
+    throw new AppServerError(
+      "compaction_budget_exceeded",
+      "Prepared context compaction request exceeds the model window",
+    );
+}
+
 async function generateContextCompactionSummary(options: {
   debugThreadId: string;
   debugBoundaryItemId: string;
@@ -7687,6 +7818,8 @@ async function generateContextCompactionSummary(options: {
   messages: ModelMessage[];
   summaryInstruction: string;
   inputTokenBudget: number | null;
+  supportsImageDetailOriginal: boolean;
+  imageTokens: import("./model-usage.js").ImageInputTokenEstimate;
   signal: AbortSignal;
   stream(
     messages: ModelMessage[],
@@ -7705,6 +7838,8 @@ async function generateContextCompactionSummary(options: {
     options.messages,
     options.summaryInstruction,
     options.inputTokenBudget,
+    options.supportsImageDetailOriginal,
+    options.imageTokens,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
@@ -7758,6 +7893,8 @@ async function generateContextCompactionSummary(options: {
     if (error instanceof CompactionSummaryValidationError) {
       throw new AppServerError("compaction_invalid_summary", error.message);
     }
+    if (error instanceof CompactionBudgetExceededError)
+      throw new AppServerError(error.code, error.message);
     if (error instanceof AppServerError) throw error;
     throw new AppServerError(
       "compaction_generation_failed",
@@ -7774,7 +7911,51 @@ function contextCompactionSummaryChunks(
   messages: readonly ModelMessage[],
   summaryInstruction: string,
   inputTokenBudget: number,
+  supportsImageDetailOriginal: boolean,
+  imageTokens: import("./model-usage.js").ImageInputTokenEstimate,
 ): ModelMessage[][] {
+  // Estimate the exact image profile that the frozen auxiliary sample will
+  // materialize. Raw attachment dimensions can needlessly turn an image into
+  // a JSON excerpt before that preparation ever runs.
+  const imageDimensions = (part: import("./item.js").ImageUserInputPart) =>
+    preparedImageDimensions(
+      part.attachment.width!,
+      part.attachment.height!,
+      part.detail === "original" && supportsImageDetailOriginal
+        ? "original"
+        : "high",
+    );
+  const estimate = (group: readonly ModelMessage[]) => {
+    let preparationNotices = 0;
+    for (const message of group) {
+      const content =
+        message.role === "user" && "content" in message
+          ? message.content
+          : message.role === "tool"
+            ? (message.modelContent ?? [])
+            : [];
+      for (const part of content) {
+        if (
+          part.type !== "image" ||
+          part.attachment.width === undefined ||
+          part.attachment.height === undefined ||
+          imageTokens(part) !== undefined
+        )
+          continue;
+        // Every image may receive a preparation/provenance notice, even when
+        // its dimensions stay unchanged (original detail or codec conversion).
+        // The notice includes the full original ref; reserve that exact length
+        // plus 2048 characters for bounded profile text and numeric metadata.
+        // No synthetic attachment or model-visible part is constructed here.
+        preparationNotices +=
+          512 + Math.ceil(JSON.stringify(part.attachment).length / 4);
+      }
+    }
+    return (
+      estimateModelMessageInputTokens(group, imageDimensions, imageTokens) +
+      preparationNotices
+    );
+  };
   const instructionTokens = estimateModelMessageInputTokens([
     { role: "user", text: summaryInstruction },
   ]);
@@ -7787,16 +7968,13 @@ function contextCompactionSummaryChunks(
   }
 
   const groups = summaryMessageGroups(messages).flatMap((group) =>
-    fitSummaryMessageGroup(group, sourceTokenBudget),
+    fitSummaryMessageGroup(group, sourceTokenBudget, estimate),
   );
   const chunks: ModelMessage[][] = [];
   let current: ModelMessage[] = [];
   for (const group of groups) {
     const candidate = [...current, ...group];
-    if (
-      current.length > 0 &&
-      estimateModelMessageInputTokens(candidate) > sourceTokenBudget
-    ) {
+    if (current.length > 0 && estimate(candidate) > sourceTokenBudget) {
       chunks.push(current);
       current = [...group];
     } else {
@@ -7837,8 +8015,9 @@ function summaryMessageGroups(
 function fitSummaryMessageGroup(
   group: readonly ModelMessage[],
   tokenBudget: number,
+  estimate: (group: readonly ModelMessage[]) => number,
 ): ModelMessage[][] {
-  if (estimateModelMessageInputTokens(group) <= tokenBudget) {
+  if (estimate(group) <= tokenBudget) {
     return [[...group]];
   }
   const source = JSON.stringify(group);

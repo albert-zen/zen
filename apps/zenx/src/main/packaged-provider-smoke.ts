@@ -1,4 +1,5 @@
 import { verifyForegroundActivityOverlay } from "./foreground-activity-smoke.js";
+import { verifyPackagedHostImagePreparation } from "./packaged-host-image-smoke.js";
 import { verifyWindowsPackagedUiaSmoke } from "./windows-packaged-uia-smoke.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -131,6 +132,7 @@ void app.whenReady().then(async () => {
           })
         : undefined;
     const programmaticTool = await runPackagedProgrammaticToolSmoke();
+    const imagePreparation = await verifyPackagedHostImagePreparation();
     console.log(
       JSON.stringify(
         {
@@ -140,8 +142,9 @@ void app.whenReady().then(async () => {
           browser: browserDiagnostic,
           computer: computer.diagnostics,
           bundledOnly: true,
-          syntheticFixtures: false,
+          syntheticFixtures: { imagePreparation: true },
           programmaticTool,
+          imagePreparation,
           windowsUia,
         },
         null,

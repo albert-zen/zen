@@ -1,5 +1,10 @@
 import type { ProviderToolPresentation } from "./model.js";
-import type { CanonicalItem, ModelUsageItem, UserInput } from "./item.js";
+import type {
+  CanonicalItem,
+  ModelUsageItem,
+  UserInput,
+  ImageUserInputPart,
+} from "./item.js";
 import {
   modelUserContent,
   modelMessageContextCategory,
@@ -35,11 +40,22 @@ export interface ModelInputEstimate {
  * Four-character text heuristic and media reserve, NOT provider tokenizer/billing.
  * Provider-specific framing/resize/reasoning behavior remains approximate.
  */
+export type ImageDimensionEstimate = (
+  part: ImageUserInputPart,
+) => readonly [number, number];
+
+/** Optional numeric estimate for an already observed preparation outcome. */
+export type ImageInputTokenEstimate = (
+  part: ImageUserInputPart,
+) => number | undefined;
+
 export function estimateModelInput(
   messages: readonly ModelMessage[],
   tools: readonly ModelTool[],
   instructions = "",
   providerToolPresentation?: ProviderToolPresentation,
+  imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): ModelInputEstimate {
   const estimate: ModelInputEstimate = {
     total: 0,
@@ -50,7 +66,10 @@ export function estimateModelInput(
   };
   for (const message of messages) {
     const category = modelMessageContextCategory(message);
-    estimate[category] = add(estimate[category], estimateModelMessage(message));
+    estimate[category] = add(
+      estimate[category],
+      estimateModelMessage(message, imageDimensions, imageTokens),
+    );
   }
   for (const tool of providerToolPresentation === undefined ? tools : [])
     estimate.toolDefinitions = add(
@@ -153,9 +172,12 @@ export function projectModelUsage(
 
 export function estimateModelMessageInputTokens(
   messages: readonly ModelMessage[],
+  imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): number {
   return messages.reduce(
-    (total, message) => add(total, estimateModelMessage(message)),
+    (total, message) =>
+      add(total, estimateModelMessage(message, imageDimensions, imageTokens)),
     0,
   );
 }
@@ -321,7 +343,11 @@ function isPositiveCount(value: unknown): value is number {
   return isCount(value) && value > 0;
 }
 
-function estimateModelMessage(message: ModelMessage): number {
+function estimateModelMessage(
+  message: ModelMessage,
+  imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
+): number {
   switch (message.role) {
     case "system":
     case "developer":
@@ -339,33 +365,50 @@ function estimateModelMessage(message: ModelMessage): number {
         estimateText(`${message.callId}\n${message.text}`),
         message.modelContent === undefined
           ? 0
-          : estimateUserInput(message.modelContent),
+          : estimateUserInput(
+              message.modelContent,
+              imageDimensions,
+              imageTokens,
+            ),
       );
     case "user":
-      return estimateUserInput(modelUserContent(message));
+      return estimateUserInput(
+        modelUserContent(message),
+        imageDimensions,
+        imageTokens,
+      );
   }
 }
 
 /** Provider-neutral pressure estimate, not an exact provider tokenizer or image meter. */
-function estimateUserInput(content: UserInput): number {
-  return content.reduce(
-    (total, part) =>
-      add(
-        total,
-        part.type === "text"
-          ? Math.ceil(part.text.length / 4)
-          : part.type === "audio" ||
-              part.attachment.width === undefined ||
-              part.attachment.height === undefined
-            ? 256 + Math.ceil(part.attachment.byteLength / 32)
-            : // Reserve one token per 32px patch plus image overhead. Provider resize/detail
-              // rules differ; counting dimensions avoids treating a large image as a tiny ref.
-              256 +
-              Math.ceil(part.attachment.width / 32) *
-                Math.ceil(part.attachment.height / 32),
-      ),
-    4,
-  );
+function estimateUserInput(
+  content: UserInput,
+  imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
+): number {
+  return content.reduce((total, part) => {
+    if (part.type === "text")
+      return add(total, Math.ceil(part.text.length / 4));
+    if (
+      part.type === "audio" ||
+      part.attachment.width === undefined ||
+      part.attachment.height === undefined
+    )
+      return add(total, 256 + Math.ceil(part.attachment.byteLength / 32));
+    const preparedTokens = imageTokens?.(part);
+    if (preparedTokens !== undefined) {
+      if (!Number.isSafeInteger(preparedTokens) || preparedTokens < 0)
+        throw new Error("Invalid prepared image input token estimate");
+      return add(total, preparedTokens);
+    }
+    const [width, height] = imageDimensions?.(part) ?? [
+      part.attachment.width,
+      part.attachment.height,
+    ];
+    // Only a pressure estimate. A Host preflight can estimate its forthcoming
+    // resize without inventing an AttachmentRef or making a model-visible part.
+    return add(total, 256 + Math.ceil(width / 32) * Math.ceil(height / 32));
+  }, 4);
 }
 
 function toolCallsText(message: ModelMessage): string {

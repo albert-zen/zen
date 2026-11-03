@@ -112,7 +112,10 @@ export default defineConfig({
   main: {
     build: {
       // Portable packaging stages only the native/runtime externals explicitly.
-      externalizeDeps: { exclude: ["@modelcontextprotocol/sdk"] },
+      externalizeDeps: {
+        include: ["sharp"],
+        exclude: ["@modelcontextprotocol/sdk"],
+      },
       rollupOptions: {
         input: {
           "renderer-file-protocol": resolve(

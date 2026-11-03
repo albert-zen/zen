@@ -21,6 +21,12 @@ export class ViewImageToolRuntime implements ToolRuntime {
     inputSchema: {
       type: "object",
       properties: {
+        detail: {
+          type: "string",
+          enum: ["high", "original"],
+          description:
+            "Default high prepares a bounded view. original requires explicitly supported model capability and still uses 6000-edge/10000-patch limits; it never overwrites the original.",
+        },
         path: {
           type: "string",
           description:
@@ -67,6 +73,18 @@ export class ViewImageToolRuntime implements ToolRuntime {
   }
 
   async execute(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+    const detail = invocation.arguments.detail ?? "high";
+    if (detail !== "high" && detail !== "original")
+      throw new Error("view_image detail must be high or original");
+    if (
+      detail === "original" &&
+      invocation.supportsImageDetailOriginal !== true
+    )
+      throw new Error(
+        invocation.supportsImageDetailOriginal === false
+          ? "The selected provider/model does not support original image detail; no image was read"
+          : "Original image detail capability is unknown for the selected provider/model; configure an explicit capability before requesting original detail. No image was read",
+      );
     const imagePath = invocation.arguments.path;
     const attachment = invocation.arguments.attachment;
     if ((typeof imagePath === "string") === (attachment !== undefined)) {
@@ -99,7 +117,13 @@ export class ViewImageToolRuntime implements ToolRuntime {
     return {
       output: `Viewed image ${ref.sha256} (${String(ref.width)}x${String(ref.height)}, ${ref.mediaType})`,
       exitCode: 0,
-      modelContent: [{ type: "image", attachment: ref }],
+      modelContent: [
+        {
+          type: "image",
+          attachment: ref,
+          ...(detail === "original" ? { detail } : {}),
+        },
+      ],
     };
   }
 }
