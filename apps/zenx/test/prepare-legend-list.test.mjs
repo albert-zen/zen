@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { resolveConfig } from "vite";
@@ -165,11 +165,10 @@ test("a symlinked package directory is rejected before mutation", () =>
     assert.equal(blobHash(readFileSync(external)), originalBlob);
   }));
 test("Node ESM/tsx and Vite resolve react.mjs; CJS remains explicitly unpatched", async () => {
-  assert.ok(modulePath.endsWith("/react.mjs"));
-  assert.ok(
-    createRequire(import.meta.url)
-      .resolve("@legendapp/list/react")
-      .endsWith("/react.js"),
+  assert.equal(basename(modulePath), "react.mjs");
+  assert.equal(
+    basename(createRequire(import.meta.url).resolve("@legendapp/list/react")),
+    "react.js",
   );
   const config = await resolveConfig(
     { root, configFile: false, logLevel: "silent" },
@@ -182,7 +181,7 @@ test("Node ESM/tsx and Vite resolve react.mjs; CJS remains explicitly unpatched"
       "apps/zenx/src/renderer/src/ExperimentalTranscriptViewport.tsx",
     ),
   );
-  assert.equal(resolved, modulePath);
+  assert.equal(resolve(resolved), modulePath);
 });
 test("npm ci lifecycle keeps the dependency pin and invokes the local preparer", () => {
   const packageJson = JSON.parse(

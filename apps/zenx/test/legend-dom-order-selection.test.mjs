@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
@@ -11,7 +12,7 @@ import { blobHash, patchedBlob } from "../scripts/prepare-legend-list.mjs";
 // deterministic DOM/selection semantics, not native macOS input acceptance.
 const modulePath = fileURLToPath(import.meta.resolve("@legendapp/list/react"));
 const bytes = readFileSync(modulePath);
-assert.ok(modulePath.endsWith("/react.mjs"));
+assert.equal(basename(modulePath), "react.mjs");
 assert.equal(blobHash(bytes), patchedBlob);
 const source = bytes.toString();
 const start = source.indexOf("// src/utils/reordering.ts");
