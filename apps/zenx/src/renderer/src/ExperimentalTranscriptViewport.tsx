@@ -2,6 +2,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   useCallback,
   useLayoutEffect,
+  useEffect,
   useRef,
   useState,
   type HTMLAttributes,
@@ -15,6 +16,11 @@ import {
   readTranscriptAnchor,
   type TranscriptAnchor,
 } from "./transcript-viewport-pins.js";
+import {
+  alignTranscriptSelectionAnchor,
+  ownsNativeTranscriptSelection,
+  transcriptSelectionIntersects,
+} from "./native-transcript-selection.js";
 
 export interface VirtualTranscriptRow {
   key: string;
@@ -55,6 +61,7 @@ interface Props extends Omit<
   };
   onViewportScroll(node: HTMLDivElement, layoutCorrection: boolean): void;
   onContentSettled(): void;
+  onNativeSelectionStart?(): void;
 }
 
 /** WIP, opt-in viewport. Legend owns the only scroll node; ZenX owns follow intent. */
@@ -68,6 +75,7 @@ export function ExperimentalTranscriptViewport({
   position,
   onViewportScroll,
   onContentSettled,
+  onNativeSelectionStart: _selectionStarted,
   ...attributes
 }: Props) {
   const list = useRef<LegendListRef | null>(null);
@@ -411,7 +419,7 @@ export function TranscriptViewport({
   children,
   ...props
 }: Props & { experimental: boolean; children: ReactNode }) {
-  if (experimental) return <ExperimentalTranscriptViewport {...props} />;
+  if (experimental) return <NativeSelectableTranscriptViewport {...props} />;
   const {
     rows: _rows,
     header: _header,
@@ -422,6 +430,7 @@ export function TranscriptViewport({
     position: _position,
     onViewportScroll,
     onContentSettled: _settled,
+    onNativeSelectionStart: _selectionStarted,
     ...attributes
   } = props;
   return (
@@ -431,6 +440,114 @@ export function TranscriptViewport({
       onScroll={(event) => onViewportScroll(event.currentTarget, false)}
     >
       {children}
+    </div>
+  );
+}
+
+/** Explicit native Select All temporarily uses the normal canonical DOM order. */
+function NativeSelectableTranscriptViewport(props: Props) {
+  const [complete, setComplete] = useState(false);
+  const completeRef = useRef(false);
+  const anchor = useRef<TranscriptAnchor | null>(null);
+  const latest = useRef(props);
+  latest.current = props;
+  const selectionEpoch = useRef(0);
+  useEffect(() => {
+    const bridge = window.zenx?.nativeEditing;
+    if (!bridge) return;
+    return bridge.onPrepareSelectAll(() => {
+      const node = latest.current.viewport.current;
+      if (!node || !ownsNativeTranscriptSelection(node)) return false;
+      if (!completeRef.current) {
+        latest.current.onNativeSelectionStart?.();
+        latest.current.controller.current?.captureReveal().cancel();
+        anchor.current = readTranscriptAnchor(node);
+        latest.current.position.virtualAnchor = anchor.current;
+        ++selectionEpoch.current;
+        completeRef.current = true;
+        flushSync(() => setComplete(true));
+      }
+      return true;
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (!complete) return;
+    const node = props.viewport.current;
+    if (!node) return;
+    const document = node.ownerDocument;
+    const epoch = selectionEpoch.current;
+    alignTranscriptSelectionAnchor(node, anchor.current);
+    props.onViewportScroll(node, true);
+    let armed = false;
+    let frame = 0;
+    let alive = true;
+    const finish = () => {
+      if (!alive || selectionEpoch.current !== epoch) return;
+      if (transcriptSelectionIntersects(node)) {
+        armed = true;
+        return;
+      }
+      // The native command follows the synchronous commit via the owned bridge.
+      // Ignore the old virtual DOM's transient collapsed selection until then.
+      if (!armed) return;
+      anchor.current = readTranscriptAnchor(node) ?? anchor.current;
+      props.position.virtualAnchor = anchor.current;
+      if (props.position.scroll) props.position.scroll.following = false;
+      completeRef.current = false;
+      setComplete(false);
+    };
+    const selection = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(finish);
+    };
+    const focus = () => {
+      if (!ownsNativeTranscriptSelection(node)) {
+        armed = true;
+        selection();
+      }
+    };
+    document.addEventListener("selectionchange", selection);
+    document.addEventListener("focusin", focus);
+    // A committed Selection, rather than a timer, owns the full DOM lifetime.
+    return () => {
+      alive = false;
+      cancelAnimationFrame(frame);
+      document.removeEventListener("selectionchange", selection);
+      document.removeEventListener("focusin", focus);
+    };
+  }, [complete, props.position, props.viewport]);
+  if (!complete) return <ExperimentalTranscriptViewport {...props} />;
+  const {
+    rows,
+    header,
+    footer,
+    viewport,
+    controller: _controller,
+    listRef: _listRef,
+    position: _position,
+    onViewportScroll,
+    onContentSettled: _settled,
+    onNativeSelectionStart: _selectionStarted,
+    ...attributes
+  } = props;
+  return (
+    <div
+      {...attributes}
+      ref={viewport}
+      data-native-transcript-selection="complete"
+      onScroll={(event) => onViewportScroll(event.currentTarget, false)}
+    >
+      <div className="messages-inner">
+        {header}
+        <div className="transcript-history">
+          {rows.map((row) => (
+            <div key={row.key} data-transcript-row-key={row.key}>
+              {row.content}
+            </div>
+          ))}
+        </div>
+        {footer}
+      </div>
     </div>
   );
 }

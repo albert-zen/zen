@@ -1774,6 +1774,7 @@ function ThreadViewContent({
                 </>
               }
               onContentSettled={followBottom}
+              onNativeSelectionStart={pauseFollowing}
               className="messages"
               style={{ overflowAnchor: atLive ? "none" : undefined }}
               onWheel={(event) => {
