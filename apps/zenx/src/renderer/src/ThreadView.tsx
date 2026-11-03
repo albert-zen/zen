@@ -1691,15 +1691,17 @@ function ThreadViewContent({
                   {renderedTranscriptRows}
                 </div>
               )}
-              {composer.pendingSends && (
-                <PendingSendRows
-                  key={thread?.id ?? composerId}
-                  messages={composer.pendingSends}
-                  onRecover={onRecoverPendingSend}
-                  onDismiss={onDismissPendingSend}
-                  onCheck={onCheckPendingSends}
-                />
-              )}
+              <div className="pending-send-host">
+                {composer.pendingSends && (
+                  <PendingSendRows
+                    key={thread?.id ?? composerId}
+                    messages={composer.pendingSends}
+                    onRecover={onRecoverPendingSend}
+                    onDismiss={onDismissPendingSend}
+                    onCheck={onCheckPendingSends}
+                  />
+                )}
+              </div>
               {composer.compaction?.status === "pending" ? (
                 <ContextCompactionProgress state={composer.compaction} />
               ) : null}

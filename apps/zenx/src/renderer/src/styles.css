@@ -1605,6 +1605,10 @@ button:disabled {
   display: grid;
   gap: inherit;
 }
+/* Keep pending mutations below history without adding a grid box or gap. */
+.pending-send-host {
+  display: contents;
+}
 .new-thread-draft-surface .messages {
   display: grid;
 }
