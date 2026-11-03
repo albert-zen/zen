@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ApprovalPolicy, SandboxMode } from "./item.js";
+import type { UserQuestionSummary } from "./user-question-state.js";
 
 export interface CurrentMetadata {
   providerProfileId?: string;
@@ -46,8 +47,10 @@ export interface ThreadSummary {
   updatedAt: string;
   /** Latest locally started Turn, or this Thread's creation (including forks). */
   turnSortAt?: string;
-  /** Latest human receipt or accepted final answer; not intermediate activity. */
+  /** Latest human receipt, accepted final answer, or local question publication. */
   recentActivityAt?: string;
+  /** Bounded source-derived attention; omitted by older Hosts or unavailable Threads. */
+  userQuestionSummary?: UserQuestionSummary;
   preview: string;
   status: "idle" | "active";
   forkedFromThreadId?: string;
@@ -176,6 +179,7 @@ export function isNativeThreadSummary(
       value.createdAt === null &&
       value.updatedAt === null &&
       typeof value.error === "string" &&
+      value.userQuestionSummary === undefined &&
       value.currentMetadata === undefined
     );
   }
@@ -187,6 +191,15 @@ export function isNativeThreadSummary(
     (value.recentActivityAt === undefined ||
       (typeof value.recentActivityAt === "string" &&
         Number.isFinite(Date.parse(value.recentActivityAt)))) &&
+    (value.userQuestionSummary === undefined ||
+      (isRecord(value.userQuestionSummary) &&
+        Number.isSafeInteger(value.userQuestionSummary.openCount) &&
+        (value.userQuestionSummary.openCount as number) >= 0 &&
+        (value.userQuestionSummary.latestPublishedAt === undefined ||
+          (typeof value.userQuestionSummary.latestPublishedAt === "string" &&
+            Number.isFinite(
+              Date.parse(value.userQuestionSummary.latestPublishedAt),
+            ))))) &&
     (value.lastMessage === undefined ||
       (isMessageSummary(value.lastMessage) &&
         (value.lastMessage.kind === "user" ||

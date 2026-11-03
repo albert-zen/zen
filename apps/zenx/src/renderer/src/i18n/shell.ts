@@ -15,8 +15,8 @@ export const en = {
   pendingSendCheck: "Check delivery",
   steerPendingLabel: "Messages waiting for the model",
   steerPendingCount: "Waiting for the model: {{count}}",
-  steerRecallAll: "Recall all to composer",
-  steerRecallOne: "Recall to composer",
+  steerRecallAll: "Recall all to original inputs",
+  steerRecallOne: "Recall to original input",
   steerRecalling: "Recalling…",
   steerHeldNotice:
     "These messages have not entered the model. They will join the next turn you explicitly start, retry or replace. You can recall them first.",
@@ -38,12 +38,12 @@ export const en = {
   steerRecoveryNotice:
     "Restore only if you still need these messages. Other windows and restarts never insert them automatically.",
   steerRecoveryConfirm:
-    "This content may already have been restored. Continue to combine it before your current draft, keeping images and references?",
-  steerRecoveryMerge: "Combine with current draft",
+    "This content may already have been restored. Return question answers to their original cards and add ordinary messages before the current composer draft, keeping images and references?",
+  steerRecoveryMerge: "Restore to original inputs",
   steerRecoveryCancel: "Cancel",
-  steerRecoveryRestore: "Restore to composer",
+  steerRecoveryRestore: "Restore to original inputs",
   steerRecoveryBusy:
-    "The composer is sending or no longer selected. The recalled content is safe here; restore it when ready.",
+    "An original input is unavailable, has a newer draft, is sending, or is no longer selected. Nothing was partially restored; the whole recalled batch remains here.",
   startWithoutProjectOrAddFolder:
     "Start a chat without a project, or add a folder.",
   noProject: "No project",
@@ -165,6 +165,10 @@ export const en = {
   threadAutomationCount: "{{count}} triggers",
   threadAutomationCount_one: "{{count}} trigger",
   threadAutomationCount_other: "{{count}} triggers",
+  threadAsking: "Asking",
+  threadAskingCount: "{{count}} open question requests",
+  threadAskingCount_one: "{{count}} open question request",
+  threadAskingCount_other: "{{count}} open question requests",
   threadUnseenEnd: "Thread ended, not yet viewed",
   threadUnseenFailure: "Thread failed, not yet viewed",
   renameThreadNamed: "Rename {{title}}",
@@ -981,8 +985,8 @@ export const zhCN = {
   pendingSendCheck: "检查送达状态",
   steerPendingLabel: "等待进入模型的消息",
   steerPendingCount: "等待进入模型：{{count}} 条",
-  steerRecallAll: "全部撤回到输入框",
-  steerRecallOne: "撤回到输入框",
+  steerRecallAll: "全部撤回到原输入位置",
+  steerRecallOne: "撤回到原输入位置",
   steerRecalling: "正在撤回…",
   steerHeldNotice:
     "这些消息尚未进入模型；你明确发起、重试或替换下一轮时会一并提交，可先全部撤回。",
@@ -1003,11 +1007,12 @@ export const zhCN = {
   steerRecoveryNotice:
     "仅在仍需要这些消息时恢复。其他窗口及重启后不会自动插入输入框。",
   steerRecoveryConfirm:
-    "这些内容可能已经恢复过。是否继续放到现有草稿之前，并保留全部图片和引用？",
-  steerRecoveryMerge: "合并到现有草稿",
+    "这些内容可能已经恢复过。是否将问题回答恢复到原问题卡片，普通消息放到现有输入框草稿之前，并保留图片和引用？",
+  steerRecoveryMerge: "恢复到原输入位置",
   steerRecoveryCancel: "取消",
-  steerRecoveryRestore: "恢复到输入框",
-  steerRecoveryBusy: "输入框正在发送或已切换。撤回内容仍安全保留，可稍后恢复。",
+  steerRecoveryRestore: "恢复到原输入位置",
+  steerRecoveryBusy:
+    "原输入位置不可用、已有新草稿、正在发送或已切换。本批未部分恢复，整批撤回内容仍保留。",
   startWithoutProjectOrAddFolder: "直接创建无项目会话，或添加一个项目文件夹。",
   noProject: "无项目",
   projectlessDirectoryHint:
@@ -1113,6 +1118,10 @@ export const zhCN = {
   threadAutomationCount: "{{count}} 个触发器",
   threadAutomationCount_one: "{{count}} 个触发器",
   threadAutomationCount_other: "{{count}} 个触发器",
+  threadAsking: "待回答",
+  threadAskingCount: "{{count}} 组问题待回答",
+  threadAskingCount_one: "{{count}} 组问题待回答",
+  threadAskingCount_other: "{{count}} 组问题待回答",
   threadUnseenEnd: "线程已结束，尚未查看",
   threadUnseenFailure: "线程执行失败，尚未查看",
   renameThreadNamed: "重命名 {{title}}",

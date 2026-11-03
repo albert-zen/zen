@@ -27,6 +27,8 @@ export type Thread = Omit<
   canonicalItems?: readonly CanonicalItem[];
   /** Persisted semantic model context; absent on older Hosts, never reconstructed wire. */
   itemList?: readonly import("../../../../src/item-list.js").ContextItem[];
+  userQuestions?: ThreadSnapshot["userQuestions"];
+  userQuestionsPage?: ThreadSnapshot["userQuestionsPage"];
   turns: Turn[];
   queuedMessages?: Array<
     NonNullable<CodexThread["queuedMessages"]>[number] & {
@@ -176,6 +178,9 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/questions/list": import("../../../../src/protocol/native/wire.js").NativeQuestionListParams;
+  "zen/thread/questions/read": import("../../../../src/protocol/native/wire.js").NativeQuestionReadParams;
+  "zen/thread/questions/respond": import("../../../../src/protocol/native/wire.js").NativeQuestionRespondParams;
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
   "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
@@ -282,6 +287,9 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/questions/list": import("../../../../src/protocol/native/wire.js").NativeQuestionListResult;
+  "zen/thread/questions/read": import("../../../../src/protocol/native/wire.js").NativeQuestionReadResult;
+  "zen/thread/questions/respond": import("../../../../src/protocol/native/wire.js").NativeQuestionRespondResult;
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportPreview;
   "zen/thread/import": {
     thread: ThreadSnapshot;

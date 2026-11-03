@@ -1,4 +1,5 @@
 import type { CapabilityObjectBinding, ModelTool } from "./model.js";
+import { ASK_USER_QUESTION_NAME } from "./user-question.js";
 
 export type ToolPresentation = "direct" | "code" | "both";
 
@@ -36,6 +37,14 @@ export function buildToolPresentation(
   const compactContextTools = snapshot.filter(
     (definition) => definition.name === COMPACT_CONTEXT_NAME,
   );
+  const questionTools = snapshot.filter(
+    (definition) => definition.name === ASK_USER_QUESTION_NAME,
+  );
+  if (questionTools.length > 1)
+    throw new Error(
+      "Tool presentation accepts at most one ask_user_question definition",
+    );
+  const directOnlyTools = [...compactContextTools, ...questionTools];
   if (
     compactContextTools.length > 1 ||
     compactContextTools.some(
@@ -52,6 +61,7 @@ export function buildToolPresentation(
   const ordinaryTools = snapshot.filter(
     (definition) =>
       definition.name !== RUN_CODE_NAME &&
+      definition.name !== ASK_USER_QUESTION_NAME &&
       definition.name !== COMPACT_CONTEXT_NAME,
   );
   if (mode !== "direct" && runCodeCount !== 1) {
@@ -62,12 +72,12 @@ export function buildToolPresentation(
 
   const modelTools =
     mode === "direct"
-      ? [...ordinaryTools, ...compactContextTools]
+      ? [...ordinaryTools, ...directOnlyTools]
       : mode === "code"
-        ? [createRunCodeModelTool(ordinaryTools), ...compactContextTools]
+        ? [createRunCodeModelTool(ordinaryTools), ...directOnlyTools]
         : [
             ...ordinaryTools,
-            ...compactContextTools,
+            ...directOnlyTools,
             createRunCodeModelTool(ordinaryTools),
           ];
   return Object.freeze({

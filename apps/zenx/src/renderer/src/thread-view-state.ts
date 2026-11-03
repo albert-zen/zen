@@ -103,6 +103,7 @@ export function applyNativeThreadEvent(
 ): Thread {
   if (
     event.type === "model_catalog_updated" ||
+    event.type === "user_question_attention_invalidated" ||
     event.type === "context_compaction_status"
   )
     return thread;
@@ -648,6 +649,8 @@ export function projectNativeThread(
     ...(snapshot.itemList === undefined
       ? {}
       : { itemList: structuredClone(snapshot.itemList) }),
+    userQuestions: snapshot.userQuestions,
+    userQuestionsPage: snapshot.userQuestionsPage,
     queuedMessages: projectedQueue(snapshot.items),
     turns: snapshot.turns.map((turn) => {
       const started = turn.items.find((item) => item.type === "turn_started");

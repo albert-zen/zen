@@ -1,4 +1,26 @@
 export const en = {
+  questionTitle: "Needs your input",
+  questionFreeText: "Your answer or additional details",
+  questionSend: "Send answers",
+  questionCancel: "Cancel request",
+  questionCheck: "Check response",
+  questionReadFailed: "Questions could not be refreshed. See details.",
+  questionMore: "Load more ({{loaded}} of {{total}})",
+  questionUnknown:
+    "Response outcome is unconfirmed. Check before sending again.",
+  questionFailed: "Response was not accepted. See details.",
+  questionDraftNote:
+    "Unsent drafts stay in this window, not across app reloads.",
+  "questionState.open": "Needs your input",
+  "questionState.sending": "Sending response…",
+  "questionState.unknown": "Response unconfirmed",
+  "questionState.rejected": "Response not accepted",
+  "questionState.answer-pending": "Answer waiting to enter model input",
+  "questionState.cancel-pending": "Cancellation waiting to enter model input",
+  "questionState.answered": "Answer entered model input",
+  "questionState.cancelled": "Cancellation entered model input",
+  "questionState.unavailable": "Question unavailable",
+
   mainConversation: "Main chat · {{title}}",
   informationNoTriggers: "No triggers for this conversation.",
   boardLoading: "Loading information…",
@@ -1051,6 +1073,26 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  questionTitle: "需要你的输入",
+  questionFreeText: "你的回答或补充说明",
+  questionSend: "发送回答",
+  questionCancel: "取消本组问题",
+  questionCheck: "检查回答状态",
+  questionReadFailed: "问题刷新失败，请查看详情。",
+  questionMore: "加载更多（{{loaded}} / {{total}}）",
+  questionUnknown: "回答结果尚未确认，请先检查状态，不要重复发送。",
+  questionFailed: "回答未被接纳，请查看详情。",
+  questionDraftNote: "未发送草稿仅保留在当前窗口，应用重载后不保留。",
+  "questionState.open": "需要你的输入",
+  "questionState.sending": "正在发送回答…",
+  "questionState.unknown": "回答结果尚未确认",
+  "questionState.rejected": "回答未被接纳",
+  "questionState.answer-pending": "回答等待进入模型输入",
+  "questionState.cancel-pending": "取消等待进入模型输入",
+  "questionState.answered": "回答已进入模型输入",
+  "questionState.cancelled": "取消已进入模型输入",
+  "questionState.unavailable": "问题不可用",
+
   informationNoTriggers: "此会话尚无触发器。",
   mainConversation: "主聊天 · {{title}}",
   boardLoading: "正在加载信息…",

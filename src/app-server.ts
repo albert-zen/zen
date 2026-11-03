@@ -1,4 +1,16 @@
+import {
+  parseUserQuestionReply,
+  normalizeUserQuestionReply,
+  renderUserQuestionReply,
+  type UserQuestionReply,
+  type UserQuestionAnswer,
+} from "./user-question.js";
 import { ThreadRecencyProjection } from "./thread-recency.js";
+import type {
+  UserQuestionState,
+  UserQuestionPage,
+  UserQuestionReadback,
+} from "./user-question-state.js";
 import {
   captureReceiptTimezone,
   formatReceiptTimestamp,
@@ -179,6 +191,10 @@ export interface StartThreadInput {
 }
 
 export interface ThreadSnapshot {
+  /** Derived from semantic publication and existing native input facts. */
+  userQuestions?: readonly UserQuestionState[];
+  /** Bounded first attention page; absence never proves a response was claimed. */
+  userQuestionsPage?: Omit<UserQuestionPage, "questions">;
   /** Exact persisted semantic context; .items is compatibility history only. */
   itemList?: readonly ContextItem[];
   id: string;
@@ -380,6 +396,7 @@ export interface ContextCompactionStatusEvent {
 
 export type AppServerEvent =
   | ContextCompactionStatusEvent
+  | { type: "user_question_attention_invalidated"; threadId: string }
   | { type: "context_item_completed"; threadId: string; item: ContextItem }
   | Exclude<RuntimeEvent, { type: "item_completed" }>
   | {
@@ -2105,6 +2122,182 @@ export class ZenAppServer {
     input: RequestedUserInput,
     options: SteerTurnOptions & { recallableSteer?: true } = {},
   ): Promise<TurnHandle> {
+    return await this.#sendMessage(threadId, input, options);
+  }
+
+  async listUserQuestions(
+    threadId: string,
+    after?: string,
+  ): Promise<UserQuestionPage> {
+    const thread = await this.#requireThread(threadId);
+    try {
+      return thread.userQuestionPage(after);
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid question cursor",
+      );
+    }
+  }
+
+  /** Read only: a missing current fact is never authority to replay an in-flight RPC. */
+  async readUserQuestion(
+    threadId: string,
+    callItemId: string,
+    clientId: string,
+  ): Promise<UserQuestionReadback> {
+    if (
+      [threadId, callItemId, clientId].some(
+        (id) => typeof id !== "string" || !id.trim() || id.length > 512,
+      )
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "Exact bounded Thread/question/client identities are required",
+      );
+    return await this.#withThreadMutation(threadId, async () => {
+      const thread = await this.#requireThread(threadId);
+      this.#assertCurrentThreadAuthority(thread);
+      await this.#journal.assertRecoverySafe?.(threadId);
+      const question = thread.userQuestion(callItemId);
+      const base = { ...(question === undefined ? {} : { question }) };
+      const used = thread.items.find(
+        (item) => "clientId" in item && item.clientId === clientId,
+      );
+      if (used === undefined) {
+        const initialInFlight =
+          this.#activeTurns.get(threadId)?.initialInputCommitted === false;
+        return {
+          ...base,
+          response: {
+            clientId,
+            status: initialInFlight ? "unknown" : "not-found",
+          },
+        };
+      }
+      if (
+        (used.type !== "user_message" && used.type !== "user_message_queued") ||
+        used.questionReply?.request.threadId !== threadId ||
+        used.questionReply.request.callItemId !== callItemId
+      )
+        return { ...base, response: { clientId, status: "conflict" } };
+      if (!question || question.state === "unavailable")
+        return { ...base, response: { clientId, status: "unknown" } };
+      const response = question.response;
+      const receipt = {
+        clientId,
+        reply: used.questionReply,
+        ...(used.type === "user_message_queued"
+          ? { queuedItemId: used.id }
+          : {}),
+      };
+      if (response?.clientId === clientId) {
+        const claimed =
+          question.state === "answered" || question.state === "cancelled";
+        const delivered = claimed
+          ? thread.items.find((item) => item.id === response.itemId)
+          : undefined;
+        return {
+          ...base,
+          response: {
+            ...receipt,
+            status: claimed ? "claimed" : "pending",
+            itemId: response.itemId,
+            ...(delivered?.turnId === undefined
+              ? {}
+              : { turnId: delivered.turnId }),
+          },
+        };
+      }
+      return { ...base, response: { ...receipt, status: "withdrawn" } };
+    });
+  }
+
+  async respondToUserQuestion(
+    threadId: string,
+    request: { questionCallItemId: string; clientId: string } & (
+      | { outcome: "answer"; answers: UserQuestionAnswer[] }
+      | { outcome: "cancel" }
+    ),
+    options: {
+      clientTimezone?: string;
+      requestApproval?: ApprovalHandler;
+    } = {},
+  ): Promise<{ turn: TurnHandle; question: UserQuestionState }> {
+    if (
+      typeof request.clientId !== "string" ||
+      !request.clientId.trim() ||
+      request.clientId.length > 512
+    )
+      throw new AppServerError(
+        "invalid_request",
+        "A stable client ID is required",
+      );
+    let candidate: UserQuestionReply;
+    try {
+      candidate = parseUserQuestionReply({
+        version: 1,
+        request: { threadId, callItemId: request.questionCallItemId },
+        outcome: request.outcome,
+        ...(request.outcome === "answer" ? { answers: request.answers } : {}),
+      });
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid question response",
+      );
+    }
+    const thread = await this.#requireThread(threadId);
+    const question = thread.userQuestion(candidate.request.callItemId);
+    if (!question)
+      throw new AppServerError(
+        "question_not_found",
+        "No accepted local question matches this Thread and Item",
+      );
+    let reply: UserQuestionReply;
+    let input: UserInput;
+    try {
+      reply = normalizeUserQuestionReply(question.specification, candidate);
+      input = [
+        {
+          type: "text",
+          text: renderUserQuestionReply(question.specification, reply),
+        },
+      ];
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid answer",
+      );
+    }
+    // The read/render above is not admission. Both write paths validate under their native lock.
+    const turn = await this.#sendMessage(
+      threadId,
+      input,
+      {
+        ...options,
+        clientId: request.clientId,
+        requireUnarchived: true,
+        recallableSteer: true,
+      },
+      reply,
+    );
+    const current = await this.#requireThread(threadId);
+    const resolved = current.userQuestion(reply.request.callItemId);
+    if (!resolved)
+      throw new AppServerError(
+        "question_state_unavailable",
+        "Read back the original response identity before retrying",
+      );
+    return { turn, question: resolved };
+  }
+
+  async #sendMessage(
+    threadId: string,
+    input: RequestedUserInput,
+    options: SteerTurnOptions & { recallableSteer?: true },
+    questionReply?: UserQuestionReply,
+  ): Promise<TurnHandle> {
     for (let attempt = 0; attempt < 8; attempt++) {
       const thread = await this.#requireThread(threadId);
       const items = thread.items;
@@ -2118,7 +2311,12 @@ export class ZenAppServer {
             );
       // startTurn performs canonical identity/input validation before any execution.
       if (duplicate !== undefined)
-        return await this.startTurn(threadId, input, options);
+        return questionReply === undefined
+          ? await this.startTurn(threadId, input, options)
+          : await this.#launchTurn(threadId, input, options, {
+              carryHeldHumanSteer: true,
+              questionReply,
+            });
       if (options.recallableSteer === true && options.clientId !== undefined) {
         const staged = items.find(
           (item) =>
@@ -2127,18 +2325,29 @@ export class ZenAppServer {
             item.clientId === options.clientId,
         );
         if (staged?.type === "user_message_queued")
-          return await this.stageSteerMessage(
+          return await this.#stageSteerMessage(
             threadId,
             staged.expectedTurnId!,
             input,
             { ...options, clientId: options.clientId },
+            questionReply,
           );
       }
       const active = this.#activeTurns.get(threadId);
+      if (
+        questionReply !== undefined &&
+        active !== undefined &&
+        !active.initialInputCommitted
+      ) {
+        // This exact initial commit may fail/unknown. Never turn that into a fresh send.
+        await active.ready;
+        continue;
+      }
       if (active?.controller.signal.aborted) {
         await Promise.allSettled([active.done]);
         continue;
       }
+
       try {
         if (
           active !== undefined &&
@@ -2151,7 +2360,7 @@ export class ZenAppServer {
                 "invalid_request",
                 "Recallable steer requires a stable client ID",
               );
-            return await this.stageSteerMessage(
+            return await this.#stageSteerMessage(
               threadId,
               active.turnId,
               input,
@@ -2159,12 +2368,18 @@ export class ZenAppServer {
                 ...options,
                 clientId: options.clientId,
               },
+              questionReply,
             );
           }
           await active.ready;
           return await this.steerTurn(threadId, active.turnId, input, options);
         }
-        return await this.startTurn(threadId, input, options);
+        return questionReply === undefined
+          ? await this.startTurn(threadId, input, options)
+          : await this.#launchTurn(threadId, input, options, {
+              carryHeldHumanSteer: true,
+              questionReply,
+            });
       } catch (error) {
         // Only definitive pre-admission races are retryable. Unknown append/transport
         // outcomes are returned for canonical readback, never replayed here.
@@ -2590,7 +2805,14 @@ export class ZenAppServer {
                     text: pending.text,
                     mode: "steer",
                   }
-                : { ...base, type: "user_message", content: pending.input };
+                : {
+                    ...base,
+                    type: "user_message",
+                    content: pending.input,
+                    ...(pending.questionReply === undefined
+                      ? {}
+                      : { questionReply: pending.questionReply }),
+                  };
           await this.#commit(thread, item);
           this.#emit({ type: "item_completed", item });
           return {
@@ -2627,6 +2849,10 @@ export class ZenAppServer {
               {
                 input: pending.input,
                 clientId: pending.clientId,
+                ...(pending.type === "user_message_queued" &&
+                pending.questionReply !== undefined
+                  ? { questionReply: pending.questionReply }
+                  : {}),
                 ...(pending.type === "thread_message_queued"
                   ? {
                       sender: pending.sender,
@@ -2740,6 +2966,11 @@ export class ZenAppServer {
         throw new AppServerError(
           "queue_not_found",
           "Queued message was not found",
+        );
+      if (original.questionReply !== undefined)
+        throw new AppServerError(
+          "question_response_edit_unsupported",
+          "Recall this question response and explicitly answer again instead of editing its rendered text",
         );
       if (
         this.#reservedQueuedItems.get(threadId)?.has(original.id) ||
@@ -3284,6 +3515,10 @@ export class ZenAppServer {
               initialMessages: batch.map((item) => ({
                 input: item.input,
                 clientId: item.clientId,
+                ...(item.type === "user_message_queued" &&
+                item.questionReply !== undefined
+                  ? { questionReply: item.questionReply }
+                  : {}),
                 ...(item.type === "host_message_queued"
                   ? {
                       hostInput: {
@@ -3516,6 +3751,7 @@ export class ZenAppServer {
       };
     },
     internal: {
+      questionReply?: UserQuestionReply;
       /** Explicit human successor authority; automatic queue/Host launches omit it. */
       carryHeldHumanSteer?: boolean;
       preparedInput?: boolean;
@@ -3532,6 +3768,16 @@ export class ZenAppServer {
   ): Promise<TurnHandle> {
     const launch = await this.#withThreadMutation(threadId, async () => {
       const thread = await this.#requireThread(threadId);
+      if (internal.questionReply !== undefined)
+        await this.#validateQuestionReplyUnlocked(
+          thread,
+          internal.questionReply,
+          options.clientId,
+          normalizeAppServerInput(
+            requestedInput as UserInput,
+            "Question response",
+          ),
+        );
       const admitting = this.#activeTurns.get(threadId);
       if (
         internal.expectedTerminalTurnId !== undefined &&
@@ -3854,9 +4100,19 @@ export class ZenAppServer {
                 ...(options.clientTimezone === undefined
                   ? {}
                   : { clientTimezone: options.clientTimezone }),
-                ...(internal.initialMessages === undefined
-                  ? {}
-                  : { initialMessages: internal.initialMessages }),
+                ...(internal.questionReply !== undefined
+                  ? {
+                      initialMessages: [
+                        {
+                          input,
+                          clientId: options.clientId!,
+                          questionReply: internal.questionReply,
+                        },
+                      ],
+                    }
+                  : internal.initialMessages === undefined
+                    ? {}
+                    : { initialMessages: internal.initialMessages }),
                 ...(options.clientId === undefined
                   ? {}
                   : { clientId: options.clientId }),
@@ -3935,6 +4191,9 @@ export class ZenAppServer {
                           createdAt: this.#now(),
                           clientId: pending.clientId,
                           content: pending.input,
+                          ...(pending.questionReply === undefined
+                            ? {}
+                            : { questionReply: pending.questionReply }),
                           ...(pending.receiptTimezone === undefined
                             ? {}
                             : { receiptTimezone: pending.receiptTimezone }),
@@ -4116,6 +4375,12 @@ export class ZenAppServer {
                                       createdAt: this.#now(),
                                       clientId: pending.clientId,
                                       content: pending.input,
+                                      ...(pending.questionReply === undefined
+                                        ? {}
+                                        : {
+                                            questionReply:
+                                              pending.questionReply,
+                                          }),
                                       ...(pending.receiptTimezone === undefined
                                         ? {}
                                         : {
@@ -4789,12 +5054,29 @@ export class ZenAppServer {
     requestedInput: RequestedUserInput,
     options: SteerTurnOptions & { clientId: string },
   ): Promise<TurnHandle> {
+    return await this.#stageSteerMessage(
+      threadId,
+      expectedTurnId,
+      requestedInput,
+      options,
+    );
+  }
+
+  async #stageSteerMessage(
+    threadId: string,
+    expectedTurnId: string,
+    requestedInput: RequestedUserInput,
+    options: SteerTurnOptions & { clientId: string },
+    questionReply?: UserQuestionReply,
+  ): Promise<TurnHandle> {
     if (options.clientId.trim().length === 0)
       throw new AppServerError(
         "invalid_request",
         "A stable client ID is required",
       );
-    return await this.#withThreadMutation<TurnHandle>(threadId, async () => {
+    const result = await this.#withThreadMutation<
+      TurnHandle | { wait: Promise<void> }
+    >(threadId, async () => {
       const thread = await this.#requireThread(threadId);
       if (options.requireUnarchived === true)
         await this.#requireUnarchived(threadId);
@@ -4803,6 +5085,13 @@ export class ZenAppServer {
         requestedInput,
         options.clientId,
       );
+      if (questionReply !== undefined)
+        await this.#validateQuestionReplyUnlocked(
+          thread,
+          questionReply,
+          options.clientId,
+          input,
+        );
       const items = thread.items;
       const original = items.find(
         (item) =>
@@ -4878,6 +5167,8 @@ export class ZenAppServer {
           "turn_not_running",
           "The target Turn is not running",
         );
+      if (questionReply !== undefined && !active.initialInputCommitted)
+        return { wait: active.ready };
       await this.#validateInput(input, active.inputModalities);
       const queued: QueuedUserMessageItem = {
         id: this.#id(),
@@ -4886,6 +5177,7 @@ export class ZenAppServer {
         createdAt: this.#now(),
         clientId: options.clientId,
         input,
+        ...(questionReply === undefined ? {} : { questionReply }),
         deliveryMode: "steer",
         expectedTurnId,
         receiptTimezone: captureReceiptTimezone(options.clientTimezone),
@@ -4902,6 +5194,17 @@ export class ZenAppServer {
         },
       };
     });
+    if ("wait" in result) {
+      await result.wait;
+      return await this.#stageSteerMessage(
+        threadId,
+        expectedTurnId,
+        requestedInput,
+        options,
+        questionReply,
+      );
+    }
+    return result;
   }
 
   async steerTurn(
@@ -6113,6 +6416,11 @@ export class ZenAppServer {
       throw new ThreadJournalAppendOutcomeUnknownError(error);
     }
     thread.appendContext(item);
+    if (thread.takeUserQuestionAttentionInvalidation())
+      this.#emit({
+        type: "user_question_attention_invalidated",
+        threadId: thread.id,
+      });
     this.#emit({ type: "context_item_completed", threadId: thread.id, item });
   }
 
@@ -6125,12 +6433,116 @@ export class ZenAppServer {
       );
   }
 
+  /** Caller owns the existing Thread mutation lock. Not a public metadata guard. */
+  async #validateQuestionReplyUnlocked(
+    thread: Thread,
+    candidate: UserQuestionReply,
+    clientId: string | undefined,
+    input: UserInput,
+    committingUserItemId?: string,
+  ): Promise<void> {
+    this.#assertCurrentThreadAuthority(thread);
+    await this.#journal.assertRecoverySafe?.(thread.id);
+    if (!clientId || candidate.request.threadId !== thread.id)
+      throw new AppServerError(
+        "invalid_request",
+        "Question response must belong to this Thread and client intent",
+      );
+    const question = thread.userQuestion(candidate.request.callItemId);
+    if (!question)
+      throw new AppServerError(
+        "question_not_found",
+        "No accepted local question matches this Thread and Item",
+      );
+    let reply: UserQuestionReply;
+    try {
+      reply = normalizeUserQuestionReply(question.specification, candidate);
+      if (
+        input.length !== 1 ||
+        input[0]?.type !== "text" ||
+        input[0].skillSource !== undefined ||
+        input[0].text !== renderUserQuestionReply(question.specification, reply)
+      )
+        throw new Error(
+          "Question response body differs from its validated answer",
+        );
+    } catch (error) {
+      throw new AppServerError(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid answer",
+      );
+    }
+    const used = thread.items.find(
+      (item) => "clientId" in item && item.clientId === clientId,
+    );
+    if (used !== undefined) {
+      if (
+        (used.type !== "user_message" && used.type !== "user_message_queued") ||
+        used.questionReply === undefined ||
+        JSON.stringify(used.questionReply) !== JSON.stringify(reply)
+      )
+        throw new AppServerError(
+          "idempotency_conflict",
+          "Client ID belongs to a different input or question response",
+        );
+      if (question.state === "open")
+        throw new AppServerError(
+          "queue_id_cancelled",
+          "This response was withdrawn; use a fresh ID only for an explicit new answer",
+        );
+    }
+    const ownPending =
+      question.response?.clientId === clientId &&
+      (question.state === "answer-pending" ||
+        question.state === "cancel-pending");
+    if (committingUserItemId === undefined || !ownPending)
+      await this.#requireUnarchived(thread.id);
+    if (question.state === "unavailable")
+      throw new AppServerError(
+        "question_state_unavailable",
+        "Question state is inconsistent; read canonical history before retrying",
+      );
+    if (
+      question.response !== undefined &&
+      question.response.clientId !== clientId
+    )
+      throw new AppServerError(
+        question.state === "answered" || question.state === "cancelled"
+          ? "question_already_answered"
+          : "question_response_pending",
+        "This question already has a response",
+      );
+    if (
+      committingUserItemId !== undefined &&
+      (question.state === "answered" || question.state === "cancelled") &&
+      question.response?.itemId !== committingUserItemId
+    )
+      throw new AppServerError(
+        "question_already_answered",
+        "This response was already claimed as user input",
+      );
+  }
+
   async #commit(thread: Thread, item: CanonicalItem): Promise<void> {
     if (this.#threads.get(thread.id) !== thread) {
       throw new ThreadJournalAppendOutcomeUnknownError(
         new Error(
           `Thread ${thread.id} was invalidated after a journal append rejection`,
         ),
+      );
+    }
+    if (
+      (item.type === "user_message" || item.type === "user_message_queued") &&
+      item.questionReply !== undefined
+    ) {
+      await this.#validateQuestionReplyUnlocked(
+        thread,
+        item.questionReply,
+        item.clientId,
+        item.type === "user_message_queued"
+          ? item.input
+          : contentFromUserMessage(item),
+        item.type === "user_message" ? item.id : undefined,
       );
     }
     await this.#ensureThreadSummaries();
@@ -6160,6 +6572,11 @@ export class ZenAppServer {
           item: context,
         });
     await this.#refreshThreadSummary(thread);
+    if (thread.takeUserQuestionAttentionInvalidation())
+      this.#emit({
+        type: "user_question_attention_invalidated",
+        threadId: thread.id,
+      });
   }
 
   async #snapshot(thread: Thread): Promise<ThreadSnapshot> {
@@ -6173,6 +6590,7 @@ export class ZenAppServer {
       );
     }
     this.#requireNotDeleted(thread);
+    const questionPage = thread.userQuestionPage();
     const activeTurnId = this.#activeTurns.get(thread.id)?.turnId;
     const configuration = thread.effectiveConfiguration();
     const items = thread.items;
@@ -6189,6 +6607,13 @@ export class ZenAppServer {
       ...(parentThreadId === undefined ? {} : { parentThreadId }),
       items,
       itemList: thread.itemList,
+      userQuestions: questionPage.questions,
+      userQuestionsPage: {
+        totalPending: questionPage.totalPending,
+        ...(questionPage.nextAfter === undefined
+          ? {}
+          : { nextAfter: questionPage.nextAfter }),
+      },
       turns,
       cwd: configuration.cwd,
       providerProfileId: configuration.providerProfileId,
@@ -6384,8 +6809,17 @@ export class ZenAppServer {
       recency = new ThreadRecencyProjection();
       this.#threadRecency.set(thread, recency);
     }
-    const recentActivityAt = recency.read(items);
+    const ordinaryActivityAt = recency.read(items);
+    const userQuestionSummary = thread.userQuestionSummary;
+    const publishedAt = userQuestionSummary.latestPublishedAt;
+    const recentActivityAt =
+      publishedAt !== undefined &&
+      (ordinaryActivityAt === undefined ||
+        Date.parse(publishedAt) > Date.parse(ordinaryActivityAt))
+        ? publishedAt
+        : ordinaryActivityAt;
     return {
+      userQuestionSummary,
       ...(recentActivityAt === undefined ? {} : { recentActivityAt }),
       ...(turnEnd === undefined
         ? {}

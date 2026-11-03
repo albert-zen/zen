@@ -1,3 +1,5 @@
+import { UserQuestionCards } from "./UserQuestionCards.js";
+import { createUserQuestionStore } from "./user-question-state.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import {
   createSteerRecallStore,
@@ -543,6 +545,16 @@ function AppContent() {
   const [importSessionOpen, setImportSessionOpen] = useState(false);
   const [queueEditStore] = useState(createQueueEditStore);
   const [steerRecallStore] = useState(createSteerRecallStore);
+  const [userQuestionStore] = useState(() =>
+    createUserQuestionStore({
+      list: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/list", params),
+      read: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/read", params),
+      respond: (params) =>
+        window.zenx.protocol.request("zen/thread/questions/respond", params),
+    }),
+  );
   const { i18n: activeI18n } = useTranslation("shell");
   const selectionEpoch = useRef(0);
   const endNotificationsRef = useRef<ReturnType<
@@ -1503,7 +1515,10 @@ function AppContent() {
         threadUsageReads.current.clear();
       }
       setServerStatus(status);
-      if (status.type !== "ready") endNotifications.disconnect();
+      if (status.type !== "ready") {
+        endNotifications.disconnect();
+        userQuestionStore.disconnect();
+      }
       if (status.type === "ready") {
         void endNotifications.connect();
         void replaceApprovalSnapshot();
@@ -1511,6 +1526,7 @@ function AppContent() {
         void loadProjects();
         void loadModels();
         if (status.reconnected && selectedThreadIdRef.current !== null) {
+          userQuestionStore.invalidate(selectedThreadIdRef.current);
           void resumeThread(selectedThreadIdRef.current, true);
         } else if (becameReady) refreshRecoveredThreadUsage();
       } else if (status.type === "reconnecting") {
@@ -1637,6 +1653,13 @@ function AppContent() {
           const projected =
             params as ServerNotificationParams["zen/thread/event"];
           const nativeEvent = projected.event;
+          if (
+            nativeEvent.type === "user_question_attention_invalidated" &&
+            cached?.processEpoch === projected.processEpoch &&
+            cached.watermark === projected.watermark
+          ) {
+            userQuestionStore.invalidate(projected.threadId);
+          }
           if (nativeEvent.type === "context_compaction_status") {
             if (
               cached?.processEpoch === projected.processEpoch &&
@@ -1940,6 +1963,27 @@ function AppContent() {
           name: titleSnapshot[selectedBaseSummary.threadId]!.title,
         }
       : selectedBaseSummary;
+  const questionAttention = useMemo(
+    () =>
+      selectedThreadId ? (
+        <UserQuestionCards
+          threadId={selectedThreadId}
+          store={userQuestionStore}
+          disabled={
+            serverStatus.type !== "ready" ||
+            selectedSummary?.archived === true ||
+            archivingThreadIds.has(selectedThreadId)
+          }
+        />
+      ) : undefined,
+    [
+      selectedThreadId,
+      userQuestionStore,
+      serverStatus.type,
+      selectedSummary?.archived,
+      archivingThreadIds,
+    ],
+  );
   const pendingThreadIds = pendingApprovalThreadIds(approvals);
   const pluginContributions = loadedPluginContributions(pluginSnapshot);
   const genericPluginTarget =
@@ -2086,26 +2130,65 @@ function AppContent() {
     return next;
   };
 
+  const recallOwnerWritable = useCommittedCallback(
+    (threadId: string) =>
+      page === "agent" &&
+      selectedThreadId === threadId &&
+      serverStatus.type === "ready" &&
+      selectedSummary?.archived !== true,
+  );
+
   const restoreRecalledInput = (
     threadId: string,
     result: RecoveredSteerRecall,
-  ): boolean => {
-    if (
-      result.receipt.threadId !== threadId ||
-      selectedThreadIdRef.current !== threadId ||
-      recallPageRef.current !== "agent" ||
-      archivingThreadIdsRef.current.has(threadId)
-    )
-      return false;
-    let restored = false;
-    updateComposer(threadId, (state) => {
-      const next = restoreRecalledComposer(state, result, () =>
-        crypto.randomUUID(),
-      );
-      restored = next !== state;
-      return next;
-    });
-    return restored;
+  ): boolean | Promise<boolean> => {
+    const epoch = selectionEpoch.current;
+    const currentOwner = () =>
+      result.receipt.threadId === threadId &&
+      recallOwnerWritable(threadId) &&
+      selectedThreadIdRef.current === threadId &&
+      selectionEpoch.current === epoch &&
+      recallPageRef.current === "agent" &&
+      !archivingThreadIdsRef.current.has(threadId) &&
+      !steerRecallStore.getSnapshot().applied.has(result.receipt.id);
+    if (!currentOwner()) return false;
+    const hasQuestions = result.messages.some(
+      (message) => message.questionReply !== undefined,
+    );
+    const hasOrdinary = result.messages.some(
+      (message) => message.questionReply === undefined,
+    );
+    const restoreComposer = () => {
+      if (!currentOwner()) return false;
+      if (!hasOrdinary) return true;
+      let restored = false;
+      updateComposer(threadId, (state) => {
+        const next = restoreRecalledComposer(state, result, () =>
+          crypto.randomUUID(),
+        );
+        restored = next !== state;
+        return next;
+      });
+      return restored;
+    };
+    if (!hasQuestions) {
+      const restored = restoreComposer();
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    }
+    // One native receipt, then all destination preflights. No UI insertion before
+    // exact withdrawn reads and the latest navigation/draft fences have passed.
+    return (async () => {
+      // Join the receipt's bounded attention refresh before capturing destinations;
+      // a later observation during exact preflight must still fail the whole batch.
+      await userQuestionStore.refresh(threadId);
+      if (!currentOwner()) return false;
+      const plan = await userQuestionStore.prepareRecall(result);
+      if (!plan || !currentOwner()) return false;
+      const restored = userQuestionStore.commitRecall(plan, restoreComposer);
+      if (restored) steerRecallStore.applied(result.receipt.id);
+      return restored;
+    })();
   };
 
   const updateNewThreadComposer = (
@@ -4542,6 +4625,7 @@ function AppContent() {
                   !selectedRoomId && selectedThreadId ? (
                     <ConversationInformationCards
                       threadId={selectedThreadId}
+                      attention={questionAttention}
                       threads={informationThreads}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}
@@ -5222,7 +5306,10 @@ function AgentSurface({
   onExitDebug(): void;
   onRecoverQueuedEdit(threadId: string): void;
   steerRecallStore: SteerRecallStore;
-  onRestoreRecalled(threadId: string, result: RecoveredSteerRecall): boolean;
+  onRestoreRecalled(
+    threadId: string,
+    result: RecoveredSteerRecall,
+  ): boolean | Promise<boolean>;
   queueEditStore: QueueEditStore;
   onOpenMessageLink(
     threadId: string,
