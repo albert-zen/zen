@@ -2302,6 +2302,8 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
         if (fault === "copy-lf-variant") clipboardText = "\r\n" + clipboardText;
         if (fault === "copy-nbsp-variant") clipboardText += "\u00a0";
+        if (fault === "copy-endpoint-mutation")
+          w.getSelection().getRangeAt(0).setStart(scroller, 1);
         if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
       } else {
         assert.equal(action, "deleteBackward:");
@@ -2431,6 +2433,7 @@ test("native Select All quality fails closed for missing bridge, partial selecti
       "occupied-clipboard",
       "copy-missing-row",
       "copy-lost-selection",
+      "copy-endpoint-mutation",
       "no-bounded-restore",
       "lost-anchor",
       "editor-stolen",
@@ -2443,6 +2446,20 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         assert.equal(
           run.result.nativeSelectAllQuality.selectedMarkerCount,
           5003,
+        );
+      }
+      if (fault === "copy-endpoint-mutation") {
+        assert.equal(
+          run.result.nativeSelectAllQuality.clipboardMatchesSelection,
+          true,
+        );
+        assert.equal(
+          run.result.nativeSelectAllQuality.copiedMessageCount,
+          10006,
+        );
+        assert.equal(
+          run.result.nativeSelectAllQuality.selectionSurvivesCopy,
+          false,
         );
       }
       if (
@@ -2458,7 +2475,13 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         ].includes(fault)
       )
         assert.equal(run.nativeCopyCalls, 0, fault);
-      if (["copy-missing-row", "copy-lost-selection"].includes(fault)) {
+      if (
+        [
+          "copy-missing-row",
+          "copy-lost-selection",
+          "copy-endpoint-mutation",
+        ].includes(fault)
+      ) {
         assert.equal(run.clipboardCleared, true, fault);
         assert.equal(
           run.cleared,
