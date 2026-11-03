@@ -264,6 +264,8 @@ test("unavailable metadata rejects forged outcome, pixels, identity, reason and 
   const invalid: Array<(value: any) => void> = [
     (value) => (value.source.metadata.imagePreparation.outcome = "future"),
     (value) =>
+      (value.source.metadata.imagePreparation.profile = ["codex-high-v1"]),
+    (value) =>
       (value.source.metadata.imagePreparation.reason =
         "raw private /workspace/error"),
     (value) => delete value.source.metadata.imagePreparation.originalAttachment,
@@ -312,6 +314,9 @@ test("unavailable metadata rejects forged outcome, pixels, identity, reason and 
   const legacy = JSON.parse(JSON.stringify(success));
   delete legacy.source.metadata.imagePreparation.outcome;
   assert.doesNotThrow(() => decodeContextItem(legacy));
+  const explicitNullOutcome = JSON.parse(JSON.stringify(success));
+  explicitNullOutcome.source.metadata.imagePreparation.outcome = null;
+  assert.throws(() => decodeContextItem(explicitNullOutcome));
 });
 
 test("only codec operations become unavailable; missing/corrupt original or derived storage/import failures remain hard errors", async () => {

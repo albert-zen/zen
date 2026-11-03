@@ -538,9 +538,8 @@ export function decodeContextItem(value: unknown): ContextItem {
       "imagePreparation",
     );
     if (
-      !["codex-high-v1", "codex-original-v1"].includes(
-        String(preparation.profile),
-      )
+      preparation.profile !== "codex-high-v1" &&
+      preparation.profile !== "codex-original-v1"
     )
       throw Error("Unknown image preparation profile");
     const occurrence = record(
@@ -584,7 +583,8 @@ export function decodeContextItem(value: unknown): ContextItem {
       )
         throw Error("Prepared view original does not match its occurrence");
     }
-    const outcome = preparation.outcome ?? "prepared";
+    const outcome =
+      preparation.outcome === undefined ? "prepared" : preparation.outcome;
     if (outcome !== "prepared" && outcome !== "unavailable")
       throw Error("Unknown image preparation outcome");
     const originalDetail = preparation.profile === "codex-original-v1";
