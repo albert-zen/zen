@@ -325,3 +325,70 @@ test('normal packaging allows only the exact provider digest substitution across
  assert.throws(()=>context.verifyMainPackaging(built,built.replaceAll('__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__','b'.repeat(64)),digest));
  assert.throws(()=>context.verifyMainPackaging('unchanged','unchanged','bad'));
 });
+
+function liveExportGuardFixture() {
+  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+  const source=fs.readFileSync(path.join(__dirname,'launch-recall-send-profile.mjs'),'utf8');
+  const code=source.slice(source.indexOf('async function captureLiveExportGuard('),source.indexOf('let cleanupSafe = false;'));
+  const context=vm.createContext({assert,open:fs.promises.open,fsConstants:fs.constants,setTimeout});
+  vm.runInContext(code,context);
+  return {capture:context.captureLiveExportGuard,source};
+}
+
+test('live credential guard survives normal shutdown deletion without publishing secrets',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'zen-live-export-guard-'));
+  const tokenFile=path.join(dir,'app-server.token'),token='a'.repeat(64),config=JSON.stringify({fixture:'private-config'});
+  let closed=false,guard;
+  try {
+    await fs.writeFile(tokenFile,token+'\n',{mode:0o600});
+    guard=await liveExportGuardFixture().capture(tokenFile,()=>closed);
+    // Product 9188's normal stop unlinks this file before the child closes.
+    await fs.unlink(tokenFile);closed=true;
+    await assert.rejects(fs.readFile(tokenFile),{code:'ENOENT'});
+    guard.scan(JSON.stringify({diagnosticOnly:true,acceptance:false,samples:3}),config);
+    for(const bad of [JSON.stringify({value:token}),JSON.stringify({value:config}),config,'Bearer '+'b'.repeat(30),'/Users/private/fixture']) {
+      assert.throws(()=>guard.scan(bad,config));
+    }
+    assert.equal(JSON.stringify(guard),'{}');
+    assert.deepEqual(await fs.readdir(dir),[]);
+    guard.clear();
+    assert.throws(()=>guard.scan('{}',config),/Final export guard unavailable/);
+  } finally {guard?.clear();await fs.rm(dir,{recursive:true,force:true});}
+});
+
+test('live credential capture handles producer open-before-write and missing-at-close fails closed',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'zen-live-export-guard-'));
+  const tokenFile=path.join(dir,'app-server.token');let guard;
+  try {
+    const {capture}=liveExportGuardFixture();
+    await fs.writeFile(tokenFile,'',{mode:0o600});
+    const pending=capture(tokenFile,()=>false);
+    await fs.writeFile(tokenFile,'c'.repeat(64)+'\n');
+    guard=await pending;
+    guard.scan('{}','synthetic config');
+    await fs.unlink(tokenFile);
+    await assert.rejects(capture(tokenFile,()=>true),/unavailable before shutdown/);
+  } finally {guard?.clear();await fs.rm(dir,{recursive:true,force:true});}
+});
+
+test('live credential capture rejects symlink without leaking target contents',async()=>{
+  const fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'zen-live-export-guard-'));
+  try {
+    const target=path.join(dir,'target'),link=path.join(dir,'app-server.token');
+    await fs.writeFile(target,'d'.repeat(64)+'\n',{mode:0o600});await fs.symlink(target,link);
+    await assert.rejects(liveExportGuardFixture().capture(link,()=>false),/Owned fixture credential capture failed/);
+  } finally {await fs.rm(dir,{recursive:true,force:true});}
+});
+
+test('launcher captures during owned lifecycle and scans only after shutdown without rereading token',()=>{
+  const {source}=liveExportGuardFixture();
+  const run=source.slice(source.indexOf('let cleanupSafe = false;'));
+  assert(run.indexOf('captureLiveExportGuard(')<run.indexOf('const code = exitStatus.value'));
+  assert(run.includes('await Promise.allSettled(['));
+  assert(run.indexOf('await verifyLongThread(')<run.indexOf('exportGuard.scan(serialized,privateConfig)'));
+  assert(!run.includes('readFile(path.join(profile,"runtime/app-server.token")'));
+  assert(run.includes('exportGuard?.clear();'));
+});

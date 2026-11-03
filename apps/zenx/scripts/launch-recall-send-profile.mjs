@@ -12,6 +12,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -376,15 +377,64 @@ function safeDiagnosticFailure(result) {
     reasonCodes: Array.isArray(failure?.reasonCodes) ? failure.reasonCodes.filter(code => allowed.includes(code)).slice(0, allowed.length) : [],
   };
 }
+// Capture only this owned fixture's live credential. Normal Host shutdown removes
+// its file; keep the exact value in this process only until the final export scan.
+async function captureLiveExportGuard(tokenFile, isClosed) {
+  let token;
+  while (!isClosed()) {
+    let handle;
+    try {
+      handle = await open(tokenFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65)
+        throw new Error("Invalid owned fixture credential");
+      const value = await handle.readFile("utf8");
+      // The producer opens the file before writing. An empty/partial first read
+      // is not a credential and may be observed again while the child is live.
+      if (/^[a-f0-9]{64}\n?$/.test(value)) token = value.trim();
+    } catch (error) {
+      if (error?.code !== "ENOENT")
+        throw new Error("Owned fixture credential capture failed");
+    } finally {
+      await handle?.close();
+    }
+    if (token !== undefined) {
+      return {
+        scan(serialized, privateConfig) {
+          if (token === undefined || typeof privateConfig !== "string" || privateConfig.length === 0)
+            throw new Error("Final export guard unavailable");
+          const contains = value => serialized.includes(value) || serialized.includes(JSON.stringify(value).slice(1,-1));
+          assert(!contains(token) && !contains(privateConfig), "Final export contains private fixture data");
+          assert(!/Bearer\s+[A-Za-z0-9._~+/=-]{12,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|\/(?:Users|home)\//.test(serialized), "Final export contains prohibited data");
+        },
+        clear() { token = undefined; },
+      };
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error("Owned fixture credential unavailable before shutdown");
+}
 let cleanupSafe = false;
 let observedClose;
+let exportGuard;
 child.once("close", (code, signal) => {
   observedClose = { code, signal };
 });
 try {
-  const code = await (
+  let ownedWaitSettled = false;
+  const ownedExit = (
     process.platform === "win32" ? waitOwnedWindowsTree : waitOwnedPosixGroup
   )(child, count===5000?600000:240000);
+  void ownedExit.then(() => { ownedWaitSettled = true; }, () => { ownedWaitSettled = true; });
+  // Both operations settle before lifecycle cleanup, even when capture fails.
+  const [exitStatus, guardStatus] = await Promise.allSettled([
+    ownedExit,
+    captureLiveExportGuard(path.join(profile,"runtime/app-server.token"), () => ownedWaitSettled),
+  ]);
+  if (guardStatus.status === "fulfilled") exportGuard = guardStatus.value;
+  if (exitStatus.status === "rejected") throw exitStatus.reason;
+  if (guardStatus.status === "rejected") throw guardStatus.reason;
+  const code = exitStatus.value;
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
@@ -423,15 +473,15 @@ try {
   summary.independentStorage={independentReopen:persisted.independentReopen,userMessages:persisted.userMessages,matchedNewMessages:persisted.matchedNewMessages,compactionAttempts:persisted.compactionAttempts,compactionFacts:persisted.compactionFacts,traceCompleteness:persisted.traceCompleteness};
   // Final export permits only the pure summary, fixed metadata, numeric counts and checked hashes.
   const privateConfig=await readFile(path.join(profile,"host-profile.json"),"utf8");
-  const privateToken=(await readFile(path.join(profile,"runtime/app-server.token"),"utf8")).trim();
   const serialized=JSON.stringify(summary,null,2);
-  assert(!serialized.includes(privateToken)&&!serialized.includes(privateConfig));
-  assert(!/Bearer\s+[A-Za-z0-9._~+/=-]{12,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|\/(?:Users|home)\//.test(serialized));
+  exportGuard.scan(serialized,privateConfig);
   await writeFile(path.join(uploadDirectory,"owned-native-send-profile.summary.json"),JSON.stringify(summary,null,2),{flag:"wx"});
   console.log("GATE_REVIEWED_TIMELINE_SUMMARY "+JSON.stringify(summary));
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
   if(sourceLabel==="pending") assert.ok(result.samples.every(s=>s.feedbackWithinTarget && s.clickToClearFrameMs<=200),"Actual first visible feedback and input clear must each meet 200ms target in every observed sample; see verified numeric output, no threshold relaxation");
 } finally {
+  exportGuard?.clear();
+  exportGuard = undefined;
   await privateLog.close();
   await writeFile(
     path.join(directory, "full-app-lifecycle.json"),
