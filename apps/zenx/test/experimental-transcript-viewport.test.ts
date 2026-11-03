@@ -110,30 +110,29 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
   console.error = (...values) => {
     errors.push(values.map(String).join(" "));
   };
+  const renderWithFooter = (footer: React.ReactNode) =>
+    React.createElement(ExperimentalTranscriptViewport, {
+      rows,
+      header: null,
+      footer,
+      viewport,
+      controller,
+      listRef,
+      position,
+      className: "messages",
+      onViewportScroll(_node, correction) {
+        scrollKinds.push(correction);
+      },
+      onContentSettled() {},
+    });
+  const pendingFooter = React.createElement(
+    "p",
+    { "data-pending": "true" },
+    "Sending",
+  );
   let mounted = true;
   try {
-    await act(async () =>
-      root.render(
-        React.createElement(ExperimentalTranscriptViewport, {
-          rows,
-          header: null,
-          footer: React.createElement(
-            "p",
-            { "data-pending": "true" },
-            "Sending",
-          ),
-          viewport,
-          controller,
-          listRef,
-          position,
-          className: "messages",
-          onViewportScroll(_node, correction) {
-            scrollKinds.push(correction);
-          },
-          onContentSettled() {},
-        }),
-      ),
-    );
+    await act(async () => root.render(renderWithFooter(pendingFooter)));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     });
@@ -159,6 +158,33 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
       contentBox.contains(document.querySelector("[data-pending]")),
       "pending footer contributes to the observed total content box",
     );
+    const footerElement = contentBox.querySelector(
+      ".virtual-transcript-footer",
+    )!;
+    assert.equal(footerElement.matches(":empty"), false);
+    await act(async () =>
+      root.render(
+        renderWithFooter(React.createElement(React.Fragment, null, [])),
+      ),
+    );
+    assert.equal(
+      footerElement.matches(":empty"),
+      true,
+      "An empty rendered Fragment uses the final-row clearance compensation",
+    );
+    await act(async () =>
+      root.render(
+        renderWithFooter(
+          React.createElement("p", { role: "status" }, "Compacting"),
+        ),
+      ),
+    );
+    assert.equal(
+      footerElement.matches(":empty"),
+      false,
+      "An actual progress child keeps the normal history-to-footer gap",
+    );
+    await act(async () => root.render(renderWithFooter(pendingFooter)));
     const count = document.querySelectorAll("[data-transcript-row-key]").length;
     assert.ok(count > 0 && count < 60, `mounted ${count} of ${rows.length}`);
     const node = viewport.current!;
