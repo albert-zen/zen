@@ -1,15 +1,15 @@
 {
-  "publicHead": "ea61449e55d11cd5e53308f002cadf03bd1c2ada",
-  "testedSourceCommit": "974b69ab18538b5807fdef6b1726bd67e66a2f7f",
-  "tree": "2c4645dbf634b31056a768b3a253eaeffa3a01d4",
+  "publicHead": "1f653a40d7278c71da73506047d613b91d70d19a",
+  "testedSourceCommit": "0abe694ea86599a0c0710abaeb3f7808276a1ae1",
+  "tree": "d957db8e1739cdf9033e958abf42efdfdfc9b743",
   "sameTreeVerifiedByGitDiff": true,
-  "run": "https://github.com/albert-zen/zen/actions/runs/41696996053",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41702513351",
   "synthetic": true,
   "artifacts": {
-    "macosApp": 13260824439,
-    "macosShelf": 13260414702,
-    "windowsApp": 13260319908,
-    "windowsShelf": 13260334645
+    "macosApp": 13265520676,
+    "macosShelf": 13264976379,
+    "windowsApp": 13263561842,
+    "windowsShelf": 13264571500
   },
   "results": {
     "macosApp": true,
@@ -22,14 +22,20 @@
       "layoutBoxes": 0,
       "focusable": false,
       "focusUnchanged": true
-    }
+    },
+    "sourceHashesPerPlatform": 35,
+    "sourceNavigationPixelsInspected": [
+      "darwin: source breadcrumb and selected sidebar read 计划助手; source body explicitly describes follow-up and default soft steer",
+      "win32: same exact source breadcrumb, selection and actual source content"
+    ]
   },
   "boundaries": [
     "Full App screenshots and system clicks use isolated synthetic data and real production Host. OS clicks test the fullscreen File resource shared heading, not Subagents-specific content or full Computer facade authorization. Posted transport receipts alone are not success: trusted DOM acknowledgement and actual sidebar-expanded state are independently checked.",
     "Shelf/source/editor screenshots use production React components in native Electron with synthetic canonical inputs, an exact synthetic source navigator and stubbed save/restore callbacks. They do not prove Host recall/save/source-navigation E2E.",
     "Only direct content, recall icon and right-aligned bubble hierarchy are reused from the reference; the outer shelf retains the production Queue composer-aligned width.",
-    "The primary-conversation image verifies retention and fullscreen split-resizer visibility only. Information/question-card visual feedback including the native textarea resize handle belongs to PR671 and is not claimed fixed here.",
-    "Earlier animated editor screenshot is superseded. Current captures wait for opacity1, rendered frames, exact text, viewport geometry and save hit target, then close the editor."
+    "Combined integration includes main PR671 question-card full-row options, autogrowing textarea without native resize grip, and exact-owner information visibility behavior. Current full App screenshots show the actual combination; no older image substitutes for this version.",
+    "Earlier animated editor screenshot is superseded. Current captures wait for opacity1, rendered frames, exact text, viewport geometry and save hit target, then close the editor.",
+    "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body."
   ],
   "images": [
     {
@@ -68,19 +74,40 @@
       "sha256": "64e9f98f8af48ad937f235a1ae7cf5f8dffc455a1e2b4e85446f7a9f40a9b890"
     },
     {
-      "file": "15-macos-system-sidebar-click.png",
-      "platform": "darwin",
-      "sha256": "be5b25d15f20e9f13400855de80681253aa957f4be8b371645f0769e7468abde"
-    },
-    {
       "file": "04-maximized-main-dock.png",
       "platform": "darwin",
-      "sha256": "ab8857e4c9ea716d26621f3a26dc601a05a3b7ee328fadb2cfebe981a65599f3"
+      "sha256": "5a9d9d07557d0c014bad889d905a3cf1f0be1af759440c4038d119c387cd3c34"
+    },
+    {
+      "file": "15-macos-system-sidebar-click.png",
+      "platform": "darwin",
+      "sha256": "4216589f7aab73300a8d8f0f440855e05409159ca98d5c1ba891437238604031"
+    },
+    {
+      "file": "17-reference-dark-Chinese-question-full-App.png",
+      "platform": "darwin",
+      "sha256": "0c43ebfebf04297ad5f4caad3f7c004543cedba9f4a3c4061bfba7fbe4db4564"
     },
     {
       "file": "windows-queue-human-edit-open.png",
       "platform": "win32",
       "sha256": "75332dcc82da0dd23ba388f7150c281b240d3c89571b9f590d9a5888b5cbef16"
+    },
+    {
+      "file": "windows-queue-source-opened.png",
+      "platform": "win32",
+      "sha256": "92550c2e5771972d3895730b0aeda025310096d4d293bd6dd4682743bc5d43d5"
+    },
+    {
+      "file": "windows-04-maximized-main-dock.png",
+      "platform": "win32",
+      "sha256": "e782adcf1a9d84b249c40aa518894d803e3ff9bbb46897019b34f2027cf2a3a9"
+    },
+    {
+      "file": "windows-17-reference-dark-Chinese-question-full-App.png",
+      "platform": "win32",
+      "sha256": "ba6304046fc019735d98c46e453766eb5d9215ee7d769a5b199107048fa3c216"
     }
-  ]
+  ],
+  "integratedMain": "3bf3f7468d7075e588f1d08e7e0b068a06ebff6c"
 }
