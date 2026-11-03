@@ -1884,3 +1884,58 @@ test("native startup opt-in is executable inside the real diagnostic expression 
     dom.window.close();
   }
 });
+
+test("native Find replacement waits for the queued Select All before insertText", async () => {
+  const start = source.indexOf('  nativeKey("A", ["meta"]);');
+  const end = source.indexOf("  await until(async () => {", start);
+  assert.ok(start > 0 && end > start);
+  const replace = new (Object.getPrototypeOf(async function () {}).constructor)(
+    "nativeKey",
+    "window",
+    "until",
+    "evaluate",
+    source.slice(start, end),
+  );
+  let selected = false;
+  let inserted = false;
+  let awaitedSelection = false;
+  await replace(
+    () =>
+      queueMicrotask(() => {
+        selected = true;
+      }),
+    {
+      webContents: {
+        async insertText(value) {
+          assert.equal(
+            selected,
+            true,
+            "insertion must not race queued native Cmd-A",
+          );
+          assert.equal(
+            awaitedSelection,
+            true,
+            "the actual input selection must be observed",
+          );
+          assert.equal(value, "Synthetic user ");
+          inserted = true;
+        },
+      },
+    },
+    async (check) => {
+      for (let i = 0; i < 3; ++i) {
+        if (await check()) {
+          awaitedSelection = true;
+          return;
+        }
+      }
+      throw Error("No actual native input selection");
+    },
+    async (expression) => {
+      assert.ok(expression.includes("selectionStart"));
+      assert.ok(expression.includes("selectionEnd"));
+      return selected;
+    },
+  );
+  assert.equal(inserted, true);
+});

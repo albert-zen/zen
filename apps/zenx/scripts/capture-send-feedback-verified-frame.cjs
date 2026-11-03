@@ -2482,6 +2482,13 @@ async function run() {
   assert.ok(oldHistory.mountedRows < 200);
   await screenshot("virtual-find-old-history.png");
   nativeKey("A", ["meta"]);
+  await until(
+    async () =>
+      evaluate(
+        "(()=>{const input=document.querySelector('.virtual-transcript-find input');return document.activeElement===input&&input.value==='Synthetic user 42.'&&input.selectionStart===0&&input.selectionEnd===input.value.length})()",
+      ),
+    "native Cmd-A selects the actual Find input before replacement",
+  );
   await window.webContents.insertText("Synthetic user ");
   await until(async () => {
     const state = await findState(
