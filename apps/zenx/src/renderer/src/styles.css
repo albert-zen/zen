@@ -1600,6 +1600,11 @@ button:disabled {
   display: grid;
   gap: 24px;
 }
+.transcript-history {
+  min-width: 0;
+  display: grid;
+  gap: 24px;
+}
 .new-thread-draft-surface .messages {
   display: grid;
 }
