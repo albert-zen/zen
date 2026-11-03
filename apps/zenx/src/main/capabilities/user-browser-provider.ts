@@ -1716,7 +1716,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       tabId,
       session,
       tab,
-      browserActionScript(target, action, text, submit),
+      // A trusted Enter would need this provider's attachment fence to verify
+      // focus ownership; until that exists, keep its previous submit semantics
+      // rather than report a focus-only no-op as success.
+      browserActionScript(target, action, text, submit ? "form" : "none"),
       signal,
     );
   }

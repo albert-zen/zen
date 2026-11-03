@@ -522,16 +522,83 @@ export function browserInputKey(value: unknown): BrowserInputKey {
   return value as BrowserInputKey;
 }
 
+const browserVirtualKeyCodes: Record<BrowserInputKey, number> = {
+  Enter: 13,
+  Tab: 9,
+  Escape: 27,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  Backspace: 8,
+  Delete: 46,
+  Home: 36,
+  End: 35,
+  PageUp: 33,
+  PageDown: 34,
+  Space: 32,
+};
+
+/** Exact CDP key descriptor; a release must use the same identity as the press. */
+export function browserKeyStrokeParameters(
+  key: BrowserInputKey,
+): Record<string, unknown> {
+  return {
+    key: key === "Space" ? " " : key,
+    code: key,
+    windowsVirtualKeyCode: browserVirtualKeyCodes[key],
+  };
+}
+
+/**
+ * The single release a blocked tab may still receive. It repeats no page
+ * action: an unpaired `keyUp` for a key that is not held is a no-op.
+ */
+export function browserInputReleaseParameters(
+  key: BrowserInputKey,
+): Record<string, unknown> {
+  return { ...browserKeyStrokeParameters(key), type: "keyUp" };
+}
+
 export class BrowserInputOutcomeUnknownError extends Error {
   constructor(
     cause: unknown,
     readonly inputMayRemainPressed = true,
+    readonly key?: BrowserInputKey,
   ) {
     super(
       `Browser targeted input outcome is unknown after dispatch. Do not retry. ${inputMayRemainPressed ? "This tab's input is blocked; have the user close the actual browser tab to release any held input (detaching ZenX alone is not enough)." : "Both input events were acknowledged; inspect again before continuing."} ${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
   }
+}
+
+/**
+ * Why a tab refuses new site input. Reads stay available: only a possibly
+ * pressed key is withheld, not the page. One controlled release may clear it.
+ */
+export interface BrowserInputBlock {
+  /** Bounded, model-facing explanation of the withheld input. */
+  reason: string;
+  /** The key whose release was never acknowledged, when it is known. */
+  key?: BrowserInputKey;
+  /** Whether the single controlled release attempt is still available. */
+  reset: "available" | "attempted";
+  /** Epoch milliseconds of the failed dispatch, for journals and diagnostics. */
+  since: number;
+}
+
+export function browserInputBlock(
+  error: BrowserInputOutcomeUnknownError,
+  since: number,
+): BrowserInputBlock | undefined {
+  if (!error.inputMayRemainPressed) return undefined;
+  return {
+    reason: error.message,
+    ...(error.key === undefined ? {} : { key: error.key }),
+    reset: "available",
+    since,
+  };
 }
 
 export interface BrowserTargetedInputPort {
@@ -575,31 +642,11 @@ export async function dispatchBrowserTargetedInput(
     action.kind === "click"
       ? browserInputPoint(initial, action.x, action.y)
       : undefined;
-  const virtualKeys: Record<BrowserInputKey, number> = {
-    Enter: 13,
-    Tab: 9,
-    Escape: 27,
-    ArrowUp: 38,
-    ArrowDown: 40,
-    ArrowLeft: 37,
-    ArrowRight: 39,
-    Backspace: 8,
-    Delete: 46,
-    Home: 36,
-    End: 35,
-    PageUp: 33,
-    PageDown: 34,
-    Space: 32,
-  };
   const key = action.kind === "key" ? browserInputKey(action.key) : undefined;
   const method = point ? "Input.dispatchMouseEvent" : "Input.dispatchKeyEvent";
   const parameters = point
     ? { ...point, button: "left", clickCount: 1 }
-    : {
-        key: key === "Space" ? " " : key,
-        code: key,
-        windowsVirtualKeyCode: virtualKeys[key!],
-      };
+    : browserKeyStrokeParameters(key!);
   let dispatched = false;
   let released = false;
   try {
@@ -671,7 +718,7 @@ export async function dispatchBrowserTargetedInput(
     port.assertCurrent();
   } catch (cause) {
     if (!dispatched) throw cause;
-    const error = new BrowserInputOutcomeUnknownError(cause, !released);
+    const error = new BrowserInputOutcomeUnknownError(cause, !released, key);
     if (!released) port.quarantine(error);
     throw error;
   }

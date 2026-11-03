@@ -9,7 +9,10 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 
 import { WorkspaceBrowser } from "../src/main/workspace-browser.js";
-import { BrowserZenXCapabilityPackage } from "../src/main/capabilities/browser-provider.js";
+import {
+  BrowserZenXCapabilityPackage,
+  browserActionScript,
+} from "../src/main/capabilities/browser-provider.js";
 import { OBSERVATION_CAPTURE } from "../src/main/capabilities/observation-capture.js";
 
 test("closing an expired workspace tab is idempotent but cannot close another Thread's page", async () => {
@@ -1027,7 +1030,7 @@ const actionInspection = {
   ],
 };
 
-async function sharedFixture() {
+async function sharedFixture(options: { popupReclaimIdleMs?: number } = {}) {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-shared-browser-race-"),
   );
@@ -1037,6 +1040,9 @@ async function sharedFixture() {
   let nextLoad: ReturnType<typeof deferred<void>> | undefined;
   const browser = new WorkspaceBrowser({
     artifactDirectory: directory,
+    ...(options.popupReclaimIdleMs === undefined
+      ? {}
+      : { popupReclaimIdleMs: options.popupReclaimIdleMs }),
     dependencies: {
       createView: () => {
         const view = new FakeView();
@@ -1094,7 +1100,13 @@ class FakeDebugger extends EventEmitter {
       const gate = this.nextWorld;
       this.nextWorld = undefined;
       if (gate) await gate.promise;
-      assert.equal(params?.worldName, "zenx-browser-observation-v1");
+      assert.ok(
+        [
+          "zenx-browser-observation-v1",
+          "zenx-browser-programmable-v1",
+        ].includes(String(params?.worldName)),
+        "page code only runs in a provider-named isolated world",
+      );
       assert.equal(params?.grantUniveralAccess, false);
       return { executionContextId: 42 };
     }
@@ -1209,8 +1221,18 @@ class FakeWebContents extends EventEmitter {
   endFrameSubscription() {
     this.frame = undefined;
   }
-  setWindowOpenHandler() {
-    return undefined;
+  /** Sites call `window.open`; ZenX hosts that page as its own tab. */
+  openHandler?: (details: { url: string }) => { action: "deny" };
+  setWindowOpenHandler(
+    handler: (details: { url: string }) => {
+      action: "deny";
+    },
+  ) {
+    this.openHandler = handler;
+  }
+  openWindow(url: string) {
+    if (this.openHandler === undefined) throw new Error("No open handler");
+    return this.openHandler({ url });
   }
   reload() {
     return undefined;
@@ -1420,7 +1442,7 @@ test("Workspace rejects targeted input when screenshot has no coherent viewport 
   }
 });
 
-test("Workspace takeover between targeted press and release blocks old release and quarantines input", async () => {
+test("Workspace takeover between targeted press and release withholds new input but keeps reads and programmatic actions", async () => {
   const f = await sharedFixture();
   try {
     f.browser.bindThreadSession("a", "thread-a");
@@ -1451,26 +1473,364 @@ test("Workspace takeover between targeted press and release blocks old release a
     const fresh = await f.browser.inspect("a", tab.tabId);
     assert.equal(fresh.agentActionOutcomeUnknown, true);
     assert.equal(fresh.inputViewport, undefined);
-    await assert.rejects(
-      f.browser.navigate(
-        "a",
-        tab.tabId,
-        "https://example.test/no",
-        undefined,
-        fresh.observationId,
-      ),
-      /input is blocked/,
-    );
+    assert.equal(fresh.inputBlocked?.reset, "available");
+    assert.equal(fresh.inputBlocked?.key, undefined);
+    // A held key is still not pressed again, and the refusal names the state.
     await assert.rejects(
       f.browser.keyPress("a", tab.tabId, fresh.observationId, "Enter"),
-      /input is blocked/,
+      /outcome is unknown/u,
     );
-    await f.browser.closeTab("a", tab.tabId, undefined, fresh.observationId);
+    await assert.rejects(
+      f.browser.pointerClick("a", tab.tabId, fresh.observationId, 20, 30),
+      /outcome is unknown/u,
+    );
+    // The block is about input only: reads and programmatic actions still run.
+    const content = await f.browser.extension(
+      "a",
+      tab.tabId,
+      "content",
+      {},
+      new AbortController().signal,
+    );
+    assert.ok(content !== undefined);
+    const readable = await f.browser.inspect("a", tab.tabId);
+    const evaluated = await f.browser.extension(
+      "a",
+      tab.tabId,
+      "evaluate",
+      { observationId: readable.observationId, expression: "1 + 1" },
+      new AbortController().signal,
+    );
+    assert.ok(evaluated !== undefined);
+    const closable = await f.browser.inspect("a", tab.tabId);
+    await f.browser.closeTab("a", tab.tabId, undefined, closable.observationId);
     assert.equal((await f.browser.listTabs("a")).length, 0);
   } finally {
     await f.close();
   }
 });
+
+test("Workspace reports one withheld key, releases it once, and never repeats the action", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const input = installTargetedInputFixture(
+      f.views[0]!.webContents.debuggerApi,
+    );
+    const observed = await f.browser.inspect("a", tab.tabId);
+    // The press is acknowledged, then the document changes before the release,
+    // so the key may still be logically down on the page.
+    input.afterInput = () => {
+      input.snapshot.documentKey =
+        "ffffffffffffffffffffffffffffffff|https://example.test/input";
+      input.afterInput = undefined;
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      /outcome is unknown/u,
+    );
+    assert.deepEqual(
+      input.events.map((event) => event.params.type),
+      ["keyDown"],
+      "the unacknowledged key-up must not be reported as sent",
+    );
+    const [blocked] = await f.browser.listTabs("a");
+    assert.equal(blocked?.inputBlocked?.key, "Enter");
+    assert.equal(blocked?.inputBlocked?.reset, "available");
+    assert.match(blocked?.inputBlocked?.reason ?? "", /outcome is unknown/u);
+    // inspect stays available and still reports the withheld state.
+    const after = await f.browser.inspect("a", tab.tabId);
+    assert.equal(after.inputBlocked?.key, "Enter");
+    assert.equal(after.agentActionOutcomeUnknown, true);
+    const released = await f.browser.inputReset("a", tab.tabId);
+    assert.deepEqual(released, {
+      blocked: false,
+      released: true,
+      key: "Enter",
+    });
+    assert.deepEqual(
+      input.events.map((event) => [event.params.type, event.params.key]),
+      [
+        ["keyDown", "Enter"],
+        ["keyUp", "Enter"],
+      ],
+      "the reset sends the missing release and repeats no page action",
+    );
+    assert.equal((await f.browser.listTabs("a"))[0]?.inputBlocked, undefined);
+    // Nothing is blocked now, so a further reset dispatches nothing at all.
+    assert.deepEqual(await f.browser.inputReset("a", tab.tabId), {
+      blocked: false,
+      released: false,
+    });
+    assert.equal(input.events.length, 2);
+    const fresh = await f.browser.inspect("a", tab.tabId);
+    assert.equal(fresh.agentActionOutcomeUnknown, false);
+    // Input works again after a fresh observation.
+    await f.browser.keyPress("a", tab.tabId, fresh.observationId, "Tab");
+    assert.equal(input.events.length, 4);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace reclaims an untouched site popup but keeps one the Agent used", async () => {
+  const f = await sharedFixture({ popupReclaimIdleMs: 5 });
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const [human] = f.browser.command(
+      f.sender as never,
+      "thread-a",
+      "new",
+      undefined,
+      "https://example.test/app",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    const openPopup = () => {
+      const parent = f.views[0]!.webContents;
+      parent.openWindow("https://login.example.test/authorize");
+    };
+    openPopup();
+    // The popup page is never inspected, so nothing needs it any more.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-a", "list").length,
+      1,
+      "an abandoned popup must not hold a tab slot",
+    );
+    assert.ok(human);
+
+    openPopup();
+    const popups = f.browser
+      .command(f.sender as never, "thread-a", "list")
+      .filter((tab) => tab.id !== human!.id);
+    assert.equal(popups.length, 1);
+    await f.browser.inspect("a", popups[0]!.id);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(
+      f.browser.command(f.sender as never, "thread-a", "list").length,
+      2,
+      "a popup the Agent observed is kept",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace submit presses Enter on the verified focus instead of submitting a form", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/search");
+    const submit = installSubmitFixture(f.views[0]!.webContents.debuggerApi);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    const targetId = observed.targets.find(
+      (entry) => entry.name === "Search",
+    )!.targetId;
+    await f.browser.type(
+      "a",
+      tab.tabId,
+      observed.observationId,
+      targetId,
+      "netis",
+      true,
+    );
+    assert.deepEqual(
+      submit.events.map((event) => [event.method, event.params.type]),
+      [
+        ["Input.dispatchKeyEvent", "keyDown"],
+        ["Input.dispatchKeyEvent", "keyUp"],
+      ],
+      "submit is a real Enter pair, not a form submission",
+    );
+    assert.equal(submit.events[0]?.params.key, "Enter");
+    assert.equal(submit.events[0]?.params.windowsVirtualKeyCode, 13);
+    // The shared action script never submits a form in the enter mode.
+    const enterScript = browserActionScript(
+      {
+        documentIdentity: "doc",
+        selector: "input",
+        tag: "input",
+        role: "combobox",
+        name: "Search",
+        type: "search",
+        id: "",
+        fieldName: "",
+        autocomplete: "",
+        href: "",
+        value: "",
+        actions: ["type"],
+      } as never,
+      "type",
+      "netis",
+      "enter",
+    );
+    assert.ok(!enterScript.includes("requestSubmit"));
+    assert.ok(
+      browserActionScript(
+        {
+          documentIdentity: "doc",
+          selector: "input",
+          tag: "input",
+          role: "combobox",
+          name: "Search",
+          type: "search",
+          id: "",
+          fieldName: "",
+          autocomplete: "",
+          href: "",
+          value: "",
+          actions: ["type"],
+        } as never,
+        "type",
+        "netis",
+        "form",
+      ).includes("requestSubmit"),
+      "the legacy provider mode keeps its previous behaviour explicitly",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace refuses to report a submit success when the page never reacts", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/search");
+    const submit = installSubmitFixture(f.views[0]!.webContents.debuggerApi, {
+      reactToEnter: false,
+    });
+    const observed = await f.browser.inspect("a", tab.tabId);
+    const targetId = observed.targets.find(
+      (entry) => entry.name === "Search",
+    )!.targetId;
+    await assert.rejects(
+      f.browser.type(
+        "a",
+        tab.tabId,
+        observed.observationId,
+        targetId,
+        "netis",
+        true,
+      ),
+      /showed no change/u,
+    );
+    assert.equal(submit.events.length, 2);
+    const [state] = await f.browser.listTabs("a");
+    assert.equal(state?.agentActionOutcomeUnknown, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Workspace allows only one release attempt and never retries it silently", async () => {
+  const f = await sharedFixture();
+  try {
+    f.browser.bindThreadSession("a", "thread-a");
+    const tab = await f.browser.open("a", "https://example.test/input");
+    const debuggerApi = f.views[0]!.webContents.debuggerApi;
+    const input = installTargetedInputFixture(debuggerApi);
+    const observed = await f.browser.inspect("a", tab.tabId);
+    input.afterInput = () => {
+      input.snapshot.documentKey =
+        "ffffffffffffffffffffffffffffffff|https://example.test/input";
+      input.afterInput = undefined;
+    };
+    await assert.rejects(
+      f.browser.keyPress("a", tab.tabId, observed.observationId, "Enter"),
+      /outcome is unknown/u,
+    );
+    const sendCommand = debuggerApi.sendCommand;
+    debuggerApi.sendCommand = async (method, params) => {
+      if (method === "Input.dispatchKeyEvent")
+        throw new Error("debugger detached");
+      return await sendCommand.call(debuggerApi, method, params);
+    };
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId),
+      /was not acknowledged/u,
+    );
+    assert.equal(
+      (await f.browser.listTabs("a"))[0]?.inputBlocked?.reset,
+      "attempted",
+    );
+    await assert.rejects(
+      f.browser.inputReset("a", tab.tabId),
+      /already attempted/u,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+/** A search control whose submit must reach the page as a trusted Enter. */
+function installSubmitFixture(
+  debuggerApi: FakeDebugger,
+  options: { reactToEnter?: boolean } = {},
+) {
+  const reactToEnter = options.reactToEnter ?? true;
+  const snapshot = {
+    documentKey: "0123456789abcdef0123456789abcdef|https://example.test/search",
+    viewport: {
+      width: 640,
+      height: 480,
+      deviceScaleFactor: 1,
+      scrollX: 0,
+      scrollY: 0,
+      visualScale: 1,
+      visualOffsetX: 0,
+      visualOffsetY: 0,
+    },
+    focusId: "search-1",
+    inputRevision: 0,
+    layoutRevision: 0,
+  };
+  const inspection = {
+    documentIdentity: "doc",
+    visibleText: "fixture",
+    targets: [
+      {
+        documentIdentity: "doc",
+        selector: "input",
+        tag: "input",
+        role: "combobox",
+        name: "Search",
+        type: "search",
+        id: "",
+        fieldName: "",
+        autocomplete: "",
+        href: "",
+        value: "",
+        nodeIdentity: "node-1",
+        actions: ["type", "click"],
+        state: {},
+      },
+    ],
+  };
+  const events: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const original = debuggerApi.sendCommand.bind(debuggerApi);
+  debuggerApi.sendCommand = async (method, params) => {
+    if (method.startsWith("Input.")) {
+      events.push({ method, params: params ?? {} });
+      if (params?.type === "keyDown" && reactToEnter) snapshot.layoutRevision++;
+      return {} as never;
+    }
+    if (method === "Runtime.evaluate") {
+      const expression = String(params?.expression ?? "");
+      const value = expression.includes("const elements =")
+        ? { ...inspection, inputSnapshot: structuredClone(snapshot) }
+        : expression.includes("focused:")
+          ? { current: true, focused: true }
+          : expression.includes("zenx-browser-targeted-input-v2")
+            ? structuredClone(snapshot)
+            : { ok: true, focusOwned: true };
+      return { result: { value } } as never;
+    }
+    return await original(method, params);
+  };
+  return { events, snapshot };
+}
 
 function installTargetedInputFixture(debuggerApi: FakeDebugger) {
   const snapshot = {

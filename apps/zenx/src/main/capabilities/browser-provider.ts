@@ -13,6 +13,7 @@ import {
   assertBrowserInputSnapshot,
   browserInputKeys,
   browserInputKey,
+  browserKeyStrokeParameters,
   browserInputProbeScript,
   browserInputSnapshotScript,
   browserTargetedInputPolicy,
@@ -87,6 +88,15 @@ export interface BrowserTabSummary {
   agentActionOutcomeUnknown?: boolean;
   requiresFreshObservation?: boolean;
   mutationsRequireObservation?: boolean;
+  /** Set while new site input is withheld; reads stay available. */
+  inputBlocked?: BrowserInputBlockedSummary;
+}
+
+export interface BrowserInputBlockedSummary {
+  reason: string;
+  key?: string;
+  reset: "available" | "attempted";
+  since: number;
 }
 
 export interface BrowserInspection extends BrowserTabSummary {
@@ -175,6 +185,17 @@ export interface ZenXBrowserBackend {
   keepTab?(sessionId: string, tabId: string): void;
   /** Read-only exact existing-target liveness; must never adopt or create targets. */
   hasTab?(sessionId: string, tabId: string): boolean | Promise<boolean>;
+  /** Read the withheld-input state; one bounded release attempt may clear it. */
+  inputReset?(
+    sessionId: string,
+    tabId: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    blocked: boolean;
+    released: boolean;
+    key?: string;
+    reason?: string;
+  }>;
   /** Trusted human UI only: never include the unredacted URL in tool results. */
   readCurrentUrl?(sessionId: string, tabId: string): Promise<string>;
   scroll?(
@@ -510,6 +531,18 @@ export const browserCapabilityManifest: ZenXPluginManifestV2 = {
       permissions: ["browser.navigate"],
       interactionMode: "background_safe",
       capabilities: ["dedicated_profile", "session.close"],
+    },
+    {
+      name: "browser_input_reset",
+      description:
+        "Report whether one explicit tab withholds new site input, and make at most one controlled release attempt: the unacknowledged key-up for the key whose press outcome was unknown. Repeats no page action, sends no new input and never retries automatically. Reads and programmatic actions stay available whether or not the release succeeds.",
+      inputSchema: objectSchema(
+        { sessionId: stringSchema(), tabId: stringSchema() },
+        ["sessionId", "tabId"],
+      ),
+      permissions: ["browser.tabs.read"],
+      interactionMode: "background_safe",
+      capabilities: ["dedicated_profile"],
     },
   ],
 };
@@ -1241,6 +1274,27 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
           ),
           sessionId,
         };
+      case "browser_input_reset": {
+        const tabId = requiredTargetId(invocation.arguments, "tabId");
+        if (this.#backend.inputReset === undefined)
+          return {
+            blocked: false,
+            released: false,
+            sessionId,
+            tabId,
+            policy:
+              "this provider does not withhold input after an unknown outcome",
+          };
+        return {
+          ...(await this.#backend.inputReset(
+            sessionId,
+            tabId,
+            invocation.signal,
+          )),
+          sessionId,
+          tabId,
+        };
+      }
       default:
         throw new Error(`Unsupported browser tool: ${toolName}`);
     }
@@ -2112,9 +2166,13 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       "type",
     );
     tab.observation = undefined;
-    const result = await evaluateInTab<{ ok: boolean; reason?: string }>(
+    const result = await evaluateInTab<{
+      ok: boolean;
+      reason?: string;
+      focusOwned?: boolean;
+    }>(
       tab,
-      browserActionScript(target, "type", text, submit),
+      browserActionScript(target, "type", text, submit ? "enter" : "none"),
       () => this.#assertInputAvailable(tab),
     );
     if (!result.ok) {
@@ -2123,6 +2181,31 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       );
     }
     await settlePage(tab.window);
+    if (submit) {
+      if (result.focusOwned !== true)
+        throw new Error(
+          "Browser type wrote the value but the exact control does not hold focus; no Enter was sent. The value is written; inspect the page before pressing a key",
+        );
+      const version = tab.documentVersion;
+      const effect = await submitBrowserTyping(
+        {
+          evaluate: async <T>(expression: string) =>
+            await evaluateInTab<T>(tab, expression),
+          dispatchKey: async (params) => {
+            const debuggerApi = tab.window.webContents.debugger;
+            if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+            await debuggerApi.sendCommand("Input.dispatchKeyEvent", params);
+          },
+          signal: async () => await tabPageEffectSignal(tab),
+          navigated: () => tab.documentVersion !== version,
+        },
+        target,
+      );
+      if (effect === "none")
+        throw new Error(
+          "Browser type wrote the value and pressed Enter on the focused control, but the page showed no change. The submit did not take effect; inspect the page and confirm before acting, and do not repeat it blindly",
+        );
+    }
     return summarizeTab(tab);
   }
 
@@ -2616,11 +2699,88 @@ export const browserInspectScript = `(() => {
   };
 })()`;
 
+/**
+ * Confirm the exact observed control still holds focus, so a submit presses
+ * Enter on that control instead of wherever focus drifted to.
+ */
+export function browserSubmitFocusScript(
+  target: BrowserTargetFingerprint,
+): string {
+  return `(() => {
+    const registry = globalThis[Symbol.for(${JSON.stringify(browserNodeRegistryKey)})];
+    const expectedDocumentIdentity = ${JSON.stringify(target.documentIdentity ?? null)};
+    if (!registry || registry.document !== document || expectedDocumentIdentity === null || registry.incarnation + "|" + location.href !== expectedDocumentIdentity) return { current: false, focused: false };
+    const expectedNodeIdentity = ${JSON.stringify(target.nodeIdentity ?? null)};
+    const element = registry.current.get(expectedNodeIdentity);
+    if (!element || !element.isConnected || element.ownerDocument !== document || registry.ids.get(element) !== expectedNodeIdentity) return { current: false, focused: false };
+    element.focus();
+    const active = element.ownerDocument.activeElement;
+    return { current: true, focused: active === element || element.contains(active) };
+  })()`;
+}
+
+export interface BrowserSubmitPort {
+  evaluate<T>(expression: string): Promise<T>;
+  dispatchKey(params: Record<string, unknown>): Promise<void>;
+  /** Cheap page state that changes when the document reacts to the key. */
+  signal(): Promise<string>;
+  /** True once a new main-frame navigation has started. */
+  navigated(): boolean;
+}
+
+/**
+ * How a `type` submit reaches the page. `enter` focuses the exact control and
+ * leaves the key to the caller, whose Backend can send trusted input and
+ * observe the effect. `form` is the legacy `requestSubmit()` and is only kept
+ * for a provider that cannot dispatch trusted keys yet; it is not chosen for
+ * new call sites because a native GET can mutate the URL while running nothing.
+ */
+export type BrowserActionSubmitMode = "none" | "enter" | "form";
+
+/**
+ * Submit a typed value the way a person does: a real Enter to the control that
+ * verifiably holds focus. Returns the observed effect; `none` is reported to
+ * the caller so a no-op is never presented as success.
+ */
+export async function submitBrowserTyping(
+  port: BrowserSubmitPort,
+  target: BrowserTargetFingerprint,
+  timeoutMs = 800,
+): Promise<"navigation" | "page_updated" | "none"> {
+  const focus = await port.evaluate<{ current?: boolean; focused?: boolean }>(
+    browserSubmitFocusScript(target),
+  );
+  if (focus?.current !== true)
+    throw new Error(
+      "Browser submit was not sent: the typed control is no longer the same node. Inspect again",
+    );
+  if (focus.focused !== true)
+    throw new Error(
+      "Browser submit was not sent: the typed control does not hold focus, so Enter would press an unobserved target. Inspect again and press the key explicitly",
+    );
+  const before = await port.signal();
+  const enter = browserKeyStrokeParameters("Enter");
+  await port.dispatchKey({
+    ...enter,
+    type: "keyDown",
+    text: "\r",
+    unmodifiedText: "\r",
+  });
+  await port.dispatchKey({ ...enter, type: "keyUp" });
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (port.navigated()) return "navigation";
+    if ((await port.signal()) !== before) return "page_updated";
+    if (Date.now() >= deadline) return "none";
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 export function browserActionScript(
   target: BrowserTargetFingerprint,
   action: BrowserTargetAction,
   text = "",
-  submit = false,
+  submit: BrowserActionSubmitMode = "none",
 ): string {
   const expectedDocumentIdentity = JSON.stringify(
     target.documentIdentity ?? null,
@@ -2650,7 +2810,15 @@ export function browserActionScript(
     const action = ${JSON.stringify(action)};
     const nextValue = ${JSON.stringify(text)};
     const showAgentPointer = ${browserAgentPointerScript};
-  const shouldSubmit = ${JSON.stringify(submit)};
+    const submitMode = ${JSON.stringify(submit)};
+    const shouldSubmit = submitMode !== "none";
+    // Only the legacy provider mode can submit a form; the code is not even
+    // generated for the trusted-Enter path.
+    const legacyFormSubmit = (element) => { ${
+      submit === "form"
+        ? 'if (shouldSubmit) (element.form ?? element.closest("form"))?.requestSubmit();'
+        : ""
+    } };
   const expectedOptions = ${JSON.stringify(target.options ?? null)};
   const expectedOptionsTruncated = ${JSON.stringify(target.optionsTruncated ?? false)};
     const element = registry.current.get(expectedNodeIdentity);
@@ -2714,9 +2882,14 @@ export function browserActionScript(
       element.textContent = nextValue;
       element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: nextValue }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
-      if (shouldSubmit) element.closest("form")?.requestSubmit();
       showAgentPointer(point);
-      return { ok: true };
+      // Submit is never a native form submission: on an SPA shell that performs
+      // a GET the application ignores, so it changes the URL while running
+      // nothing. Focus the exact control and let the caller send a real Enter,
+      // then require an observable page effect.
+      if (shouldSubmit) element.focus();
+      legacyFormSubmit(element);
+      return { ok: true, focusOwned: !shouldSubmit || element.ownerDocument.activeElement === element };
     }
     const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
@@ -2724,9 +2897,10 @@ export function browserActionScript(
     setter.call(element, nextValue);
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
-    if (shouldSubmit) element.form?.requestSubmit();
     showAgentPointer(point);
-    return { ok: true };
+    if (shouldSubmit) element.focus();
+    legacyFormSubmit(element);
+    return { ok: true, focusOwned: !shouldSubmit || element.ownerDocument.activeElement === element };
   })()`;
 }
 
@@ -3202,6 +3376,22 @@ async function evaluateInTab<T>(
     expression,
     beforeDispatch,
   );
+}
+
+/** Page fingerprint used to decide whether a submit produced any effect. */
+async function tabPageEffectSignal(tab: BrowserTab): Promise<string> {
+  const snapshot = await evaluateInTab<{
+    documentKey?: unknown;
+    layoutRevision?: unknown;
+    inputRevision?: unknown;
+  }>(tab, browserInputSnapshotScript);
+  return [
+    tab.documentVersion,
+    tab.window.webContents.getURL(),
+    String(snapshot?.documentKey ?? ""),
+    String(snapshot?.layoutRevision ?? ""),
+    String(snapshot?.inputRevision ?? ""),
+  ].join("|");
 }
 
 /** Named isolated execution prevents the page from forging the node registry. */

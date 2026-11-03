@@ -237,6 +237,7 @@ test("registry tools retain separate approval names and generated permission sco
     "key_press",
     "close",
     "close_session",
+    "input_reset",
     "evaluate",
     "network_start",
     "network_read",
