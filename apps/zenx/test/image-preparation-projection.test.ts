@@ -136,7 +136,10 @@ test("cold and live projection show only latest sample, without duplicate occurr
       input("second"),
       latest,
       latest,
-    ])?.images.map((x) => x.original.width),
+    ])?.images.map((x) => {
+      assert(x.original !== null);
+      return x.original.width;
+    }),
     [4000],
   );
   assert.equal(
@@ -259,6 +262,7 @@ test("unavailable images are retained without prepared pixels or fallback claims
 
 test("unavailable image respects cold sample, selection, and occurrence fences", () => {
   const first = notice("s", "first", { unavailable: "image_decode_failed" });
+  assert(first.kind === "message");
   assert.equal(
     projectImagePreparation([input("first"), first, first])?.images.length,
     1,

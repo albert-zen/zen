@@ -110,11 +110,14 @@ export function projectImagePreparation(
     if (occurrences.has(key) || !eligible.has(origin.itemId)) continue;
     const original = imageDimensions(detail.originalAttachment);
     const unavailable = detail.outcome === "unavailable";
-    const reason = detail.reason;
+    const reason =
+      detail.reason === "image_decode_failed" ||
+      detail.reason === "image_processing_failed"
+        ? detail.reason
+        : null;
     if (
       unavailable &&
-      ((reason !== "image_decode_failed" &&
-        reason !== "image_processing_failed") ||
+      (reason === null ||
         item.content.parts.length !== 1 ||
         item.content.parts[0]?.type !== "text")
     )
