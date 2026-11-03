@@ -2302,8 +2302,28 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
         if (fault === "copy-lf-variant") clipboardText = "\r\n" + clipboardText;
         if (fault === "copy-nbsp-variant") clipboardText += "\u00a0";
-        if (fault === "copy-endpoint-mutation")
-          w.getSelection().getRangeAt(0).setStart(scroller, 1);
+        if (fault === "copy-endpoint-mutation") {
+          const selection = w.getSelection(),
+            before = w.__nativeSelectAllQuality,
+            empty = d.createTextNode("");
+          scroller.firstElementChild.prepend(empty);
+          selection.getRangeAt(0).setStart(empty, 0);
+          assert.equal(selection.toString() === before.text, true);
+          assert.equal(before.orderedMessages(selection.toString()), 10006);
+          assert.equal(
+            selection.anchorNode !== before.anchorNode && empty.isConnected,
+            true,
+          );
+          assert.equal(
+            !selection.isCollapsed &&
+              selection.anchorOffset === before.anchorOffset &&
+              selection.focusNode === before.focusNode &&
+              selection.focusOffset === before.focusOffset &&
+              before.anchorNode.isConnected &&
+              before.focusNode.isConnected,
+            true,
+          );
+        }
         if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
       } else {
         assert.equal(action, "deleteBackward:");
@@ -2433,7 +2453,6 @@ test("native Select All quality fails closed for missing bridge, partial selecti
       "occupied-clipboard",
       "copy-missing-row",
       "copy-lost-selection",
-      "copy-endpoint-mutation",
       "no-bounded-restore",
       "lost-anchor",
       "editor-stolen",
@@ -2446,20 +2465,6 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         assert.equal(
           run.result.nativeSelectAllQuality.selectedMarkerCount,
           5003,
-        );
-      }
-      if (fault === "copy-endpoint-mutation") {
-        assert.equal(
-          run.result.nativeSelectAllQuality.clipboardMatchesSelection,
-          true,
-        );
-        assert.equal(
-          run.result.nativeSelectAllQuality.copiedMessageCount,
-          10006,
-        );
-        assert.equal(
-          run.result.nativeSelectAllQuality.selectionSurvivesCopy,
-          false,
         );
       }
       if (
@@ -2475,13 +2480,7 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         ].includes(fault)
       )
         assert.equal(run.nativeCopyCalls, 0, fault);
-      if (
-        [
-          "copy-missing-row",
-          "copy-lost-selection",
-          "copy-endpoint-mutation",
-        ].includes(fault)
-      ) {
+      if (["copy-missing-row", "copy-lost-selection"].includes(fault)) {
         assert.equal(run.clipboardCleared, true, fault);
         assert.equal(
           run.cleared,
@@ -2493,6 +2492,17 @@ test("native Select All quality fails closed for missing bridge, partial selecti
   } finally {
     sharedDom.window.close();
   }
+});
+
+test("native Copy rejects changed connected endpoint identity with identical complete text before clear", async () => {
+  const run = await nativeSelectAllFixture("copy-endpoint-mutation"),
+    q = run.result.nativeSelectAllQuality;
+  assert.ok(run.error);
+  assert.equal(q.clipboardMatchesSelection, true);
+  assert.equal(q.copiedMessageCount, 10006);
+  assert.equal(q.selectionSurvivesCopy, false);
+  assert.equal(run.clipboardCleared, true);
+  assert.equal(run.cleared, false);
 });
 
 test("native canonical message oracle rejects unselected or partial final assistant, invalid assistant IDs and missing copied reply", async () => {
