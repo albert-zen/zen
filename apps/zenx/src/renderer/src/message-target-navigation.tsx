@@ -29,15 +29,13 @@ export function useMessageTargetNavigation(
 ) {
   const navigation = useContext(MessageTargetNavigationContext);
   const reading = useContext(ThreadReadingContext);
-  const consumed = useRef<number | null>(null);
+  const consumed = useRef<string | null>(null);
+  const retired = useRef(new Set<string>());
   const request = navigation?.request;
   useLayoutEffect(() => {
-    if (
-      !request ||
-      request.threadId !== thread?.id ||
-      consumed.current === request.requestId
-    )
-      return;
+    if (!request || request.threadId !== thread?.id) return;
+    const identity = JSON.stringify([request.threadId, request.requestId]);
+    if (consumed.current === identity || retired.current.has(identity)) return;
     const turn = thread.turns.find((turn) =>
       turn.items.some(
         (item) =>
@@ -58,7 +56,7 @@ export function useMessageTargetNavigation(
         ) ?? [],
       ).find((element) => element.dataset.sentMessageId === request.itemId);
       if (!element || element.closest("[hidden], [aria-hidden='true']")) return;
-      consumed.current = request.requestId;
+      consumed.current = identity;
       element.dataset.messageTarget = "true";
       element.focus({ preventScroll: true });
       element.scrollIntoView({ block: "center", behavior: "auto" });
@@ -73,7 +71,15 @@ export function useMessageTargetNavigation(
     };
     if (materializeTurn)
       queueMicrotask(() => {
-        if (active) void materializeTurn(turn.id, focusTarget);
+        if (!active) return;
+        const retireIfOwned = () => {
+          // Snapshot cleanup may supersede this attempt without cancelling the
+          // still-current request. Only its live effect may retire that identity.
+          if (active) retired.current.add(identity);
+        };
+        void materializeTurn(turn.id, focusTarget).then((revealed) => {
+          if (!revealed) retireIfOwned();
+        }, retireIfOwned);
       });
     else frame = requestAnimationFrame(focusTarget);
     return () => {

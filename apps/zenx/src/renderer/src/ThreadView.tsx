@@ -1735,6 +1735,8 @@ function ThreadViewContent({
           controller={virtualViewport}
           reading={readingState}
           wakeups={wakeups}
+          pluginSnapshot={pluginSnapshot}
+          pluginUiRegistry={pluginUiRegistry}
           pauseFollowing={pauseFollowing}
         />
       ) : null}
@@ -4093,10 +4095,6 @@ function TraceDetail({
         <ToolInput command={item.command} findItemId={item.id} />
         <div
           className="trace-output"
-          data-thread-find-item-id={
-            item.structuredContent === undefined ? item.id : undefined
-          }
-          data-thread-find-field="output"
           role="region"
           aria-label={i18n.t("shell:toolOutput")}
           tabIndex={0}

@@ -39,7 +39,7 @@ test("whole-data search finds hidden historical bodies and plain tool text with 
         exitCode: 0,
       },
       {
-        id: "opaque",
+        id: "structured-fallback",
         type: "commandExecution",
         command: "custom",
         structuredContent: { secret: "needle" },
@@ -65,6 +65,8 @@ test("whole-data search finds hidden historical bodies and plain tool text with 
       ["reason", "body", 0],
       ["call", "command", 0],
       ["call", "output", 0],
+      ["structured-fallback", "tool-structured", 0],
+      ["structured-fallback", "output", 0],
       ["answer", "body", 0],
       ["answer", "body", 1],
     ],
@@ -76,7 +78,11 @@ test("whole-data search finds hidden historical bodies and plain tool text with 
   );
   assert.equal(searchTranscript(entries, "**one**").length, 0);
   assert.equal(searchTranscript(entries, "summary-only").length, 0);
-  assert.equal(searchTranscript(entries, "needle hidden").length, 0);
+  assert.equal(
+    searchTranscript(entries, "needle hidden").length,
+    1,
+    "known fallback text is actually rendered, not an opaque plugin substitute",
+  );
 });
 test("literal matching is non-overlapping, whitespace normalized, Unicode-safe, and navigation wraps", () => {
   const entries = [

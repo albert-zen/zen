@@ -11,6 +11,7 @@ import {
   type VirtualTranscriptHandle,
 } from "../src/renderer/src/ExperimentalTranscriptViewport.js";
 import { VirtualTranscriptFind } from "../src/renderer/src/VirtualTranscriptFind.js";
+import { ToolResultRenderer } from "../src/renderer/src/ToolResultRenderer.js";
 import { HostMessageContent } from "../src/renderer/src/HostMessageContent.js";
 import {
   ThreadReadingContext,
@@ -153,6 +154,31 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
           copyAction: false,
         }),
       ),
+    },
+  ];
+  const tool = {
+    type: "commandExecution",
+    id: "tool-item",
+    command: "fixture-tool",
+    contentType: "fixture/unknown",
+    structuredContent: { body: "Visible structure" },
+    aggregatedOutput: "Visible output",
+    exitCode: 0,
+  } as Extract<Turn["items"][number], { type: "commandExecution" }>;
+  turns = [
+    ...turns,
+    { id: "tool-turn", status: "completed", items: [tool] } as Turn,
+  ];
+  rows = [
+    ...rows,
+    {
+      key: JSON.stringify(["thread", "turn", "tool-turn"]),
+      content: React.createElement(ToolResultRenderer, {
+        item: tool,
+        snapshot: null,
+        registry: null,
+        theme: "light",
+      }),
     },
   ];
   const root = createRoot(document.getElementById("root")!);
@@ -364,6 +390,57 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
       )[0]?.toString(),
       "Host hidden body",
     );
+    await act(async () => {
+      type("Visible structure");
+      await settle();
+    });
+    await act(async () => {
+      await settle();
+    });
+    assert.equal(
+      (
+        [...highlights.get("zenx-thread-find-active")] as Range[]
+      )[0]?.toString(),
+      "Visible structure",
+    );
+    assert.equal(
+      document.querySelector("[data-thread-find-field='tool-structured']")
+        ?.isConnected,
+      true,
+      "Find materializes the actual known fallback pre, not a hidden clone",
+    );
+    assert.equal(
+      reading.snapshot().get(JSON.stringify(["turn", "tool-turn"])),
+      true,
+    );
+    const beforeAvailabilityReveal = controller.current!.reveal;
+    let availabilityReveals = 0;
+    controller.current!.reveal = (...args) => {
+      availabilityReveals++;
+      return beforeAvailabilityReveal(...args);
+    };
+    const savedTurns = turns,
+      savedRows = rows;
+    await act(async () => {
+      turns = turns.filter((turn) => turn.id !== "tool-turn");
+      rows = rows.filter(
+        (row) => row.key !== JSON.stringify(["thread", "turn", "tool-turn"]),
+      );
+      render();
+      await settle();
+    });
+    await act(async () => {
+      turns = savedTurns;
+      rows = savedRows;
+      render();
+      await settle();
+    });
+    assert.equal(
+      availabilityReveals,
+      0,
+      "a disappearing/restored product result cannot replay old navigation after live renderer changes",
+    );
+    controller.current!.reveal = beforeAvailabilityReveal;
     await act(async () => {
       type("needle");
       await settle();

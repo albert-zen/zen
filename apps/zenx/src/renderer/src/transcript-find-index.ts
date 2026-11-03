@@ -1,3 +1,9 @@
+import {
+  resolveToolResultPresentation,
+  toolResultFallbackText,
+  toolResultPresentationKey,
+  type ToolResultPresentationContext,
+} from "./tool-result-presentation.js";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
@@ -17,10 +23,21 @@ import {
 import { disclosureKey } from "./thread-reading-state.js";
 import { projectTurn } from "./turn-projection.js";
 
+const fallbackContext: ToolResultPresentationContext = {
+  snapshot: null,
+  registry: null,
+};
+
 export interface TranscriptFindEntry {
   turnId: string;
   itemId: string;
-  field: "body" | "command" | "output" | "host-summary" | "host-original";
+  field:
+    | "body"
+    | "command"
+    | "output"
+    | "host-summary"
+    | "host-original"
+    | "tool-structured";
   /** Separate rendered blocks: a result never bridges unrelated paragraphs/cells. */
   blocks: readonly string[];
   disclosures: readonly string[];
@@ -201,6 +218,7 @@ function itemFindFields(
   canonical?: TurnCanonicalPresentation,
   parse: typeof markdownFindBlocks = markdownFindBlocks,
   wakeup?: TriggerHistoryEntry,
+  tools: ToolResultPresentationContext = fallbackContext,
 ): FindField[] {
   if (
     (item.type === "userMessage" && wakeup) ||
@@ -246,19 +264,29 @@ function itemFindFields(
     return [{ field: "body", blocks: inputBlocks(item, canonical, parse) }];
   if (item.type === "reasoning")
     return [{ field: "body", blocks: parse(item.content.join("\n")) }];
-  if (item.type === "commandExecution")
-    return [
+  if (item.type === "commandExecution") {
+    const fields: FindField[] = [
       { field: "command", blocks: [normalizeFindText(item.command)] },
-      // A structured result can use a custom renderer, so its JSON/output is not visible-text authority.
-      ...(item.structuredContent === undefined && item.aggregatedOutput
-        ? [
-            {
-              field: "output" as const,
-              blocks: [normalizeFindText(item.aggregatedOutput)],
-            },
-          ]
-        : []),
     ];
+    // Resolve first: an opaque plugin branch is never serialized or mounted for Find.
+    if (
+      resolveToolResultPresentation(item, tools.snapshot, tools.registry)
+        .kind === "fallback"
+    ) {
+      const text = toolResultFallbackText(item);
+      if (text.structured)
+        fields.push({
+          field: "tool-structured",
+          blocks: [normalizeFindText(text.structured)],
+        });
+      if (text.output)
+        fields.push({
+          field: "output",
+          blocks: [normalizeFindText(text.output)],
+        });
+    }
+    return fields;
+  }
   return [];
 }
 
@@ -268,15 +296,17 @@ export function createTranscriptFindIndexer(
 ) {
   const items = new WeakMap<
     ThreadItem,
-    { input: unknown; wakeupKey: string; fields: FindField[] }
+    { input: unknown; wakeupKey: string; toolKey: string; fields: FindField[] }
   >();
   let currentWakeups: readonly TriggerHistoryEntry[] = [];
+  let currentTools = fallbackContext;
   const turns = new WeakMap<
     Turn,
     {
       canonical: TurnCanonicalPresentation | undefined;
       entries: TranscriptFindEntry[];
       wakeupKey: string;
+      toolKey: string;
     }
   >();
   const fields = (item: ThreadItem, canonical?: TurnCanonicalPresentation) => {
@@ -288,19 +318,37 @@ export function createTranscriptFindIndexer(
         ? findInputWakeup(item, currentWakeups)
         : undefined;
     const wakeupKey = JSON.stringify([wakeup?.triggerId, wakeup?.prompt]);
+    const toolKey =
+      item.type === "commandExecution"
+        ? JSON.stringify(
+            resolveToolResultPresentation(
+              item,
+              currentTools.snapshot,
+              currentTools.registry,
+            ),
+          )
+        : "";
     const before = items.get(item);
-    if (before && before.input === input && before.wakeupKey === wakeupKey)
+    if (
+      before &&
+      before.input === input &&
+      before.wakeupKey === wakeupKey &&
+      before.toolKey === toolKey
+    )
       return before.fields;
-    const fields = itemFindFields(item, canonical, parse, wakeup);
-    items.set(item, { input, wakeupKey, fields });
+    const fields = itemFindFields(item, canonical, parse, wakeup, currentTools);
+    items.set(item, { input, wakeupKey, toolKey, fields });
     return fields;
   };
   return (
     source: readonly Turn[],
     canonical: ReadonlyMap<string, TurnCanonicalPresentation>,
     wakeups: readonly TriggerHistoryEntry[] = [],
+    tools: ToolResultPresentationContext = fallbackContext,
   ): TranscriptFindEntry[] => {
     currentWakeups = wakeups;
+    currentTools = tools;
+    const toolKey = toolResultPresentationKey(tools.snapshot, tools.registry);
     const wakeupKey = JSON.stringify(
       wakeups.map((entry) => [
         entry.clientUserMessageId,
@@ -315,11 +363,12 @@ export function createTranscriptFindIndexer(
       if (
         before &&
         before.canonical === presentation &&
-        before.wakeupKey === wakeupKey
+        before.wakeupKey === wakeupKey &&
+        before.toolKey === toolKey
       )
         return before.entries;
       const entries = indexTurnFindText(turn, presentation, fields);
-      turns.set(turn, { canonical: presentation, entries, wakeupKey });
+      turns.set(turn, { canonical: presentation, entries, wakeupKey, toolKey });
       return entries;
     });
   };

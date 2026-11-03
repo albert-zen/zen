@@ -8,6 +8,9 @@ import {
   type RefObject,
 } from "react";
 import { useTranslation } from "react-i18next";
+import type { ZenXPluginSnapshot } from "../../main/capabilities/types.js";
+import type { PluginUiRegistry } from "./plugin-ui-host.js";
+import { toolResultPresentationKey } from "./tool-result-presentation.js";
 import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import type { Turn } from "../../protocol-client/index.js";
 import type { VirtualTranscriptHandle } from "./ExperimentalTranscriptViewport.js";
@@ -35,6 +38,8 @@ interface Props {
   controller: RefObject<VirtualTranscriptHandle | null>;
   reading: ReturnType<typeof createThreadReadingState>;
   wakeups?: readonly TriggerHistoryEntry[];
+  pluginSnapshot?: ZenXPluginSnapshot | null;
+  pluginUiRegistry?: PluginUiRegistry | null;
   pauseFollowing(): void;
 }
 
@@ -48,6 +53,8 @@ export function VirtualTranscriptFind({
   controller,
   reading,
   wakeups,
+  pluginSnapshot = null,
+  pluginUiRegistry = null,
   pauseFollowing,
 }: Props) {
   const { t } = useTranslation("shell");
@@ -65,10 +72,20 @@ export function VirtualTranscriptFind({
   const returnFocus = useRef<HTMLElement | null>(null);
   const owner = useRef({});
   const request = useRef(0);
+  const navigationTicket = useRef<string | null>(null);
   const [indexText] = useState(() => createTranscriptFindIndexer());
+  const toolKey = open
+    ? toolResultPresentationKey(pluginSnapshot, pluginUiRegistry)
+    : "";
   const entries = useMemo(
-    () => (open ? indexText(turns, canonical, wakeups) : []),
-    [open, turns, canonical, wakeups, indexText],
+    () =>
+      open
+        ? indexText(turns, canonical, wakeups, {
+            snapshot: pluginSnapshot,
+            registry: pluginUiRegistry,
+          })
+        : [],
+    [open, turns, canonical, wakeups, indexText, toolKey],
   );
   const matches = useMemo(
     () => searchTranscript(entries, query),
@@ -205,6 +222,9 @@ export function VirtualTranscriptFind({
     const selected = latest.current.match;
     const paintOwner = owner.current;
     const version = ++request.current;
+    const ticket = JSON.stringify([threadId, query, selection.request]);
+    const shouldReveal = open && navigationTicket.current !== ticket;
+    navigationTicket.current = open ? ticket : null;
     setStatus(null);
     if (!node || !handle || !open || !selected || !matchKey) return;
     let active = true;
@@ -250,6 +270,15 @@ export function VirtualTranscriptFind({
     // Legend's public scroll command may flush layout synchronously. Start outside React's lifecycle.
     queueMicrotask(() => {
       if (!current()) return;
+      if (!shouldReveal) {
+        // Live renderer availability can restore a match, but it is not a new navigation request.
+        paintTranscriptFindRange(
+          document,
+          paintOwner,
+          transcriptFindRange(node, selected, latest.current.query),
+        );
+        return;
+      }
       pauseFollowing();
       for (const key of selected.entry.disclosures) reading.set(key, true);
       const pending = handle.reveal(

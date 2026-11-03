@@ -5,6 +5,7 @@ import { act, withRuntimeDom } from "./agent-runtime-dom.js";
 import { queueScenario } from "./fixtures/agent-queue-data.js";
 import {
   runtimeMessage,
+  runtimeCommand,
   runtimeThread,
 } from "./fixtures/agent-runtime-data.js";
 import {
@@ -70,7 +71,7 @@ function history(reference = quote) {
                   type: "text" as const,
                   text: referenceMessage(
                     "Queued question",
-                    [quote],
+                    [reference],
                     item.clientId,
                   ),
                 },
@@ -98,7 +99,23 @@ function enableVirtualGeometry() {
   proto.getBoundingClientRect = function () {
     return rect(this.classList.contains("messages") ? 600 : 280);
   };
+  // A small fixed-height controlled layout, not a browser geometry measurement.
   const tops = new WeakMap<HTMLElement, number>();
+  let scrollCallbacks = 0;
+  let callbackFailure: Error | null = null;
+  const lastOffsets: string[] = [];
+  const recordScroll = (node: HTMLElement, kind: string, offset: number) => {
+    if (!node.classList.contains("messages")) return true;
+    lastOffsets.push(
+      `${kind}: requested=${offset}, old=${tops.get(node) ?? 0}, max=${node.scrollHeight - node.clientHeight}`,
+    );
+    if (lastOffsets.length > 12) lastOffsets.shift();
+    if (++scrollCallbacks <= 1000) return true;
+    callbackFailure ??= new Error(
+      `Controlled virtual layout exceeded 1000 scroll callbacks:\n${lastOffsets.join("\n")}`,
+    );
+    return false;
+  };
   Object.defineProperties(proto, {
     scrollTop: {
       configurable: true,
@@ -106,6 +123,7 @@ function enableVirtualGeometry() {
         return tops.get(this) ?? 0;
       },
       set(value: number) {
+        if (!recordScroll(this, "scrollTop", value)) return;
         tops.set(
           this,
           Math.max(0, Math.min(this.scrollHeight - this.clientHeight, value)),
@@ -181,6 +199,16 @@ function enableVirtualGeometry() {
     },
   });
   proto.scrollTo = function (options) {
+    if (
+      !recordScroll(
+        this,
+        "scrollTo",
+        typeof options === "object"
+          ? (options.top ?? this.scrollTop)
+          : this.scrollTop,
+      )
+    )
+      return;
     if (typeof options === "object")
       this.scrollTop = options.top ?? this.scrollTop;
     this.dispatchEvent(new window.Event("scroll"));
@@ -193,6 +221,7 @@ function enableVirtualGeometry() {
   } as unknown as typeof ResizeObserver;
   return () => {
     globalThis.ResizeObserver = previous;
+    if (callbackFailure) throw callbackFailure;
   };
 }
 const sourceSelector =
@@ -286,6 +315,157 @@ test("virtual composer, sent bubble and queued-editor source actions materialize
         /Unsent main question/,
       );
       assert.equal(saves, 0);
+      await h.click(".queued-message-editor .reference-token-details");
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      await act(async () => {
+        document
+          .querySelector<HTMLButtonElement>(".reference-open-source")!
+          .click();
+        outside.focus();
+        outside.dispatchEvent(
+          new window.MouseEvent("pointerdown", { button: 0, bubbles: true }),
+        );
+      });
+      await settle();
+      assert.equal(
+        document.activeElement,
+        outside,
+        "a cancelled queued source request cannot steal the newer reader's focus",
+      );
+      assert.equal(saves, 0);
+      outside.remove();
+    } finally {
+      restore();
+    }
+  });
+});
+
+for (const invalid of [
+  { ...quote, id: "missing-source" },
+  { ...quote, threadId: "another-thread" },
+]) {
+  test(`virtual queued source preserves the editor and explicit fallback for ${invalid.id}/${invalid.threadId}`, async () => {
+    await withRuntimeDom(async (h) => {
+      const restore = enableVirtualGeometry();
+      let saves = 0;
+      try {
+        await h.render(history(invalid), {
+          onEditQueued: async () => {
+            saves++;
+            throw new Error("unexpected save");
+          },
+        });
+        await settle();
+        await h.click('[data-queue-id="queue-0"] .queue-row-edit');
+        await h.click(".queued-message-editor .reference-token-details");
+        await h.click(".reference-open-source");
+        await settle();
+        assert.ok(document.querySelector(".queued-message-editor"));
+        assert.ok(document.querySelector(".reference-source-error"));
+        assert.match(
+          document.querySelector(".queued-message-editor .cm-content")!
+            .textContent!,
+          /Queued question/,
+        );
+        assert.equal(saves, 0);
+      } finally {
+        restore();
+      }
+    });
+  });
+}
+
+test("virtual tool-result source opens its exact nested trace disclosure and represented canonical alias", async () => {
+  await withRuntimeDom(async (h) => {
+    const restore = enableVirtualGeometry();
+    const reference = {
+      ...quote,
+      id: "historical-result-5",
+      excerpt: "Exact tool output 5",
+    };
+    const thread = history(reference);
+    const turn = thread.turns.find((turn) => turn.id === "historical-turn-5")!;
+    turn.items = [
+      {
+        ...runtimeCommand("historical-call-5"),
+        aggregatedOutput: "Exact tool output 5",
+      },
+      runtimeCommand("historical-call-two-5"),
+      ...turn.items,
+    ];
+    const stamp = {
+      threadId: thread.id,
+      turnId: turn.id,
+      createdAt: "2026-11-03T00:00:00Z",
+    };
+    thread.canonicalItems!.push(
+      {
+        ...stamp,
+        type: "tool_call",
+        id: "historical-call-5",
+        callId: "call-5",
+        name: "shell",
+        arguments: {},
+      },
+      {
+        ...stamp,
+        type: "tool_result",
+        id: reference.id,
+        callId: "call-5",
+        output: reference.excerpt,
+        exitCode: 0,
+      },
+      {
+        ...stamp,
+        type: "tool_call",
+        id: "historical-call-two-5",
+        callId: "call-two-5",
+        name: "shell",
+        arguments: {},
+      },
+    );
+    try {
+      await h.render(thread, {
+        composer: editComposer(
+          emptyComposerState(),
+          withSkillDraft("Tool question", [], [reference]),
+        ),
+      });
+      await settle();
+      assert.equal(
+        document.querySelector('[data-quote-item-id="historical-call-5"]'),
+        null,
+      );
+      await h.click("#thread-composer .reference-token-details");
+      await h.click(".reference-open-source");
+      await settle();
+      const target = document.querySelector<HTMLElement>(
+        '[data-quote-item-id="historical-call-5"]',
+      );
+      assert.ok(target?.isConnected);
+      assert.deepEqual(JSON.parse(target.dataset.quoteItemIds!), [
+        "historical-call-5",
+        reference.id,
+      ]);
+      assert.equal(target.closest("[aria-hidden='true'],[inert]"), null);
+      assert.equal(document.activeElement, target);
+      const row = target.closest("[data-transcript-row-key]")!;
+      assert.equal(
+        row.querySelector(".turn-toggle")!.getAttribute("aria-expanded"),
+        "true",
+      );
+      assert.equal(
+        row.querySelector(".trace-toggle")!.getAttribute("aria-expanded"),
+        "true",
+      );
+      assert.equal(
+        row.querySelector(".trace-item-toggle")!.getAttribute("aria-expanded"),
+        "true",
+      );
+      assert.ok(
+        document.querySelectorAll("[data-transcript-row-key]").length < 65,
+      );
     } finally {
       restore();
     }
