@@ -131,3 +131,11 @@ At this inline-source checkpoint, 88 focused tests pass (8 preparation/layout an
 The non-vendor source diff is whitespace-clean; the copied patch exception above
 is unchanged. No packaged/native execution was added by this source-verification
 stage.
+
+Cancelled virtual message targets are retired by exact local Thread/request ID.
+A later canonical snapshot cannot restart a reader-cancelled or superseded target,
+and cancellation never calls the exact-target `consumed` callback. Snapshot effect
+cleanup alone does not retire a still-current request; its replacement may finish.
+A new request ID for the same message, or the same numeric ID in another Thread,
+can still reveal. An actual hook-plus-Legend controlled component test covers these
+cases without changing the locked native fixture or claiming native acceptance.
