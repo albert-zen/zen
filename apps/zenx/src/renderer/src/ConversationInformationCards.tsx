@@ -87,15 +87,13 @@ function ConversationInformationContent({
             <Icon name="clock" size={15} />
             {t("threadTriggers")}
           </h3>
-          {admissionId ? (
+          {state.status === "error" && admissionId ? (
             <button
               type="button"
-              className="icon-button"
-              aria-label={t("refresh")}
-              title={t("refresh")}
+              className="quiet-button"
               onClick={() => void refresh(true)}
             >
-              <Icon name="reload" size={14} />
+              {t("retry")}
             </button>
           ) : null}
         </header>
