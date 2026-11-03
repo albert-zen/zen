@@ -1679,6 +1679,21 @@ async function stopOwnedTrace() {
   })();
   return traceStopPromise;
 }
+// Post-timing real-input oracle: no scroll or ownership shortcut may establish Selection safety.
+function assertNativeSelectionQuality(evidence) {
+  assert.equal(evidence.selectionOwnedByTarget, true);
+  assert.equal(evidence.preservedAfterNativeWheel, true);
+  assert.ok(evidence.beforeViewportHeight > 0);
+  assert.ok(
+    evidence.beforeScrollTop - evidence.afterScrollTop >=
+      evidence.beforeViewportHeight,
+    "Native wheel must actually move upward by at least one viewport",
+  );
+  assert.equal(evidence.targetOffscreenAfterWheel, true);
+  assert.equal(evidence.pausedReader, true);
+  assert.ok(evidence.bottomDistance > 100);
+  assert.ok(evidence.mountedRows >= 2 && evidence.mountedRows < 200);
+}
 async function run() {
   await networkReady;
   await until(async () => {
@@ -2538,8 +2553,12 @@ async function run() {
       ),
     "native mouse drag creates a real transcript Selection",
   );
-  await evaluate(
-    "(()=>{const s=getSelection();window.__qualitySelection={text:s.toString(),anchor:s.anchorNode,focus:s.focusNode,anchorOffset:s.anchorOffset,focusOffset:s.focusOffset};return true})()",
+  assert.equal(
+    await evaluate(`(()=>{const s=getSelection(),target=Array.from(document.querySelectorAll('article.user-row')).find(n=>n.dataset.sentMessageId===${JSON.stringify(tailUserId)}),scroll=document.querySelector('.messages');
+    const owned=Boolean(target&&target.contains(s.anchorNode)&&target.contains(s.focusNode));
+    window.__qualitySelection={text:s.toString(),anchor:s.anchorNode,focus:s.focusNode,anchorOffset:s.anchorOffset,focusOffset:s.focusOffset,target,owned,scrollTop:scroll.scrollTop,viewportHeight:scroll.clientHeight};return owned})()`),
+    true,
+    "Native Selection must belong to the exact revealed historical row",
   );
   await screenshot("virtual-selection-before-scroll.png");
   window.webContents.sendInputEvent({
@@ -2553,12 +2572,9 @@ async function run() {
   });
   await pause(500);
   result.nativeSelectionQuality = await evaluate(
-    "(()=>{const s=getSelection(),b=window.__qualitySelection,scroll=document.querySelector('.messages');return {preservedAfterNativeWheel:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchor&&s.focusNode===b.focus&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchor.isConnected&&b.focus.isConnected,selectedCharacterCount:s.toString().length,mountedRows:document.querySelectorAll('section.turn').length,pausedReader:Boolean(document.querySelector('.back-live')),bottomDistance:scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop,nativeMouseDrag:true,afterTiming:true}})()",
+    "(()=>{const s=getSelection(),b=window.__qualitySelection,scroll=document.querySelector('.messages'),bounds=scroll.getBoundingClientRect(),target=b.target.getBoundingClientRect(),bottom=Math.min(bounds.bottom,document.querySelector('.bottom-zone').getBoundingClientRect().top);return {selectionOwnedByTarget:b.owned&&b.target.contains(s.anchorNode)&&b.target.contains(s.focusNode),preservedAfterNativeWheel:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchor&&s.focusNode===b.focus&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchor.isConnected&&b.focus.isConnected,selectedCharacterCount:s.toString().length,beforeScrollTop:b.scrollTop,afterScrollTop:scroll.scrollTop,beforeViewportHeight:b.viewportHeight,targetOffscreenAfterWheel:target.top>=bottom||target.bottom<=bounds.top,mountedRows:document.querySelectorAll('section.turn').length,pausedReader:Boolean(document.querySelector('.back-live')),bottomDistance:scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop,nativeMouseDrag:true,afterTiming:true}})()",
   );
-  assert.equal(result.nativeSelectionQuality.preservedAfterNativeWheel, true);
-  assert.equal(result.nativeSelectionQuality.pausedReader, true);
-  assert.ok(result.nativeSelectionQuality.bottomDistance > 100);
-  assert.ok(result.nativeSelectionQuality.mountedRows < 200);
+  assertNativeSelectionQuality(result.nativeSelectionQuality);
   await click(
     "document.querySelector('#thread-composer')",
     "Clear native Selection by focusing Composer",

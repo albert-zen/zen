@@ -1796,7 +1796,7 @@ test("native Find and Selection quality use real input after timing and bounded 
     "modifiers:['leftButtonDown']",
     "s.anchorNode===b.anchor",
     "b.anchor.isConnected",
-    "nativeSelectionQuality.preservedAfterNativeWheel,true",
+    "assertNativeSelectionQuality(result.nativeSelectionQuality)",
   ])
     assert.ok(
       source
@@ -1815,4 +1815,36 @@ test("native Find and Selection quality use real input after timing and bounded 
   assert.ok(launch.includes("virtual-find-(?:old-history|wrapped-tail)"));
   assert.ok(launch.includes("virtual-selection-before-scroll"));
   assert.ok(launch.includes("virtualFindQuality: result.virtualFindQuality"));
+});
+
+test("native Selection oracle rejects no movement, wrong row, onscreen retention and node loss", () => {
+  const start = source.indexOf("function assertNativeSelectionQuality(");
+  const end = source.indexOf("\nasync function run()", start);
+  const validate = new Function(
+    "assert",
+    source.slice(start, end) + ";return assertNativeSelectionQuality;",
+  )(assert);
+  const good = {
+    selectionOwnedByTarget: true,
+    preservedAfterNativeWheel: true,
+    beforeViewportHeight: 600,
+    beforeScrollTop: 10000,
+    afterScrollTop: 7000,
+    targetOffscreenAfterWheel: true,
+    pausedReader: true,
+    bottomDistance: 3500,
+    mountedRows: 12,
+  };
+  validate(good);
+  for (const bad of [
+    { afterScrollTop: 10000 }, // Already-paused Find state must not masquerade as scrolling.
+    { afterScrollTop: 9700 },
+    { selectionOwnedByTarget: false },
+    { preservedAfterNativeWheel: false },
+    { targetOffscreenAfterWheel: false },
+    { mountedRows: 5000 },
+    { beforeViewportHeight: 0 },
+    { pausedReader: false },
+  ])
+    assert.throws(() => validate({ ...good, ...bad }));
 });
