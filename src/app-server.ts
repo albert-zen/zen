@@ -7490,6 +7490,25 @@ function remapForkContext(
       const value = metadata[key];
       if (typeof value === "string") metadata[key] = remap(value);
     }
+    const preparation = metadata.imagePreparation;
+    if (
+      preparation !== null &&
+      typeof preparation === "object" &&
+      !Array.isArray(preparation)
+    ) {
+      const occurrence = preparation.occurrence;
+      if (
+        occurrence !== null &&
+        typeof occurrence === "object" &&
+        !Array.isArray(occurrence) &&
+        typeof occurrence.itemId === "string"
+      ) {
+        preparation.occurrence = {
+          ...occurrence,
+          itemId: remap(occurrence.itemId),
+        };
+      }
+    }
     for (const key of ["mediaOccurrence", "omittedMedia"]) {
       const occurrences = metadata[key];
       if (Array.isArray(occurrences))
