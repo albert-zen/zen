@@ -517,9 +517,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(
-    workflow.includes("for case in narrow-candidate narrow-baseline; do"),
-  );
+  assert.ok(workflow.includes("for case in control-candidate; do"));
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
@@ -556,4 +554,35 @@ test("historical grid comparison keeps exact sources and reader regression outsi
   );
   assert.ok(source.includes("native resize preserves paused reader offset"));
   assert.ok(source.includes("native resize must not restore live following"));
+});
+
+test("Selection getter probes preserve values and restore native descriptors", async () => {
+  const f = fixture();
+  const owner = f.w.Selection.prototype;
+  const wrapped = Object.getOwnPropertyDescriptor(owner, "isCollapsed").get;
+  try {
+    const selection = f.d.getSelection();
+    assert.equal(selection.isCollapsed, true);
+    assert.equal(selection.anchorNode, null);
+    assert.equal(selection.focusNode, null);
+    assert.equal(selection.rangeCount, 0);
+    assert.equal(selection.type, "None");
+    const counts = f.record.geometryProbes.counts;
+    assert.ok(counts["get.isCollapsed:document-selection"].calls >= 1);
+    assert.ok(counts["get.anchorNode:document-selection"].calls >= 1);
+    const calls = counts["get.isCollapsed:document-selection"].calls;
+    await f.row("pending");
+    assert.equal(selection.isCollapsed, true);
+    assert.equal(counts["get.isCollapsed:document-selection"].calls, calls);
+    assert.equal(
+      JSON.stringify(f.record.geometryProbes).includes("synthetic-nonce"),
+      false,
+    );
+  } finally {
+    f.close();
+  }
+  assert.notEqual(
+    Object.getOwnPropertyDescriptor(owner, "isCollapsed").get,
+    wrapped,
+  );
 });

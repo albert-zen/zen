@@ -329,6 +329,7 @@ function installObservation(nonce, threadId, profileIndex = 0) {
     record.pendingDomMs === undefined &&
     !stopped;
   const category = (node) => {
+    if (node instanceof Selection) return "document-selection";
     if (!(node instanceof Element)) return "other";
     for (const [selector, label] of [
       [".messages", "transcript-scrollport"],
@@ -434,6 +435,10 @@ function installObservation(nonce, threadId, profileIndex = 0) {
     });
   }
   for (const [owner, names] of [
+    [
+      Selection.prototype,
+      ["isCollapsed", "anchorNode", "focusNode", "rangeCount", "type"],
+    ],
     [
       Element.prototype,
       [
