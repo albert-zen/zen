@@ -61,14 +61,14 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   candidate: {
-    commit: "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
-    tree: "ba960dd46644a9f8d87bd5c524b0d31019261444",
+    commit: "12bff5c83a5c7d8601331c5027a5a1bbbe6f3707",
+    tree: "cdcc49266539832ceec00cf1c38258cafd64f28c",
     expectedVirtualTranscript: true,
   },
 };
 // One exact latest UI quality source. This is not a new latency A/B.
-const frontendSourceTree = "a5b6da40df0538dee66ee7b13effd9c9995d1d19";
-const rendererSourceTree = "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad";
+const frontendSourceTree = "b910d3bed997feb1efebdaef77f4a9569569244b";
+const rendererSourceTree = "6e101331da7fc276acb7275b1eeb6e2f30dcb0b3";
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
@@ -593,9 +593,12 @@ function projectFailureTranscriptQuality(capture) {
             ? state.counts.slice(0, 2).map(finite)
             : [],
           mountedRows: finite(state.mountedRows),
+          stableAcrossFrames: boolean(state.stableAcrossFrames),
+          stableFrameCount: finite(state.stableFrameCount),
         }
       : null;
   const selected = capture?.nativeSelectionQuality;
+  const all = capture?.nativeSelectAllQuality;
   return {
     find: capture?.virtualFindQuality
       ? {
@@ -603,6 +606,37 @@ function projectFailureTranscriptQuality(capture) {
           wrappedTail: find(capture.virtualFindQuality.wrappedTail),
           totalMatches: finite(capture.virtualFindQuality.totalMatches),
         }
+      : null,
+    selectAll: all
+      ? Object.fromEntries([
+          ...[
+            "boundedBefore",
+            "pausedBefore",
+            "anchorCaptured",
+            "afterTiming",
+            "fullDom",
+            "canonicalOrder",
+            "earliestMarkerSelected",
+            "latestMarkerSelected",
+            "selectionActive",
+            "readerAnchorPreserved",
+            "clipboardMatchesSelection",
+            "selectionSurvivesCopy",
+            "selectionCleared",
+            "virtualRestored",
+            "restoredReaderAnchor",
+            "pausedAfterClear",
+            "editableSelectionPreserved",
+          ].map((key) => [key, boolean(all[key])]),
+          ...[
+            "mountedUserRows",
+            "selectedMarkerCount",
+            "copiedMarkerCount",
+            "restoredMountedRows",
+            "menuToSelectionMs",
+            "clearToRestoreMs",
+          ].map((key) => [key, finite(all[key])]),
+        ])
       : null,
     selection: selected
       ? Object.fromEntries([
@@ -729,12 +763,12 @@ async function copyOwnedSyntheticScreenshots({
   assert.equal(typeof guard?.scan, "function");
   const names = (await readdir(directory))
     .filter((name) =>
-      /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|virtual-find-(?:old-history|wrapped-tail)|virtual-selection-before-scroll|send-latency-failure)\.png$/.test(
+      /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|virtual-find-(?:old-history|wrapped-tail)|virtual-selection-before-scroll|native-select-all|send-latency-failure)\.png$/.test(
         name,
       ),
     )
     .sort();
-  assert.ok(names.length <= 18, "Owned synthetic image count stays bounded");
+  assert.ok(names.length <= 19, "Owned synthetic image count stays bounded");
   guard.scan(
     JSON.stringify({ synthetic: true, provider: "fake", screenshots: names }),
     privateConfig,
@@ -907,6 +941,53 @@ try {
   assert.equal(result.virtualFindQuality?.wrappedTail?.accepted, true);
   assert.equal(result.virtualFindQuality?.totalMatches, 5000);
   assert.equal(result.nativeSelectionQuality?.preservedAfterNativeWheel, true);
+  assert.equal(
+    result.virtualFindQuality?.wrappedTail?.stableAcrossFrames,
+    true,
+  );
+  assert.equal(result.virtualFindQuality?.wrappedTail?.stableFrameCount, 2);
+  assert.deepEqual(result.virtualFindQuality.wrappedTail.counts, [5000, 5000]);
+  const selectAll = projectFailureTranscriptQuality(result).selectAll;
+  for (const field of [
+    "boundedBefore",
+    "pausedBefore",
+    "anchorCaptured",
+    "afterTiming",
+    "fullDom",
+    "canonicalOrder",
+    "earliestMarkerSelected",
+    "latestMarkerSelected",
+    "selectionActive",
+    "readerAnchorPreserved",
+    "clipboardMatchesSelection",
+    "selectionSurvivesCopy",
+    "selectionCleared",
+    "virtualRestored",
+    "restoredReaderAnchor",
+    "pausedAfterClear",
+    "editableSelectionPreserved",
+  ])
+    assert.equal(
+      selectAll?.[field],
+      true,
+      `Native Select All quality: ${field}`,
+    );
+  for (const field of [
+    "mountedUserRows",
+    "selectedMarkerCount",
+    "copiedMarkerCount",
+  ])
+    assert.equal(
+      selectAll?.[field],
+      5003,
+      `Native Select All quality: ${field}`,
+    );
+  assert.ok(
+    selectAll.restoredMountedRows > 0 && selectAll.restoredMountedRows < 200,
+  );
+  for (const field of ["menuToSelectionMs", "clearToRestoreMs"])
+    assert.ok(Number.isFinite(selectAll[field]) && selectAll[field] >= 0);
+
   assert.equal(result.emptyFooterGeometry?.reserveMatchesFullDom, true);
   assert.equal(result.before.turns, count);
   assert.equal(result.before.messages, count * 2);
@@ -1075,6 +1156,7 @@ try {
     virtualHistoryVisual: result.virtualHistoryVisual,
     virtualFindQuality: result.virtualFindQuality,
     nativeSelectionQuality: result.nativeSelectionQuality,
+    nativeSelectAllQuality: selectAll,
     emptyFooterGeometry: result.emptyFooterGeometry,
     rendered: result.before.rendered,
     renderedAfter: result.afterRendered,

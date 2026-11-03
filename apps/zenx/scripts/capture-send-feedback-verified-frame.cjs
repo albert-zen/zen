@@ -8,6 +8,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  clipboard,
   session,
   ipcMain,
   contentTracing,
@@ -241,7 +242,18 @@ ipcMain.handle = function (channel, handler) {
   });
 };
 
+const capturedScreenshots = new Set();
 async function screenshot(name) {
+  assert.ok(
+    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|virtual-find-(?:old-history|wrapped-tail)|virtual-selection-before-scroll|native-select-all|send-latency-failure)\.png$/.test(
+      name,
+    ),
+  );
+  capturedScreenshots.add(name);
+  assert.ok(
+    capturedScreenshots.size <= 19,
+    "Owned synthetic image count stays bounded",
+  );
   await fs.writeFile(
     path.join(directory, name),
     (await window.webContents.capturePage()).toPNG(),
@@ -1695,6 +1707,163 @@ function assertNativeSelectionQuality(evidence) {
   assert.ok(evidence.bottomDistance > 100);
   assert.ok(evidence.mountedRows >= 2 && evidence.mountedRows < 200);
 }
+// Invoke the installed product Edit menu handler, never a diagnostic Selection reconstruction.
+function invokeProductSelectAll() {
+  assert.equal(process.platform, "darwin");
+  assert.equal(window.isFocused() && window.webContents.isFocused(), true);
+  assert.equal(BrowserWindow.getFocusedWindow() === window, true);
+  assert.equal(
+    window.webContents.focusedFrame === window.webContents.mainFrame,
+    true,
+  );
+  const edit = Menu.getApplicationMenu()?.items.find((item) =>
+    item.submenu?.items.some((child) => child.role === "copy"),
+  );
+  const selectAll = edit?.submenu?.items.find(
+    (item) => item.accelerator === "CommandOrControl+A",
+  );
+  assert.ok(
+    selectAll?.enabled && typeof selectAll.click === "function",
+    "Installed product Select All bridge handler must be available",
+  );
+  selectAll.click(selectAll, window, {});
+}
+
+async function checkNativeSelectAll(canonicalTurns, samples) {
+  assert.equal(result.seed.synthetic, true);
+  assert.equal(result.seed.userMessageCount, 5000);
+  assert.equal(result.fixtureModel.provider, "fake");
+  assert.equal(samples.length, 3);
+  const users = canonicalTurns.flatMap((turn) =>
+    turn.items.filter((item) => item.type === "userMessage"),
+  );
+  const markers = [
+    ...Array.from({ length: 5000 }, (_, i) => `Synthetic user ${i}.`),
+    ...samples.map((sample) => sample.nonce),
+  ];
+  assert.equal(users.length, 5003);
+  assert.ok(
+    users.every((user, i) =>
+      user.content.some(
+        (part) => part.type === "text" && part.text.includes(markers[i]),
+      ),
+    ),
+  );
+  await click(
+    "document.querySelector('.messages')",
+    "Focus owned transcript for product Edit Select All",
+  );
+  const prepared = await evaluate(`(()=>{
+    const scroll=document.querySelector('.messages');
+    const anchor=()=>{const s=document.querySelector('.messages'),bounds=s.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(innerHeight,bounds.bottom,document.querySelector('.bottom-zone')?.getBoundingClientRect().top??innerHeight);const row=Array.from(s.querySelectorAll('[data-transcript-row-key]')).filter(n=>n.getBoundingClientRect().bottom>top).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0],rect=row?.getBoundingClientRect();return row&&rect.top<bottom&&rect.bottom>top?{key:row.dataset.transcriptRowKey,offset:rect.top-bounds.top}:null};
+    const expectedIds=${JSON.stringify(users.map((user) => user.id))},markers=${JSON.stringify(markers)},before=anchor();
+    const orderedMarkers=text=>{let end=0,count=0;for(const marker of markers){const at=text.indexOf(marker,end);if(at<0)break;end=at+marker.length;count++;}return count};
+    window.__nativeSelectAllQuality={before,anchor,orderedMarkers,inspect:()=>{
+      const s=document.querySelector('.messages'),selection=getSelection(),text=selection?.toString()??'',ids=Array.from(s.querySelectorAll('article.user-row')).map(n=>n.dataset.sentMessageId),current=anchor();
+      return {fullDom:s.dataset.nativeTranscriptSelection==='complete',mountedUserRows:ids.length,canonicalOrder:ids.length===expectedIds.length&&ids.every((id,i)=>id===expectedIds[i]),selectedMarkerCount:orderedMarkers(text),earliestMarkerSelected:text.includes(markers[0]),latestMarkerSelected:text.includes(markers.at(-1)),selectionActive:Boolean(selection&&!selection.isCollapsed),readerAnchorPreserved:Boolean(before&&current&&before.key===current.key&&Math.abs(before.offset-current.offset)<=2)};
+    }};
+    return {boundedBefore:scroll.querySelectorAll('section.turn').length<200,pausedBefore:Boolean(document.querySelector('.back-live')),anchorCaptured:Boolean(before)};
+  })()`);
+  result.nativeSelectAllQuality = { ...prepared, afterTiming: true };
+  assert.equal(
+    prepared.boundedBefore && prepared.pausedBefore && prepared.anchorCaptured,
+    true,
+  );
+  const menuStarted = performance.now();
+  invokeProductSelectAll();
+  await until(async () => {
+    const state = await evaluate("window.__nativeSelectAllQuality.inspect()");
+    Object.assign(result.nativeSelectAllQuality, state);
+    return (
+      state.fullDom &&
+      state.selectionActive &&
+      state.canonicalOrder &&
+      state.selectedMarkerCount === 5003
+    );
+  }, "product Edit Select All reaches Cocoa selection of all 5000 historical and three sent users");
+  result.nativeSelectAllQuality.menuToSelectionMs =
+    performance.now() - menuStarted;
+  assert.equal(result.nativeSelectAllQuality.readerAnchorPreserved, true);
+  assert.equal(
+    await evaluate(
+      `(()=>{const b=window.__nativeSelectAllQuality,s=getSelection();b.text=s.toString();b.anchorNode=s.anchorNode;b.focusNode=s.focusNode;b.anchorOffset=s.anchorOffset;b.focusOffset=s.focusOffset;return b.text.length>0})()`,
+    ),
+    true,
+  );
+  // This disposable CI runner must have no pre-existing clipboard data. Never read it.
+  assert.deepEqual(
+    clipboard.availableFormats(),
+    [],
+    "Native Copy requires an empty owned CI clipboard",
+  );
+  const sentinel = "Synthetic native Copy pending";
+  clipboard.writeText(sentinel);
+  try {
+    assert.equal(window.isFocused() && window.webContents.isFocused(), true);
+    assert.equal(
+      window.webContents.focusedFrame === window.webContents.mainFrame,
+      true,
+    );
+    Menu.sendActionToFirstResponder("copy:");
+    await until(
+      async () => clipboard.readText() !== sentinel,
+      "native Cocoa Copy updates the owned synthetic clipboard",
+    );
+    const copied = clipboard.readText();
+    const copy = await evaluate(`(async()=>{
+      await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+      const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
+      return {clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
+    })()`);
+    Object.assign(result.nativeSelectAllQuality, copy);
+    assert.equal(
+      copy.clipboardMatchesSelection && copy.selectionSurvivesCopy,
+      true,
+    );
+    assert.equal(copy.copiedMarkerCount, 5003);
+    await screenshot("native-select-all.png");
+  } finally {
+    clipboard.clear();
+  }
+  const clearStarted = performance.now();
+  await click(
+    "document.querySelector('#thread-composer')",
+    "Clear full native Selection with real Composer click",
+  );
+  await until(async () => {
+    const cleared = await evaluate(`(()=>{
+      const b=window.__nativeSelectAllQuality,s=document.querySelector('.messages'),a=b.anchor(),selection=getSelection();
+      return {selectionCleared:Boolean(selection?.isCollapsed),virtualRestored:s.classList.contains('experimental-transcript-viewport')&&!s.hasAttribute('data-native-transcript-selection'),restoredMountedRows:s.querySelectorAll('section.turn').length,restoredReaderAnchor:Boolean(a&&b.before&&a.key===b.before.key&&Math.abs(a.offset-b.before.offset)<=2),pausedAfterClear:Boolean(document.querySelector('.back-live'))};
+    })()`);
+    Object.assign(result.nativeSelectAllQuality, cleared);
+    return (
+      cleared.selectionCleared &&
+      cleared.virtualRestored &&
+      cleared.restoredMountedRows < 200 &&
+      cleared.restoredReaderAnchor &&
+      cleared.pausedAfterClear
+    );
+  }, "native clear restores bounded virtual DOM and the original reader anchor");
+  result.nativeSelectAllQuality.clearToRestoreMs =
+    performance.now() - clearStarted;
+  await window.webContents.insertText("Synthetic editable native selection");
+  invokeProductSelectAll();
+  await until(async () => {
+    const editable = await evaluate(
+      "(()=>{const e=document.querySelector('#thread-composer');return document.activeElement===e&&e.value==='Synthetic editable native selection'&&e.selectionStart===0&&e.selectionEnd===e.value.length&&!document.querySelector('[data-native-transcript-selection]')&&document.querySelectorAll('section.turn').length<200})()",
+    );
+    result.nativeSelectAllQuality.editableSelectionPreserved = editable;
+    return editable;
+  }, "product native Select All preserves editable input selection");
+  Menu.sendActionToFirstResponder("deleteBackward:");
+  await until(
+    async () =>
+      evaluate("document.querySelector('#thread-composer').value===''"),
+    "native edit cleanup leaves the owned Composer empty",
+  );
+  assert.equal(await evaluate("delete window.__nativeSelectAllQuality"), true);
+}
+
 async function run() {
   await networkReady;
   await until(async () => {
@@ -2452,14 +2621,20 @@ async function run() {
     window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
     window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
   };
-  const findState = async (id, query) =>
-    evaluate(`(()=>{
-    const input=document.querySelector('.virtual-transcript-find input');
-    const status=document.querySelector('.virtual-transcript-find [role="status"]')?.textContent??'';
-    const ranges=Array.from(CSS.highlights.get('zenx-thread-find-active')??[]);
-    const range=ranges.find(r=>r.startContainer.parentElement?.closest('article.user-row')?.dataset.sentMessageId===${JSON.stringify(id)});
-    const box=range?.getBoundingClientRect(),scroll=document.querySelector('.messages').getBoundingClientRect(),bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
-    return {accepted:Boolean(input?.value===${JSON.stringify(query)}&&range&&range.startContainer.isConnected&&range.endContainer.isConnected&&range.toString()===${JSON.stringify(query.trim())}&&box.height>0&&box.bottom>scroll.top&&box.top<Math.min(scroll.bottom,bottom)),counts:(status.match(/\\d+/g)??[]).map(Number),mountedRows:document.querySelectorAll('section.turn').length};
+  const findState = async (id, query, stableFrames = false) =>
+    evaluate(`(async()=>{
+    const inspect=()=>{
+      const input=document.querySelector('.virtual-transcript-find input');
+      const status=document.querySelector('.virtual-transcript-find [role="status"]')?.textContent??'';
+      const ranges=Array.from(CSS.highlights.get('zenx-thread-find-active')??[]);
+      const range=ranges.find(r=>r.startContainer.parentElement?.closest('article.user-row')?.dataset.sentMessageId===${JSON.stringify(id)});
+      const box=range?.getBoundingClientRect(),scroll=document.querySelector('.messages').getBoundingClientRect(),bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
+      return {accepted:Boolean(input?.value===${JSON.stringify(query)}&&range&&range.startContainer.isConnected&&range.endContainer.isConnected&&range.toString()===${JSON.stringify(query.trim())}&&box.height>0&&box.bottom>scroll.top&&box.top<Math.min(scroll.bottom,bottom)),counts:(status.match(/\\d+/g)??[]).map(Number),mountedRows:document.querySelectorAll('section.turn').length,rangeTop:box?.top??null,rangeBottom:box?.bottom??null};
+    };
+    const first=inspect();if(!${stableFrames})return first;
+    await new Promise(requestAnimationFrame);const second=inspect();
+    await new Promise(requestAnimationFrame);const last=inspect();
+    return {...last,stableAcrossFrames:first.accepted&&second.accepted&&last.accepted&&JSON.stringify(first)===JSON.stringify(second)&&JSON.stringify(second)===JSON.stringify(last),stableFrameCount:2};
   })()`);
   await click(
     "document.querySelector('.messages')",
@@ -2508,6 +2683,7 @@ async function run() {
     wrappedTail = await findState(tailUserId, "Synthetic user ");
     return (
       wrappedTail.accepted &&
+      wrappedTail.counts.length === 2 &&
       wrappedTail.counts[0] === 5000 &&
       wrappedTail.counts[1] === 5000
     );
@@ -2523,6 +2699,18 @@ async function run() {
     queryReplacement: "macos-native-first-responder-selectAll",
     afterTiming: true,
   };
+  // Repeat the exact Range/count/geometry predicate across two paint opportunities.
+  // This guards stale capture state, not physical compositor presentation.
+  await until(async () => {
+    wrappedTail = await findState(tailUserId, "Synthetic user ", true);
+    result.virtualFindQuality.wrappedTail = wrappedTail;
+    return (
+      wrappedTail.stableAcrossFrames &&
+      wrappedTail.counts.length === 2 &&
+      wrappedTail.counts[0] === 5000 &&
+      wrappedTail.counts[1] === 5000
+    );
+  }, "wrapped tail Find Range and count remain stable across two animation frames");
   await screenshot("virtual-find-wrapped-tail.png");
   nativeKey("Escape");
   await until(
@@ -2593,6 +2781,7 @@ async function run() {
     "document.querySelector('#thread-composer')",
     "Clear native Selection by focusing Composer",
   );
+  await checkNativeSelectAll(finalRead.thread.turns, result.samples);
   const readerPoint = await evaluate(
     `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
   );

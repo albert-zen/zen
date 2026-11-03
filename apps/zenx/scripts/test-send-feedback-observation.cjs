@@ -608,10 +608,10 @@ test("single-source UI quality locks exact latest Legend frontend and keeps read
     "utf8",
   );
   for (const identity of [
-    "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
-    "ba960dd46644a9f8d87bd5c524b0d31019261444",
-    "a5b6da40df0538dee66ee7b13effd9c9995d1d19",
-    "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad",
+    "12bff5c83a5c7d8601331c5027a5a1bbbe6f3707",
+    "cdcc49266539832ceec00cf1c38258cafd64f28c",
+    "b910d3bed997feb1efebdaef77f4a9569569244b",
+    "6e101331da7fc276acb7275b1eeb6e2f30dcb0b3",
   ])
     assert.ok(launch.includes(identity));
   const snapshots = new Function(
@@ -1515,6 +1515,7 @@ test("fixed synthetic screenshot exporter preserves failed-case PNGs and rejects
   const names = [
     "messages-10000-sample-0-before.png",
     "legend-history-after-canonical.png",
+    "native-select-all.png",
     "send-latency-failure.png",
   ].sort();
   const capture = {
@@ -1811,7 +1812,7 @@ test("native Find and Selection quality use real input after timing and bounded 
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
-  assert.ok(launch.includes("names.length <= 18"));
+  assert.ok(launch.includes("names.length <= 19"));
   assert.ok(launch.includes("virtual-find-(?:old-history|wrapped-tail)"));
   assert.ok(launch.includes("virtual-selection-before-scroll"));
   assert.ok(launch.includes("virtualFindQuality: result.virtualFindQuality"));
@@ -1979,6 +1980,18 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       wrappedTail: { accepted: true, counts: [5000, 5000], mountedRows: 10 },
       totalMatches: 5000,
     },
+    nativeSelectAllQuality: {
+      fullDom: true,
+      canonicalOrder: false,
+      mountedUserRows: 5003,
+      selectedMarkerCount: Infinity,
+      copiedMarkerCount: "NEVER_EXPORT",
+      menuToSelectionMs: Infinity,
+      clearToRestoreMs: 12.5,
+      text: "NEVER_EXPORT",
+      clipboard: "NEVER_EXPORT",
+      anchor: { private: "NEVER_EXPORT" },
+    },
     nativeSelectionQuality: {
       selectionOwnedByTarget: false,
       preservedAfterNativeWheel: false,
@@ -1995,14 +2008,505 @@ test("failed native quality exports fixed finite evidence without text or DOM id
     },
   });
   assert.deepEqual(result.find.oldHistory.counts, [1, 1]);
+  assert.equal(result.selectAll.fullDom, true);
+  assert.equal(result.selectAll.canonicalOrder, false);
+  assert.equal(result.selectAll.mountedUserRows, 5003);
+  assert.equal(result.selectAll.selectedMarkerCount, null);
+  assert.equal(result.selectAll.copiedMarkerCount, null);
+  assert.equal(result.selectAll.menuToSelectionMs, null);
+  assert.equal(result.selectAll.clearToRestoreMs, 12.5);
   assert.equal(result.selection.selectionOwnedByTarget, false);
   assert.equal(result.selection.beforeScrollTop, 10000);
   assert.equal(result.selection.bottomDistance, null);
   assert.equal(JSON.stringify(result).includes("NEVER_EXPORT"), false);
-  assert.deepEqual(project(undefined), { find: null, selection: null });
+  assert.deepEqual(project(undefined), {
+    find: null,
+    selectAll: null,
+    selection: null,
+  });
   assert.ok(
     launch.includes(
       "transcriptQuality: projectFailureTranscriptQuality(capture)",
     ),
   );
+});
+
+function wrappedDiagnosticEvaluator(window, expressions = []) {
+  const start = source.indexOf("function diagnosticEvaluation(");
+  const wrap = new Function(
+    source.slice(start, source.indexOf("\nconst evaluate =", start)) +
+      "; return diagnosticEvaluation;",
+  )();
+  return async (expression) => {
+    expressions.push(expression.slice(0, 90));
+    const reply = await window.eval(wrap(expression));
+    assert.equal(reply.ok, true, reply.error?.message);
+    return reply.value;
+  };
+}
+
+test("wrapped-tail Find executes the shipped expression and rejects transient Range/count geometry", async () => {
+  const dom = new JSDOM(
+    '<div class="messages"><section class="turn"><article class="user-row" data-sent-message-id="tail"><span>Synthetic user 4999.</span></article></section></div><div class="bottom-zone"></div><div class="virtual-transcript-find"><input><div role="status">5000 / 5000</div></div>',
+    { runScripts: "outside-only" },
+  );
+  const w = dom.window,
+    d = w.document;
+  const input = d.querySelector("input"),
+    status = d.querySelector('[role="status"]');
+  input.value = "Synthetic user ";
+  const range = d.createRange();
+  range.setStart(d.querySelector("span").firstChild, 0);
+  range.setEnd(d.querySelector("span").firstChild, "Synthetic user".length);
+  range.getBoundingClientRect = () => ({ top: 100, bottom: 120, height: 20 });
+  d.querySelector(".messages").getBoundingClientRect = () => ({
+    top: 20,
+    bottom: 400,
+  });
+  d.querySelector(".bottom-zone").getBoundingClientRect = () => ({ top: 400 });
+  w.CSS = { highlights: new Map([["zenx-thread-find-active", [range]]]) };
+  const start = source.indexOf("  const findState = async (");
+  const read = new Function(
+    "evaluate",
+    source.slice(start, source.indexOf("\n  await click(", start)) +
+      "; return findState;",
+  )(wrappedDiagnosticEvaluator(w));
+  let frame = 0;
+  w.requestAnimationFrame = (callback) =>
+    queueMicrotask(() => {
+      frame++;
+      callback(frame);
+    });
+  try {
+    const stable = await read("tail", "Synthetic user ", true);
+    assert.equal(stable.accepted, true);
+    assert.deepEqual(Array.from(stable.counts), [5000, 5000]);
+    assert.equal(stable.stableAcrossFrames, true);
+    assert.equal(stable.stableFrameCount, 2);
+    assert.equal(frame, 2);
+    // Correct initial/final state is insufficient if the intervening frame is stale.
+    frame = 0;
+    w.requestAnimationFrame = (callback) =>
+      queueMicrotask(() => {
+        status.textContent = ++frame === 1 ? "1 / 5000" : "5000 / 5000";
+        callback(frame);
+      });
+    assert.equal(
+      (await read("tail", "Synthetic user ", true)).stableAcrossFrames,
+      false,
+    );
+    let rangeTop = 100;
+    frame = 0;
+    range.getBoundingClientRect = () => ({
+      top: rangeTop,
+      bottom: rangeTop + 20,
+      height: 20,
+    });
+    w.requestAnimationFrame = (callback) =>
+      queueMicrotask(() => {
+        rangeTop = ++frame === 1 ? 120 : 100;
+        callback(frame);
+      });
+    assert.equal(
+      (await read("tail", "Synthetic user ", true)).stableAcrossFrames,
+      false,
+    );
+    assert.equal((await read("wrong-id", "Synthetic user ")).accepted, false);
+    range.setEnd(d.querySelector("span").firstChild, 5);
+    assert.equal((await read("tail", "Synthetic user ")).accepted, false);
+  } finally {
+    w.close();
+  }
+});
+
+async function nativeSelectAllFixture(fault, sharedDom) {
+  const dom = sharedDom ?? new JSDOM("", { runScripts: "outside-only" });
+  const w = dom.window,
+    d = w.document;
+  d.body.innerHTML =
+    '<main class="thread-view"><div class="messages experimental-transcript-viewport"></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea></main>';
+  const scroller = d.querySelector(".messages"),
+    editor = d.querySelector("textarea");
+  w.requestAnimationFrame = (callback) => queueMicrotask(() => callback(1));
+  scroller.getBoundingClientRect = () => ({ top: 20, bottom: 620 });
+  const samples = Array.from({ length: 3 }, (_, i) => ({
+    nonce: `Synthetic latency message 10000 ${i} unit-owned`,
+  }));
+  const markers = [
+    ...Array.from({ length: 5000 }, (_, i) => `Synthetic user ${i}.`),
+    ...samples.map((sample) => sample.nonce),
+  ];
+  const turns = markers.map((text, i) => ({
+    items: [
+      {
+        type: "userMessage",
+        id: `owned-${i}`,
+        content: [{ type: "text", text }],
+      },
+    ],
+  }));
+  const mount = (all) => {
+    const indices = all
+      ? Array.from({ length: 5003 }, (_, i) => i)
+      : Array.from({ length: 8 }, (_, i) => i + 4980);
+    if (all && fault === "wrong-order")
+      [indices[0], indices[1]] = [indices[1], indices[0]];
+    scroller.innerHTML = indices
+      .map(
+        (i) =>
+          `<section class="turn" data-transcript-row-key="row-${i}"><article class="user-row" data-sent-message-id="owned-${i}">${markers[i]}</article></section>`,
+      )
+      .join("");
+    if (all && fault === "duplicate-user-id")
+      scroller.querySelector(
+        '[data-sent-message-id="owned-2501"]',
+      ).dataset.sentMessageId = "owned-2500";
+    if (all && fault === "omitted-user-id")
+      scroller
+        .querySelector('[data-sent-message-id="owned-2501"]')
+        .removeAttribute("data-sent-message-id");
+    for (const row of scroller.children) {
+      const i = Number(row.dataset.transcriptRowKey.slice(4));
+      row.getBoundingClientRect = () => ({
+        top:
+          (i - 4980) * 100 +
+          20 +
+          (!all && fault === "lost-anchor" && cleared ? 10 : 0) +
+          (fault === "no-visible-anchor" ? 1000 : 0),
+        bottom:
+          (i - 4980) * 100 + 120 + (fault === "no-visible-anchor" ? 1000 : 0),
+      });
+    }
+    scroller.classList.toggle("experimental-transcript-viewport", !all);
+    if (all) scroller.dataset.nativeTranscriptSelection = "complete";
+    else delete scroller.dataset.nativeTranscriptSelection;
+  };
+  let cleared = false,
+    menuCalls = 0,
+    nativeCopyCalls = 0,
+    clipboardCleared = false,
+    clipboardText = "";
+  mount(false);
+  const expressions = [],
+    images = [];
+  const evaluate = wrappedDiagnosticEvaluator(w, expressions);
+  const result = {
+    seed: { synthetic: true, userMessageCount: 5000 },
+    fixtureModel: { provider: "fake" },
+  };
+  const mainFrame = {};
+  const nativeWindow = {
+    isFocused: () => true,
+    webContents: {
+      mainFrame,
+      focusedFrame: fault === "wrong-focused-frame" ? {} : mainFrame,
+      isFocused: () => true,
+      async insertText(text) {
+        editor.setRangeText(
+          text,
+          editor.selectionStart,
+          editor.selectionEnd,
+          "end",
+        );
+      },
+    },
+  };
+  const menuItem = {
+    accelerator: "CommandOrControl+A",
+    enabled: true,
+    click() {
+      menuCalls++;
+      if (d.activeElement === editor && fault !== "editor-stolen") {
+        editor.select();
+        return;
+      }
+      mount(true);
+      // Synthetic native-action double only. Production diagnostic never creates a Range.
+      if (fault !== "no-native-selection") {
+        const range = d.createRange();
+        range.selectNodeContents(scroller);
+        w.getSelection().removeAllRanges();
+        w.getSelection().addRange(range);
+      }
+    },
+  };
+  const Menu = {
+    getApplicationMenu: () => ({
+      items: [
+        {
+          submenu: {
+            items: [
+              { role: "copy" },
+              ...(fault === "no-product-handler" ? [] : [menuItem]),
+            ],
+          },
+        },
+      ],
+    }),
+    sendActionToFirstResponder(action) {
+      if (action === "copy:") {
+        nativeCopyCalls++;
+        clipboardText = w.getSelection().toString();
+        if (fault === "copy-missing-row")
+          clipboardText = clipboardText.replace(markers[2500], "");
+        if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
+      } else {
+        assert.equal(action, "deleteBackward:");
+        editor.setRangeText(
+          "",
+          editor.selectionStart,
+          editor.selectionEnd,
+          "end",
+        );
+      }
+    },
+  };
+  const clipboard = {
+    availableFormats: () =>
+      fault === "occupied-clipboard" ? ["text/plain"] : [],
+    writeText: (text) => {
+      clipboardText = text;
+    },
+    readText: () => clipboardText,
+    clear: () => {
+      clipboardCleared = true;
+      clipboardText = "";
+    },
+  };
+  const click = async (_expression, label) => {
+    if (label.includes("Composer")) {
+      cleared = true;
+      w.getSelection().removeAllRanges();
+      editor.focus();
+      if (fault !== "no-bounded-restore") mount(false);
+    } else editor.blur();
+  };
+  const until = async (check, label) => {
+    for (let i = 0; i < 2; i++) if (await check()) return;
+    throw Error(`Synthetic bounded wait failed: ${label}`);
+  };
+  const start = source.indexOf("function invokeProductSelectAll()");
+  const check = new Function(
+    "assert",
+    "process",
+    "window",
+    "BrowserWindow",
+    "Menu",
+    "evaluate",
+    "click",
+    "result",
+    "clipboard",
+    "until",
+    "screenshot",
+    source.slice(start, source.indexOf("\nasync function run()", start)) +
+      "; return checkNativeSelectAll;",
+  )(
+    assert,
+    { platform: "darwin" },
+    nativeWindow,
+    { getFocusedWindow: () => nativeWindow },
+    Menu,
+    evaluate,
+    click,
+    result,
+    clipboard,
+    until,
+    async (name) => images.push(name),
+  );
+  let error;
+  try {
+    await check(turns, samples);
+  } catch (caught) {
+    error = caught;
+  }
+  delete w.__nativeSelectAllQuality;
+  w.getSelection().removeAllRanges();
+  d.body.replaceChildren();
+  if (!sharedDom) w.close();
+  await new Promise(setImmediate);
+  return {
+    error,
+    result,
+    expressions,
+    images,
+    menuCalls,
+    nativeCopyCalls,
+    clipboardCleared,
+  };
+}
+
+test("full native Select All diagnostic executes every shipped evaluate expression through its real wrapper", async () => {
+  const run = await nativeSelectAllFixture();
+  assert.ifError(run.error);
+  assert.equal(
+    run.menuCalls,
+    2,
+    "installed product menu covers page and editable input",
+  );
+  assert.equal(run.nativeCopyCalls, 1);
+  assert.equal(run.clipboardCleared, true);
+  assert.deepEqual(run.images, ["native-select-all.png"]);
+  const quality = run.result.nativeSelectAllQuality;
+  assert.equal(quality.mountedUserRows, 5003);
+  assert.equal(quality.selectedMarkerCount, 5003);
+  assert.equal(quality.copiedMarkerCount, 5003);
+  assert.equal(quality.restoredMountedRows, 8);
+  for (const field of ["menuToSelectionMs", "clearToRestoreMs"])
+    assert.ok(Number.isFinite(quality[field]) && quality[field] >= 0);
+  for (const [name, value] of Object.entries(quality))
+    if (typeof value === "boolean") assert.equal(value, true, name);
+  assert.ok(run.expressions.length >= 8);
+  assert.equal(JSON.stringify(quality).includes("owned-"), false);
+  assert.equal(JSON.stringify(quality).includes("Synthetic user"), false);
+});
+
+test("native Select All quality fails closed for missing bridge, partial selection, reordered DOM, bad copy, lost selection and failed restore", async () => {
+  const sharedDom = new JSDOM("", { runScripts: "outside-only" });
+  try {
+    for (const fault of [
+      "no-product-handler",
+      "wrong-focused-frame",
+      "no-native-selection",
+      "wrong-order",
+      "duplicate-user-id",
+      "omitted-user-id",
+      "no-visible-anchor",
+      "occupied-clipboard",
+      "copy-missing-row",
+      "copy-lost-selection",
+      "no-bounded-restore",
+      "lost-anchor",
+      "editor-stolen",
+    ]) {
+      const run = await nativeSelectAllFixture(fault, sharedDom);
+      assert.ok(run.error, fault);
+      if (["duplicate-user-id", "omitted-user-id"].includes(fault)) {
+        assert.equal(run.result.nativeSelectAllQuality.canonicalOrder, false);
+        assert.equal(run.result.nativeSelectAllQuality.mountedUserRows, 5003);
+        assert.equal(
+          run.result.nativeSelectAllQuality.selectedMarkerCount,
+          5003,
+        );
+      }
+      if (
+        [
+          "no-product-handler",
+          "wrong-focused-frame",
+          "no-native-selection",
+          "wrong-order",
+          "duplicate-user-id",
+          "omitted-user-id",
+          "no-visible-anchor",
+          "occupied-clipboard",
+        ].includes(fault)
+      )
+        assert.equal(run.nativeCopyCalls, 0, fault);
+      if (["copy-missing-row", "copy-lost-selection"].includes(fault))
+        assert.equal(run.clipboardCleared, true, fault);
+    }
+  } finally {
+    sharedDom.window.close();
+  }
+});
+
+test("capture and exporter accept only the same fixed 19-image bound including native selection and failure", async () => {
+  const names = [
+    ...[0, 1, 2].flatMap((i) =>
+      ["before", "after"].map(
+        (side) => `messages-10000-sample-${i}-${side}.png`,
+      ),
+    ),
+    "information-presentation-before-timing.png",
+    ...["after-canonical", "before-natural-up", "after-natural-up"].map(
+      (stage) => `legend-history-${stage}.png`,
+    ),
+    ...["old-history", "wrapped-tail"].map(
+      (stage) => `virtual-find-${stage}.png`,
+    ),
+    "virtual-selection-before-scroll.png",
+    "native-select-all.png",
+    "paused-reader-after-native-resize.png",
+    ...[390, 640, 641].map((width) => `responsive-history-${width}.png`),
+    "send-latency-failure.png",
+  ];
+  assert.equal(names.length, 19);
+  const start = source.indexOf("const capturedScreenshots = new Set();");
+  const writes = [];
+  const capture = new Function(
+    "assert",
+    "fs",
+    "path",
+    "directory",
+    "window",
+    source.slice(start, source.indexOf("// Full-DOM checks", start)) +
+      ";return screenshot;",
+  )(
+    assert,
+    { writeFile: async (_path, bytes) => writes.push(bytes) },
+    path,
+    "/owned",
+    {
+      webContents: { capturePage: async () => ({ toPNG: () => "owned PNG" }) },
+    },
+  );
+  for (const name of names) await capture(name);
+  assert.equal(writes.length, 19);
+  await assert.rejects(
+    capture("messages-10001-sample-0-before.png"),
+    /count stays bounded/,
+  );
+  await assert.rejects(capture("private-file.png"));
+  const fs = require("node:fs/promises"),
+    os = require("node:os"),
+    fsConstants = require("node:fs").constants;
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const copy = new Function(
+    "assert",
+    "readdir",
+    "open",
+    "writeFile",
+    "path",
+    "fsConstants",
+    "return (" +
+      launch.slice(
+        launch.indexOf("async function copyOwnedSyntheticScreenshots("),
+        launch.indexOf("let cleanupSafe ="),
+      ) +
+      ")",
+  )(assert, fs.readdir, fs.open, fs.writeFile, path, fsConstants);
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "zen-native-selectall-cap-"),
+  );
+  try {
+    const directory = path.join(root, "source"),
+      uploadDirectory = path.join(root, "out");
+    await fs.mkdir(directory);
+    await fs.mkdir(uploadDirectory);
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    for (const name of names)
+      await fs.writeFile(path.join(directory, name), png);
+    const args = {
+      directory,
+      uploadDirectory,
+      capture: {
+        seed: { synthetic: true, userMessageCount: 5000 },
+        fixtureModel: { provider: "fake" },
+        packagedRuntime: { isPackaged: true },
+      },
+      close: { code: 1, signal: null },
+      guard: { scan() {} },
+      privateConfig: "owned",
+    };
+    assert.deepEqual(await copy(args), [...names].sort());
+    await fs.writeFile(
+      path.join(directory, "messages-10001-sample-0-before.png"),
+      png,
+    );
+    await assert.rejects(copy(args), /count stays bounded/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
