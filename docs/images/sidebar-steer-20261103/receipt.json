@@ -1,160 +1,86 @@
 {
+  "publicHead": "ea61449e55d11cd5e53308f002cadf03bd1c2ada",
+  "testedSourceCommit": "974b69ab18538b5807fdef6b1726bd67e66a2f7f",
+  "tree": "2c4645dbf634b31056a768b3a253eaeffa3a01d4",
+  "sameTreeVerifiedByGitDiff": true,
+  "run": "https://github.com/albert-zen/zen/actions/runs/41696996053",
   "synthetic": true,
-  "head": "8d6e66758aafc90075421b71f54286d680fbc4fe",
-  "sourceCommit": "10ae2b66aff0c04c95d12cb863e241e1ca7e7935",
-  "tree": "43fad78214e6fd84dbbb71bed009e9f119ffcf1e",
-  "run": "https://github.com/albert-zen/zen/actions/runs/41651958923",
-  "scope": "Disposable production Electron App and Host with synthetic files, conversations and fake-provider data only. OS sidebar input uses unchanged production native helper/transport, not a full Computer facade authorization/capture admission E2E. Tested fullscreen File resource shared heading, not Subagents-specific content. Steer images are isolated production-component previews, 390x900 and 1440x900, with DOM details expansion and no Host recall invocation.",
-  "sidebarOsInput": {
-    "status": "passed",
-    "permissionChanges": false,
-    "clicks": 2
+  "artifacts": {
+    "macosApp": 13260824439,
+    "macosShelf": 13260414702,
+    "windowsApp": 13260319908,
+    "windowsShelf": 13260334645
   },
-  "systemSidebarClicks": [
+  "results": {
+    "macosApp": true,
+    "windowsApp": true,
+    "macosShelf": true,
+    "windowsShelf": true,
+    "macosOwnedSystemSidebarClicks": 2,
+    "fullscreenResizer": {
+      "display": "none",
+      "layoutBoxes": 0,
+      "focusable": false,
+      "focusUnchanged": true
+    }
+  },
+  "boundaries": [
+    "Full App screenshots and system clicks use isolated synthetic data and real production Host. OS clicks test the fullscreen File resource shared heading, not Subagents-specific content or full Computer facade authorization. Posted transport receipts alone are not success: trusted DOM acknowledgement and actual sidebar-expanded state are independently checked.",
+    "Shelf/source/editor screenshots use production React components in native Electron with synthetic canonical inputs, an exact synthetic source navigator and stubbed save/restore callbacks. They do not prove Host recall/save/source-navigation E2E.",
+    "Only direct content, recall icon and right-aligned bubble hierarchy are reused from the reference; the outer shelf retains the production Queue composer-aligned width.",
+    "The primary-conversation image verifies retention and fullscreen split-resizer visibility only. Information/question-card visual feedback including the native textarea resize handle belongs to PR671 and is not claimed fixed here.",
+    "Earlier animated editor screenshot is superseded. Current captures wait for opacity1, rendered frames, exact text, viewport geometry and save hit target, then close the editor."
+  ],
+  "images": [
     {
-      "label": "Expand sidebar using actual bound macOS pointer",
-      "receipt": {
-        "pid": 5245,
-        "windowId": 24,
-        "posted": {
-          "dispatch": "posted",
-          "applicationEffect": "unverified"
-        }
-      },
-      "input": "production Computer exact PID/CG/AX bound CoreGraphics events"
+      "file": "steer-wide-light.png",
+      "platform": "darwin",
+      "sha256": "674202e40ce5f5db4d5eb1580cc49722687b62acab53768243d59c11218e3edb"
     },
     {
-      "label": "Expand sidebar using actual bound macOS pointer",
-      "receipt": {
-        "pid": 5245,
-        "windowId": 24,
-        "posted": {
-          "applicationEffect": "unverified",
-          "dispatch": "posted"
-        }
-      },
-      "input": "production Computer exact PID/CG/AX bound CoreGraphics events"
+      "file": "steer-wide-dark.png",
+      "platform": "darwin",
+      "sha256": "45edab6adc42b5934b48c928639189b905819f8eb75a8dd9e9368ec7c184c19b"
+    },
+    {
+      "file": "steer-narrow.png",
+      "platform": "darwin",
+      "sha256": "717fefeec82ba0597084f91005bd7810741805b9075c1b68fee07bf57aa9d871"
+    },
+    {
+      "file": "steer-narrow-english.png",
+      "platform": "darwin",
+      "sha256": "a79e5ba9eec5482a3255bf21f78a5323920a15fb27cff01f952429b4c5fedab0"
+    },
+    {
+      "file": "queue-source-opened.png",
+      "platform": "darwin",
+      "sha256": "faa28f1805169f13daa15b51bda3ff214bb854c9b4d629484a626f9a6752dfc4"
+    },
+    {
+      "file": "queue-human-edit-open.png",
+      "platform": "darwin",
+      "sha256": "8915bc4e4f20cbe931676debc6d8d62d34a2f42689348458003249b8b4a03faf"
+    },
+    {
+      "file": "pending-settled.png",
+      "platform": "darwin",
+      "sha256": "64e9f98f8af48ad937f235a1ae7cf5f8dffc455a1e2b4e85446f7a9f40a9b890"
+    },
+    {
+      "file": "15-macos-system-sidebar-click.png",
+      "platform": "darwin",
+      "sha256": "be5b25d15f20e9f13400855de80681253aa957f4be8b371645f0769e7468abde"
+    },
+    {
+      "file": "04-maximized-main-dock.png",
+      "platform": "darwin",
+      "sha256": "ab8857e4c9ea716d26621f3a26dc601a05a3b7ee328fadb2cfebe981a65599f3"
+    },
+    {
+      "file": "windows-queue-human-edit-open.png",
+      "platform": "win32",
+      "sha256": "75332dcc82da0dd23ba388f7150c281b240d3c89571b9f590d9a5888b5cbef16"
     }
-  ],
-  "applicationWitness": "Each OS click must independently acknowledge a trusted DOM click and remove sidebar-collapsed before the driver sets passed. Transport posted receipt intentionally retains applicationEffect unverified.",
-  "sidebarGeometry": {
-    "buttonRight": 120,
-    "headingLeft": 121
-  },
-  "primaryConversation": "Production App navigated away from fullscreen main conversation, returned to primary selection, then restored prior file resource on split. Thread/Room races and remounts additionally covered by controller/component tests.",
-  "shelf": {
-    "ok": true,
-    "synthetic": true,
-    "platform": "darwin",
-    "cases": [
-      {
-        "name": "steer-wide-light",
-        "geometry": {
-          "viewport": 1440,
-          "overflow": false,
-          "shelf": {
-            "x": 440,
-            "y": 609,
-            "right": 1264,
-            "bottom": 775,
-            "width": 824,
-            "height": 166
-          },
-          "composer": {
-            "x": 432,
-            "y": 774,
-            "right": 1272,
-            "bottom": 882,
-            "width": 840,
-            "height": 108
-          },
-          "inBottomZone": true,
-          "inTranscript": false,
-          "recall": "\u5168\u90e8\u64a4\u56de",
-          "rows": 2
-        }
-      },
-      {
-        "name": "steer-wide-dark",
-        "geometry": {
-          "viewport": 1440,
-          "overflow": false,
-          "shelf": {
-            "x": 440,
-            "y": 609,
-            "right": 1264,
-            "bottom": 775,
-            "width": 824,
-            "height": 166
-          },
-          "composer": {
-            "x": 432,
-            "y": 774,
-            "right": 1272,
-            "bottom": 882,
-            "width": 840,
-            "height": 108
-          },
-          "inBottomZone": true,
-          "inTranscript": false,
-          "recall": "\u5168\u90e8\u64a4\u56de",
-          "rows": 2
-        }
-      },
-      {
-        "name": "steer-narrow",
-        "geometry": {
-          "viewport": 390,
-          "overflow": false,
-          "shelf": {
-            "x": 20,
-            "y": 619,
-            "right": 370,
-            "bottom": 785,
-            "width": 350,
-            "height": 166
-          },
-          "composer": {
-            "x": 16,
-            "y": 784,
-            "right": 374,
-            "bottom": 892,
-            "width": 358,
-            "height": 108
-          },
-          "inBottomZone": true,
-          "inTranscript": false,
-          "recall": "\u5168\u90e8\u64a4\u56de",
-          "rows": 2
-        }
-      },
-      {
-        "name": "pending-settled",
-        "bubbles": {
-          "pending": {
-            "width": 410,
-            "height": 47.6875
-          },
-          "settled": {
-            "width": 410,
-            "height": 47.6875
-          }
-        }
-      }
-    ]
-  },
-  "sourceHashes": {
-    "src/renderer/src/App.tsx": "732068b6f321f71f5349d2568adb0c25390c3077ac9c1ed2316f755891289502",
-    "scripts/capture-information-board.cjs": "890ab406d3a3227434bb7378fc9b6bb1669447a1efbba59c1e3cd54674b8dfc3",
-    "scripts/owned-sidebar-native-input.ts": "837233c5a8b01695210a660fe4802077c084fa608ff9c877d312beb181a5d194",
-    "scripts/launch-information-board-acceptance.mjs": "d2de7e4e7123e9ccf0c92e5bbf0174c2912afa585fcc3c779dac78367fefd86a"
-  },
-  "screenshotHashes": {
-    "pending-settled.png": "64e9f98f8af48ad937f235a1ae7cf5f8dffc455a1e2b4e85446f7a9f40a9b890",
-    "steer-narrow.png": "597ae3754f27e23bdf073f89f6065654b325127d316bec30f087b26b49f0e205",
-    "04-maximized-main-dock.png": "ab8857e4c9ea716d26621f3a26dc601a05a3b7ee328fadb2cfebe981a65599f3",
-    "steer-wide-dark.png": "d55c2a64fc52a7c9fd68b90e4c3dd97582e97c4ca3126dd06bef4704ba4fad93",
-    "steer-wide-light.png": "d21d8a215f8fb05691a4909db1a33c6f06b9bba4e68d200fcfd73bf5ba33ecf9",
-    "15-macos-system-sidebar-click.png": "db05fcd9825ce2097d7e291ed6d1da09ba623bf63d42b9872948071834421c76"
-  }
+  ]
 }
