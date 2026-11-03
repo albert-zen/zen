@@ -54,10 +54,16 @@ closed. Immediately before launch, the existing AppServer `dispatchHostTool`
 mutation fence checks current Thread permissions and archival state. Domain
 operations retain their own live owner checks and CAS.
 
-The desktop production launcher has **not yet been wired**: it must supply the
-current generation-bound approval handler through the existing
-AppServerManager/renderer path. An embedding callback and protocol test are not
-claimed as completed desktop UI integration.
+`AppServerManager.hostToolApprovalHandler()` now binds a native Host tool request
+to the current process and Desktop protocol-client generation. It uses the same
+pending approval map, renderer request/resolved events and existing UI response
+path as ordinary tools. Abort, reconnect and Host replacement retire the old
+request/handler; it never creates a synthetic canonical Turn or tool Item.
+
+The production stdio launcher and main/child MCP IPC path are **not yet wired**.
+They must carry that existing generation-bound approval handler to the child
+which owns the actual AgentRuntime ToolEnvironment. The manager tests exercise
+the real child/manager/UI event seam, not packaged Desktop screenshot acceptance.
 
 Thread permission/archive/delete events, Room membership loss, any capability
 Catalog publication and the supplied connection lifetime retire the binding.

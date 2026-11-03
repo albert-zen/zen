@@ -2,7 +2,11 @@ import {
   validateBoardToolRequest,
   type BoardToolRequest,
 } from "../board-host.js";
-import type { ToolExecutionResult } from "../../../../src/tool.js";
+import type {
+  ApprovalHandler,
+  ApprovalRequest,
+  ToolExecutionResult,
+} from "../../../../src/tool.js";
 import { DEFAULT_TOOL_TIMEOUT_MS } from "../../../../src/tool-task.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import {
@@ -115,6 +119,7 @@ export interface ApprovalResolvedEvent {
 }
 
 interface PendingApproval {
+  origin: "protocol" | "host-tool";
   event: ApprovalRequestEvent;
   decision: ApprovalDecision | null;
   client: ZenXProtocolClient;
@@ -1242,6 +1247,91 @@ export class AppServerManager {
     pending.resolve({ decision });
   }
 
+  /** Bind native Host tools to the existing Desktop approval UI generation. */
+  hostToolApprovalHandler(): ApprovalHandler {
+    const client = this.#client;
+    const epoch = this.#processEpoch;
+    if (!client || !epoch || this.#stopping || this.#status.type !== "ready")
+      throw new Error("Host approval UI is not ready");
+    const generation = client.connectionGeneration;
+    const current = () =>
+      this.#client === client &&
+      this.#processEpoch === epoch &&
+      client.connectionGeneration === generation &&
+      !this.#stopping &&
+      this.#status.type === "ready";
+    return async (request: ApprovalRequest): Promise<ApprovalDecision> => {
+      if (!current() || request.signal.aborted) return "cancel";
+      const requestId = randomUUID();
+      const event: ApprovalRequestEvent = {
+        requestId,
+        params: {
+          threadId: request.threadId,
+          turnId: request.turnId,
+          itemId: request.itemId,
+          startedAtMs: Date.now(),
+          environmentId: null,
+          reason: "A tool from the current Host is waiting for your decision.",
+          command: request.command,
+          cwd: request.cwd,
+          ...(request.scope === undefined
+            ? {}
+            : { approvalScope: request.scope }),
+          ...(request.approvalTarget === undefined
+            ? {}
+            : { approvalTarget: { ...request.approvalTarget } }),
+          ...(request.toolName === undefined
+            ? {}
+            : { toolName: request.toolName }),
+          ...(request.toolArguments === undefined
+            ? {}
+            : { toolArguments: structuredClone(request.toolArguments) }),
+          commandActions: [],
+          proposedExecpolicyAmendment: null,
+          networkApprovalContext: null,
+          proposedNetworkPolicyAmendments: null,
+        },
+      };
+      let resolve!: (result: { decision: ApprovalDecision }) => void;
+      const response = new Promise<{ decision: ApprovalDecision }>((done) => {
+        resolve = done;
+      });
+      const pending: PendingApproval = {
+        origin: "host-tool",
+        event,
+        decision: null,
+        client,
+        connectionGeneration: generation,
+        wireRequestId: `host-tool:${requestId}`,
+        resolve,
+      };
+      this.#pendingApprovals.set(requestId, pending);
+      const abort = () =>
+        this.#cancelPendingApprovals((candidate) => candidate === pending);
+      request.signal.addEventListener("abort", abort, { once: true });
+      try {
+        if (request.signal.aborted || !current()) abort();
+        else for (const listener of this.#approvalListeners) listener(event);
+        const result = await response;
+        return current() && !request.signal.aborted
+          ? result.decision
+          : "cancel";
+      } finally {
+        request.signal.removeEventListener("abort", abort);
+        if (this.#pendingApprovals.get(requestId) === pending) {
+          this.#pendingApprovals.delete(requestId);
+          const resolved: ApprovalResolvedEvent = {
+            requestId,
+            threadId: request.threadId,
+            decision: pending.decision ?? "cancel",
+          };
+          for (const listener of this.#approvalResolvedListeners)
+            listener(resolved);
+        }
+      }
+    };
+  }
+
   async stop(
     options: { preserveConnectionAuthority?: boolean } = {},
   ): Promise<void> {
@@ -1398,6 +1488,7 @@ export class AppServerManager {
           const requestId = randomUUID();
           const event = { requestId, params };
           this.#pendingApprovals.set(requestId, {
+            origin: "protocol",
             event,
             decision: null,
             client,
@@ -1451,6 +1542,7 @@ export class AppServerManager {
   ): void {
     const pending = [...this.#pendingApprovals.values()].find(
       (candidate) =>
+        candidate.origin === "protocol" &&
         candidate.client === client &&
         candidate.connectionGeneration === connectionGeneration &&
         candidate.wireRequestId === params.requestId,
