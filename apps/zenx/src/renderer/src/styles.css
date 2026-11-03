@@ -1605,6 +1605,9 @@ button:disabled {
   display: grid;
   gap: inherit;
 }
+.load-earlier-transcript {
+  justify-self: start;
+}
 .new-thread-draft-surface .messages {
   display: grid;
 }

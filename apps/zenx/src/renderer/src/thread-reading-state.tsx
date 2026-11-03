@@ -12,6 +12,7 @@ export function createThreadReadingState() {
   const listeners = new Set<() => void>();
   return {
     scroll: null as { top: number; following: boolean } | null,
+    historyStart: undefined as string | undefined,
     snapshot: () => disclosures,
     subscribe: (listener: () => void) => {
       listeners.add(listener);

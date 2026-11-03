@@ -1,4 +1,5 @@
 export const en = {
+  loadEarlierHistory: "Load earlier history ({{count}} entries)",
   pendingSendSending: "Sending…",
   pendingSendAdmitted: "Admitted; waiting for the conversation to update",
   pendingSendNotSent: "Not sent",
@@ -970,6 +971,7 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  loadEarlierHistory: "加载更早历史（还有 {{count}} 条）",
   pendingSendSending: "正在发送…",
   pendingSendAdmitted: "已接纳，等待会话更新",
   pendingSendNotSent: "未发送",

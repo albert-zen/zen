@@ -975,6 +975,74 @@ function ThreadViewContent({
     () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
     [contextCompactions, transcriptOrder, turns],
   );
+  // Experimental paging boundary, not a canonical/history limit. This is not
+  // equivalent to T3's complete virtualized, searchable transcript viewport.
+  const historyKeys = useMemo(
+    () =>
+      transcriptRows.map((row) =>
+        JSON.stringify([
+          row.type,
+          row.type === "turn" ? row.turn.id : row.compaction.item.id,
+        ]),
+      ),
+    [transcriptRows],
+  );
+  const initialHistory = () => ({
+    owner: readingState,
+    start:
+      readingState.historyStart ??
+      historyKeys[Math.max(0, historyKeys.length - 100)],
+  });
+  const [historyWindow, setHistoryWindow] = useState(initialHistory);
+  const currentHistory =
+    historyWindow.owner === readingState ? historyWindow : initialHistory();
+  const storedHistoryStart = Math.max(
+    0,
+    historyKeys.indexOf(currentHistory.start ?? ""),
+  );
+  const messageNavigation = useContext(MessageTargetNavigationContext);
+  const requestedMessage = messageNavigation?.request;
+  const requestedTurn =
+    requestedMessage && requestedMessage.threadId === thread?.id
+      ? turns.find((turn) =>
+          turn.items.some((item) => item.id === requestedMessage.itemId),
+        )
+      : undefined;
+  const requestedHistoryStart = requestedTurn
+    ? transcriptRows.findIndex(
+        (row) => row.type === "turn" && row.turn.id === requestedTurn.id,
+      )
+    : -1;
+  const historyStart =
+    requestedHistoryStart < 0
+      ? storedHistoryStart
+      : Math.min(storedHistoryStart, requestedHistoryStart);
+  const mountedTranscriptRows = useMemo(
+    () => transcriptRows.slice(historyStart),
+    [transcriptRows, historyStart],
+  );
+  const historyRef = useRef<HTMLDivElement>(null);
+  const historyAnchor = useRef<{
+    owner: typeof readingState;
+    element: Element;
+    top: number;
+    requestId: number | undefined;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const start = historyKeys[historyStart];
+    readingState.historyStart = start;
+    if (
+      historyWindow.owner !== readingState ||
+      historyStart < storedHistoryStart
+    )
+      setHistoryWindow({ owner: readingState, start });
+  }, [
+    readingState,
+    historyKeys,
+    historyStart,
+    historyWindow.owner,
+    storedHistoryStart,
+  ]);
   const pendingApprovals = useMemo(
     () =>
       approvals.filter((approval) => approval.params.threadId === thread?.id),
@@ -1083,6 +1151,28 @@ function ThreadViewContent({
   }, [readingState, saveReadingPosition]);
 
   useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
+
+  useLayoutEffect(() => {
+    const anchor = historyAnchor.current;
+    historyAnchor.current = null;
+    const scroll = scrollRef.current;
+    if (
+      !anchor ||
+      anchor.owner !== readingState ||
+      !anchor.element.isConnected ||
+      !scroll ||
+      anchor.requestId !== messageNavigation?.request?.requestId
+    )
+      return;
+    scroll.scrollTop += anchor.element.getBoundingClientRect().top - anchor.top;
+    observedScrollTop.current = scroll.scrollTop;
+    saveReadingPosition();
+  }, [
+    historyStart,
+    readingState,
+    messageNavigation?.request?.requestId,
+    saveReadingPosition,
+  ]);
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -1511,7 +1601,7 @@ function ThreadViewContent({
   // Composer updates reuse the actual transcript elements, not just TurnBlock bodies.
   const renderedTranscriptRows = useMemo(
     () =>
-      transcriptRows.map((row) =>
+      mountedTranscriptRows.map((row) =>
         row.type === "turn" ? (
           <TurnBlock
             index={row.index}
@@ -1556,7 +1646,7 @@ function ThreadViewContent({
     [
       thread,
       contextPreview,
-      transcriptRows,
+      mountedTranscriptRows,
       runningTurn,
       composer.compaction?.status,
       lastCanonicalTurnEnd,
@@ -1687,7 +1777,34 @@ function ThreadViewContent({
                   </div>
                 ))
               ) : (
-                <div className="transcript-history">
+                <div className="transcript-history" ref={historyRef}>
+                  {historyStart > 0 ? (
+                    <button
+                      className="quiet-button load-earlier-transcript"
+                      type="button"
+                      onClick={() => {
+                        pauseFollowing();
+                        const element = historyRef.current?.querySelector(
+                          ":scope > :not(.load-earlier-transcript)",
+                        );
+                        if (element)
+                          historyAnchor.current = {
+                            owner: readingState,
+                            element,
+                            top: element.getBoundingClientRect().top,
+                            requestId: messageNavigation?.request?.requestId,
+                          };
+                        setHistoryWindow({
+                          owner: readingState,
+                          start: historyKeys[Math.max(0, historyStart - 100)],
+                        });
+                      }}
+                    >
+                      {i18n.t("shell:loadEarlierHistory", {
+                        count: historyStart,
+                      })}
+                    </button>
+                  ) : null}
                   {renderedTranscriptRows}
                 </div>
               )}
