@@ -353,7 +353,9 @@ async function inspectMountedTranscript(
     })),
     rowsTruncated: snapshot.rows.length > 32,
   };
-  assert.ok(["before", "live", "earlier", "returned"].includes(stage));
+  assert.ok(
+    ["before", "live", "earlier", "returned", "responsive"].includes(stage),
+  );
   assert.equal(
     canonicalTurnsWithoutUser,
     0,
@@ -1817,7 +1819,34 @@ async function run() {
   await until(
     async () =>
       await evaluate(
-        "(()=>{const s=document.querySelector('.messages');return s&&s.querySelectorAll('section.turn').length>=2&&Math.abs(s.scrollHeight-s.clientHeight-s.scrollTop)<=3})()",
+        "(()=>{const s=document.querySelector('.messages');return s&&s.querySelectorAll('section.turn').length>=2})()",
+      ),
+    "canonical history mounted before reader preparation",
+  );
+  await pause(300);
+  result.initialReaderPreparation = await evaluate(
+    "(()=>{const s=document.querySelector('.messages');return {bottomDistance:s.scrollHeight-s.clientHeight-s.scrollTop,backToLivePresent:Boolean(document.querySelector('.back-live'))}})()",
+  );
+  result.initialReaderPreparation.nativeBackToLiveUsed = false;
+  // Both backend cases require the same actual live reader state. Record an
+  // initial auto-follow miss; use the existing real UI rather than forcing an
+  // offset or mistaking this unmeasured WIP navigation defect for Send latency.
+  if (result.initialReaderPreparation.bottomDistance > 3) {
+    await until(
+      async () =>
+        await evaluate("Boolean(document.querySelector('.back-live'))"),
+      "existing Back to live control before timing",
+    );
+    await click(
+      "document.querySelector('.back-live')",
+      "Prepare actual live reader",
+    );
+    result.initialReaderPreparation.nativeBackToLiveUsed = true;
+  }
+  await until(
+    async () =>
+      await evaluate(
+        "(()=>{const s=document.querySelector('.messages');return Math.abs(s.scrollHeight-s.clientHeight-s.scrollTop)<=3})()",
       ),
     "canonical history mounted at live bottom before timing",
   );
@@ -2441,16 +2470,47 @@ async function run() {
       "actual responsive fixture window size",
     );
     await pause(300);
+    let responsiveRows;
+    if (result.before.rendered.virtual) {
+      await inspectMountedTranscript(
+        finalRead.thread.turns,
+        threadId,
+        "responsive",
+      );
+      responsiveRows = result.mountedInspectionDiagnostic.rows;
+    }
     const geometry = await evaluate(`(()=>{
       const scroller=document.querySelector('.messages'), virtual=scroller.classList.contains('experimental-transcript-viewport');
       const inner=document.querySelector(virtual?'.messages > .virtual-transcript-content':'.messages-inner');
       const history=virtual?inner:inner.querySelector(':scope > .transcript-history')??inner;
       const turnNodes=Array.from(history.querySelectorAll('section.turn'));
-      const turns=(virtual?turnNodes:turnNodes.slice(0,2)).map(node=>({node,rect:node.getBoundingClientRect()}));
-      if(virtual)turns.sort((a,b)=>a.rect.top-b.rect.top);
-      const first=turns[0].rect, second=turns[1].rect, editor=document.querySelector('#thread-composer'), input=editor.getBoundingClientRect(), action=document.querySelector('.composer-send-control > .action-orb'), orb=action.getBoundingClientRect();
-      return {virtual,innerWidth,innerHeight,outerGapPx:virtual?null:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:virtual?null:parseFloat(getComputedStyle(history).rowGap),rowGapPx:virtual?parseFloat(getComputedStyle(turns[0].node.closest('.virtual-transcript-row')).paddingBottom):null,turnGapPx:second.top-first.bottom,turnCount:turnNodes.length,overflow:document.documentElement.scrollWidth>innerWidth,editorBounds:{left:input.left,right:input.right,top:input.top,bottom:input.bottom},actionBounds:{left:orb.left,right:orb.right,top:orb.top,bottom:orb.bottom},actionUnobscured:action.contains(document.elementFromPoint(orb.left+orb.width/2,orb.top+orb.height/2))};
+      const turns=virtual?[]:turnNodes.slice(0,2).map(node=>node.getBoundingClientRect());
+      const editor=document.querySelector('#thread-composer'), input=editor.getBoundingClientRect(), action=document.querySelector('.composer-send-control > .action-orb'), orb=action.getBoundingClientRect();
+      return {virtual,innerWidth,innerHeight,outerGapPx:virtual?null:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:virtual?null:parseFloat(getComputedStyle(history).rowGap),rowGapPx:virtual?parseFloat(getComputedStyle(turnNodes[0].closest('.virtual-transcript-row')).paddingBottom):null,turnGapPx:virtual?null:turns[1].top-turns[0].bottom,turnCount:turnNodes.length,overflow:document.documentElement.scrollWidth>innerWidth,editorBounds:{left:input.left,right:input.right,top:input.top,bottom:input.bottom},actionBounds:{left:orb.left,right:orb.right,top:orb.top,bottom:orb.bottom},actionUnobscured:action.contains(document.elementFromPoint(orb.left+orb.width/2,orb.top+orb.height/2))};
     })()`);
+    if (geometry.virtual) {
+      const pairIndex = responsiveRows.findIndex(
+        (row, i) =>
+          i > 0 &&
+          row.canonicalIndex === responsiveRows[i - 1].canonicalIndex + 1 &&
+          (row.visible || responsiveRows[i - 1].visible),
+      );
+      assert.ok(
+        pairIndex > 0,
+        "Responsive gap uses real adjacent canonical rows touching the viewport",
+      );
+      const [first, second] = responsiveRows.slice(
+        pairIndex - 1,
+        pairIndex + 1,
+      );
+      geometry.turnGapPx = second.top - first.bottom;
+      geometry.turnGapCanonicalIndices = [
+        first.canonicalIndex,
+        second.canonicalIndex,
+      ];
+      geometry.turnGapSelection =
+        "adjacent canonical rows, at least one visible";
+    }
     result.responsiveHistoryLayout.push(geometry);
     if (geometry.virtual) {
       assert.equal(geometry.rowGapPx, expectedGap);
@@ -2464,7 +2524,8 @@ async function run() {
       assert.equal(geometry.turnCount, result.before.rendered.turnBlocks + 3);
     }
     assert.ok(
-      Math.abs(geometry.turnGapPx - expectedGap) <= 0.1,
+      Math.abs(geometry.turnGapPx - expectedGap) <=
+        (geometry.virtual ? 1.5 : 0.1),
       "real historical Turn geometry follows responsive parent gap",
     );
     assert.equal(

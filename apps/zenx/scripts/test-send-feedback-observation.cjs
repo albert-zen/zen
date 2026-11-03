@@ -1023,8 +1023,11 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
   ])
     assert.ok(source.includes(screenshot));
   assert.ok(
-    source.includes("if(virtual)turns.sort((a,b)=>a.rect.top-b.rect.top)"),
+    source.includes(
+      '"Responsive gap uses real adjacent canonical rows touching the viewport"',
+    ),
   );
+  assert.ok(source.includes('"adjacent canonical rows, at least one visible"'));
   assert.ok(
     source.includes("const rect=virtual?row.getBoundingClientRect():null"),
   );
@@ -1693,5 +1696,82 @@ test("native returned-buffer geometry permits only offscreen retained gaps", asy
   await assert.rejects(
     inspect(canonical, "thread-A", "returned"),
     /Visible rows preserve contiguous/,
+  );
+});
+
+test("responsive gap selects adjacent canonical rows touching the viewport, not retained offscreen fragments", () => {
+  const start = source.indexOf("const pairIndex = responsiveRows.findIndex(");
+  const end = source.indexOf(
+    "\n    }\n    result.responsiveHistoryLayout.push(geometry)",
+    start,
+  );
+  assert.ok(start > 0 && end > start);
+  const select = new Function(
+    "assert",
+    "responsiveRows",
+    "const geometry={};" + source.slice(start, end) + ";return geometry;",
+  );
+  const rows = [
+    { canonicalIndex: 4990, top: -1800, bottom: -1600, visible: false },
+    { canonicalIndex: 4996, top: -727.296875, bottom: -500, visible: false },
+    { canonicalIndex: 5000, top: 100, bottom: 300, visible: true },
+    { canonicalIndex: 5001, top: 324.28125, bottom: 650, visible: true },
+  ];
+  const actual = select(assert, rows);
+  assert.deepEqual(actual.turnGapCanonicalIndices, [5000, 5001]);
+  assert.equal(actual.turnGapPx, 24.28125);
+  assert.throws(
+    () => select(assert, rows.slice(0, 3)),
+    /adjacent canonical rows/,
+  );
+  const tall = select(assert, [
+    { canonicalIndex: 20, top: -700, bottom: -20, visible: false },
+    { canonicalIndex: 21, top: 0, bottom: 900, visible: true },
+    { canonicalIndex: 22, top: 920, bottom: 1600, visible: false },
+  ]);
+  assert.deepEqual(tall.turnGapCanonicalIndices, [20, 21]);
+  assert.equal(tall.turnGapPx, 20);
+});
+
+test("backend pair explicitly prepares and reports real live reader state before timing", () => {
+  const preparation = source.slice(
+    source.indexOf("result.initialReaderPreparation ="),
+    source.indexOf(
+      "result.before =",
+      source.indexOf("result.initialReaderPreparation ="),
+    ),
+  );
+  assert.ok(preparation.includes("bottomDistance > 3"));
+  assert.ok(preparation.includes("await click("));
+  assert.ok(preparation.includes("\"document.querySelector('.back-live')\""));
+  assert.ok(preparation.includes('"Prepare actual live reader"'));
+  assert.ok(preparation.includes("nativeBackToLiveUsed = true"));
+  assert.ok(
+    preparation.includes(
+      "canonical history mounted at live bottom before timing",
+    ),
+  );
+  assert.equal(
+    /scrollTop\s*=/.test(preparation),
+    false,
+    "Never force a test-only offset instead of using the actual UI",
+  );
+  assert.ok(
+    source.indexOf("result.initialReaderPreparation =") <
+      source.indexOf("result.samples = []"),
+  );
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  assert.ok(
+    launch.includes(
+      "initialReaderPreparation: result.initialReaderPreparation",
+    ),
+  );
+  assert.ok(
+    launch.includes(
+      "initialReaderPreparation: capture?.initialReaderPreparation",
+    ),
   );
 });
