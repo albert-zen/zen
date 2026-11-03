@@ -1,0 +1,909 @@
+{
+  "ok": true,
+  "scope": "Synthetic production ThreadView browser fixture. Not full App, packaged, native Host, macOS or Windows acceptance.",
+  "source": {
+    "sourceCommit": "ed8a3b76ac48150c65e4ae597d374dae5e3216d7",
+    "sourceTree": "7d01340a925d6b5bfe12cc57f086c80b83193356",
+    "synthetic": true,
+    "scope": "Production ThreadView, ImagePreparationNotice/projection and CSS in browser. Synthetic ItemList snapshots and fixture navigation only. Not full App, native Host, packaged, physical macOS or Windows acceptance. No user data or image payloads.",
+    "bundleSha256": "009e31ef8dab52c56ba2af7b5dada90cb3ebacfb3f8bf98c663cc7be2448a850",
+    "javascriptSha256": "df10a424d25f49ed2601cf131fe65e298974d74827c1f9a9a92ebd17beb21c81",
+    "cssSha256": "82ec392d6d9ffc9e977ff036eed2d9157959448c87c8c46522a18bda453aa51c",
+    "sources": {
+      "apps/zenx/src/renderer/src/ThreadView.tsx": "510e122c628ff509255dc6f260710dc1b1cf71923a56efd52121c1ce74e12dfb",
+      "apps/zenx/src/renderer/src/ImagePreparationNotice.tsx": "48167280329e710a33cc6e4c7ab536499d74eb3ea55d1965299d428ed81f6ebb",
+      "apps/zenx/src/renderer/src/image-preparation-projection.ts": "334e0b0ba814489ae12020c56bc98efac77a24ec10a0af45c1a4ce584c005564",
+      "apps/zenx/src/renderer/src/styles.css": "f113cec837bc58c6bb62538d433a061d2c0f28e7f9870cfd9949543c0725824e",
+      "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+      "apps/zenx/src/renderer/src/i18n/shell.ts": "4793597ad6395106e67bd8c91609357b47e3e942d3f6585e13092fcfeb2839de",
+      "apps/zenx/test/fixtures/image-preparation-visual.tsx": "314be336f350ccc697dc71e9a673205ef258d087c35c16d309b84a700da33d58",
+      "apps/zenx/scripts/build-image-preparation-preview.mjs": "e7e135474091451ac22cef290e39b7650d9e4812fd1fe1d2680779b74e3d6fdd",
+      "apps/zenx/scripts/capture-image-preparation-preview.mjs": "b3ffc25a9bc4018f7eac696238f7209ac343466e855ebb079ce26948790aa4d6",
+      "apps/zenx/test/image-preparation-preview.test.mjs": "8bcced9de43679c088802d9edf8f70954763bebaff3aab742f75cf45a530138b",
+      ".github/workflows/ci.yml": "4fc6281ee981f1ecba3bda82fd31a831e612d0d593c916216dd7d8721cfc2a85"
+    }
+  },
+  "executable": "/usr/bin/google-chrome",
+  "launchArguments": [
+    "--headless=new",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--remote-debugging-port=0",
+    "--user-data-dir=<isolated synthetic profile>",
+    "about:blank"
+  ],
+  "chromiumSandboxDisabled": false,
+  "cases": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "height": 820,
+      "initial": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 123,
+          "width": 840,
+          "height": 133.84375
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Current"
+      },
+      "expanded": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 2400 × 1800 → 1536 × 1152 (codex-high-v1)",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 123,
+          "width": 840,
+          "height": 177.78125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "keyboard": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 2400 × 1800 → 1536 × 1152 (codex-high-v1)",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 123,
+          "width": 840,
+          "height": 177.78125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "removals": [
+        {
+          "label": "Compacted",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Compacted"
+        },
+        {
+          "label": "Later unavailable",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Later unavailable"
+        },
+        {
+          "label": "Other thread",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Other thread"
+        }
+      ],
+      "retained": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (1)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 123,
+          "width": 840,
+          "height": 111.46875
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Retained only"
+      },
+      "codecOutcomes": [
+        {
+          "label": "Codec unavailable",
+          "noticeCount": 1,
+          "notice": "Image unavailable to model (1)\nNo image pixels were sent for these images. Your original attachments are preserved.\nView image sizes\nImage 1: 4000 × 3000 · unavailable to model (could not decode image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 123,
+            "width": 840,
+            "height": 114.609375
+          },
+          "summaryFocused": true,
+          "status": "Synthetic snapshot: Codec unavailable"
+        },
+        {
+          "label": "Mixed outcome",
+          "noticeCount": 1,
+          "notice": "Model image view: 1 prepared, 1 unavailable\nThe model sees only the prepared images; unavailable images were not sent. Your original attachments are preserved.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 4000 × 3000 · unavailable to model (could not prepare image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 123,
+            "width": 840,
+            "height": 155.40625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Mixed outcome"
+        },
+        {
+          "label": "Codec cold selected",
+          "noticeCount": 1,
+          "notice": "Image unavailable to model (1)\nNo image pixels were sent for these images. Your original attachments are preserved.\nView image sizes\nImage 1: 4000 × 3000 · unavailable to model (could not decode image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 123,
+            "width": 840,
+            "height": 114.65625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Codec cold selected"
+        }
+      ]
+    },
+    {
+      "lang": "zh-CN",
+      "theme": "dark",
+      "width": 390,
+      "height": 600,
+      "initial": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 122,
+          "width": 348,
+          "height": 170.59375
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Current"
+      },
+      "expanded": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：2400 × 1800 → 1536 × 1152（codex-high-v1）",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 122,
+          "width": 348,
+          "height": 251.28125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "keyboard": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：2400 × 1800 → 1536 × 1152（codex-high-v1）",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 122,
+          "width": 348,
+          "height": 251.28125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "removals": [
+        {
+          "label": "Compacted",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Compacted"
+        },
+        {
+          "label": "Later unavailable",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Later unavailable"
+        },
+        {
+          "label": "Other thread",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Other thread"
+        }
+      ],
+      "retained": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（1 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 185,
+          "width": 348,
+          "height": 129.84375
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Retained only"
+      },
+      "codecOutcomes": [
+        {
+          "label": "Codec unavailable",
+          "noticeCount": 1,
+          "notice": "模型无法查看图片（1 张）\n这些图片的像素没有发送给模型；原始附件仍然保留。\n查看图片尺寸\n图片 1：4000 × 3000 · 模型无法查看（图片解码失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 185,
+            "width": 348,
+            "height": 132.9375
+          },
+          "summaryFocused": true,
+          "status": "Synthetic snapshot: Codec unavailable"
+        },
+        {
+          "label": "Mixed outcome",
+          "noticeCount": 1,
+          "notice": "模型图片视图：已处理 1 张，无法查看 1 张\n模型只能看到已处理的图片；无法查看的图片没有发送。原始附件仍然保留。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：4000 × 3000 · 模型无法查看（图片处理失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 185,
+            "width": 348,
+            "height": 228.90625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Mixed outcome"
+        },
+        {
+          "label": "Codec cold selected",
+          "noticeCount": 1,
+          "notice": "模型无法查看图片（1 张）\n这些图片的像素没有发送给模型；原始附件仍然保留。\n查看图片尺寸\n图片 1：4000 × 3000 · 模型无法查看（图片解码失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 185,
+            "width": 348,
+            "height": 133.03125
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Codec cold selected"
+        }
+      ]
+    },
+    {
+      "lang": "zh-CN",
+      "theme": "dark",
+      "width": 1100,
+      "height": 820,
+      "initial": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 135,
+          "width": 840,
+          "height": 133.84375
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Current"
+      },
+      "expanded": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：2400 × 1800 → 1536 × 1152（codex-high-v1）",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 135,
+          "width": 840,
+          "height": 177.78125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "keyboard": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（2 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n此模型不支持原图细节输入，因此使用受限的高细节视图。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：2400 × 1800 → 1536 × 1152（codex-high-v1）",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 135,
+          "width": 840,
+          "height": 177.78125
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "removals": [
+        {
+          "label": "Compacted",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Compacted"
+        },
+        {
+          "label": "Later unavailable",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Later unavailable"
+        },
+        {
+          "label": "Other thread",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Other thread"
+        }
+      ],
+      "retained": {
+        "noticeCount": 1,
+        "notice": "模型图片视图已调整（1 张）\n模型看到的是处理后的图片；原始附件仍然保留。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 1100,
+          "height": 820
+        },
+        "noticeRect": {
+          "x": 130,
+          "y": 135,
+          "width": 840,
+          "height": 111.46875
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Retained only"
+      },
+      "codecOutcomes": [
+        {
+          "label": "Codec unavailable",
+          "noticeCount": 1,
+          "notice": "模型无法查看图片（1 张）\n这些图片的像素没有发送给模型；原始附件仍然保留。\n查看图片尺寸\n图片 1：4000 × 3000 · 模型无法查看（图片解码失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 135,
+            "width": 840,
+            "height": 114.203125
+          },
+          "summaryFocused": true,
+          "status": "Synthetic snapshot: Codec unavailable"
+        },
+        {
+          "label": "Mixed outcome",
+          "noticeCount": 1,
+          "notice": "模型图片视图：已处理 1 张，无法查看 1 张\n模型只能看到已处理的图片；无法查看的图片没有发送。原始附件仍然保留。\n无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。\n查看图片尺寸\n图片 1：4000 × 3000 → 1600 × 1200（codex-high-v1）\n图片 2：4000 × 3000 · 模型无法查看（图片处理失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 135,
+            "width": 840,
+            "height": 155.40625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Mixed outcome"
+        },
+        {
+          "label": "Codec cold selected",
+          "noticeCount": 1,
+          "notice": "模型无法查看图片（1 张）\n这些图片的像素没有发送给模型；原始附件仍然保留。\n查看图片尺寸\n图片 1：4000 × 3000 · 模型无法查看（图片解码失败）",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 1100,
+            "height": 820
+          },
+          "noticeRect": {
+            "x": 130,
+            "y": 135,
+            "width": 840,
+            "height": 114.65625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Codec cold selected"
+        }
+      ]
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "height": 600,
+      "initial": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 82,
+          "width": 348,
+          "height": 188.96875
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Current"
+      },
+      "expanded": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 2400 × 1800 → 1536 × 1152 (codex-high-v1)",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 82,
+          "width": 348,
+          "height": 269.65625
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "keyboard": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (2)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail input is unsupported by this model, so a bounded high-detail view was used.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 2400 × 1800 → 1536 × 1152 (codex-high-v1)",
+        "open": true,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 82,
+          "width": 348,
+          "height": 269.65625
+        },
+        "summaryFocused": true,
+        "status": "Synthetic snapshot: Current"
+      },
+      "removals": [
+        {
+          "label": "Compacted",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Compacted"
+        },
+        {
+          "label": "Later unavailable",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Later unavailable"
+        },
+        {
+          "label": "Other thread",
+          "noticeCount": 0,
+          "notice": null,
+          "open": null,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": null,
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Other thread"
+        }
+      ],
+      "retained": {
+        "noticeCount": 1,
+        "notice": "Model image view adjusted (1)\nThe model sees prepared images. Your original attachments are preserved.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes",
+        "open": false,
+        "overflow": false,
+        "viewport": {
+          "width": 390,
+          "height": 600
+        },
+        "noticeRect": {
+          "x": 16,
+          "y": 167,
+          "width": 348,
+          "height": 148.21875
+        },
+        "summaryFocused": false,
+        "status": "Synthetic snapshot: Retained only"
+      },
+      "codecOutcomes": [
+        {
+          "label": "Codec unavailable",
+          "noticeCount": 1,
+          "notice": "Image unavailable to model (1)\nNo image pixels were sent for these images. Your original attachments are preserved.\nView image sizes\nImage 1: 4000 × 3000 · unavailable to model (could not decode image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 167,
+            "width": 348,
+            "height": 151.3125
+          },
+          "summaryFocused": true,
+          "status": "Synthetic snapshot: Codec unavailable"
+        },
+        {
+          "label": "Mixed outcome",
+          "noticeCount": 1,
+          "notice": "Model image view: 1 prepared, 1 unavailable\nThe model sees only the prepared images; unavailable images were not sent. Your original attachments are preserved.\nOriginal-detail support is unknown for this model, so a bounded high-detail view was used.\nView image sizes\nImage 1: 4000 × 3000 → 1600 × 1200 (codex-high-v1)\nImage 2: 4000 × 3000 · unavailable to model (could not prepare image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 167,
+            "width": 348,
+            "height": 247.28125
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Mixed outcome"
+        },
+        {
+          "label": "Codec cold selected",
+          "noticeCount": 1,
+          "notice": "Image unavailable to model (1)\nNo image pixels were sent for these images. Your original attachments are preserved.\nView image sizes\nImage 1: 4000 × 3000 · unavailable to model (could not decode image)",
+          "open": true,
+          "overflow": false,
+          "viewport": {
+            "width": 390,
+            "height": 600
+          },
+          "noticeRect": {
+            "x": 16,
+            "y": 167,
+            "width": 348,
+            "height": 151.40625
+          },
+          "summaryFocused": false,
+          "status": "Synthetic snapshot: Codec cold selected"
+        }
+      ]
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "en-light-1100-collapsed.png",
+      "sha256": "feaab26868957c069fc3d67bf94455abb4e609b856525bfdb2dcd4b277e0675a"
+    },
+    {
+      "name": "en-light-1100-expanded.png",
+      "sha256": "a28ebaeb45e58a104aa9e3680e4bfe1bbd23ead9a7bd85db47a40e297be1fecf"
+    },
+    {
+      "name": "en-light-1100-keyboard.png",
+      "sha256": "57a2796a25c323fdd7f6b38d662bfe00b11c06947c1068d72045c26556564db4"
+    },
+    {
+      "name": "en-light-1100-compacted.png",
+      "sha256": "d29393d6d4584b3ac2b33bc815ad45c3ed2f904bffea4850dc70c47cbe444fbc"
+    },
+    {
+      "name": "en-light-1100-later-unavailable.png",
+      "sha256": "b73dd8968c1bd19f2aeb407cb0128f46dc897ee02de31ba926b4152e44425e48"
+    },
+    {
+      "name": "en-light-1100-other-thread.png",
+      "sha256": "880c34b14594935417dbfefb4bdab4e49fd6a3409f8d3207c14d683599ae88fb"
+    },
+    {
+      "name": "en-light-1100-codec-unavailable.png",
+      "sha256": "658b3d0591c6453e4e96960d202cbcceb4ccc578eb2ea81753a3fd5e17b2167a"
+    },
+    {
+      "name": "en-light-1100-mixed-outcome.png",
+      "sha256": "db989806a39f8c4b89650e1eacd152f41c8b9e5646707a7817e73378302cdde0"
+    },
+    {
+      "name": "en-light-1100-codec-cold-selected.png",
+      "sha256": "82edc1d813e8d4ef3c6f1104a821c2f21413f0e33675f9a7c16865011fe4ab33"
+    },
+    {
+      "name": "zh-CN-dark-390-collapsed.png",
+      "sha256": "e009cb3ae37da7c45d5149f31fc3d6c7936451e0cc3d36eda480a37178e1bed0"
+    },
+    {
+      "name": "zh-CN-dark-390-expanded.png",
+      "sha256": "eadb060abe88d484c2455827f3e743b7a9b544a6ece0d1759d9d77b4bdd002ab"
+    },
+    {
+      "name": "zh-CN-dark-390-keyboard.png",
+      "sha256": "22df51c1198eea9aef2dd28d6ff9832dd6f391da13f95055a04822f3c63da828"
+    },
+    {
+      "name": "zh-CN-dark-390-compacted.png",
+      "sha256": "9788b23beaad7a2b53f419530373adc46d75c3518f042d7bc3bb411f3ea4aae5"
+    },
+    {
+      "name": "zh-CN-dark-390-later-unavailable.png",
+      "sha256": "c06f089ec96ff1bb36b970cdf2612505f19b85418b9bd1e3fcc30046d2bfe156"
+    },
+    {
+      "name": "zh-CN-dark-390-other-thread.png",
+      "sha256": "56d444cccd60d62a97853d02a838f282032438fa589f4f34b4aa33f3940b1730"
+    },
+    {
+      "name": "zh-CN-dark-390-codec-unavailable.png",
+      "sha256": "64717f17658f77124eb03058d3951309a0e8e652622d25e4fe5ce014ec88be1f"
+    },
+    {
+      "name": "zh-CN-dark-390-mixed-outcome.png",
+      "sha256": "76cdee5148a5d11e04159ae93d1d90ff3804ba3992143f0bfffcd7ff2ba51d24"
+    },
+    {
+      "name": "zh-CN-dark-390-codec-cold-selected.png",
+      "sha256": "62da89f6072c0f4d7a601ce0d566802516c7ca45727907cbf1bd9e2994afe243"
+    },
+    {
+      "name": "zh-CN-dark-1100-collapsed.png",
+      "sha256": "aa19257186d5ee4d366913e233d44887cb736f9953837cec7f97fa6c7109069a"
+    },
+    {
+      "name": "zh-CN-dark-1100-expanded.png",
+      "sha256": "1cb0c64ef1de05ee6884d6607aa1da5b94ff565d0ee5b0a95687e5487f00b887"
+    },
+    {
+      "name": "zh-CN-dark-1100-keyboard.png",
+      "sha256": "99f6170e85d1224c8b5027c055a4117aa31bfb9a9bd59f797c9a550e89ca96d1"
+    },
+    {
+      "name": "zh-CN-dark-1100-compacted.png",
+      "sha256": "07075cf40239d6b2f6417a54ce8d728479fae9c36de13f1f376adc11f7e7d376"
+    },
+    {
+      "name": "zh-CN-dark-1100-later-unavailable.png",
+      "sha256": "d8f3df8bc534424dac9c3cff5443fdbb42980ded73a2aab4b9d092c334ca6ac3"
+    },
+    {
+      "name": "zh-CN-dark-1100-other-thread.png",
+      "sha256": "e694c1355ff409a6b4dc56059fd1ed9c08409f05728a7aeb4ea647af857896f7"
+    },
+    {
+      "name": "zh-CN-dark-1100-codec-unavailable.png",
+      "sha256": "aee16bec8b0291d717f0fda599ee157389f12caf5a2eb2069e935933358ca1ab"
+    },
+    {
+      "name": "zh-CN-dark-1100-mixed-outcome.png",
+      "sha256": "2a7fbfda9f29c9ca6832dd582f2b71a21e3edef06aec63dbca2ea666093be26e"
+    },
+    {
+      "name": "zh-CN-dark-1100-codec-cold-selected.png",
+      "sha256": "a6f98c8167825b92291c6feb1fa3f97d0990479bc4619843554c3d5f36388212"
+    },
+    {
+      "name": "en-light-390-collapsed.png",
+      "sha256": "70d7188a8ba5a8785fc0b6d8f024387e8c422c78a7bb58d8be64a204811645d2"
+    },
+    {
+      "name": "en-light-390-expanded.png",
+      "sha256": "6d07bee277d8d5fe0b30ecbd98ff3dbe5912285acb9f749c86615ad42c0ba059"
+    },
+    {
+      "name": "en-light-390-keyboard.png",
+      "sha256": "f7786d00f4fc06df0b6b2b5633169de658ae84d23d97c3bd022ce43f7152cd28"
+    },
+    {
+      "name": "en-light-390-compacted.png",
+      "sha256": "b1fdd4a02538ac15de5857fe1b949a71af52d9ec9551321fdc79aecc2befb34a"
+    },
+    {
+      "name": "en-light-390-later-unavailable.png",
+      "sha256": "33d3abda22b65cd89ccd89c20c65e1c91d08821d59ebd7d849f0b26b8a1a0f29"
+    },
+    {
+      "name": "en-light-390-other-thread.png",
+      "sha256": "3925dda4f39a29d49a022f1f08bb10f0ef9d01ff7ac7868fe839bd0da6c7f1d1"
+    },
+    {
+      "name": "en-light-390-codec-unavailable.png",
+      "sha256": "5e35a580ea34c0d15a6659ac55fa16185c620660dc4094adb2ee0a96e1d32f7c"
+    },
+    {
+      "name": "en-light-390-mixed-outcome.png",
+      "sha256": "5d99aa7fdca590401d176f066e7af47b1bf274ff9d3289a238c1cbfff1f67901"
+    },
+    {
+      "name": "en-light-390-codec-cold-selected.png",
+      "sha256": "4d1e14d441d7a02216d5ca6d4c9371ecad421512d25cc2674751c33fc2108879"
+    }
+  ],
+  "errors": []
+}

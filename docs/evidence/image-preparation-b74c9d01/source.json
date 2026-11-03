@@ -1,0 +1,22 @@
+{
+  "sourceCommit": "ed8a3b76ac48150c65e4ae597d374dae5e3216d7",
+  "sourceTree": "7d01340a925d6b5bfe12cc57f086c80b83193356",
+  "synthetic": true,
+  "scope": "Production ThreadView, ImagePreparationNotice/projection and CSS in browser. Synthetic ItemList snapshots and fixture navigation only. Not full App, native Host, packaged, physical macOS or Windows acceptance. No user data or image payloads.",
+  "bundleSha256": "009e31ef8dab52c56ba2af7b5dada90cb3ebacfb3f8bf98c663cc7be2448a850",
+  "javascriptSha256": "df10a424d25f49ed2601cf131fe65e298974d74827c1f9a9a92ebd17beb21c81",
+  "cssSha256": "82ec392d6d9ffc9e977ff036eed2d9157959448c87c8c46522a18bda453aa51c",
+  "sources": {
+    "apps/zenx/src/renderer/src/ThreadView.tsx": "510e122c628ff509255dc6f260710dc1b1cf71923a56efd52121c1ce74e12dfb",
+    "apps/zenx/src/renderer/src/ImagePreparationNotice.tsx": "48167280329e710a33cc6e4c7ab536499d74eb3ea55d1965299d428ed81f6ebb",
+    "apps/zenx/src/renderer/src/image-preparation-projection.ts": "334e0b0ba814489ae12020c56bc98efac77a24ec10a0af45c1a4ce584c005564",
+    "apps/zenx/src/renderer/src/styles.css": "f113cec837bc58c6bb62538d433a061d2c0f28e7f9870cfd9949543c0725824e",
+    "apps/zenx/src/renderer/src/theme.css": "6fe99f043bb28cc00757e6450e92241222a6714a83ff6737d3dd34a105ce8271",
+    "apps/zenx/src/renderer/src/i18n/shell.ts": "4793597ad6395106e67bd8c91609357b47e3e942d3f6585e13092fcfeb2839de",
+    "apps/zenx/test/fixtures/image-preparation-visual.tsx": "314be336f350ccc697dc71e9a673205ef258d087c35c16d309b84a700da33d58",
+    "apps/zenx/scripts/build-image-preparation-preview.mjs": "e7e135474091451ac22cef290e39b7650d9e4812fd1fe1d2680779b74e3d6fdd",
+    "apps/zenx/scripts/capture-image-preparation-preview.mjs": "b3ffc25a9bc4018f7eac696238f7209ac343466e855ebb079ce26948790aa4d6",
+    "apps/zenx/test/image-preparation-preview.test.mjs": "8bcced9de43679c088802d9edf8f70954763bebaff3aab742f75cf45a530138b",
+    ".github/workflows/ci.yml": "4fc6281ee981f1ecba3bda82fd31a831e612d0d593c916216dd7d8721cfc2a85"
+  }
+}
