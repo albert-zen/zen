@@ -19,7 +19,10 @@ import { resolveConfig } from "electron-vite";
 import { build } from "vite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { BUNDLED_MCP_LICENSE_PACKAGES } from "../scripts/package-zenx-portable.mjs";
+import {
+  BUNDLED_MCP_LICENSE_PACKAGES,
+  stageImageCodec,
+} from "../scripts/package-zenx-portable.mjs";
 import { stageStorageWriter } from "../scripts/stage-storage-writer.mjs";
 import { createLiveUserMcpHost } from "./fixtures/live-user-mcp-host.js";
 
@@ -127,6 +130,7 @@ test(
         dereference: true,
       });
       await stageStorageWriter(repository, app);
+      await stageImageCodec(repository, app);
       await writeFile(path.join(app, "package.json"), '{"type":"module"}\n');
       await assert.rejects(
         access(path.join(app, "node_modules", "@modelcontextprotocol")),

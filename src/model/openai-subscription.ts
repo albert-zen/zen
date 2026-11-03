@@ -465,6 +465,7 @@ async function toResponsesInput(
         const bytes = await attachments.read(part.attachment);
         content.push({
           type: "input_image",
+          ...(part.detail === undefined ? {} : { detail: part.detail }),
           image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
         });
       }

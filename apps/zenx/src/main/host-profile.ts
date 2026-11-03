@@ -918,6 +918,12 @@ function validateStructuredModelCatalogEntry(
       defaultReasoningEffort: value.defaultReasoningEffort,
       inputModalities: value.inputModalities as Array<"text" | "image"> | null,
       contextWindow: value.contextWindow,
+      ...(value.supportsImageDetailOriginal === undefined
+        ? {}
+        : {
+            supportsImageDetailOriginal: value.supportsImageDetailOriginal as
+              boolean | null,
+          }),
     });
     const { isDefault: _isDefault, ...entry } = normalized;
     return entry;

@@ -1,3 +1,5 @@
+import { imageUnavailableNotice } from "./image-preparation-notice.js";
+import type { AttachmentRef } from "./attachment-ref.js";
 import { bindModelMediaOrigin } from "./model-media-origin.js";
 import { parseUserQuestionReply } from "./user-question.js";
 import {
@@ -36,7 +38,8 @@ export type ContextSourceKind =
   | "tool_definitions"
   | "context_notice"
   | "auxiliary_input"
-  | "media_unavailable";
+  | "media_unavailable"
+  | "image_preparation";
 export interface ContextSource {
   kind: ContextSourceKind;
   /** Legacy compatibility ordinal, not an execution revision or a model-visible ID. */
@@ -141,6 +144,7 @@ const sourceKinds: readonly ContextSourceKind[] = [
   "context_notice",
   "auxiliary_input",
   "media_unavailable",
+  "image_preparation",
 ];
 const metadataKeys = new Set([
   "questionReply",
@@ -176,6 +180,7 @@ const metadataKeys = new Set([
   "summaryOffset",
   "summaryLength",
   "historicalSnapshot",
+  "imagePreparation",
 ]);
 
 /** Strict at the writer boundary: unknown runtime variants/fields cannot leak into ItemList. */
@@ -500,6 +505,170 @@ export function decodeContextItem(value: unknown): ContextItem {
     default:
       throw new Error(`Not a semantic Item kind: ${String(item.kind)}`);
   }
+  if (source.kind === "image_preparation") {
+    if (item.kind !== "message" || item.role !== "user")
+      throw Error("Image preparation must be a user content overlay");
+    const metadata = record(source.metadata, "image preparation metadata");
+    keys(
+      metadata,
+      ["onlySampleId", "selection", "imagePreparation"],
+      "image preparation metadata",
+    );
+    string(metadata.onlySampleId, "image preparation sample", false);
+    const selection = record(metadata.selection, "image preparation selection");
+    keys(
+      selection,
+      ["providerProfileId", "modelId", "reasoningEffort"],
+      "image preparation selection",
+    );
+    string(selection.providerProfileId, "providerProfileId", false);
+    string(selection.modelId, "modelId", false);
+    const preparation = record(metadata.imagePreparation, "imagePreparation");
+    keys(
+      preparation,
+      [
+        "profile",
+        "occurrence",
+        "supportsImageDetailOriginal",
+        "originalAttachment",
+        "requestedDetail",
+        "outcome",
+        "reason",
+      ],
+      "imagePreparation",
+    );
+    if (
+      preparation.profile !== "codex-high-v1" &&
+      preparation.profile !== "codex-original-v1"
+    )
+      throw Error("Unknown image preparation profile");
+    const occurrence = record(
+      preparation.occurrence,
+      "image preparation occurrence",
+    );
+    keys(
+      occurrence,
+      ["itemId", "field", "partIndex", "sha256"],
+      "image preparation occurrence",
+    );
+    string(occurrence.itemId, "itemId", false);
+    if (
+      (occurrence.field !== "content" && occurrence.field !== "modelContent") ||
+      !Number.isSafeInteger(occurrence.partIndex) ||
+      Number(occurrence.partIndex) < 0 ||
+      typeof occurrence.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(occurrence.sha256)
+    )
+      throw Error("Invalid image preparation occurrence");
+    if (
+      preparation.requestedDetail !== undefined &&
+      preparation.requestedDetail !== "high" &&
+      preparation.requestedDetail !== "original"
+    )
+      throw Error("Invalid requested image detail");
+    if (
+      preparation.supportsImageDetailOriginal !== undefined &&
+      preparation.supportsImageDetailOriginal !== null &&
+      typeof preparation.supportsImageDetailOriginal !== "boolean"
+    )
+      throw Error("Invalid original image detail capability");
+    if (preparation.originalAttachment !== undefined) {
+      validateUserInput(
+        [{ type: "image", attachment: preparation.originalAttachment }],
+        "originalAttachment",
+      );
+      if (
+        (preparation.originalAttachment as { sha256: string }).sha256 !==
+        occurrence.sha256
+      )
+        throw Error("Prepared view original does not match its occurrence");
+    }
+    const outcome =
+      preparation.outcome === undefined ? "prepared" : preparation.outcome;
+    if (outcome !== "prepared" && outcome !== "unavailable")
+      throw Error("Unknown image preparation outcome");
+    const originalDetail = preparation.profile === "codex-original-v1";
+    if (originalDetail && preparation.supportsImageDetailOriginal !== true)
+      throw Error("Original image profile requires explicit frozen capability");
+    const overlay = content.parts as UserInput;
+    if (outcome === "unavailable") {
+      if (
+        preparation.originalAttachment === undefined ||
+        preparation.requestedDetail === undefined ||
+        preparation.supportsImageDetailOriginal === undefined
+      )
+        throw Error(
+          "Unavailable image requires its original and frozen preparation choice",
+        );
+      if (
+        originalDetail !==
+        (preparation.requestedDetail === "original" &&
+          preparation.supportsImageDetailOriginal === true)
+      )
+        throw Error(
+          "Unavailable image profile does not match its frozen detail capability",
+        );
+      if (
+        preparation.reason !== "image_decode_failed" &&
+        preparation.reason !== "image_processing_failed"
+      )
+        throw Error("Unknown unavailable image reason");
+      if (
+        overlay.length !== 1 ||
+        overlay[0]?.type !== "text" ||
+        overlay[0].text !== content.text
+      )
+        throw Error(
+          "Unavailable image requires one persisted text notice and no pixels",
+        );
+      const originalRef = record(
+        preparation.originalAttachment,
+        "unavailable image original",
+      );
+      keys(
+        originalRef,
+        ["type", "sha256", "mediaType", "byteLength", "width", "height"],
+        "unavailable image original",
+      );
+      if (
+        content.text !==
+        imageUnavailableNotice(
+          preparation.reason,
+          preparation.originalAttachment as unknown as AttachmentRef,
+        )
+      )
+        throw Error(
+          "Unavailable image notice does not match its safe template",
+        );
+    } else {
+      if (preparation.reason !== undefined)
+        throw Error("Prepared image cannot carry an unavailable reason");
+      if (
+        overlay.length !== 2 ||
+        overlay[0]?.type !== "text" ||
+        overlay[1]?.type !== "image" ||
+        overlay[0].text !== content.text
+      )
+        throw Error(
+          "Image preparation requires one persisted notice and image",
+        );
+      const ref = overlay[1].attachment;
+      if (originalDetail && overlay[1].detail !== "original")
+        throw Error("Original profile requires original image detail");
+      if (
+        ref.width === undefined ||
+        ref.height === undefined ||
+        Math.max(ref.width, ref.height) > (originalDetail ? 6000 : 2048) ||
+        Math.ceil(ref.width / 32) * Math.ceil(ref.height / 32) >
+          (originalDetail ? 10000 : 2500)
+      )
+        throw Error("Prepared image exceeds its profile");
+    }
+  } else if (
+    source.metadata !== undefined &&
+    "imagePreparation" in (source.metadata as object)
+  )
+    throw Error("Image preparation metadata requires its Host source");
   return structuredClone(value) as ContextItem;
 }
 
@@ -638,6 +807,26 @@ export function compileItemList(
         : [],
     ),
   );
+  const imagePreparations = new Map<string, ContextItem>();
+  for (const item of selected) {
+    if (item.source.kind !== "image_preparation") continue;
+    const preparedSelection = item.source.metadata?.selection as {
+      providerProfileId: string;
+      modelId: string;
+    };
+    if (
+      options.selection !== undefined &&
+      (preparedSelection.providerProfileId !==
+        options.selection.providerProfileId ||
+        preparedSelection.modelId !== options.selection.modelId)
+    )
+      throw Error("Image preparation selection does not match this sample");
+    const preparation = item.source.metadata?.imagePreparation as
+      { occurrence?: unknown } | undefined;
+    if (item.kind !== "message" || preparation?.occurrence === undefined)
+      throw new Error("Invalid image preparation overlay");
+    imagePreparations.set(occurrenceKey(preparation.occurrence), item);
+  }
   const projectParts = (item: ContextItem, content: UserInput): UserInput =>
     content.flatMap<UserInput[number]>((part, index) => {
       if (part.type === "text") return [structuredClone(part)];
@@ -660,6 +849,17 @@ export function compileItemList(
       };
       if (!supportedMedia.has(part.type) || omitted.has(occurrenceKey(origin)))
         return [];
+      const preparation =
+        part.type === "image"
+          ? imagePreparations.get(occurrenceKey(origin))
+          : undefined;
+      if (preparation?.kind === "message")
+        return preparation.content.parts.map((prepared) => {
+          const projected = structuredClone(prepared);
+          if (projected.type === "image")
+            bindModelMediaOrigin(projected, origin);
+          return projected;
+        });
       const projected = structuredClone(part);
       bindModelMediaOrigin(projected, origin);
       return [projected];
@@ -670,6 +870,7 @@ export function compileItemList(
   for (const item of selected) {
     switch (item.kind) {
       case "message":
+        if (item.source.kind === "image_preparation") break;
         if (item.role === "user")
           messages.push({
             role: "user",
@@ -825,7 +1026,9 @@ function parts(value: unknown, label: string): void {
       p,
       p.type === "text"
         ? ["type", "text", "skillSource"]
-        : ["type", "attachment"],
+        : p.type === "image"
+          ? ["type", "attachment", "detail"]
+          : ["type", "attachment"],
       label,
     );
     // Empty observed assistant/tool text is real content, not invalid user ingress.

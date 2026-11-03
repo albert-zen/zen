@@ -322,7 +322,9 @@ export function sampledMediaOccurrences(
   inputModalities?: readonly string[] | null,
   rejectedParts?: readonly object[],
 ): RecoveryMediaOccurrence[] {
-  const supported = new Set(inputModalities ?? ["text"]);
+  // Unknown follows the compiler's existing attempt semantics. This closes a
+  // pre-existing recovery gap; only actually projected parts can be nominated.
+  const supported = new Set(inputModalities ?? ["text", "image", "audio"]);
   const origins = new Map<object, RecoveryMediaOccurrence>();
   for (const item of items) {
     const source = itemContent(item);
@@ -345,12 +347,8 @@ export function sampledMediaOccurrences(
         : message.role === "tool"
           ? message.modelContent
           : undefined;
-    const seen = new Set<string>();
     for (const part of content ?? []) {
       if (part.type === "text" || !supported.has(part.type)) continue;
-      const key = `${part.type}:${part.attachment.sha256}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
       if (rejectedParts !== undefined && !rejectedParts.includes(part))
         continue;
       const origin = modelMediaOrigin(part) ?? origins.get(part);

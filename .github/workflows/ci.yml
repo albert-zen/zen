@@ -92,6 +92,21 @@ jobs:
           path: ${{ runner.temp }}/zenx-send-preparation
           if-no-files-found: warn
           retention-days: 14
+      - name: Capture image preparation notice (synthetic production ThreadView)
+        if: ${{ !cancelled() && steps.zenx-dependencies.outcome == 'success' && steps.zenx-fonts.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          node --test apps/zenx/test/image-preparation-preview.test.mjs
+          node apps/zenx/scripts/build-image-preparation-preview.mjs "${{ runner.temp }}/zenx-image-preparation"
+          node apps/zenx/scripts/capture-image-preparation-preview.mjs "${{ runner.temp }}/zenx-image-preparation"
+      - name: Retain image preparation screenshots and provenance even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zenx-image-preparation-${{ github.sha }}
+          path: ${{ runner.temp }}/zenx-image-preparation
+          if-no-files-found: warn
+          retention-days: 14
       - name: Capture titlebar leading-safe-area matrix (synthetic production components)
         run: |
           node apps/zenx/scripts/build-titlebar-safe-area-preview.mjs "${{ runner.temp }}/zenx-titlebar-safe-area"
