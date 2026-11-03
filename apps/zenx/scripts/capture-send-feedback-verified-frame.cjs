@@ -1729,7 +1729,57 @@ function invokeProductSelectAll() {
   selectAll.click(selectAll, window, {});
 }
 
-async function checkNativeSelectAll(canonicalTurns, samples) {
+async function reloadOwnedRenderer() {
+  let reloadTimer, reloadFinished;
+  try {
+    await new Promise((resolve, reject) => {
+      reloadFinished = resolve;
+      window.webContents.once("did-finish-load", reloadFinished);
+      reloadTimer = setTimeout(
+        () => reject(Error("Owned renderer reload timed out")),
+        30000,
+      );
+      window.webContents.reload();
+    });
+  } finally {
+    clearTimeout(reloadTimer);
+    window.webContents.removeListener("did-finish-load", reloadFinished);
+  }
+}
+
+async function snapshotNativeCopySelection() {
+  // Snapshot only the owned empty composer intersected by native page Selection.
+  // Placeholder text and node identities remain private to this renderer.
+  assert.equal(
+    await evaluate(
+      `(()=>{const b=window.__nativeSelectAllQuality,s=getSelection(),e=document.querySelector('#thread-composer');b.text=s.toString();b.anchorNode=s.anchorNode;b.focusNode=s.focusNode;b.anchorOffset=s.anchorOffset;b.focusOffset=s.focusOffset;
+      const node=e instanceof HTMLTextAreaElement?e:null,length=node?.placeholder.length??0,bounded=length>0&&length<=128,intersects=Boolean(node?.isConnected&&s.rangeCount===1&&s.getRangeAt(0).intersectsNode(node));
+      b.copyComposer={node,placeholder:bounded?node.placeholder:'',length,intersects,eligible:Boolean(bounded&&intersects&&node.value.length===0&&node.matches(':placeholder-shown')&&node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible')};
+      return b.text.length>0})()`,
+    ),
+    true,
+  );
+}
+
+async function observeNativeCopy(copied) {
+  const copy = await evaluate(`(async()=>{
+      await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
+      const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
+      const lf=text=>text.replace(/\\r\\n?/g,'\\n'),nbsp=text=>text.replace(/\\u00a0/g,' '),collapsed=text=>text.replace(/\\s+/g,' '),nonWhitespace=text=>text.replace(/\\s/g,'');
+      const counts=(text,prefix)=>Object.fromEntries([['UTF16Length',text.length],['CRCount',text.split('\\r').length-1],['LFCount',text.split('\\n').length-1],['NBSPCount',text.split('\\u00a0').length-1],['TABCount',text.split('\\t').length-1]].map(([key,value])=>[prefix+key,value]));
+      const c=b.copyComposer??{node:null,placeholder:'',length:0,intersects:false,eligible:false},e=document.querySelector('#thread-composer'),p=c.placeholder,token=p+'\\n';
+      const stable=Boolean(c.node&&e===c.node&&e.isConnected&&e.placeholder===p&&e.value.length===0&&e.matches(':placeholder-shown')),at=p?copied.indexOf(p):-1;
+      const exact=Boolean(c.eligible&&stable&&p&&!b.text.includes(p)&&at>=0&&copied.indexOf(p,at+1)<0&&copied.length-b.text.length===token.length&&copied.slice(at,at+token.length)===token&&copied.slice(0,at)+copied.slice(at+token.length)===b.text);
+      return {...counts(b.text,'selected'),...counts(copied,'copied'),copyComposerEligible:c.eligible,copySelectionIntersectsComposer:c.intersects,copyComposerSnapshotStable:stable,copyPlaceholderUTF16Length:c.length,clipboardAddsOnlyComposerPlaceholderLF:exact,clipboardPlaceholderInsertionAtStart:exact&&at===0,clipboardPlaceholderInsertionAtEnd:exact&&at+token.length===copied.length,clipboardPlaceholderInsertionAfterCanonicalMessages:exact&&b.orderedMessages(copied.slice(0,at))===10006,clipboardEqualAfterLF:lf(copied)===lf(b.text),clipboardEqualAfterEdgeTrim:copied.trim()===b.text.trim(),clipboardEqualAfterNBSP:nbsp(copied)===nbsp(b.text),clipboardEqualAfterLFAndNBSP:lf(nbsp(copied))===lf(nbsp(b.text)),clipboardEqualAfterCollapsedWhitespace:collapsed(copied)===collapsed(b.text),clipboardEqualNonWhitespace:nonWhitespace(copied)===nonWhitespace(b.text),clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
+    })()`);
+  return copy;
+}
+
+async function prepareNativeSelectAll(
+  canonicalTurns,
+  samples,
+  fullDomControl = false,
+) {
   assert.equal(result.seed.synthetic, true);
   assert.equal(result.seed.userMessageCount, 5000);
   assert.equal(result.fixtureModel.provider, "fake");
@@ -1780,17 +1830,22 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   const prepared = await evaluate(`(()=>{
     const scroll=document.querySelector('.messages');
     const anchor=()=>{const s=document.querySelector('.messages'),bounds=s.getBoundingClientRect(),top=Math.max(0,bounds.top),bottom=Math.min(innerHeight,bounds.bottom,document.querySelector('.bottom-zone')?.getBoundingClientRect().top??innerHeight);const row=Array.from(s.querySelectorAll('[data-transcript-row-key]')).filter(n=>n.getBoundingClientRect().bottom>top).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0],rect=row?.getBoundingClientRect();return row&&rect.top<bottom&&rect.bottom>top?{key:row.dataset.transcriptRowKey,offset:rect.top-bounds.top}:null};
-    const expectedIds=${JSON.stringify(users.map((user) => user.id))},markers=${JSON.stringify(markers)},messages=${JSON.stringify(messages)},before=anchor();
+    const expectedIds=${JSON.stringify(users.map((user) => user.id))},markers=${JSON.stringify(markers)},messages=${JSON.stringify(messages)},before=${fullDomControl}?null:anchor();
     const normalize=text=>text.replace(/\\s+/g,' ').trim(),messageTexts=messages.map(message=>normalize(message.text));
     const orderedMessages=text=>{text=normalize(text);let end=0,count=0;for(const expected of messageTexts){const at=text.indexOf(expected,end);if(at<0)break;end=at+expected.length;count++;}return count};
     const lastAssistant=text=>normalize(text).includes(messageTexts.at(-1));
     const orderedMarkers=text=>{let end=0,count=0;for(const marker of markers){const at=text.indexOf(marker,end);if(at<0)break;end=at+marker.length;count++;}return count};
     window.__nativeSelectAllQuality={before,anchor,orderedMarkers,orderedMessages,lastAssistant,inspect:()=>{
-      const s=document.querySelector('.messages'),selection=getSelection(),text=selection?.toString()??'',ids=Array.from(s.querySelectorAll('article.user-row')).map(n=>n.dataset.sentMessageId),rows=Array.from(s.querySelectorAll('article.user-row,article.agent-copy')),current=anchor();
-      return {fullDom:s.dataset.nativeTranscriptSelection==='complete',mountedUserRows:ids.length,canonicalOrder:ids.length===expectedIds.length&&ids.every((id,i)=>id===expectedIds[i]),mountedMessageRows:rows.length,canonicalMessageOrder:rows.length===messages.length&&rows.every((row,i)=>row.matches('article.user-row')?messages[i].type==='userMessage'&&row.dataset.sentMessageId===messages[i].id:messages[i].type==='agentMessage'&&row.dataset.readMessageId===messages[i].id),selectedMessageCount:orderedMessages(text),fullLastAssistantSelected:lastAssistant(text),selectedMarkerCount:orderedMarkers(text),earliestMarkerSelected:text.includes(markers[0]),latestMarkerSelected:text.includes(markers.at(-1)),selectionActive:Boolean(selection&&!selection.isCollapsed),readerAnchorPreserved:Boolean(before&&current&&before.key===current.key&&Math.abs(before.offset-current.offset)<=2)};
+      const s=document.querySelector('.messages'),selection=getSelection(),text=selection?.toString()??'',ids=Array.from(s.querySelectorAll('article.user-row')).map(n=>n.dataset.sentMessageId),rows=Array.from(s.querySelectorAll('article.user-row,article.agent-copy')),current=${fullDomControl}?null:anchor();
+      return {fullDom:${fullDomControl}?!s.classList.contains('experimental-transcript-viewport')&&!s.hasAttribute('data-native-transcript-selection'):s.dataset.nativeTranscriptSelection==='complete',mountedUserRows:ids.length,canonicalOrder:ids.length===expectedIds.length&&ids.every((id,i)=>id===expectedIds[i]),mountedMessageRows:rows.length,canonicalMessageOrder:rows.length===messages.length&&rows.every((row,i)=>row.matches('article.user-row')?messages[i].type==='userMessage'&&row.dataset.sentMessageId===messages[i].id:messages[i].type==='agentMessage'&&row.dataset.readMessageId===messages[i].id),selectedMessageCount:orderedMessages(text),fullLastAssistantSelected:lastAssistant(text),selectedMarkerCount:orderedMarkers(text),earliestMarkerSelected:text.includes(markers[0]),latestMarkerSelected:text.includes(markers.at(-1)),selectionActive:Boolean(selection&&!selection.isCollapsed),readerAnchorPreserved:Boolean(before&&current&&before.key===current.key&&Math.abs(before.offset-current.offset)<=2)};
     }};
     return {boundedBefore:scroll.querySelectorAll('section.turn').length<200,pausedBefore:Boolean(document.querySelector('.back-live')),anchorCaptured:Boolean(before)};
   })()`);
+  return prepared;
+}
+
+async function checkNativeSelectAll(canonicalTurns, samples) {
+  const prepared = await prepareNativeSelectAll(canonicalTurns, samples);
   result.nativeSelectAllQuality = { ...prepared, afterTiming: true };
   assert.equal(
     prepared.boundedBefore && prepared.pausedBefore && prepared.anchorCaptured,
@@ -1814,17 +1869,7 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   result.nativeSelectAllQuality.menuToSelectionMs =
     performance.now() - menuStarted;
   assert.equal(result.nativeSelectAllQuality.readerAnchorPreserved, true);
-  // Snapshot only the owned empty composer intersected by native page Selection.
-  // Placeholder text and node identities remain private to this renderer.
-  assert.equal(
-    await evaluate(
-      `(()=>{const b=window.__nativeSelectAllQuality,s=getSelection(),e=document.querySelector('#thread-composer');b.text=s.toString();b.anchorNode=s.anchorNode;b.focusNode=s.focusNode;b.anchorOffset=s.anchorOffset;b.focusOffset=s.focusOffset;
-      const node=e instanceof HTMLTextAreaElement?e:null,length=node?.placeholder.length??0,bounded=length>0&&length<=128,intersects=Boolean(node?.isConnected&&s.rangeCount===1&&s.getRangeAt(0).intersectsNode(node));
-      b.copyComposer={node,placeholder:bounded?node.placeholder:'',length,intersects,eligible:Boolean(bounded&&intersects&&node.value.length===0&&node.matches(':placeholder-shown')&&node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible')};
-      return b.text.length>0})()`,
-    ),
-    true,
-  );
+  await snapshotNativeCopySelection();
   // This disposable CI runner must have no pre-existing clipboard data. Never read it.
   assert.deepEqual(
     clipboard.availableFormats(),
@@ -1845,16 +1890,7 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
       "native Cocoa Copy updates the owned synthetic clipboard",
     );
     const copied = clipboard.readText();
-    const copy = await evaluate(`(async()=>{
-      await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
-      const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
-      const lf=text=>text.replace(/\\r\\n?/g,'\\n'),nbsp=text=>text.replace(/\\u00a0/g,' '),collapsed=text=>text.replace(/\\s+/g,' '),nonWhitespace=text=>text.replace(/\\s/g,'');
-      const counts=(text,prefix)=>Object.fromEntries([['UTF16Length',text.length],['CRCount',text.split('\\r').length-1],['LFCount',text.split('\\n').length-1],['NBSPCount',text.split('\\u00a0').length-1],['TABCount',text.split('\\t').length-1]].map(([key,value])=>[prefix+key,value]));
-      const c=b.copyComposer??{node:null,placeholder:'',length:0,intersects:false,eligible:false},e=document.querySelector('#thread-composer'),p=c.placeholder,token=p+'\\n';
-      const stable=Boolean(c.node&&e===c.node&&e.isConnected&&e.placeholder===p&&e.value.length===0&&e.matches(':placeholder-shown')),at=p?copied.indexOf(p):-1;
-      const exact=Boolean(c.eligible&&stable&&p&&!b.text.includes(p)&&at>=0&&copied.indexOf(p,at+1)<0&&copied.length-b.text.length===token.length&&copied.slice(at,at+token.length)===token&&copied.slice(0,at)+copied.slice(at+token.length)===b.text);
-      return {...counts(b.text,'selected'),...counts(copied,'copied'),copyComposerEligible:c.eligible,copySelectionIntersectsComposer:c.intersects,copyComposerSnapshotStable:stable,copyPlaceholderUTF16Length:c.length,clipboardAddsOnlyComposerPlaceholderLF:exact,clipboardPlaceholderInsertionAtStart:exact&&at===0,clipboardPlaceholderInsertionAtEnd:exact&&at+token.length===copied.length,clipboardPlaceholderInsertionAfterCanonicalMessages:exact&&b.orderedMessages(copied.slice(0,at))===10006,clipboardEqualAfterLF:lf(copied)===lf(b.text),clipboardEqualAfterEdgeTrim:copied.trim()===b.text.trim(),clipboardEqualAfterNBSP:nbsp(copied)===nbsp(b.text),clipboardEqualAfterLFAndNBSP:lf(nbsp(copied))===lf(nbsp(b.text)),clipboardEqualAfterCollapsedWhitespace:collapsed(copied)===collapsed(b.text),clipboardEqualNonWhitespace:nonWhitespace(copied)===nonWhitespace(b.text),clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
-    })()`);
+    const copy = await observeNativeCopy(copied);
     Object.assign(result.nativeSelectAllQuality, copy);
     // Endpoint/body failures remain immediate. Raw equality is sticky at final acceptance.
     assert.equal(copy.selectionSurvivesCopy, true);
@@ -1904,6 +1940,155 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   assert.equal(await evaluate("delete window.__nativeSelectAllQuality"), true);
 }
 
+// Same owned App, Host and canonical Thread, with only the two experiment keys removed.
+async function checkFullDomNativeCopy(canonicalTurns, samples, threadTarget) {
+  const control = (result.nativeFullDomCopyControl = {
+    afterVirtualAssertions: true,
+    completed: false,
+  });
+  const sidebarSelectionScroll = result.sidebarSelectionScroll;
+  const focused = () =>
+    process.platform === "darwin" &&
+    window.isFocused() &&
+    window.webContents.isFocused() &&
+    BrowserWindow.getFocusedWindow() === window &&
+    window.webContents.focusedFrame === window.webContents.mainFrame;
+  let ownsClipboard = false;
+  try {
+    window.setBounds({ ...window.getBounds(), width: 1280, height: 677 });
+    await until(
+      async () => evaluate("innerWidth===1280&&innerHeight===677"),
+      "full DOM control window bounds",
+    );
+    await evaluate(
+      "(()=>{sessionStorage.removeItem('zenx.experimental.virtualTranscript');sessionStorage.removeItem('zenx.experimental.virtualTranscriptFind');return true})()",
+    );
+    await reloadOwnedRenderer();
+    await until(
+      async () =>
+        evaluate(
+          "Boolean(document.querySelector('.app-shell')&&window.zenx?.protocol&&sessionStorage.getItem('zenx.experimental.virtualTranscript')===null&&sessionStorage.getItem('zenx.experimental.virtualTranscriptFind')===null)",
+        ),
+      "same App remounted with experiments default-off",
+    );
+    await until(
+      async () =>
+        evaluate("window.zenx.protocol.getStatus().then(s=>s.type==='ready')"),
+      "same Host ready for full DOM control",
+    );
+    control.defaultOffAfterReload = true;
+    await until(
+      async () => evaluate("Boolean(" + threadTarget + ")"),
+      "same canonical Thread in sidebar",
+    );
+    await revealThreadWithSidebarWheel(threadTarget);
+    await click(
+      threadTarget,
+      "Select same canonical Thread for full DOM control",
+    );
+    await until(
+      async () =>
+        evaluate(
+          "Boolean(document.querySelector('#thread-composer:not(:disabled)'))",
+        ),
+      "full DOM control idle composer",
+    );
+    await prepareNativeSelectAll(canonicalTurns, samples, true);
+    await until(async () => {
+      const state = await evaluate("window.__nativeSelectAllQuality.inspect()");
+      Object.assign(control, state);
+      return (
+        state.fullDom &&
+        state.canonicalOrder &&
+        state.canonicalMessageOrder &&
+        state.mountedUserRows === 5003 &&
+        state.mountedMessageRows === 10006
+      );
+    }, "same full DOM canonical users and assistants in exact order");
+    control.ownedFocusBeforeSelectAll = focused();
+    assert.equal(control.ownedFocusBeforeSelectAll, true);
+    const edit = Menu.getApplicationMenu()?.items.find((item) =>
+      item.submenu?.items.some((child) => child.role === "copy"),
+    );
+    control.defaultSelectAllRole = Boolean(
+      edit?.submenu?.items.some(
+        (item) => item.role?.toLowerCase() === "selectall" && item.enabled,
+      ),
+    );
+    assert.equal(
+      control.defaultSelectAllRole,
+      true,
+      "Default native Select All role must return without the experimental bridge",
+    );
+    const started = performance.now();
+    Menu.sendActionToFirstResponder("selectAll:");
+    await until(async () => {
+      const state = await evaluate("window.__nativeSelectAllQuality.inspect()");
+      Object.assign(control, state);
+      return (
+        state.fullDom &&
+        state.selectionActive &&
+        state.canonicalOrder &&
+        state.canonicalMessageOrder &&
+        state.selectedMessageCount === 10006 &&
+        state.fullLastAssistantSelected &&
+        state.selectedMarkerCount === 5003
+      );
+    }, "default native Select All covers every canonical message");
+    control.menuToSelectionMs = performance.now() - started;
+    await snapshotNativeCopySelection();
+    control.clipboardWasEmpty = clipboard.availableFormats().length === 0;
+    assert.equal(
+      control.clipboardWasEmpty,
+      true,
+      "Full DOM Copy requires an empty owned CI clipboard",
+    );
+    ownsClipboard = true;
+    const sentinel = "Synthetic full DOM native Copy pending";
+    clipboard.writeText(sentinel);
+    control.ownedFocusBeforeCopy = focused();
+    assert.equal(control.ownedFocusBeforeCopy, true);
+    Menu.sendActionToFirstResponder("copy:");
+    await until(
+      async () => clipboard.readText() !== sentinel,
+      "full DOM native Copy updates owned clipboard",
+    );
+    const copy = await observeNativeCopy(clipboard.readText());
+    Object.assign(control, copy);
+    assert.equal(copy.selectionSurvivesCopy, true);
+    assert.equal(copy.copiedMarkerCount, 5003);
+    assert.equal(copy.copiedMessageCount, 10006);
+    assert.equal(copy.fullLastAssistantCopied, true);
+    control.completed = true;
+  } catch {
+    control.completed = false;
+  } finally {
+    result.sidebarSelectionScroll = sidebarSelectionScroll;
+    try {
+      if (ownsClipboard) clipboard.clear();
+    } catch {
+      control.completed = false;
+    }
+    try {
+      await click(
+        "document.querySelector('#thread-composer')",
+        "Clear full DOM native Selection with Composer click",
+      );
+      await until(async () => {
+        control.selectionCleared = await evaluate(
+          "Boolean(getSelection()?.isCollapsed)",
+        );
+        return control.selectionCleared;
+      }, "full DOM control native selection cleared");
+    } catch {
+      control.completed = false;
+    }
+    await evaluate("delete window.__nativeSelectAllQuality").catch(() => {
+      control.completed = false;
+    });
+  }
+}
+
 // Comparison diagnostics cannot waive a raw native clipboard mismatch.
 function assertNativeClipboardMatch() {
   assert.equal(
@@ -1948,21 +2133,7 @@ async function run() {
   await evaluate(
     "(()=>{sessionStorage.setItem('zenx.experimental.virtualTranscript','1');sessionStorage.setItem('zenx.experimental.virtualTranscriptFind','1');return true})()",
   );
-  let reloadTimer, reloadFinished;
-  try {
-    await new Promise((resolve, reject) => {
-      reloadFinished = resolve;
-      window.webContents.once("did-finish-load", reloadFinished);
-      reloadTimer = setTimeout(
-        () => reject(Error("Owned renderer reload timed out")),
-        30000,
-      );
-      window.webContents.reload();
-    });
-  } finally {
-    clearTimeout(reloadTimer);
-    window.webContents.removeListener("did-finish-load", reloadFinished);
-  }
+  await reloadOwnedRenderer();
   await until(
     async () =>
       await evaluate(
@@ -2972,7 +3143,17 @@ async function run() {
     );
     await screenshot(`responsive-history-${width}.png`);
   }
+  await checkFullDomNativeCopy(
+    finalRead.thread.turns,
+    result.samples,
+    threadTarget,
+  );
   assertNativeClipboardMatch();
+  assert.equal(
+    result.nativeFullDomCopyControl.completed,
+    true,
+    "Full DOM native Copy control must complete",
+  );
   result.ok = true;
 }
 async function verifyPackagedRuntime() {

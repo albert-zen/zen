@@ -599,15 +599,8 @@ function projectFailureTranscriptQuality(capture) {
       : null;
   const selected = capture?.nativeSelectionQuality;
   const all = capture?.nativeSelectAllQuality;
-  return {
-    find: capture?.virtualFindQuality
-      ? {
-          oldHistory: find(capture.virtualFindQuality.oldHistory),
-          wrappedTail: find(capture.virtualFindQuality.wrappedTail),
-          totalMatches: finite(capture.virtualFindQuality.totalMatches),
-        }
-      : null,
-    selectAll: all
+  const projectSelectAll = (all) =>
+    all
       ? Object.fromEntries([
           ...[
             "boundedBefore",
@@ -667,6 +660,34 @@ function projectFailureTranscriptQuality(capture) {
             "clearToRestoreMs",
           ].map((key) => [key, finite(all[key])]),
         ])
+      : null;
+  return {
+    find: capture?.virtualFindQuality
+      ? {
+          oldHistory: find(capture.virtualFindQuality.oldHistory),
+          wrappedTail: find(capture.virtualFindQuality.wrappedTail),
+          totalMatches: finite(capture.virtualFindQuality.totalMatches),
+        }
+      : null,
+    selectAll: projectSelectAll(all),
+    fullDomControl: capture?.nativeFullDomCopyControl
+      ? {
+          ...projectSelectAll(capture.nativeFullDomCopyControl),
+          ...Object.fromEntries(
+            [
+              "afterVirtualAssertions",
+              "defaultOffAfterReload",
+              "defaultSelectAllRole",
+              "ownedFocusBeforeSelectAll",
+              "ownedFocusBeforeCopy",
+              "clipboardWasEmpty",
+              "completed",
+            ].map((key) => [
+              key,
+              boolean(capture.nativeFullDomCopyControl[key]),
+            ]),
+          ),
+        }
       : null,
     selection: selected
       ? Object.fromEntries([
@@ -1200,6 +1221,8 @@ try {
     virtualFindQuality: result.virtualFindQuality,
     nativeSelectionQuality: result.nativeSelectionQuality,
     nativeSelectAllQuality: selectAll,
+    nativeFullDomCopyControl:
+      projectFailureTranscriptQuality(result).fullDomControl,
     emptyFooterGeometry: result.emptyFooterGeometry,
     rendered: result.before.rendered,
     renderedAfter: result.afterRendered,

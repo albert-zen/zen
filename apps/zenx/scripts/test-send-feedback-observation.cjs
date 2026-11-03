@@ -1008,7 +1008,10 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
   assert.ok(source.includes("experimental Back to live reaches actual bottom"));
   assert.equal(source.includes("mount previous 100 history rows"), false);
   assert.equal(source.includes("window.__historyMountAnchor"), false);
-  const reload = source.indexOf("window.webContents.reload()");
+  const reload = source.indexOf(
+    "await reloadOwnedRenderer();",
+    source.indexOf("async function run()"),
+  );
   assert.ok(
     reload >
       source.indexOf(
@@ -2011,6 +2014,18 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       clipboard: "NEVER_EXPORT",
       anchor: { private: "NEVER_EXPORT" },
     },
+    nativeFullDomCopyControl: {
+      completed: false,
+      defaultOffAfterReload: true,
+      defaultSelectAllRole: "NEVER_EXPORT",
+      afterVirtualAssertions: true,
+      clipboardMatchesSelection: false,
+      clipboardAddsOnlyComposerPlaceholderLF: true,
+      copiedMessageCount: 10006,
+      selectedUTF16Length: Infinity,
+      text: "NEVER_EXPORT",
+      error: "NEVER_EXPORT",
+    },
     nativeSelectionQuality: {
       selectionOwnedByTarget: false,
       preservedAfterNativeWheel: false,
@@ -2056,6 +2071,16 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.equal(result.selectAll.fullLastAssistantCopied, true);
   assert.equal(result.selectAll.menuToSelectionMs, null);
   assert.equal(result.selectAll.clearToRestoreMs, 12.5);
+  assert.equal(result.fullDomControl.completed, false);
+  assert.equal(result.fullDomControl.defaultOffAfterReload, true);
+  assert.equal(result.fullDomControl.defaultSelectAllRole, null);
+  assert.equal(result.fullDomControl.clipboardMatchesSelection, false);
+  assert.equal(
+    result.fullDomControl.clipboardAddsOnlyComposerPlaceholderLF,
+    true,
+  );
+  assert.equal(result.fullDomControl.copiedMessageCount, 10006);
+  assert.equal(result.fullDomControl.selectedUTF16Length, null);
   assert.equal(result.selection.selectionOwnedByTarget, false);
   assert.equal(result.selection.beforeScrollTop, 10000);
   assert.equal(result.selection.bottomDistance, null);
@@ -2063,6 +2088,7 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.deepEqual(project(undefined), {
     find: null,
     selectAll: null,
+    fullDomControl: null,
     selection: null,
   });
   assert.ok(
@@ -2160,15 +2186,24 @@ test("wrapped-tail Find executes the shipped expression and rejects transient Ra
   }
 });
 
-async function nativeSelectAllFixture(fault, sharedDom) {
-  const dom = sharedDom ?? new JSDOM("", { runScripts: "outside-only" });
+async function nativeSelectAllFixture(
+  fault,
+  sharedDom,
+  fullDomControl = false,
+) {
+  const dom =
+    sharedDom ??
+    new JSDOM("", { runScripts: "outside-only", url: "https://owned.invalid" });
+  const withPlaceholder =
+    fault === "copy-placeholder-variant" ||
+    (fullDomControl && fault !== "control-no-role-raw-equal");
   const w = dom.window,
     d = w.document;
   d.body.innerHTML =
-    '<main class="thread-view"><div class="messages experimental-transcript-viewport"></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea></main>';
+    '<main class="app-shell thread-view"><button class="thread-row" data-thread-id="owned-thread">Owned Thread</button><div class="messages experimental-transcript-viewport"></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea></main>';
   const scroller = d.querySelector(".messages"),
     editor = d.querySelector("textarea");
-  if (fault === "copy-placeholder-variant") {
+  if (withPlaceholder) {
     editor.placeholder = "Ask ZenX anything…";
     editor.getClientRects = () => [{ width: 100, height: 20 }];
   }
@@ -2202,7 +2237,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     const indices = all
       ? Array.from({ length: 5003 }, (_, i) => i)
       : Array.from({ length: 8 }, (_, i) => i + 4980);
-    if (all && fault === "wrong-order")
+    if (
+      all &&
+      (fault === "wrong-order" || (reloaded && fault === "control-wrong-order"))
+    )
       [indices[0], indices[1]] = [indices[1], indices[0]];
     scroller.innerHTML = indices
       .map(
@@ -2238,6 +2276,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     if (all) scroller.dataset.nativeTranscriptSelection = "complete";
     else delete scroller.dataset.nativeTranscriptSelection;
   };
+  let reloaded = false,
+    reloadFinished,
+    nativeSelectAllCalls = 0,
+    revealCalls = 0;
   let cleared = false,
     menuCalls = 0,
     nativeCopyCalls = 0,
@@ -2252,12 +2294,42 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     fixtureModel: { provider: "fake" },
   };
   const mainFrame = {};
+  if (fullDomControl) {
+    w.sessionStorage.setItem("zenx.experimental.virtualTranscript", "1");
+    w.sessionStorage.setItem("zenx.experimental.virtualTranscriptFind", "1");
+    w.sessionStorage.setItem("owned-control-unrelated", "preserved");
+    w.zenx = { protocol: { getStatus: async () => ({ type: "ready" }) } };
+  }
   const nativeWindow = {
+    getBounds: () => ({ width: w.innerWidth, height: w.innerHeight }),
+    setBounds: ({ width, height }) => {
+      w.innerWidth = width;
+      w.innerHeight = height;
+    },
     isFocused: () => true,
     webContents: {
       mainFrame,
       focusedFrame: fault === "wrong-focused-frame" ? {} : mainFrame,
       isFocused: () => true,
+      once: (_event, listener) => {
+        reloadFinished = listener;
+      },
+      removeListener: () => {
+        reloadFinished = undefined;
+      },
+      reload() {
+        reloaded = true;
+        delete w.__nativeSelectAllQuality;
+        w.getSelection().removeAllRanges();
+        mount(true);
+        delete scroller.dataset.nativeTranscriptSelection;
+        if (fault === "control-wrong-thread")
+          for (const row of scroller.querySelectorAll("article.user-row"))
+            row.dataset.sentMessageId = "foreign-" + row.dataset.sentMessageId;
+        if (fault === "control-wrong-focus")
+          nativeWindow.webContents.focusedFrame = {};
+        reloadFinished();
+      },
       async insertText(text) {
         editor.setRangeText(
           text,
@@ -2282,8 +2354,7 @@ async function nativeSelectAllFixture(fault, sharedDom) {
       if (fault !== "no-native-selection") {
         const range = d.createRange();
         range.selectNodeContents(scroller);
-        if (fault === "copy-placeholder-variant")
-          range.selectNodeContents(d.body);
+        if (withPlaceholder) range.selectNodeContents(d.body);
         if (fault === "truncated-final-assistant") {
           const lastUser = scroller.querySelector(
             '[data-sent-message-id="owned-5002"]',
@@ -2311,14 +2382,32 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           submenu: {
             items: [
               { role: "copy" },
-              ...(fault === "no-product-handler" ? [] : [menuItem]),
+              ...(reloaded
+                ? [
+                    "control-no-default-role",
+                    "control-no-role-raw-equal",
+                  ].includes(fault)
+                  ? [menuItem]
+                  : [{ role: "selectAll", enabled: true }]
+                : fault === "no-product-handler"
+                  ? []
+                  : [menuItem]),
             ],
           },
         },
       ],
     }),
     sendActionToFirstResponder(action) {
-      if (action === "copy:") {
+      if (action === "selectAll:") {
+        assert.equal(reloaded, true);
+        nativeSelectAllCalls++;
+        const range = d.createRange();
+        range.selectNodeContents(d.body);
+        const first = d.querySelector(".thread-row").firstChild;
+        range.setStart(first, 0);
+        w.getSelection().removeAllRanges();
+        w.getSelection().addRange(range);
+      } else if (action === "copy:") {
         nativeCopyCalls++;
         clipboardText = w.getSelection().toString();
         if (fault === "copy-missing-row")
@@ -2327,13 +2416,18 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
         if (fault === "copy-lf-variant") clipboardText = "\r\n" + clipboardText;
         if (fault === "copy-nbsp-variant") clipboardText += "\u00a0";
-        if (fault === "copy-placeholder-variant")
-          clipboardText += editor.placeholder + "\n";
-        if (fault === "copy-endpoint-mutation") {
+        if (withPlaceholder) clipboardText += editor.placeholder + "\n";
+        if (
+          fault === "copy-endpoint-mutation" ||
+          (reloaded && fault === "control-copy-endpoint-mutation")
+        ) {
           const selection = w.getSelection(),
             before = w.__nativeSelectAllQuality,
             empty = d.createTextNode("");
-          scroller.firstElementChild.prepend(empty);
+          (reloaded
+            ? d.querySelector(".thread-row")
+            : scroller.firstElementChild
+          ).prepend(empty);
           selection.getRangeAt(0).setStart(empty, 0);
           assert.equal(selection.toString() === before.text, true);
           assert.equal(before.orderedMessages(selection.toString()), 10006);
@@ -2351,7 +2445,11 @@ async function nativeSelectAllFixture(fault, sharedDom) {
             true,
           );
         }
-        if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
+        if (
+          fault === "copy-lost-selection" ||
+          (reloaded && fault === "control-copy-lost-selection")
+        )
+          w.getSelection().removeAllRanges();
       } else {
         assert.equal(action, "deleteBackward:");
         editor.setRangeText(
@@ -2365,7 +2463,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
   };
   const clipboard = {
     availableFormats: () =>
-      fault === "occupied-clipboard" ? ["text/plain"] : [],
+      fault === "occupied-clipboard" ||
+      (reloaded && fault === "control-occupied-clipboard")
+        ? ["text/plain"]
+        : [],
     writeText: (text) => {
       clipboardText = text;
     },
@@ -2380,7 +2481,7 @@ async function nativeSelectAllFixture(fault, sharedDom) {
       cleared = true;
       w.getSelection().removeAllRanges();
       editor.focus();
-      if (fault !== "no-bounded-restore") mount(false);
+      if (!reloaded && fault !== "no-bounded-restore") mount(false);
     } else editor.blur();
   };
   const until = async (check, label) => {
@@ -2400,8 +2501,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     "clipboard",
     "until",
     "screenshot",
+    "revealThreadWithSidebarWheel",
+    "fullDomControl",
     source.slice(start, source.indexOf("\nasync function run()", start)) +
-      "; return async (...args) => { await checkNativeSelectAll(...args); assertNativeClipboardMatch(); };",
+      "; return async (...args) => { await checkNativeSelectAll(...args); if (fullDomControl) await checkFullDomNativeCopy(...args, \"document.querySelector('.thread-row[data-thread-id=owned-thread]')\"); assertNativeClipboardMatch(); if (fullDomControl) assert.equal(result.nativeFullDomCopyControl.completed, true, 'Full DOM native Copy control must complete'); };",
   )(
     assert,
     { platform: "darwin" },
@@ -2414,6 +2517,11 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     clipboard,
     until,
     async (name) => images.push(name),
+    async (target) => {
+      assert.ok(await evaluate("Boolean(" + target + ")"));
+      revealCalls++;
+    },
+    fullDomControl,
   );
   let error;
   try {
@@ -2421,6 +2529,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
   } catch (caught) {
     error = caught;
   }
+  const privateStateCleaned = !w.__nativeSelectAllQuality;
+  const unrelatedSessionPreserved =
+    fullDomControl &&
+    w.sessionStorage.getItem("owned-control-unrelated") === "preserved";
   delete w.__nativeSelectAllQuality;
   w.getSelection().removeAllRanges();
   d.body.replaceChildren();
@@ -2435,6 +2547,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     nativeCopyCalls,
     clipboardCleared,
     cleared,
+    nativeSelectAllCalls,
+    revealCalls,
+    privateStateCleaned,
+    unrelatedSessionPreserved,
   };
 }
 
@@ -2828,9 +2944,153 @@ test("raw native clipboard mismatch remains a final failure after restoration an
     sharedDom.window.close();
   }
   assert.ok(
-    source.indexOf("  assertNativeClipboardMatch();\n  result.ok = true;") >
-      source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
+    source.indexOf(
+      "  assertNativeClipboardMatch();",
+      source.indexOf("async function run()"),
+    ) > source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
   );
+});
+
+test("same-session default full DOM Copy executes native actions, reuses attribution and keeps virtual raw failure", async () => {
+  const run = await nativeSelectAllFixture(undefined, undefined, true);
+  assert.match(run.error?.message ?? "", /comparison diagnostics do not waive/);
+  const original = run.result.nativeSelectAllQuality,
+    control = run.result.nativeFullDomCopyControl;
+  assert.equal(original.clipboardMatchesSelection, false);
+  assert.equal(
+    original.virtualRestored &&
+      original.restoredReaderAnchor &&
+      original.editableSelectionPreserved,
+    true,
+  );
+  assert.equal(control.completed, true);
+  assert.equal(
+    control.defaultOffAfterReload &&
+      control.defaultSelectAllRole &&
+      control.afterVirtualAssertions,
+    true,
+  );
+  assert.equal(control.canonicalOrder && control.canonicalMessageOrder, true);
+  assert.equal(control.selectedMessageCount, 10006);
+  assert.equal(control.copiedMessageCount, 10006);
+  assert.equal(
+    control.fullLastAssistantSelected &&
+      control.fullLastAssistantCopied &&
+      control.selectionSurvivesCopy,
+    true,
+  );
+  assert.equal(control.clipboardMatchesSelection, false);
+  assert.equal(control.clipboardAddsOnlyComposerPlaceholderLF, true);
+  assert.equal(
+    control.clipboardPlaceholderInsertionAfterCanonicalMessages,
+    true,
+  );
+  assert.equal(control.selectionCleared, true);
+  assert.equal(run.nativeSelectAllCalls, 1);
+  assert.equal(run.nativeCopyCalls, 2);
+  assert.equal(
+    run.menuCalls,
+    2,
+    "control cannot invoke the experimental bridge",
+  );
+  assert.equal(run.revealCalls, 1);
+  assert.equal(
+    run.privateStateCleaned &&
+      run.unrelatedSessionPreserved &&
+      run.clipboardCleared,
+    true,
+  );
+  assert.deepEqual(run.images, ["native-select-all.png"]);
+  assert.ok(
+    source.indexOf(
+      "  await checkFullDomNativeCopy(",
+      source.indexOf("async function run()"),
+    ) > source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
+  );
+});
+
+test("full DOM control fails closed for bridge substitution, canonical reorder and copy endpoint loss without hiding virtual raw failure", async () => {
+  const sharedDom = new JSDOM("", {
+    runScripts: "outside-only",
+    url: "https://owned.invalid",
+  });
+  try {
+    for (const fault of [
+      "control-no-default-role",
+      "control-wrong-order",
+      "control-wrong-thread",
+      "control-wrong-focus",
+      "control-occupied-clipboard",
+      "control-copy-endpoint-mutation",
+      "control-copy-lost-selection",
+    ]) {
+      const run = await nativeSelectAllFixture(fault, sharedDom, true);
+      assert.match(
+        run.error?.message ?? "",
+        /comparison diagnostics do not waive/,
+        fault,
+      );
+      assert.equal(
+        run.result.nativeSelectAllQuality.clipboardMatchesSelection,
+        false,
+        fault,
+      );
+      assert.equal(run.result.nativeFullDomCopyControl.completed, false, fault);
+      assert.equal(run.privateStateCleaned, true, fault);
+      if (
+        [
+          "control-copy-lost-selection",
+          "control-copy-endpoint-mutation",
+        ].includes(fault)
+      ) {
+        assert.equal(
+          run.result.nativeFullDomCopyControl.selectionSurvivesCopy,
+          false,
+          fault,
+        );
+        assert.equal(
+          run.result.nativeFullDomCopyControl.copiedMessageCount,
+          10006,
+          fault,
+        );
+      }
+      if (fault === "control-occupied-clipboard")
+        assert.equal(run.nativeCopyCalls, 1, fault);
+      assert.equal(run.menuCalls, 2, fault);
+      assert.equal(
+        run.nativeSelectAllCalls,
+        [
+          "control-copy-lost-selection",
+          "control-copy-endpoint-mutation",
+          "control-occupied-clipboard",
+        ].includes(fault)
+          ? 1
+          : 0,
+        fault,
+      );
+    }
+  } finally {
+    sharedDom.window.close();
+  }
+});
+
+test("full DOM control independently blocks acceptance when original virtual raw equality passes", async () => {
+  const run = await nativeSelectAllFixture(
+    "control-no-role-raw-equal",
+    undefined,
+    true,
+  );
+  assert.equal(
+    run.result.nativeSelectAllQuality.clipboardMatchesSelection,
+    true,
+  );
+  assert.equal(run.result.nativeFullDomCopyControl.completed, false);
+  assert.match(
+    run.error?.message ?? "",
+    /Full DOM native Copy control must complete/,
+  );
+  assert.equal(run.nativeSelectAllCalls, 0);
+  assert.equal(run.privateStateCleaned, true);
 });
 
 test("capture and exporter accept only the same fixed 19-image bound including native selection and failure", async () => {
