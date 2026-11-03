@@ -205,6 +205,23 @@ const networkReady = app.whenReady().then(() =>
 );
 async function run() {
   await networkReady;
+  const questionFixture = JSON.parse(
+    await fs.readFile(path.join(temporary, "information-fixture.json"), "utf8"),
+  );
+  const mainQuestion = questionFixture.questions["information-main"];
+  const otherQuestion = questionFixture.questions["information-other"];
+  assert.equal(mainQuestion.state, "open");
+  assert.equal(otherQuestion.state, "open");
+  const questionCard = (question) =>
+    `[data-question-call-id=${JSON.stringify(question.request.callItemId)}]`;
+  const roomQuestionRequest = (room, method, params) =>
+    evaluate(
+      `window.zenx.userQuestions.request(${JSON.stringify({
+        owner: { kind: "room", id: room.id },
+        method,
+        params,
+      })})`,
+    );
   await until(async () => {
     window = BrowserWindow.getAllWindows().find((w) =>
       w.webContents.getURL().endsWith("/renderer/index.html"),
@@ -638,7 +655,7 @@ async function run() {
     "actual app light appearance for Room acceptance",
   );
   const nativeRoom = await evaluate(
-    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native Room',members:[{name:'Synthetic source',threadId:'information-main'}]})",
+    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native Room',members:[{name:'Synthetic source',threadId:'information-main'},{name:'Synthetic newly publishing member',threadId:'information-child'}]})",
   );
   const nativePaw = await evaluate(
     "window.zenx.plugins.executeCommand('zenx-rooms','create-assistant',{name:'Synthetic native PAW',memberName:'Synthetic PAW member',operationId:'information-acceptance-paw',target:{kind:'existing',threadId:'information-other'}})",
@@ -702,10 +719,110 @@ async function run() {
     "actual member-owned Trigger facts",
   );
   await screenshot("12-native-room-member-layout.png");
+  await until(
+    () => evaluate(`Boolean(${query(questionCard(mainQuestion))})`),
+    "ordinary Room owns its current member's real pending question",
+  );
+  assert.equal(
+    await evaluate(`Boolean(${query(questionCard(otherQuestion))})`),
+    false,
+    "ordinary Room cannot borrow a nonmember question",
+  );
+  const emptyMemberQuestions = await roomQuestionRequest(nativeRoom, "list", {
+    threadId: "information-child",
+  });
+  assert.deepEqual(emptyMemberQuestions.questions, []);
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({
+      threadId: "information-child",
+      clientUserMessageId: "information-native-live-room-question",
+      input: [
+        {
+          type: "text",
+          text:
+            "!tool ask_user_question " +
+            JSON.stringify({
+              questions: [
+                {
+                  id: "live",
+                  prompt: "Synthetic newly published Room member question",
+                  options: [{ id: "later", label: "Answer later" }],
+                },
+              ],
+            }),
+        },
+      ],
+    })})`,
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-content')?.textContent.includes('Synthetic newly published Room member question')",
+      ),
+    "first question appears for an unselected member while its Room stays open",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.editable-information-panel').dataset.owner",
+    ),
+    "room:" + nativeRoom.id,
+  );
+  const newlyPublished = await roomQuestionRequest(nativeRoom, "list", {
+    threadId: "information-child",
+  });
+  assert.equal(newlyPublished.questions.length, 1);
+  assert.ok(
+    await evaluate(
+      `Boolean(${query(questionCard(newlyPublished.questions[0]))})`,
+    ),
+  );
+  const roomWidgetCount = await evaluate(
+    "document.querySelectorAll('.information-widget[data-visible=true]').length",
+  );
+  for (let index = 0; index < roomWidgetCount; index++) {
+    await click(
+      '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
+      "Hide ordinary Room widget " + index,
+    );
+    await settledLayout();
+  }
+  await click(
+    '[aria-label="Customize information"]',
+    "Leave ordinary Room customization with every widget hidden",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.information-widget-body').length",
+    ),
+    0,
+  );
+  assert.ok(await evaluate(`Boolean(${query(questionCard(mainQuestion))})`));
+  await screenshot("12a-native-room-all-hidden-asking-remains.png");
+  await click(
+    questionCard(mainQuestion) + ' input[type="radio"]',
+    "Answer the exact current member question from ordinary Room",
+  );
+  await click(
+    questionCard(mainQuestion) + " .primary-button",
+    "Send ordinary Room question answer through owned native bridge",
+  );
+  await until(async () => {
+    const read = await roomQuestionRequest(nativeRoom, "read", {
+      threadId: "information-main",
+      questionCallItemId: mainQuestion.request.callItemId,
+      clientUserMessageId: "information-native-room-read",
+    });
+    return read.question?.state === "answered";
+  }, "actual Host claims ordinary Room question answer");
+  await screenshot("12b-native-room-question-answered.png");
   result.cases.push({
     name: "native-ordinary-room",
     owner: ordinaryLayout.owner,
     memberBound: true,
+    realPendingQuestion: true,
+    questionRemainsWhenAllWidgetsHidden: true,
+    nativeAnswerClaimed: true,
+    newlyPublishedUnselectedMemberQuestionAppears: true,
   });
   await openRoom(nativePaw, "Select PAW's actual Room in Sidebar");
   const pawLayout = await evaluate(
@@ -721,11 +838,64 @@ async function run() {
       ),
   );
   await screenshot("13-native-paw-actual-room.png");
+  await until(
+    () => evaluate(`Boolean(${query(questionCard(otherQuestion))})`),
+    "PAW actual assistant member's distinct pending question",
+  );
+  assert.equal(
+    await evaluate(`Boolean(${query(questionCard(mainQuestion))})`),
+    false,
+    "PAW cannot inherit the previous Room's question card",
+  );
+  await screenshot("13a-native-paw-member-question.png");
   result.cases.push({
     name: "native-paw-room",
     owner: pawLayout.owner,
     actualAssistant: "information-other",
     thirdOwner: false,
+    realAssistantQuestion: true,
+  });
+  await evaluate(
+    `window.zenx.plugins.executeCommand('zenx-rooms','remove-member',{roomId:${JSON.stringify(nativePaw.id)},threadId:'information-other'})`,
+  );
+  await until(
+    () => evaluate(`!${query(questionCard(otherQuestion))}`),
+    "removed PAW member loses its question card without reopening",
+  );
+  for (const [method, params] of [
+    ["list", { threadId: "information-other" }],
+    [
+      "respond",
+      {
+        threadId: "information-other",
+        questionCallItemId: otherQuestion.request.callItemId,
+        clientUserMessageId: "information-native-removed-member-no-replay",
+        outcome: "cancel",
+      },
+    ],
+  ]) {
+    const denied = await roomQuestionRequest(nativePaw, method, params);
+    assert.equal(denied.type, "zenx.question-error.v1");
+    assert.equal(denied.code, "question_source_unavailable");
+    assert.equal(denied.outcome, "rejected");
+  }
+  const unchangedQuestion = await evaluate(
+    `window.zenx.protocol.request('zen/thread/questions/read',${JSON.stringify({
+      threadId: "information-other",
+      questionCallItemId: otherQuestion.request.callItemId,
+      clientUserMessageId: "information-native-removed-member-no-replay",
+    })})`,
+  );
+  assert.equal(unchangedQuestion.question.state, "open");
+  assert.equal(unchangedQuestion.response.status, "not-found");
+  await screenshot("13b-native-removed-paw-member-no-question.png");
+  result.cases.push({
+    name: "native-room-question-membership-revoked",
+    owner: { kind: "room", id: nativePaw.id },
+    removedThreadId: "information-other",
+    staleListRejected: true,
+    staleResponseRejectedBeforeAppend: true,
+    originalQuestionStillOpen: true,
   });
   await openRoom(emptyRoom, "Select actual empty Room in Sidebar");
   await click(
