@@ -1,14 +1,4 @@
-import {
-  compileItemList,
-  contextItemsFromLegacy,
-  type ContextItem,
-} from "./item-list.js";
-import {
-  imageBudgetOmissions,
-  omittedMediaReceipt,
-  type MediaProjectionBudget,
-} from "./model-content.js";
-import { modelMediaOrigin } from "./model-media-origin.js";
+import { contextItemsFromLegacy, type ContextItem } from "./item-list.js";
 import {
   compileWorkspaceInstructionMessages,
   filePermissionContext,
@@ -34,7 +24,6 @@ export function prepareSampleContext(options: {
   providerToolPresentation?: ProviderToolPresentation | undefined;
   workspaceInstructions?: readonly WorkspaceInstructionFile[];
   inputModalities: readonly string[] | null;
-  mediaBudget?: MediaProjectionBudget | null;
   notice?: string;
   id(): string;
   now(): string;
@@ -201,45 +190,6 @@ export function prepareSampleContext(options: {
       `[${kind} input is unavailable for this selected model. Stored ${kind} attachments were not sent or read in this sample.]`,
       true,
     );
-  // The real Host dispatches compiled ItemList messages, not the legacy media
-  // projection. Commit both the selection and every visible receipt first, so
-  // the sole compiler can reproduce this exact request after a cold read.
-  if (options.mediaBudget !== null) {
-    const candidate = compileItemList([...options.itemList, ...result], {
-      sampleId: options.sampleId,
-      inputModalities: options.inputModalities,
-    });
-    const dropped = imageBudgetOmissions(
-      candidate.messages,
-      options.mediaBudget,
-    );
-    if (dropped.length) {
-      const text = dropped
-        .map(({ image }) => omittedMediaReceipt(image.attachment))
-        .join("\n");
-      result.push({
-        ...base(),
-        source: {
-          kind: "media_unavailable",
-          sequence,
-          metadata: {
-            onlySampleId: options.sampleId,
-            omittedMedia: dropped.map(({ image }) => {
-              const origin = modelMediaOrigin(image);
-              if (origin === undefined)
-                throw new Error(
-                  "Image budget requires compiler media provenance",
-                );
-              return { ...origin };
-            }),
-          },
-        },
-        kind: "message",
-        role: "user",
-        content: { text, parts: [{ type: "text", text }] },
-      });
-    }
-  }
   return result;
 }
 
