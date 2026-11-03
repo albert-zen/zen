@@ -2,6 +2,7 @@ import {
   canonicalRoomQuestion,
   roomQuestionIdentity,
   roomQuestionRevision,
+  roomQuestionResponseText,
   type RoomQuestion,
   type RoomQuestionResponseInput,
   type RoomQuestionResponseReadback,
@@ -11,7 +12,6 @@ import {
 import {
   normalizeUserQuestionReply,
   parseUserQuestionSpecification,
-  renderUserQuestionAnswer,
 } from "../../../../src/user-question.js";
 import type {
   AutomationRoomEvent,
@@ -2688,13 +2688,7 @@ export class ZenXTriggerService {
               ),
             };
           }
-          const body =
-            reply.outcome === "answer"
-              ? renderUserQuestionAnswer(question.specification, reply.answers)
-              : "I chose not to answer this question.";
-          normalizedText = `Reply to Room question ${question.id}:\n${body}`;
-          if (utf8Bytes(normalizedText) > MAX_MESSAGE_TEXT_BYTES)
-            normalizedText = `Reply to Room question ${question.id} was saved in the workspace information panel. Read that Room question for the full answer.`;
+          normalizedText = roomQuestionResponseText(question, reply);
           const operations = (room.operations ??= []);
           while (operations.length >= MAX_ROOM_OPERATIONS) {
             const index = operations.findIndex(

@@ -24,6 +24,7 @@ import type {
 import {
   canonicalRoomQuestion,
   roomQuestionIdentity,
+  roomQuestionResponseText,
   type RoomQuestion,
   type RoomQuestionWorkspace,
   type RoomQuestionWorkspaceReadOptions,
@@ -403,7 +404,10 @@ export class AutomationTransactionStore {
           );
     if (options.afterQuestionId !== undefined && after < 0)
       throw Error("Room question cursor is unavailable; refresh");
-    const selected = entries.slice(after + 1, after + 33);
+    const limit = options.limit ?? 32;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32)
+      throw Error("Room question page limit must be 1..32");
+    const selected = entries.slice(after + 1, after + 1 + limit);
     const frames = new Map<number, Frame>();
     const questions: RoomQuestion[] = [];
     const openCount = room.openQuestionCount;
@@ -890,6 +894,17 @@ export class AutomationTransactionStore {
           throw Error(
             "Room question publication requires a fresh identity and origin",
           );
+        if (
+          !previous &&
+          !record.metadata.rooms
+            .find((room) => room.id === roomId)
+            ?.members.some(
+              (member) => member.threadId === question.origin.threadId,
+            )
+        )
+          throw Error(
+            "Room question publisher is not a current workspace member",
+          );
         if (originalId !== undefined && originalId !== question.id)
           throw Error("Room question origin is already published");
         if (question.response) {
@@ -915,6 +930,12 @@ export class AutomationTransactionStore {
             message?.type !== "message" ||
             message.message.roomId !== roomId ||
             message.message.kind !== "human" ||
+            message.message.author !== "You" ||
+            message.message.originThreadId !== null ||
+            message.message.originTurnId !== null ||
+            message.message.replyTo !== undefined ||
+            message.message.text !==
+              roomQuestionResponseText(question, response) ||
             operation?.messageId !== response.messageId
           )
             throw Error(

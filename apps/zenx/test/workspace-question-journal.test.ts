@@ -10,6 +10,7 @@ import {
 } from "../src/main/automation-transaction-store.js";
 import {
   canonicalRoomQuestion,
+  roomQuestionResponseText,
   type RoomQuestion,
 } from "../src/room-questions.js";
 const room = (id: string) => ({
@@ -94,6 +95,18 @@ test("Room workspace owns questions independently of participant Threads and sur
     2,
     "removing participants never deletes workspace resources",
   );
+  await assert.rejects(
+    f.journal.append({
+      metadata: f.journal.metadata(),
+      roomEvents: [
+        {
+          type: "question",
+          question: question("room-a", "removed-new-publication"),
+        },
+      ],
+    }),
+    /current workspace member/,
+  );
   const before = await f.journal.readRoomQuestions("room-a");
   await f.restart();
   assert.deepEqual(await f.journal.readRoomQuestions("room-a"), before);
@@ -162,7 +175,7 @@ test("revision, immutable origin, owner, terminal and response atomicity are enf
     }),
     /same transaction/,
   );
-  const text = "Synthetic Room-owned answer";
+  const text = roomQuestionResponseText(answered, answered.response!);
   const metadata = f.journal.metadata();
   metadata.rooms[0]!.messageCount = 1;
   metadata.rooms[0]!.operations = [
@@ -179,6 +192,32 @@ test("revision, immutable origin, owner, terminal and response atomicity are enf
       },
     },
   ];
+  const wrongMetadata = structuredClone(metadata);
+  const wrongText = "Unrelated human Room message";
+  wrongMetadata.rooms[0]!.operations![0]!.bodyRef.sha256 =
+    fingerprintOperationBody({ text: wrongText });
+  await assert.rejects(
+    f.journal.append({
+      metadata: wrongMetadata,
+      roomEvents: [
+        { type: "question", question: answered },
+        {
+          type: "message",
+          message: {
+            id: messageId,
+            roomId: "room-a",
+            author: "You",
+            text: wrongText,
+            createdAt: 3,
+            kind: "human",
+            originThreadId: null,
+            originTurnId: null,
+          },
+        },
+      ],
+    }),
+    /same transaction/,
+  );
   await f.journal.append({
     metadata,
     roomEvents: [

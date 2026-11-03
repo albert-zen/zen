@@ -1,6 +1,8 @@
+import { MAX_MESSAGE_TEXT_BYTES } from "./main/trigger-limits.js";
 import {
   normalizeUserQuestionReply,
   parseUserQuestionSpecification,
+  renderUserQuestionAnswer,
   type UserQuestionAnswer,
   type UserQuestionSpecification,
 } from "../../../src/user-question.js";
@@ -51,6 +53,7 @@ export interface RoomQuestionWorkspaceReadOptions {
   afterQuestionId?: string;
   expectedWorkspaceRevision?: number;
   includeClosed?: boolean;
+  limit?: number;
 }
 function object(
   value: unknown,
@@ -181,4 +184,24 @@ export interface RoomQuestionResponseReadback {
   };
   /** Existing Room delivery facts, never an inferred Thread admission. */
   delivery?: import("./main/trigger-types.js").RoomDeliveryView;
+}
+
+/** Canonical ordinary Room message body, with a complete answer retained in the resource. */
+export function roomQuestionResponseText(
+  question: Pick<RoomQuestion, "id" | "specification">,
+  response: {
+    outcome: "answer" | "cancel";
+    answers?: readonly UserQuestionAnswer[];
+  },
+): string {
+  if (response.outcome === "answer" && !response.answers)
+    throw Error("Room question answer is missing");
+  const body =
+    response.outcome === "answer"
+      ? renderUserQuestionAnswer(question.specification, response.answers!)
+      : "I chose not to answer this question.";
+  const text = `Reply to Room question ${question.id}:\n${body}`;
+  return new TextEncoder().encode(text).length <= MAX_MESSAGE_TEXT_BYTES
+    ? text
+    : `Reply to Room question ${question.id} was saved in the workspace information panel. Read that Room question for the full answer.`;
 }

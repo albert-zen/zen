@@ -1,3 +1,8 @@
+import { ModelReferenceRegistry } from "../../../src/model-references.js";
+import { invokeModelToolFacade } from "../src/main/capabilities/model-tool-facade.js";
+import { createZenXRoomsProfileLoader } from "../src/main/rooms-profile-loader.js";
+import { createZenXTrustedPlugin } from "../../../packages/zenx-rooms-plugin/src/runtime.js";
+import type { ZenXAutomationControlPort } from "../src/main/capabilities/automation-control-package.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -43,6 +48,7 @@ async function fixture(t: test.TestContext) {
   });
   let failNext = false;
   const dispatched: string[] = [];
+  let unavailable = false;
   const store: ZenXTriggerStorePort = {
     get roomHistory() {
       return journal;
@@ -66,6 +72,7 @@ async function fixture(t: test.TestContext) {
     request: async (method: string, params: any) => {
       assert.equal(method, "zen/turn/wake");
       dispatched.push(params.threadId);
+      if (unavailable) throw Error("Synthetic target Thread unavailable");
       return { mode: "start", turnId: randomUUID() };
     },
   };
@@ -116,6 +123,9 @@ async function fixture(t: test.TestContext) {
     },
     fail() {
       failNext = true;
+    },
+    unavailable() {
+      unavailable = true;
     },
   };
 }
@@ -390,4 +400,303 @@ test("publication source identity binds its original content even after a later 
     /different content/,
   );
   assert.equal(f.service.roomQuestionSummary(q.roomId).totalQuestions, 1);
+});
+
+test("trusted Room model read/edit/withdraw derives caller from active Host scope and list count shares the journal", async (t) => {
+  const f = await fixture(t);
+  const questions = await Promise.all(
+    Array.from({ length: 5 }, () => f.publish()),
+  );
+  let captured: any;
+  const loader = createZenXRoomsProfileLoader(
+    () => f.service as unknown as ZenXAutomationControlPort,
+  );
+  const runtime = loader({
+    createZenXTrustedPlugin: (port: any) => {
+      captured = port;
+      return createZenXTrustedPlugin(port);
+    },
+  });
+  const invoke = (
+    name: string,
+    args: Record<string, unknown>,
+    threadId = "member-a",
+    ui = false,
+  ) =>
+    runtime.invoke(name, {
+      callId: randomUUID(),
+      threadId,
+      cwd: directoryForInvocation(),
+      signal: new AbortController().signal,
+      arguments: ui ? { input: args } : args,
+      ...(ui ? { trustedPluginUi: true as const } : {}),
+    });
+  function directoryForInvocation() {
+    return "/synthetic-room-model";
+  }
+  const first: any = await invoke("zenx_rooms_questions", {
+    roomId: f.room.id,
+  });
+  assert.equal(
+    first.questions.length,
+    4,
+    "model reads bounded complete resources before the 1 MiB transport limit",
+  );
+  assert.equal(first.openCount, 5);
+  assert.ok(first.nextAfter);
+  const updated: any = await invoke(
+    "zenx_rooms_update_question",
+    {
+      roomId: f.room.id,
+      questionId: questions[0]!.id,
+      expectedRevision: 1,
+      specification: {
+        questions: [{ id: "scope", prompt: "Updated by actual member B" }],
+      },
+    },
+    "member-b",
+  );
+  assert.equal(updated.revision, 2);
+  assert.deepEqual(updated.origin, questions[0]!.origin);
+  await assert.rejects(
+    invoke(
+      "zenx_rooms_update_question",
+      {
+        roomId: f.room.id,
+        questionId: updated.id,
+        expectedRevision: 2,
+        specification: content,
+        callerThreadId: "member-a",
+      },
+      "foreign",
+    ),
+    /Unknown/,
+  );
+  await assert.rejects(
+    invoke("zenx_rooms_questions", { roomId: f.room.id }, "foreign"),
+    /current Room workspace member/,
+  );
+  assert.throws(
+    () =>
+      captured.modelUpdateRoomQuestion({
+        roomId: f.room.id,
+        questionId: updated.id,
+        expectedRevision: 2,
+        specification: content,
+      }),
+    /not active/,
+  );
+  await f.service.removeRoomMember(f.room.id, "member-a");
+  await assert.rejects(
+    invoke("zenx_rooms_questions", { roomId: f.room.id }, "member-a"),
+    /current Room workspace member/,
+  );
+  const list: any = await invoke("zenx_rooms_list", {}, "member-b", true);
+  assert.equal(
+    list.rooms.find((room: any) => room.id === f.room.id).questionSummary
+      .openCount,
+    5,
+  );
+  await invoke(
+    "zenx_rooms_withdraw_question",
+    { roomId: f.room.id, questionId: updated.id, expectedRevision: 2 },
+    "member-b",
+  );
+  const after: any = await invoke("zenx_rooms_list", {}, "member-b", true);
+  assert.equal(
+    after.rooms.find((room: any) => room.id === f.room.id).questionSummary
+      .openCount,
+    4,
+  );
+  assert.equal((await f.service.roomQuestions(f.room.id)).openCount, 4);
+});
+
+test("answer delivery uses ordinary Room mentions and PAW rules, with truthful unavailable target receipts", async (t) => {
+  const f = await fixture(t);
+  await f.service.create({
+    threadId: "member-a",
+    kind: "roomMention",
+    roomId: f.room.id,
+    mention: "A",
+    label: "A replies",
+    prompt: "Synthetic Room mention",
+  });
+  const q = await f.publish();
+  const sent = await f.service.respondRoomQuestion(
+    {
+      ...response(q, "mentioned-origin"),
+      answers: [
+        { questionId: "scope", optionIds: [], text: "@A the answer is stored" },
+      ],
+    },
+    admit,
+  );
+  assert.equal(sent.response.status, "saved");
+  assert.deepEqual(f.dispatched, ["member-a"]);
+  assert.equal(sent.delivery!.mentions[0]!.threadId, "member-a");
+  const before = f.dispatched.length;
+  const another = await f.publish();
+  await f.service.removeRoomMember(f.room.id, "member-a");
+  const removed = await f.service.respondRoomQuestion(
+    {
+      ...response(another, "removed-origin"),
+      answers: [
+        { questionId: "scope", optionIds: [], text: "@A retained Room answer" },
+      ],
+    },
+    admit,
+  );
+  assert.equal(removed.response.status, "saved");
+  assert.deepEqual(removed.delivery!.mentions, []);
+  assert.equal(
+    f.dispatched.length,
+    before,
+    "removed source cannot regain Room delivery from a question reply",
+  );
+  const paw = await f.service.createAssistantRoom({
+    name: "Independent PAW workspace",
+    members: [{ threadId: "member-b", name: "B" }],
+  });
+  const pq = await f.service.publishRoomQuestion(
+    paw.id,
+    { threadId: "member-b", callItemId: "paw-ask" },
+    content,
+    admit,
+  );
+  f.unavailable();
+  const absent = await f.service.respondRoomQuestion(
+    response(pq, "missing-paw-target"),
+    admit,
+  );
+  assert.equal(
+    absent.response.status,
+    "saved",
+    "Room question and human message remain durable even if ordinary delivery fails",
+  );
+  assert.equal(absent.question!.state, "answered");
+  assert.equal(absent.delivery!.mentions[0]!.threadId, "member-b");
+  assert.ok(
+    absent.delivery!.mentions[0]!.deliveries.every(
+      (delivery) =>
+        delivery.status === "failed" ||
+        delivery.status === "unknown" ||
+        delivery.status === "unconfigured",
+    ),
+  );
+  assert.equal("turnId" in absent, false);
+  assert.equal("admission" in absent, false);
+});
+
+test("full valid answers remain in the Room resource when ordinary Room message size needs a bounded reference", async (t) => {
+  const f = await fixture(t);
+  const q = await f.publish();
+  const answer = "x".repeat(8192);
+  const result = await f.service.respondRoomQuestion(
+    {
+      ...response(q, "full-room-answer"),
+      answers: [{ questionId: "scope", optionIds: [], text: answer }],
+    },
+    admit,
+  );
+  assert.equal(result.question!.response!.answers![0]!.text, answer);
+  const message = await f.service.readRoomMessage(
+    q.roomId,
+    result.response.messageId!,
+  );
+  assert.match(
+    message!.message.text,
+    /Read that Room question for the full answer/,
+  );
+  assert.ok(Buffer.byteLength(message!.message.text) <= 8000);
+  const model = await f.service.roomQuestionsAsMember(
+    q.roomId,
+    "member-b",
+    { includeClosed: true },
+    admit,
+  );
+  assert.equal(model.questions[0]!.response!.answers![0]!.text, answer);
+});
+
+test("normal model scoped refs read and mutate the actual Room journal with immutable paging and live membership", async (t) => {
+  const f = await fixture(t);
+  await Promise.all(Array.from({ length: 5 }, () => f.publish()));
+  let runtime = createZenXRoomsProfileLoader(
+    () => f.service as unknown as ZenXAutomationControlPort,
+  )({ createZenXTrustedPlugin });
+  const references = new ModelReferenceRegistry();
+  let epoch = "synthetic-epoch-before-restart";
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await invokeModelToolFacade({
+      epoch,
+      references,
+      invocation: {
+        name,
+        callId: randomUUID(),
+        threadId: "member-a",
+        cwd: "/synthetic-scoped-room-model",
+        signal: new AbortController().signal,
+        arguments: args,
+      },
+      dispatch: async (invocation) => ({
+        output: JSON.stringify(await runtime.invoke(name, invocation)),
+        exitCode: 0,
+      }),
+    });
+    return JSON.parse(result.output);
+  };
+  const listing = await call("zenx_rooms_list", {});
+  const room = listing.rooms.find((room: any) => room.name === "Workspace");
+  assert.equal(room.questionSummary.openCount, 5);
+  assert.equal(room.id, undefined);
+  const first = await call("zenx_rooms_questions", { room: room.ref });
+  assert.equal(first.questions.length, 4);
+  const next = await call("zenx_rooms_questions", { page: first.next });
+  assert.equal(next.questions.length, 1);
+  assert.equal(first.questions[0].id, undefined);
+  const changed = await call("zenx_rooms_update_question", {
+    question: first.questions[0].ref,
+    specification: {
+      questions: [{ id: "r1", prompt: "Literal r999 and {{r1}}" }],
+    },
+  });
+  assert.equal(
+    changed.specification.questions[0].prompt,
+    "Literal r999 and {{r1}}",
+  );
+  assert.notEqual(changed.ref, first.questions[0].ref);
+  await assert.rejects(
+    call("zenx_rooms_withdraw_question", { question: first.questions[0].ref }),
+    /Room question changed; read before withdrawing/,
+  );
+  await assert.rejects(
+    call("zenx_rooms_questions", { page: first.next }),
+    /revision|changed/i,
+  );
+  await f.restart();
+  runtime = createZenXRoomsProfileLoader(
+    () => f.service as unknown as ZenXAutomationControlPort,
+  )({ createZenXTrustedPlugin });
+  epoch = "synthetic-epoch-after-restart";
+  await assert.rejects(
+    call("zenx_rooms_withdraw_question", { question: changed.ref }),
+    /unavailable or retired/,
+  );
+  const fresh = await call("zenx_rooms_questions", { room: room.ref });
+  const edited = fresh.questions.find(
+    (question: any) => question.specification.questions[0].id === "r1",
+  );
+  assert.ok(edited);
+  await call("zenx_rooms_withdraw_question", { question: edited.ref });
+  assert.equal(f.service.roomQuestionSummary(f.room.id).openCount, 4);
+  await f.service.removeRoomMember(f.room.id, "member-a");
+  await assert.rejects(
+    call("zenx_rooms_questions", { room: room.ref }),
+    /current Room workspace member/,
+  );
+  const independent = await f.service.roomQuestions(f.room.id);
+  assert.equal(independent.openCount, 4);
+  assert.equal(
+    independent.questions.every((question) => question.roomId === f.room.id),
+    true,
+  );
 });
