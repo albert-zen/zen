@@ -1,15 +1,15 @@
 {
-  "publicHead": "1f653a40d7278c71da73506047d613b91d70d19a",
-  "testedSourceCommit": "0abe694ea86599a0c0710abaeb3f7808276a1ae1",
-  "tree": "d957db8e1739cdf9033e958abf42efdfdfc9b743",
+  "publicHead": "aeaa0332c0d6a6a520c47f226b316a3a79bee438",
+  "testedSourceCommit": "aa1f26cc0de1a6d0966f4b2ce96d82be2fdc4309",
+  "tree": "6ddd580315fd874b100a61fdcdc8dd878b477d02",
   "sameTreeVerifiedByGitDiff": true,
-  "run": "https://github.com/albert-zen/zen/actions/runs/41702513351",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41718117008",
   "synthetic": true,
   "artifacts": {
-    "macosApp": 13265520676,
-    "macosShelf": 13264976379,
-    "windowsApp": 13263561842,
-    "windowsShelf": 13264571500
+    "macosApp": 13270922379,
+    "macosShelf": 13270483105,
+    "windowsApp": 13270414535,
+    "windowsShelf": 13271580647
   },
   "results": {
     "macosApp": true,
@@ -33,7 +33,7 @@
     "Full App screenshots and system clicks use isolated synthetic data and real production Host. OS clicks test the fullscreen File resource shared heading, not Subagents-specific content or full Computer facade authorization. Posted transport receipts alone are not success: trusted DOM acknowledgement and actual sidebar-expanded state are independently checked.",
     "Shelf/source/editor screenshots use production React components in native Electron with synthetic canonical inputs, an exact synthetic source navigator and stubbed save/restore callbacks. They do not prove Host recall/save/source-navigation E2E.",
     "Only direct content, recall icon and right-aligned bubble hierarchy are reused from the reference; the outer shelf retains the production Queue composer-aligned width.",
-    "Combined integration includes main PR671 question-card full-row options, autogrowing textarea without native resize grip, and exact-owner information visibility behavior. Current full App screenshots show the actual combination; no older image substitutes for this version.",
+    "Combined integration includes main PR671 question-card full-row options and autogrowing textarea without native resize grip, plus main PR674 image preparation. These sidebar/queue fixtures do not display an image preparation notice; image preparation has separate tests and visual evidence. Current screenshots are produced by the stated combined source, not relabeled older captures.",
     "Earlier animated editor screenshot is superseded. Current captures wait for opacity1, rendered frames, exact text, viewport geometry and save hit target, then close the editor.",
     "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body."
   ],
@@ -41,7 +41,7 @@
     {
       "file": "steer-wide-light.png",
       "platform": "darwin",
-      "sha256": "674202e40ce5f5db4d5eb1580cc49722687b62acab53768243d59c11218e3edb"
+      "sha256": "46ef9bf54494fcf0b217f5840edcfef4464c2cff03b232025078ecf836015e0b"
     },
     {
       "file": "steer-wide-dark.png",
@@ -76,17 +76,17 @@
     {
       "file": "04-maximized-main-dock.png",
       "platform": "darwin",
-      "sha256": "5a9d9d07557d0c014bad889d905a3cf1f0be1af759440c4038d119c387cd3c34"
+      "sha256": "f886abf1e1dae0d3a3160d4cb2291aa5ea081d6ee0620b63767e0d0d386be57a"
     },
     {
       "file": "15-macos-system-sidebar-click.png",
       "platform": "darwin",
-      "sha256": "4216589f7aab73300a8d8f0f440855e05409159ca98d5c1ba891437238604031"
+      "sha256": "a9d78bd8c1459eb5d309e46b58f8c026ae04d957c5e469f54cae9caae5d61f6c"
     },
     {
       "file": "17-reference-dark-Chinese-question-full-App.png",
       "platform": "darwin",
-      "sha256": "0c43ebfebf04297ad5f4caad3f7c004543cedba9f4a3c4061bfba7fbe4db4564"
+      "sha256": "695a82fdd3c1187bcc17823058482b995a1a61774fb1d2b33321f19f3bec8d35"
     },
     {
       "file": "windows-queue-human-edit-open.png",
@@ -101,13 +101,25 @@
     {
       "file": "windows-04-maximized-main-dock.png",
       "platform": "win32",
-      "sha256": "e782adcf1a9d84b249c40aa518894d803e3ff9bbb46897019b34f2027cf2a3a9"
+      "sha256": "e8252238dbb1a923195d53c477a401d06d0429feb1ed5b9163a51299e4c8f4d9"
     },
     {
       "file": "windows-17-reference-dark-Chinese-question-full-App.png",
       "platform": "win32",
-      "sha256": "ba6304046fc019735d98c46e453766eb5d9215ee7d769a5b199107048fa3c216"
+      "sha256": "b7dc26247c22f412d5006a0d1cd586449050b5ddcc240c8a6b430007411492f2"
     }
   ],
-  "integratedMain": "3bf3f7468d7075e588f1d08e7e0b068a06ebff6c"
+  "integratedMain": "e77e1fbfa5d76c080ad0f0bed0da3930742ebda9",
+  "preservedFailedAttempt": {
+    "job": 126203388638,
+    "artifact": 13271317077,
+    "failure": "trusted Chromium click acknowledgement timed out while opening narrow information panel",
+    "outcome": "unknown after dispatch",
+    "fixtureClosedNormally": true,
+    "independentWindowsJobRetries": 1,
+    "retryJob": 126206313343,
+    "oldSessionReplayed": false,
+    "guardsOrTimeoutsChanged": false
+  },
+  "completeCi": "Pending; native visual acceptance is not a full CI pass."
 }
