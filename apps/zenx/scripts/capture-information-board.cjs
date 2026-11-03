@@ -212,12 +212,17 @@ async function capture(name, mode) {
       visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
       "card clears actual visible conversation/workspace headings on every platform",
     );
+    // Accepted questions are above component settings. With multiple questions,
+    // the settings toolbar is legitimately below the fold, not occluded.
+    // Check the first real heading in DOM order and retain the hit-test evidence.
+    geometry.firstCardHeading = await evaluate(
+      "(()=>{const e=document.querySelector('.information-dock .user-question-attention > header, .information-dock .room-question-attention > header, .information-dock .information-settings-toolbar');if(!e)throw Error('Missing information heading');const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {text:e.textContent,top:r.top,bottom:r.bottom,hitClass:hit?.className,unoccluded:e.contains(hit)}})()",
+    );
     assert.equal(
-      await evaluate(
-        "(()=>{const e=document.querySelector('.information-dock .information-settings-toolbar'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
-      ),
+      geometry.firstCardHeading.unoccluded,
       true,
-      "first card heading is not occluded by a higher titlebar layer",
+      "first card heading is not occluded by a higher titlebar layer: " +
+        JSON.stringify(geometry.firstCardHeading),
     );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");

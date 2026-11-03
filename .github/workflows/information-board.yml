@@ -1,13 +1,5 @@
 name: Information board full App acceptance
 on:
-  # Temporary acceptance-only trigger; remove before merging this work branch.
-  push:
-    branches:
-      - fix/information-feedback-reviewed-20261103
-    paths:
-      - .github/workflows/information-board.yml
-      - apps/zenx/**
-      - src/user-question-state.ts
   pull_request:
     paths:
       - .github/workflows/information-board.yml
