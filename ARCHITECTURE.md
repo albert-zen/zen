@@ -84,6 +84,8 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 
 ## 核心概念
 
+- **Image Input Preparation** — Host 在模型采样前将已授权不可变原图按版本化单图尺寸/patch profile 准备为独立附件，并先持久化绑定 sample、selection 与原 occurrence 的视图和明确 notice；唯一 ItemList compiler 在原位置选择已存视图并保留原 occurrence，原始 AttachmentRef 与访问权限不变，未知 Provider 限额不推测、不设默认图片数量或总字节删除策略。
+
 - **Bound user MCP adapter** — An explicitly composed stdio MCP server projects a fixed Thread/Room owner's existing Host tools; the exact AgentRuntime ToolEnvironment admission, existing async approval protocol, current membership and CAS remain authoritative, connection revocation is one-way, typed facade references (including layout cursors/widgets) are enveloped per connection without rewriting authored text, and all adapter state is disposable, with no second AppServer, transcript, execution journal or saved connection configuration.
 - **Live Desktop MCP tunnel** — One fixed-owner binding carries official SDK MCP messages over the existing authenticated native WebSocket; the existing Desktop main process validates live owners and captures its normal generation-bound approval handler, while its existing child executes through the exact AgentRuntime ToolEnvironment, with only disposable connection and IPC correlation state and no Host boot or credential/configuration write in the stdio launcher.
 

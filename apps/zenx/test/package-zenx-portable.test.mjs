@@ -978,6 +978,7 @@ test("stages the real app without modifying reusable build output", async () => 
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
+          sharp: "0.35.5",
           "fs-native-extensions": "1.4.5",
         },
       }),
@@ -991,6 +992,7 @@ test("stages the real app without modifying reusable build output", async () => 
           "@zenx/plugin-sdk": "0.1.0",
           ws: "^8.18.3",
           "node-pty": "1.1.0",
+          sharp: "0.35.5",
           "fs-native-extensions": "1.4.5",
         },
       },
@@ -1675,6 +1677,12 @@ async function writeStorageWriterFixture(rootDirectory) {
 
 async function writePtyFixture(rootDirectory) {
   await writeStorageWriterFixture(rootDirectory);
+  const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
+  await symlink(
+    await realpath(path.join(realRoot, "node_modules", "sharp")),
+    path.join(rootDirectory, "node_modules", "sharp"),
+    "dir",
+  );
   for (const name of ["xterm", "addon-fit"]) {
     const directory = path.join(rootDirectory, "node_modules", "@xterm", name);
     await mkdir(directory, { recursive: true });

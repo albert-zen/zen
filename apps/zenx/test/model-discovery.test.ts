@@ -1082,3 +1082,52 @@ test("API catalog separates explicit input claims from ID inference without chan
     result.models.every((entry) => !("declaredInputModalities" in entry)),
   );
 });
+
+test("original image detail is preserved only from an explicit provider capability through discovery and cache", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-original-detail-"),
+  );
+  try {
+    const result = await discoverOpenAiSubscriptionModels({
+      accessToken: subscriptionToken("original-account"),
+      fetch: async () =>
+        Response.json({
+          models: [true, false, undefined].map((capability, index) => ({
+            slug: `detail-${index}`,
+            display_name: `Detail ${index}`,
+            default_reasoning_level: "medium",
+            supported_reasoning_levels: [
+              { effort: "medium", description: "Balanced" },
+            ],
+            visibility: "list",
+            priority: index,
+            input_modalities: ["text", "image"],
+            context_window: 32000,
+            ...(capability === undefined
+              ? {}
+              : { supports_image_detail_original: capability }),
+          })),
+        }),
+    });
+    assert.deepEqual(
+      result.models.map((model) => model.supportsImageDetailOriginal),
+      [true, false, undefined],
+    );
+    const cache = new OpenAiSubscriptionModelCache(
+      path.join(directory, "cache.json"),
+    );
+    await cache.store({
+      accountId: "original-account",
+      fetchedAt: Date.now(),
+      models: result.models,
+    });
+    assert.deepEqual(
+      (await cache.load("original-account"))?.models.map(
+        (model) => model.supportsImageDetailOriginal,
+      ),
+      [true, false, undefined],
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

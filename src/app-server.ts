@@ -1,4 +1,8 @@
 import {
+  prepareSampleImages,
+  preparedImageDimensions,
+} from "./image-preparation.js";
+import {
   parseUserQuestionReply,
   normalizeUserQuestionReply,
   renderUserQuestionReply,
@@ -4508,6 +4512,24 @@ export class ZenAppServer {
                                     now: this.#now,
                                   }))
                                     await this.#commitContext(thread, context);
+                                  for (const context of await prepareSampleImages(
+                                    {
+                                      threadId,
+                                      turnId,
+                                      sampleId: modelResponseId,
+                                      itemList: thread.itemList,
+                                      selection: sample.selection,
+                                      supportsImageDetailOriginal:
+                                        sample.model
+                                          .supportsImageDetailOriginal ?? null,
+                                      inputModalities:
+                                        sample.model.inputModalities,
+                                      attachments: this.#attachments,
+                                      id: this.#id,
+                                      now: this.#now,
+                                    },
+                                  ))
+                                    await this.#commitContext(thread, context);
                                 },
                                 {},
                                 controller.signal,
@@ -4554,6 +4576,14 @@ export class ZenAppServer {
                                   sandbox: configuration.sandbox,
                                   approvalPolicy: configuration.approvalPolicy,
                                   inputModalities: sample.model.inputModalities,
+                                  ...(sample.model
+                                    .supportsImageDetailOriginal === undefined
+                                    ? {}
+                                    : {
+                                        supportsImageDetailOriginal:
+                                          sample.model
+                                            .supportsImageDetailOriginal,
+                                      }),
                                   contextWindow: sample.model.contextWindow,
                                   ...(runtimeConfiguration.contextCompaction
                                     .agenticEnabled &&
@@ -5380,6 +5410,26 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
       instructionsMaterialized: true,
+      ...(compiled.messages.some((message) =>
+        (message.role === "user" && "content" in message
+          ? message.content
+          : message.role === "tool"
+            ? (message.modelContent ?? [])
+            : []
+        ).some((part) => part.type === "image"),
+      )
+        ? {
+            imageDimensions: (part: import("./item.js").ImageUserInputPart) =>
+              preparedImageDimensions(
+                part.attachment.width!,
+                part.attachment.height!,
+                part.detail === "original" &&
+                  resolved.model.supportsImageDetailOriginal === true
+                  ? "original"
+                  : "high",
+              ),
+          }
+        : {}),
     });
   }
 
@@ -5960,6 +6010,9 @@ export class ZenAppServer {
     if (this.#auxiliaryModel !== undefined) {
       yield* streamAuxiliaryModel({
         ...this.#auxiliaryModel,
+        attachments: this.#attachments,
+        supportsImageDetailOriginal:
+          selection.model.supportsImageDetailOriginal ?? null,
         adapter: selection.adapter,
         purpose: "compaction",
         configuration: {
@@ -5986,7 +6039,7 @@ export class ZenAppServer {
     }
     // Direct AppServer embeddings own their supplied journal; production Host always supplies the auxiliary stores.
     const sampleId = this.#id();
-    const inputs = materializeAuxiliaryInputs(
+    const inputs: ContextItem[] = materializeAuxiliaryInputs(
       thread.id,
       messages,
       [],
@@ -5999,6 +6052,20 @@ export class ZenAppServer {
         metadata: { ...item.source.metadata, onlySampleId: sampleId },
       },
     }));
+    inputs.push(
+      ...(await prepareSampleImages({
+        threadId: thread.id,
+        sampleId,
+        itemList: inputs,
+        selection: selection.selection,
+        inputModalities: selection.model.inputModalities,
+        supportsImageDetailOriginal:
+          selection.model.supportsImageDetailOriginal ?? null,
+        attachments: this.#attachments,
+        id: this.#id,
+        now: this.#now,
+      })),
+    );
     for (const item of inputs) {
       if (concurrentAdmission)
         await this.#withThreadMutation(thread.id, async () => {

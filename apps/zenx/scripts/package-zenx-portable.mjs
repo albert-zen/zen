@@ -14,6 +14,7 @@ import {
   mkdir,
   mkdtemp,
   lstat,
+  readdir,
   stat,
   open,
   readFile,
@@ -851,6 +852,7 @@ export async function stagePackage(options) {
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
+    await stageImageCodec(options.rootDirectory, options.appDirectory);
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])
@@ -909,6 +911,141 @@ export async function stagePackage(options) {
     );
   }
   await injectProviderManifestDigest(stagedMain, options.manifestSha256);
+}
+
+/** Stage sharp's JS closure and the native pair for the packaging host only. */
+export async function stageImageCodec(
+  rootDirectory,
+  appDirectory,
+  platform = process.platform,
+  arch = process.arch,
+) {
+  const installed = path.join(rootDirectory, "node_modules");
+  const sharpSource = await realpath(path.join(installed, "sharp"));
+  const sharpManifest = JSON.parse(
+    await readFile(path.join(sharpSource, "package.json"), "utf8"),
+  );
+  if (sharpManifest.version !== "0.35.5") {
+    throw new Error(`Unaudited sharp version: ${sharpManifest.version}`);
+  }
+  const siblingModules = path.dirname(sharpSource);
+  const sourceFor = async (name) => {
+    // A symlinked sharp install can carry its own dependency closure.
+    for (const base of [
+      path.join(sharpSource, "node_modules"),
+      siblingModules,
+      installed,
+    ]) {
+      try {
+        return await realpath(path.join(base, name));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    throw new Error(`sharp runtime dependency is missing: ${name}`);
+  };
+  const linuxVariant =
+    platform === "linux" &&
+    !process.report?.getReport()?.header.glibcVersionRuntime
+      ? "linuxmusl"
+      : platform;
+  const target = `${linuxVariant}-${arch}`;
+  const native = `@img/sharp-${target}`;
+  const vips = `@img/sharp-libvips-${target}`;
+  if (sharpManifest.optionalDependencies?.[native] === undefined) {
+    throw new Error(`Unsupported sharp native runtime: ${target}`);
+  }
+  const packages = [
+    "sharp",
+    ...Object.keys(sharpManifest.dependencies),
+    native,
+  ];
+  if (sharpManifest.optionalDependencies?.[vips] !== undefined)
+    packages.push(vips);
+  const semver = createRequire(path.join(sharpSource, "package.json"))(
+    "semver",
+  );
+  for (const name of packages) {
+    const source = name === "sharp" ? sharpSource : await sourceFor(name);
+    const manifest = JSON.parse(
+      await readFile(path.join(source, "package.json"), "utf8"),
+    );
+    if (manifest.name !== name) {
+      throw new Error(`Unexpected sharp runtime package at ${source}: ${name}`);
+    }
+    const expected = sharpManifest.optionalDependencies?.[name];
+    if (expected !== undefined && manifest.version !== expected) {
+      throw new Error(
+        `Unexpected sharp native version for ${name}: ${manifest.version}`,
+      );
+    }
+    const required = sharpManifest.dependencies?.[name];
+    if (
+      required !== undefined &&
+      !semver.satisfies(manifest.version, required)
+    ) {
+      throw new Error(
+        `Unexpected sharp dependency version for ${name}: ${manifest.version}`,
+      );
+    }
+    const destination = path.join(appDirectory, "node_modules", name);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await cp(source, destination, { recursive: true });
+    // The libvips package publishes no LICENSE file. Keep its upstream
+    // license declaration and a visible notice alongside other licenses.
+    if (name !== vips) {
+      let licenseSource;
+      for (const file of ["LICENSE", "LICENSE.md"]) {
+        try {
+          licenseSource = await realpath(path.join(source, file));
+          break;
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+      }
+      if (!licenseSource)
+        throw new Error(`sharp runtime license is missing: ${name}`);
+      const licenses = path.join(appDirectory, "licenses");
+      await mkdir(licenses, { recursive: true });
+      await cp(
+        licenseSource,
+        path.join(licenses, `${name.replaceAll("/", "-")}.txt`),
+      );
+    } else {
+      const licenses = path.join(appDirectory, "licenses");
+      await mkdir(licenses, { recursive: true });
+      await writeFile(
+        path.join(licenses, `${name.replaceAll("/", "-")}.txt`),
+        `${name} ${manifest.version}\nLicense: ${manifest.license}\nHomepage: ${manifest.homepage}\nThe upstream npm package does not include a separate LICENSE file.\n`,
+      );
+    }
+  }
+  const nativeFiles = await readdir(
+    path.join(appDirectory, "node_modules", native, "lib"),
+  );
+  if (!nativeFiles.some((file) => file.endsWith(".node"))) {
+    throw new Error(`sharp native runtime is missing for ${target}`);
+  }
+  if (packages.includes(vips)) {
+    const vipsManifest = JSON.parse(
+      await readFile(
+        path.join(appDirectory, "node_modules", vips, "package.json"),
+        "utf8",
+      ),
+    );
+    const vipsBinary = vipsManifest.exports?.["./binary"];
+    if (
+      !vipsBinary ||
+      !(await stat(
+        path.join(appDirectory, "node_modules", vips, vipsBinary),
+      ).then(
+        (entry) => entry.isFile(),
+        () => false,
+      ))
+    ) {
+      throw new Error(`sharp libvips runtime is missing for ${target}`);
+    }
+  }
 }
 
 /** Stage the official Node-API PTY and only this target's native files. */
@@ -1066,6 +1203,7 @@ export function packageManifest(target, zenxPackage) {
           "@zenx/plugin-sdk": zenxPackage.dependencies["@zenx/plugin-sdk"],
           ws: zenxPackage.dependencies.ws,
           "node-pty": zenxPackage.dependencies["node-pty"],
+          sharp: "0.35.5",
           "fs-native-extensions": "1.4.5",
         },
       }

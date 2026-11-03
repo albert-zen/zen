@@ -1,4 +1,14 @@
 export const en = {
+  imagePreparationTitle: "Model image view adjusted ({{count}})",
+  imagePreparationPreserved:
+    "The model sees prepared images. Your original attachments are preserved.",
+  imagePreparationFallbackUnsupported:
+    "Original-detail input is unsupported by this model, so a bounded high-detail view was used.",
+  imagePreparationFallbackUnknown:
+    "Original-detail support is unknown for this model, so a bounded high-detail view was used.",
+  imagePreparationDetails: "View image sizes",
+  imagePreparationDimensions:
+    "Image {{number}}: {{originalWidth}} × {{originalHeight}} → {{preparedWidth}} × {{preparedHeight}} ({{profile}})",
   pendingSendSending: "Sending…",
   pendingSendAdmitted: "Admitted; waiting for the conversation to update",
   pendingSendNotSent: "Not sent",
@@ -970,6 +980,15 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  imagePreparationTitle: "模型图片视图已调整（{{count}} 张）",
+  imagePreparationPreserved: "模型看到的是处理后的图片；原始附件仍然保留。",
+  imagePreparationFallbackUnsupported:
+    "此模型不支持原图细节输入，因此使用受限的高细节视图。",
+  imagePreparationFallbackUnknown:
+    "无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。",
+  imagePreparationDetails: "查看图片尺寸",
+  imagePreparationDimensions:
+    "图片 {{number}}：{{originalWidth}} × {{originalHeight}} → {{preparedWidth}} × {{preparedHeight}}（{{profile}}）",
   pendingSendSending: "正在发送…",
   pendingSendAdmitted: "已接纳，等待会话更新",
   pendingSendNotSent: "未发送",
