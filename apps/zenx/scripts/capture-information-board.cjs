@@ -182,7 +182,16 @@ async function replaceNativeFieldText(selector, text) {
     "native insertion committed the exact field value",
   );
 }
+async function settleScreenshotFrame() {
+  // DOM acknowledgement can precede the compositor's visible frame on macOS.
+  // Allow the asserted native state to paint without mutating focus or inputs.
+  await evaluate(
+    "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+  );
+  await pause(100);
+}
 async function screenshot(name) {
+  await settleScreenshotFrame();
   await fs.writeFile(
     path.join(directory, name),
     (await window.webContents.capturePage()).toPNG(),
@@ -622,6 +631,13 @@ async function run() {
       "document.querySelectorAll('.user-question-card input[type=checkbox]:checked').length",
     ),
     1,
+  );
+  assert.equal(
+    await evaluate(
+      `document.activeElement===${query(checkbox)} && ${query(checkbox)}.matches(':focus-visible')`,
+    ),
+    true,
+    "native checkbox keyboard selection retains visible focus before capture",
   );
   await screenshot("01f-checkbox-keyboard-focus.png");
   const keyboardSwitch =
@@ -1422,6 +1438,7 @@ async function run() {
   );
   await screenshot("17-reference-dark-Chinese-question-full-App.png");
   const captureInformationCrop = async (name) => {
+    await settleScreenshotFrame();
     const rectangle = await evaluate(
       "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
     );
