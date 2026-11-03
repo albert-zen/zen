@@ -12622,3 +12622,15 @@ button:disabled {
   font-size: 11px;
   padding-bottom: 16px;
 }
+@media (max-width: 640px) {
+  .virtual-transcript-row {
+    padding-bottom: 20px;
+  }
+  .virtual-transcript-header {
+    padding-top: 20px;
+  }
+  .virtual-transcript-footer {
+    gap: 20px;
+    padding-bottom: max(28px, calc(var(--bottom-zone-height, 0px) + 24px));
+  }
+}

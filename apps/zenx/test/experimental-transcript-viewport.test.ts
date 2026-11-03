@@ -142,8 +142,22 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
       1,
       "one scroll owner",
     );
+    const contentBox = document.querySelector<HTMLElement>(
+      ".messages > .virtual-transcript-content",
+    );
     assert.ok(
-      viewport.current?.contains(document.querySelector("[data-pending]")),
+      contentBox,
+      "stable content box is a direct child of the sole scroll owner",
+    );
+    assert.equal(
+      contentBox.style.height,
+      "",
+      "content box is not forced to viewport height",
+    );
+    assert.equal(contentBox.style.minHeight, "100%");
+    assert.ok(
+      contentBox.contains(document.querySelector("[data-pending]")),
+      "pending footer contributes to the observed total content box",
     );
     const count = document.querySelectorAll("[data-transcript-row-key]").length;
     assert.ok(count > 0 && count < 60, `mounted ${count} of ${rows.length}`);

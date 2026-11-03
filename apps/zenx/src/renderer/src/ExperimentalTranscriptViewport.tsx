@@ -286,6 +286,7 @@ export function ExperimentalTranscriptViewport({
       className={`${attributes.className ?? ""} experimental-transcript-viewport`}
       style={{ ...attributes.style, overflowAnchor: "none", padding: 0 }}
       ref={attach}
+      contentContainerClassName="virtual-transcript-content"
       data={rows}
       keyExtractor={(row) => row.key}
       renderItem={({ item }) => (

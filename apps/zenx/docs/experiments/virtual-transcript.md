@@ -35,9 +35,13 @@ Both MIT notices are preserved in `apps/zenx/patches`; the copied patch is web E
 only, not T3's mobile/CJS/types changes or its entire timeline implementation.
 CommonJS `react.js` remains stock and is not used by this adapter's tested Node
 ESM/tsx or Vite import resolution. See the patches README for exact upstream URLs.
-Normal `npm ci` invokes the preparer in the existing workspace postinstall; a
-fresh full-repository npm ci was not run in this shared environment. The preparer
-refuses symlinked/external dependencies instead of modifying a shared tree.
+Normal `npm ci` invokes the preparer in the existing workspace postinstall. A
+fresh full-repository npm ci passed with all lifecycle scripts enabled in an
+isolated Linux / Node 24.22.1 dependency tree. Cache/temp paths were relocated to
+the writable workspace; no lifecycle scripts or source were bypassed. The fresh
+installed ESM blob matched the upstream target and preparation was idempotent.
+The preparer refuses symlinked/external dependencies rather than modifying a
+shared tree.
 The adapter uses supported web types and `getScrollableNode`/`getState`/scroll APIs,
 not casts into private runtime APIs or unsupported renderScrollComponent.
 Before enabling by default, finish whole-data find and precise target navigation,
@@ -70,6 +74,25 @@ inertial/touch/scrollbar behavior and first-visible pending Send remain unverifi
 The patched ESM also passes all 27 focused checks. Five additional preparation
 checks pass: exact upstream output/idempotence, reject unknown source without
 mutation, reject shared dependency symlinks, actual Vite plus Node ESM import
-resolution, and npm lifecycle/pin consistency. Full npm ci, native UI screenshots,
-native 5000-turn Send latency and complete reading/find/quote acceptance are not
-claimed by these focused tests.
+resolution, and npm lifecycle/pin consistency. The same 32 focused tests also
+pass on the fresh npm-ci-installed dependency tree. Native UI screenshots,
+packaged native builds, native 5000-turn Send latency and complete
+reading/find/quote acceptance are not claimed by these checks. Electron 43's
+package has no install lifecycle; an Electron binary was not installed or launched
+by this dependency verification.
+
+Commit-range whitespace validation passes for non-vendor source. The exact copied
+unified-diff artifact has three required one-space blank context lines and is a
+narrow documented exception, not a full commit-diff whitespace pass. See the
+patches README; do not trim the hash-matched upstream patch to hide this result.
+
+The virtual viewport retains the existing desktop 24px / ≤640px 20px transcript
+rhythm, including footer gaps and matching header/footer insets. Its warning uses
+the existing `--text-secondary` theme alias. These are source contract checks,
+not responsive screenshot acceptance.
+
+For existing passive size observation, `.messages > .virtual-transcript-content`
+is the stable app-owned total-content box supplied through Legend's supported
+`contentContainerClassName`. It has min-height:100% rather than fixed viewport
+height, and contains the header, totalSize-height row region and pending footer.
+No additional scroll owner or measurement probe is needed.

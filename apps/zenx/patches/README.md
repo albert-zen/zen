@@ -23,3 +23,16 @@ contracts remain the adapter's responsibility and still require native acceptanc
 Both upstream MIT notices are retained alongside the copied patch:
 [LegendList license](https://github.com/LegendApp/legend-list/blob/d5a9dab3b93003c0848dda5ad78e6df1ebb59a35/LICENSE),
 [T3 license](https://github.com/pingdotgg/t3code/blob/cefb544af3c98224874419198c0359b652ca3c94/LICENSE).
+
+## Narrow whitespace-check exception
+
+The exact copied patch has three lines containing a single ASCII space: lines
+39, 164 and 195. Each is the mandatory unified-diff context prefix for a blank
+source line. A commit-range `git diff --check` reports them as trailing whitespace
+in the patch artifact. They are preserved to retain the exact upstream patch;
+they are not whitespace added to the resulting JavaScript.
+
+The non-vendor source check excludes only this patch artifact:
+`git diff --check BASE HEAD -- . ':(exclude)apps/zenx/patches/legend-list-3.3.5-react.patch'`.
+The full commit diff is not claimed whitespace-clean. An earlier worktree-only
+check did not inspect committed contents and was insufficient for that claim.
