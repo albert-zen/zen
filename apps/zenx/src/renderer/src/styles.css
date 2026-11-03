@@ -12729,7 +12729,7 @@ button:disabled {
   border-radius: 10px;
   background: var(--color-surface-overlay);
   color: var(--text);
-  box-shadow: 0 4px 18px rgb(0 0 0 / 12%);
+  box-shadow: 0 4px 18px var(--color-shadow-find);
 }
 .virtual-transcript-find-controls {
   display: flex;
@@ -12762,8 +12762,8 @@ button:disabled {
   color: var(--text-3);
 }
 ::highlight(zenx-thread-find-active) {
-  background-color: #e8b73c;
-  color: #161616;
+  background-color: var(--color-surface-find-match);
+  color: var(--color-text-on-find-match);
 }
 
 .image-preparation-notice {

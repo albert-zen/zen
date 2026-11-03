@@ -96,7 +96,12 @@ import {
 } from "../native-room-questions.js";
 
 contextBridge.exposeInMainWorld("zenx", {
-  nativeEditing: createNativeEditingApi(ipcRenderer, undefined, document),
+  // Capture the preload's document now; non-DOM IPC consumers have none.
+  nativeEditing: createNativeEditingApi(
+    ipcRenderer,
+    undefined,
+    globalThis.document,
+  ),
   threadQuestionAttention: {
     onChanged: (listener: () => void) => {
       const receive = () => listener();
