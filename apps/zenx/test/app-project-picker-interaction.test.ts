@@ -11689,3 +11689,17 @@ for (const mode of ["dock", "popover"] as const) {
     }
   });
 }
+
+test("historical grid inherits the transcript's responsive 24px and narrow 20px gap", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /\.messages-inner\s*\{[^}]*gap:\s*24px;/);
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.messages-inner\s*\{\s*gap:\s*20px;/,
+  );
+  const historyRule = css.match(/\.transcript-history\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(historyRule, /gap:\s*inherit;/);
+});

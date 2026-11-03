@@ -1603,7 +1603,7 @@ button:disabled {
 .transcript-history {
   min-width: 0;
   display: grid;
-  gap: 24px;
+  gap: inherit;
 }
 .new-thread-draft-surface .messages {
   display: grid;
