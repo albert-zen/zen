@@ -14,6 +14,10 @@ import {
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
+import {
+  readInformationOpen,
+  rememberInformationOpen,
+} from "./information-panel-memory.js";
 
 /** A separate contribution slot: no resource tab, navigation or execution ownership. */
 export function PluginInformationHost({
@@ -26,6 +30,7 @@ export function PluginInformationHost({
   readHandle,
   resourcePanelWidth = 0,
   contextContent,
+  revealSignal = 0,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -40,11 +45,37 @@ export function PluginInformationHost({
   readHandle(pluginId: string, handleId: string): Promise<unknown>;
   resourcePanelWidth?: number;
   contextContent?: React.ReactNode;
+  /** A foreground attention event (for example a new native question). */
+  revealSignal?: number;
 }) {
   const { t } = useTranslation("panels");
   const contributions = snapshot.information ?? [];
   const ownerKey = conversationKey(owner);
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(() => readInformationOpen(ownerKey));
+  const previousOwner = useRef(ownerKey);
+  const setOpen = React.useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      setOpenState((current) => {
+        const value = typeof next === "function" ? next(current) : next;
+        rememberInformationOpen(ownerKey, value);
+        return value;
+      });
+    },
+    [ownerKey],
+  );
+  // A Thread/Room switch restores that owner's own last state; a never-opened
+  // owner still starts closed instead of inheriting the previous one.
+  useLayoutEffect(() => {
+    if (previousOwner.current === ownerKey) return;
+    previousOwner.current = ownerKey;
+    setOpenState(readInformationOpen(ownerKey));
+  }, [ownerKey]);
+  // Attention can reveal the surface even when this owner was left closed.
+  // Background updates never call this; the caller bumps the token only for
+  // the currently selected conversation.
+  useEffect(() => {
+    if (revealSignal > 0) setOpen(true);
+  }, [revealSignal, setOpen]);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
@@ -174,8 +205,8 @@ export function PluginInformationHost({
     return () => document.removeEventListener("keydown", escape);
   }, [open, layout.dock, contentId]);
   useEffect(() => {
-    setOpen(false);
-  }, [ownerKey, contributions.length === 0]);
+    if (contributions.length === 0) setOpen(false);
+  }, [contributions.length, setOpen]);
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
   if (!active && !contextContent) return null;
