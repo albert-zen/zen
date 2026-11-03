@@ -1,3 +1,4 @@
+import { createNativeEditingApi } from "./native-editing.js";
 import type {
   NativeInformationApi,
   NativeInformationUpdate,
@@ -95,6 +96,7 @@ import {
 } from "../native-room-questions.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  nativeEditing: createNativeEditingApi(ipcRenderer, undefined, document),
   threadQuestionAttention: {
     onChanged: (listener: () => void) => {
       const receive = () => listener();
