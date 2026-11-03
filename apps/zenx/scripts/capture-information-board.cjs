@@ -21,11 +21,18 @@ const result = {
   ok: false,
   synthetic: true,
   platform: process.platform,
+  inputBoundaries: {
+    pointer: "Electron native events with trusted DOM click acknowledgement",
+    field: "Electron native Select All and insertText with exact UI readback",
+    select:
+      "production DOM input/change; native OS popup input is not accepted by this run",
+  },
   steps: [],
   cases: [],
   blockedExternalRequests: 0,
 };
 let window, taskId;
+let clickSequence = 0;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression) {
   const reply = await window.webContents.executeJavaScript(
@@ -63,6 +70,10 @@ async function click(selector, label = selector) {
     async () => window.isFocused() && window.webContents.isFocused(),
     "owned window focus",
   );
+  const acknowledgedClick = ++clickSequence;
+  await evaluate(
+    `(()=>{const e=${query(selector)};e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return true})()`,
+  );
   window.webContents.sendInputEvent({
     type: "mouseDown",
     button: "left",
@@ -75,6 +86,12 @@ async function click(selector, label = selector) {
     clickCount: 1,
     ...point,
   });
+  // Posting native input is not an acknowledgement: a following IPC read can
+  // otherwise observe pre-click idle before React starts the layout write.
+  await until(
+    () => evaluate(`window.__informationNativeClick===${acknowledgedClick}`),
+    label + " trusted native click delivered",
+  );
   result.steps.push(label);
 }
 async function settledLayout() {
@@ -87,19 +104,21 @@ async function settledLayout() {
   );
 }
 async function selectValue(selector, value, label) {
-  const index = await evaluate(
-    `(()=>{const e=${query(selector)};return [...e.options].findIndex(o=>o.value===${JSON.stringify(value)})})()`,
+  // macOS's native select popup is outside webContents key dispatch. Exercise
+  // the real controlled DOM select/change handler, not an OS menu, and record
+  // this narrower input boundary. All subsequent Host/state checks are unchanged.
+  await evaluate(
+    `(()=>{const e=${query(selector)};if(!(e instanceof HTMLSelectElement)||e.disabled)throw Error('Unavailable select: '+${JSON.stringify(label)});const option=[...e.options].find(o=>o.value===${JSON.stringify(value)});if(!option||option.disabled)throw Error('Unavailable real option: '+${JSON.stringify(label)});e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect();if(!r.width||!r.height||!e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)))throw Error('Obscured select: '+${JSON.stringify(label)});e.focus();e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`,
   );
-  assert.ok(index >= 0, `Real option exists: ${label}`);
-  await click(selector, label);
-  for (const keyCode of ["Home", ...Array(index).fill("Down"), "Return"]) {
-    window.webContents.sendInputEvent({ type: "keyDown", keyCode });
-    window.webContents.sendInputEvent({ type: "keyUp", keyCode });
-  }
   await until(
     () => evaluate(`${query(selector)}.value===${JSON.stringify(value)}`),
-    label + " selected",
+    label + " controlled DOM selection committed",
   );
+  result.steps.push(label);
+  (result.controlSelections ??= []).push({
+    label,
+    input: "real DOM select input/change; not native OS popup automation",
+  });
   await settledLayout();
 }
 async function insertComposerText(text) {
@@ -860,6 +879,10 @@ async function run() {
       ),
     "Asking remains for the other Room request",
   );
+  await until(
+    () => evaluate(`!${query(roomCard(roomFirst))}`),
+    "answered Room card acknowledged and removed before capture",
+  );
   await screenshot("12b-native-room-partial-answer-asking-remains.png");
   await click(
     roomCard(roomSecond) + " .user-question-actions .quiet-button",
@@ -959,6 +982,10 @@ async function run() {
   await until(
     () => evaluate(`!${query(roomBadge(nativePaw))}`),
     "PAW workspace Asking clears independently",
+  );
+  await until(
+    () => evaluate(`!${query(roomCard(pawQuestion))}`),
+    "cancelled PAW card acknowledged and removed before capture",
   );
   await screenshot("13b-native-paw-room-resolved-private-thread-pending.png");
   result.cases.push({
