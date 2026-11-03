@@ -48,6 +48,12 @@ async function click(selector) {
   await until(`window.__shelfClick===${sequence}`);
 }
 async function screenshot(name) {
+  // DOM acknowledgement can precede the compositor's visible frame on macOS.
+  // Let the asserted state paint before accepting a screenshot as evidence.
+  await evaluate(
+    "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+  );
+  await pause(100);
   await fs.writeFile(
     path.join(directory, name + ".png"),
     (await window.webContents.capturePage()).toPNG(),
@@ -131,10 +137,7 @@ app
       assert.ok(
         geometry.shelf.x >= 0 && geometry.shelf.right <= geometry.viewport,
       );
-      await fs.writeFile(
-        path.join(directory, name + ".png"),
-        (await window.webContents.capturePage()).toPNG(),
-      );
+      await screenshot(name);
       result.cases.push({ name, geometry, countLabels });
       await click(".pending-steer-heading .queue-shelf-toggle");
       await until("document.querySelector('.steer-shelf-details').hidden");
