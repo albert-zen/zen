@@ -455,34 +455,60 @@ function NativeSelectableTranscriptViewport(props: Props) {
   useEffect(() => {
     const bridge = window.zenx?.nativeEditing;
     if (!bridge) return;
-    return bridge.onPrepareSelectAll(() => {
+    let alive = true;
+    let cancelFrame = 0;
+    const unsubscribe = bridge.onPrepareSelectAll(() => {
+      if (!alive) return false;
       const node = latest.current.viewport.current;
       if (!node || !ownsNativeTranscriptSelection(node)) return false;
+      cancelAnimationFrame(cancelFrame);
+      ++selectionEpoch.current;
       if (!completeRef.current) {
         latest.current.onNativeSelectionStart?.();
         latest.current.controller.current?.captureReveal().cancel();
         anchor.current = readTranscriptAnchor(node);
         latest.current.position.virtualAnchor = anchor.current;
-        ++selectionEpoch.current;
         completeRef.current = true;
         flushSync(() => setComplete(true));
       }
       return true;
     });
+    const unsubscribeCancelled = bridge.onSelectAllCancelled(() => {
+      const epoch = selectionEpoch.current;
+      cancelAnimationFrame(cancelFrame);
+      cancelFrame = requestAnimationFrame(() => {
+        if (!alive || epoch !== selectionEpoch.current || !completeRef.current)
+          return;
+        const current = latest.current;
+        const node = current.viewport.current;
+        if (node && transcriptSelectionIntersects(node)) return;
+        if (node) anchor.current = readTranscriptAnchor(node) ?? anchor.current;
+        current.position.virtualAnchor = anchor.current;
+        if (current.position.scroll) current.position.scroll.following = false;
+        completeRef.current = false;
+        setComplete(false);
+      });
+    });
+    return () => {
+      alive = false;
+      ++selectionEpoch.current;
+      cancelAnimationFrame(cancelFrame);
+      unsubscribe();
+      unsubscribeCancelled();
+    };
   }, []);
   useLayoutEffect(() => {
     if (!complete) return;
     const node = props.viewport.current;
     if (!node) return;
     const document = node.ownerDocument;
-    const epoch = selectionEpoch.current;
     alignTranscriptSelectionAnchor(node, anchor.current);
     props.onViewportScroll(node, true);
     let armed = false;
     let frame = 0;
     let alive = true;
     const finish = () => {
-      if (!alive || selectionEpoch.current !== epoch) return;
+      if (!alive || !completeRef.current) return;
       if (transcriptSelectionIntersects(node)) {
         armed = true;
         return;

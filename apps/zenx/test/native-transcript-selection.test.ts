@@ -14,15 +14,42 @@ import {
   alignTranscriptSelectionAnchor,
 } from "../src/renderer/src/native-transcript-selection.js";
 
-test("native page selection defers to editors and chooses only the visible primary transcript", () => {
+test("native page selection defers to editors and covers visible transcripts only", () => {
   const dom = new JSDOM(
     "<main class='thread-view'><div class='messages'><p>History</p></div><textarea></textarea><div contenteditable='true' tabindex='0'></div></main><main class='thread-view' hidden><div class='messages'></div></main>",
   );
+  dom.window.HTMLElement.prototype.getClientRects = () => [{}] as DOMRectList;
   try {
     const [primary, hidden] =
       dom.window.document.querySelectorAll<HTMLElement>(".messages");
     assert.equal(ownsNativeTranscriptSelection(primary!), true);
     assert.equal(ownsNativeTranscriptSelection(hidden!), false);
+    const view = primary!.closest<HTMLElement>(".thread-view")!;
+    view.getClientRects = () => [] as unknown as DOMRectList;
+    assert.equal(
+      ownsNativeTranscriptSelection(primary!),
+      false,
+      "a CSS-hidden or detached cached viewport cannot claim native page selection",
+    );
+    view.getClientRects = () => [{}] as DOMRectList;
+
+    const other = dom.window.document.createElement("main");
+    other.className = "thread-view";
+    other.innerHTML = '<div class="messages">Other visible conversation</div>';
+    dom.window.document.body.append(other);
+    assert.equal(
+      ownsNativeTranscriptSelection(other.firstElementChild as HTMLElement),
+      true,
+      "page-wide native Select All cannot silently omit a second visible conversation",
+    );
+    const outside = dom.window.document.createElement("button");
+    dom.window.document.body.append(outside);
+    outside.focus();
+    assert.equal(
+      ownsNativeTranscriptSelection(primary!),
+      true,
+      "sidebar/non-editor focus retains original page-wide native selection scope",
+    );
     dom.window.document.querySelector("textarea")!.focus();
     assert.equal(ownsNativeTranscriptSelection(primary!), false);
     (
@@ -57,6 +84,7 @@ test("explicit native Select All mounts canonical order only until actual Select
     ResizeObserver: globalThis.ResizeObserver,
   };
   let prepare: (() => boolean) | undefined;
+  let cancelled: (() => void) | undefined;
   let subscriptions = 0;
   let pauses = 0;
   Object.assign(globalThis, {
@@ -68,6 +96,12 @@ test("explicit native Select All mounts canonical order only until actual Select
   Object.assign(dom.window, {
     zenx: {
       nativeEditing: {
+        onSelectAllCancelled(listener: () => void) {
+          cancelled = listener;
+          return () => {
+            cancelled = undefined;
+          };
+        },
         onPrepareSelectAll(listener: () => boolean) {
           prepare = listener;
           subscriptions++;
@@ -92,6 +126,9 @@ test("explicit native Select All mounts canonical order only until actual Select
   });
   dom.window.HTMLElement.prototype.getBoundingClientRect = function () {
     return rect(0, this.classList.contains("messages") ? 600 : 280);
+  };
+  dom.window.HTMLElement.prototype.getClientRects = function () {
+    return [this.getBoundingClientRect()] as unknown as DOMRectList;
   };
   Object.defineProperties(dom.window.HTMLElement.prototype, {
     clientHeight: {
@@ -206,6 +243,25 @@ test("explicit native Select All mounts canonical order only until actual Select
       5000,
       "transient collapsed state before native selection must not undo preparation",
     );
+    await act(async () => {
+      cancelled!();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    assert.ok(
+      document.querySelectorAll("[data-transcript-row-key]").length < 200,
+      "native request cancellation releases prepared DOM when no Selection was ever established",
+    );
+    await act(async () => assert.equal(prepare!(), true));
+    await act(async () => {
+      cancelled!();
+      assert.equal(prepare!(), true);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    assert.equal(
+      document.querySelectorAll("[data-transcript-row-key]").length,
+      5000,
+      "a new explicit request supersedes old cancellation before it can destroy the new prepared DOM",
+    );
     const selection = document.getSelection()!;
     const range = document.createRange();
     range.selectNodeContents(document.body);
@@ -214,6 +270,15 @@ test("explicit native Select All mounts canonical order only until actual Select
       document.dispatchEvent(new dom.window.Event("selectionchange"));
       await new Promise((r) => setTimeout(r, 30));
     });
+    await act(async () => {
+      cancelled!();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    assert.equal(
+      document.querySelectorAll("[data-transcript-row-key]").length,
+      5000,
+      "a cancellation cannot discard an already established native Selection",
+    );
     assert.equal(selection.toString().includes("Canonical 0"), true);
     assert.ok(
       selection.toString().indexOf("Canonical 0") <
@@ -229,6 +294,39 @@ test("explicit native Select All mounts canonical order only until actual Select
       "cleared native selection releases full DOM",
     );
     assert.equal(position.scroll.following, false);
+    const stalePrepare = prepare!;
+    await act(async () =>
+      root.render(
+        React.createElement(TranscriptViewport, {
+          experimental: false,
+          rows,
+          header: null,
+          footer: null,
+          viewport,
+          controller,
+          position,
+          onViewportScroll() {},
+          onContentSettled() {},
+          onNativeSelectionStart() {
+            pauses++;
+          },
+          className: "messages",
+          children: React.createElement("p", null, "Normal full transcript"),
+        }),
+      ),
+    );
+    assert.equal(
+      subscriptions,
+      0,
+      "default/full-DOM path never registers a preparation bridge",
+    );
+    const pausesBeforeLateRequest = pauses;
+    assert.equal(
+      stalePrepare(),
+      false,
+      "late callback cannot claim or mutate a replacement viewport",
+    );
+    assert.equal(pauses, pausesBeforeLateRequest);
   } finally {
     await act(async () => root.unmount());
     Object.assign(globalThis, previous);

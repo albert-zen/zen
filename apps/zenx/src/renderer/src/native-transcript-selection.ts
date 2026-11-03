@@ -4,21 +4,21 @@ import { readTranscriptAnchor } from "./transcript-viewport-pins.js";
 export function ownsNativeTranscriptSelection(viewport: HTMLElement): boolean {
   const document = viewport.ownerDocument;
   const view = viewport.closest(".thread-view") ?? viewport;
-  if (view.closest("[hidden],[aria-hidden='true'],[inert]")) return false;
+  if (
+    view.closest("[hidden],[aria-hidden='true'],[inert]") ||
+    view.getClientRects().length === 0
+  )
+    return false;
   const active = document.activeElement;
   if (
     active?.closest(
-      "input,textarea,select,[contenteditable='true'],.cm-editor,.xterm,[role='dialog'],[data-thread-find-ignore]",
+      "input,textarea,select,[contenteditable]:not([contenteditable='false']),.cm-editor,.xterm,[role='dialog'],[data-thread-find-ignore]",
     )
   )
     return false;
-  if (active === document.body || active === document.documentElement) {
-    const primary = Array.from(document.querySelectorAll(".thread-view")).find(
-      (element) => !element.closest("[hidden],[aria-hidden='true'],[inert]"),
-    );
-    return !primary || primary === view;
-  }
-  return active !== null && view.contains(active);
+  // A native page-wide Select All includes every visible transcript, even if
+  // a sidebar button owns focus. Do not silently narrow it to one DOM subtree.
+  return true;
 }
 
 export function transcriptSelectionIntersects(viewport: HTMLElement): boolean {

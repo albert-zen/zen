@@ -70,6 +70,7 @@ declare global {
     zenx: {
       nativeEditing?: {
         onPrepareSelectAll(listener: () => boolean): () => void;
+        onSelectAllCancelled(listener: () => void): () => void;
       };
       threadQuestionAttention?: { onChanged(listener: () => void): () => void };
       information?: import("../../native-information.js").NativeInformationApi;
