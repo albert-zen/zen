@@ -278,7 +278,7 @@ test("unawaited scoped publication failure is still an unknown operation result"
   );
 });
 
-test("semantic decode clones each stored item once per fresh read", async (t) => {
+test("public reads decode owned values while unchanged append scopes reuse verified bytes", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zen-item-decode-count-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const store = new FileItemListStore(dir);
@@ -332,7 +332,7 @@ test("semantic decode clones each stored item once per fresh read", async (t) =>
     { clones: 40, parses: 40 },
     { clones: 40, parses: 40 },
     { clones: 0, parses: 0 },
-    { clones: 40, parses: 40 },
+    { clones: 0, parses: 0 },
   ]);
 });
 
