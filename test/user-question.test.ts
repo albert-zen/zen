@@ -11,6 +11,7 @@ import {
   parseUserQuestionSpecification,
   normalizeUserQuestionReply,
   renderUserQuestionReply,
+  renderUserQuestionAnswer,
 } from "../src/user-question.js";
 import {
   buildToolPresentation,
@@ -43,6 +44,64 @@ const reply = {
   outcome: "answer" as const,
   answers: [{ questionId: "scope", optionIds: ["small"] }],
 };
+
+test("questions and choices need no template; the normalized fallback is stable, client-compatible and literal", () => {
+  const input = {
+    questions: [
+      {
+        id: "scope",
+        prompt: "Keep literal {{note}} in this question?",
+        options: [{ id: "small", label: "Small {{scope}}" }],
+      },
+      { id: "note", prompt: "Any note?" },
+    ],
+  };
+  const parsed = parseUserQuestionSpecification(input);
+  assert.deepEqual(parsed, {
+    ...input,
+    answerTemplate: "scope: {{scope}}\n\nnote: {{note}}",
+  });
+  assert.deepEqual(
+    parseUserQuestionSpecification(parsed),
+    parsed,
+    "native readers retain the established required-template projection shape",
+  );
+  assert.equal(
+    Object.hasOwn(input, "answerTemplate"),
+    false,
+    "normalization never rewrites the model's call arguments",
+  );
+  assert.equal(
+    renderUserQuestionAnswer(parsed, [
+      {
+        questionId: "note",
+        optionIds: [],
+        text: "Literal {{scope}} remains text",
+      },
+      { questionId: "scope", optionIds: ["small"] },
+    ]),
+    "scope: Small {{scope}}\n\nnote: Literal {{scope}} remains text",
+  );
+  assert.deepEqual(
+    new AskUserQuestionToolRuntime().specification.inputSchema.required,
+    ["questions"],
+  );
+});
+
+test("explicit templates keep their exact prior bytes and invalid explicit templates still fail", () => {
+  assert.deepEqual(
+    parseUserQuestionSpecification(specification),
+    specification,
+  );
+  assert.equal(
+    renderUserQuestionReply(specification, reply),
+    "Reply to question call-a:\nScope: Small",
+  );
+  for (const answerTemplate of [null, "", "{{scope}} {{scope}}", "{{missing}}"])
+    assert.throws(() =>
+      parseUserQuestionSpecification({ ...specification, answerTemplate }),
+    );
+});
 
 test("strict reply provenance survives the actual semantic decoder and compatibility read round trip", () => {
   const fact = decodeCanonicalItem({

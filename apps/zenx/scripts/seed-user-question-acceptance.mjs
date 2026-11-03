@@ -50,7 +50,6 @@ export async function seedUserQuestionAcceptance({
                 ],
               },
             ],
-            answerTemplate: "Synthetic color answer: {{color}}",
           },
           {
             questions: [

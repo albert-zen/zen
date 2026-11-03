@@ -205,7 +205,12 @@ export function parseUserQuestionSpecification(
     }
     return result;
   });
-  const answerTemplate = text(raw.answerTemplate, 4096, "answerTemplate");
+  // Keep the projected/native shape compatible with existing clients. Only
+  // validated IDs enter the fallback template; question text is never code.
+  const answerTemplate =
+    raw.answerTemplate === undefined
+      ? questions.map(({ id }) => `${id}: {{${id}}}`).join("\n\n")
+      : text(raw.answerTemplate, 4096, "answerTemplate");
   const used = new Set<string>();
   const remainder = answerTemplate.replace(
     /\{\{([a-zA-Z0-9_-]+)\}\}/g,

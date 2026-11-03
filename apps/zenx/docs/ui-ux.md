@@ -1065,6 +1065,11 @@ ending its Turn does not cancel a question, clear its draft, move focus or navig
 This initial renderer-local draft does not survive application reload; native
 accepted/pending questions do. Neither Board fields nor Composer/queue-edit fields
 are reused. Each authored question must have a valid answer before one group Send.
+Models may publish questions and optional choices without an answer template.
+Missing templates use deterministic ID-labelled answer text in authored question
+order; existing explicit templates keep their exact rendering. The native read
+shape still includes a normalized template, and question text is never evaluated
+as a template.
 
 The view reads bounded native pages and exact response identities. Invalidation
 restarts pagination; additional pages remain explicitly reachable. Pending means

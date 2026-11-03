@@ -75,7 +75,8 @@ export async function questionNativeFixture(toolEnvironment?: ToolEnvironment) {
     },
     async publish(
       threadId: string,
-      specification: UserQuestionSpecification = {
+      specification: Pick<UserQuestionSpecification, "questions"> &
+        Partial<Pick<UserQuestionSpecification, "answerTemplate">> = {
         questions: [
           {
             id: "scope",
@@ -94,7 +95,6 @@ export async function questionNativeFixture(toolEnvironment?: ToolEnvironment) {
             ],
           },
         ],
-        answerTemplate: "Scope: {{scope}}",
       },
     ) {
       await (

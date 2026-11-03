@@ -155,12 +155,25 @@ test("default-on asynchronous Ask survives completed independent work and Host r
     path.join(os.tmpdir(), "zen-question-async-"),
   );
   const base = options(directory);
+  const withoutTemplate = { questions: specification.questions };
+  const templateFreeAsk = `!tool ${ASK_USER_QUESTION_NAME} ${JSON.stringify(withoutTemplate)}`;
   let host = createHostedAppServer(base);
   try {
     const thread = await host.startThread();
-    const turn = await host.startTurn(thread.id, ask);
+    const turn = await host.startTurn(thread.id, templateFreeAsk);
     await turn.done;
     const question = (await host.listUserQuestions(thread.id)).questions[0]!;
+    assert.equal(question.specification.answerTemplate, "scope: {{scope}}");
+    const originalCall = (await host.readThread(thread.id)).itemList!.find(
+      (item) =>
+        item.id === question.request.callItemId && item.kind === "tool_call",
+    );
+    assert.ok(originalCall?.kind === "tool_call");
+    assert.deepEqual(
+      originalCall.content.arguments,
+      withoutTemplate,
+      "semantic call arguments remain exactly what the model authored",
+    );
     assert.equal(
       question.state,
       "open",
@@ -209,6 +222,12 @@ test("default-on asynchronous Ask survives completed independent work and Host r
       1,
       "the later answer is one ordinary durable human input",
     );
+    const answerInput = semanticReplies[0]!;
+    assert.ok(answerInput.kind === "message");
+    assert.deepEqual(answerInput.content.parts.at(-1), {
+      type: "text",
+      text: `Reply to question ${question.request.callItemId}:\nscope: Small, answered later`,
+    });
     const answered = await host.readThreadSummary(thread.id);
     assert.equal(
       answered.status === "systemError"
@@ -216,6 +235,25 @@ test("default-on asynchronous Ask survives completed independent work and Host r
         : answered.userQuestionSummary?.openCount,
       0,
     );
+    const cancelThread = await host.startThread();
+    await (
+      await host.startTurn(cancelThread.id, templateFreeAsk)
+    ).done;
+    const cancelQuestion = (await host.listUserQuestions(cancelThread.id))
+      .questions[0]!;
+    const cancelled = await host.respondToUserQuestion(cancelThread.id, {
+      questionCallItemId: cancelQuestion.request.callItemId,
+      clientId: "template-free-cancel",
+      outcome: "cancel",
+    });
+    await cancelled.turn.done;
+    const cancelRead = await host.readUserQuestion(
+      cancelThread.id,
+      cancelQuestion.request.callItemId,
+      "template-free-cancel",
+    );
+    assert.equal(cancelRead.response.status, "claimed");
+    assert.equal(cancelRead.question?.state, "cancelled");
   } finally {
     await host.closeHostResources();
     await rm(directory, { recursive: true, force: true });
