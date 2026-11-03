@@ -30,7 +30,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-information-layout-ab-v1-not-acceptance",
+  harnessVersion: "native-shared-arrival-ab-v1-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
@@ -39,7 +39,7 @@ const result = {
   scope:
     "Production App, private production DomainThreadJournal history, native input and Send; no model network, no mock ACK or injected UI; actual product pending and canonical feedback measured separately.",
   measurementContract:
-    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. This is not compositor presentation telemetry or proof of pixel scanout.",
+    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. This is not compositor presentation telemetry or proof of pixel scanout.",
   steps: [],
   blockedExternalRequests: 0,
 };
@@ -241,6 +241,8 @@ function installObservation(nonce, threadId) {
     },
     frames: [],
     notifications: [],
+    nativeLayoutEvents: [],
+    nativeLayoutAtClick: null,
     instrumentation: {
       mutationCallbacks: 0,
       mutationRecords: 0,
@@ -271,12 +273,80 @@ function installObservation(nonce, threadId) {
     record.trusted = event.isTrusted;
     record.disabledAtClick = button.disabled;
     record.draftAtClick = value();
+    record.nativeLayoutAtClick = { ...latestLayout };
     record.visibilityAtClick = {
       state: document.visibilityState,
       focused: document.hasFocus(),
     };
   };
   document.addEventListener("click", capture, true);
+  // Passive evidence from the same boxes as the production follow observer.
+  // Entry sizes are browser-supplied; never read geometry or scroll here.
+  const layoutTargets = new Map(
+    [
+      [document.querySelector(".messages-inner"), "content"],
+      [document.querySelector(".messages"), "scrollport"],
+      [document.querySelector(".bottom-zone"), "composer-zone"],
+    ].filter(([target]) => target),
+  );
+  const latestLayout = {};
+  let pendingIntersectionVisible = false;
+  const intersectionObserver =
+    typeof IntersectionObserver === "undefined"
+      ? null
+      : new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.target !== record.pendingBubble) continue;
+              pendingIntersectionVisible =
+                entry.isIntersecting && entry.intersectionRatio > 0;
+              if (!pendingIntersectionVisible || !entry.target.isConnected)
+                continue;
+              if (record.pendingNativeIntersectionMs === undefined) {
+                record.pendingNativeIntersectionMs = performance.now();
+                record.pendingNativeIntersectionEntryMs = entry.time;
+                record.pendingNativeIntersectionRatio = entry.intersectionRatio;
+                const r = entry.intersectionRect;
+                record.pendingNativeIntersectionBounds = {
+                  left: r.left,
+                  top: r.top,
+                  width: r.width,
+                  height: r.height,
+                };
+                requestAnimationFrame(() => {
+                  if (
+                    pendingIntersectionVisible &&
+                    record.pendingBubble?.isConnected
+                  )
+                    record.pendingNativeSubsequentFrameMs = performance.now();
+                });
+              }
+            }
+          },
+          { root: document.querySelector(".messages"), threshold: [0, 0.01] },
+        );
+  const layoutObserver =
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver((entries) => {
+          const boxes = entries.map((entry) => ({
+            target: layoutTargets.get(entry.target),
+            width: entry.contentRect.width,
+            height: entry.contentRect.height,
+          }));
+          for (const box of boxes)
+            latestLayout[box.target] = { width: box.width, height: box.height };
+          if (record.clickMs === undefined)
+            record.nativeLayoutReady = latestLayout.content !== undefined;
+          else if (record.nativeLayoutEvents.length < 200)
+            record.nativeLayoutEvents.push({
+              atMs: performance.now(),
+              boxes,
+              pendingConnected: record.pendingBubble?.isConnected === true,
+              canonicalConnected: record.bubble?.isConnected === true,
+            });
+        });
+  for (const target of layoutTargets.keys()) layoutObserver?.observe(target);
   const findBubble = (root) => {
     if (!(root instanceof Element)) return;
     record.instrumentation.inspectedElements++;
@@ -296,7 +366,12 @@ function installObservation(nonce, threadId) {
           record.pendingDomMs = performance.now();
         record.pendingClientId = row.dataset.pendingSendClientId;
         record.pendingStateAtDom = row.dataset.sendState;
-        record.pendingBubble = bubble;
+        if (record.pendingBubble !== bubble) {
+          if (record.pendingBubble)
+            intersectionObserver?.unobserve(record.pendingBubble);
+          record.pendingBubble = bubble;
+          intersectionObserver?.observe(bubble);
+        }
       }
     }
     const rows = root.closest("article.user-row[data-sent-message-id]")
@@ -546,6 +621,8 @@ function installObservation(nonce, threadId) {
     stopped = true;
     cancelAnimationFrame(frameId);
     mutation.disconnect();
+    layoutObserver?.disconnect();
+    intersectionObserver?.disconnect();
     off();
     document.removeEventListener("click", capture, true);
     const { bubble, pendingBubble, stop, ...plain } = record;
@@ -706,6 +783,13 @@ async function run() {
     viewportWidth === 1120 ? "popover" : "dock",
     "Actual DOM must establish the intended candidate/control path",
   );
+  await until(
+    async () =>
+      await evaluate(
+        "!document.querySelector('.information-content')?.textContent?.includes('Loading information')",
+      ),
+    "preparation information reads settled",
+  );
   await screenshot("information-presentation-before-timing.png");
   await click(
     informationTrigger,
@@ -784,6 +868,11 @@ async function run() {
         JSON.stringify(threadId) +
         ")",
     );
+    await until(
+      async () =>
+        await evaluate("window.__sendLatency.nativeLayoutReady===true"),
+      "native observer initial content delivery before timing",
+    );
     await screenshot(
       "messages-" +
         manifest.visibleMessageCount +
@@ -791,6 +880,16 @@ async function run() {
         repetition +
         "-before.png",
     );
+    result.readerBeforeSend ??= [];
+    const reader = await evaluate(
+      `(()=>{const s=document.querySelector('.messages');return {scrollTop:s.scrollTop,scrollHeight:s.scrollHeight,clientHeight:s.clientHeight,bottomDistance:s.scrollHeight-s.clientHeight-s.scrollTop,selectionActive:!window.getSelection()?.isCollapsed}})()`,
+    );
+    assert.ok(
+      reader.bottomDistance <= 3 && reader.bottomDistance >= -3,
+      "Matched live-bottom reader state before timing",
+    );
+    assert.equal(reader.selectionActive, false);
+    result.readerBeforeSend.push(reader);
     const ipcStart = result.ipc.length;
     await click(
       "document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)')",
@@ -865,6 +964,41 @@ async function run() {
         sample.clearGeometryCompleteMs - sample.clickMs;
       sample.clickToClearSubsequentFrameMs =
         sample.clearSubsequentFrameMs - sample.clickMs;
+      assert.ok(
+        sample.nativeLayoutAtClick?.content,
+        "Native initial content size required",
+      );
+      const pendingResize = sample.nativeLayoutEvents.find(
+        (event) =>
+          event.pendingConnected &&
+          event.boxes.some(
+            (box) =>
+              box.target === "content" &&
+              box.height > sample.nativeLayoutAtClick.content.height,
+          ),
+      );
+      assert.ok(
+        pendingResize,
+        "Real inserted pending row must cause a native observed content growth before canonical replacement",
+      );
+      sample.clickToPendingContentResizeMs =
+        pendingResize.atMs - sample.clickMs;
+      sample.nativeLayoutEvents = sample.nativeLayoutEvents.map((event) => ({
+        ...event,
+        relativeToClickMs: event.atMs - sample.clickMs,
+      }));
+      assert.ok(
+        Number.isFinite(sample.pendingNativeIntersectionMs),
+        "Inserted real pending row must intersect the actual scrollport via native browser observer",
+      );
+      assert.ok(
+        Number.isFinite(sample.pendingNativeSubsequentFrameMs),
+        "Pending row must remain connected and natively intersecting into a later frame opportunity",
+      );
+      sample.clickToPendingNativeIntersectionMs =
+        sample.pendingNativeIntersectionMs - sample.clickMs;
+      sample.clickToPendingNativeSubsequentFrameMs =
+        sample.pendingNativeSubsequentFrameMs - sample.clickMs;
       sample.feedbackTargetMs = 200;
       sample.feedbackWithinTarget = sample.firstVisibleFeedbackMs <= 200;
       sample.verifiedFeedbackWithinTarget =

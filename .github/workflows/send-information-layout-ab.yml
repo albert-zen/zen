@@ -1,7 +1,7 @@
-name: Packaged information-layout Send A/B (diagnostic only)
+name: Packaged shared-arrival Send A/B (diagnostic only)
 on:
   push:
-    branches: [diagnostic/send-information-layout-native-20261103]
+    branches: [diagnostic/send-shared-layout-native-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -15,12 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: bedc83f9ff0d6a1dd7b3705d90f7de175c632ed5
+          ref: ca168feadf0dff50179c7c538e4bdb854b3a9296
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 6ef1897cb0804809143fa658e6de4a09982e710f
+          ref: e245bbc2104ee993863a7b7b39967105fc4c1f5c
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
         timeout-minutes: 48
         run: |
           failed=0
-          for case in control-baseline control-candidate narrow-baseline narrow-candidate; do
+          for case in control-baseline control-candidate narrow-candidate narrow-baseline; do
             case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
             case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
             mkdir -p "results/$case"
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-information-layout-ab-5000
+          name: native-send-shared-layout-ab-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

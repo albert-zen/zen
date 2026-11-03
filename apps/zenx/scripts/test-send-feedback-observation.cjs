@@ -17,9 +17,12 @@ const observer = source.slice(
 );
 assert.ok(observer.startsWith("function installObservation("));
 
-function fixture() {
+function fixture({
+  layoutObservation = false,
+  intersectionObservation = false,
+} = {}) {
   const dom = new JSDOM(
-    '<main class="thread-view"><div class="messages"></div><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></main>',
+    '<main class="thread-view"><div class="messages"><div class="messages-inner"></div></div><div class="bottom-zone"><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></div></main>',
     { runScripts: "outside-only" },
   );
   const { window: w } = dom;
@@ -30,6 +33,65 @@ function fixture() {
     offCount = 0;
   const frames = new Map();
   let geometryReads = 0;
+  const errors = [];
+  w.addEventListener("error", (event) => errors.push(String(event.error)));
+  let layoutObserver;
+  if (layoutObservation)
+    w.ResizeObserver = class {
+      constructor(callback) {
+        this.callback = callback;
+        this.targets = new Set();
+        this.disconnected = false;
+        layoutObserver = this;
+      }
+      observe(target) {
+        this.targets.add(target);
+      }
+      disconnect() {
+        this.disconnected = true;
+        this.targets.clear();
+      }
+      deliver(target, height) {
+        this.callback([{ target, contentRect: { width: 400, height } }]);
+      }
+    };
+  let intersectionObserver;
+  if (intersectionObservation)
+    w.IntersectionObserver = class {
+      constructor(callback, options) {
+        this.callback = callback;
+        this.targets = new Set();
+        this.root = options.root;
+        intersectionObserver = this;
+      }
+      observe(target) {
+        this.targets.add(target);
+      }
+      unobserve(target) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.disconnected = true;
+        this.targets.clear();
+      }
+      deliver(target, visible) {
+        assert.ok(this.targets.has(target));
+        this.callback([
+          {
+            target,
+            isIntersecting: visible,
+            intersectionRatio: visible ? 1 : 0,
+            time: now,
+            intersectionRect: {
+              left: 10,
+              top: 10,
+              width: 400,
+              height: visible ? 40 : 0,
+            },
+          },
+        ]);
+      }
+    };
   Object.defineProperty(w.performance, "now", { value: () => now });
   w.requestAnimationFrame = (callback) => {
     frames.set(++id, callback);
@@ -62,6 +124,8 @@ function fixture() {
   };
   d.querySelector("#thread-composer").value = "synthetic-nonce";
   w.eval(observer + '; installObservation("synthetic-nonce", "thread-A");');
+  if (layoutObservation)
+    layoutObserver.deliver(d.querySelector(".messages-inner"), 1000);
   d.querySelector("button").dispatchEvent(
     new w.MouseEvent("click", { bubbles: true }),
   );
@@ -80,7 +144,7 @@ function fixture() {
     bubble.className = "user-bubble";
     bubble.textContent = "synthetic-nonce";
     article.append(bubble);
-    d.querySelector(".messages").append(article);
+    d.querySelector(".messages-inner").append(article);
     await new Promise(setImmediate);
     return { article, bubble };
   };
@@ -90,6 +154,14 @@ function fixture() {
     row,
     record: w.__sendLatency,
     geometryReads: () => geometryReads,
+    resize(height) {
+      layoutObserver.deliver(d.querySelector(".messages-inner"), height);
+    },
+    resizeDisconnected: () => layoutObserver?.disconnected,
+    intersect(target, visible) {
+      intersectionObserver.deliver(target, visible);
+    },
+    intersectionDisconnected: () => intersectionObserver?.disconnected,
     frame() {
       now += 16;
       const callbacks = [...frames.values()];
@@ -112,7 +184,14 @@ function fixture() {
     close() {
       w.__sendLatency.stop();
       assert.equal(offCount, 1);
+      if (intersectionObservation)
+        assert.equal(intersectionObserver.disconnected, true);
       dom.window.close();
+      assert.deepEqual(
+        errors,
+        [],
+        "observer must not swallow DOM event-handler failures",
+      );
     },
   };
 }
@@ -259,4 +338,76 @@ test("canonical-first path requires native identity, supports same-message remou
   f.close();
   f.frame();
   assert.equal(f.record.instrumentation.frameCallbacks, count);
+});
+
+test("passive native resize evidence uses supplied entries without geometry reads", async () => {
+  const f = fixture({ layoutObservation: true });
+  try {
+    assert.equal(f.record.nativeLayoutReady, true);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(f.record.nativeLayoutAtClick.content)),
+      { width: 400, height: 1000 },
+    );
+    await f.row("pending");
+    const reads = f.geometryReads();
+    f.resize(1100);
+    assert.equal(f.geometryReads(), reads);
+    const event = f.record.nativeLayoutEvents[0];
+    assert.equal(event.pendingConnected, true);
+    assert.equal(event.boxes[0].target, "content");
+    assert.equal(event.boxes[0].height, 1100);
+    assert.ok(event.atMs >= f.record.clickMs);
+  } finally {
+    f.close();
+  }
+  assert.equal(f.resizeDisconnected(), true);
+});
+test("DOM mutation alone never fabricates resize delivery evidence", async () => {
+  const f = fixture({ layoutObservation: true });
+  try {
+    const { bubble } = await f.row("pending");
+    bubble.textContent = "same-box text change";
+    await new Promise(setImmediate);
+    assert.equal(f.record.nativeLayoutEvents.length, 0);
+    f.resize(1000);
+    assert.equal(f.record.nativeLayoutEvents.length, 1);
+    assert.equal(f.record.nativeLayoutEvents[0].boxes[0].height, 1000);
+  } finally {
+    f.close();
+  }
+});
+
+test("native intersection entry remains independent of geometry reads and is confirmed in a later connected frame", async () => {
+  const f = fixture({ intersectionObservation: true });
+  try {
+    const { bubble } = await f.row("pending");
+    const before = f.geometryReads();
+    f.intersect(bubble, true);
+    assert.equal(f.geometryReads(), before);
+    assert.equal(f.record.pendingNativeIntersectionMs, f.record.clickMs);
+    assert.equal(f.record.pendingNativeSubsequentFrameMs, undefined);
+    f.frame();
+    assert.ok(
+      f.record.pendingNativeSubsequentFrameMs >
+        f.record.pendingNativeIntersectionMs,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("detached or non-intersecting pending cannot pass native subsequent-frame evidence", async () => {
+  for (const state of ["detached", "outside"]) {
+    const f = fixture({ intersectionObservation: true });
+    try {
+      const { article, bubble } = await f.row("pending");
+      f.intersect(bubble, true);
+      if (state === "detached") article.remove();
+      else f.intersect(bubble, false);
+      f.frame();
+      assert.equal(f.record.pendingNativeSubsequentFrameMs, undefined);
+    } finally {
+      f.close();
+    }
+  }
 });

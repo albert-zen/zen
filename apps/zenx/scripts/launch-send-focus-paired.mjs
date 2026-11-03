@@ -59,12 +59,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "bedc83f9ff0d6a1dd7b3705d90f7de175c632ed5",
-    tree: "382f413a2203a5fef660f7e78c9b8ca65aecb7c6",
+    commit: "ca168feadf0dff50179c7c538e4bdb854b3a9296",
+    tree: "0a02942ea221dfa3a41111b5267dcc5377cee236",
   },
   candidate: {
-    commit: "6ef1897cb0804809143fa658e6de4a09982e710f",
-    tree: "7ecfbdcf365e3c6d57c925a0f88916be46a76ee3",
+    commit: "e245bbc2104ee993863a7b7b39967105fc4c1f5c",
+    tree: "a6993aa2c9904f36ed4d2d0cfdb904bac00b57d1",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -607,7 +607,7 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-information-layout-ab-v1-not-acceptance",
+    "native-shared-arrival-ab-v1-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
@@ -705,6 +705,17 @@ try {
       verifiedClearWithinTarget: sample.verifiedClearWithinTarget,
       visibilityAtClick: sample.visibilityAtClick,
       instrumentation: sample.instrumentation,
+      clickToPendingContentResizeMs: sample.clickToPendingContentResizeMs,
+      nativeLayoutAtClick: sample.nativeLayoutAtClick,
+      clickToPendingNativeIntersectionMs:
+        sample.clickToPendingNativeIntersectionMs,
+      clickToPendingNativeSubsequentFrameMs:
+        sample.clickToPendingNativeSubsequentFrameMs,
+      pendingNativeIntersectionRatio: sample.pendingNativeIntersectionRatio,
+      pendingNativeIntersectionBounds: sample.pendingNativeIntersectionBounds,
+      nativeLayoutEvents: sample.nativeLayoutEvents.map(
+        ({ atMs, ...event }) => event,
+      ),
     };
   });
   const summary = {
@@ -724,6 +735,7 @@ try {
     nativeWindow: result.nativeWindow,
     informationPresentation: result.informationPresentation,
     rendered: result.before.rendered,
+    readerBeforeSend: result.readerBeforeSend,
     samples,
     packaged: {
       isPackaged: true,
