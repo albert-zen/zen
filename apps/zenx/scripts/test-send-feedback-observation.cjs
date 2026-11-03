@@ -567,21 +567,24 @@ test("timeline integration remains single source, bounded and private", () => {
     "utf8",
   );
   assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
-  assert.ok(workflow.includes('"1120 click narrow candidate baseline"'));
+  assert.equal(
+    workflow.includes('"1120 click narrow candidate baseline"'),
+    false,
+  );
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
   );
 });
 
-test("span linkage locks current main and keeps reader regression outside timing", () => {
+test("history volume pair locks rollback-preserving sources and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "b72962a068d9ffcd7a01989aa66f12f2cde80761",
-    "33c5e6041c685cc7fc3992d8a4a3c3552bc56fde",
+    "baed6ada3751d6e7c225ec78e9b06f734095db15",
+    "c0afbda944b4714544bd1f24d984e0d16909cda8",
   ])
     assert.ok(launch.includes(identity));
   for (const contract of [
@@ -912,4 +915,33 @@ test("invalidation trace is bounded to first sample while all three native sends
   assert.ok(source.includes("traceSampleLimit: 1"));
   assert.ok(source.includes("if (repetition === 0) await stopOwnedTrace();"));
   assert.ok(source.includes("repetition < 3"));
+});
+
+test("history experiment keeps canonical suffix and native expansion outside measured sends", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  assert.ok(launch.includes('sourceLabel === "candidate" ? 100 : count'));
+  assert.ok(launch.includes("result.before.turns, count"));
+  assert.ok(launch.includes("result.before.messages, count * 2"));
+  assert.ok(
+    launch.includes("result.before.rendered.exactCanonicalSuffix, true"),
+  );
+  assert.ok(source.includes("Mounted history is the exact canonical suffix"));
+  const expand = source.indexOf("if (result.before.rendered.historyPager)");
+  assert.ok(
+    expand >
+      source.indexOf(
+        "await stopOwnedTrace();",
+        source.indexOf("result.samples = []"),
+      ),
+  );
+  assert.ok(expand > source.indexOf("const finalItems ="));
+  assert.ok(
+    source.includes(
+      "native experimental prepend retains existing row position",
+    ),
+  );
+  assert.ok(source.includes("experimental Back to live reaches actual bottom"));
 });

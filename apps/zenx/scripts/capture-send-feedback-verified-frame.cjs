@@ -1416,9 +1416,23 @@ async function run() {
     baselineKind:
       "existing selected idle Thread; initial production thread/read verified and warmed before timing",
     rendered: await evaluate(
-      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,pendingHosts:inner.querySelectorAll(':scope > .pending-send-host').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
+      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,pendingHosts:inner.querySelectorAll(':scope > .pending-send-host').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,historyPager:Boolean(document.querySelector('.load-earlier-transcript')),outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
     ),
   };
+  const mountedUserIds = await evaluate(
+    "Array.from(document.querySelectorAll('article.user-row[data-sent-message-id]'),e=>e.dataset.sentMessageId)",
+  );
+  const expectedTail = before.thread.turns
+    .slice(-result.before.rendered.turnBlocks)
+    .flatMap((turn) => turn.items)
+    .filter((item) => item.type === "userMessage")
+    .map((item) => item.id);
+  assert.deepEqual(
+    mountedUserIds,
+    expectedTail,
+    "Mounted history is the exact canonical suffix",
+  );
+  result.before.rendered.exactCanonicalSuffix = true;
   const informationTrigger =
     "document.querySelector('.information-toolbar button')";
   await until(
@@ -1884,6 +1898,65 @@ async function run() {
     ),
     "No compaction anywhere in observed baseline lifecycle",
   );
+  // Experimental paging is measured only after all send timing and trace stop.
+  // This is a DOM-volume diagnostic, not acceptance of a new history UX.
+  if (result.before.rendered.historyPager) {
+    const topPoint = await evaluate(
+      "(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()",
+    );
+    window.webContents.sendInputEvent({ type: "mouseMove", ...topPoint });
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...topPoint,
+      deltaX: 0,
+      deltaY: 1000000,
+      canScroll: true,
+      hasPreciseScrollingDeltas: true,
+    });
+    await until(
+      async () =>
+        await evaluate("document.querySelector('.messages').scrollTop<=1"),
+      "native upward scroll reaches experimental oldest mounted row",
+    );
+    await evaluate(
+      "(()=>{const e=document.querySelector('.transcript-history > section.turn');window.__historyMountAnchor={element:e,top:e.getBoundingClientRect().top,count:document.querySelectorAll('section.turn').length}})()",
+    );
+    await screenshot("experimental-history-before-expand.png");
+    await click(
+      "document.querySelector('.load-earlier-transcript')",
+      "Experimental: mount previous 100 history rows",
+    );
+    await until(
+      async () =>
+        await evaluate(
+          "document.querySelectorAll('section.turn').length===window.__historyMountAnchor.count+100",
+        ),
+      "experimental history expansion mounted exactly 100 earlier rows",
+    );
+    await pause(300);
+    result.historyMountVisual = await evaluate(
+      "(()=>{const a=window.__historyMountAnchor;return {beforeCount:a.count,afterCount:document.querySelectorAll('section.turn').length,retainedNodeConnected:a.element.isConnected,retainedNodeTopDelta:a.element.getBoundingClientRect().top-a.top,backToLive:Boolean(document.querySelector('.back-live'))}})()",
+    );
+    assert.equal(result.historyMountVisual.retainedNodeConnected, true);
+    assert.ok(
+      Math.abs(result.historyMountVisual.retainedNodeTopDelta) <= 2,
+      "native experimental prepend retains existing row position",
+    );
+    assert.equal(result.historyMountVisual.backToLive, true);
+    await screenshot("experimental-history-after-expand.png");
+    await evaluate("delete window.__historyMountAnchor");
+    await click(
+      "document.querySelector('.back-live')",
+      "Return experimental reader to live after expansion",
+    );
+    await until(
+      async () =>
+        await evaluate(
+          "(()=>{const s=document.querySelector('.messages');return s.scrollHeight-s.clientHeight-s.scrollTop<=1})()",
+        ),
+      "experimental Back to live reaches actual bottom",
+    );
+  }
   const readerPoint = await evaluate(
     `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
   );
@@ -1959,7 +2032,12 @@ async function run() {
       Math.abs(geometry.turnGapPx - expectedGap) <= 0.1,
       "real historical Turn geometry follows responsive parent gap",
     );
-    assert.equal(geometry.turnCount, manifest.completedTurnCount + 3);
+    assert.equal(
+      geometry.turnCount,
+      result.before.rendered.turnBlocks +
+        3 +
+        (result.historyMountVisual ? 100 : 0),
+    );
     assert.equal(
       geometry.overflow,
       false,

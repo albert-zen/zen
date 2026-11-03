@@ -61,12 +61,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "b72962a068d9ffcd7a01989aa66f12f2cde80761",
-    tree: "33c5e6041c685cc7fc3992d8a4a3c3552bc56fde",
+    commit: "baed6ada3751d6e7c225ec78e9b06f734095db15",
+    tree: "c0afbda944b4714544bd1f24d984e0d16909cda8",
   },
   candidate: {
-    commit: "7eaf40fd3f9f989926f3dd7879ae8b7513d036a2",
-    tree: "096991d08754350193e3a42158de08241132174e",
+    commit: "10a533f6d7d506018eb7eaf7001d25d5cfd8b9b1",
+    tree: "031c535dc90466f98f19f4c4c9cb6387abd872ea",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -328,7 +328,8 @@ await writeFile(
       sourceTree: snapshot.tree,
       packagedHashes,
       comparisonRole:
-        "locked-main span invalidation schedule linkage: " + activationKind,
+        "experimental DOM-volume causal pair, not virtualization acceptance: " +
+        activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
       visibleHistoricalMessages: count * 2,
@@ -698,7 +699,18 @@ try {
   ];
   assert.equal(result.before.rendered.historyGroups, 1);
   assert.equal(result.before.rendered.directTurns, 0);
-  assert.equal(result.before.rendered.groupTurns, count);
+  const mountedCount = sourceLabel === "candidate" ? 100 : count;
+  assert.equal(result.before.turns, count);
+  assert.equal(result.before.messages, count * 2);
+  assert.equal(result.before.rendered.groupTurns, mountedCount);
+  assert.equal(result.before.rendered.turnBlocks, mountedCount);
+  assert.equal(result.before.rendered.userRows, mountedCount);
+  assert.equal(result.before.rendered.assistantRows, mountedCount);
+  assert.equal(
+    result.before.rendered.historyPager,
+    sourceLabel === "candidate",
+  );
+  assert.equal(result.before.rendered.exactCanonicalSuffix, true);
   assert.equal(result.before.rendered.pendingHosts, 0);
   assert.equal(result.before.rendered.outerGapPx, 24);
   assert.equal(result.before.rendered.historyGapPx, 24);
@@ -798,6 +810,11 @@ try {
     hostAfter: hostSnapshot(),
     nativeWindow: result.nativeWindow,
     informationPresentation: result.informationPresentation,
+    canonicalBefore: {
+      turns: result.before.turns,
+      messages: result.before.messages,
+    },
+    historyMountVisual: result.historyMountVisual,
     rendered: result.before.rendered,
     readerBeforeSend: result.readerBeforeSend,
     pausedReaderResize: result.pausedReaderResize,
@@ -856,7 +873,7 @@ try {
     "REVIEWED_NATIVE_AB_OBSERVATION_NOT_ACCEPTANCE " + JSON.stringify(summary),
   );
   for (const name of (await readdir(directory)).filter((name) =>
-    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641))\.png$/.test(
+    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|experimental-history-(?:before|after)-expand)\.png$/.test(
       name,
     ),
   ))
