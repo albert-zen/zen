@@ -281,3 +281,116 @@ test("npm-ci nested sharp staging is regular, repeatable and detached from its u
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("sharp staging rejects unexpected package links without following them", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sharp-source-link-"),
+  );
+  try {
+    const fixture = path.join(directory, "fixture");
+    const outside = path.join(directory, "outside");
+    await writeNestedSharpFixture(fixture);
+    await mkdir(outside);
+    await writeFile(path.join(outside, "sentinel"), "untouched");
+    await symlink(
+      outside,
+      path.join(fixture, "node_modules", "sharp", "unexpected-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const app = path.join(directory, "app");
+    await assert.rejects(
+      () => stageImageCodec(fixture, app),
+      /Non-regular sharp runtime source/u,
+    );
+    assert.equal(
+      await readFile(path.join(outside, "sentinel"), "utf8"),
+      "untouched",
+    );
+    assert.deepEqual(await readdir(outside), ["sentinel"]);
+    await assert.rejects(
+      lstat(path.join(app, "node_modules", "sharp", "unexpected-link")),
+      { code: "ENOENT" },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("sharp staging rejects linked destination parents before cleanup", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sharp-parent-link-"),
+  );
+  try {
+    const fixture = path.join(directory, "fixture");
+    await writeNestedSharpFixture(fixture);
+    for (const target of ["app", "node_modules", "@img"]) {
+      const app = path.join(directory, `app-${target}`);
+      const outside = path.join(directory, `outside-${target}`);
+      const link =
+        target === "app"
+          ? app
+          : path.join(
+              app,
+              "node_modules",
+              ...(target === "@img" ? ["@img"] : []),
+            );
+      await mkdir(outside);
+      await writeFile(path.join(outside, "sentinel"), "untouched");
+      await mkdir(path.dirname(link), { recursive: true });
+      await symlink(
+        outside,
+        link,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await assert.rejects(
+        () => stageImageCodec(fixture, app),
+        /Unsafe sharp runtime directory/u,
+        target,
+      );
+      assert.equal(
+        await readFile(path.join(outside, "sentinel"), "utf8"),
+        "untouched",
+        target,
+      );
+      assert.deepEqual(await readdir(outside), ["sentinel"], target);
+      assert.equal((await lstat(link)).isSymbolicLink(), true, target);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("sharp staging replaces only the named destination link, never its target", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-sharp-target-link-"),
+  );
+  try {
+    const fixture = path.join(directory, "fixture");
+    const app = path.join(directory, "app");
+    const outside = path.join(directory, "outside");
+    await writeNestedSharpFixture(fixture, true);
+    await mkdir(outside);
+    await writeFile(path.join(outside, "sentinel"), "untouched");
+    const link = path.join(app, "node_modules", "semver");
+    await mkdir(path.dirname(link), { recursive: true });
+    await symlink(
+      outside,
+      link,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await stageImageCodec(fixture, app);
+    await assertRegularTree(app);
+    assert.match(
+      JSON.parse(await readFile(path.join(link, "package.json"), "utf8"))
+        .version,
+      /^7\./u,
+    );
+    assert.equal(
+      await readFile(path.join(outside, "sentinel"), "utf8"),
+      "untouched",
+    );
+    assert.deepEqual(await readdir(outside), ["sentinel"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

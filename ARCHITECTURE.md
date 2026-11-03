@@ -6,6 +6,8 @@
 
 - **Native information admission** — The native information service admits the current trusted main-frame document and live Thread/Room member choices into the existing sidebar CAS operations, minting component identities and bindings without a new owner or persistence domain.
 
+- **Information panel visibility** — Per-Thread/Room visibility and consumed foreground question attention tokens are disposable window-local presentation memory, separate from the durable sidebar layout and question authority; new selected-Thread questions may reveal the panel without changing focus, while background questions never navigate or open it.
+
 - **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.
 
 ## ItemList / Trace / current product state contract
@@ -1761,3 +1763,5 @@ remote-tool recall or automatic cross-window exactly-once insertion. Acceptance 
 combined source version; historical branch checks do not accept an integration.
 
 Room Boards are existing workspace product resources addressed only by roomId and instanceKey; current member Thread identity is execution/admission context, never persisted Board ownership. Trusted human reads/drafts validate the live workspace, while Agent access and execution retain their exact live member and existing tool permissions.
+
+Native 问询分页读取携带从既有已接受发布结果 append 顺序推导的最新问题身份；前台资料卡只据此区分新发布与分页、答复或撤回，不增加持久状态，也不扩展 CAS。

@@ -105,6 +105,7 @@ test("production sidebar command projects before cloning and never visits privat
           kind: "timer",
           label: "Daily",
           active: false,
+          definitionRevision: 0,
           timer: { nextRunAt: 2_000_000_000_000 },
         },
       ],
