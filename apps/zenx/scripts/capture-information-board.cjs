@@ -57,13 +57,6 @@ async function until(check, label) {
 const query = (selector) =>
   `document.querySelector(${JSON.stringify(selector)})`;
 async function click(selector, label = selector, systemPointer = false) {
-  await until(() => evaluate(`Boolean(${query(selector)})`), label);
-  await evaluate(
-    `${query(selector)}.scrollIntoView({block:'center',inline:'nearest'})`,
-  );
-  const point = await evaluate(
-    `(()=>{const e=${query(selector)},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));return {x:Math.round(x),y:Math.round(y)}})()`,
-  );
   window.show();
   window.focus();
   window.webContents.focus();
@@ -72,9 +65,16 @@ async function click(selector, label = selector, systemPointer = false) {
     "owned window focus",
   );
   const acknowledgedClick = ++clickSequence;
-  await evaluate(
-    `(()=>{const e=${query(selector)};e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return true})()`,
-  );
+  let point;
+  // Renderer refresh can replace a control between separate evaluations. Locate,
+  // validate and arm the same element atomically, after focus has settled. Only
+  // missing pre-dispatch targets may wait; unknown dispatched input never retries.
+  await until(async () => {
+    point = await evaluate(
+      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
+    );
+    return point !== null;
+  }, label + " target prepared before input");
   if (systemPointer) {
     const receipt = await ownedSidebarInput.click(window, point);
     (result.systemSidebarClicks ??= []).push({

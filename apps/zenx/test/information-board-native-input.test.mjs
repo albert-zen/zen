@@ -137,17 +137,32 @@ async function actualHelpers(names, globals) {
   );
 }
 
-async function clickFixture({ trusted = true, disabled = false } = {}) {
+async function clickFixture({
+  trusted = true,
+  disabled = false,
+  obscured = false,
+  hidden = false,
+  missingOnce = false,
+  missingAlways = false,
+  removedAfterPreparation = false,
+} = {}) {
   const events = [];
   const browser = {};
   let listener;
   let delivery;
   let finishWrite;
   let busy = false;
+  let targetQueries = 0;
+  let focused = false;
   const target = {
     disabled,
     scrollIntoView() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 20, height: 20 }),
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: hidden ? 0 : 20,
+      height: 20,
+    }),
     contains: (element) => element === target,
     addEventListener(type, callback, options) {
       assert.equal(type, "click");
@@ -162,9 +177,19 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
     },
   };
   const document = {
-    querySelector: (selector) =>
-      selector.includes("Refresh information") ? refresh : target,
-    elementFromPoint: () => target,
+    querySelector: (selector) => {
+      if (selector.includes("Refresh information")) return refresh;
+      assert.equal(
+        focused,
+        true,
+        "focus must settle before preparing the target",
+      );
+      targetQueries++;
+      return missingAlways || (missingOnce && targetQueries === 1)
+        ? null
+        : target;
+    },
+    elementFromPoint: () => (obscured ? {} : target),
     elementsFromPoint: () => [target],
   };
   const result = { steps: [] };
@@ -187,7 +212,9 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
     },
     window: {
       show() {},
-      focus() {},
+      focus() {
+        focused = true;
+      },
       isFocused: () => true,
       webContents: {
         focus() {},
@@ -197,7 +224,7 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
           if (event.type === "mouseUp")
             delivery = () => {
               events.push("DOM click delivered");
-              listener({ isTrusted: trusted });
+              if (!removedAfterPreparation) listener({ isTrusted: trusted });
               busy = true;
               finishWrite = () => {
                 busy = false;
@@ -209,7 +236,7 @@ async function clickFixture({ trusted = true, disabled = false } = {}) {
     },
     result,
   });
-  return { ...helpers, events, result };
+  return { ...helpers, events, result, targetQueries: () => targetQueries };
 }
 
 test("native click waits for actual trusted delivery before layout idle can be observed", async () => {
@@ -219,6 +246,47 @@ test("native click waits for actual trusted delivery before layout idle can be o
   await f.settledLayout();
   assert.equal(f.events.at(-1), "layout write settled");
   assert.deepEqual(f.result.steps, ["Hide one widget"]);
+  assert.equal(
+    f.targetQueries(),
+    1,
+    "one element is located, checked and armed",
+  );
+});
+
+test("a temporarily missing control waits only before the single native dispatch", async () => {
+  const f = await clickFixture({ missingOnce: true });
+  await f.click("button", "Resume exact trigger");
+  assert.equal(f.targetQueries(), 2);
+  assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
+  assert.deepEqual(f.result.steps, ["Resume exact trigger"]);
+});
+
+test("an absent control never dispatches input or records a successful step", async () => {
+  const f = await clickFixture({ missingAlways: true });
+  await assert.rejects(f.click("button"), /target prepared before input/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("removal after preparation keeps unacknowledged input unknown without replay", async () => {
+  const f = await clickFixture({ removedAfterPreparation: true });
+  await assert.rejects(f.click("button"), /trusted Chromium click delivered/);
+  assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("an obscured control still refuses native input without forced dispatch", async () => {
+  const f = await clickFixture({ obscured: true });
+  await assert.rejects(f.click("button"), /Obscured\/disabled/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
+});
+
+test("a control without a visible layout box cannot receive native input", async () => {
+  const f = await clickFixture({ hidden: true });
+  await assert.rejects(f.click("button"), /Obscured\/disabled/);
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.result.steps, []);
 });
 
 test("synthetic click cannot acknowledge native delivery or trigger an input retry", async () => {
