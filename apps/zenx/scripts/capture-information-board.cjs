@@ -141,6 +141,201 @@ async function capture(name, mode) {
   await screenshot(name + ".png");
   result.cases.push({ name, mode, geometry });
 }
+// Diagnostic-only mode: the unchanged production App/preload/Host own every
+// Thread, Turn and profile write. Only DOM reads and native input drive the UI.
+async function runPinnedSidebarAcceptance() {
+  const created = [];
+  const pinnedIds = () =>
+    evaluate(
+      "Array.from(document.querySelectorAll('.pinned-thread-group .thread-row-shell')).map(row=>row.dataset.threadId)",
+    );
+  const expectPins = async (expected, name) => {
+    await until(
+      async () =>
+        JSON.stringify(await pinnedIds()) === JSON.stringify(expected),
+      name,
+    );
+    const saved = JSON.parse(
+      await fs.readFile(
+        path.join(temporary, "profile", "host-profile.json"),
+        "utf8",
+      ),
+    );
+    assert.deepEqual(
+      saved.pinnedThreadIds,
+      expected,
+      "real Host profile matches visible order",
+    );
+    result.cases.push({
+      name,
+      visible: await pinnedIds(),
+      persisted: saved.pinnedThreadIds,
+    });
+  };
+  const togglePin = async (threadId, action = "pin") => {
+    const prefix = action === "pin" ? ".project-group" : ".pinned-thread-group";
+    await click(
+      `${prefix} [data-thread-id=${JSON.stringify(threadId)}] .thread-row`,
+      "Focus row to reveal its real native menu affordance",
+    );
+    await click(
+      `${prefix} [data-thread-id=${JSON.stringify(threadId)}] .thread-menu-trigger`,
+      `${action} synthetic Thread`,
+    );
+    await click(
+      `[role=menuitem][data-thread-action=${action}]`,
+      `Confirm ${action} using native menu input`,
+    );
+  };
+  await expectPins([], "private profile starts without Pins");
+  for (let number = 1; number <= 4; number++) {
+    const before = await evaluate(
+      "window.zenx.threads.list({archived:false}).then(rows=>rows.map(row=>row.threadId))",
+    );
+    await click(
+      ".new-thread-action:not(:disabled)",
+      `Create synthetic Thread ${number} through New thread`,
+    );
+    await click(
+      ".new-thread-draft-surface #thread-composer:not(:disabled)",
+      "Focus new-Thread Composer",
+    );
+    await window.webContents.insertText(
+      `Synthetic Pin acceptance ${number}. Reply briefly. This is isolated CI data.`,
+    );
+    await click(
+      ".composer-send-control > button.action-orb.send:not(:disabled)",
+      "Send first message to create real Thread",
+    );
+    let threadId;
+    await until(async () => {
+      const rows = await evaluate("window.zenx.threads.list({archived:false})");
+      const added = rows.filter((row) => !before.includes(row.threadId));
+      assert.ok(added.length <= 1, "one UI Send creates no duplicate Thread");
+      threadId = added[0]?.threadId;
+      if (!threadId || added[0].status !== "idle") return false;
+      const recovery = await evaluate(
+        `window.zenx.protocol.request('zen/thread/resume',{threadId:${JSON.stringify(threadId)}})`,
+      );
+      return recovery.thread.items.some(
+        (item) => item.type === "turn_completed",
+      );
+    }, "new native Thread completes its first fake-provider Turn");
+    const recovery = await evaluate(
+      `window.zenx.protocol.request('zen/thread/resume',{threadId:${JSON.stringify(threadId)}})`,
+    );
+    assert.ok(
+      recovery.thread.items.some((item) => item.type === "user_message"),
+      "real native recovery contains UI input",
+    );
+    assert.ok(
+      recovery.thread.items.some((item) => item.type === "turn_completed"),
+      "real native recovery contains completed Turn",
+    );
+    created.push(threadId);
+    if (number <= 3) {
+      await togglePin(threadId);
+      await expectPins([...created], `Pin ${number} appends at bottom`);
+    }
+  }
+  assert.equal(new Set(created).size, 4);
+  result.createdThreadCount = created.length;
+  await screenshot("01-three-ui-created-pins.png");
+  const third = `.pinned-thread-group [data-thread-id=${JSON.stringify(created[2])}] .thread-row`;
+  const affordance = await evaluate(
+    `(()=>{const row=document.querySelector(${JSON.stringify(third)});return {draggable:row.closest('.thread-row-shell').draggable,shortcut:row.getAttribute('aria-keyshortcuts')}})()`,
+  );
+  assert.equal(
+    affordance.draggable,
+    true,
+    "same native draggable row supports manual reorder",
+  );
+  assert.equal(affordance.shortcut, "Alt+ArrowUp Alt+ArrowDown");
+  await click(
+    third,
+    "Focus third pinned row for the supported manual keyboard reorder",
+  );
+  await until(
+    () =>
+      evaluate(
+        `document.activeElement===document.querySelector(${JSON.stringify(third)})`,
+      ),
+    "native keyboard focus is on the exact third pinned row",
+  );
+  window.webContents.sendInputEvent({
+    type: "keyDown",
+    keyCode: "Up",
+    modifiers: ["alt"],
+  });
+  window.webContents.sendInputEvent({
+    type: "keyUp",
+    keyCode: "Up",
+    modifiers: ["alt"],
+  });
+  const manual = [created[0], created[2], created[1]];
+  await expectPins(manual, "native Alt+ArrowUp manually reorders third Pin");
+  assert.equal(
+    await evaluate(
+      "document.activeElement.closest('.thread-row-shell')?.dataset.threadId",
+    ),
+    created[2],
+    "native keyboard reorder preserves moved-row focus",
+  );
+  await screenshot("02-native-manual-reorder.png");
+  await togglePin(created[3]);
+  const appended = [...manual, created[3]];
+  await expectPins(appended, "fourth Pin appends below saved manual order");
+  await screenshot("03-new-pin-below-manual-order.png");
+  await togglePin(created[2], "unpin");
+  await expectPins(
+    [created[0], created[1], created[3]],
+    "Unpin removes only selected row",
+  );
+  await togglePin(created[2]);
+  const finalOrder = [created[0], created[1], created[3], created[2]];
+  await expectPins(finalOrder, "Unpin then re-Pin appends at bottom");
+  await screenshot("04-repin-at-bottom.png");
+  const selected = `.pinned-thread-group [data-thread-id=${JSON.stringify(created[0])}] .thread-row`;
+  await click(selected, "Select existing Pin before real model activity");
+  await click(
+    "#thread-composer:not(:disabled)",
+    "Focus existing-Thread Composer",
+  );
+  await window.webContents.insertText(
+    "Synthetic activity must not reorder Pins. Reply briefly.",
+  );
+  await click(
+    ".composer-send-control > button.action-orb.send:not(:disabled)",
+    "Run existing pinned Thread without reordering",
+  );
+  await until(async () => {
+    const recovery = await evaluate(
+      `window.zenx.protocol.request('zen/thread/resume',{threadId:${JSON.stringify(created[0])}})`,
+    );
+    return (
+      recovery.thread.items.filter((item) => item.type === "turn_completed")
+        .length >= 2
+    );
+  }, "second real fake-provider Turn completes");
+  await expectPins(
+    finalOrder,
+    "real model activity leaves Pin order unchanged",
+  );
+  await screenshot("05-model-activity-preserves-order.png");
+  window.webContents.reload();
+  await until(
+    () => evaluate("Boolean(document.querySelector('.app-shell'))"),
+    "production renderer reopens",
+  );
+  await expectPins(
+    finalOrder,
+    "reopened production renderer reads persisted order",
+  );
+  await screenshot("06-reopened-persisted-order.png");
+  result.scope =
+    "Full production Electron App/preload/child Host. Four Threads created with native New thread/Composer/Send input; Pins and Alt+Arrow manual reorder use native UI input. Synthetic private profile only. Screenshots capture the complete App client window, not a component preview. No renderer state or preload mocks.";
+  result.ok = true;
+}
 const networkReady = app.whenReady().then(() =>
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     let allowed = false;
@@ -187,6 +382,10 @@ async function run() {
   const settings = await evaluate("window.zenx.settings.get()");
   assert.equal(settings.profile.defaultModel.providerProfileId, "fake");
   assert.equal(settings.hasApiKey, false);
+  if (process.argv.includes("--pinned-sidebar")) {
+    await runPinnedSidebarAcceptance();
+    return;
+  }
   await until(
     () =>
       evaluate(

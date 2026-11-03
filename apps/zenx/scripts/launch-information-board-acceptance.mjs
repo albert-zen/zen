@@ -20,6 +20,7 @@ import { JsonlThreadMetadataStore } from "../../../dist/src/thread-metadata.js";
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(["win32", "darwin"].includes(process.platform));
 const directory = path.resolve(process.argv[2]);
+const pinnedSidebar = process.argv[3] === "--pinned-sidebar";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
@@ -50,6 +51,7 @@ await writeFile(
   JSON.stringify({
     version: 3,
     onboardingComplete: true,
+    pinnedThreadIds: [],
     providerProfiles: [
       {
         type: "fake",
@@ -225,6 +227,7 @@ const child = spawn(
     directory,
     temporary,
     `--user-data-dir=${profile}`,
+    ...(pinnedSidebar ? ["--pinned-sidebar"] : []),
   ],
   {
     env: environment,
@@ -362,7 +365,7 @@ try {
     await readFile(path.join(directory, "acceptance.json"), "utf8"),
   );
   assert.equal(result.ok, true);
-  assert.ok(result.cases.length >= 8);
+  assert.ok(result.cases.length >= (pinnedSidebar ? 6 : 8));
   validated = true;
 } finally {
   await writeFile(

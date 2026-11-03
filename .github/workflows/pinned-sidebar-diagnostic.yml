@@ -1,0 +1,37 @@
+name: Pinned Sidebar native diagnostic
+on:
+  push:
+    branches:
+      - diagnostic/pinned-native-20261103
+    paths:
+      - .github/workflows/pinned-sidebar-diagnostic.yml
+      - apps/zenx/scripts/launch-information-board-acceptance.mjs
+      - apps/zenx/scripts/capture-information-board.cjs
+permissions:
+  contents: read
+concurrency:
+  group: pinned-sidebar-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-pins:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build --workspace @zen/zenx
+      - name: Capture native Pin append and manual reorder in disposable full App
+        timeout-minutes: 5
+        run: node apps/zenx/scripts/launch-information-board-acceptance.mjs "${{ runner.temp }}/pinned-sidebar" --pinned-sidebar
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pinned-sidebar-macos-${{ github.sha }}
+          path: ${{ runner.temp }}/pinned-sidebar
+          if-no-files-found: error
+          retention-days: 14
