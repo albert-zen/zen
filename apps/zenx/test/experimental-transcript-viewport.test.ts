@@ -253,6 +253,81 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
     );
     const actualScrollToIndex = listRef.current!.scrollToIndex;
     listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
+    const protectedRow = node.querySelector<HTMLElement>(
+      "[data-transcript-row-key]",
+    )!;
+    const pendingSelection = document.createRange();
+    pendingSelection.selectNodeContents(protectedRow);
+    selection.addRange(pendingSelection);
+    const pendingSelectedText = selection.toString();
+    // Deliberately do not deliver selectionchange before either jump.
+    let oldReveal: Promise<boolean>;
+    let oldOwner: ReturnType<VirtualTranscriptHandle["captureReveal"]>;
+    await act(async () => {
+      oldReveal = controller.current!.reveal("turn-999");
+      oldOwner = controller.current!.captureReveal();
+    });
+    listRef.current!.scrollToIndex = (params) => {
+      void actualScrollToIndex(params);
+      return new Promise<void>(() => {});
+    };
+    let immediate: ReturnType<VirtualTranscriptHandle["materialize"]> = null;
+    let prepared = 0;
+    let sourceCommit = 0;
+    await act(async () => {
+      immediate = controller.current!.materialize(
+        "turn-25",
+        () => prepared++,
+        () => sourceCommit++,
+      );
+      assert.ok(
+        immediate?.element.isConnected,
+        "source row is available synchronously without awaiting reveal",
+      );
+      assert.equal(immediate.element.dataset.transcriptRowKey, "turn-25");
+    });
+    assert.equal(prepared, 1);
+    assert.equal(
+      protectedRow.isConnected,
+      true,
+      "pre-jump protection captures selection before delayed selectionchange",
+    );
+    assert.equal(selection.toString(), pendingSelectedText);
+    assert.equal(
+      await oldReveal!,
+      false,
+      "new source materialization supersedes an older pending Find/target reveal",
+    );
+    assert.equal(oldOwner!.isCurrent(), false);
+    await act(async () => oldOwner!.cancel());
+    assert.equal(
+      immediate!.isCurrent(),
+      true,
+      "stale Find cleanup cannot cancel newer source ownership",
+    );
+    assert.ok(
+      node.querySelectorAll("[data-transcript-row-key]").length < 65,
+      "one synchronous source pin does not mount all history",
+    );
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await act(async () =>
+      outside.dispatchEvent(
+        new dom.window.MouseEvent("pointerdown", { button: 0, bubbles: true }),
+      ),
+    );
+    assert.equal(
+      immediate!.isCurrent(),
+      false,
+      "new user interaction outside the viewport cancels pending source settlement",
+    );
+    assert.equal(sourceCommit, 0);
+    outside.remove();
+    await act(async () => {
+      selection.removeAllRanges();
+      document.dispatchEvent(new dom.window.Event("selectionchange"));
+    });
+    listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
     let reveal: Promise<boolean>;
     let committed = 0;
     await act(async () => {

@@ -34,12 +34,9 @@ export function markdownFindBlocks(source: string): string[] {
   });
   const blocks: string[] = [];
   const inline = (node: RootContent): string => {
-    if (
-      node.type === "image" ||
-      node.type === "imageReference" ||
-      node.type === "definition" ||
-      node.type === "footnoteDefinition"
-    )
+    if (node.type === "image" || node.type === "imageReference")
+      return "\u0000";
+    if (node.type === "definition" || node.type === "footnoteDefinition")
       return "";
     if (node.type === "break") return " ";
     if ("value" in node) return String(node.value);
@@ -51,8 +48,10 @@ export function markdownFindBlocks(source: string): string[] {
     if (
       ["paragraph", "heading", "code", "tableCell", "html"].includes(node.type)
     ) {
-      const text = normalizeFindText(inline(node));
-      if (text) blocks.push(text);
+      for (const part of inline(node).split("\u0000")) {
+        const text = normalizeFindText(part);
+        if (text) blocks.push(text);
+      }
     } else if ("children" in node && node.type !== "footnoteDefinition") {
       node.children.forEach((child) => visit(child as RootContent));
     }
@@ -64,6 +63,7 @@ export function markdownFindBlocks(source: string): string[] {
 function inputBlocks(
   item: Extract<ThreadItem, { type: "userMessage" | "threadMessage" }>,
   canonical: TurnCanonicalPresentation | undefined,
+  parse: typeof markdownFindBlocks = markdownFindBlocks,
 ): string[] {
   const input = canonical?.inputs.get(item.id);
   const parts = input
@@ -73,13 +73,12 @@ function inputBlocks(
           part.type === "text" ? [part.text] : [],
         )
     : item.content.map((part) => part.text);
-  if (item.type === "threadMessage")
-    return markdownFindBlocks(parts.join("\n"));
+  if (item.type === "threadMessage") return parse(parts.join("\n"));
   const parsed = parts.map((part) =>
     parseSentReferenceContent(part, input?.clientId ?? item.clientId),
   );
   if (parsed.every((part) => part.references.length === 0))
-    return markdownFindBlocks(parsed.map((part) => part.text).join("\n"));
+    return parse(parsed.map((part) => part.text).join("\n"));
   return parsed.flatMap((part) => {
     const normalized = normalizeInlineReferences(part.text, part.references);
     let prefix = "\uE000ZENXFIND";
@@ -93,17 +92,19 @@ function inputBlocks(
       previous = reference.position! + 1;
     });
     source += normalized.text.slice(previous);
-    return markdownFindBlocks(source).map((block) =>
-      normalized.references.reduce(
-        (text, reference, index) =>
-          text
-            .split(`${prefix}${index}\uE001`)
-            .join(
-              reference.kind === "message" || reference.kind === "text"
-                ? reference.excerpt
-                : reference.name,
-            ),
-        block,
+    return parse(source).map((block) =>
+      normalizeFindText(
+        normalized.references.reduce(
+          (text, reference, index) =>
+            text
+              .split(`${prefix}${index}\uE001`)
+              .join(
+                reference.kind === "message" || reference.kind === "text"
+                  ? reference.excerpt
+                  : reference.name,
+              ),
+          block,
+        ),
       ),
     );
   });
@@ -113,6 +114,7 @@ function inputBlocks(
 export function indexTurnFindText(
   turn: Turn,
   canonical?: TurnCanonicalPresentation,
+  readFields: typeof itemFindFields = itemFindFields,
 ): TranscriptFindEntry[] {
   const projection = projectTurn(turn);
   const trace = new Map<string, string>();
@@ -122,7 +124,14 @@ export function indexTurnFindText(
       for (const item of node.items) trace.set(item.id, node.id);
   }
   const entries: TranscriptFindEntry[] = [];
-  for (const item of turn.items) {
+  const displayedItems = [
+    ...projection.inputItems,
+    ...projection.history.flatMap((node): ThreadItem[] =>
+      node.kind === "traceGroup" ? node.items : [node.item],
+    ),
+    ...(projection.finalItem ? [projection.finalItem] : []),
+  ];
+  for (const item of displayedItems) {
     const disclosures = [disclosureKey("turn", turn.id)];
     const group = trace.get(item.id);
     if (group)
@@ -140,20 +149,75 @@ export function indexTurnFindText(
           disclosures,
         });
     };
-    if (item.type === "agentMessage")
-      add("body", markdownFindBlocks(item.text));
-    else if (item.type === "userMessage" || item.type === "threadMessage")
-      add("body", inputBlocks(item, canonical));
-    else if (item.type === "reasoning")
-      add("body", markdownFindBlocks(item.content.join("\n")));
-    else if (item.type === "commandExecution") {
-      add("command", [normalizeFindText(item.command)]);
-      // A structured result can use a custom renderer. Its JSON is not equivalent to visible text.
-      if (item.structuredContent === undefined && item.aggregatedOutput)
-        add("output", [normalizeFindText(item.aggregatedOutput)]);
-    }
+    for (const field of readFields(item, canonical))
+      add(field.field, field.blocks);
   }
   return entries;
+}
+
+type FindField = Pick<TranscriptFindEntry, "field"> & { blocks: string[] };
+function itemFindFields(
+  item: ThreadItem,
+  canonical?: TurnCanonicalPresentation,
+  parse: typeof markdownFindBlocks = markdownFindBlocks,
+): FindField[] {
+  if (item.type === "agentMessage")
+    return [{ field: "body", blocks: parse(item.text) }];
+  if (item.type === "userMessage" || item.type === "threadMessage")
+    return [{ field: "body", blocks: inputBlocks(item, canonical, parse) }];
+  if (item.type === "reasoning")
+    return [{ field: "body", blocks: parse(item.content.join("\n")) }];
+  if (item.type === "commandExecution")
+    return [
+      { field: "command", blocks: [normalizeFindText(item.command)] },
+      // A structured result can use a custom renderer, so its JSON/output is not visible-text authority.
+      ...(item.structuredContent === undefined && item.aggregatedOutput
+        ? [
+            {
+              field: "output" as const,
+              blocks: [normalizeFindText(item.aggregatedOutput)],
+            },
+          ]
+        : []),
+    ];
+  return [];
+}
+
+/** Cold work runs only when invoked by open Find. Immutable items and completed turns reuse parsed text. */
+export function createTranscriptFindIndexer(
+  parse: typeof markdownFindBlocks = markdownFindBlocks,
+) {
+  const items = new WeakMap<
+    ThreadItem,
+    { input: unknown; fields: FindField[] }
+  >();
+  const turns = new WeakMap<
+    Turn,
+    {
+      canonical: TurnCanonicalPresentation | undefined;
+      entries: TranscriptFindEntry[];
+    }
+  >();
+  const fields = (item: ThreadItem, canonical?: TurnCanonicalPresentation) => {
+    const input = canonical?.inputs.get(item.id);
+    const before = items.get(item);
+    if (before && before.input === input) return before.fields;
+    const fields = itemFindFields(item, canonical, parse);
+    items.set(item, { input, fields });
+    return fields;
+  };
+  return (
+    source: readonly Turn[],
+    canonical: ReadonlyMap<string, TurnCanonicalPresentation>,
+  ): TranscriptFindEntry[] =>
+    source.flatMap((turn) => {
+      const presentation = canonical.get(turn.id);
+      const before = turns.get(turn);
+      if (before && before.canonical === presentation) return before.entries;
+      const entries = indexTurnFindText(turn, presentation, fields);
+      turns.set(turn, { canonical: presentation, entries });
+      return entries;
+    });
 }
 
 export function findTextOccurrences(text: string, query: string): number[] {

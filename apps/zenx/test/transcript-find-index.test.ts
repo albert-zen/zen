@@ -95,3 +95,132 @@ test("literal matching is non-overlapping, whitespace normalized, Unicode-safe, 
   assert.equal(stepTranscriptFind(0, 3, -1), 2);
   assert.equal(stepTranscriptFind(2, 3, 1), 0);
 });
+
+test("5000-turn open Find reuses old text parses across new Send and live turn replacement", async () => {
+  const { createTranscriptFindIndexer } =
+    await import("../src/renderer/src/transcript-find-index.js");
+  let parses = 0;
+  const index = createTranscriptFindIndexer((source) => {
+    parses++;
+    return markdownFindBlocks(source);
+  });
+  const canonical = new Map();
+  const turns = Array.from(
+    { length: 5000 },
+    (_, i) =>
+      ({
+        id: `turn-${i}`,
+        status: "completed",
+        items: [{ id: `item-${i}`, type: "agentMessage", text: `Answer ${i}` }],
+      }) as Turn,
+  );
+  assert.equal(parses, 0, "creating closed Find performs zero reads/parses");
+  assert.equal(index(turns, canonical).length, 5000);
+  assert.equal(parses, 5000);
+  index([...turns], canonical);
+  assert.equal(
+    parses,
+    5000,
+    "new turns array does not reparse immutable history",
+  );
+  const active = {
+    id: "active",
+    status: "inProgress",
+    items: [
+      {
+        id: "new-user",
+        type: "userMessage",
+        clientId: null,
+        content: [{ type: "text", text: "New Send", text_elements: [] }],
+      },
+    ],
+  } as Turn;
+  index([...turns, active], canonical);
+  assert.equal(parses, 5001, "new Send parses exactly one new item");
+  const streamed = {
+    ...active,
+    items: [
+      ...active.items,
+      { id: "new-answer", type: "agentMessage", text: "stream" },
+    ],
+  } as Turn;
+  index([...turns, streamed], canonical);
+  assert.equal(
+    parses,
+    5002,
+    "changed long turn retains its unchanged item text",
+  );
+  index(
+    [
+      ...turns,
+      {
+        ...streamed,
+        items: [
+          ...streamed.items.slice(0, -1),
+          { ...streamed.items.at(-1)!, text: "stream delta" },
+        ],
+      } as Turn,
+    ],
+    canonical,
+  );
+  assert.equal(parses, 5003, "stream delta reparses only the changed item");
+});
+
+test("canonical input and visible reference labels are searched, never serialized reference metadata", async () => {
+  const { referenceMessage } =
+    await import("../src/renderer/src/reference-draft.js");
+  const encoded = referenceMessage(
+    "Ask \uFFFC now",
+    [
+      {
+        kind: "message",
+        threadId: "hidden-origin-thread",
+        id: "hidden-source-id",
+        name: "source",
+        cwd: "/private/workspace",
+        excerpt: "**literal** quote",
+        position: 4,
+      },
+    ],
+    "client",
+  );
+  const item = {
+    type: "userMessage",
+    id: "input",
+    clientId: "client",
+    content: [{ type: "text", text: "stale projection", text_elements: [] }],
+  } as const;
+  const turn = {
+    id: "t",
+    status: "completed",
+    items: [item],
+  } as unknown as Turn;
+  const canonical = {
+    inputs: new Map([
+      [
+        "input",
+        {
+          id: "input",
+          type: "user_message",
+          text: encoded,
+          clientId: "client",
+        },
+      ],
+    ]),
+  } as unknown as import("../src/renderer/src/turn-canonical-presentation.js").TurnCanonicalPresentation;
+  const entries = indexTurnFindText(turn, canonical);
+  assert.deepEqual(entries[0]!.blocks, ["Ask **literal** quote now"]);
+  assert.equal(
+    searchTranscript(entries, "**literal**").length,
+    1,
+    "reference label is literal, not reparsed Markdown",
+  );
+  for (const hidden of [
+    "stale projection",
+    "hidden-origin-thread",
+    "hidden-source-id",
+    "/private/workspace",
+    "zenx-reference-message",
+  ])
+    assert.equal(searchTranscript(entries, hidden).length, 0);
+});
