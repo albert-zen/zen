@@ -491,3 +491,11 @@ test("native-only information remembers Thread and Room visibility across remoun
     dom.window.close();
   }
 });
+
+test("Chinese information lineage consistently names child conversations", async () => {
+  const { zhCN } = await import("../src/renderer/src/i18n/panels.js");
+  assert.equal(zhCN.informationLineage, "子对话");
+  assert.equal(zhCN.subagentConversations, "子对话");
+  assert.equal(zhCN.subagents, "子对话");
+  assert.equal(zhCN.noSubagentsYet, "尚无子对话。");
+});

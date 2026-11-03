@@ -1149,7 +1149,7 @@ export const zhCN = {
   informationRefresh: "刷新资料",
   informationCustomize: "自定义资料",
   informationPullRequests: "相关拉取请求",
-  informationLineage: "子 Agent",
+  informationLineage: "子对话",
   informationArtifacts: "相关产物",
   informationRoomMembers: "Room 成员",
   informationBoard: "Board",
