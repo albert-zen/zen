@@ -61,12 +61,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "baed6ada3751d6e7c225ec78e9b06f734095db15",
+    commit: "3b411e8480d6dacd7b9baed6276849fa99fbda7e",
     tree: "c0afbda944b4714544bd1f24d984e0d16909cda8",
   },
   candidate: {
-    commit: "10a533f6d7d506018eb7eaf7001d25d5cfd8b9b1",
-    tree: "031c535dc90466f98f19f4c4c9cb6387abd872ea",
+    commit: "85ea447d369c144a5d1125fc7c5518ec62b276f2",
+    tree: "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -328,7 +328,7 @@ await writeFile(
       sourceTree: snapshot.tree,
       packagedHashes,
       comparisonRole:
-        "experimental DOM-volume causal pair, not virtualization acceptance: " +
+        "full-DOM versus real Legend WIP native pair, not production acceptance: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
@@ -697,23 +697,68 @@ try {
     "clickToClearFrameMs",
     "clickToCanonicalNotificationMs",
   ];
-  assert.equal(result.before.rendered.historyGroups, 1);
-  assert.equal(result.before.rendered.directTurns, 0);
-  const mountedCount = sourceLabel === "candidate" ? 100 : count;
+  assert.deepEqual(result.experimentalSession, {
+    enabledOnBothApps: true,
+    reloadedBeforeSelection: true,
+  });
   assert.equal(result.before.turns, count);
   assert.equal(result.before.messages, count * 2);
-  assert.equal(result.before.rendered.groupTurns, mountedCount);
-  assert.equal(result.before.rendered.turnBlocks, mountedCount);
+  const virtual = sourceLabel === "candidate";
+  assert.equal(result.before.rendered.virtual, virtual);
+  const mountedCount = result.before.rendered.turnBlocks;
+  if (virtual) {
+    assert.ok(mountedCount >= 2 && mountedCount < 200);
+    assert.equal(result.before.rendered.virtualRows, mountedCount);
+    assert.equal(
+      result.before.rendered.contentSelector,
+      ".messages > .virtual-transcript-content",
+    );
+    assert.equal(result.before.rendered.contentDisplay, "block");
+    assert.equal(result.before.rendered.historyGroups, 0);
+    assert.equal(result.before.rendered.rowGapPx, 24);
+    assert.ok(
+      result.virtualHistoryVisual.earlier.firstCanonicalIndex <
+        result.virtualHistoryVisual.live.firstCanonicalIndex,
+    );
+    assert.ok(
+      result.virtualHistoryVisual.earlier.lastCanonicalIndex <
+        result.virtualHistoryVisual.live.lastCanonicalIndex,
+    );
+    assert.equal(
+      result.virtualHistoryVisual.returned.exactCanonicalSuffix,
+      true,
+    );
+  } else {
+    assert.equal(mountedCount, count);
+    assert.equal(result.before.rendered.historyGroups, 1);
+    assert.equal(result.before.rendered.directTurns, 0);
+    assert.equal(result.before.rendered.groupTurns, count);
+    assert.equal(result.before.rendered.outerGapPx, 24);
+    assert.equal(result.before.rendered.historyGapPx, 24);
+  }
   assert.equal(result.before.rendered.userRows, mountedCount);
   assert.equal(result.before.rendered.assistantRows, mountedCount);
-  assert.equal(
-    result.before.rendered.historyPager,
-    sourceLabel === "candidate",
-  );
+  assert.equal(result.before.rendered.historyPager, false);
   assert.equal(result.before.rendered.exactCanonicalSuffix, true);
+  assert.equal(result.before.rendered.canonicalMembers, mountedCount);
+  assert.equal(result.before.rendered.canonicalContiguous, true);
   assert.equal(result.before.rendered.pendingHosts, 0);
-  assert.equal(result.before.rendered.outerGapPx, 24);
-  assert.equal(result.before.rendered.historyGapPx, 24);
+  assert.equal(result.afterRendered.exactCanonicalSuffix, true);
+  assert.equal(
+    result.afterRendered.turnBlocks,
+    virtual ? result.afterRendered.canonicalMembers : count + 3,
+  );
+  for (const rendered of [result.before.rendered, result.afterRendered]) {
+    assert.equal(rendered.inspection.withinSendTiming, false);
+    assert.equal(
+      rendered.inspection.rendererRowRectReads,
+      virtual ? rendered.turnBlocks : 0,
+    );
+    assert.ok(
+      Number.isFinite(rendered.inspection.mainWallMs) &&
+        rendered.inspection.mainWallMs >= 0,
+    );
+  }
   const samples = result.samples.map((sample, index) => {
     for (const name of [
       "own.value.set",
@@ -797,6 +842,8 @@ try {
     diagnosticOnly: true,
     acceptance: false,
     measurementContract: result.measurementContract,
+    diagnosticTargetMeaning: result.diagnosticTargetMeaning,
+    experimentalSession: result.experimentalSession,
     sourceCommit: expected,
     sourceTree: snapshot.tree,
     sourceLabel,
@@ -814,8 +861,9 @@ try {
       turns: result.before.turns,
       messages: result.before.messages,
     },
-    historyMountVisual: result.historyMountVisual,
+    virtualHistoryVisual: result.virtualHistoryVisual,
     rendered: result.before.rendered,
+    renderedAfter: result.afterRendered,
     readerBeforeSend: result.readerBeforeSend,
     pausedReaderResize: result.pausedReaderResize,
     responsiveHistoryLayout: result.responsiveHistoryLayout,
@@ -873,7 +921,7 @@ try {
     "REVIEWED_NATIVE_AB_OBSERVATION_NOT_ACCEPTANCE " + JSON.stringify(summary),
   );
   for (const name of (await readdir(directory)).filter((name) =>
-    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|experimental-history-(?:before|after)-expand)\.png$/.test(
+    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up))\.png$/.test(
       name,
     ),
   ))

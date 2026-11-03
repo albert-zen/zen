@@ -1,7 +1,7 @@
-name: Packaged Send history DOM volume pair (experiment)
+name: Packaged Send real Legend pair (WIP experiment)
 on:
   push:
-    branches: [diagnostic/send-history-dom-volume-20261103]
+    branches: [diagnostic/send-legend-native-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: baed6ada3751d6e7c225ec78e9b06f734095db15
+          ref: 3b411e8480d6dacd7b9baed6276849fa99fbda7e
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 10a533f6d7d506018eb7eaf7001d25d5cfd8b9b1
+          ref: 85ea447d369c144a5d1125fc7c5518ec62b276f2
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build locked full-DOM baseline and experimental history mount
+      - name: Build locked full-DOM baseline and real Legend WIP
         timeout-minutes: 16
         run: |
           for source in baseline candidate; do
@@ -50,7 +50,7 @@ jobs:
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native dock Enter DOM-volume pair, not production acceptance
+      - name: Native dock Enter real Legend pair, not production acceptance
         timeout-minutes: 20
         run: |
           failed=0
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-history-dom-volume-5000
+          name: native-send-real-legend-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

@@ -24,6 +24,7 @@ function fixture({
   activationKind = "click",
   cachedPresenceStyle = false,
   activationSnapshotCost = 0,
+  virtual = false,
 } = {}) {
   const dom = new JSDOM(
     '<main class="thread-view"><div class="messages"><div class="messages-inner"></div></div><div class="bottom-zone"><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></div></main>',
@@ -31,6 +32,17 @@ function fixture({
   );
   const { window: w } = dom;
   const d = w.document;
+  if (virtual) {
+    const scroller = d.querySelector(".messages");
+    scroller.classList.add("experimental-transcript-viewport");
+    // The real public total-content box contains a relative total-size layer
+    // and the pending footer. The inner wrapper is deliberately not observed.
+    scroller.innerHTML =
+      '<div class="virtual-transcript-content"><div class="fixed-viewport-wrapper"></div><div class="virtual-transcript-footer"></div></div>';
+  }
+  const content = d.querySelector(
+    ".messages > .virtual-transcript-content, .messages-inner",
+  );
   let now = 100,
     id = 0,
     listener,
@@ -156,8 +168,7 @@ function fixture({
     presenceStyle = w.getComputedStyle(presencePanel);
     void presenceStyle.animationName;
   }
-  if (layoutObservation)
-    layoutObserver.deliver(d.querySelector(".messages-inner"), 1000);
+  if (layoutObservation) layoutObserver.deliver(content, 1000);
   if (activationSnapshotCost) {
     const query = d.querySelector.bind(d);
     d.querySelector = (selector) => {
@@ -189,7 +200,7 @@ function fixture({
     bubble.className = "user-bubble";
     bubble.textContent = "synthetic-nonce";
     article.append(bubble);
-    d.querySelector(".messages-inner").append(article);
+    (d.querySelector(".virtual-transcript-footer") ?? content).append(article);
     await new Promise(setImmediate);
     return { article, bubble };
   };
@@ -204,9 +215,10 @@ function fixture({
     marks,
     geometryReads: () => geometryReads,
     resize(height) {
-      layoutObserver.deliver(d.querySelector(".messages-inner"), height);
+      layoutObserver.deliver(content, height);
     },
     resizeDisconnected: () => layoutObserver?.disconnected,
+    layoutTargets: () => [...(layoutObserver?.targets ?? [])],
     intersect(target, visible) {
       intersectionObserver.deliver(target, visible);
     },
@@ -389,27 +401,39 @@ test("canonical-first path requires native identity, supports same-message remou
   assert.equal(f.record.instrumentation.frameCallbacks, count);
 });
 
-test("passive native resize evidence uses supplied entries without geometry reads", async () => {
-  const f = fixture({ layoutObservation: true });
-  try {
-    assert.equal(f.record.nativeLayoutReady, true);
-    assert.deepEqual(
-      JSON.parse(JSON.stringify(f.record.nativeLayoutAtClick.content)),
-      { width: 400, height: 1000 },
-    );
-    await f.row("pending");
-    const reads = f.geometryReads();
-    f.resize(1100);
-    assert.equal(f.geometryReads(), reads);
-    const event = f.record.nativeLayoutEvents[0];
-    assert.equal(event.pendingConnected, true);
-    assert.equal(event.boxes[0].target, "content");
-    assert.equal(event.boxes[0].height, 1100);
-    assert.ok(event.atMs >= f.record.clickMs);
-  } finally {
-    f.close();
+test("passive native resize evidence uses supplied entries from the actual total-content box without geometry reads", async () => {
+  for (const virtual of [false, true]) {
+    const f = fixture({ layoutObservation: true, virtual });
+    try {
+      const content = f.d.querySelector(
+        virtual ? ".messages > .virtual-transcript-content" : ".messages-inner",
+      );
+      assert.ok(f.layoutTargets().includes(content));
+      assert.equal(
+        f
+          .layoutTargets()
+          .includes(f.d.querySelector(".fixed-viewport-wrapper")),
+        false,
+      );
+      assert.equal(f.record.nativeLayoutReady, true);
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(f.record.nativeLayoutAtClick.content)),
+        { width: 400, height: 1000 },
+      );
+      await f.row("pending");
+      const reads = f.geometryReads();
+      f.resize(1100);
+      assert.equal(f.geometryReads(), reads);
+      const event = f.record.nativeLayoutEvents[0];
+      assert.equal(event.pendingConnected, true);
+      assert.equal(event.boxes[0].target, "content");
+      assert.equal(event.boxes[0].height, 1100);
+      assert.ok(event.atMs >= f.record.clickMs);
+    } finally {
+      f.close();
+    }
+    assert.equal(f.resizeDisconnected(), true);
   }
-  assert.equal(f.resizeDisconnected(), true);
 });
 test("DOM mutation alone never fabricates resize delivery evidence", async () => {
   const f = fixture({ layoutObservation: true });
@@ -577,14 +601,16 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("history volume pair locks rollback-preserving sources and keeps reader regression outside timing", () => {
+test("real Legend pair locks full-DOM baseline and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "baed6ada3751d6e7c225ec78e9b06f734095db15",
+    "3b411e8480d6dacd7b9baed6276849fa99fbda7e",
     "c0afbda944b4714544bd1f24d984e0d16909cda8",
+    "85ea447d369c144a5d1125fc7c5518ec62b276f2",
+    "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
   ])
     assert.ok(launch.includes(identity));
   for (const contract of [
@@ -917,31 +943,181 @@ test("invalidation trace is bounded to first sample while all three native sends
   assert.ok(source.includes("repetition < 3"));
 });
 
-test("history experiment keeps canonical suffix and native expansion outside measured sends", () => {
+test("real Legend experiment keeps full canonical data and natural buffer replacement outside measured sends", async () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
-  assert.ok(launch.includes('sourceLabel === "candidate" ? 100 : count'));
+  assert.ok(launch.includes("mountedCount >= 2 && mountedCount < 200"));
   assert.ok(launch.includes("result.before.turns, count"));
   assert.ok(launch.includes("result.before.messages, count * 2"));
   assert.ok(
+    launch.includes("result.before.rendered.canonicalMembers, mountedCount"),
+  );
+  assert.ok(
     launch.includes("result.before.rendered.exactCanonicalSuffix, true"),
   );
-  assert.ok(source.includes("Mounted history is the exact canonical suffix"));
-  const expand = source.indexOf("if (result.before.rendered.historyPager)");
   assert.ok(
-    expand >
+    source.includes("Mounted user ID belongs to full canonical projection"),
+  );
+  assert.ok(
+    source.includes(
+      "Geometry-ordered mounted rows preserve contiguous canonical order",
+    ),
+  );
+  const natural = source.indexOf("if (result.before.rendered.virtual)");
+  assert.ok(
+    natural >
       source.indexOf(
         "await stopOwnedTrace();",
         source.indexOf("result.samples = []"),
       ),
   );
-  assert.ok(expand > source.indexOf("const finalItems ="));
+  assert.ok(natural > source.indexOf("const finalItems ="));
   assert.ok(
     source.includes(
-      "native experimental prepend retains existing row position",
+      "Natural wheel replaces the actual Legend buffer, not an expanding page",
     ),
   );
   assert.ok(source.includes("experimental Back to live reaches actual bottom"));
+  assert.equal(source.includes("mount previous 100 history rows"), false);
+  assert.equal(source.includes("window.__historyMountAnchor"), false);
+  const reload = source.indexOf("window.webContents.reload()");
+  assert.ok(
+    reload >
+      source.indexOf(
+        "sessionStorage.setItem('zenx.experimental.virtualTranscript','1')",
+      ),
+  );
+  assert.ok(reload < source.indexOf("Select seeded production Thread"));
+  for (const screenshot of [
+    "legend-history-after-canonical.png",
+    "legend-history-before-natural-up.png",
+    "legend-history-after-natural-up.png",
+  ])
+    assert.ok(source.includes(screenshot));
+  assert.ok(
+    source.includes("if(virtual)turns.sort((a,b)=>a.rect.top-b.rect.top)"),
+  );
+  assert.ok(
+    source.includes("top:virtual?row.getBoundingClientRect().top:null"),
+  );
+  assert.ok(source.includes("if(virtual)rows.sort((a,b)=>a.top-b.top)"));
+  assert.ok(source.includes("turnNodes.slice(0,2)"));
+  assert.ok(source.includes("clearTimeout(reloadTimer)"));
+  assert.ok(
+    source.includes(
+      'window.webContents.removeListener("did-finish-load", reloadFinished)',
+    ),
+  );
+  assert.ok(launch.includes(".messages > .virtual-transcript-content"));
+  assert.equal(launch.includes("? 100 : count"), false);
+  assert.ok(source.includes("not a user SLA or an acceptance threshold"));
+
+  const mountedInspector = source.slice(
+    source.indexOf("async function inspectMountedTranscript("),
+    source.indexOf(
+      "// Instrumented getter attribution plus existing browser observations.",
+    ),
+  );
+  const canonical = Array.from({ length: 5 }, (_, index) => ({
+    id: "turn-" + index,
+    items: [{ type: "userMessage", id: "user-" + index }],
+  }));
+  const dom = new JSDOM('<div class="messages"></div>', {
+    runScripts: "outside-only",
+  });
+  const d = dom.window.document;
+  const inspect = new Function(
+    "assert",
+    "evaluate",
+    "return (" + mountedInspector + ")",
+  )(assert, async (expression) => dom.window.eval(expression));
+  let rowRectReads = 0;
+  const render = (indices, virtual) => {
+    const scroller = d.querySelector(".messages");
+    scroller.className =
+      "messages" + (virtual ? " experimental-transcript-viewport" : "");
+    scroller.innerHTML = virtual
+      ? '<div class="virtual-transcript-content" style="display:block"><div class="total-size"></div><div class="virtual-transcript-footer"></div></div>'
+      : '<div class="messages-inner" style="display:grid;row-gap:24px"><div class="transcript-history" style="row-gap:24px"></div></div>';
+    const parent = scroller.querySelector(
+      virtual ? ".total-size" : ".transcript-history",
+    );
+    for (const index of indices) {
+      const row = d.createElement("section");
+      row.className = "turn";
+      row.innerHTML =
+        '<article class="user-row" data-sent-message-id="user-' +
+        index +
+        '"></article><article class="agent-copy"></article>';
+      row.getBoundingClientRect = () => {
+        rowRectReads++;
+        return { top: index * 100 };
+      };
+      if (virtual) {
+        const wrapper = d.createElement("div");
+        wrapper.className = "virtual-transcript-row";
+        wrapper.style.paddingBottom = "24px";
+        wrapper.dataset.transcriptRowKey = JSON.stringify([
+          "thread-A",
+          "turn",
+          "turn-" + index,
+        ]);
+        wrapper.append(row);
+        parent.append(wrapper);
+      } else parent.append(row);
+    }
+  };
+  try {
+    render([0, 1, 2, 3, 4], false);
+    const full = await inspect(canonical, "thread-A");
+    assert.equal(full.turnBlocks, 5);
+    assert.equal(full.historyGroups, 1);
+    assert.equal(full.exactCanonicalSuffix, true);
+    assert.equal(
+      rowRectReads,
+      0,
+      "Full-DOM canonical verification adds no per-row rect reads",
+    );
+    assert.equal(full.inspection.rendererRowRectReads, 0);
+    assert.equal(full.inspection.withinSendTiming, false);
+    render([4, 2, 3], true); // DOM order differs from real geometry.
+    const live = await inspect(canonical, "thread-A");
+    assert.equal(live.firstCanonicalIndex, 2);
+    assert.equal(live.lastCanonicalIndex, 4);
+    assert.equal(live.canonicalMembers, 3);
+    assert.equal(rowRectReads, 3);
+    assert.equal(live.inspection.rendererRowRectReads, 3);
+    assert.equal(live.exactCanonicalSuffix, true);
+    assert.equal(
+      "rows" in live,
+      false,
+      "Raw canonical IDs never enter exported snapshot",
+    );
+    render([2, 0, 1], true);
+    const earlier = await inspect(canonical, "thread-A");
+    assert.equal(earlier.firstCanonicalIndex, 0);
+    assert.equal(earlier.lastCanonicalIndex, 2);
+    assert.equal(earlier.exactCanonicalSuffix, false);
+    render([0, 2], true);
+    await assert.rejects(
+      inspect(canonical, "thread-A"),
+      /contiguous canonical order/,
+    );
+    render([0, 0], true);
+    await assert.rejects(inspect(canonical, "thread-A"));
+    render([0, 1], true);
+    d.querySelector("article.user-row").dataset.sentMessageId = "not-canonical";
+    await assert.rejects(
+      inspect(canonical, "thread-A"),
+      /belongs to full canonical projection/,
+    );
+    render([0, 1], true);
+    d.querySelector("[data-transcript-row-key]").dataset.transcriptRowKey =
+      JSON.stringify(["other-thread", "turn", "turn-0"]);
+    await assert.rejects(inspect(canonical, "thread-A"));
+  } finally {
+    dom.window.close();
+  }
 });

@@ -51,6 +51,8 @@ const result = {
     "Production App, private production DomainThreadJournal history, native input and Send; no model network, no mock ACK or injected UI; actual product pending and canonical feedback measured separately.",
   measurementContract:
     "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. Native invalidation tracking adds event/stack capture overhead. Only the first activation has timeline attribution; later real sends are untraced. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
+  diagnosticTargetMeaning:
+    "Existing 200ms flags are an internal diagnostic target, not a user SLA or an acceptance threshold.",
   steps: [],
   blockedExternalRequests: 0,
 };
@@ -245,6 +247,94 @@ async function screenshot(name) {
   );
 }
 
+// Full-DOM checks run before/after timing only. Virtual rows are ordered by real
+// geometry, not Legend's recyclable DOM order. Export numeric membership only.
+async function inspectMountedTranscript(canonicalTurns, threadId) {
+  const inspectionStartedMainMs = performance.now();
+  const snapshot = await evaluate(`(()=>{
+    const scroller=document.querySelector('.messages');
+    const virtual=scroller.classList.contains('experimental-transcript-viewport');
+    const selector=virtual?'.messages > .virtual-transcript-content':'.messages-inner';
+    const content=document.querySelector(selector);
+    if(!content||content.parentElement!==scroller)throw Error('Missing actual total-content box');
+    const history=content.querySelector(':scope > .transcript-history');
+    const rows=Array.from(scroller.querySelectorAll('section.turn'),row=>({
+      top:virtual?row.getBoundingClientRect().top:null,
+      userId:row.querySelector('article.user-row[data-sent-message-id]')?.dataset.sentMessageId,
+      key:row.closest('[data-transcript-row-key]')?.dataset.transcriptRowKey??null,
+    }));
+    if(virtual)rows.sort((a,b)=>a.top-b.top);
+    return {virtual,contentSelector:selector,contentDisplay:getComputedStyle(content).display,
+      contentHeight:content.getBoundingClientRect().height,
+      userRows:scroller.querySelectorAll('article.user-row').length,
+      assistantRows:scroller.querySelectorAll('article.agent-copy').length,
+      turnBlocks:rows.length,
+      pendingHosts:content.querySelectorAll('.pending-send-host').length,
+      historyGroups:content.querySelectorAll(':scope > .transcript-history').length,
+      directTurns:content.querySelectorAll(':scope > section.turn').length,
+      groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,
+      virtualRows:scroller.querySelectorAll('[data-transcript-row-key]').length,
+      historyPager:Boolean(document.querySelector('.load-earlier-transcript')),
+      outerGapPx:virtual?null:parseFloat(getComputedStyle(content).rowGap),
+      historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null,
+      rowGapPx:virtual?parseFloat(getComputedStyle(scroller.querySelector('.virtual-transcript-row')).paddingBottom):null,
+      rows};
+  })()`);
+  const canonicalUsers = new Map();
+  canonicalTurns.forEach((turn, index) => {
+    const user = turn.items.find((item) => item.type === "userMessage");
+    assert.ok(user, "Synthetic canonical Turn has a user message");
+    canonicalUsers.set(user.id, { index, turnId: turn.id });
+  });
+  const indices = snapshot.rows.map((row) => {
+    const canonical = canonicalUsers.get(row.userId);
+    assert.ok(
+      canonical,
+      "Mounted user ID belongs to full canonical projection",
+    );
+    if (snapshot.virtual)
+      assert.equal(
+        row.key,
+        JSON.stringify([threadId, "turn", canonical.turnId]),
+      );
+    return canonical.index;
+  });
+  assert.ok(
+    indices.length >= 2,
+    "Actual transcript contains mounted Turn rows",
+  );
+  assert.equal(new Set(indices).size, indices.length);
+  assert.ok(
+    indices.every((index, i) => i === 0 || index === indices[i - 1] + 1),
+    "Geometry-ordered mounted rows preserve contiguous canonical order",
+  );
+  if (snapshot.virtual) {
+    assert.ok(
+      snapshot.turnBlocks < 200,
+      "Legend keeps mounted DOM bounded, not a fixed tail page",
+    );
+    assert.equal(snapshot.virtualRows, snapshot.turnBlocks);
+    assert.equal(snapshot.contentDisplay, "block");
+  } else assert.equal(snapshot.turnBlocks, canonicalTurns.length);
+  delete snapshot.rows;
+  return {
+    ...snapshot,
+    inspection: {
+      clockDomain: "electron-main",
+      mainWallMs: performance.now() - inspectionStartedMainMs,
+      rendererRowRectReads: snapshot.virtual ? indices.length : 0,
+      rendererContentRectReads: 1,
+      withinSendTiming: false,
+    },
+    canonicalMembers: indices.length,
+    uniqueCanonicalIndices: indices.length,
+    firstCanonicalIndex: indices[0],
+    lastCanonicalIndex: indices.at(-1),
+    canonicalContiguous: true,
+    exactCanonicalSuffix: indices.at(-1) === canonicalTurns.length - 1,
+  };
+}
+
 // Instrumented getter attribution plus existing browser observations.
 // No added geometry reads or changes to App state, UI, requests or receipts.
 function installObservation(
@@ -365,7 +455,10 @@ function installObservation(
     if (!(node instanceof Element)) return "other";
     for (const [selector, label] of [
       [".messages", "transcript-scrollport"],
-      [".messages-inner", "transcript-content"],
+      [
+        ".messages-inner, .messages > .virtual-transcript-content",
+        "transcript-content",
+      ],
       ["#thread-composer", "composer-editor"],
       [".bottom-zone", "composer-zone"],
       [".composer-send-control, .composer-send-popover", "send-controls"],
@@ -731,7 +824,12 @@ function installObservation(
   // Entry sizes are browser-supplied; never read geometry or scroll here.
   const layoutTargets = new Map(
     [
-      [document.querySelector(".messages-inner"), "content"],
+      [
+        document.querySelector(
+          ".messages > .virtual-transcript-content, .messages-inner",
+        ),
+        "content",
+      ],
       [document.querySelector(".messages"), "scrollport"],
       [document.querySelector(".bottom-zone"), "composer-zone"],
     ].filter(([target]) => target),
@@ -1334,6 +1432,36 @@ async function run() {
       ),
     "App mounted",
   );
+  // Identical test-only preparation on both owned Apps. Baseline ignores it.
+  await evaluate(
+    "sessionStorage.setItem('zenx.experimental.virtualTranscript','1')",
+  );
+  let reloadTimer, reloadFinished;
+  try {
+    await new Promise((resolve, reject) => {
+      reloadFinished = resolve;
+      window.webContents.once("did-finish-load", reloadFinished);
+      reloadTimer = setTimeout(
+        () => reject(Error("Owned renderer reload timed out")),
+        30000,
+      );
+      window.webContents.reload();
+    });
+  } finally {
+    clearTimeout(reloadTimer);
+    window.webContents.removeListener("did-finish-load", reloadFinished);
+  }
+  await until(
+    async () =>
+      await evaluate(
+        "Boolean(document.querySelector('.app-shell') && window.zenx?.protocol && sessionStorage.getItem('zenx.experimental.virtualTranscript')==='1')",
+      ),
+    "App remounted after identical experimental session opt-in",
+  );
+  result.experimentalSession = {
+    enabledOnBothApps: true,
+    reloadedBeforeSelection: true,
+  };
   await until(
     async () =>
       await evaluate(
@@ -1410,29 +1538,26 @@ async function run() {
     before.thread.turns.every((t) => t.status !== "inProgress"),
     "No active Turn before ordinary send",
   );
+  await until(
+    async () =>
+      await evaluate(
+        "(()=>{const s=document.querySelector('.messages');return s&&s.querySelectorAll('section.turn').length>=2&&Math.abs(s.scrollHeight-s.clientHeight-s.scrollTop)<=3})()",
+      ),
+    "canonical history mounted at live bottom before timing",
+  );
+  await pause(300);
   result.before = {
     turns: before.thread.turns.length,
     messages: beforeMessages.length,
     baselineKind:
       "existing selected idle Thread; initial production thread/read verified and warmed before timing",
-    rendered: await evaluate(
-      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,pendingHosts:inner.querySelectorAll(':scope > .pending-send-host').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,historyPager:Boolean(document.querySelector('.load-earlier-transcript')),outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
-    ),
+    rendered: await inspectMountedTranscript(before.thread.turns, threadId),
   };
-  const mountedUserIds = await evaluate(
-    "Array.from(document.querySelectorAll('article.user-row[data-sent-message-id]'),e=>e.dataset.sentMessageId)",
+  assert.equal(
+    result.before.rendered.exactCanonicalSuffix,
+    true,
+    "Mounted initial history ends at the full canonical tail",
   );
-  const expectedTail = before.thread.turns
-    .slice(-result.before.rendered.turnBlocks)
-    .flatMap((turn) => turn.items)
-    .filter((item) => item.type === "userMessage")
-    .map((item) => item.id);
-  assert.deepEqual(
-    mountedUserIds,
-    expectedTail,
-    "Mounted history is the exact canonical suffix",
-  );
-  result.before.rendered.exactCanonicalSuffix = true;
   const informationTrigger =
     "document.querySelector('.information-toolbar button')";
   await until(
@@ -1898,56 +2023,55 @@ async function run() {
     ),
     "No compaction anywhere in observed baseline lifecycle",
   );
-  // Experimental paging is measured only after all send timing and trace stop.
-  // This is a DOM-volume diagnostic, not acceptance of a new history UX.
-  if (result.before.rendered.historyPager) {
-    const topPoint = await evaluate(
+  // Natural Legend buffer replacement is checked only after timing and trace stop.
+  // This is a WIP native experiment, not acceptance of a new history UX.
+  result.afterRendered = await inspectMountedTranscript(
+    finalRead.thread.turns,
+    threadId,
+  );
+  if (result.before.rendered.virtual) {
+    const live = result.afterRendered;
+    assert.equal(live.exactCanonicalSuffix, true);
+    await screenshot("legend-history-after-canonical.png");
+    const point = await evaluate(
       "(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()",
     );
-    window.webContents.sendInputEvent({ type: "mouseMove", ...topPoint });
+    await screenshot("legend-history-before-natural-up.png");
+    window.webContents.sendInputEvent({ type: "mouseMove", ...point });
     window.webContents.sendInputEvent({
       type: "mouseWheel",
-      ...topPoint,
+      ...point,
       deltaX: 0,
-      deltaY: 1000000,
+      deltaY: 3600,
       canScroll: true,
       hasPreciseScrollingDeltas: true,
     });
     await until(
       async () =>
-        await evaluate("document.querySelector('.messages').scrollTop<=1"),
-      "native upward scroll reaches experimental oldest mounted row",
-    );
-    await evaluate(
-      "(()=>{const e=document.querySelector('.transcript-history > section.turn');window.__historyMountAnchor={element:e,top:e.getBoundingClientRect().top,count:document.querySelectorAll('section.turn').length}})()",
-    );
-    await screenshot("experimental-history-before-expand.png");
-    await click(
-      "document.querySelector('.load-earlier-transcript')",
-      "Experimental: mount previous 100 history rows",
-    );
-    await until(
-      async () =>
         await evaluate(
-          "document.querySelectorAll('section.turn').length===window.__historyMountAnchor.count+100",
+          "(()=>{const s=document.querySelector('.messages');return s.scrollHeight-s.clientHeight-s.scrollTop>100&&Boolean(document.querySelector('.back-live'))})()",
         ),
-      "experimental history expansion mounted exactly 100 earlier rows",
+      "natural upward wheel pauses virtual following",
     );
-    await pause(300);
-    result.historyMountVisual = await evaluate(
-      "(()=>{const a=window.__historyMountAnchor;return {beforeCount:a.count,afterCount:document.querySelectorAll('section.turn').length,retainedNodeConnected:a.element.isConnected,retainedNodeTopDelta:a.element.getBoundingClientRect().top-a.top,backToLive:Boolean(document.querySelector('.back-live'))}})()",
+    await pause(500);
+    const earlier = await inspectMountedTranscript(
+      finalRead.thread.turns,
+      threadId,
     );
-    assert.equal(result.historyMountVisual.retainedNodeConnected, true);
     assert.ok(
-      Math.abs(result.historyMountVisual.retainedNodeTopDelta) <= 2,
-      "native experimental prepend retains existing row position",
+      earlier.firstCanonicalIndex < live.firstCanonicalIndex,
+      "Natural wheel materializes earlier canonical Legend rows",
     );
-    assert.equal(result.historyMountVisual.backToLive, true);
-    await screenshot("experimental-history-after-expand.png");
-    await evaluate("delete window.__historyMountAnchor");
+    assert.ok(
+      earlier.lastCanonicalIndex < live.lastCanonicalIndex,
+      "Natural wheel replaces the actual Legend buffer, not an expanding page",
+    );
+    assert.equal(earlier.historyPager, false);
+    result.virtualHistoryVisual = { live, earlier, nativeWheelDeltaY: 3600 };
+    await screenshot("legend-history-after-natural-up.png");
     await click(
       "document.querySelector('.back-live')",
-      "Return experimental reader to live after expansion",
+      "Return virtual reader to live",
     );
     await until(
       async () =>
@@ -1955,6 +2079,15 @@ async function run() {
           "(()=>{const s=document.querySelector('.messages');return s.scrollHeight-s.clientHeight-s.scrollTop<=1})()",
         ),
       "experimental Back to live reaches actual bottom",
+    );
+    await pause(300);
+    result.virtualHistoryVisual.returned = await inspectMountedTranscript(
+      finalRead.thread.turns,
+      threadId,
+    );
+    assert.equal(
+      result.virtualHistoryVisual.returned.exactCanonicalSuffix,
+      true,
     );
   }
   const readerPoint = await evaluate(
@@ -2021,22 +2154,30 @@ async function run() {
     );
     await pause(300);
     const geometry = await evaluate(`(()=>{
-      const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history')??inner, turns=history.querySelectorAll(':scope > section.turn');
-      const first=turns[0].getBoundingClientRect(), second=turns[1].getBoundingClientRect(), editor=document.querySelector('#thread-composer'), input=editor.getBoundingClientRect(), action=document.querySelector('.composer-send-control > .action-orb'), orb=action.getBoundingClientRect();
-      return {innerWidth,innerHeight,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:parseFloat(getComputedStyle(history).rowGap),turnGapPx:second.top-first.bottom,turnCount:turns.length,overflow:document.documentElement.scrollWidth>innerWidth,editorBounds:{left:input.left,right:input.right,top:input.top,bottom:input.bottom},actionBounds:{left:orb.left,right:orb.right,top:orb.top,bottom:orb.bottom},actionUnobscured:action.contains(document.elementFromPoint(orb.left+orb.width/2,orb.top+orb.height/2))};
+      const scroller=document.querySelector('.messages'), virtual=scroller.classList.contains('experimental-transcript-viewport');
+      const inner=document.querySelector(virtual?'.messages > .virtual-transcript-content':'.messages-inner');
+      const history=virtual?inner:inner.querySelector(':scope > .transcript-history')??inner;
+      const turnNodes=Array.from(history.querySelectorAll('section.turn'));
+      const turns=(virtual?turnNodes:turnNodes.slice(0,2)).map(node=>({node,rect:node.getBoundingClientRect()}));
+      if(virtual)turns.sort((a,b)=>a.rect.top-b.rect.top);
+      const first=turns[0].rect, second=turns[1].rect, editor=document.querySelector('#thread-composer'), input=editor.getBoundingClientRect(), action=document.querySelector('.composer-send-control > .action-orb'), orb=action.getBoundingClientRect();
+      return {virtual,innerWidth,innerHeight,outerGapPx:virtual?null:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:virtual?null:parseFloat(getComputedStyle(history).rowGap),rowGapPx:virtual?parseFloat(getComputedStyle(turns[0].node.closest('.virtual-transcript-row')).paddingBottom):null,turnGapPx:second.top-first.bottom,turnCount:turnNodes.length,overflow:document.documentElement.scrollWidth>innerWidth,editorBounds:{left:input.left,right:input.right,top:input.top,bottom:input.bottom},actionBounds:{left:orb.left,right:orb.right,top:orb.top,bottom:orb.bottom},actionUnobscured:action.contains(document.elementFromPoint(orb.left+orb.width/2,orb.top+orb.height/2))};
     })()`);
     result.responsiveHistoryLayout.push(geometry);
-    assert.equal(geometry.outerGapPx, expectedGap);
-    assert.equal(geometry.historyGapPx, expectedGap);
+    if (geometry.virtual) {
+      assert.equal(geometry.rowGapPx, expectedGap);
+      assert.ok(
+        geometry.turnCount >= 2 && geometry.turnCount < 200,
+        "Responsive Legend DOM remains bounded while canonical history stays full",
+      );
+    } else {
+      assert.equal(geometry.outerGapPx, expectedGap);
+      assert.equal(geometry.historyGapPx, expectedGap);
+      assert.equal(geometry.turnCount, result.before.rendered.turnBlocks + 3);
+    }
     assert.ok(
       Math.abs(geometry.turnGapPx - expectedGap) <= 0.1,
       "real historical Turn geometry follows responsive parent gap",
-    );
-    assert.equal(
-      geometry.turnCount,
-      result.before.rendered.turnBlocks +
-        3 +
-        (result.historyMountVisual ? 100 : 0),
     );
     assert.equal(
       geometry.overflow,
