@@ -1,4 +1,4 @@
-name: Packaged Send geometry readers (instrumented diagnostic)
+name: Packaged Send style readers and timeline (diagnostic)
 on:
   push:
     branches: [diagnostic/send-layout-readers-20261103]
@@ -31,6 +31,7 @@ jobs:
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
+            cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
       - name: Build exact baseline once
         working-directory: baseline
@@ -41,7 +42,7 @@ jobs:
           npm run build --workspace @zen/zenx
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
-        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
+        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs
       - name: Native 1280 dock source, three sends with bounded getter attribution
         timeout-minutes: 20
         run: |
@@ -63,7 +64,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-layout-getter-attribution-5000
+          name: native-send-style-readers-timeline-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

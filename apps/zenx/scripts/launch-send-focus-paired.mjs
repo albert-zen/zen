@@ -165,6 +165,7 @@ for (const file of [
   "scripts/capture-send-feedback.cjs",
   "scripts/launch-send-feedback.mjs",
   "scripts/long-thread-domain-seed.mjs",
+  "scripts/summarize-send-timeline.cjs",
 ])
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
@@ -227,6 +228,10 @@ try {
       await copyFile(
         path.join(root, "scripts/capture-send-feedback.cjs"),
         path.join(appDirectory, "scripts/capture-send-feedback.cjs"),
+      );
+      await copyFile(
+        path.join(root, "scripts/summarize-send-timeline.cjs"),
+        path.join(appDirectory, "scripts/summarize-send-timeline.cjs"),
       );
       const manifestPath = path.join(appDirectory, "package.json");
       const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -613,7 +618,7 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-layout-getter-attribution-v1-not-acceptance",
+    "native-style-readers-timeline-v1-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
@@ -728,8 +733,17 @@ try {
       ),
     };
   });
+  const timeline = JSON.parse(
+    await readFile(
+      path.join(directory, "owned-native-send-profile.summary.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(timeline.review?.passed, true);
+  assert.equal(timeline.acceptance, false);
   const summary = {
     schemaVersion: 1,
+    timeline,
     diagnosticOnly: true,
     acceptance: false,
     measurementContract: result.measurementContract,
@@ -773,6 +787,7 @@ try {
       capture: hashes["scripts/capture-send-feedback.cjs"],
       launcher: hashes["scripts/launch-send-feedback.mjs"],
       seed: hashes["scripts/long-thread-domain-seed.mjs"],
+      statistics: hashes["scripts/summarize-send-timeline.cjs"],
     },
     independentStorage: {
       independentReopen: persisted.independentReopen,

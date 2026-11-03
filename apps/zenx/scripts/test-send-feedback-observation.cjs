@@ -475,3 +475,51 @@ test("geometry probes observe existing calls only before pending delivery and re
     wrappedHeight,
   );
 });
+
+test("computed style reads preserve live object identity and attribute its existing CSSOM properties", () => {
+  const f = fixture();
+  try {
+    const editor = f.d.querySelector("#thread-composer");
+    const style = f.w.getComputedStyle(editor);
+    assert.ok(style instanceof f.w.CSSStyleDeclaration);
+    void style.display;
+    void style.getPropertyValue("height");
+    const counts = f.record.geometryProbes.counts;
+    assert.equal(counts["style.display:composer-editor"].calls, 1);
+    assert.ok(counts["style.getPropertyValue:composer-editor"].calls >= 1);
+    assert.equal(
+      JSON.stringify(f.record.geometryProbes).includes("synthetic-nonce"),
+      false,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("timeline integration remains single source, bounded and private", () => {
+  assert.ok(source.includes("trace_buffer_size_in_kb: 131072"));
+  assert.ok(source.includes("120000"));
+  assert.ok(
+    source.includes("if (result.ok) await reviewAndPublishProfile(rawPath)"),
+  );
+  assert.ok(
+    source.includes("Raw profile withheld: private review did not pass"),
+  );
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  assert.ok(launch.includes("timeline.review?.passed"));
+  const workflow = readFileSync(
+    path.join(
+      __dirname,
+      "../../../.github/workflows/send-information-layout-ab.yml",
+    ),
+    "utf8",
+  );
+  assert.ok(workflow.includes("for case in control-baseline; do"));
+  assert.equal(
+    workflow.includes("owned-native-send-profile.private.json"),
+    false,
+  );
+});

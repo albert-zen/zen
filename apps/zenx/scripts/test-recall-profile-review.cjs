@@ -63,7 +63,7 @@ async function fixture() {
   });
   await fs.writeFile(rawPath, raw, { mode: 0o600 });
   const source = await fs.readFile(
-    path.join(__dirname, "capture-recall-send-profile.cjs"),
+    path.join(__dirname, "capture-send-feedback-verified-frame.cjs"),
     "utf8",
   );
   const code = source.slice(

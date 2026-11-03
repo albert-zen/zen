@@ -4,7 +4,13 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
-const { app, BrowserWindow, session, ipcMain } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  session,
+  ipcMain,
+  contentTracing,
+} = require("electron");
 assert.ok(["win32", "darwin"].includes(process.platform));
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.ok(process.versions.electron);
@@ -30,7 +36,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-layout-getter-attribution-v1-not-acceptance",
+  harnessVersion: "native-style-readers-timeline-v1-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
@@ -44,6 +50,10 @@ const result = {
   blockedExternalRequests: 0,
 };
 let window;
+let traceStarted = false,
+  traceDeadline,
+  traceStopPromise;
+const { summarizeSendTimeline } = require("./summarize-send-timeline.cjs");
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 // Catch renderer exceptions before Electron replaces them with an opaque IPC rejection.
 // JSON-normalize successes too: only plain data crosses this diagnostic boundary.
@@ -232,7 +242,7 @@ async function screenshot(name) {
 
 // Instrumented getter attribution plus existing browser observations.
 // No added geometry reads or changes to App state, UI, requests or receipts.
-function installObservation(nonce, threadId) {
+function installObservation(nonce, threadId, profileIndex = 0) {
   const record = {
     clockDomain: "renderer",
     nonce,
@@ -263,6 +273,25 @@ function installObservation(nonce, threadId) {
     },
   };
   window.__sendLatency = record;
+  const mark = (phase) =>
+    performance.mark?.(`zen-send-${profileIndex}-${phase}`);
+  record.visibilitySnapshots = [];
+  const visibility = (phase) => {
+    if (record.visibilitySnapshots.length < 64)
+      record.visibilitySnapshots.push({
+        phase,
+        atMs: performance.now(),
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus(),
+      });
+  };
+  const focused = () => visibility("window-focus"),
+    blurred = () => visibility("window-blur"),
+    changed = () => visibility("visibilitychange");
+  window.addEventListener("focus", focused);
+  window.addEventListener("blur", blurred);
+  document.addEventListener("visibilitychange", changed);
+  visibility("installed");
   let stopped = false,
     frameId,
     frameNumber = 0;
@@ -279,6 +308,8 @@ function installObservation(nonce, threadId) {
     );
     if (!button || record.clickMs !== undefined) return;
     record.clickMs = performance.now();
+    mark("native-click");
+    visibility("click");
     record.trusted = event.isTrusted;
     record.disabledAtClick = button.disabled;
     record.draftAtClick = value();
@@ -292,6 +323,7 @@ function installObservation(nonce, threadId) {
   // Observe calls the product already makes; never add a geometry read.
   // Only the click-to-first-pending-observer window is attributed.
   const restoreGeometry = [];
+  const computedTargets = new WeakMap();
   const probeActive = () =>
     record.clickMs !== undefined &&
     record.pendingDomMs === undefined &&
@@ -325,7 +357,7 @@ function installObservation(nonce, threadId) {
   };
   const reportGeometry = (method, node, start, end) => {
     const overhead = performance.now();
-    const target = category(node),
+    const target = category(computedTargets.get(node) ?? node),
       key = method + ":" + target;
     const bucket = (record.geometryProbes.counts[key] ??= {
       calls: 0,
@@ -366,10 +398,16 @@ function installObservation(nonce, threadId) {
   };
   const wrapCall = (method, original) =>
     function (...args) {
-      if (!probeActive()) return Reflect.apply(original, this, args);
+      if (!probeActive()) {
+        const value = Reflect.apply(original, this, args);
+        if (method === "getComputedStyle") computedTargets.set(value, args[0]);
+        return value;
+      }
       const start = performance.now();
       try {
-        return Reflect.apply(original, this, args);
+        const value = Reflect.apply(original, this, args);
+        if (method === "getComputedStyle") computedTargets.set(value, args[0]);
+        return value;
       } finally {
         reportGeometry(
           method,
@@ -382,6 +420,7 @@ function installObservation(nonce, threadId) {
   for (const [owner, name] of [
     [Element.prototype, "getBoundingClientRect"],
     [Element.prototype, "getClientRects"],
+    [Element.prototype, "checkVisibility"],
     [Element.prototype, "scrollIntoView"],
     [HTMLElement.prototype, "focus"],
     [window, "getComputedStyle"],
@@ -430,6 +469,67 @@ function installObservation(nonce, threadId) {
       restoreGeometry.push(() => {
         if (Object.getOwnPropertyDescriptor(owner, name)?.get === get)
           Object.defineProperty(owner, name, descriptor);
+      });
+    }
+  }
+  // getComputedStyle may return a live object before its properties flush style.
+  // Wrap existing CSSOM reads on their native prototypes, never proxy the value.
+  record.geometryProbes.cssPropertyWrappers = [];
+  const stylePrototypes = new Set([
+    CSSStyleDeclaration.prototype,
+    Object.getPrototypeOf(document.documentElement.style),
+  ]);
+  if (typeof CSSStyleProperties !== "undefined")
+    stylePrototypes.add(CSSStyleProperties.prototype);
+  for (const owner of stylePrototypes) {
+    for (const name of [
+      "display",
+      "visibility",
+      "width",
+      "height",
+      "maxHeight",
+      "minHeight",
+      "lineHeight",
+      "boxSizing",
+      "paddingTop",
+      "paddingBottom",
+      "paddingLeft",
+      "paddingRight",
+      "borderTopWidth",
+      "borderBottomWidth",
+      "marginLeft",
+      "marginRight",
+      "position",
+      "overflowX",
+      "overflowY",
+      "transform",
+      "fontSize",
+      "scrollbarGutter",
+    ]) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (!descriptor?.configurable || !descriptor.get) continue;
+      if (!record.geometryProbes.cssPropertyWrappers.includes(name))
+        record.geometryProbes.cssPropertyWrappers.push(name);
+      const get = wrapCall("style." + name, descriptor.get);
+      Object.defineProperty(owner, name, { ...descriptor, get });
+      restoreGeometry.push(() => {
+        if (Object.getOwnPropertyDescriptor(owner, name)?.get === get)
+          Object.defineProperty(owner, name, descriptor);
+      });
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(
+      owner,
+      "getPropertyValue",
+    );
+    if (descriptor?.value && descriptor.writable) {
+      const wrapped = wrapCall("style.getPropertyValue", descriptor.value);
+      Object.defineProperty(owner, "getPropertyValue", {
+        ...descriptor,
+        value: wrapped,
+      });
+      restoreGeometry.push(() => {
+        if (owner.getPropertyValue === wrapped)
+          Object.defineProperty(owner, "getPropertyValue", descriptor);
       });
     }
   }
@@ -515,8 +615,10 @@ function installObservation(nonce, threadId) {
         (record.pendingClientId === undefined ||
           record.pendingClientId === row.dataset.pendingSendClientId)
       ) {
-        if (record.pendingDomMs === undefined)
+        if (record.pendingDomMs === undefined) {
           record.pendingDomMs = performance.now();
+          mark("first-pending-dom-observed");
+        }
         record.pendingClientId = row.dataset.pendingSendClientId;
         record.pendingStateAtDom = row.dataset.sendState;
         if (record.pendingBubble !== bubble) {
@@ -658,6 +760,14 @@ function installObservation(nonce, threadId) {
     if (stopped) return;
     const now = performance.now();
     const currentFrame = ++frameNumber;
+    if (
+      record.feedbackGeometryCompleteMs !== undefined &&
+      record.nextFrameEntryMs === undefined
+    ) {
+      record.nextFrameEntryMs = now;
+      mark("next-frame-entry");
+      visibility("next-frame-entry");
+    }
     if (record.clickMs !== undefined) {
       if (record.inputClearFrameMs === undefined && value() === "")
         record.inputClearFrameMs = now;
@@ -739,6 +849,8 @@ function installObservation(nonce, threadId) {
         if (feedbackVisible) {
           if (record.feedbackGeometryCompleteMs === undefined) {
             record.feedbackGeometryCompleteMs = geometryComplete;
+            mark("geometry-complete");
+            visibility("first-geometry");
             record.feedbackGeometryFrame = currentFrame;
             record.feedbackGeometryKind = feedback.kind;
             record.feedbackClientId = feedback.clientId;
@@ -748,6 +860,8 @@ function installObservation(nonce, threadId) {
             record.feedbackSubsequentFrameMs === undefined
           ) {
             record.feedbackSubsequentFrameMs = geometryComplete;
+            mark("next-frame-geometry");
+            visibility("next-frame-geometry");
             record.feedbackSubsequentKind = feedback.kind;
             record.feedbackSubsequentMessageId = feedback.messageId ?? null;
           }
@@ -779,6 +893,9 @@ function installObservation(nonce, threadId) {
     intersectionObserver?.disconnect();
     off();
     document.removeEventListener("click", capture, true);
+    window.removeEventListener("focus", focused);
+    window.removeEventListener("blur", blurred);
+    document.removeEventListener("visibilitychange", changed);
     record.nativeFinalOwnership = {
       pendingConnected: record.pendingBubble?.isConnected === true,
       canonicalConnected: record.bubble?.isConnected === true,
@@ -796,6 +913,192 @@ function installObservation(nonce, threadId) {
   };
 }
 
+function profileReviewReasons(raw, secrets, configurations, allowedRoots) {
+  const reasons = new Set();
+  for (const secret of secrets)
+    if (
+      raw.includes(secret) ||
+      raw.includes(JSON.stringify(secret).slice(1, -1))
+    )
+      reasons.add("known-credential-literal");
+  for (const config of configurations)
+    if (
+      raw.includes(config) ||
+      raw.includes(JSON.stringify(config).slice(1, -1))
+    )
+      reasons.add("private-configuration-content");
+  const sensitive = [
+    /Bearer\s+[A-Za-z0-9._~+/=-]{12,}/,
+    /\bsk-[A-Za-z0-9_-]{20,}/,
+    /\bgh[pousr]_[A-Za-z0-9]{20,}/,
+    /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,
+    /"(?:providerProfiles|onboardingComplete|apiKey|accessToken|bearerToken)"\s*:/,
+  ];
+  if (sensitive.some((pattern) => pattern.test(raw)))
+    reasons.add("credential-or-configuration-pattern");
+  for (const candidate of raw.match(/\/(?:Users|home)\/[^"\s\\]+/g) ?? [])
+    if (
+      !allowedRoots.some(
+        (root) => candidate === root || candidate.startsWith(root + "/"),
+      )
+    )
+      reasons.add("non-fixture-user-path");
+  return [...reasons];
+}
+async function reviewAndPublishProfile(rawPath) {
+  result.profile.reviewStage = "private-review";
+  try {
+    const secrets = [];
+    for (const [relative, required] of [
+      ["profile/runtime/app-server.token", true],
+      ["profile/runtime/plugin-dev.token", false],
+    ]) {
+      try {
+        const filename = path.join(temporary, relative),
+          stat = await fs.lstat(filename);
+        assert(
+          stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1,
+          "Fixture token must be an owned regular file",
+        );
+        const tokenFile = await fs.readFile(filename, "utf8");
+        assert(
+          /^[a-f0-9]{64}\n?$/.test(tokenFile),
+          "Fixture token format must match its production generator",
+        );
+        secrets.push(tokenFile.trim());
+      } catch (error) {
+        if (!required && error.code === "ENOENT") continue;
+        throw error;
+      }
+    }
+    const config = await fs.readFile(
+      path.join(temporary, "profile/host-profile.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(config);
+    const collect = (value) => {
+      if (!value || typeof value !== "object") return;
+      for (const [key, entry] of Object.entries(value)) {
+        if (
+          /token|secret|password|api.?key|credential|authorization/i.test(
+            key,
+          ) &&
+          typeof entry === "string" &&
+          entry.length >= 16
+        )
+          secrets.push(entry);
+        else collect(entry);
+      }
+    };
+    collect(parsed);
+    const raw = await fs.readFile(rawPath, "utf8");
+    const reasonCodes = profileReviewReasons(
+      raw,
+      secrets,
+      [config, JSON.stringify(parsed)],
+      [process.cwd(), temporary],
+    );
+    result.profile.review = {
+      passed: false,
+      knownCredentialCount: secrets.length,
+      privateConfigurationCount: 1,
+      reasonCodes,
+    };
+    assert.equal(
+      reasonCodes.length,
+      0,
+      "Raw profile withheld: private review did not pass",
+    );
+    result.profile.reviewStage = "timeline-summary";
+    const rendererRoot =
+      result.profile.schemaVersion === 3
+        ? path.resolve(__dirname, "../out/renderer")
+        : null;
+    const ownBundles = [];
+    if (result.profile.schemaVersion === 3)
+      for (const relative of (
+        await fs.readdir(rendererRoot, { recursive: true })
+      )
+        .filter((f) => f.endsWith(".js"))
+        .sort()) {
+        const file = path.join(rendererRoot, relative);
+        ownBundles.push({
+          url: pathToFileURL(file).href,
+          sha256: createHash("sha256")
+            .update(await fs.readFile(file))
+            .digest("hex"),
+        });
+      }
+    const summary = summarizeSendTimeline(
+      JSON.parse(raw),
+      { ...result.profile, ownBundles },
+      result.samples,
+    );
+    summary.review = {
+      passed: true,
+      knownCredentialCount: secrets.length,
+      privateConfigurationCount: 1,
+    };
+    result.profile.reviewStage = "summary-write";
+    const serializedSummary = JSON.stringify(summary, null, 2);
+    assert.equal(
+      profileReviewReasons(
+        serializedSummary,
+        secrets,
+        [config, JSON.stringify(parsed)],
+        [process.cwd(), temporary],
+      ).length,
+      0,
+      "Projected summary failed private scan",
+    );
+    const published = path.join(
+      directory,
+      "owned-native-send-profile.summary.json",
+    );
+    await fs.writeFile(published, serializedSummary, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    result.profile.traceFile = "private-only-not-exported";
+    result.profile.summaryFile = path.basename(published);
+    result.profile.review.passed = true;
+  } catch {
+    if (!result.profile.review)
+      result.profile.review = {
+        passed: false,
+        reasonCodes: ["review-input-unavailable-or-invalid"],
+      };
+    result.profile.review.passed = false;
+    if (!result.profile.review.reasonCodes.length)
+      result.profile.review.reasonCodes = [
+        result.profile.reviewStage === "timeline-summary"
+          ? "timeline-contract-invalid"
+          : result.profile.reviewStage === "summary-write"
+            ? "summary-write-failed"
+            : "review-input-unavailable-or-invalid",
+      ];
+    throw new Error("Profile review failed; raw trace remains private");
+  }
+}
+
+async function stopOwnedTrace() {
+  if (traceStopPromise) return traceStopPromise;
+  assert.equal(traceStarted, true);
+  traceStopPromise = (async () => {
+    clearTimeout(traceDeadline);
+    result.profile.bufferUsage = await contentTracing.getTraceBufferUsage();
+    const rawPath = await contentTracing.stopRecording(
+      path.join(temporary, "owned-native-send-profile.private.json"),
+    );
+    result.profile.traceStoppedMainMs = performance.now();
+    result.profile.durationMs =
+      result.profile.traceStoppedMainMs - result.profile.traceStartedMainMs;
+    result.profile.traceStopped = true;
+    result.profile.rawPath = rawPath;
+    return rawPath;
+  })();
+  return traceStopPromise;
+}
 async function run() {
   await networkReady;
   await until(async () => {
@@ -973,6 +1276,56 @@ async function run() {
   result.processResourcesBefore = app
     .getAppMetrics()
     .map(({ type, cpu, memory }) => ({ type, cpu, memory }));
+  result.profile = {
+    schemaVersion: 3,
+    diagnosticOnly: true,
+    acceptance: false,
+    reason:
+      "Timeline overhead: none of these timings are acceptance evidence; CPU sampling disabled",
+    electron: process.versions.electron,
+    mainPid: process.pid,
+    rendererPid: window.webContents.getOSProcessId(),
+    api: "Electron 43.2.0 contentTracing.startRecording(TraceConfig)/stopRecording",
+  };
+  const categories = [
+    "toplevel",
+    "devtools.timeline",
+    "disabled-by-default-devtools.timeline",
+    "disabled-by-default-devtools.timeline.frame",
+    "v8",
+    "blink.user_timing",
+  ];
+  result.profile.backgroundThrottling =
+    window.webContents.getLastWebPreferences().backgroundThrottling ?? null;
+  result.profile.requestedCategories = categories;
+  result.profile.availableCategories = await contentTracing.getCategories();
+  await contentTracing.startRecording({
+    recording_mode: "record-until-full",
+    included_categories: categories,
+    excluded_categories: [
+      "disabled-by-default-v8.cpu_profiler",
+      "disabled-by-default-v8.cpu_profiler.hires",
+    ],
+    trace_buffer_size_in_kb: 131072,
+  });
+  traceStarted = true;
+  result.profile.traceStartedMainMs = performance.now();
+  traceDeadline = setTimeout(() => {
+    result.profile.deadlineExceeded = true;
+    result.ok = false;
+    void stopOwnedTrace().catch(() => {});
+  }, 120000);
+  result.profile.processesBefore = app
+    .getAppMetrics()
+    .map(({ pid, type, cpu, memory, name, serviceName }) => ({
+      pid,
+      type,
+      cpu,
+      memory,
+      name,
+      serviceName,
+    }));
+
   result.samples = [];
   assert.equal(
     await evaluate(
@@ -1032,6 +1385,8 @@ async function run() {
         JSON.stringify(nonce) +
         "," +
         JSON.stringify(threadId) +
+        "," +
+        repetition +
         ")",
     );
     await until(
@@ -1249,6 +1604,13 @@ async function run() {
     }
     await pause(300);
   }
+  await stopOwnedTrace();
+  assert.notEqual(
+    result.profile.deadlineExceeded,
+    true,
+    "Owned timeline exceeded 120 seconds",
+  );
+  assert.ok(result.profile.durationMs <= 120000);
   console.log(
     "SYNTHETIC_SEND_STAGE " +
       JSON.stringify({
@@ -1369,6 +1731,17 @@ void verifyPackagedRuntime()
       } catch {}
   })
   .finally(async () => {
+    if (traceStarted)
+      try {
+        const rawPath = await stopOwnedTrace();
+        assert.notEqual(result.profile.deadlineExceeded, true);
+        assert.ok(result.profile.durationMs <= 120000);
+        if (result.ok) await reviewAndPublishProfile(rawPath);
+      } catch {
+        result.ok = false;
+        result.profile.traceError =
+          "Profile collection or private review failed";
+      }
     await fs.writeFile(
       path.join(directory, "full-app-measurements.json"),
       JSON.stringify(result, null, 2),
