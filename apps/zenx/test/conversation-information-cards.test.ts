@@ -477,6 +477,12 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
       )!.disabled,
       true,
     );
+    assert.equal(
+      document
+        .querySelector('[aria-label="Enable trigger · Unknown revision"]')!
+        .getAttribute("aria-disabled"),
+      "true",
+    );
     const pause = document.querySelector<HTMLButtonElement>(
       '[aria-label="Pause trigger · Synthetic active"]',
     )!;

@@ -209,7 +209,11 @@ function ConversationInformationContent({
                     className="plugin-switch"
                     // Keep native keyboard focus while awaiting the Host. The
                     // synchronous busy guard rejects both pointer and key repeats.
-                    aria-disabled={busyTrigger !== null}
+                    aria-disabled={
+                      busyTrigger !== null ||
+                      (!trigger.active &&
+                        trigger.definitionRevision === undefined)
+                    }
                     disabled={
                       !trigger.active &&
                       trigger.definitionRevision === undefined
