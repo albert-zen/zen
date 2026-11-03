@@ -1,0 +1,88 @@
+{
+  "productHead": "07a409e45a9dc39163d4832a768d24cf6f3c6b06",
+  "testedMerge": "0bfe488e3118cc7c7f17bc599379a749953f6786",
+  "productTree": "4cc0dc0dbcc5cdcee0d57ea803a7d1bca5d84102",
+  "baseMain": "6c346092e80d7d7d0fb78379602fda60f14baeee",
+  "workflowRun": 41695117400,
+  "synthetic": true,
+  "platforms": {
+    "macos": {
+      "artifactId": 13262491158,
+      "artifactZipSha256": "3f3d6a729b1d511a37a7a5a96740ab05a99c1adcd8f421f53cc5dd4767e47ebb",
+      "cases": 26,
+      "nativeInputSteps": 81,
+      "verifiedSourceFiles": 34,
+      "sourceLineEndings": "LF"
+    },
+    "windows": {
+      "artifactId": 13260592464,
+      "artifactZipSha256": "8b3024ff6175600c5767eb2b4b87e975a9981ec81c2214bc0cc21e28e411f02d",
+      "cases": 26,
+      "nativeInputSteps": 81,
+      "verifiedSourceFiles": 34,
+      "sourceLineEndings": "Git CRLF"
+    }
+  },
+  "files": [
+    {
+      "path": "macos/17a-reference-dark-Chinese-question-native-crop.png",
+      "bytes": 55954,
+      "sha256": "06e4270ae5f267fd699fde0d63c357f29681adeb8f7cca0525a8b549aa7d62af"
+    },
+    {
+      "path": "macos/18a-reference-dark-Chinese-triggers-native-crop.png",
+      "bytes": 35441,
+      "sha256": "24523d7e6703a81501c15c7b6ffbc62450387e39a6203775873f97108c766bae"
+    },
+    {
+      "path": "macos/01e-new-foreground-question-reveal.png",
+      "bytes": 224060,
+      "sha256": "433f5a6744d4d62fcf5150f3af3a46150e50c6885c784055a890f6843bfd44cc"
+    },
+    {
+      "path": "macos/01f-checkbox-keyboard-focus.png",
+      "bytes": 224587,
+      "sha256": "28677fc4806b26c536da38b6a9a73632c04b7fb1b338fac77706f6dbbff57400"
+    },
+    {
+      "path": "macos/12a-native-room-workspace-two-questions.png",
+      "bytes": 147589,
+      "sha256": "8318e8cf951102b9e3bb9c0e2967c3587846d904b48ce74ae80121228f6a6891"
+    },
+    {
+      "path": "macos/source.json",
+      "bytes": 10324,
+      "sha256": "770604de3be086a079d8087fab049b69c7c790e9dec56883be469220ec37b5d4"
+    },
+    {
+      "path": "windows/17a-reference-dark-Chinese-question-native-crop.png",
+      "bytes": 36252,
+      "sha256": "fff72e79bd7a1b1f1b421e63b82374deb23d87b4db341c4b0e4909d8d5c7dd3c"
+    },
+    {
+      "path": "windows/18a-reference-dark-Chinese-triggers-native-crop.png",
+      "bytes": 28466,
+      "sha256": "7ce9b62e1e551deb36279d75d2a12b727b37cfd62e38e0e55ab91f4359a72800"
+    },
+    {
+      "path": "windows/01e-new-foreground-question-reveal.png",
+      "bytes": 167561,
+      "sha256": "23a42f8434c3babd43477248e7ce7f325bcc528cfbab69bb6f3f9055efd16239"
+    },
+    {
+      "path": "windows/01f-checkbox-keyboard-focus.png",
+      "bytes": 172580,
+      "sha256": "5ce5cec126331f1ec399571aa46df5a6d84cac56c7159ab00a61831b9f0b1276"
+    },
+    {
+      "path": "windows/12a-native-room-workspace-two-questions.png",
+      "bytes": 123146,
+      "sha256": "424daead02953a4e4cef25859e0ea8e32522e31ce94b0309bf3e152dfe5d00a9"
+    },
+    {
+      "path": "windows/source.json",
+      "bytes": 10352,
+      "sha256": "37dc833302057ee3d7996bb8fb435b2569c659bf2bea815646b7fec60fec279a"
+    }
+  ]
+}
