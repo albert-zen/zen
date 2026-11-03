@@ -355,6 +355,10 @@ function styleInvalidationCauses(events, start, end, bundles) {
     "composer",
     "composer-send-popover",
     "action-orb",
+    "thread-view",
+    "workspace",
+    "agent-surface",
+    "app-shell",
   ];
   // Chromium writes both invalidationSet and invalidationList[].id using
   // DescendantInvalidationSetToIdString. IDs stay private to this window.
@@ -396,7 +400,7 @@ function styleInvalidationCauses(events, start, end, bundles) {
     ).split(/\s+/);
     const target = targets.find((name) => classNames.includes(name)) ?? "other";
     const tags =
-      "button input textarea select form fieldset div span p a summary details section article svg path g circle polyline line rect html body label text".split(
+      "button input textarea select form fieldset div span p a summary details section article main header footer aside nav svg path g circle polyline line rect html body label text document".split(
         " ",
       );
     const rawTag =
@@ -414,10 +418,20 @@ function styleInvalidationCauses(events, start, end, bundles) {
       ["changedPseudo", "changedAttribute", "changedClass"].find(
         (key) => typeof data[key] === "string",
       ) ?? "none";
+    // Blink versions emit either CSS spelling or enum names such as
+    // PseudoFocusWithin. Normalize only before the fixed allowlist below.
     const rawChange =
-      changeKind === "none" ? "" : data[changeKind].replace(/^:/, "");
+      changeKind === "none"
+        ? ""
+        : (changeKind === "changedPseudo"
+            ? data[changeKind]
+                .replace(/^k?Pseudo/, "")
+                .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+                .toLowerCase()
+            : data[changeKind]
+          ).replace(/^:/, "");
     const change =
-      "disabled enabled class style tabindex aria-disabled aria-busy aria-label aria-describedby data-scrollbar-active data-state data-action data-mode focus focus-visible focus-within hover active first-child last-child only-child nth-child nth-last-child checked indeterminate placeholder-shown read-only read-write valid invalid required optional default action-orb send stop steer batch-next queue replace"
+      "disabled enabled class style tabindex aria-disabled aria-busy aria-label aria-describedby data-scrollbar-active data-state data-action data-mode focus focus-visible focus-within hover active has empty first-child last-child only-child nth-child nth-last-child checked indeterminate placeholder-shown read-only read-write valid invalid required optional default action-orb send stop steer batch-next queue replace"
         .split(" ")
         .includes(rawChange)
         ? rawChange

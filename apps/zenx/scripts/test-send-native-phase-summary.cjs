@@ -427,3 +427,39 @@ test("invalidation set link output stays capped and unknown feature strings neve
   for (const raw of ["private-", "https://", "CUSTOM-ELEMENT"])
     assert.equal(JSON.stringify(result).includes(raw), false);
 });
+
+test("Blink pseudo enum spellings normalize only to fixed codes", () => {
+  for (const [raw, expected] of [
+    ["PseudoFocusWithin", "focus-within"],
+    ["PseudoFocusVisible", "focus-visible"],
+    ["PseudoHas", "has"],
+    ["PseudoEnabled", "enabled"],
+    ["PseudoDisabled", "disabled"],
+    [":focus-within", "focus-within"],
+    ["PseudoPrivateSecret", "other"],
+  ]) {
+    const result = styleInvalidationCauses(
+      [
+        schedule(100, {
+          changedPseudo: raw,
+          nodeName: "MAIN class='private-node'",
+        }),
+      ],
+      100,
+      120,
+      bundles,
+    );
+    assert.deepEqual(result.scheduledChanges, [
+      { code: `changedPseudo:${expected}`, events: 1 },
+    ]);
+    assert.equal(result.groups[0].nodeTag, "main");
+    assert.equal(JSON.stringify(result).includes("PrivateSecret"), false);
+  }
+  const doc = styleInvalidationCauses(
+    [schedule(100, { nodeName: "#document" })],
+    100,
+    120,
+    bundles,
+  );
+  assert.equal(doc.groups[0].nodeTag, "document");
+});
