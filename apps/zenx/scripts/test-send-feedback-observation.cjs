@@ -21,6 +21,8 @@ function fixture({
   layoutObservation = false,
   intersectionObservation = false,
   cachedOwnValue = false,
+  activationKind = "click",
+  cachedPresenceStyle = false,
 } = {}) {
   const dom = new JSDOM(
     '<main class="thread-view"><div class="messages"><div class="messages-inner"></div></div><div class="bottom-zone"><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></div></main>',
@@ -134,12 +136,33 @@ function fixture({
     "value",
   );
   d.querySelector("#thread-composer").value = "synthetic-nonce";
-  w.eval(observer + '; installObservation("synthetic-nonce", "thread-A");');
+  w.eval(
+    observer +
+      '; installObservation("synthetic-nonce", "thread-A", 0, ' +
+      JSON.stringify(activationKind) +
+      ");",
+  );
+  let presencePanel, presenceStyle;
+  if (cachedPresenceStyle) {
+    presencePanel = d.createElement("div");
+    presencePanel.className = "composer-send-popover";
+    presencePanel.dataset.state = "open";
+    presencePanel.style.animationName = "private-fixture-animation";
+    presencePanel.style.display = "block";
+    d.body.append(presencePanel);
+    presenceStyle = w.getComputedStyle(presencePanel);
+    void presenceStyle.animationName;
+  }
   if (layoutObservation)
     layoutObserver.deliver(d.querySelector(".messages-inner"), 1000);
-  d.querySelector("button").dispatchEvent(
-    new w.MouseEvent("click", { bubbles: true }),
-  );
+  if (activationKind === "enter")
+    d.querySelector("#thread-composer").dispatchEvent(
+      new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  else
+    d.querySelector("button").dispatchEvent(
+      new w.MouseEvent("click", { bubbles: true }),
+    );
   d.querySelector("#thread-composer").value = "";
   const row = async (
     kind,
@@ -165,6 +188,8 @@ function fixture({
     row,
     record: w.__sendLatency,
     originalOwnValueDescriptor,
+    presencePanel,
+    presenceStyle,
     geometryReads: () => geometryReads,
     resize(height) {
       layoutObserver.deliver(d.querySelector(".messages-inner"), height);
@@ -529,9 +554,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(
-    workflow.includes("for case in control-baseline control-candidate; do"),
-  );
+  assert.ok(workflow.includes("for activation in click enter; do"));
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
@@ -545,7 +568,7 @@ test("historical grid comparison keeps exact sources and reader regression outsi
   );
   for (const identity of [
     "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
-    "04d98bfa949357d20befc313450bec2f86ed28e8",
+    "a44591da91c5f1bb075b913b97796951a1ac1289",
     "406b7116f3ece53770f7064ff59f818d365232f5",
     "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   ])
@@ -666,4 +689,61 @@ test("cached own textarea setter is observed without changing its getter or rest
   const restored = Object.getOwnPropertyDescriptor(editor, "value");
   assert.equal(restored.get, f.originalOwnValueDescriptor.get);
   assert.equal(restored.set, f.originalOwnValueDescriptor.set);
+});
+
+test("synthetic Enter observer uses the activation clock without clicking Send", async () => {
+  const f = fixture({ activationKind: "enter" });
+  try {
+    assert.equal(f.record.activationKind, "enter");
+    assert.equal(f.record.sendPanelOpenAtActivation, false);
+    await f.row("pending");
+    f.frame();
+    f.frame();
+    assert.ok(Number.isFinite(f.record.feedbackSubsequentFrameMs));
+  } finally {
+    f.close();
+  }
+});
+test("cached exact-panel style Proxy measures existing reads and restores without CSS value export", () => {
+  const f = fixture({ cachedPresenceStyle: true });
+  try {
+    const style = f.presenceStyle,
+      panel = f.presencePanel;
+    panel.dataset.state = "closed";
+    assert.equal(style.animationName, "private-fixture-animation");
+    assert.equal(style.display, "block");
+    assert.equal(style.getPropertyValue("display"), "block");
+    const metadata = f.record.geometryProbes.cssReturnProxy;
+    assert.equal(metadata.cachedStylesWrapped, 1);
+    assert.equal(metadata.returnedObjectIdentityChanged, true);
+    assert.equal(
+      f.record.geometryProbes.counts["style.cached.animationName:send-controls"]
+        .calls,
+      1,
+    );
+    assert.equal(metadata.readSemantics[0].closedAtRead, true);
+    assert.equal(
+      metadata.readSemantics[0].matchesLastObservedOpenAnimationName,
+      true,
+    );
+    assert.equal(
+      JSON.stringify(f.record.geometryProbes).includes(
+        "private-fixture-animation",
+      ),
+      false,
+    );
+    assert.equal(f.record.sendPanelOpenAtActivation, true);
+  } finally {
+    f.close();
+  }
+  assert.equal(f.record.geometryProbes.cssReturnProxy.stopped, true);
+  const count =
+    f.record.geometryProbes.counts["style.cached.animationName:send-controls"]
+      .calls;
+  void f.presenceStyle.animationName;
+  assert.equal(
+    f.record.geometryProbes.counts["style.cached.animationName:send-controls"]
+      .calls,
+    count,
+  );
 });

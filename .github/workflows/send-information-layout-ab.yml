@@ -1,7 +1,7 @@
-name: Packaged Send historical grid experiment (diagnostic)
+name: Packaged Send cached Presence style attribution (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-history-grid-20261103]
+    branches: [diagnostic/send-presence-style-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -15,12 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ece4b9015f2bb20c664058cc3d7d2a2bb38fd900
-          persist-credentials: false
-          path: baseline
-      - uses: actions/checkout@v4
-        with:
-          ref: 04d98bfa949357d20befc313450bec2f86ed28e8
+          ref: a44591da91c5f1bb075b913b97796951a1ac1289
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -32,32 +27,33 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build exact current baseline and candidate
+      - name: Build exact current source once
         timeout-minutes: 16
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: candidate
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
-      - name: Native current source pair with responsive and accessor checks
+      - name: Native click versus Enter with cached Presence property attribution
         timeout-minutes: 20
         run: |
           failed=0
-          for case in control-baseline control-candidate; do
-            case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
-            case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
+          for activation in click enter; do
+            case="control-$activation"
+            source=candidate
+            width=1280
             mkdir -p "results/$case"
             echo "NATIVE_AB_CASE_BEGIN $case $source $width"
             set +e
-            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width")
+            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "control-candidate" "$width" "$activation")
             status=$?
             set -e
             printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
@@ -68,7 +64,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-responsive-accessors-5000
+          name: native-send-cached-presence-style-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

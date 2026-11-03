@@ -44,7 +44,9 @@ assert.equal(
   pairCase,
   (viewportWidth === 1120 ? "narrow" : "control") + "-" + sourceLabel,
 );
-assert.equal(process.argv[7], undefined);
+const activationKind = process.argv[7] ?? "click";
+assert.ok(["click", "enter"].includes(activationKind));
+assert.equal(process.argv[8], undefined);
 const hostSnapshot = () => ({
   platform: os.platform(),
   release: os.release(),
@@ -63,7 +65,7 @@ const snapshots = {
     tree: "406b7116f3ece53770f7064ff59f818d365232f5",
   },
   candidate: {
-    commit: "04d98bfa949357d20befc313450bec2f86ed28e8",
+    commit: "a44591da91c5f1bb075b913b97796951a1ac1289",
     tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   },
 };
@@ -326,9 +328,7 @@ await writeFile(
       sourceTree: snapshot.tree,
       packagedHashes,
       comparisonRole:
-        sourceLabel === "baseline"
-          ? "unmodified-production-baseline"
-          : "isolated-" + sourceLabel + "-candidate",
+        "locked-production-source activation comparison: " + activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
       visibleHistoricalMessages: count * 2,
@@ -383,6 +383,7 @@ const child = spawn(
     version,
     temporary,
     String(viewportWidth),
+    activationKind,
     `--user-data-dir=${profile}`,
   ],
   {
@@ -618,10 +619,11 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-style-readers-timeline-v1-not-acceptance",
+    "native-presence-style-proxy-v1-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
+  assert.equal(result.activationKind, activationKind);
   assert.equal(
     result.informationPresentation.mode,
     viewportWidth === 1120 ? "popover" : "dock",
@@ -722,6 +724,14 @@ try {
         sample.geometryProbes.textareaAccessorWrappers.includes(name),
         "Required real textarea accessor coverage: " + name,
       );
+    assert.equal(sample.activationKind, activationKind);
+    assert.equal(sample.sendPanelClosedAfterSend, true);
+    assert.equal(sample.editorFocusedAfterSend, true);
+    assert.equal(sample.geometryProbes.cssReturnProxy.instrumented, true);
+    // Coverage is an observed hypothesis result, never a fabricated zero-cost pass.
+    // A fast click may not have mounted the panel; keep that sample explicit.
+    if (activationKind === "enter")
+      assert.equal(sample.sendPanelOpenAtActivation, false);
     const timings = Object.fromEntries(
       timingFields.map((key) => {
         const value = sample[key];
@@ -735,6 +745,16 @@ try {
     return {
       index,
       phase: index === 0 ? "first" : "warm",
+      activationKind: sample.activationKind,
+      presencePathMeasured:
+        (sample.geometryProbes.counts[
+          "style.cached.animationName:send-controls"
+        ]?.calls ?? 0) > 0,
+      sendPanelOpenAtActivation: sample.sendPanelOpenAtActivation,
+      editorFocusedAtActivation: sample.editorFocusedAtActivation,
+      sendPanelClosedAfterSend: sample.sendPanelClosedAfterSend,
+      sendPanelPresentAfterSend: sample.sendPanelPresentAfterSend,
+      editorFocusedAfterSend: sample.editorFocusedAfterSend,
       firstVisibleFeedbackKind: sample.firstVisibleFeedbackKind,
       ...timings,
       ipcDurationMs: sample.ipc[0].durationMs,
@@ -779,6 +799,8 @@ try {
     sourceLabel,
     pairCase,
     viewportWidth,
+    activationKind,
+    legacyTimingColumnMeaning: result.legacyTimingColumnMeaning,
     priorCompletedTurns: count,
     historicalMessages: count * 2,
     hostBefore,
@@ -870,6 +892,7 @@ try {
     sourceTree: snapshot.tree,
     pairCase,
     viewportWidth,
+    activationKind,
     stage:
       capture?.waitingFor ?? capture?.pendingOperation ?? "launcher validation",
     reason: "native-capture-or-validation-failed",
@@ -887,6 +910,11 @@ try {
       .slice(0, 3)
       .map((sample, index) => ({
         index,
+        activationKind: sample.activationKind,
+        sendPanelOpenAtActivation: sample.sendPanelOpenAtActivation,
+        editorFocusedAtActivation: sample.editorFocusedAtActivation,
+        sendPanelClosedAfterSend: sample.sendPanelClosedAfterSend,
+        editorFocusedAfterSend: sample.editorFocusedAfterSend,
         geometryProbes: sample.geometryProbes,
         nativeFinalOwnership: sample.nativeFinalOwnership,
         nativeLayoutAtClick: sample.nativeLayoutAtClick,

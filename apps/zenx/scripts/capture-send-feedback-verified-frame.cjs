@@ -28,6 +28,8 @@ assert.notEqual(
 const [directory, version, temporary] = process.argv.slice(1, 4);
 const viewportWidth = Number(process.argv[4]);
 assert.ok([1120, 1280].includes(viewportWidth));
+const activationKind = process.argv[5] ?? "click";
+assert.ok(["click", "enter"].includes(activationKind));
 assert.ok(directory && temporary && ["before", "current"].includes(version));
 app.setPath("userData", path.join(temporary, "profile"));
 app.setPath("home", path.join(temporary, "home"));
@@ -36,10 +38,13 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-style-readers-timeline-v1-not-acceptance",
+  harnessVersion: "native-presence-style-proxy-v1-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
+  activationKind,
+  legacyTimingColumnMeaning:
+    "clickTo columns start at the trusted activation event, including Enter; scoped CSS proxies perturb returned object identity, so attribution only",
   platform: process.platform,
   electron: process.versions.electron,
   scope:
@@ -242,7 +247,12 @@ async function screenshot(name) {
 
 // Instrumented getter attribution plus existing browser observations.
 // No added geometry reads or changes to App state, UI, requests or receipts.
-function installObservation(nonce, threadId, profileIndex = 0) {
+function installObservation(
+  nonce,
+  threadId,
+  profileIndex = 0,
+  activationKind = "click",
+) {
   const record = {
     clockDomain: "renderer",
     nonce,
@@ -303,11 +313,30 @@ function installObservation(nonce, threadId, profileIndex = 0) {
       : (e?.textContent ?? null);
   };
   const capture = (event) => {
-    const button = event.target?.closest?.(
-      ".composer-send-control > button.action-orb",
-    );
+    if (
+      activationKind === "enter" &&
+      (event.key !== "Enter" ||
+        event.shiftKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.isComposing ||
+        event.target !== editor())
+    )
+      return;
+    const button =
+      activationKind === "enter"
+        ? document.querySelector(
+            ".composer-send-control > button.action-orb.send",
+          )
+        : event.target?.closest?.(".composer-send-control > button.action-orb");
     if (!button || record.clickMs !== undefined) return;
     record.clickMs = performance.now();
+    record.activationKind = activationKind;
+    record.sendPanelOpenAtActivation = Boolean(
+      document.querySelector('.composer-send-popover[data-state="open"]'),
+    );
+    record.editorFocusedAtActivation = document.activeElement === editor();
     mark("native-click");
     visibility("click");
     record.trusted = event.isTrusted;
@@ -319,7 +348,8 @@ function installObservation(nonce, threadId, profileIndex = 0) {
       focused: document.hasFocus(),
     };
   };
-  document.addEventListener("click", capture, true);
+  const activationEvent = activationKind === "enter" ? "keydown" : "click";
+  document.addEventListener(activationEvent, capture, true);
   // Observe calls the product already makes; never add a geometry read.
   // Only the click-to-first-pending-observer window is attributed.
   const restoreGeometry = [];
@@ -516,7 +546,8 @@ function installObservation(nonce, threadId, profileIndex = 0) {
     }
   }
   // getComputedStyle may return a live object before its properties flush style.
-  // Wrap existing CSSOM reads on their native prototypes, never proxy the value.
+  // Generic CSSOM wrappers retain raw objects; the scoped cached-panel probe below
+  // explicitly changes only Send-panel returned identities for attribution.
   record.geometryProbes.cssPropertyWrappers = [];
   const stylePrototypes = new Set([
     CSSStyleDeclaration.prototype,
@@ -576,6 +607,124 @@ function installObservation(nonce, threadId, profileIndex = 0) {
       });
     }
   }
+  (() => {
+    const prior = window.getComputedStyle;
+    const rawToProxy = new WeakMap();
+    const proxyToRaw = new WeakMap();
+    let enabled = true;
+    const metadata = (record.geometryProbes.cssReturnProxy = {
+      instrumented: true,
+      exactSendPopoverOnly: true,
+      returnedObjectIdentityChanged: true,
+      methodFunctionIdentityChanged: true,
+      originalReceiverPreserved: true,
+      cachedStylesWrapped: 0,
+      readSemantics: [],
+      stopped: false,
+    });
+    const wrapped = function (...args) {
+      const rawStyle = Reflect.apply(prior, this, args);
+      const node = args[0];
+      if (
+        !enabled ||
+        !(node instanceof Element) ||
+        !node.matches(".composer-send-popover")
+      )
+        return rawStyle;
+      let proxy = rawToProxy.get(rawStyle);
+      if (proxy) return proxy;
+      const methods = new WeakMap();
+      let hasOpenAnimationName = false;
+      let openAnimationName; // Held privately only; never exported or re-read.
+      proxy = new Proxy(rawStyle, {
+        get(target, property) {
+          let value;
+          const measured =
+            (property === "animationName" || property === "display") &&
+            enabled &&
+            probeActive();
+          if (measured) {
+            const start = performance.now();
+            try {
+              value = Reflect.get(target, property, target);
+            } finally {
+              reportGeometry(
+                "style.cached." + property,
+                node,
+                start,
+                performance.now(),
+              );
+            }
+          } else value = Reflect.get(target, property, target);
+          if (enabled && (property === "animationName" || measured)) {
+            const overhead = performance.now();
+            const state = node.getAttribute("data-state");
+            if (property === "animationName" && state === "open") {
+              openAnimationName = value;
+              hasOpenAnimationName = true;
+            }
+            if (measured && metadata.readSemantics.length < 8) {
+              const observation = {
+                property,
+                closedAtRead: state === "closed",
+                connectedAtRead: node.isConnected,
+                isNone:
+                  property === "animationName"
+                    ? value === "none" || value === ""
+                    : value === "none",
+              };
+              if (property === "animationName") {
+                observation.hasObservedOpenAnimationName = hasOpenAnimationName;
+                observation.matchesLastObservedOpenAnimationName =
+                  hasOpenAnimationName && value === openAnimationName;
+              }
+              metadata.readSemantics.push(observation);
+            }
+            record.geometryProbes.overheadMs =
+              (record.geometryProbes.overheadMs ?? 0) +
+              performance.now() -
+              overhead;
+          }
+          if (typeof value !== "function" || property === "constructor")
+            return value;
+          // Respect Proxy invariants for a frozen own function-valued property.
+          const own = Reflect.getOwnPropertyDescriptor(target, property);
+          if (
+            own &&
+            own.configurable === false &&
+            own.writable === false &&
+            "value" in own
+          )
+            return value;
+          let method = methods.get(value);
+          if (!method) {
+            // Unlike bind(), preserve explicit .call(otherStyle) receivers too.
+            method = new Proxy(value, {
+              apply(fn, receiver, callArgs) {
+                return Reflect.apply(
+                  fn,
+                  proxyToRaw.get(receiver) ?? receiver,
+                  callArgs,
+                );
+              },
+            });
+            methods.set(value, method);
+          }
+          return method;
+        },
+      });
+      rawToProxy.set(rawStyle, proxy);
+      proxyToRaw.set(proxy, rawStyle);
+      metadata.cachedStylesWrapped++;
+      return proxy;
+    };
+    window.getComputedStyle = wrapped;
+    restoreGeometry.push(() => {
+      enabled = false;
+      metadata.stopped = true;
+      if (window.getComputedStyle === wrapped) window.getComputedStyle = prior;
+    });
+  })();
   // Passive evidence from the same boxes as the production follow observer.
   // Entry sizes are browser-supplied; never read geometry or scroll here.
   const layoutTargets = new Map(
@@ -929,13 +1078,20 @@ function installObservation(nonce, threadId, profileIndex = 0) {
   frameId = requestAnimationFrame(frame);
   record.stop = () => {
     stopped = true;
+    record.sendPanelPresentAfterSend = Boolean(
+      document.querySelector(".composer-send-popover"),
+    );
+    record.sendPanelClosedAfterSend = !document.querySelector(
+      '.composer-send-popover[data-state="open"]',
+    );
+    record.editorFocusedAfterSend = document.activeElement === editor();
     cancelAnimationFrame(frameId);
     mutation.disconnect();
     for (const restore of restoreGeometry.reverse()) restore();
     layoutObserver?.disconnect();
     intersectionObserver?.disconnect();
     off();
-    document.removeEventListener("click", capture, true);
+    document.removeEventListener(activationEvent, capture, true);
     window.removeEventListener("focus", focused);
     window.removeEventListener("blur", blurred);
     document.removeEventListener("visibilitychange", changed);
@@ -1430,6 +1586,8 @@ async function run() {
         JSON.stringify(threadId) +
         "," +
         repetition +
+        "," +
+        JSON.stringify(activationKind) +
         ")",
     );
     await until(
@@ -1455,10 +1613,22 @@ async function run() {
     assert.equal(reader.selectionActive, false);
     result.readerBeforeSend.push(reader);
     const ipcStart = result.ipc.length;
-    await click(
-      "document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)')",
-      "Native Send ordinary text",
-    );
+    if (activationKind === "click") {
+      await click(
+        "document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)')",
+        "Native Send ordinary text",
+      );
+    } else {
+      assert.equal(
+        await evaluate(
+          "document.activeElement === document.querySelector('#thread-composer')",
+        ),
+        true,
+      );
+      window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+      window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+      result.steps.push("Native Enter ordinary text");
+    }
     try {
       await until(
         async () =>
