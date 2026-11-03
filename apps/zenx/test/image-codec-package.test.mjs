@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -102,7 +103,15 @@ test("sharp staging rejects incomplete native runtime", async () => {
           ? path.join(modules, "sharp", "node_modules", "semver")
           : path.join(modules, name);
       await mkdir(path.dirname(destination), { recursive: true });
-      await cp(path.join(installed, name), destination, { recursive: true });
+      const source =
+        name === "semver"
+          ? path.dirname(
+              createRequire(
+                path.join(installed, "sharp", "package.json"),
+              ).resolve("semver/package.json"),
+            )
+          : path.join(installed, name);
+      await cp(source, destination, { recursive: true });
     }
     // The application's unrelated semver v6 must not shadow sharp's nested v7.
     await mkdir(path.join(modules, "semver"), { recursive: true });
@@ -127,6 +136,21 @@ test("sharp staging rejects incomplete native runtime", async () => {
         ),
       ).version,
       /^7\./u,
+    );
+    // Fixing the fixture's nested resolution must not weaken version rejection.
+    const semverManifest = path.join(
+      modules,
+      "sharp",
+      "node_modules",
+      "semver",
+      "package.json",
+    );
+    const invalid = JSON.parse(await readFile(semverManifest, "utf8"));
+    invalid.version = "6.3.1";
+    await writeFile(semverManifest, JSON.stringify(invalid));
+    await assert.rejects(
+      () => stageImageCodec(fixtureRoot, app, "win32", "x64"),
+      /Unexpected sharp dependency version for semver: 6\.3\.1/u,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
