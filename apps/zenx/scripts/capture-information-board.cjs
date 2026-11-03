@@ -140,13 +140,13 @@ async function insertComposerText(text) {
   );
 }
 async function replaceNativeFieldText(selector, text) {
-  await click(selector, "Edit only second Board field");
+  await click(selector, "Edit exact native field " + selector);
   await until(
     () =>
       evaluate(
         `(()=>{const e=${query(selector)};return document.activeElement===e&&typeof e?.selectionStart==='number'})()`,
       ),
-    "owned Board field has native focus before replacement",
+    "owned field has native focus before replacement",
   );
   // Renderer key injection does not traverse macOS's application-menu
   // accelerator. Use Electron's native editing command, then observe the real
@@ -395,6 +395,129 @@ async function run() {
       ),
     "real unanswered question survived completed Turn and seed Host restart",
   );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.conversation-information-section > header button')===null",
+    ),
+    true,
+    "healthy trigger facts have no always-visible refresh control",
+  );
+  await click(
+    '[aria-label="Pause trigger · Daily synthetic review"]',
+    "Pause exact trigger through its native information switch",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('[aria-label=\"Enable trigger · Daily synthetic review\"]')?.getAttribute('aria-checked')==='false'",
+      ),
+    "authoritative pause readback",
+  );
+  await screenshot("01b-trigger-paused.png");
+  await click(
+    '[aria-label="Enable trigger · Daily synthetic review"]',
+    "Resume exact trigger through its revision-bound native switch",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('[aria-label=\"Pause trigger · Daily synthetic review\"]')?.getAttribute('aria-checked')==='true'",
+      ),
+    "authoritative resume readback",
+  );
+  const switchFacts = await evaluate(
+    "window.zenx.plugins.executeCommand('zenx-triggers','sidebar-facts')",
+  );
+  assert.equal(
+    switchFacts.triggers.find((trigger) => trigger.id === active.id)?.active,
+    true,
+  );
+  result.cases.push({
+    name: "native-trigger-switches",
+    pauseThenResume: true,
+    currentFacts: switchFacts.triggers.filter(
+      (trigger) => trigger.threadId === "information-main",
+    ),
+  });
+  await screenshot("01c-trigger-resumed.png");
+  const option =
+    ".user-question-card:first-of-type .user-question-option:first-of-type";
+  await click(
+    option,
+    "Select a full question option row using native pointer input",
+  );
+  assert.equal(
+    await evaluate(`${query(option)}.querySelector('input').checked`),
+    true,
+  );
+  assert.equal(await evaluate(`${query(option)}.dataset.selected`), "true");
+  const questionText =
+    ".user-question-card:first-of-type .user-question-text textarea";
+  const emptyHeight = await evaluate(
+    `${query(questionText)}.getBoundingClientRect().height`,
+  );
+  await replaceNativeFieldText(
+    questionText,
+    "Synthetic review notes.\nA second line.\nA third line.\nA fourth line.",
+  );
+  const questionSizing = await evaluate(
+    `(()=>{const e=${query(questionText)};return {height:e.getBoundingClientRect().height,resize:getComputedStyle(e).resize,fieldSizing:getComputedStyle(e).fieldSizing}})()`,
+  );
+  assert.ok(
+    questionSizing.height > emptyHeight,
+    "question textarea grows from real multiline input",
+  );
+  assert.equal(questionSizing.resize, "none");
+  result.cases.push({
+    name: "native-question-full-row-and-growth",
+    emptyHeight,
+    ...questionSizing,
+  });
+  await screenshot("01d-full-row-question-multiline.png");
+  await click(
+    ".information-toolbar button",
+    "Close information before a new foreground model question",
+  );
+  await click(
+    "#thread-composer",
+    "Retain native Composer focus during foreground question publication",
+  );
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-main')?.status==='idle')",
+      ),
+    "foreground actor idle before question publication",
+  );
+  const revealPrompt =
+    "Synthetic new foreground question reveals information without stealing focus.";
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId: "information-main", clientUserMessageId: "native-information-reveal", input: [{ type: "text", text: "!tool ask_user_question " + JSON.stringify({ questions: [{ id: "reveal", prompt: revealPrompt, options: [{ id: "yes", label: "Keep the foreground draft" }] }] }) }] })})`,
+  );
+  await until(
+    () =>
+      evaluate(
+        `document.querySelector('.user-question-attention')?.textContent.includes(${JSON.stringify(revealPrompt)})`,
+      ),
+    "real new foreground question automatically reveals its hidden panel",
+  );
+  assert.equal(
+    await evaluate(
+      "document.activeElement===document.querySelector('#thread-composer')",
+    ),
+    true,
+    "automatic reveal does not move native focus",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#thread-composer').value"),
+    "Synthetic draft must survive information and workspace toggles.",
+  );
+  await screenshot("01e-new-foreground-question-reveal.png");
+  result.cases.push({
+    name: "native-foreground-question-reveal",
+    composerFocusRetained: true,
+    draftRetained: true,
+  });
   await click(
     '[aria-label="Customize information"]',
     "Customize actual information layout",
@@ -650,9 +773,13 @@ async function run() {
       ),
     "owner-scoped draft preserved",
   );
-  await click(
-    ".information-toolbar button",
-    "Open original information for exact Trigger edit",
+  await capture("10a-original-owner-restored", "dock");
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
+    ),
+    "true",
+    "returning owner restores its remembered open panel",
   );
   await click(
     '.information-trigger-list button[aria-label="Edit · Daily synthetic review"]',
@@ -1031,6 +1158,52 @@ async function run() {
   await evaluate(
     `window.zenx.shellPanel.request({operation:'stop',threadId:'information-main',taskId:${JSON.stringify(taskId)}})`,
   );
+  await click(main, "Return to main owner after its background command ended");
+  if (
+    await evaluate(
+      "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')==='false'",
+    )
+  )
+    await click(
+      ".information-toolbar button",
+      "Open information to inspect ended command removal",
+    );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.background-shell-list')===null && document.querySelector('.background-shell-status')?.textContent.includes('No background commands')",
+      ),
+    "ended command no longer appears as live work",
+  );
+  await screenshot("15-ended-command-removed.png");
+  result.cases.push({
+    name: "native-ended-command-removal",
+    endedCommandAbsent: true,
+  });
+  // Exercise the production language preference receiver with a synthetic
+  // same-origin preference event; this is not a native Settings-menu claim.
+  await evaluate(
+    "(()=>{localStorage.setItem('zenx.language','zh-CN');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',newValue:'zh-CN',storageArea:localStorage}));return true})()",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-content')?.textContent.includes('子对话')",
+      ),
+    "production Chinese child-conversation terminology",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-content').textContent.includes('子 Agent')",
+    ),
+    false,
+  );
+  await screenshot("16-chinese-child-conversations.png");
+  result.cases.push({
+    name: "chinese-child-conversations",
+    languageInput:
+      "production preference receiver with synthetic same-origin storage event",
+  });
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)

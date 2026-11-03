@@ -297,6 +297,27 @@ test("streaming a long conversation does not clone or redraw the information cat
       /Updated child active/,
     );
     active = false;
+    threads = [
+      ...threads,
+      {
+        ...threads[0]!,
+        threadId: "owner",
+        status: "idle",
+        lastTurnEnd: {
+          id: "completed-change",
+          turnId: "synthetic-turn",
+          position: 1,
+          createdAt: "2026-11-03T00:00:00Z",
+        },
+      } as (typeof threads)[number],
+    ];
+    await render(32);
+    assert.match(
+      document.querySelector(".information-trigger-list")!.textContent!,
+      /Live triggerPaused/,
+      "completed owner Turn refreshes facts without waiting for focus",
+    );
+    active = true;
     // Returning focus re-reads bounded trigger facts; there is no manual
     // refresh control in the always-visible card header.
     await act(async () => {
@@ -304,7 +325,7 @@ test("streaming a long conversation does not clone or redraw the information cat
     });
     assert.match(
       document.querySelector(".information-trigger-list")!.textContent!,
-      /Live triggerPaused/,
+      /Live triggerEnabled/,
     );
     sessions = [
       {

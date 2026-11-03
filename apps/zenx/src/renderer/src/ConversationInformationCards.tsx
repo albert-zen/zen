@@ -82,7 +82,13 @@ function ConversationInformationContent({
   const admissionId = show("triggers")
     ? sidebarTriggerAdmissionId(snapshot)
     : null;
-  const { state, refresh } = useSidebarTriggers(admissionId, threadId);
+  const owner = threads.find((thread) => thread.threadId === threadId);
+  const triggerRevision = JSON.stringify([
+    threadId,
+    owner?.status,
+    owner && "lastTurnEnd" in owner ? owner.lastTurnEnd?.id : undefined,
+  ]);
+  const { state, refresh } = useSidebarTriggers(admissionId, triggerRevision);
   const triggers = state.triggers.filter(
     (trigger) =>
       trigger.threadId === threadId &&
