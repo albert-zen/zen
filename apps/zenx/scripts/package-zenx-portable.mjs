@@ -991,9 +991,43 @@ export async function stageImageCodec(
         `Unexpected sharp dependency version for ${name}: ${manifest.version}`,
       );
     }
-    const destination = path.join(appDirectory, "node_modules", name);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await cp(source, destination, { recursive: true });
+    const appRoot = path.resolve(appDirectory);
+    const modules = path.join(appRoot, "node_modules");
+    const destination = path.resolve(modules, name);
+    const relative = path.relative(modules, destination);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+      throw new Error(`Unsafe sharp runtime destination: ${name}`);
+    // Cleanup owns only this validated package. Never traverse a replaced
+    // app/module/scope directory into another checkout or dependency store.
+    for (const directory of new Set([
+      appRoot,
+      modules,
+      path.dirname(destination),
+    ])) {
+      await mkdir(directory, { recursive: true });
+      const entry = await lstat(directory);
+      if (!entry.isDirectory() || entry.isSymbolicLink())
+        throw new Error(`Unsafe sharp runtime directory: ${directory}`);
+    }
+    await rm(destination, { recursive: true, force: true });
+    await cp(source, destination, {
+      recursive: true,
+      filter: async (filename) => {
+        // The audited closure is copied explicitly below the app's modules.
+        // npm's nested installs/.bin shims are not package runtime files.
+        if (
+          path
+            .relative(source, filename)
+            .split(path.sep)
+            .includes("node_modules")
+        )
+          return false;
+        const entry = await lstat(filename);
+        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile()))
+          throw new Error(`Non-regular sharp runtime source: ${filename}`);
+        return true;
+      },
+    });
     // The libvips package publishes no LICENSE file. Keep its upstream
     // license declaration and a visible notice alongside other licenses.
     if (name !== vips) {
