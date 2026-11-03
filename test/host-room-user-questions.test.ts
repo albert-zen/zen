@@ -1,3 +1,9 @@
+import { ToolEnvironment } from "../src/tool.js";
+import {
+  ModelReferenceRegistry,
+  attachModelReferenceBindings,
+} from "../src/model-references.js";
+import { projectRoomResult } from "../apps/zenx/src/main/capabilities/model-room-facade.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -18,6 +24,7 @@ async function fixture(
     input: RoomUserQuestionPublicationInput,
     signal: AbortSignal,
   ) => Promise<{ roomId: string; questionId: string; revision: number }>,
+  toolEnvironment?: ToolEnvironment,
 ) {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zen-host-room-question-"),
@@ -29,6 +36,7 @@ async function fixture(
     provider: { type: "fake" },
     approvalPolicy: "never",
     toolPresentation: "direct",
+    ...(toolEnvironment === undefined ? {} : { toolEnvironment }),
     ...(publisher === undefined ? {} : { publishRoomQuestion: publisher }),
   });
   t.after(async () => {
@@ -155,4 +163,107 @@ test("authored origin fields and invalid Room targets are rejected before Room p
     ).done;
   assert.equal(calls, 0);
   assert.deepEqual((await host.readThread(thread.id)).userQuestions, []);
+});
+
+test("actual Host carries normal Rooms projection refs into Ask and rejects forked authority or removed membership", async (t) => {
+  let allowed = true;
+  const publications: RoomUserQuestionPublicationInput[] = [];
+  const environment = new ToolEnvironment({
+    runtimes: [
+      {
+        name: "zenx_rooms_list",
+        enforcesSandbox: true,
+        specification: {
+          name: "zenx_rooms_list",
+          description: "Synthetic normal Rooms read",
+          inputSchema: { type: "object", properties: {} },
+        },
+        execute: async (invocation) => {
+          const refs = new ModelReferenceRegistry().scope(
+            invocation.threadId!,
+            invocation.modelReferences,
+          );
+          const output = projectRoomResult(
+            "zenx_rooms_list",
+            {
+              rooms: [
+                {
+                  id: "actual-room",
+                  name: "Synthetic Room",
+                  members: [{ threadId: invocation.threadId, name: "Author" }],
+                },
+              ],
+            },
+            {},
+            refs,
+            "normal-generation",
+          );
+          return attachModelReferenceBindings(
+            { exitCode: 0, output: JSON.stringify(output) },
+            refs.newBindings,
+          );
+        },
+      },
+    ],
+  });
+  const host = await fixture(
+    t,
+    async (input) => {
+      if (!allowed)
+        throw Error(
+          "Question publisher is not a current Room workspace member",
+        );
+      publications.push(input);
+      return { roomId: input.roomId, questionId: "room-resource", revision: 1 };
+    },
+    environment,
+  );
+  const author = await host.startThread();
+  await (
+    await host.startTurn(author.id, "!tool zenx_rooms_list {}")
+  ).done;
+  const listed = (await host.readThread(author.id)).items.find(
+    (item) =>
+      item.type === "tool_result" &&
+      item.referenceBindings?.some((binding) => binding.namespace === "rooms"),
+  );
+  assert.ok(listed?.type === "tool_result");
+  const ref = listed.referenceBindings!.find(
+    (binding) => binding.namespace === "rooms" && binding.kind === "room",
+  )!.ref;
+  assert.equal(ref, "r1");
+  assert.equal(
+    listed.output.includes("actual-room"),
+    false,
+    "normal Room read does not disclose raw target IDs",
+  );
+  await (
+    await host.startTurn(author.id, ask(ref))
+  ).done;
+  assert.equal(publications.length, 1);
+  assert.equal(publications[0]!.roomId, "actual-room");
+  const fork = await host.forkThread({
+    sourceThreadId: author.id,
+    through: { type: "latest-complete" },
+    workspace: { type: "same-directory" },
+  });
+  await (
+    await host.startTurn(fork.id, ask(ref))
+  ).done;
+  assert.equal(
+    publications.length,
+    1,
+    "forked provenance is not caller authority",
+  );
+  allowed = false;
+  await (
+    await host.startTurn(author.id, ask(ref))
+  ).done;
+  assert.equal(
+    publications.length,
+    1,
+    "live Room membership is still required for an old valid ref",
+  );
+  assert.deepEqual((await host.readThread(author.id)).userQuestions, []);
+  assert.deepEqual((await host.readThread(fork.id)).userQuestions, []);
 });
