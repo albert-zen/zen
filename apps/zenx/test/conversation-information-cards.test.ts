@@ -491,7 +491,12 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
       retainedClick();
     });
     assert.deepEqual(writes, [["cancel", { triggerId: "active" }]]);
-    assert.equal(pause.disabled, true);
+    assert.equal(pause.getAttribute("aria-disabled"), "true");
+    assert.equal(
+      pause.disabled,
+      false,
+      "busy controls retain native keyboard focus",
+    );
     const beforeFailureReads = reads;
     await act(async () => failWrite(new Error("Synthetic revision conflict")));
     assert.ok(
@@ -508,6 +513,7 @@ test("trigger retry is failure-only and switches fence repeated, failed, and ret
       "failure cannot optimistically change Host state",
     );
     assert.equal(pause.disabled, false);
+    assert.equal(pause.getAttribute("aria-disabled"), "false");
     await render("other");
     assert.equal(
       document.querySelector('[role="alert"]'),

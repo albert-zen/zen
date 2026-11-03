@@ -165,23 +165,25 @@ function ConversationInformationContent({
           className="conversation-information-section"
           aria-label={t("threadTriggers")}
         >
-          <header>
-            {!embedded && (
-              <h3>
-                <Icon name="clock" size={15} />
-                {t("threadTriggers")}
-              </h3>
-            )}
-            {state.status === "error" && admissionId ? (
-              <button
-                type="button"
-                className="quiet-button"
-                onClick={() => void refresh(true)}
-              >
-                {t("retry")}
-              </button>
-            ) : null}
-          </header>
+          {!embedded || (state.status === "error" && admissionId) ? (
+            <header>
+              {!embedded && (
+                <h3>
+                  <Icon name="clock" size={15} />
+                  {t("threadTriggers")}
+                </h3>
+              )}
+              {state.status === "error" && admissionId ? (
+                <button
+                  type="button"
+                  className="quiet-button"
+                  onClick={() => void refresh(true)}
+                >
+                  {t("retry")}
+                </button>
+              ) : null}
+            </header>
+          ) : null}
           {state.status !== "ready" ? (
             <p role="status">
               {state.status === "loading"
@@ -205,10 +207,12 @@ function ConversationInformationContent({
                     aria-busy={busyTrigger === trigger.id}
                     aria-label={`${t(trigger.active ? "pauseTrigger" : "enableTrigger")} · ${trigger.label ?? trigger.id}`}
                     className="plugin-switch"
+                    // Keep native keyboard focus while awaiting the Host. The
+                    // synchronous busy guard rejects both pointer and key repeats.
+                    aria-disabled={busyTrigger !== null}
                     disabled={
-                      busyTrigger !== null ||
-                      (!trigger.active &&
-                        trigger.definitionRevision === undefined)
+                      !trigger.active &&
+                      trigger.definitionRevision === undefined
                     }
                     onClick={() =>
                       void setTriggerActive(trigger, !trigger.active)

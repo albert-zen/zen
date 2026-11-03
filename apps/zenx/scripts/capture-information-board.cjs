@@ -613,7 +613,7 @@ async function run() {
   await until(
     () =>
       evaluate(
-        "document.activeElement?.getAttribute('aria-checked')==='false' && !document.activeElement.disabled",
+        "document.activeElement?.getAttribute('aria-checked')==='false' && document.activeElement.getAttribute('aria-disabled')!=='true' && !document.activeElement.disabled",
       ),
     "paused native trigger switch retains focus",
   );
@@ -621,7 +621,7 @@ async function run() {
   await until(
     () =>
       evaluate(
-        "document.activeElement?.getAttribute('aria-checked')==='true' && !document.activeElement.disabled",
+        "document.activeElement?.getAttribute('aria-checked')==='true' && document.activeElement.getAttribute('aria-disabled')!=='true' && !document.activeElement.disabled",
       ),
     "native switch keyboard resume confirmed",
   );

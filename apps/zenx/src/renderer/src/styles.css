@@ -11996,6 +11996,11 @@ button:disabled {
 .information-trigger-list .plugin-switch {
   width: 44px;
 }
+.information-trigger-list .plugin-switch[aria-disabled="true"],
+.information-trigger-list .plugin-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .information-trigger-list strong {
   overflow: hidden;
   text-overflow: ellipsis;
