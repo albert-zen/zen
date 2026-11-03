@@ -79,6 +79,8 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 
 ## 核心概念
 
+- **Bound user MCP adapter** — An explicitly composed stdio MCP server projects a fixed Thread/Room owner's existing Host tools; the exact AgentRuntime ToolEnvironment admission, existing async approval protocol, current membership and CAS remain authoritative, connection revocation is one-way and all adapter state is disposable, with no second AppServer, transcript, execution journal or saved connection configuration.
+
 - **ZenX 更新内容** — Renderer 仅展示随构建分发、以稳定条目 ID 标识的本地更新说明；打开状态为易失 UI 状态，不联网、不检查更新、不进入 Core journal。
 
 - **Host bootstrap wakeup** — 原生 `zen/turn/wake` 复用既有 Turn start/steer 准入与幂等回执，写入显式 `sender: host` / `source: bootstrap` 的 canonical `host_message`；模型投影标明 Host 来源，CAS 不将其伪装成人类消息，不增加调度器。
