@@ -57,7 +57,10 @@ import {
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
-import { ImagePreparationNotice } from "./ImagePreparationNotice.js";
+import {
+  captureImagePreparationDisclosure,
+  ImagePreparationNotice,
+} from "./ImagePreparationNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
   ThreadReadingContext,
@@ -1764,7 +1767,10 @@ function ThreadViewContent({
                   <ImportedThreadNotice
                     items={displayedThread?.canonicalItems ?? []}
                   />
-                  <ImagePreparationNotice items={thread?.itemList ?? []} />
+                  <ImagePreparationNotice
+                    items={thread?.itemList ?? []}
+                    reading={virtualTranscript ? readingState : undefined}
+                  />
                 </>
               }
               footer={
@@ -1785,6 +1791,12 @@ function ThreadViewContent({
               }
               onContentSettled={followBottom}
               onNativeSelectionStart={pauseFollowing}
+              onBeforeViewportChange={
+                virtualTranscript
+                  ? (node) =>
+                      captureImagePreparationDisclosure(node, readingState)
+                  : undefined
+              }
               onViewportChanged={handleVirtualViewportChanged}
               className="messages"
               style={{ overflowAnchor: atLive ? "none" : undefined }}
@@ -1862,7 +1874,10 @@ function ThreadViewContent({
                 <ImportedThreadNotice
                   items={displayedThread?.canonicalItems ?? []}
                 />
-                <ImagePreparationNotice items={thread?.itemList ?? []} />
+                <ImagePreparationNotice
+                  items={thread?.itemList ?? []}
+                  reading={virtualTranscript ? readingState : undefined}
+                />
                 {transcriptRows.length === 0 ? (
                   (emptyContent ?? (
                     <div className="thread-empty">

@@ -62,6 +62,7 @@ interface Props extends Omit<
   onViewportScroll(node: HTMLDivElement, layoutCorrection: boolean): void;
   onContentSettled(): void;
   onNativeSelectionStart?(): void;
+  onBeforeViewportChange?(viewport: HTMLDivElement): void;
   onViewportChanged?(): void;
 }
 
@@ -77,6 +78,7 @@ export function ExperimentalTranscriptViewport({
   onViewportScroll,
   onContentSettled,
   onNativeSelectionStart: _selectionStarted,
+  onBeforeViewportChange: _beforeViewportChange,
   onViewportChanged: _viewportChanged,
   ...attributes
 }: Props) {
@@ -433,6 +435,7 @@ export function TranscriptViewport({
     onViewportScroll,
     onContentSettled: _settled,
     onNativeSelectionStart: _selectionStarted,
+    onBeforeViewportChange: _beforeViewportChange,
     onViewportChanged: _viewportChanged,
     ...attributes
   } = props;
@@ -475,6 +478,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
       cancelAnimationFrame(cancelFrame);
       ++selectionEpoch.current;
       if (!completeRef.current) {
+        latest.current.onBeforeViewportChange?.(node);
         latest.current.onNativeSelectionStart?.();
         latest.current.controller.current?.captureReveal().cancel();
         anchor.current = readTranscriptAnchor(node);
@@ -493,6 +497,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
         const current = latest.current;
         const node = current.viewport.current;
         if (node && transcriptSelectionIntersects(node)) return;
+        if (node) current.onBeforeViewportChange?.(node);
         if (node) anchor.current = readTranscriptAnchor(node) ?? anchor.current;
         current.position.virtualAnchor = anchor.current;
         if (current.position.scroll) current.position.scroll.following = false;
@@ -595,6 +600,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
       // The native command follows the synchronous commit via the owned bridge.
       // Ignore the old virtual DOM's transient collapsed selection until then.
       if (!armed) return;
+      latest.current.onBeforeViewportChange?.(node);
       anchor.current = readTranscriptAnchor(node) ?? anchor.current;
       props.position.virtualAnchor = anchor.current;
       if (props.position.scroll) props.position.scroll.following = false;
@@ -637,6 +643,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
     onViewportScroll,
     onContentSettled: _settled,
     onNativeSelectionStart: _selectionStarted,
+    onBeforeViewportChange: _beforeViewportChange,
     onViewportChanged: _viewportChanged,
     ...attributes
   } = props;

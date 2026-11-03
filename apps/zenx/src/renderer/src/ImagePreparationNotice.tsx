@@ -2,13 +2,45 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import type { ContextItem } from "../../../../../src/item-list.js";
 import { projectImagePreparation } from "./image-preparation-projection.js";
+import {
+  disclosureKey,
+  type useThreadReadingState,
+} from "./thread-reading-state.js";
+
+const emptyChoices: ReadonlyMap<string, boolean> = new Map();
+const emptySnapshot = () => emptyChoices;
+const noSubscription = () => () => {};
+
+export function imagePreparationDisclosureKey(sampleId: string) {
+  return disclosureKey("image-preparation", sampleId);
+}
+
+/** Capture native toggles before a viewport replacement can discard their queued event. */
+export function captureImagePreparationDisclosure(
+  viewport: HTMLElement,
+  reading: ReturnType<typeof useThreadReadingState>,
+) {
+  const details = viewport.querySelector<HTMLDetailsElement>(
+    ".image-preparation-notice details[data-image-preparation-sample-id]",
+  );
+  const sampleId = details?.dataset.imagePreparationSampleId;
+  if (details && sampleId)
+    reading.set(imagePreparationDisclosureKey(sampleId), details.open);
+}
 
 export function ImagePreparationNotice({
   items,
+  reading,
 }: {
   items: readonly ContextItem[];
+  reading?: ReturnType<typeof useThreadReadingState>;
 }) {
   const { t } = useTranslation("shell");
+  const choices = React.useSyncExternalStore(
+    reading?.subscribe ?? noSubscription,
+    reading?.snapshot ?? emptySnapshot,
+    reading?.snapshot ?? emptySnapshot,
+  );
   const projection = projectImagePreparation(items);
   if (projection === null) return null;
   const preparedCount = projection.images.filter(
@@ -47,7 +79,27 @@ export function ImagePreparationNotice({
           {t("imagePreparationFallbackUnknown")}
         </span>
       )}
-      <details>
+      <details
+        open={
+          reading
+            ? (choices.get(
+                imagePreparationDisclosureKey(projection.sampleId),
+              ) ?? false)
+            : undefined
+        }
+        data-image-preparation-sample-id={
+          reading ? projection.sampleId : undefined
+        }
+        onToggle={
+          reading
+            ? (event) =>
+                reading.set(
+                  imagePreparationDisclosureKey(projection.sampleId),
+                  event.currentTarget.open,
+                )
+            : undefined
+        }
+      >
         <summary>{t("imagePreparationDetails")}</summary>
         <ul>
           {projection.images.map((image, index) => (
