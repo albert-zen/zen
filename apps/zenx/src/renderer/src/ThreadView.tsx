@@ -1,3 +1,4 @@
+import { isNestedTranscriptScroll } from "./transcript-viewport-pins.js";
 import {
   TranscriptViewport,
   type VirtualTranscriptHandle,
@@ -1098,7 +1099,20 @@ function ThreadViewContent({
     saveReadingPosition();
   }, [readingState, saveReadingPosition, virtualTranscript]);
 
-  useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
+  const materializeTargetTurn = useCallback(
+    (turnId: string, onRevealed: () => void) =>
+      virtualViewport.current?.reveal(
+        JSON.stringify([displayedThread?.id, "turn", turnId]),
+        onRevealed,
+      ) ?? Promise.resolve(false),
+    [displayedThread?.id],
+  );
+  useMessageTargetNavigation(
+    thread,
+    scrollRef,
+    pauseFollowing,
+    virtualTranscript ? materializeTargetTurn : undefined,
+  );
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -1593,6 +1607,19 @@ function ThreadViewContent({
     ],
   );
 
+  const virtualTranscriptRows = useMemo(
+    () =>
+      transcriptRows.map((row, index) => ({
+        key: JSON.stringify([
+          displayedThread?.id,
+          row.type,
+          row.type === "turn" ? row.turn.id : row.compaction.item.id,
+        ]),
+        content: renderedTranscriptRows[index],
+      })),
+    [displayedThread?.id, transcriptRows, renderedTranscriptRows],
+  );
+
   return (
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
@@ -1632,14 +1659,7 @@ function ThreadViewContent({
             viewport={scrollRef}
             controller={virtualViewport}
             position={readingState}
-            rows={transcriptRows.map((row, index) => ({
-              key: JSON.stringify([
-                displayedThread?.id,
-                row.type,
-                row.type === "turn" ? row.turn.id : row.compaction.item.id,
-              ]),
-              content: renderedTranscriptRows[index],
-            }))}
+            rows={virtualTranscriptRows}
             header={
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
@@ -2741,23 +2761,6 @@ function transcriptHasSelection(element: Element | null): boolean {
       element.contains(selection.anchorNode)) ||
       (selection.focusNode !== null && element.contains(selection.focusNode)))
   );
-}
-function isNestedTranscriptScroll(
-  target: EventTarget | null,
-  transcript: HTMLElement,
-): boolean {
-  for (
-    let element = target instanceof Element ? target : null;
-    element && element !== transcript;
-    element = element.parentElement
-  ) {
-    if (
-      element.scrollHeight > element.clientHeight &&
-      /auto|scroll/.test(getComputedStyle(element).overflowY)
-    )
-      return true;
-  }
-  return false;
 }
 
 const TurnBlock = memo(function TurnBlock({

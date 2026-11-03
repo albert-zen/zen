@@ -4,6 +4,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import type { LegendListRef } from "@legendapp/list/react";
 import {
   ExperimentalTranscriptViewport,
   type VirtualTranscriptHandle,
@@ -88,6 +89,8 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
   } as unknown as typeof ResizeObserver;
   const viewport = { current: null as HTMLDivElement | null };
   const controller = { current: null as VirtualTranscriptHandle | null };
+  const listRef = { current: null as LegendListRef | null };
+  const scrollKinds: boolean[] = [];
   const position = {
     scroll: { top: 0, following: false },
     virtualAnchor: null,
@@ -121,9 +124,12 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
           ),
           viewport,
           controller,
+          listRef,
           position,
           className: "messages",
-          onViewportScroll() {},
+          onViewportScroll(_node, correction) {
+            scrollKinds.push(correction);
+          },
           onContentSettled() {},
         }),
       ),
@@ -177,17 +183,121 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
       selected,
       "selection survives actual pin update",
     );
-    let reveal: Promise<boolean>;
+    const originalKeys = [
+      ...node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
+    ].map((row) => row.dataset.transcriptRowKey);
     await act(async () => {
-      reveal = controller.current!.reveal("turn-999");
+      node.dispatchEvent(
+        new dom.window.WheelEvent("wheel", { deltaY: 140000, bubbles: true }),
+      );
+      node.scrollTop = 140000;
+      node.dispatchEvent(new dom.window.Event("scroll"));
+      await new Promise((resolve) => setTimeout(resolve, 550));
+    });
+    const farKeys = [
+      ...node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
+    ].map((row) => row.dataset.transcriptRowKey);
+    assert.ok(
+      farKeys.some((key) => !originalKeys.includes(key)),
+      "far offset materializes different rows",
+    );
+    assert.ok(
+      farKeys.some((key) => Number(key?.split("-")[1]) > 450),
+      "visible buffer reaches the distant history region",
+    );
+    assert.equal(
+      firstRow.isConnected,
+      true,
+      "selected/focused old row stays mounted beyond the buffer",
+    );
+    assert.equal(
+      document.activeElement,
+      button,
+      "focus survives far scroll and DOM-order settlement",
+    );
+    assert.equal(
+      selection.toString(),
+      selected,
+      "selected text survives far scroll and DOM-order settlement",
+    );
+    await act(async () => {
+      selection.removeAllRanges();
+      button.blur();
+      document.dispatchEvent(new dom.window.Event("selectionchange"));
+      node.scrollTop = 145000;
+      node.dispatchEvent(new dom.window.Event("scroll"));
+      await new Promise((resolve) => setTimeout(resolve, 35));
+    });
+    assert.equal(
+      firstRow.isConnected,
+      false,
+      "released pins allow the historical row to unmount",
+    );
+    assert.ok(
+      scrollKinds.includes(false),
+      "real reader scroll is not hidden as layout correction",
+    );
+    const actualScrollToIndex = listRef.current!.scrollToIndex;
+    listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
+    let reveal: Promise<boolean>;
+    let committed = 0;
+    await act(async () => {
+      reveal = controller.current!.reveal("turn-999", () => committed++);
+      node.dispatchEvent(
+        new dom.window.WheelEvent("wheel", { deltaY: -10, bubbles: true }),
+      );
+    });
+    assert.equal(
+      await reveal!,
+      false,
+      "reader input cancels even an unresolved library scroll promise",
+    );
+    assert.equal(committed, 0);
+    listRef.current!.scrollToIndex = async () => {
+      throw new Error("controlled rejected scroll");
+    };
+    await act(async () => {
+      reveal = controller.current!.reveal("turn-999", () => committed++);
+    });
+    assert.equal(
+      await reveal!,
+      false,
+      "rejected library scroll settles as failure without consuming target",
+    );
+    listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
+    await act(async () => {
+      reveal = controller.current!.reveal("turn-998", () => committed++);
+    });
+    listRef.current!.scrollToIndex = actualScrollToIndex;
+    let newer: Promise<boolean>;
+    await act(async () => {
+      newer = controller.current!.reveal("turn-510", () => committed++);
+    });
+    await act(async () => {
+      assert.equal(await newer!, true);
+    });
+    assert.equal(
+      await reveal!,
+      false,
+      "new request supersedes unresolved previous request",
+    );
+    assert.equal(
+      committed,
+      1,
+      "only current materialized request commits target focus",
+    );
+    listRef.current!.scrollToIndex = () => new Promise<void>(() => {});
+    await act(async () => {
+      reveal = controller.current!.reveal("turn-999", () => committed++);
     });
     await act(async () => root.unmount());
     mounted = false;
     assert.equal(
       await reveal!,
       false,
-      "pending reveal resolves cancelled after cleanup",
+      "pending unresolved library scroll resolves cancelled after cleanup",
     );
+    assert.equal(committed, 1);
     assert.equal(controller.current, null);
     assert.equal(
       errors.filter((error) =>

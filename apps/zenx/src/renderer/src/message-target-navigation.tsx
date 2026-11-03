@@ -22,6 +22,10 @@ export function useMessageTargetNavigation(
   thread: Thread | null,
   viewport: RefObject<HTMLElement | null>,
   pauseFollowing: () => void,
+  materializeTurn?: (
+    turnId: string,
+    onRevealed: () => void,
+  ) => Promise<boolean>,
 ) {
   const navigation = useContext(MessageTargetNavigationContext);
   const reading = useContext(ThreadReadingContext);
@@ -44,7 +48,10 @@ export function useMessageTargetNavigation(
     if (!turn) return; // Await the target viewport's authoritative resume, not a title/text lookup.
     reading?.set(disclosureKey("turn", turn.id), true);
     pauseFollowing();
-    const frame = requestAnimationFrame(() => {
+    let active = true;
+    let frame = 0;
+    const focusTarget = () => {
+      if (!active) return;
       const element = Array.from(
         viewport.current?.querySelectorAll<HTMLElement>(
           "[data-sent-message-id]",
@@ -63,8 +70,13 @@ export function useMessageTargetNavigation(
         { once: true },
       );
       navigation?.consumed(request.requestId);
-    });
-    return () => cancelAnimationFrame(frame);
+    };
+    if (materializeTurn) void materializeTurn(turn.id, focusTarget);
+    else frame = requestAnimationFrame(focusTarget);
+    return () => {
+      active = false;
+      cancelAnimationFrame(frame);
+    };
   }, [
     request,
     thread?.id,
@@ -73,5 +85,6 @@ export function useMessageTargetNavigation(
     pauseFollowing,
     viewport,
     navigation,
+    materializeTurn,
   ]);
 }

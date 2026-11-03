@@ -15,8 +15,10 @@ path. The virtual path displays an explicit experimental warning.
 
 - Browser-native Find and Select All cannot include unmounted history. They are
   explicitly warned about, not replaced with manual paging or claimed equivalent.
-- Source-target and inline quote navigation still need virtual materialization.
-  The adapter exposes `reveal(key)` for that work.
+- Exact message-target navigation now resolves a canonical turn key and materializes
+  it before focusing/consuming the target. Reader input, newer requests and unmount
+  cancel the pending reveal. Same-thread inline quote source jumps still use a
+  mounted-DOM lookup and remain an explicit production blocker.
 - Focus and selection rows are protected with public alwaysRender pins before
   scroll recycling. Native cross-row selection, active media, keyboard traversal,
   and chronological screen-reader behavior still require real-app acceptance.
@@ -51,3 +53,13 @@ exact final revision. Capture actual running UI screenshots before any merge.
   pin/scroll events, no flushSync/nested-update warning in that flow, and a pending
   reveal resolving cancelled on unmount. This is not real browser selection,
   native layout or a Send latency result.
+
+The strengthened actual-component test changes `scrollTop` to 140000, waits for
+row-buffer and stock DOM-order settlement, checks that distant row identities
+appear while the original focused/selected node stays connected, and checks that
+clearing selection/focus lets it unmount. It also replaces the supported public
+`scrollToIndex` method with controlled pending/rejected promises to cover reader
+cancellation, newer-request supersession and unmount. No private API is accessed.
+The reader-scroll session now lasts across ongoing scroll events and scrollbar
+pointer lifetime, with native scrollend and a debounced fallback; actual native
+inertial/touch/scrollbar behavior and first-visible pending Send remain unverified.

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
+  isNestedTranscriptScroll,
   protectedTranscriptRows,
   readTranscriptAnchor,
   type TranscriptAnchor,
@@ -21,7 +22,7 @@ export interface VirtualTranscriptRow {
 }
 export interface VirtualTranscriptHandle {
   /** Materialize one canonical row, without mounting intervening history. */
-  reveal(key: string): Promise<boolean>;
+  reveal(key: string, onRevealed?: () => void): Promise<boolean>;
 }
 interface Props extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -32,6 +33,7 @@ interface Props extends Omit<
   footer: ReactNode;
   viewport: RefObject<HTMLDivElement | null>;
   controller: RefObject<VirtualTranscriptHandle | null>;
+  listRef?: RefObject<LegendListRef | null>;
   position: {
     virtualAnchor: TranscriptAnchor | null;
     scroll: { following: boolean } | null;
@@ -47,6 +49,7 @@ export function ExperimentalTranscriptViewport({
   footer,
   viewport,
   controller,
+  listRef,
   position,
   onViewportScroll,
   onContentSettled,
@@ -62,18 +65,21 @@ export function ExperimentalTranscriptViewport({
   );
   const generation = useRef(0);
   const selecting = useRef(false);
-  const readerUntil = useRef(0);
   const saved = useRef(position.virtualAnchor);
-  const initialIndex = saved.current
-    ? rows.findIndex((row) => row.key === saved.current?.key)
-    : -1;
+  const initial = useRef({
+    following: position.scroll?.following !== false,
+    index: saved.current
+      ? rows.findIndex((row) => row.key === saved.current?.key)
+      : -1,
+  });
   const attach = useCallback(
     (value: LegendListRef | null) => {
       list.current = value;
+      if (listRef) listRef.current = value;
       const node = value?.getScrollableNode();
       viewport.current = node instanceof window.HTMLDivElement ? node : null;
     },
-    [viewport],
+    [listRef, viewport],
   );
 
   useLayoutEffect(() => {
@@ -84,6 +90,18 @@ export function ExperimentalTranscriptViewport({
     let settleFrame = 0;
     let finishFrame = 0;
     const frames = new Map<number, (alive: boolean) => void>();
+    const pending = new Set<() => void>();
+    let readerScrolling = false;
+    let pointerActive = false;
+    let readerTimer: ReturnType<typeof setTimeout> | undefined;
+    const scrollEnd = () => {
+      readerScrolling = false;
+    };
+    const keepReaderActive = () => {
+      readerScrolling = true;
+      clearTimeout(readerTimer);
+      readerTimer = setTimeout(scrollEnd, 220);
+    };
     const nextFrame = () =>
       new Promise<boolean>((resolve) => {
         const id = requestAnimationFrame(() => {
@@ -113,54 +131,104 @@ export function ExperimentalTranscriptViewport({
       });
     };
     notifySettled.current = settle;
-    const userInput = () => {
+    const userInput = (event: Event) => {
+      if (isNestedTranscriptScroll(event.target, node)) return false;
+      keepReaderActive();
+      if (pending.size > 0) {
+        for (const cancel of pending) cancel();
+        // A public offset command supersedes Legend's queued index correction.
+        void instance.scrollToOffset({
+          offset: node.scrollTop,
+          animated: false,
+        });
+      }
       generation.current++;
-      readerUntil.current = performance.now() + 180;
       setTarget(null);
+      return true;
     };
     const pointer = (event: PointerEvent) => {
-      userInput();
-      selecting.current = event.button === 0;
+      if (!userInput(event)) return;
+      pointerActive = true;
+      const target = event.target instanceof Element ? event.target : null;
+      selecting.current =
+        event.button === 0 &&
+        !!target?.closest("[data-transcript-row-key]") &&
+        !target.closest("button,a,input,textarea,select,[role='button']");
       protect(true); // Keep potential range rows before a scroll can recycle them.
     };
     const release = () => {
+      pointerActive = false;
       selecting.current = false;
       protect();
     };
     const selection = () => protect();
     const scroll = () => {
+      if (readerScrolling) keepReaderActive();
       const correction =
-        performance.now() > readerUntil.current && !selecting.current;
+        pending.size > 0 || (!readerScrolling && !pointerActive);
       latest.current.onViewportScroll(node, correction);
       if (!saved.current)
         latest.current.position.virtualAnchor = readTranscriptAnchor(node);
     };
     const beforeScroll = () => protect(true);
-    const restore = async (key: string, offset: number, version: number) => {
+    const restore = async (
+      key: string,
+      offset: number,
+      version: number,
+      onRevealed?: () => void,
+    ) => {
       const index = latest.current.rows.findIndex((row) => row.key === key);
-      if (index < 0) return false;
+      if (index < 0) {
+        setTarget(null);
+        return false;
+      }
       setTarget(key);
-      await instance.scrollToIndex({ index, animated: false, viewPosition: 0 });
-      if (!(await nextFrame()) || generation.current !== version) return false;
-      const row = Array.from(
-        node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
-      ).find((row) => row.dataset.transcriptRowKey === key);
-      if (!row) return false;
-      node.scrollTop +=
-        row.getBoundingClientRect().top -
-        node.getBoundingClientRect().top -
-        offset;
-      latest.current.onViewportScroll(node, true);
-      return true;
+      let cancel = () => {};
+      const cancelled = new Promise<false>((resolve) => {
+        cancel = () => resolve(false);
+      });
+      pending.add(cancel);
+      try {
+        const settled = await Promise.race([
+          instance
+            .scrollToIndex({ index, animated: false, viewPosition: 0 })
+            .then(() => true),
+          cancelled,
+        ]);
+        if (!settled || !alive || generation.current !== version) return false;
+        if (!(await nextFrame()) || generation.current !== version)
+          return false;
+        const row = Array.from(
+          node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
+        ).find((row) => row.dataset.transcriptRowKey === key);
+        if (!row) return false;
+        node.scrollTop +=
+          row.getBoundingClientRect().top -
+          node.getBoundingClientRect().top -
+          offset;
+        latest.current.onViewportScroll(node, true);
+        if (!alive || generation.current !== version) return false;
+        onRevealed?.();
+        return true;
+      } catch {
+        return false;
+      } finally {
+        pending.delete(cancel);
+        if (alive && generation.current === version) setTarget(null);
+      }
     };
     controller.current = {
-      reveal: (key) => restore(key, 0, ++generation.current),
+      reveal: (key, onRevealed) => {
+        for (const cancel of pending) cancel();
+        return restore(key, 0, ++generation.current, onRevealed);
+      },
     };
     node.addEventListener("scroll", beforeScroll, {
       capture: true,
       passive: true,
     });
     node.addEventListener("scroll", scroll, { passive: true });
+    node.addEventListener("scrollend", scrollEnd, { passive: true });
     node.addEventListener("wheel", userInput, { capture: true, passive: true });
     node.addEventListener("keydown", userInput, true);
     node.addEventListener("pointerdown", pointer, true);
@@ -177,22 +245,18 @@ export function ExperimentalTranscriptViewport({
     ];
     if (saved.current && position.scroll?.following === false) {
       const anchor = saved.current;
-      void restore(anchor.key, anchor.offset, generation.current).finally(
-        () => {
-          if (alive) {
-            saved.current = null;
-            setTarget(null);
-          }
-        },
-      );
+      saved.current = null;
+      void restore(anchor.key, anchor.offset, generation.current);
     } else {
       saved.current = null;
       settle();
     }
     return () => {
       alive = false;
+      clearTimeout(readerTimer);
       generation.current++;
       controller.current = null;
+      for (const cancel of pending) cancel();
       notifySettled.current = () => {};
       for (const [id, resolve] of frames) {
         cancelAnimationFrame(id);
@@ -203,6 +267,7 @@ export function ExperimentalTranscriptViewport({
       unsubscribe.forEach((stop) => stop());
       node.removeEventListener("scroll", beforeScroll, true);
       node.removeEventListener("scroll", scroll);
+      node.removeEventListener("scrollend", scrollEnd);
       node.removeEventListener("wheel", userInput, true);
       node.removeEventListener("keydown", userInput, true);
       node.removeEventListener("pointerdown", pointer, true);
@@ -236,8 +301,10 @@ export function ExperimentalTranscriptViewport({
       alwaysRender={{ keys: [...pins, ...(target ? [target] : [])] }}
       maintainScrollAtEnd={false}
       maintainVisibleContentPosition={{ data: false, size: true }}
-      initialScrollAtEnd={position.scroll?.following !== false}
-      initialScrollIndex={initialIndex >= 0 ? initialIndex : undefined}
+      initialScrollAtEnd={initial.current.following}
+      initialScrollIndex={
+        initial.current.index >= 0 ? initial.current.index : undefined
+      }
       ListHeaderComponent={
         <div className="virtual-transcript-header">
           <p className="virtual-transcript-warning" role="status">
@@ -268,6 +335,7 @@ export function TranscriptViewport({
     footer: _footer,
     viewport,
     controller: _controller,
+    listRef: _listRef,
     position: _position,
     onViewportScroll,
     onContentSettled: _settled,

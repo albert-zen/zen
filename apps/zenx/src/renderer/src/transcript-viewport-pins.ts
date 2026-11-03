@@ -47,3 +47,23 @@ export function readTranscriptAnchor(
     ? { key, offset: row.getBoundingClientRect().top - top }
     : null;
 }
+
+/** A scrollable tool/code region owns its input independently of the transcript. */
+export function isNestedTranscriptScroll(
+  target: EventTarget | null,
+  transcript: HTMLElement,
+): boolean {
+  const ElementType = transcript.ownerDocument.defaultView?.Element;
+  for (
+    let element = ElementType && target instanceof ElementType ? target : null;
+    element && element !== transcript;
+    element = element.parentElement
+  ) {
+    if (
+      element.scrollHeight > element.clientHeight &&
+      /auto|scroll/.test(getComputedStyle(element).overflowY)
+    )
+      return true;
+  }
+  return false;
+}
