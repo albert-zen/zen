@@ -539,3 +539,16 @@
   gap: 6px;
   margin: 6px 0;
 }
+
+/* Unknown-outcome and recovery actions remain distinct, keyboard-visible controls. */
+.steer-shelf > button,
+.steer-recovery button {
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+}
+.steer-shelf > button {
+  align-self: flex-start;
+  margin: 0 14px 8px;
+}

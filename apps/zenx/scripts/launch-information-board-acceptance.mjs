@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { build } from "esbuild";
 import { seedInformationLayoutQuestion } from "./seed-information-layout-acceptance.mjs";
 import { DomainThreadJournal } from "../../../dist/src/domain-journal.js";
 import { FileTraceStore } from "../../../dist/src/trace.js";
@@ -195,6 +196,7 @@ for (const file of [
   "src/renderer/src/board-ui-state.ts",
   "scripts/seed-information-layout-acceptance.mjs",
   "scripts/capture-information-board.cjs",
+  "scripts/owned-sidebar-native-input.ts",
   "scripts/launch-information-board-acceptance.mjs",
   "../../src/app-server.ts",
   "../../src/user-question-tool.ts",
@@ -249,6 +251,16 @@ if (process.platform === "win32") {
   });
   await mkdir(environment.APPDATA, { recursive: true });
   await mkdir(environment.LOCALAPPDATA, { recursive: true });
+}
+if (process.platform === "darwin") {
+  await build({
+    entryPoints: [path.join(root, "scripts/owned-sidebar-native-input.ts")],
+    outfile: path.join(temporary, "owned-sidebar-native-input.cjs"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    external: ["electron"],
+  });
 }
 const child = spawn(
   electron,

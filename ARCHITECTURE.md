@@ -199,6 +199,7 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **Code State** — 线程内有界 JSON 数据从 append-only `code_state` Items 重建，`store/load` 只提供显式写入和当前程序的快照读取，不保存函数、执行栈或另一份会话权威。
 - **User Message Time Projection** — 模型请求为每条 canonical `user_message` 单独携带明确时区的原始 `createdAt`；队列与替换输入从同一 ItemList 的最早准入 Item 派生，先于压缩过滤，fork/replay 不重取时钟。未知或无时区旧记录标为 null；replacement-history 导入前缀因旧记录无法区分 checkpoint 时间与原消息时间而保守标为未知（含导入尾部），后续本地输入不受影响；Provider 以独立文本 part 标明 Host 元数据，不改写用户正文、媒体或授权。
 - **Model Content Projection** — 根据本次模型的输入能力投影历史与当前媒体内容，只改变 ModelRequest，不改写 canonical Items 或附件。
+- **Media Projection Budget** — 按"最新优先"限制本次回放图片的数量与字节总量；Host 在派发前提交 sample-only 的遗漏选择与可精确取回原附件的文本回执，再由唯一 ItemList compiler 选择，既有语义 Items 与附件不变；legacy 请求投影复用相同预算，也可显式关闭。
 - **Code Media Converter** — 将程序显式 image/audio 数据或当前线程已授权附件引用转换到同一个 AttachmentStore 与模型内容通路，不自行读取路径或网络。
 - **Nested Tool Invocation Port** — AgentRuntime 只向可信 builtin 组合工具提供的 turn-scoped capability，用同一 Tool Environment 和 canonical lifecycle 提交子调用，不序列化或下放给 plugin / external provider。
 - **Tool Output Spool** — Host 把超出默认 8 KiB 模型 preview（4 KiB head 与 4 KiB tail）的完整已捕获 text result 暂存到权限收窄的临时文件，并只把含 head/tail、大小、hash 和易失路径的 receipt canonicalize；临时副本不是 Thread authority。

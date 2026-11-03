@@ -49,6 +49,7 @@ jobs:
         timeout-minutes: 6
         run: node apps/zenx/scripts/launch-information-board-acceptance.mjs "${{ runner.temp }}/information-board"
       - name: Pending steer shelf and stable local echo in native component preview
+        if: ${{ !cancelled() }}
         timeout-minutes: 2
         run: node apps/zenx/scripts/launch-pending-shelf-acceptance.mjs "${{ runner.temp }}/pending-shelf"
       - uses: actions/upload-artifact@v4

@@ -72,12 +72,18 @@ export class ThreadSidebarController {
         ...pending.patches.values(),
       );
     }
+    // Delayed committed reads must not retire a newer visible fullscreen choice.
+    // Failed admission removes its overlay before this same cleanup runs again.
+    for (const key of this.#primarySelections.keys()) {
+      const visible = this.#presentation[key];
+      if (!visible?.open || !visible.fullscreen)
+        this.#primarySelections.delete(key);
+    }
     for (const listener of this.#listeners) listener();
   }
   accept = (state: ThreadSidebarState) => {
     const key = sidebarOwnerKey(state.owner);
     if ((this.#states[key]?.revision ?? -1) > state.revision) return;
-    if (!state.open || !state.fullscreen) this.#primarySelections.delete(key);
     this.#states = { ...this.#states, [key]: state };
     this.#emit();
   };

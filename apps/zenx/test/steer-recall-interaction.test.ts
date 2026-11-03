@@ -887,3 +887,62 @@ test("pending images use canonical attachment refs and their preview closes afte
     assert.equal(reads, before);
   });
 });
+
+test("shelf read-only recovery and restore actions retain 44px hit targets", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const styles = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  await withRuntimeDom(async (h) => {
+    const style = document.createElement("style");
+    style.textContent = styles;
+    document.head.append(style);
+    const thread = staged();
+    protocol(async () => {
+      throw Error("Synthetic disconnected recall");
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => true,
+    });
+    await h.click(recallButton);
+    await flush();
+    const check = document.querySelector<HTMLButtonElement>(
+      ".steer-shelf > button",
+    )!;
+    assert.ok(check);
+    const largeEnough = (button: HTMLButtonElement) =>
+      assert.equal(
+        window.getComputedStyle(button).minHeight,
+        "44px",
+        button.textContent ?? "recovery button",
+      );
+    largeEnough(check);
+    const recalled = applyQueueItem(
+      thread,
+      receipt({
+        threadId: thread.id,
+        recallId: "hit-target",
+        targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
+          queuedItemId: item.id,
+          clientId: item.clientId,
+          expectedRevision: item.revision,
+        })),
+      }),
+    );
+    await h.render(recalled, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => false,
+    });
+    largeEnough(
+      document.querySelector<HTMLButtonElement>(".steer-recovery button")!,
+    );
+    await h.click(".steer-recovery button");
+    const actions = [
+      ...document.querySelectorAll<HTMLButtonElement>(".steer-recovery button"),
+    ];
+    assert.equal(actions.length, 2);
+    actions.forEach(largeEnough);
+  });
+});

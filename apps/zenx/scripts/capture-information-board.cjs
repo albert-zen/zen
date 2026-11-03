@@ -22,7 +22,8 @@ const result = {
   synthetic: true,
   platform: process.platform,
   inputBoundaries: {
-    pointer: "Electron native events with trusted DOM click acknowledgement",
+    pointer:
+      "Electron sendInputEvent with trusted DOM acknowledgement, not OS non-client hit-testing; systemSidebarClicks separately use production bound Computer CoreGraphics input",
     field: "Electron native Select All and insertText with exact UI readback",
     select:
       "production DOM input/change; native OS popup input is not accepted by this run",
@@ -31,7 +32,7 @@ const result = {
   cases: [],
   blockedExternalRequests: 0,
 };
-let window, taskId;
+let window, taskId, ownedSidebarInput;
 let clickSequence = 0;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression) {
@@ -55,7 +56,7 @@ async function until(check, label) {
 }
 const query = (selector) =>
   `document.querySelector(${JSON.stringify(selector)})`;
-async function click(selector, label = selector) {
+async function click(selector, label = selector, systemPointer = false) {
   await until(() => evaluate(`Boolean(${query(selector)})`), label);
   await evaluate(
     `${query(selector)}.scrollIntoView({block:'center',inline:'nearest'})`,
@@ -74,23 +75,35 @@ async function click(selector, label = selector) {
   await evaluate(
     `(()=>{const e=${query(selector)};e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return true})()`,
   );
-  window.webContents.sendInputEvent({
-    type: "mouseDown",
-    button: "left",
-    clickCount: 1,
-    ...point,
-  });
-  window.webContents.sendInputEvent({
-    type: "mouseUp",
-    button: "left",
-    clickCount: 1,
-    ...point,
-  });
+  if (systemPointer) {
+    const receipt = await ownedSidebarInput.click(window, point);
+    (result.systemSidebarClicks ??= []).push({
+      label,
+      receipt,
+      input: "production Computer exact PID/CG/AX bound CoreGraphics events",
+    });
+  } else {
+    window.webContents.sendInputEvent({
+      type: "mouseDown",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
+    window.webContents.sendInputEvent({
+      type: "mouseUp",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
+  }
   // Posting native input is not an acknowledgement: a following IPC read can
   // otherwise observe pre-click idle before React starts the layout write.
   await until(
     () => evaluate(`window.__informationNativeClick===${acknowledgedClick}`),
-    label + " trusted native click delivered",
+    label +
+      (systemPointer
+        ? " trusted OS click delivered"
+        : " trusted Chromium click delivered"),
   );
   result.steps.push(label);
 }
@@ -1108,6 +1121,88 @@ async function run() {
   await evaluate(
     `window.zenx.shellPanel.request({operation:'stop',threadId:'information-main',taskId:${JSON.stringify(taskId)}})`,
   );
+  // Unlike sendInputEvent, the production Computer path traverses macOS's
+  // actual non-client drag hit test. No trust prompt, TCC change or fallback.
+  if (process.platform === "darwin") {
+    result.sidebarOsInput = { status: "running", permissionChanges: false };
+    try {
+      ownedSidebarInput = await require(
+        path.join(temporary, "owned-sidebar-native-input.cjs"),
+      ).prepareOwnedSidebarInput(temporary);
+      await click(
+        main,
+        "Select owned main Thread for system-pointer acceptance",
+      );
+      await until(
+        () => evaluate("Boolean(document.querySelector('.auxiliary-panel'))"),
+        "owned Thread workspace mounted",
+      );
+      if (
+        !(await evaluate(
+          "document.querySelector('.auxiliary-panel').dataset.open==='true'",
+        ))
+      )
+        await click(
+          "#thread-browser-toggle",
+          "Open workspace for system-pointer acceptance",
+        );
+      if (
+        !(await evaluate(
+          "document.querySelector('.auxiliary-panel').dataset.expanded==='true'",
+        ))
+      )
+        await click(
+          '.auxiliary-heading button[aria-label="Expand side panel"]',
+          "Maximize workspace for system-pointer acceptance",
+        );
+      await click(
+        '[data-tab-id="file:fixture.txt"] [role="tab"]',
+        "Select owned resource before system-pointer acceptance",
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await click(
+          ".sidebar-collapse-button",
+          "Collapse sidebar before actual OS click",
+        );
+        await until(
+          () =>
+            evaluate(
+              "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+            ),
+          "sidebar fully collapsed before OS click",
+        );
+        await pause(250);
+        await click(
+          ".sidebar-collapse-button",
+          "Expand sidebar using actual bound macOS pointer",
+          true,
+        );
+        await until(
+          () =>
+            evaluate(
+              "!document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+            ),
+          "OS click expanded the actual sidebar",
+        );
+      }
+      result.sidebarOsInput = {
+        status: "passed",
+        permissionChanges: false,
+        clicks: result.systemSidebarClicks.length,
+      };
+      await screenshot("15-macos-system-sidebar-click.png");
+    } catch (error) {
+      result.sidebarOsInput = {
+        status: /Accessibility permission is not granted/.test(String(error))
+          ? "blocked"
+          : "failed",
+        permissionChanges: false,
+        reason: String(error),
+        nativeDelivery: "unverified",
+      };
+      throw error;
+    }
+  }
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
@@ -1128,6 +1223,7 @@ void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
       } catch {}
   })
   .finally(async () => {
+    await ownedSidebarInput?.close();
     await fs.writeFile(
       path.join(directory, "acceptance.json"),
       JSON.stringify(result, null, 2),

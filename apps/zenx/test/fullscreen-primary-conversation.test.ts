@@ -590,3 +590,44 @@ test("primary selection belongs to the exact owner and retires on Host collapse"
   assert.equal(controller.isPrimaryConversationSelected(thread), false);
   assert.equal(controller.get(thread)!.selectedTab, "custom:fallback");
 });
+
+test("a late committed read cannot retire primary while fullscreen admission is pending", async () => {
+  for (const applied of [true, false]) {
+    const initial = {
+      ...emptySidebarState("pending"),
+      open: true,
+      selectedTab: "custom:resource",
+      tabs: [{ kind: "custom" as const, id: "resource" }],
+    };
+    let finish!: (value: { applied: boolean; state: typeof initial }) => void;
+    const controller = new ThreadSidebarController({
+      read: async () => initial,
+      onChanged: () => () => {},
+      update: () =>
+        new Promise((resolve) => {
+          finish = resolve as typeof finish;
+        }),
+    });
+    controller.accept(initial);
+    const expansion = controller.edit("pending", () => ({ fullscreen: true }));
+    await Promise.resolve();
+    controller.selectPrimaryConversation("pending");
+    controller.accept(initial);
+    assert.equal(controller.snapshot()["thread:pending"]!.fullscreen, true);
+    assert.equal(
+      controller.isPrimaryConversationSelected("pending"),
+      true,
+      "The current visible fullscreen choice outlives a delayed collapsed read",
+    );
+    finish({
+      applied,
+      state: applied ? { ...initial, fullscreen: true, revision: 1 } : initial,
+    });
+    await expansion;
+    assert.equal(
+      controller.isPrimaryConversationSelected("pending"),
+      applied,
+      "Success retains primary; failed admission removes the optimistic view",
+    );
+  }
+});
