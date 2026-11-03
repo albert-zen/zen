@@ -325,8 +325,10 @@ export async function prepareSampleImages(options: {
 export type ImagePreparationOccurrence = RecoveryMediaOccurrence;
 
 /** Read-only pressure estimate, never a preparation or dispatch decision. Reuse
- * only an exact origin's durable codec observation for the same profile/detail
- * capability. A later real sample still verifies and prepares the original. */
+ * only an exact origin's durable codec observation for the same effective
+ * profile and requested detail. Original capability only changes ORIGINAL
+ * selection; it cannot invalidate an unchanged HIGH codec observation. A later
+ * real sample still verifies and prepares the original. */
 export function unavailableImageTokenEstimate(
   itemList: readonly ContextItem[],
   supportsImageDetailOriginal: boolean | null,
@@ -361,8 +363,7 @@ export function unavailableImageTokenEstimate(
     if (
       preparation?.occurrence === undefined ||
       preparation.requestedDetail === undefined ||
-      preparation.profile === undefined ||
-      preparation.supportsImageDetailOriginal !== supportsImageDetailOriginal
+      preparation.profile === undefined
     )
       continue;
     const observationKey = key(

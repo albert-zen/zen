@@ -679,7 +679,11 @@ test("real Host user/tool same-hash unavailable overlays survive fork and cold r
   }
 });
 
-test("durable unavailable observations budget historical pixels as text across smaller-model preflight and compaction", async () => {
+async function assertUnavailableBudgetTransition(
+  sourceCapability: boolean | null,
+  nextCapability: boolean | null,
+  requestedDetail: "high" | "original" = "high",
+) {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zen-unavailable-budget-"),
   );
@@ -719,6 +723,7 @@ test("durable unavailable observations budget historical pixels as text across s
         supportedReasoningEfforts: ["medium"],
         defaultReasoningEffort: "medium",
         contextWindow: 64000,
+        supportsImageDetailOriginal: sourceCapability,
         inputModalities: ["text", "image"],
         source: "manual",
       },
@@ -727,7 +732,8 @@ test("durable unavailable observations budget historical pixels as text across s
         supportedReasoningEfforts: ["medium"],
         defaultReasoningEffort: "medium",
         contextWindow: 5000,
-        inputModalities: ["text", "image"],
+        supportsImageDetailOriginal: nextCapability,
+        inputModalities: nextCapability === null ? null : ["text", "image"],
         source: "manual",
       },
     ],
@@ -739,9 +745,9 @@ test("durable unavailable observations budget historical pixels as text across s
     const thread = await host.startThread();
     await (
       await host.startTurn(thread.id, [
-        { type: "image", attachment: bad },
+        { type: "image", attachment: bad, detail: requestedDetail },
         { type: "image", attachment: healthy },
-        { type: "image", attachment: bad },
+        { type: "image", attachment: bad, detail: requestedDetail },
       ])
     ).done;
     const snapshot = await host.readThread(thread.id);
@@ -795,9 +801,28 @@ test("durable unavailable observations budget historical pixels as text across s
     await host.closeHostResources();
     await rm(directory, { recursive: true, force: true });
   }
-});
+}
 
-test("read-only unavailable estimates bind exact occurrence, requested profile and capability without decoding or sticky negatives", async () => {
+for (const [sourceCapability, nextCapability, detail] of [
+  [true, false, "high"],
+  [true, null, "high"],
+  [false, true, "high"],
+  [null, true, "high"],
+  [false, null, "high"],
+  [null, false, "high"],
+  [false, null, "original"],
+  [null, false, "original"],
+] as const) {
+  test(`durable unavailable observations budget historical pixels across ${String(sourceCapability)} -> ${String(nextCapability)} (${detail}) smaller-model preflight and compaction`, async () => {
+    await assertUnavailableBudgetTransition(
+      sourceCapability,
+      nextCapability,
+      detail,
+    );
+  });
+}
+
+test("read-only unavailable estimates bind exact occurrence and effective profile without decoding or sticky negatives", async () => {
   const { unavailableImageTokenEstimate } =
     await import("../src/image-preparation.js");
   const { estimateModelMessageInputTokens } =
@@ -820,10 +845,11 @@ test("read-only unavailable estimates bind exact occurrence, requested profile a
     .find((part) => part.type === "image")!;
   const estimate = unavailableImageTokenEstimate([overlay], null);
   assert.equal(estimate(image), Math.ceil(overlay.content.text.length / 4));
-  assert.equal(
-    unavailableImageTokenEstimate([overlay], false)(image),
-    undefined,
-  );
+  for (const capability of [true, false, null])
+    assert.equal(
+      unavailableImageTokenEstimate([overlay], capability)(image),
+      estimate(image),
+    );
   const different = compileItemList([{ ...source, id: "other-origin" }], {
     inputModalities: ["text", "image"],
   }).messages[0]!;
