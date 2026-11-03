@@ -310,6 +310,134 @@ function knownLoss(value) {
   }
   return false;
 }
+// This category carries raw node names, selectors and arbitrary extraData.
+// Project fixed codes/counts only; unknown values never become output labels.
+function styleInvalidationCauses(events, start, end, bundles) {
+  valid(finite(start) && finite(end) && end >= start);
+  valid(Array.isArray(bundles) && bundles.length <= 256);
+  const kinds = new Map([
+    ["ScheduleStyleInvalidationTracking", "schedule"],
+    ["StyleRecalcInvalidationTracking", "recalc"],
+    ["StyleInvalidatorInvalidationTracking", "invalidate"],
+  ]);
+  const reasons = new Map([
+    ["Node was inserted into tree", "inserted"],
+    ["Inline CSS style declaration was mutated", "inline-style"],
+    ["Style attribute change", "style-attribute"],
+    ["Related style rule", "related-rule"],
+    ["StyleInvalidator", "style-invalidator"],
+    ["ControlValue", "control-value"],
+    ["PseudoClass", "pseudo-class"],
+    ["Affected by :has()", "has-selector"],
+    ["ActiveStylesheetsUpdate", "stylesheets"],
+    ["Animation", "animation"],
+    ["Element has pending invalidation list", "pending-list"],
+    ["Invalidation set matched class", "matched-class"],
+    ["Invalidation set matched attribute", "matched-attribute"],
+    ["Invalidation set matched tagName", "matched-tag"],
+    ["Invalidation set invalidates self", "invalidates-self"],
+    ["Invalidation set invalidates subtree", "invalidates-subtree"],
+  ]);
+  const targets = [
+    "turn",
+    "turn-history",
+    "turn-final",
+    "user-row",
+    "user-bubble",
+    "agent-copy",
+    "markdown-body",
+    "message-actions",
+    "pending-send-row",
+    "messages",
+    "messages-inner",
+    "transcript-history",
+    "bottom-zone",
+    "composer",
+    "composer-send-popover",
+    "action-orb",
+  ];
+  const groups = new Map(),
+    nodes = new Set(),
+    ownedLocations = [],
+    seen = new Set();
+  let eventCount = 0;
+  for (const event of events) {
+    const kind = kinds.get(event.name);
+    const categories =
+      typeof event.cat === "string" ? event.cat.split(",") : [];
+    if (
+      !kind ||
+      !["I", "i", "R"].includes(event.ph) ||
+      !categories.includes(
+        "disabled-by-default-devtools.timeline.invalidationTracking",
+      ) ||
+      /user_timing|blink.console/.test(event.cat)
+    )
+      continue;
+    valid(finite(event.ts));
+    if (event.ts < start || event.ts >= end) continue;
+    eventCount++;
+    const data = event.args?.data ?? {},
+      reason = reasons.get(data.reason) ?? "unknown";
+    const classNames = (
+      typeof data.nodeName === "string"
+        ? (/\bclass=['\"]([^'\"]*)['\"]/.exec(data.nodeName)?.[1] ?? "")
+        : ""
+    ).split(/\s+/);
+    const target = targets.find((name) => classNames.includes(name)) ?? "other";
+    if (Number.isSafeInteger(data.nodeId) && data.nodeId > 0)
+      nodes.add(data.nodeId);
+    const key = [kind, reason, target].join(":");
+    if (!groups.has(key))
+      groups.set(key, { kind, reason, target, events: 0, subtreeEvents: 0 });
+    const group = groups.get(key);
+    group.events++;
+    if (data.subtree === true) group.subtreeEvents++;
+    const stack = Array.isArray(data.stackTrace)
+      ? data.stackTrace
+      : data.stackTrace?.callFrames;
+    for (const frame of Array.isArray(stack) ? stack : []) {
+      const bundleIndex = bundles.findIndex(
+        (bundle) => bundle.url === frame?.url,
+      );
+      if (
+        ownedLocations.length >= 8 ||
+        bundleIndex < 0 ||
+        !Number.isSafeInteger(frame.lineNumber) ||
+        frame.lineNumber < 0 ||
+        !Number.isSafeInteger(frame.columnNumber) ||
+        frame.columnNumber < 0 ||
+        !/^[a-f0-9]{64}$/.test(bundles[bundleIndex].sha256)
+      )
+        continue;
+      const position = [bundleIndex, frame.lineNumber, frame.columnNumber].join(
+        ":",
+      );
+      if (seen.has(position)) continue;
+      seen.add(position);
+      ownedLocations.push({
+        kind,
+        reason,
+        target,
+        bundleIndex,
+        bundleSha256: bundles[bundleIndex].sha256,
+        line: frame.lineNumber,
+        column: frame.columnNumber,
+      });
+    }
+  }
+  return {
+    meaning:
+      "Recorded renderer-main invalidations inside the existing first-gap window. Fixed target classes are buckets, not node identities. Unknown/absent events do not prove no invalidation; instrumentation adds overhead.",
+    eventCount,
+    uniqueNodeCount: nodes.size,
+    omittedGroups: Math.max(0, groups.size - 16),
+    groups: [...groups.values()]
+      .sort((a, b) => b.events - a.events)
+      .slice(0, 16),
+    ownedLocations,
+  };
+}
 function summarizeSendTimeline(trace, profile, samples) {
   valid(Array.isArray(trace.traceEvents) && samples?.length === 3);
   valid(
@@ -468,6 +596,20 @@ function summarizeSendTimeline(trace, profile, samples) {
               marks[1],
               profile.ownBundles ?? [],
             ),
+            ...(profile.invalidationTracking === true
+              ? {
+                  firstGapInvalidations: styleInvalidationCauses(
+                    events.filter(
+                      (event) =>
+                        event.pid === profile.rendererPid &&
+                        event.tid === rendererTid,
+                    ),
+                    marks[0],
+                    marks[1],
+                    profile.ownBundles ?? [],
+                  ),
+                }
+              : {}),
             geometryToNextFrameNativeOther: nativeOtherPhases(
               renderer,
               geometry,
@@ -545,4 +687,5 @@ module.exports = {
   ownBundleCallsites,
   styleLayoutInitiators,
   nativeOtherPhases,
+  styleInvalidationCauses,
 };

@@ -566,7 +566,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes("for activation in click enter; do"));
+  assert.ok(workflow.includes("for activation in enter; do"));
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
@@ -771,5 +771,114 @@ test("cached exact-panel style Proxy measures existing reads and restores withou
     f.record.geometryProbes.counts["style.cached.animationName:send-controls"]
       .calls,
     count,
+  );
+});
+
+test("native invalidation causes keep only fixed reason/target codes and owned numeric locations", () => {
+  const { styleInvalidationCauses } = require("./summarize-send-timeline.cjs");
+  const bundle = { url: "file:///private/owned.js", sha256: "a".repeat(64) };
+  const events = Array.from({ length: 30 }, (_, index) => ({
+    name: "StyleRecalcInvalidationTracking",
+    cat: "disabled-by-default-devtools.timeline.invalidationTracking",
+    ph: "I",
+    ts: 100 + index,
+    args: {
+      data: {
+        reason: index === 0 ? "private-unknown-reason" : "Related style rule",
+        nodeName:
+          index === 0
+            ? "private-unknown-node"
+            : "SECTION class='turn completed'",
+        nodeId: 8000 + index,
+        extraData: "private-extra",
+        selectorPart: "private-selector",
+        subtree: true,
+        stackTrace: [
+          {
+            url: bundle.url,
+            lineNumber: index,
+            columnNumber: 1,
+            functionName: "private-function",
+          },
+          { url: "file:///private/foreign.js", lineNumber: 1, columnNumber: 1 },
+        ],
+      },
+    },
+  }));
+  const result = styleInvalidationCauses(events, 100, 125, [bundle]);
+  assert.equal(result.eventCount, 25);
+  assert.equal(result.uniqueNodeCount, 25);
+  assert.equal(
+    result.groups.reduce((sum, group) => sum + group.events, 0),
+    25,
+  );
+  assert.ok(
+    result.groups.some(
+      (group) =>
+        group.reason === "related-rule" &&
+        group.target === "turn" &&
+        group.events === 24,
+    ),
+  );
+  assert.ok(
+    result.groups.some(
+      (group) => group.reason === "unknown" && group.target === "other",
+    ),
+  );
+  assert.equal(result.ownedLocations.length, 8);
+  assert.ok(
+    result.ownedLocations.every(
+      (frame) =>
+        frame.bundleIndex === 0 && frame.bundleSha256 === bundle.sha256,
+    ),
+  );
+  assert.equal(JSON.stringify(result).includes("private-"), false);
+  assert.equal(JSON.stringify(result).includes("nodeId"), false);
+  const targets =
+    "turn turn-history turn-final user-row agent-copy messages messages-inner composer composer-send-popover".split(
+      " ",
+    );
+  const diverse = Array.from({ length: 27 }, (_, index) => ({
+    ...events[1],
+    name: [
+      "ScheduleStyleInvalidationTracking",
+      "StyleRecalcInvalidationTracking",
+      "StyleInvalidatorInvalidationTracking",
+    ][index % 3],
+    args: {
+      data: {
+        ...events[1].args.data,
+        nodeId: index + 1,
+        nodeName: `DIV class='${targets[Math.floor(index / 3)]}'`,
+        stackTrace: { callFrames: events[1].args.data.stackTrace },
+      },
+    },
+  }));
+  const capped = styleInvalidationCauses(diverse, 100, 125, [bundle]);
+  assert.equal(capped.eventCount, 27);
+  assert.equal(capped.groups.length, 16);
+  assert.equal(capped.omittedGroups, 11);
+  assert.equal(capped.ownedLocations.length, 1);
+  const isolated = styleInvalidationCauses(
+    [
+      { ...events[1], cat: "blink.user_timing" },
+      {
+        ...events[1],
+        args: {
+          data: {
+            ...events[1].args.data,
+            nodeName: "DIV id='turn' class='unrelated'",
+          },
+        },
+      },
+    ],
+    100,
+    125,
+    [bundle],
+  );
+  assert.equal(isolated.eventCount, 1);
+  assert.equal(isolated.groups[0].target, "other");
+  assert.throws(() =>
+    styleInvalidationCauses([{ ...events[0], ts: NaN }], 0, 200, [bundle]),
   );
 });

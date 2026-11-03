@@ -38,7 +38,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-presence-style-proxy-v1-not-acceptance",
+  harnessVersion: "native-style-invalidation-v1-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
@@ -50,7 +50,7 @@ const result = {
   scope:
     "Production App, private production DomainThreadJournal history, native input and Send; no model network, no mock ACK or injected UI; actual product pending and canonical feedback measured separately.",
   measurementContract:
-    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
+    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. Native invalidation tracking adds event/stack capture overhead. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
   steps: [],
   blockedExternalRequests: 0,
 };
@@ -1479,6 +1479,7 @@ async function run() {
     .map(({ type, cpu, memory }) => ({ type, cpu, memory }));
   result.profile = {
     schemaVersion: 3,
+    invalidationTracking: true,
     diagnosticOnly: true,
     acceptance: false,
     reason:
@@ -1495,6 +1496,7 @@ async function run() {
     "disabled-by-default-devtools.timeline.frame",
     "v8",
     "blink.user_timing",
+    "disabled-by-default-devtools.timeline.invalidationTracking",
   ];
   result.profile.backgroundThrottling =
     window.webContents.getLastWebPreferences().backgroundThrottling ?? null;

@@ -1,11 +1,13 @@
-name: Packaged Send cached Presence style attribution (diagnostic)
+name: Packaged Send native invalidation causes (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-presence-style-20261103]
+    branches: [diagnostic/send-style-invalidations-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
       - apps/zenx/scripts/launch-send-focus-paired.mjs
+      - apps/zenx/scripts/summarize-send-timeline.cjs
+      - apps/zenx/scripts/test-send-feedback-observation.cjs
 permissions:
   contents: read
 jobs:
@@ -42,11 +44,11 @@ jobs:
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: candidate
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
-      - name: Native click versus Enter with cached Presence property attribution
+      - name: Native Enter with private bounded invalidation cause attribution
         timeout-minutes: 20
         run: |
           failed=0
-          for activation in click enter; do
+          for activation in enter; do
             case="control-$activation"
             source=candidate
             width=1280
@@ -64,7 +66,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-cached-presence-style-5000
+          name: native-send-invalidation-causes-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

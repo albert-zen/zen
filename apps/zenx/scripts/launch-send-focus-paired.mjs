@@ -619,7 +619,7 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-presence-style-proxy-v1-not-acceptance",
+    "native-style-invalidation-v1-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
