@@ -110,3 +110,55 @@ test("code copy controls and image UI never shift the product occurrence identit
   assert.equal(searchTranscript([match.entry], "leftright").length, 0);
   dom.window.close();
 });
+
+test("real Markdown renderer and data index agree on visible footnote bodies and reference order", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  const source =
+    "See first[^b], then second[^a], and first again[^b].\n\n[^a]: Alpha **body**\n[^b]: Beta `body`\n\n[^unused]: invisible hidden definition";
+  const blocks = markdownFindBlocks(source);
+  assert.deepEqual(blocks, [
+    "See first, then second, and first again.",
+    "Beta body",
+    "Alpha body",
+  ]);
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      "main",
+      null,
+      React.createElement(
+        "div",
+        { "data-thread-find-item-id": "i" },
+        React.createElement(Markdown, { text: source }),
+      ),
+    ),
+  );
+  const dom = new JSDOM(markup);
+  const viewport = dom.window.document.querySelector("main")!;
+  const entries = [
+    {
+      turnId: "t",
+      itemId: "i",
+      field: "body" as const,
+      blocks,
+      disclosures: [],
+    },
+  ];
+  const matches = searchTranscript(entries, "body");
+  assert.equal(matches.length, 2);
+  assert.equal(
+    transcriptFindRange(viewport, matches[0]!, "body")?.startContainer
+      .parentElement?.tagName,
+    "CODE",
+  );
+  assert.equal(
+    transcriptFindRange(viewport, matches[1]!, "body")?.startContainer
+      .parentElement?.tagName,
+    "STRONG",
+  );
+  assert.equal(searchTranscript(entries, "invisible").length, 0);
+  assert.equal(searchTranscript(entries, "Footnotes").length, 0);
+  assert.equal(viewport.textContent?.includes("invisible"), false);
+  dom.window.close();
+});

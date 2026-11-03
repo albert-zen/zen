@@ -17,6 +17,7 @@ import {
   normalizeFindText,
   searchTranscript,
   stepTranscriptFind,
+  transcriptFindMatchId,
 } from "./transcript-find-index.js";
 import {
   paintTranscriptFindRange,
@@ -49,7 +50,11 @@ export function VirtualTranscriptFind({
   const { t } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [selection, setSelection] = useState({ index: 0, request: 0 });
+  const [selection, setSelection] = useState<{
+    index: number;
+    request: number;
+    matchId: string | null;
+  }>({ index: 0, request: 0, matchId: null });
   const [focusRequest, setFocusRequest] = useState(0);
   const [status, setStatus] = useState<"missing" | "unsupported" | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -66,11 +71,20 @@ export function VirtualTranscriptFind({
     () => searchTranscript(entries, query),
     [entries, query],
   );
-  const activeIndex = Math.min(
-    selection.index,
-    Math.max(0, matches.length - 1),
-  );
-  const match = matches[activeIndex];
+  const retainedIndex =
+    selection.matchId === null
+      ? -1
+      : matches.findIndex(
+          (match) => transcriptFindMatchId(match) === selection.matchId,
+        );
+  const activeIndex =
+    retainedIndex >= 0
+      ? retainedIndex
+      : Math.min(selection.index, Math.max(0, matches.length - 1));
+  const match =
+    selection.matchId !== null && retainedIndex < 0
+      ? undefined
+      : matches[activeIndex];
   const matchKey = match
     ? JSON.stringify([
         threadId,
@@ -92,14 +106,30 @@ export function VirtualTranscriptFind({
     returnFocus.current = null;
   };
   const step = (direction: -1 | 1) =>
-    setSelection((previous) => ({
-      index: stepTranscriptFind(
+    setSelection((previous) => {
+      const index = stepTranscriptFind(
         latest.current.activeIndex,
         latest.current.matches.length,
         direction,
-      ),
-      request: previous.request + 1,
-    }));
+      );
+      const match = latest.current.matches[index];
+      return {
+        index,
+        request: previous.request + 1,
+        matchId: match ? transcriptFindMatchId(match) : null,
+      };
+    });
+  // Live appends/backfills update the count without replacing the selected product identity or jumping.
+  useEffect(() => {
+    if (!open || !match || selection.matchId !== null) return;
+    const id = transcriptFindMatchId(match);
+    const version = selection.request;
+    setSelection((previous) =>
+      previous.request === version && previous.matchId === null
+        ? { ...previous, matchId: id }
+        : previous,
+    );
+  }, [open, matchKey, selection.matchId, selection.request]);
   const callbacks = useRef({ close, step });
   callbacks.current = { close, step };
 
@@ -335,6 +365,7 @@ export function VirtualTranscriptFind({
             setSelection((previous) => ({
               index: 0,
               request: previous.request + 1,
+              matchId: null,
             }));
           }}
         />
@@ -342,7 +373,7 @@ export function VirtualTranscriptFind({
           {query.trim()
             ? matches.length
               ? t("threadFindCount", {
-                  current: activeIndex + 1,
+                  current: match ? activeIndex + 1 : 0,
                   total: matches.length,
                 })
               : t("threadFindNoMatches")

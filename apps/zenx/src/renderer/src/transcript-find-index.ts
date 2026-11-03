@@ -23,6 +23,13 @@ export interface TranscriptFindMatch {
   entry: TranscriptFindEntry;
   occurrence: number;
 }
+export function transcriptFindMatchId(match: TranscriptFindMatch): string {
+  return JSON.stringify([
+    match.entry.itemId,
+    match.entry.field,
+    match.occurrence,
+  ]);
+}
 export const normalizeFindText = (value: string) =>
   value.replace(/\s+/gu, " ").trim();
 
@@ -33,7 +40,23 @@ export function markdownFindBlocks(source: string): string[] {
     mdastExtensions: [gfmFromMarkdown()],
   });
   const blocks: string[] = [];
+  const footnotes = new Map(
+    root.children.flatMap((node) =>
+      node.type === "footnoteDefinition"
+        ? [[node.identifier, node] as const]
+        : [],
+    ),
+  );
+  const referenced: string[] = [];
   const inline = (node: RootContent): string => {
+    if (node.type === "footnoteReference") {
+      if (
+        footnotes.has(node.identifier) &&
+        !referenced.includes(node.identifier)
+      )
+        referenced.push(node.identifier);
+      return "";
+    }
     if (node.type === "image" || node.type === "imageReference")
       return "\u0000";
     if (node.type === "definition" || node.type === "footnoteDefinition")
@@ -57,6 +80,9 @@ export function markdownFindBlocks(source: string): string[] {
     }
   };
   root.children.forEach(visit);
+  // ReactMarkdown places only referenced footnote bodies at the end, in first-reference order.
+  for (let index = 0; index < referenced.length; index++)
+    footnotes.get(referenced[index]!)?.children.forEach(visit);
   return blocks;
 }
 

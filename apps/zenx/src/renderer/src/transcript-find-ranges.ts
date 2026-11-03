@@ -81,6 +81,12 @@ export function transcriptFindRange(
           return;
         }
         if (
+          element.matches(
+            "[data-footnote-ref],[data-footnote-backref],.footnotes .sr-only",
+          )
+        )
+          return;
+        if (
           element !== scope &&
           element.hasAttribute("data-thread-find-item-id")
         )

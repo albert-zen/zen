@@ -92,7 +92,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
   reading.scroll = { top: 0, following: false };
   const canonical = new Map();
   let textReads = 0;
-  const turns = Array.from(
+  let turns = Array.from(
     { length: 1000 },
     (_, index) =>
       ({
@@ -110,7 +110,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
         ],
       }) as Turn,
   );
-  const rows = turns.map((turn, index) => ({
+  let rows = turns.map((turn, index) => ({
     key: JSON.stringify(["thread", "turn", turn.id]),
     content: React.createElement(
       "div",
@@ -323,6 +323,45 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
       reading.snapshot().get(JSON.stringify(["turn", "turn-999"])),
       true,
     );
+    const beforeRefreshReveal = controller.current!.reveal;
+    let refreshReveals = 0;
+    controller.current!.reveal = (...args) => {
+      refreshReveals++;
+      return beforeRefreshReveal(...args);
+    };
+    await act(async () => {
+      const prepended = {
+        id: "backfill",
+        status: "completed",
+        items: [
+          { type: "agentMessage", id: "backfill-item", text: "Earlier needle" },
+        ],
+      } as Turn;
+      turns = [prepended, ...turns];
+      rows = [
+        {
+          key: JSON.stringify(["thread", "turn", "backfill"]),
+          content: React.createElement(
+            "div",
+            { "data-thread-find-item-id": "backfill-item" },
+            React.createElement("p", null, "Earlier needle"),
+          ),
+        },
+        ...rows,
+      ];
+      render();
+      await settle();
+    });
+    assert.match(
+      document.querySelector("[role='search'] [role='status']")!.textContent!,
+      /1001 of 1001/,
+    );
+    assert.equal(
+      refreshReveals,
+      0,
+      "new earlier matches rebase the active identity without unsolicited navigation",
+    );
+    controller.current!.reveal = beforeRefreshReveal;
     await act(async () => {
       key(input, "Escape");
     });
