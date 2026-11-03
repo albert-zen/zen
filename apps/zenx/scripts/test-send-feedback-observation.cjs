@@ -566,7 +566,8 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.match(workflow, /for activation in (?:enter|click); do/);
+  assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
+  assert.ok(workflow.includes('"1120 click narrow candidate baseline"'));
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
@@ -579,8 +580,8 @@ test("span linkage locks current main and keeps reader regression outside timing
     "utf8",
   );
   for (const identity of [
-    "a44591da91c5f1bb075b913b97796951a1ac1289",
-    "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
+    "b72962a068d9ffcd7a01989aa66f12f2cde80761",
+    "33c5e6041c685cc7fc3992d8a4a3c3552bc56fde",
   ])
     assert.ok(launch.includes(identity));
   for (const contract of [

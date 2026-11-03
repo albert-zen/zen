@@ -1,7 +1,7 @@
-name: Packaged Send select slot narrow click A/B (diagnostic)
+name: Packaged Send select slot current main A/B (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-select-slot-narrow-click-ab-20261103]
+    branches: [diagnostic/send-select-slot-current-main-ab-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -14,16 +14,16 @@ permissions:
 jobs:
   native-getter-macos:
     runs-on: macos-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: a44591da91c5f1bb075b913b97796951a1ac1289
+          ref: b72962a068d9ffcd7a01989aa66f12f2cde80761
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: aba07f7835a4300aef76cac8bbefe5d231c58be2
+          ref: 7eaf40fd3f9f989926f3dd7879ae8b7513d036a2
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -50,14 +50,14 @@ jobs:
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native reversed narrow click with private first-activation schedule linkage
-        timeout-minutes: 20
+      - name: Native current main dock Enter and popover click matched pairs
+        timeout-minutes: 28
         run: |
           failed=0
-          for activation in click; do
-            for source in candidate baseline; do
-              case="narrow-$source"
-              width=1120
+          for case_spec in "1280 enter control baseline candidate" "1120 click narrow candidate baseline"; do
+            read -r width activation prefix first second <<< "$case_spec"
+            for source in "$first" "$second"; do
+              case="$prefix-$source"
               mkdir -p "results/$case"
               echo "NATIVE_AB_CASE_BEGIN $case $source $width"
               set +e
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-select-slot-narrow-click-ab-5000
+          name: native-send-select-slot-current-main-ab-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

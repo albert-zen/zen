@@ -61,12 +61,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "a44591da91c5f1bb075b913b97796951a1ac1289",
-    tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
+    commit: "b72962a068d9ffcd7a01989aa66f12f2cde80761",
+    tree: "33c5e6041c685cc7fc3992d8a4a3c3552bc56fde",
   },
   candidate: {
-    commit: "aba07f7835a4300aef76cac8bbefe5d231c58be2",
-    tree: "9b226e27c0b437ba526c46823e09bb0ecdb3956e",
+    commit: "7eaf40fd3f9f989926f3dd7879ae8b7513d036a2",
+    tree: "096991d08754350193e3a42158de08241132174e",
   },
 };
 const snapshot = snapshots[sourceLabel];
