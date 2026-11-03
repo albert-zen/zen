@@ -1,15 +1,15 @@
 {
-  "publicHead": "aeaa0332c0d6a6a520c47f226b316a3a79bee438",
-  "testedSourceCommit": "aa1f26cc0de1a6d0966f4b2ce96d82be2fdc4309",
-  "tree": "6ddd580315fd874b100a61fdcdc8dd878b477d02",
+  "publicHead": "9320f5f3a2b21d943b1d9f019352a8624ff0064a",
+  "testedSourceCommit": "73c0a3945a7292df3a0f382f835cd5742d869a0e",
+  "tree": "bea869199626b296fa7689d87987beb75c6aa0d7",
   "sameTreeVerifiedByGitDiff": true,
-  "run": "https://github.com/albert-zen/zen/actions/runs/41718117008",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41724783653",
   "synthetic": true,
   "artifacts": {
-    "macosApp": 13270922379,
-    "macosShelf": 13270483105,
-    "windowsApp": 13270414535,
-    "windowsShelf": 13271580647
+    "macosApp": 13273920920,
+    "macosShelf": 13274560691,
+    "windowsApp": 13274375322,
+    "windowsShelf": 13274420393
   },
   "results": {
     "macosApp": true,
@@ -35,18 +35,19 @@
     "Only direct content, recall icon and right-aligned bubble hierarchy are reused from the reference; the outer shelf retains the production Queue composer-aligned width.",
     "Combined integration includes main PR671 question-card full-row options and autogrowing textarea without native resize grip, plus main PR674 image preparation. These sidebar/queue fixtures do not display an image preparation notice; image preparation has separate tests and visual evidence. Current screenshots are produced by the stated combined source, not relabeled older captures.",
     "Earlier animated editor screenshot is superseded. Current captures wait for opacity1, rendered frames, exact text, viewport geometry and save hit target, then close the editor.",
-    "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body."
+    "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body.",
+    "This source also integrates main PR680 immutable Trace snapshots. It does not change ZenX renderer, capture scripts or native input helpers. All images are freshly produced by the stated 9320/73c0 source; byte-identical regenerated images may reuse an existing Git blob."
   ],
   "images": [
     {
       "file": "steer-wide-light.png",
       "platform": "darwin",
-      "sha256": "46ef9bf54494fcf0b217f5840edcfef4464c2cff03b232025078ecf836015e0b"
+      "sha256": "674202e40ce5f5db4d5eb1580cc49722687b62acab53768243d59c11218e3edb"
     },
     {
       "file": "steer-wide-dark.png",
       "platform": "darwin",
-      "sha256": "45edab6adc42b5934b48c928639189b905819f8eb75a8dd9e9368ec7c184c19b"
+      "sha256": "8c1f87edb25e496fd900b6aa09bec061a11aad578b24d755622c28be91d279a2"
     },
     {
       "file": "steer-narrow.png",
@@ -76,17 +77,17 @@
     {
       "file": "04-maximized-main-dock.png",
       "platform": "darwin",
-      "sha256": "f886abf1e1dae0d3a3160d4cb2291aa5ea081d6ee0620b63767e0d0d386be57a"
+      "sha256": "0aa4b5bc296a9374016220d23d5208fbb090ae90f2a9d95614ecbf125615f714"
     },
     {
       "file": "15-macos-system-sidebar-click.png",
       "platform": "darwin",
-      "sha256": "a9d78bd8c1459eb5d309e46b58f8c026ae04d957c5e469f54cae9caae5d61f6c"
+      "sha256": "81b71ff2b62af4aa2eedf7e5e9500941c1cf64acc07e4de0262cab31b5fa667e"
     },
     {
       "file": "17-reference-dark-Chinese-question-full-App.png",
       "platform": "darwin",
-      "sha256": "695a82fdd3c1187bcc17823058482b995a1a61774fb1d2b33321f19f3bec8d35"
+      "sha256": "5ea91d378953a1870be4e08cbcf10a9d5eb199db1bee400de79d49a2eb9b682e"
     },
     {
       "file": "windows-queue-human-edit-open.png",
@@ -101,16 +102,26 @@
     {
       "file": "windows-04-maximized-main-dock.png",
       "platform": "win32",
-      "sha256": "e8252238dbb1a923195d53c477a401d06d0429feb1ed5b9163a51299e4c8f4d9"
+      "sha256": "c05f2f4a98699ee838bb885260f2857e20ff690ec2bd26ef8d82d7532abb0720"
     },
     {
       "file": "windows-17-reference-dark-Chinese-question-full-App.png",
       "platform": "win32",
-      "sha256": "b7dc26247c22f412d5006a0d1cd586449050b5ddcc240c8a6b430007411492f2"
+      "sha256": "56da0391666bf9fb4c4a0f26e490263b99805528b736dbc9edd3c78826439898"
     }
   ],
-  "integratedMain": "e77e1fbfa5d76c080ad0f0bed0da3930742ebda9",
-  "preservedFailedAttempt": {
+  "integratedMain": "869921bd6ba827880113ca1e14a12ac6e2324b1e",
+  "completeCi": {
+    "statusAsOfPublication": "Pending: 5 of 8 successful, aggregate running, two macOS jobs queued. Native visual acceptance is not a full CI pass.",
+    "run": "https://github.com/albert-zen/zen/actions/runs/41724783462"
+  },
+  "verifiedAtUtc": "2026-11-03T21:58:44.861648+00:00",
+  "nativeCurrentAttempts": {
+    "macos": 1,
+    "windows": 1,
+    "retries": 0
+  },
+  "historicalFailedAttempt": {
     "job": 126203388638,
     "artifact": 13271317077,
     "failure": "trusted Chromium click acknowledgement timed out while opening narrow information panel",
@@ -119,7 +130,7 @@
     "independentWindowsJobRetries": 1,
     "retryJob": 126206313343,
     "oldSessionReplayed": false,
-    "guardsOrTimeoutsChanged": false
-  },
-  "completeCi": "Pending; native visual acceptance is not a full CI pass."
+    "guardsOrTimeoutsChanged": false,
+    "publicHead": "aeaa0332c0d6a6a520c47f226b316a3a79bee438"
+  }
 }
