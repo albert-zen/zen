@@ -994,8 +994,12 @@ function ThreadViewContent({
       historyKeys[Math.max(0, historyKeys.length - 100)],
   });
   const [historyWindow, setHistoryWindow] = useState(initialHistory);
+  const initialRowsArrived =
+    historyWindow.start === undefined && historyKeys.length > 0;
   const currentHistory =
-    historyWindow.owner === readingState ? historyWindow : initialHistory();
+    historyWindow.owner === readingState && !initialRowsArrived
+      ? historyWindow
+      : initialHistory();
   const storedHistoryStart = Math.max(
     0,
     historyKeys.indexOf(currentHistory.start ?? ""),
@@ -1033,6 +1037,7 @@ function ThreadViewContent({
     readingState.historyStart = start;
     if (
       historyWindow.owner !== readingState ||
+      initialRowsArrived ||
       historyStart < storedHistoryStart
     )
       setHistoryWindow({ owner: readingState, start });
@@ -1041,6 +1046,7 @@ function ThreadViewContent({
     historyKeys,
     historyStart,
     historyWindow.owner,
+    initialRowsArrived,
     storedHistoryStart,
   ]);
   const pendingApprovals = useMemo(

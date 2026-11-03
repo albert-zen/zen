@@ -66,6 +66,19 @@ test("experimental mount also supports a read-only context preview without a tar
   });
 });
 
+test("experimental initial extent applies when authoritative history arrives after an empty viewport", async () => {
+  await withRuntimeDom(async (h) => {
+    await h.render(history(0));
+    assert.equal(document.querySelectorAll(".turn").length, 0);
+    await h.render(history(310));
+    assert.equal(document.querySelectorAll(".turn").length, 100);
+    assert.match(
+      document.querySelector(".turn")?.textContent ?? "",
+      /Synthetic answer 210/u,
+    );
+  });
+});
+
 test("experimental mount extent follows exact thread identity through navigation", async () => {
   await withRuntimeDom(async (h) => {
     const a = history(310);
