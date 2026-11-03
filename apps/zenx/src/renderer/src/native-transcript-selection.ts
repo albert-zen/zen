@@ -11,8 +11,7 @@ export function ownsNativeTranscriptSelection(viewport: HTMLElement): boolean {
   )
     return false;
   const active = document.activeElement;
-  if (active?.closest(nativeEditingLocalSelectionSelector))
-    return false;
+  if (active?.closest(nativeEditingLocalSelectionSelector)) return false;
   // A native page-wide Select All includes every visible transcript, even if
   // a sidebar button owns focus. Do not silently narrow it to one DOM subtree.
   return true;
