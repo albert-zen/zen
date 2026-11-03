@@ -4,6 +4,8 @@ These PNGs show the **actual production editable information, Board and informat
 
 The supported cloud browser operated the controls through the managed Sites preview relay. `source.json` binds the component, style and fixture sources by SHA-256. The external JavaScript entry avoids the relay's live-reload HTML insertion inside bundled isolated-document strings.
 
+These visual captures bind the source in UI checkpoint `92f53933` and **precede** stale-read recovery fix `bc1a1ac7`. The fix changes no markup or styles, but these PNGs are not exact-final-source proof of the race fix. Its separate red/green DOM/native-service interleaving regression verifies that a read started before a write cannot mark a later unknown outcome reviewed. Final integrated full-App/native evidence must be captured separately.
+
 - 01: Default Thread components, including explicit unavailable PR/artifact providers.
 - 02: Customization controls.
 - 03: Retained concurrent-edit conflict requiring explicit reapply.

@@ -50,6 +50,9 @@ const query = (selector) =>
   `document.querySelector(${JSON.stringify(selector)})`;
 async function click(selector, label = selector) {
   await until(() => evaluate(`Boolean(${query(selector)})`), label);
+  await evaluate(
+    `${query(selector)}.scrollIntoView({block:'center',inline:'nearest'})`,
+  );
   const point = await evaluate(
     `(()=>{const e=${query(selector)},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));return {x:Math.round(x),y:Math.round(y)}})()`,
   );
@@ -73,6 +76,31 @@ async function click(selector, label = selector) {
     ...point,
   });
   result.steps.push(label);
+}
+async function settledLayout() {
+  await until(
+    () =>
+      evaluate(
+        "!document.querySelector('[aria-label=\"Refresh information\"]')?.disabled",
+      ),
+    "native layout write settled",
+  );
+}
+async function selectValue(selector, value, label) {
+  const index = await evaluate(
+    `(()=>{const e=${query(selector)};return [...e.options].findIndex(o=>o.value===${JSON.stringify(value)})})()`,
+  );
+  assert.ok(index >= 0, `Real option exists: ${label}`);
+  await click(selector, label);
+  for (const keyCode of ["Home", ...Array(index).fill("Down"), "Return"]) {
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+  }
+  await until(
+    () => evaluate(`${query(selector)}.value===${JSON.stringify(value)}`),
+    label + " selected",
+  );
+  await settledLayout();
 }
 async function screenshot(name) {
   await fs.writeFile(
@@ -118,7 +146,7 @@ async function capture(name, mode) {
     );
     assert.equal(
       await evaluate(
-        "(()=>{const e=document.querySelector('.information-dock .conversation-information-section > header'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
+        "(()=>{const e=document.querySelector('.information-dock .information-settings-toolbar'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
       ),
       true,
       "first card heading is not occluded by a higher titlebar layer",
@@ -218,6 +246,33 @@ async function run() {
       ),
     "main composer",
   );
+  // Real runtime/model facade publication, not direct plugin storage or injected UI.
+  const bodyProgram = `const decode=r=>{if(r.exitCode!==0)throw Error(r.output||'Tool failed');return r.structuredContent??JSON.parse(r.output)}; for (const address of ['default','board:acceptance-second']) { const observed=decode(await tools.zenx_board_read({view:'document',...(address==='default'?{}:{instanceKey:address})})); const saved=decode(await tools.zenx_board_put({snapshot:observed.snapshot,document:{id:'equal-authored-id',title:address==='default'?'Native first Board':'Native second Board',summary:'Synthetic same body ID and revision; independent address.',blocks:[{id:'field',kind:'field',field:'answer',label:'Native independent field'}],initialValues:{answer:address==='default'?'first saved value':'second saved value'},events:[],html:'<p>Identical isolated body</p>'}})); if(saved.applied!==true)throw Error('Unexpected body conflict'); } const sidebar=decode(await tools.zenx_self_control_sidebar_read({includeInformation:true})); const placed=decode(await tools.zenx_self_control_sidebar_update({snapshot:sidebar.snapshot,patch:{information:{operations:[{op:'add',type:'board',config:{instanceKey:'board:acceptance-second'}}]}}})); if(placed.applied!==true)throw Error('Unexpected layout conflict'); text('Synthetic native Board and layout publication complete');`;
+  await click(
+    "#thread-composer",
+    "Author independent Boards through actual model tools",
+  );
+  await window.webContents.insertText(
+    "!tool run_code " + JSON.stringify({ code: bodyProgram }),
+  );
+  await click(
+    ".composer-send-control > button.action-orb.send:not(:disabled)",
+    "Publish two Boards and placement through actual Host",
+  );
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.plugins.executeCommand('zenx-board','ui',{operation:'read',owner:{kind:'thread',threadId:'information-main'},instanceKey:'board:acceptance-second'}).then(s=>s?.document?.title==='Native second Board')",
+      ),
+    "actual model-authored independent Board body",
+  );
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-main')?.status==='idle')",
+      ),
+    "real model publication Turn completed without blocking on the open question",
+  );
   const command =
     "!tool shell " +
     JSON.stringify({
@@ -270,6 +325,147 @@ async function run() {
     "real trigger, lineage and command cards",
   );
   await capture("01-wide-light", "dock");
+  await until(
+    () =>
+      evaluate(
+        "Boolean(document.querySelector('.user-question-attention .user-question-card')) && Boolean(document.querySelector('.thread-asking-badge'))",
+      ),
+    "real unanswered question survived completed Turn and seed Host restart",
+  );
+  await click(
+    '[aria-label="Customize information"]',
+    "Customize actual information layout",
+  );
+  const observedBoards = await evaluate(
+    "window.zenx.information.read({kind:'thread',id:'information-main'}).then(s=>s.layout.widgets.filter(w=>w.type==='board'))",
+  );
+  assert.equal(observedBoards.length, 2);
+  const secondId = observedBoards.find(
+    (widget) => widget.config.instanceKey === "board:acceptance-second",
+  ).id;
+  const row = (id) => `[data-widget-id=${JSON.stringify(id)}]`;
+  await click(
+    row(secondId) + ' button[aria-label="Move up · Board"]',
+    "Reorder independent Board placement with native pointer",
+  );
+  await settledLayout();
+  await screenshot("01a-native-customize.png");
+  const count = await evaluate(
+    "document.querySelectorAll('.information-widget[data-visible=true]').length",
+  );
+  for (let index = 0; index < count; index++) {
+    await click(
+      '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
+      "Hide customizable widget " + index,
+    );
+    await settledLayout();
+  }
+  await click(
+    '[aria-label="Customize information"]',
+    "Leave customization with every widget hidden",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.information-widget-body').length",
+    ),
+    0,
+  );
+  assert.ok(
+    await evaluate(
+      "Boolean(document.querySelector('.user-question-attention .user-question-card'))",
+    ),
+  );
+  await screenshot("01b-native-all-hidden-asking-remains.png");
+  result.cases.push({
+    name: "native-unhideable-asking",
+    source:
+      "real default-on asynchronous question, completed seed Turn and seed Host shutdown before Desktop",
+    allWidgetsHidden: true,
+  });
+  await click(
+    '[aria-label="Customize information"]',
+    "Restore layout through actual controls",
+  );
+  await click(
+    ".information-add-controls > button:last-of-type",
+    "Reset native layout without deleting extra bodies",
+  );
+  await settledLayout();
+  await click(
+    row(secondId) +
+      ".information-widget .information-widget-actions button:nth-child(3)",
+    "Show retained second Board after reset",
+  );
+  await settledLayout();
+  await click(
+    '[aria-label="Customize information"]',
+    "Review independent native fields",
+  );
+  await until(
+    () =>
+      evaluate("document.querySelectorAll('.board-field input').length===2"),
+    "two independent native Board fields",
+  );
+  await click(
+    row(secondId) + " .board-field input",
+    "Edit only second Board field",
+  );
+  window.webContents.sendInputEvent({
+    type: "keyDown",
+    keyCode: "A",
+    modifiers: [process.platform === "darwin" ? "meta" : "control"],
+  });
+  window.webContents.sendInputEvent({
+    type: "keyUp",
+    keyCode: "A",
+    modifiers: [process.platform === "darwin" ? "meta" : "control"],
+  });
+  await window.webContents.insertText("second native draft only");
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.plugins.executeCommand('zenx-board','ui',{operation:'read',owner:{kind:'thread',threadId:'information-main'},instanceKey:'board:acceptance-second'}).then(s=>s?.values?.answer==='second native draft only')",
+      ),
+    "second native draft saved",
+  );
+  assert.equal(
+    await evaluate(
+      "window.zenx.plugins.executeCommand('zenx-board','ui',{operation:'read',owner:{kind:'thread',threadId:'information-main'}}).then(s=>s.values.answer)",
+    ),
+    "first saved value",
+  );
+  await screenshot("01c-native-independent-fields.png");
+  result.cases.push({
+    name: "native-independent-bodies",
+    sameAuthoredId: true,
+    independentDrafts: true,
+    modelPublication: true,
+  });
+  await click(
+    '[aria-label="Customize information"]',
+    "Remove only the second placement",
+  );
+  await click(
+    row(secondId) + ' button[aria-label="Remove placement · Board"]',
+    "Remove second placement without deleting its body",
+  );
+  await settledLayout();
+  assert.equal(
+    await evaluate(
+      "window.zenx.plugins.executeCommand('zenx-board','ui',{operation:'read',owner:{kind:'thread',threadId:'information-main'},instanceKey:'board:acceptance-second'}).then(s=>s?.values?.answer)",
+    ),
+    "second native draft only",
+  );
+  await click(
+    ".information-add-controls > button:last-of-type",
+    "Restore standard provider layout",
+  );
+  await settledLayout();
+  await click(
+    '[aria-label="Customize information"]',
+    "Return to information reading",
+  );
+  await evaluate("document.querySelector('.information-content').scrollTop=0");
   await click(
     "#thread-browser-toggle",
     "Open workspace and automatically close information",
@@ -418,6 +614,133 @@ async function run() {
     "real Trigger editor",
   );
   await screenshot("11-trigger-editor.png");
+  nativeTheme.themeSource = "light";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance==='light'"),
+    "actual app light appearance for Room acceptance",
+  );
+  const nativeRoom = await evaluate(
+    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native Room',members:[{name:'Synthetic source',threadId:'information-main'}]})",
+  );
+  const nativePaw = await evaluate(
+    "window.zenx.plugins.executeCommand('zenx-rooms','create-assistant',{name:'Synthetic native PAW',memberName:'Synthetic PAW member',operationId:'information-acceptance-paw',target:{kind:'existing',threadId:'information-other'}})",
+  );
+  const emptyRoom = await evaluate(
+    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native empty Room',members:[{name:'Temporary synthetic source',threadId:'information-child'}]})",
+  );
+  await evaluate(
+    `window.zenx.plugins.executeCommand('zenx-rooms','remove-member',{roomId:${JSON.stringify(emptyRoom.id)},threadId:'information-child'})`,
+  );
+  const openRoom = async (room, title) => {
+    await click(
+      `.room-conversation-row[title=${JSON.stringify(room.name)}]`,
+      title,
+    );
+    await click(
+      ".information-toolbar button",
+      "Open information owned by " + room.name,
+    );
+    await until(
+      () =>
+        evaluate(
+          `document.querySelector('.editable-information-panel')?.dataset.owner===${JSON.stringify("room:" + room.id)}`,
+        ),
+      "actual Room information owner",
+    );
+  };
+  await openRoom(nativeRoom, "Select ordinary Room in actual Sidebar");
+  await click(
+    '[aria-label="Customize information"]',
+    "Choose a verified current Room member",
+  );
+  await selectValue(
+    '[aria-label="Source member"]',
+    "information-main",
+    "Select actual Room source member",
+  );
+  await selectValue(
+    '[aria-label="Component"]',
+    "triggers",
+    "Select admitted Trigger component",
+  );
+  await click(
+    ".information-add-controls > button:first-of-type",
+    "Add member-bound Trigger component",
+  );
+  await settledLayout();
+  const ordinaryLayout = await evaluate(
+    `window.zenx.information.read({kind:'room',id:${JSON.stringify(nativeRoom.id)}})`,
+  );
+  assert.deepEqual(
+    ordinaryLayout.layout.widgets.find((widget) => widget.type === "triggers")
+      .binding,
+    { kind: "member", resourceThreadId: "information-main" },
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-content').textContent.includes('Daily synthetic review')",
+      ),
+    "actual member-owned Trigger facts",
+  );
+  await screenshot("12-native-room-member-layout.png");
+  result.cases.push({
+    name: "native-ordinary-room",
+    owner: ordinaryLayout.owner,
+    memberBound: true,
+  });
+  await openRoom(nativePaw, "Select PAW's actual Room in Sidebar");
+  const pawLayout = await evaluate(
+    `window.zenx.information.read({kind:'room',id:${JSON.stringify(nativePaw.id)}})`,
+  );
+  assert.deepEqual(pawLayout.owner, { kind: "room", id: nativePaw.id });
+  assert.equal(pawLayout.resourceThreadId, "information-other");
+  assert.ok(
+    pawLayout.layout.widgets
+      .filter((widget) => widget.binding.kind === "member")
+      .every(
+        (widget) => widget.binding.resourceThreadId === "information-other",
+      ),
+  );
+  await screenshot("13-native-paw-actual-room.png");
+  result.cases.push({
+    name: "native-paw-room",
+    owner: pawLayout.owner,
+    actualAssistant: "information-other",
+    thirdOwner: false,
+  });
+  await openRoom(emptyRoom, "Select actual empty Room in Sidebar");
+  await click(
+    '[aria-label="Customize information"]',
+    "Inspect empty Room source options",
+  );
+  const emptyLayout = await evaluate(
+    `window.zenx.information.read({kind:'room',id:${JSON.stringify(emptyRoom.id)}})`,
+  );
+  assert.deepEqual(emptyLayout.members, []);
+  assert.equal(emptyLayout.resourceThreadId, undefined);
+  assert.ok(
+    emptyLayout.layout.widgets.every(
+      (widget) => widget.binding.kind === "owner",
+    ),
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[aria-label=\"Source member\"]').options.length",
+    ),
+    1,
+  );
+  assert.equal(
+    await evaluate("document.querySelectorAll('.user-question-card').length"),
+    0,
+    "empty Room cannot borrow a stale private Thread question",
+  );
+  await screenshot("14-native-empty-room-no-invented-member.png");
+  result.cases.push({
+    name: "native-empty-room",
+    owner: emptyLayout.owner,
+    noInventedMember: true,
+  });
   await evaluate(
     `window.zenx.shellPanel.request({operation:'stop',threadId:'information-main',taskId:${JSON.stringify(taskId)}})`,
   );
