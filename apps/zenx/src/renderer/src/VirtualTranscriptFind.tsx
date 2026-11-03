@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { useTranslation } from "react-i18next";
+import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
 import type { Turn } from "../../protocol-client/index.js";
 import type { VirtualTranscriptHandle } from "./ExperimentalTranscriptViewport.js";
 import type { TurnCanonicalPresentation } from "./turn-canonical-presentation.js";
@@ -33,6 +34,7 @@ interface Props {
   viewport: RefObject<HTMLDivElement | null>;
   controller: RefObject<VirtualTranscriptHandle | null>;
   reading: ReturnType<typeof createThreadReadingState>;
+  wakeups?: readonly TriggerHistoryEntry[];
   pauseFollowing(): void;
 }
 
@@ -45,6 +47,7 @@ export function VirtualTranscriptFind({
   viewport,
   controller,
   reading,
+  wakeups,
   pauseFollowing,
 }: Props) {
   const { t } = useTranslation("shell");
@@ -64,8 +67,8 @@ export function VirtualTranscriptFind({
   const request = useRef(0);
   const [indexText] = useState(() => createTranscriptFindIndexer());
   const entries = useMemo(
-    () => (open ? indexText(turns, canonical) : []),
-    [open, turns, canonical, indexText],
+    () => (open ? indexText(turns, canonical, wakeups) : []),
+    [open, turns, canonical, wakeups, indexText],
   );
   const matches = useMemo(
     () => searchTranscript(entries, query),

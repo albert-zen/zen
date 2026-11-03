@@ -119,7 +119,10 @@ test("real Markdown renderer and data index agree on visible footnote bodies and
     "See first[^b], then second[^a], and first again[^b].\n\n[^a]: Alpha **body**\n[^b]: Beta `body`\n\n[^unused]: invisible hidden definition";
   const blocks = markdownFindBlocks(source);
   assert.deepEqual(blocks, [
-    "See first, then second, and first again.",
+    "See first",
+    ", then second",
+    ", and first again",
+    ".",
     "Beta body",
     "Alpha body",
   ]);
@@ -160,5 +163,88 @@ test("real Markdown renderer and data index agree on visible footnote bodies and
   assert.equal(searchTranscript(entries, "invisible").length, 0);
   assert.equal(searchTranscript(entries, "Footnotes").length, 0);
   assert.equal(viewport.textContent?.includes("invisible"), false);
+  dom.window.close();
+});
+
+test("tight Markdown list items retain the same text-block boundaries as the data index", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  const source = "- a\n- b\n\nab";
+  const entries = [
+    {
+      turnId: "t",
+      itemId: "i",
+      field: "body" as const,
+      blocks: markdownFindBlocks(source),
+      disclosures: [],
+    },
+  ];
+  const dom = new JSDOM(
+    renderToStaticMarkup(
+      React.createElement(
+        "main",
+        null,
+        React.createElement(
+          "div",
+          { "data-thread-find-item-id": "i" },
+          React.createElement(Markdown, { text: source }),
+        ),
+      ),
+    ),
+  );
+  const match = searchTranscript(entries, "ab")[0]!;
+  const range = transcriptFindRange(
+    dom.window.document.querySelector("main")!,
+    match,
+    "ab",
+  )!;
+  assert.equal(range.toString(), "ab");
+  assert.equal(
+    range.startContainer.parentElement?.tagName,
+    "P",
+    "separate tight list items cannot manufacture an earlier false occurrence",
+  );
+  dom.window.close();
+});
+
+test("duplicate footnote definitions use the first body like the actual Markdown renderer", async () => {
+  const React = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { Markdown } = await import("../src/renderer/src/Markdown.js");
+  const source = "See[^a]\n\n[^a]: first\n[^a]: second";
+  const blocks = markdownFindBlocks(source);
+  assert.deepEqual(blocks, ["See", "first"]);
+  const dom = new JSDOM(
+    renderToStaticMarkup(
+      React.createElement(
+        "main",
+        null,
+        React.createElement(
+          "div",
+          { "data-thread-find-item-id": "i" },
+          React.createElement(Markdown, { text: source }),
+        ),
+      ),
+    ),
+  );
+  const entries = [
+    {
+      turnId: "t",
+      itemId: "i",
+      field: "body" as const,
+      blocks,
+      disclosures: [],
+    },
+  ];
+  assert.equal(searchTranscript(entries, "second").length, 0);
+  assert.equal(
+    transcriptFindRange(
+      dom.window.document.querySelector("main")!,
+      searchTranscript(entries, "first")[0]!,
+      "first",
+    )?.toString(),
+    "first",
+  );
   dom.window.close();
 });

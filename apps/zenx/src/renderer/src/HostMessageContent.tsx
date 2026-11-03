@@ -1,9 +1,21 @@
 import { MessageSourceLink } from "./message-source-navigation.js";
-import { useId, useState, type ReactNode } from "react";
+import {
+  useContext,
+  useId,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { ThreadReadingContext, disclosureKey } from "./thread-reading-state.js";
+import { hostMessageSummary } from "./trigger-message-presentation.js";
 import { useTranslation } from "react-i18next";
 import type { HostWakeupInput } from "../../../../../src/item.js";
 import { Icon } from "./icons.js";
 import { Markdown } from "./Markdown.js";
+
+const emptyChoices = new Map<string, boolean>();
+const noSubscribe = () => () => {};
+const emptySnapshot = () => emptyChoices;
 
 /** Disposable presentation only. Source authority always comes from canonical metadata. */
 export function HostMessageContent({
@@ -16,6 +28,7 @@ export function HostMessageContent({
   copyAction = true,
   truncated = false,
   onReadingChange,
+  findItemId,
 }: Pick<HostWakeupInput, "source" | "sourceId" | "text"> & {
   sourceNavigation?: boolean;
   sourceAction?: ReactNode;
@@ -23,10 +36,20 @@ export function HostMessageContent({
   copyAction?: boolean;
   truncated?: boolean;
   onReadingChange?(expanded: boolean): void;
+  findItemId?: string;
 }) {
   const { t } = useTranslation("shell");
   const detailsId = useId();
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setExpanded] = useState(false);
+  const reading = useContext(ThreadReadingContext);
+  const choices = useSyncExternalStore(
+    findItemId && reading ? reading.subscribe : noSubscribe,
+    findItemId && reading ? reading.snapshot : emptySnapshot,
+    findItemId && reading ? reading.snapshot : emptySnapshot,
+  );
+  const findKey = findItemId ? disclosureKey("host", findItemId) : undefined;
+  const expanded =
+    (findKey ? choices.get(findKey) : undefined) ?? localExpanded;
   const [copied, setCopied] = useState(false);
   const label = t(
     source === "trigger"
@@ -35,13 +58,15 @@ export function HostMessageContent({
         ? "hostMessageRoom"
         : "hostMessageHost",
   );
-  const summary = hostSummary(text, prompt);
+  const summary = hostMessageSummary(text, prompt);
   const welcome =
     source === "bootstrap" && !text.startsWith("[ZenX trigger wakeup]");
   const copyLabel = truncated ? "copyHostExcerpt" : "copyHostMessage";
   const copiedLabel = truncated ? "copiedHostExcerpt" : "copiedHostMessage";
   const toggle = () => {
     setExpanded(!expanded);
+    // Normal Host disclosure stays local; Find only owns a key after its explicit reveal.
+    if (findKey && choices.has(findKey)) reading?.set(findKey, !expanded);
     onReadingChange?.(!expanded);
   };
   return (
@@ -66,11 +91,18 @@ export function HostMessageContent({
         </strong>
       </header>
       {welcome ? (
-        <div className="host-message-welcome">
+        <div
+          className="host-message-welcome"
+          data-thread-find-item-id={findItemId}
+        >
           <Markdown text={text} />
         </div>
       ) : (
-        <p className="host-message-summary">
+        <p
+          className="host-message-summary"
+          data-thread-find-item-id={summary ? findItemId : undefined}
+          data-thread-find-field="host-summary"
+        >
           {summary ||
             t(
               source === "trigger"
@@ -101,7 +133,13 @@ export function HostMessageContent({
               {t("hostSourceId", { id: sourceId })}
             </p>
           )}
-          <pre className="host-message-original">{text}</pre>
+          <pre
+            className="host-message-original"
+            data-thread-find-item-id={findItemId}
+            data-thread-find-field="host-original"
+          >
+            {text}
+          </pre>
           {copyAction ? (
             <button
               type="button"
@@ -124,27 +162,4 @@ export function HostMessageContent({
       ) : null}
     </div>
   );
-}
-
-/** Recognize only the Host builder's envelope. Unknown formats remain behind disclosure. */
-function hostSummary(text: string, historyPrompt?: string): string {
-  if (!text.startsWith("[ZenX trigger wakeup]\n")) return "";
-  const headerEnd = text.indexOf("\n\nInjected prompt:\n");
-  if (headerEnd < 0) return "";
-  const header = text.slice(0, headerEnd);
-  const title = /^Registered trigger: (.+)$/mu.exec(header)?.[1]?.trim();
-  const promptStart = headerEnd + "\n\nInjected prompt:\n".length;
-  const promptEnd = text
-    .slice(promptStart)
-    .search(
-      /\n\n(?:Current Room message \(|Bounded source context \(|PAW context:|Reply Room ID:|Associated assistant Room IDs:)/u,
-    );
-  const prompt =
-    historyPrompt ??
-    text.slice(
-      promptStart,
-      promptEnd < 0 ? undefined : promptStart + promptEnd,
-    );
-  const excerpt = prompt.trim().replace(/\s+/gu, " ").slice(0, 180);
-  return [title?.slice(0, 120), excerpt].filter(Boolean).join(" · ");
 }

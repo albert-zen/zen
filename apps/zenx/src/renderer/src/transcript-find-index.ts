@@ -2,6 +2,12 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import type { RootContent } from "mdast";
+import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
+import {
+  findInputWakeup,
+  hostMessageSummary,
+  triggerMessagePresentation,
+} from "./trigger-message-presentation.js";
 import type { ThreadItem, Turn } from "../../protocol-client/index.js";
 import type { TurnCanonicalPresentation } from "./turn-canonical-presentation.js";
 import {
@@ -14,7 +20,7 @@ import { projectTurn } from "./turn-projection.js";
 export interface TranscriptFindEntry {
   turnId: string;
   itemId: string;
-  field: "body" | "command" | "output";
+  field: "body" | "command" | "output" | "host-summary" | "host-original";
   /** Separate rendered blocks: a result never bridges unrelated paragraphs/cells. */
   blocks: readonly string[];
   disclosures: readonly string[];
@@ -40,13 +46,13 @@ export function markdownFindBlocks(source: string): string[] {
     mdastExtensions: [gfmFromMarkdown()],
   });
   const blocks: string[] = [];
-  const footnotes = new Map(
-    root.children.flatMap((node) =>
-      node.type === "footnoteDefinition"
-        ? [[node.identifier, node] as const]
-        : [],
-    ),
-  );
+  const footnotes = new Map<
+    string,
+    Extract<RootContent, { type: "footnoteDefinition" }>
+  >();
+  for (const node of root.children)
+    if (node.type === "footnoteDefinition" && !footnotes.has(node.identifier))
+      footnotes.set(node.identifier, node);
   const referenced: string[] = [];
   const inline = (node: RootContent): string => {
     if (node.type === "footnoteReference") {
@@ -55,7 +61,7 @@ export function markdownFindBlocks(source: string): string[] {
         !referenced.includes(node.identifier)
       )
         referenced.push(node.identifier);
-      return "";
+      return "\u0000";
     }
     if (node.type === "image" || node.type === "imageReference")
       return "\u0000";
@@ -136,7 +142,7 @@ function inputBlocks(
   });
 }
 
-/** Loaded product text only. Opaque plugin surfaces, host envelopes and UI metadata are not indexed. */
+/** Loaded product text only. Opaque plugin surfaces and unrelated UI metadata are not indexed. */
 export function indexTurnFindText(
   turn: Turn,
   canonical?: TurnCanonicalPresentation,
@@ -158,7 +164,12 @@ export function indexTurnFindText(
     ...(projection.finalItem ? [projection.finalItem] : []),
   ];
   for (const item of displayedItems) {
-    const disclosures = [disclosureKey("turn", turn.id)];
+    const disclosures: string[] = [];
+    if (
+      !["userMessage", "threadMessage", "hostMessage"].includes(item.type) &&
+      item.id !== projection.finalItem?.id
+    )
+      disclosures.push(disclosureKey("turn", turn.id));
     const group = trace.get(item.id);
     if (group)
       disclosures.push(
@@ -172,7 +183,10 @@ export function indexTurnFindText(
           itemId: item.id,
           field,
           blocks,
-          disclosures,
+          disclosures:
+            field === "host-original"
+              ? [...disclosures, disclosureKey("host", item.id)]
+              : disclosures,
         });
     };
     for (const field of readFields(item, canonical))
@@ -186,7 +200,46 @@ function itemFindFields(
   item: ThreadItem,
   canonical?: TurnCanonicalPresentation,
   parse: typeof markdownFindBlocks = markdownFindBlocks,
+  wakeup?: TriggerHistoryEntry,
 ): FindField[] {
+  if (
+    (item.type === "userMessage" && wakeup) ||
+    (item.type === "hostMessage" && item.source === "trigger")
+  ) {
+    const text =
+      item.type === "userMessage"
+        ? item.content.map((part) => part.text).join("\n")
+        : item.text;
+    const sourceId =
+      item.type === "userMessage" ? wakeup!.triggerId : item.sourceId;
+    return [
+      {
+        field: "body",
+        blocks: parse(triggerMessagePresentation(text, sourceId).text),
+      },
+    ];
+  }
+  if (item.type === "hostMessage") {
+    const welcome =
+      item.source === "bootstrap" &&
+      !item.text.startsWith("[ZenX trigger wakeup]");
+    const summary = welcome
+      ? ""
+      : hostMessageSummary(item.text, wakeup?.prompt);
+    return [
+      ...(welcome
+        ? [{ field: "body" as const, blocks: parse(item.text) }]
+        : summary
+          ? [
+              {
+                field: "host-summary" as const,
+                blocks: [normalizeFindText(summary)],
+              },
+            ]
+          : []),
+      { field: "host-original", blocks: [normalizeFindText(item.text)] },
+    ];
+  }
   if (item.type === "agentMessage")
     return [{ field: "body", blocks: parse(item.text) }];
   if (item.type === "userMessage" || item.type === "threadMessage")
@@ -215,35 +268,61 @@ export function createTranscriptFindIndexer(
 ) {
   const items = new WeakMap<
     ThreadItem,
-    { input: unknown; fields: FindField[] }
+    { input: unknown; wakeupKey: string; fields: FindField[] }
   >();
+  let currentWakeups: readonly TriggerHistoryEntry[] = [];
   const turns = new WeakMap<
     Turn,
     {
       canonical: TurnCanonicalPresentation | undefined;
       entries: TranscriptFindEntry[];
+      wakeupKey: string;
     }
   >();
   const fields = (item: ThreadItem, canonical?: TurnCanonicalPresentation) => {
     const input = canonical?.inputs.get(item.id);
+    const wakeup =
+      item.type === "userMessage" ||
+      item.type === "threadMessage" ||
+      item.type === "hostMessage"
+        ? findInputWakeup(item, currentWakeups)
+        : undefined;
+    const wakeupKey = JSON.stringify([wakeup?.triggerId, wakeup?.prompt]);
     const before = items.get(item);
-    if (before && before.input === input) return before.fields;
-    const fields = itemFindFields(item, canonical, parse);
-    items.set(item, { input, fields });
+    if (before && before.input === input && before.wakeupKey === wakeupKey)
+      return before.fields;
+    const fields = itemFindFields(item, canonical, parse, wakeup);
+    items.set(item, { input, wakeupKey, fields });
     return fields;
   };
   return (
     source: readonly Turn[],
     canonical: ReadonlyMap<string, TurnCanonicalPresentation>,
-  ): TranscriptFindEntry[] =>
-    source.flatMap((turn) => {
+    wakeups: readonly TriggerHistoryEntry[] = [],
+  ): TranscriptFindEntry[] => {
+    currentWakeups = wakeups;
+    const wakeupKey = JSON.stringify(
+      wakeups.map((entry) => [
+        entry.clientUserMessageId,
+        entry.triggerId,
+        entry.prompt,
+        entry.sourceRoomId,
+      ]),
+    );
+    return source.flatMap((turn) => {
       const presentation = canonical.get(turn.id);
       const before = turns.get(turn);
-      if (before && before.canonical === presentation) return before.entries;
+      if (
+        before &&
+        before.canonical === presentation &&
+        before.wakeupKey === wakeupKey
+      )
+        return before.entries;
       const entries = indexTurnFindText(turn, presentation, fields);
-      turns.set(turn, { canonical: presentation, entries });
+      turns.set(turn, { canonical: presentation, entries, wakeupKey });
       return entries;
     });
+  };
 }
 
 export function findTextOccurrences(text: string, query: string): number[] {

@@ -6,7 +6,7 @@ export const en = {
   nextThreadMatch: "Next match",
   closeThreadFind: "Close thread search",
   threadFindScope:
-    "WIP: messages, reasoning and plain tool text across loaded history. Host and custom plugin content are not indexed.",
+    "WIP: messages, Host details, reasoning and plain tool text across loaded history. Structured tool and custom plugin output are not indexed.",
   threadFindRevealFailed:
     "Match could not be revealed. Try next or previous again.",
   threadFindHighlightUnsupported:
@@ -990,7 +990,7 @@ export const zhCN = {
   nextThreadMatch: "下一个匹配项",
   closeThreadFind: "关闭会话查找",
   threadFindScope:
-    "实验：搜索已加载历史中的消息、思考和纯文本工具内容。暂不包含 Host 消息和自定义插件内容。",
+    "实验：搜索已加载历史中的消息、Host 详情、思考和纯文本工具内容。暂不包含结构化工具和自定义插件输出。",
   threadFindRevealFailed: "未能显示匹配项，请再次选择上一个或下一个。",
   threadFindHighlightUnsupported:
     "当前浏览器不支持搜索高亮，已有文本选择保持不变。",

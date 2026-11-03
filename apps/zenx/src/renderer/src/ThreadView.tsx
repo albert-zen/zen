@@ -27,7 +27,10 @@ import {
   reportSendActivation,
 } from "./send-observation.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
-import { triggerMessagePresentation } from "./trigger-message-presentation.js";
+import {
+  findInputWakeup,
+  triggerMessagePresentation,
+} from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -1731,6 +1734,7 @@ function ThreadViewContent({
           viewport={scrollRef}
           controller={virtualViewport}
           reading={readingState}
+          wakeups={wakeups}
           pauseFollowing={pauseFollowing}
         />
       ) : null}
@@ -2979,16 +2983,7 @@ const TurnBlock = memo(function TurnBlock({
       { type: "userMessage" | "threadMessage" | "hostMessage" }
     >,
   ) => {
-    const wakeup = wakeups.find(
-      (entry) =>
-        entry.clientUserMessageId === item.clientId &&
-        (item.type === "userMessage" ||
-          (item.type === "hostMessage" &&
-            (item.source === "trigger"
-              ? entry.triggerId === item.sourceId
-              : item.source === "room" &&
-                entry.sourceRoomId === item.sourceId))),
-    );
+    const wakeup = findInputWakeup(item, wakeups);
     if (item.type === "hostMessage")
       return (
         <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
@@ -3006,6 +3001,7 @@ const TurnBlock = memo(function TurnBlock({
       <TriggerMessageBubble
         text={item.content.map((part) => part.text).join("\n")}
         sourceId={wakeup.triggerId}
+        findItemId={item.id}
         key={item.id}
         turn={turn}
       />
@@ -4544,10 +4540,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
 function TriggerMessageBubble({
   text,
   sourceId,
+  findItemId,
   turn,
 }: {
   text: string;
   sourceId?: string;
+  findItemId?: string;
   turn: Turn;
 }) {
   const presentation = triggerMessagePresentation(text, sourceId);
@@ -4558,7 +4556,7 @@ function TriggerMessageBubble({
         label={presentation.name || i18n.t("shell:hostMessageTrigger")}
         className="host-message-source"
       />
-      <div className="user-bubble">
+      <div className="user-bubble" data-thread-find-item-id={findItemId}>
         <Markdown text={presentation.text} />
       </div>
       <MessageActions
@@ -4588,12 +4586,14 @@ function WakeupCard(
         <TriggerMessageBubble
           text={item.text}
           sourceId={item.sourceId}
+          findItemId={item.id}
           turn={turn}
         />
       );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          findItemId={item.id}
           sourceNavigation
           source={item.source}
           sourceId={item.sourceId}

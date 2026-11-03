@@ -15,6 +15,7 @@ const BLOCKS = new Set([
   "PRE",
   "TD",
   "TH",
+  "LI",
 ]);
 interface Point {
   node: Text;
@@ -82,10 +83,12 @@ export function transcriptFindRange(
         }
         if (
           element.matches(
-            "[data-footnote-ref],[data-footnote-backref],.footnotes .sr-only",
+            "[data-footnote-ref],[data-footnote-backref],.footnotes .sr-only,sup > a[href^='#user-content-fn-'],.footnotes a[href^='#user-content-fnref-']",
           )
-        )
+        ) {
+          flush();
           return;
+        }
         if (
           element !== scope &&
           element.hasAttribute("data-thread-find-item-id")

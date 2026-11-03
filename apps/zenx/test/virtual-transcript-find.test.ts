@@ -11,7 +11,11 @@ import {
   type VirtualTranscriptHandle,
 } from "../src/renderer/src/ExperimentalTranscriptViewport.js";
 import { VirtualTranscriptFind } from "../src/renderer/src/VirtualTranscriptFind.js";
-import { createThreadReadingState } from "../src/renderer/src/thread-reading-state.js";
+import { HostMessageContent } from "../src/renderer/src/HostMessageContent.js";
+import {
+  ThreadReadingContext,
+  createThreadReadingState,
+} from "../src/renderer/src/thread-reading-state.js";
 import { i18n } from "../src/renderer/src/i18n.js";
 
 // Actual Find + actual npm Legend web component. Deterministic JSDOM geometry is not native layout acceptance.
@@ -118,6 +122,39 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
       React.createElement("p", null, `Answer ${index} needle`),
     ),
   }));
+  const hostTurn = {
+    id: "host-turn",
+    status: "completed",
+    items: [
+      {
+        type: "hostMessage",
+        id: "host-item",
+        clientId: "host-client",
+        source: "room",
+        sourceId: "room",
+        text: "Host hidden body",
+        mode: "start",
+      },
+    ],
+  } as Turn;
+  turns = [...turns, hostTurn];
+  rows = [
+    ...rows,
+    {
+      key: JSON.stringify(["thread", "turn", "host-turn"]),
+      content: React.createElement(
+        ThreadReadingContext.Provider,
+        { value: reading },
+        React.createElement(HostMessageContent, {
+          findItemId: "host-item",
+          source: "room",
+          sourceId: "room",
+          text: "Host hidden body",
+          copyAction: false,
+        }),
+      ),
+    },
+  ];
   const root = createRoot(document.getElementById("root")!);
   const key = (
     target: HTMLElement,
@@ -305,6 +342,29 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
       "no hidden all-history DOM",
     );
     await act(async () => {
+      type("Host hidden body");
+      await settle();
+    });
+    await act(async () => {
+      await settle();
+    });
+    assert.equal(
+      reading.snapshot().get(JSON.stringify(["host", "host-item"])),
+      true,
+      "Find opens only the requested existing Host details disclosure",
+    );
+    assert.equal(
+      (document.querySelector(".host-message-original") as HTMLElement)
+        ?.textContent,
+      "Host hidden body",
+    );
+    assert.equal(
+      (
+        [...highlights.get("zenx-thread-find-active")] as Range[]
+      )[0]?.toString(),
+      "Host hidden body",
+    );
+    await act(async () => {
       type("needle");
       await settle();
     });
@@ -321,7 +381,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
     );
     assert.equal(
       reading.snapshot().get(JSON.stringify(["turn", "turn-999"])),
-      true,
+      undefined,
     );
     const beforeRefreshReveal = controller.current!.reveal;
     let refreshReveals = 0;
