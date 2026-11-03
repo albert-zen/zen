@@ -1609,15 +1609,22 @@ function ThreadViewContent({
 
   const virtualTranscriptRows = useMemo(
     () =>
-      transcriptRows.map((row, index) => ({
-        key: JSON.stringify([
-          displayedThread?.id,
-          row.type,
-          row.type === "turn" ? row.turn.id : row.compaction.item.id,
-        ]),
-        content: renderedTranscriptRows[index],
-      })),
-    [displayedThread?.id, transcriptRows, renderedTranscriptRows],
+      virtualTranscript
+        ? transcriptRows.map((row, index) => ({
+            key: JSON.stringify([
+              displayedThread?.id,
+              row.type,
+              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+            ]),
+            content: renderedTranscriptRows[index],
+          }))
+        : [],
+    [
+      virtualTranscript,
+      displayedThread?.id,
+      transcriptRows,
+      renderedTranscriptRows,
+    ],
   );
 
   return (

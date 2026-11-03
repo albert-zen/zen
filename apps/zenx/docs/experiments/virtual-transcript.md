@@ -28,15 +28,18 @@ path. The virtual path displays an explicit experimental warning.
 
 ## Dependency and licensing boundary
 
-This checkpoint uses stock npm LegendList 3.3.5, not the exact patched T3 runtime.
-T3 at `cefb544af3c98224874419198c0359b652ca3c94` applies a web patch covering
-state-preserving DOM moves, offscreen pin positioning and bounded corrective
-layout chains. That patch is not copied here. Both licenses were inspected:
-LegendList: MIT, copyright 2022 Moo.do LLC; T3: MIT, copyright 2026 T3 Tools Inc.
-Any copied patch must retain its applicable license notices. The adapter itself
-uses only the supported web types and `getScrollableNode`/`getState`/scroll APIs,
-not casts into private runtime APIs or an unsupported renderScrollComponent.
-
+The experiment pins npm LegendList 3.3.5 and applies the unchanged `react.mjs`
+section of T3's patch at `cefb544af3c98224874419198c0359b652ca3c94` through a
+67-line idempotent local preparer. Original/patched git blob hashes are checked.
+Both MIT notices are preserved in `apps/zenx/patches`; the copied patch is web ESM
+only, not T3's mobile/CJS/types changes or its entire timeline implementation.
+CommonJS `react.js` remains stock and is not used by this adapter's tested Node
+ESM/tsx or Vite import resolution. See the patches README for exact upstream URLs.
+Normal `npm ci` invokes the preparer in the existing workspace postinstall; a
+fresh full-repository npm ci was not run in this shared environment. The preparer
+refuses symlinked/external dependencies instead of modifying a shared tree.
+The adapter uses supported web types and `getScrollableNode`/`getState`/scroll APIs,
+not casts into private runtime APIs or unsupported renderScrollComponent.
 Before enabling by default, finish whole-data find and precise target navigation,
 then run the existing native ordinary-Send and reading/selection acceptance on the
 exact final revision. Capture actual running UI screenshots before any merge.
@@ -55,7 +58,7 @@ exact final revision. Capture actual running UI screenshots before any merge.
   native layout or a Send latency result.
 
 The strengthened actual-component test changes `scrollTop` to 140000, waits for
-row-buffer and stock DOM-order settlement, checks that distant row identities
+row-buffer and DOM-order settlement, checks that distant row identities
 appear while the original focused/selected node stays connected, and checks that
 clearing selection/focus lets it unmount. It also replaces the supported public
 `scrollToIndex` method with controlled pending/rejected promises to cover reader
@@ -63,3 +66,10 @@ cancellation, newer-request supersession and unmount. No private API is accessed
 The reader-scroll session now lasts across ongoing scroll events and scrollbar
 pointer lifetime, with native scrollend and a debounced fallback; actual native
 inertial/touch/scrollbar behavior and first-visible pending Send remain unverified.
+
+The patched ESM also passes all 27 focused checks. Five additional preparation
+checks pass: exact upstream output/idempotence, reject unknown source without
+mutation, reject shared dependency symlinks, actual Vite plus Node ESM import
+resolution, and npm lifecycle/pin consistency. Full npm ci, native UI screenshots,
+native 5000-turn Send latency and complete reading/find/quote acceptance are not
+claimed by these focused tests.

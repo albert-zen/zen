@@ -122,10 +122,11 @@ export function ExperimentalTranscriptViewport({
       else update();
     };
     const settle = () => {
-      cancelAnimationFrame(settleFrame);
-      cancelAnimationFrame(finishFrame);
+      if (settleFrame || finishFrame) return;
       settleFrame = requestAnimationFrame(() => {
+        settleFrame = 0;
         finishFrame = requestAnimationFrame(() => {
+          finishFrame = 0;
           if (alive) latest.current.onContentSettled();
         });
       });
