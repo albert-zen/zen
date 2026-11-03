@@ -1,6 +1,6 @@
 import { localErrorDetail } from "../../local-error-detail.js";
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
   BoardBlock,
   BoardEventResult,
@@ -30,6 +30,45 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   const owner = sdk.context.owner as BoardConversation;
   const instanceKey = sdk.context.instanceKey as string | undefined;
   const key = boardUiSessionKey(owner, instanceKey, sdk.context.admissionId);
+  const members = Array.isArray(sdk.context.members)
+    ? (sdk.context.members as { threadId: string; name?: string }[]).filter(
+        (member) => typeof member?.threadId === "string",
+      )
+    : [];
+  const [selection, setSelection] = useState({ key, threadId: "" });
+  const executor = useRef({ key, threadId: "" });
+  executor.current = {
+    key,
+    threadId:
+      selection.key === key &&
+      members.some((member) => member.threadId === selection.threadId)
+        ? selection.threadId
+        : "",
+  };
+  useEffect(() => {
+    if (
+      selection.key !== key ||
+      (selection.threadId && !executor.current.threadId)
+    )
+      setSelection({ key, threadId: "" });
+  }, [key, selection.key, selection.threadId, executor.current.threadId]);
+  const command = (input: Record<string, unknown>) => {
+    if (
+      owner.kind !== "room" ||
+      !["event", "navigate"].includes(String(input.operation))
+    )
+      return sdk.commands.execute("ui", input);
+    if (
+      !active.mounted ||
+      executor.current.key !== key ||
+      !executor.current.threadId
+    )
+      throw new Error(t("boardChooseExecutionMember"));
+    return sdk.commands.execute("ui", {
+      ...input,
+      executionThreadId: executor.current.threadId,
+    });
+  };
   const session = useMemo(() => {
     let current = sessions.get(key);
     if (!current) {
@@ -78,9 +117,27 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   };
   const run = async (id: string, values?: BoardValues) => {
     setLocalError(null);
-    // Session failures already belong to this owner. Navigation is performed by
-    // the Host against its exact sidebar resource; receipts are not app routes.
-    return await session.run(id, values);
+    // Execution is per human click, never retained in the shared document cache.
+    const actor = owner.kind === "room" ? executor.current.threadId : undefined;
+    const assertCurrent = () => {
+      if (
+        !active.mounted ||
+        executor.current.key !== key ||
+        (owner.kind === "room" &&
+          (!actor || executor.current.threadId !== actor))
+      )
+        throw new Error(t("boardChooseExecutionMember"));
+    };
+    try {
+      assertCurrent();
+      return await session.run(id, values, {
+        executionThreadId: actor,
+        assertCurrent,
+      });
+    } catch (error) {
+      showLocalError(error);
+      throw error;
+    }
   };
   const visibleLocalError = localError?.scope === active ? localError : null;
   const error = session.error ?? visibleLocalError?.message;
@@ -103,7 +160,7 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
             "Board changed; review the current document before navigating",
           );
         setLocalError(null);
-        const result = (await sdk.commands.execute("ui", {
+        const result = (await command({
           ...(session.instanceKey === "default"
             ? {}
             : { instanceKey: session.instanceKey }),
@@ -229,6 +286,23 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
           · <code>{board.id}</code>
         </small>
       </header>
+      {owner.kind === "room" ? (
+        <label className="board-field">
+          <span>{t("boardExecutionMember")}</span>
+          <Select
+            value={executor.current.threadId}
+            onValueChange={(threadId) => setSelection({ key, threadId })}
+            aria-label={t("boardExecutionMember")}
+          >
+            <option value="">{t("boardChooseExecutionMember")}</option>
+            {members.map((member) => (
+              <option key={member.threadId} value={member.threadId}>
+                {member.name ?? member.threadId}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : null}
       {board.blocks.map((block) => (
         <BoardBlockView
           key={block.id}

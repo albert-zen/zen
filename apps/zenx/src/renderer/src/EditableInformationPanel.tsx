@@ -324,6 +324,9 @@ function InformationPanel({
             owner,
             admissionId,
             instanceKey: widget.config.instanceKey,
+            ...(owner.kind === "room"
+              ? { members: receipt?.members ?? [] }
+              : {}),
           }}
           theme={theme}
           navigate={navigate}

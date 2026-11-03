@@ -438,11 +438,20 @@ export function projectBoardResult(
   delete output.pinned;
   delete output.browserSidebarTargets;
   delete output.navigationDiagnostics;
+  const resourceOwner = (value: unknown) => {
+    const owner = object(value);
+    if (owner.kind === "thread" && typeof owner.threadId === "string")
+      return { kind: "thread", threadId: owner.threadId };
+    if (owner.kind === "room" && typeof owner.roomId === "string")
+      return { kind: "room", roomId: owner.roomId };
+    throw Error("Board returned an invalid resource owner");
+  };
   const projectOwner = (value: unknown) => {
     const owner = object(value);
-    if (owner.threadId !== refs.ownerThreadId)
-      return { kind: owner.kind, status: "unavailable" };
-    if (owner.kind === "thread") return { kind: "thread" };
+    if (owner.kind === "thread")
+      return owner.threadId === refs.ownerThreadId
+        ? { kind: "thread" }
+        : { kind: "thread", status: "unavailable" };
     if (owner.kind === "room" && typeof owner.roomId === "string")
       return {
         kind: "room",
@@ -466,7 +475,9 @@ export function projectBoardResult(
       (contentSnapshot.completeDocument &&
         !document &&
         !(output.exists === false && contentSnapshot.revision === 0)) ||
-      (document && JSON.stringify(document.owner) !== JSON.stringify(owner))
+      (document &&
+        JSON.stringify(resourceOwner(document.owner)) !==
+          JSON.stringify(resourceOwner(owner)))
     )
       throw Error("Board returned an invalid content snapshot");
     if (owner.threadId === refs.ownerThreadId) {

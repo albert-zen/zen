@@ -1,4 +1,7 @@
-import type { BoardNavigationTarget } from "../../../../packages/zenx-board-plugin/src/board.js";
+import type {
+  BoardResourceOwner,
+  BoardNavigationTarget,
+} from "../../../../packages/zenx-board-plugin/src/board.js";
 import type { BrowserModelRoute } from "./capabilities/model-browser-metadata.js";
 import {
   sidebarTabId,
@@ -93,6 +96,27 @@ export class BoardHostService {
       .snapshot()
       .rooms.find((entry) => entry.id === owner.roomId)!;
     return `${room.operationEpoch ?? "legacy"}:${randomUUID()}`;
+  }
+
+  /** Authenticated human product access, separate from member execution admission. */
+  async readResourceOwner(
+    owner: BoardResourceOwner,
+  ): Promise<BoardResourceOwner> {
+    if (owner.kind === "thread") return await this.readOwner(owner);
+    if (
+      owner.kind !== "room" ||
+      typeof owner.roomId !== "string" ||
+      !owner.roomId.trim() ||
+      owner.roomId.length > 512
+    )
+      throw new Error("Invalid Board workspace owner");
+    const room = this.options.rooms.roomsAvailable()
+      ? this.options.rooms
+          .snapshot()
+          .rooms.find((entry) => entry.id === owner.roomId)
+      : undefined;
+    if (!room) throw new Error("Board Room workspace is unavailable");
+    return { kind: "room", roomId: owner.roomId };
   }
 
   async readOwner(input: unknown): Promise<BoardOwner> {

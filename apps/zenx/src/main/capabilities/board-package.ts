@@ -11,12 +11,15 @@ import type { ZenXCapabilityPackage } from "./types.js";
 import { boardManifest } from "../../../../../packages/zenx-board-plugin/src/manifest.js";
 import {
   boardDocumentKey,
+  boardOwnerKey,
+  boardResourceOwner,
   normalizeBoardInstanceKey,
   type BoardAction,
   type BoardNavigationTarget,
   type BoardDocument,
   type BoardEventResult,
   type BoardOwner,
+  type BoardResourceOwner,
   type BoardSnapshot,
   type BoardValue,
   type BoardValues,
@@ -24,6 +27,8 @@ import {
 
 export interface BoardHostPort {
   readOwner(owner: BoardOwner): Promise<BoardOwner>;
+  /** Trusted human product access, never Agent execution authority. */
+  readResourceOwner?(owner: BoardResourceOwner): Promise<BoardResourceOwner>;
   makeClientId?(owner: BoardOwner): string;
   readNavigationTarget?(
     owner: BoardOwner,
@@ -78,42 +83,42 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       name === "zenx_board_put"
         ? validateDocument(args.document, invocation.threadId)
         : undefined;
-    // Room UI reads resolve the persisted execution member; never guess from the foreground selection.
-    if (
-      ui &&
-      args.operation === "read" &&
-      typeof args.owner === "object" &&
-      args.owner !== null
-    ) {
-      const candidate = args.owner as Record<string, unknown>;
-      if (candidate.kind === "room" && candidate.threadId === undefined) {
-        const saved = await this.#serial(
-          async () =>
-            (await this.#boards())[
-              boardDocumentKey(
-                {
-                  kind: "room",
-                  roomId: text(candidate.roomId, "roomId", 512),
-                  threadId: invocation.threadId ?? "",
-                },
-                instanceKey,
-              )
-            ],
-        );
-        if (!saved) return null;
-        args.owner = saved.document.owner;
-      }
-    }
-    const owner =
+    const resource =
       document?.owner ??
-      validateOwner(
+      validateResourceOwner(
         args.owner ?? { kind: "thread", threadId: invocation.threadId },
       );
-    if (!ui && owner.threadId !== invocation.threadId)
+    const rawOwner = record(
+      document
+        ? (record(args.document).owner ?? resource)
+        : (args.owner ?? resource),
+    );
+    if (
+      !ui &&
+      rawOwner.threadId !== undefined &&
+      rawOwner.threadId !== invocation.threadId
+    )
+      throw new Error("Board owner must be the calling Thread");
+    const actor = ui
+      ? (args.executionThreadId ?? rawOwner.threadId)
+      : invocation.threadId;
+    const owner: BoardOwner | undefined =
+      resource.kind === "thread"
+        ? resource
+        : actor === undefined
+          ? undefined
+          : { ...resource, threadId: text(actor, "threadId", 512) };
+    if (!ui && (!owner || owner.threadId !== invocation.threadId))
       throw new Error("Board owner must be the calling Thread");
     const revalidate = async () => {
       invocation.signal.throwIfAborted();
-      await this.host.readOwner(owner);
+      if (ui) {
+        if (this.host.readResourceOwner)
+          await this.host.readResourceOwner(resource);
+        else if (resource.kind === "thread")
+          await this.host.readOwner(resource);
+        else throw new Error("Room Board workspace validation is unavailable");
+      } else await this.host.readOwner(owner!);
       invocation.signal.throwIfAborted();
     };
     // Passive refresh admits once, after queued storage I/O, rather than reading
@@ -128,7 +133,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       const supplied = readBrowserSidebarTargets(invocation);
       for (const target of targets) {
         if (target.kind === "url") continue;
-        const route = await this.host.readNavigationTarget?.(owner, target);
+        const route = await this.host.readNavigationTarget?.(owner!, target);
         if (
           !route ||
           (supplied && !supplied.some((entry) => sameRoute(entry, route)))
@@ -138,23 +143,34 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           );
       }
     };
+    if (
+      name === "zenx_board_ui" &&
+      ["event", "navigate"].includes(String(args.operation)) &&
+      !owner
+    )
+      throw new Error(
+        "Choose an explicit current Room member for Board execution; workspace ownership does not select an executor",
+      );
     if (name === "zenx_board_ui" && args.operation === "event")
-      return await this.#event(owner, instanceKey, args, invocation.signal);
+      return await this.#event(owner!, instanceKey, args, invocation.signal);
     if (name === "zenx_board_ui" && args.operation === "navigate")
-      return await this.#navigate(owner, instanceKey, args, invocation.signal);
+      return await this.#navigate(owner!, instanceKey, args, invocation.signal);
     return await this.#serial(async () => {
       const boards = await this.#boards();
       await revalidate();
-      const key = boardDocumentKey(owner, instanceKey);
+      const key = boardDocumentKey(resource, instanceKey);
       const current = boards[key];
-      if (current && current.document.owner.threadId !== owner.threadId)
+      if (
+        current &&
+        boardOwnerKey(current.document.owner) !== boardOwnerKey(resource)
+      )
         throw new Error("Board belongs to a different execution member");
       if (document) {
         const revision = contentRevision(current ? current.revision : 0);
         if (args.expectedRevision !== revision)
           return {
             applied: false,
-            ...contentRead(owner, current, false, instanceKey),
+            ...contentRead(owner!, current, false, instanceKey),
           };
         const nextRevision = contentRevision(revision + 1);
         await validateTargets();
@@ -195,7 +211,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           );
         return {
           applied: true,
-          ...contentRead(owner, next, false, instanceKey),
+          ...contentRead(owner!, next, false, instanceKey),
         };
       }
       if (name === "zenx_board_read") {
@@ -205,9 +221,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           args.view !== "document"
         )
           throw new Error("Board read view must be semantic or document");
-        if (!current) return contentRead(owner, undefined, false, instanceKey);
+        if (!current) return contentRead(owner!, undefined, false, instanceKey);
         if (args.view !== "document")
-          return contentRead(owner, current, false, instanceKey);
+          return contentRead(owner!, current, false, instanceKey);
         const routes: BrowserModelRoute[] = [];
         const navigationDiagnostics: Array<{
           kind: string;
@@ -221,7 +237,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         )) {
           if (target.kind === "url") continue;
           try {
-            const route = await this.host.readNavigationTarget?.(owner, target);
+            const route = await this.host.readNavigationTarget?.(
+              owner!,
+              target,
+            );
             if (
               route &&
               routes.length < 64 &&
@@ -250,7 +269,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         await revalidate();
         return attachBrowserSidebarTargets(
           {
-            ...contentRead(owner, current, true, instanceKey),
+            ...contentRead(owner!, current, true, instanceKey),
             ...(navigationDiagnostics.length ? { navigationDiagnostics } : {}),
           },
           routes,
@@ -293,7 +312,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         signal.throwIfAborted();
         await this.host.readOwner(owner);
         signal.throwIfAborted();
-        if (!current || current.document.owner.threadId !== owner.threadId)
+        if (
+          !current ||
+          boardOwnerKey(current.document.owner) !== boardOwnerKey(owner!)
+        )
           throw new Error("Board owner is unavailable");
         if (current.revision !== args.revision)
           throw new Error(
@@ -345,7 +367,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         signal.throwIfAborted();
         await this.host.readOwner(owner);
         signal.throwIfAborted();
-        if (!current || current.document.owner.threadId !== owner.threadId)
+        if (
+          !current ||
+          boardOwnerKey(current.document.owner) !== boardOwnerKey(owner!)
+        )
           throw new Error("Board owner is unavailable");
         if (
           current.revision !== args.revision ||
@@ -579,10 +604,15 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
   async #boards(): Promise<Record<string, BoardSnapshot>> {
     if (!this.#sdk) throw new Error("Board plugin storage is unavailable");
     const stored = await this.#sdk.storage.get();
-    return structuredClone(record(stored.boards ?? {})) as Record<
+    const boards = structuredClone(record(stored.boards ?? {})) as Record<
       string,
       BoardSnapshot
     >;
+    // Pure legacy decoding: old creator members never become resource authority.
+    for (const snapshot of Object.values(boards))
+      if (snapshot.document?.owner?.kind === "room")
+        snapshot.document.owner = boardResourceOwner(snapshot.document.owner);
+    return boards;
   }
   async #save(boards: Record<string, BoardSnapshot>) {
     if (!this.#sdk) throw new Error("Board plugin storage is unavailable");
@@ -717,6 +747,15 @@ export function validateOwner(value: unknown): BoardOwner {
     };
   throw new Error("Invalid Board owner");
 }
+function validateResourceOwner(value: unknown): BoardResourceOwner {
+  const owner = record(value);
+  if (owner.kind === "room") {
+    only(owner, ["kind", "roomId", "threadId"]);
+    if (owner.threadId !== undefined) text(owner.threadId, "threadId", 512);
+    return { kind: "room", roomId: text(owner.roomId, "roomId", 512) };
+  }
+  return validateOwner(value);
+}
 function interpolate(template: string, values: BoardValues): string {
   return template.replace(
     /\{\{([a-zA-Z][a-zA-Z0-9_.-]*)\}\}/gu,
@@ -737,7 +776,9 @@ export function validateDocument(
     throw new Error(
       "Board instanceKey is an address, not authored document content",
     );
-  const owner = validateOwner(doc.owner ?? { kind: "thread", threadId });
+  const owner = validateResourceOwner(
+    doc.owner ?? { kind: "thread", threadId },
+  );
   if (
     !Array.isArray(doc.blocks) ||
     doc.blocks.length > 64 ||

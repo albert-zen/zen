@@ -104,3 +104,5 @@ button.onclick = () =>
 ```
 
 The scope ends with the callback and is revoked on frame close or document replacement, with a Host-enforced five-minute maximum. After expiry, a new explicit click is required; an in-flight action is not replayed or reported as canceled. Every effect still checks existing Host permissions and live ownership. On-load code has no interaction authority; no additional confirmation is imposed on a correctly scoped user interaction.
+
+Room Boards are workspace resources keyed by roomId and optional instanceKey. Their persisted owner does not contain a member Thread. Agent admission and immutable snapshots remain bound to the exact current caller and generation; sharing the resource never shares a member's permissions. Legacy creator metadata is discarded only in the read projection without rewriting storage. Human workspace reads/drafts survive an author leaving; execution explicitly selects a current member and rechecks existing Host permissions.

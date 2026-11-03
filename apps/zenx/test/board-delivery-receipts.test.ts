@@ -51,6 +51,7 @@ async function fixture(delivery: unknown) {
   let executions = 0;
   let revokeAfterDelivery = false;
   const service = new ZenXBoardCapabilityPackage({
+    readResourceOwner: async (value) => value,
     readOwner: async (value: BoardOwner) => {
       if (revokeAfterDelivery && sends > 0)
         throw new Error("Exact member removed");
@@ -221,12 +222,17 @@ test("malformed Room outcome is retained without repeated delivery", async () =>
   assert.deepEqual(f.counts(), { sends: 1, executions: 0 });
 });
 
-test("stale action and substitute execution member fail before effects", async () => {
+test("stale actions and unavailable execution members fail before effects", async () => {
   const f = await fixture(receipt());
   await assert.rejects(f.run({ revision: 0 }), /Board changed/);
+  f.service.host.readOwner = async (value) => {
+    if (value.threadId === "outsider")
+      throw new Error("Exact member unavailable");
+    return value;
+  };
   await assert.rejects(
-    f.run({ owner: { ...owner, threadId: "member-b" } }),
-    /owner is unavailable/,
+    f.run({ owner: { ...owner, threadId: "outsider" } }),
+    /Exact member unavailable/,
   );
   assert.deepEqual(f.counts(), { sends: 0, executions: 0 });
 });
