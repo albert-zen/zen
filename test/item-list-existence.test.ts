@@ -399,72 +399,93 @@ test("one append snapshot repairs a missing compiled suffix before publishing ne
   }
 });
 
-for (const stage of ["before-read", "after-read"] as const)
-  test(`append snapshot fails closed when its source disappears ${stage}`, async (t) => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "zen-snapshot-missing-"),
-    );
-    const directory = path.join(root, "threads");
-    const trace = new FileTraceStore(path.join(root, "trace"));
-    const journal = new DomainThreadJournal({
-      directory,
-      trace,
-      metadata: new InMemoryThreadMetadataStore(),
-    });
-    const filename = path.join(directory, "items", "t.jsonl");
-    const read = fs.readFile;
-    const readTrace = trace.read.bind(trace);
-    let removed = false;
-    try {
-      await journal.create([metadata, user("initial")]);
-      const before = await readTrace("t");
-      const tracked = t.mock.method(
-        fs,
-        "readFile",
-        async (...args: Parameters<typeof read>) => {
-          const bytes = await read(...args);
-          if (stage === "after-read" && args[0] === filename && !removed) {
+for (const reader of ["read", "readSnapshot"] as const)
+  for (const stage of ["before-read", "after-read"] as const)
+    test(`append snapshot fails closed when its source disappears ${stage} (${reader})`, async (t) => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "zen-snapshot-missing-"),
+      );
+      const directory = path.join(root, "threads");
+      const trace = new FileTraceStore(path.join(root, "trace"));
+      const journal = new DomainThreadJournal({
+        directory,
+        trace:
+          reader === "readSnapshot"
+            ? trace
+            : {
+                record: trace.record.bind(trace),
+                recordBatch: trace.recordBatch.bind(trace),
+                read: (...args: Parameters<FileTraceStore["read"]>) =>
+                  trace.read(...args),
+                readArtifact: trace.readArtifact.bind(trace),
+              },
+        metadata: new InMemoryThreadMetadataStore(),
+      });
+      const filename = path.join(directory, "items", "t.jsonl");
+      const read = fs.readFile;
+      const readTrace = trace.read.bind(trace);
+      const readSnapshot = trace.readSnapshot.bind(trace);
+      let removed = false;
+      try {
+        await journal.create([metadata, user("initial")]);
+        const before = await readTrace("t");
+        const tracked = t.mock.method(
+          fs,
+          "readFile",
+          async (...args: Parameters<typeof read>) => {
+            const bytes = await read(...args);
+            if (stage === "after-read" && args[0] === filename && !removed) {
+              await fs.unlink(filename);
+              removed = true;
+            }
+            return bytes;
+          },
+        );
+        syncBuiltinESMExports();
+        const removeBeforeSemanticRead = async () => {
+          if (stage === "before-read" && !removed) {
             await fs.unlink(filename);
             removed = true;
           }
-          return bytes;
-        },
-      );
-      syncBuiltinESMExports();
-      trace.read = async (...args) => {
-        const observed = await readTrace(...args);
-        if (stage === "before-read" && !removed) {
-          await fs.unlink(filename);
-          removed = true;
+        };
+        trace.read = async (...args) => {
+          const observed = await readTrace(...args);
+          await removeBeforeSemanticRead();
+          return observed;
+        };
+        trace.readSnapshot = async (...args) => {
+          const observed = await readSnapshot(...args);
+          await removeBeforeSemanticRead();
+          return observed;
+        };
+        try {
+          await assert.rejects(journal.append(user("not-admitted")), {
+            code: "ENOENT",
+          });
+          assert.equal(removed, true);
+        } finally {
+          tracked.mock.restore();
+          syncBuiltinESMExports();
+          trace.read = readTrace;
+          trace.readSnapshot = readSnapshot;
         }
-        return observed;
-      };
-      try {
-        await assert.rejects(journal.append(user("not-admitted")), {
-          code: "ENOENT",
-        });
-        assert.equal(removed, true);
+        await assert.rejects(fs.stat(filename), { code: "ENOENT" });
+        assert.deepEqual(
+          await readTrace("t"),
+          before,
+          "no new input source or semantic publication occurred",
+        );
+        // Explicit standalone recovery still rebuilds from fresh source evidence.
+        await journal.reconcileCompilation("t");
+        assert.deepEqual(
+          (await journal.readItemList("t")).map((i) => i.id),
+          ["initial"],
+        );
       } finally {
-        tracked.mock.restore();
-        syncBuiltinESMExports();
         trace.read = readTrace;
+        trace.readSnapshot = readSnapshot;
+        await journal.close();
+        await trace.flush();
+        await fs.rm(root, { recursive: true, force: true });
       }
-      await assert.rejects(fs.stat(filename), { code: "ENOENT" });
-      assert.deepEqual(
-        await readTrace("t"),
-        before,
-        "no new input source or semantic publication occurred",
-      );
-      // Explicit standalone recovery still rebuilds from fresh source evidence.
-      await journal.reconcileCompilation("t");
-      assert.deepEqual(
-        (await journal.readItemList("t")).map((i) => i.id),
-        ["initial"],
-      );
-    } finally {
-      trace.read = readTrace;
-      await journal.close();
-      await trace.flush();
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
+    });
