@@ -20,6 +20,14 @@ import type {
   RoomSendOperation,
 } from "./trigger-types.js";
 
+import {
+  canonicalRoomQuestion,
+  roomQuestionIdentity,
+  type RoomQuestion,
+  type RoomQuestionWorkspace,
+  type RoomQuestionWorkspaceReadOptions,
+} from "../room-questions.js";
+
 const MAX_METADATA_BYTES = 1024 * 1024;
 // Bounds one mutation/import batch, not retained history. Normal sends add one
 // bounded message. Importers may split larger input into unselected batches.
@@ -77,6 +85,7 @@ export type AutomationRoomEvent =
       operationId: string;
       origin?: "legacy-receipt";
     } & AutomationOperationBody)
+  | { type: "question"; question: RoomQuestion }
   | { type: "message"; message: RoomMessage }
   | {
       type: "reaction";
@@ -111,7 +120,7 @@ interface EventIndex {
 interface IndexedEvent {
   roomId: string;
   entry: EventIndex;
-  type: "message" | "reaction" | "operationBody";
+  type: "message" | "reaction" | "operationBody" | "question";
   origin?: string;
 }
 interface BodyIndex {
@@ -121,7 +130,20 @@ interface BodyIndex {
   hasReply: boolean;
   kind?: RoomMessage["kind"];
 }
+interface QuestionIndex {
+  entry: EventIndex;
+  revision: number;
+  state: RoomQuestion["state"];
+  origin: string;
+  specificationHash: string;
+  createdAt: number;
+}
 interface RoomIndex {
+  questions: Map<string, QuestionIndex>;
+  questionOrigins: Map<string, string>;
+  questionClients: Map<string, string>;
+  questionRevision: number;
+  openQuestionCount: number;
   operationBindings: Map<string, { sha256: string; messageId: string | null }>;
   operationBodies: Map<string, BodyIndex>;
   messageBodies: Map<string, BodyIndex>;
@@ -297,6 +319,97 @@ export class AutomationTransactionStore {
   metadata(): AutomationMetadata {
     this.#assertReadable();
     return structuredClone(this.#metadata);
+  }
+
+  #questionRoom(roomId: string): RoomIndex {
+    this.#assertReadable();
+    roomQuestionIdentity(roomId);
+    if (!this.#metadata.rooms.some((room) => room.id === roomId))
+      throw Error("Room question workspace is unavailable");
+    const room = this.#rooms.get(roomId);
+    if (!room) throw Error("Room question workspace index is unavailable");
+    return room;
+  }
+  roomQuestionSummary(roomId: string) {
+    const room = this.#questionRoom(roomId);
+    return {
+      revision: room.questionRevision,
+      openCount: room.openQuestionCount,
+      totalQuestions: room.questions.size,
+    };
+  }
+  async readRoomQuestion(
+    roomId: string,
+    questionId: string,
+  ): Promise<RoomQuestion | null> {
+    const room = this.#questionRoom(roomId);
+    const indexed = room.questions.get(roomQuestionIdentity(questionId));
+    if (!indexed) return null;
+    const event = await this.#readEvent(indexed.entry, new Map());
+    this.#questionRoom(roomId);
+    if (event.type !== "question") throw Error("Room question index mismatch");
+    return structuredClone(event.question);
+  }
+  async findRoomQuestionByOrigin(
+    roomId: string,
+    origin: RoomQuestion["origin"],
+  ): Promise<RoomQuestion | null> {
+    const room = this.#questionRoom(roomId);
+    const id = room.questionOrigins.get(
+      JSON.stringify([
+        roomQuestionIdentity(origin.threadId),
+        roomQuestionIdentity(origin.callItemId),
+      ]),
+    );
+    return id ? this.readRoomQuestion(roomId, id) : null;
+  }
+  async readRoomQuestions(
+    roomId: string,
+    options: RoomQuestionWorkspaceReadOptions = {},
+  ): Promise<RoomQuestionWorkspace> {
+    const room = this.#questionRoom(roomId);
+    const revision = room.questionRevision;
+    if (
+      options.expectedWorkspaceRevision !== undefined &&
+      options.expectedWorkspaceRevision !== revision
+    )
+      throw Object.assign(
+        Error("Room question workspace changed; refresh its page"),
+        { code: "room_question_conflict", currentRevision: revision },
+      );
+    const entries = [...room.questions.entries()].filter(
+      ([, value]) => options.includeClosed || value.state === "open",
+    );
+    const after =
+      options.afterQuestionId === undefined
+        ? -1
+        : entries.findIndex(
+            ([id]) => id === roomQuestionIdentity(options.afterQuestionId),
+          );
+    if (options.afterQuestionId !== undefined && after < 0)
+      throw Error("Room question cursor is unavailable; refresh");
+    const selected = entries.slice(after + 1, after + 33);
+    const frames = new Map<number, Frame>();
+    const questions: RoomQuestion[] = [];
+    const openCount = room.openQuestionCount;
+    const totalQuestions = room.questions.size;
+    for (const [, value] of selected) {
+      const event = await this.#readEvent(value.entry, frames);
+      if (event.type !== "question")
+        throw Error("Room question page index mismatch");
+      questions.push(structuredClone(event.question));
+    }
+    this.#questionRoom(roomId);
+    return {
+      roomId,
+      revision,
+      openCount,
+      totalQuestions,
+      questions,
+      ...(after + 1 + selected.length < entries.length
+        ? { nextAfter: selected.at(-1)![0] }
+        : {}),
+    };
   }
 
   async append(
@@ -709,9 +822,104 @@ export class AutomationTransactionStore {
     const events: IndexedEvent[] = [];
     const bodies = new Map<string, Map<string, BodyIndex>>();
     const newMessages = new Map<string, Map<string, BodyIndex>>();
+    const newQuestions = new Map<string, Map<string, QuestionIndex>>();
+    const newQuestionOrigins = new Map<string, Map<string, string>>();
+    const newQuestionClients = new Map<string, Map<string, string>>();
     record.roomEvents.forEach((event, index) => {
       let roomId: string, messageId: string, origin: string | undefined;
-      if (
+      if (keys(event, ["type", "question"]) && event.type === "question") {
+        const question = canonicalRoomQuestion(event.question);
+        event.question = question;
+        roomId = question.roomId;
+        messageId = question.id;
+        const indexed = this.#rooms.get(roomId);
+        const pending =
+          newQuestions.get(roomId) ?? new Map<string, QuestionIndex>();
+        const previous =
+          pending.get(question.id) ?? indexed?.questions.get(question.id);
+        const originKey = JSON.stringify([
+          question.origin.threadId,
+          question.origin.callItemId,
+        ]);
+        const origins =
+          newQuestionOrigins.get(roomId) ?? new Map<string, string>();
+        const originalId =
+          origins.get(originKey) ?? indexed?.questionOrigins.get(originKey);
+        const specificationHash = createHash("sha256")
+          .update(JSON.stringify(question.specification))
+          .digest("hex");
+        if (previous) {
+          if (
+            previous.state !== "open" ||
+            question.revision !== previous.revision + 1 ||
+            previous.origin !== originKey ||
+            previous.createdAt !== question.createdAt
+          )
+            throw Error(
+              "Room question revision, ownership or terminal state changed",
+            );
+          if (
+            question.response &&
+            (question.response.questionRevision !== previous.revision ||
+              specificationHash !== previous.specificationHash)
+          )
+            throw Error(
+              "Room question response does not match its exact content revision",
+            );
+        } else if (
+          question.revision !== 1 ||
+          question.state !== "open" ||
+          question.response ||
+          originalId !== undefined
+        )
+          throw Error(
+            "Room question publication requires a fresh identity and origin",
+          );
+        if (originalId !== undefined && originalId !== question.id)
+          throw Error("Room question origin is already published");
+        if (question.response) {
+          const response = question.response;
+          const clients =
+            newQuestionClients.get(roomId) ?? new Map<string, string>();
+          if (
+            (clients.get(response.clientId) ??
+              indexed?.questionClients.get(response.clientId)) !== undefined
+          )
+            throw Error("Room response client identity is already bound");
+          const message = record.roomEvents.find(
+            (candidate) =>
+              candidate.type === "message" &&
+              candidate.message.id === response.messageId,
+          );
+          const operation = record.metadata.rooms
+            .find((candidate) => candidate.id === roomId)
+            ?.operations?.find(
+              (candidate) => candidate.id === response.operationId,
+            );
+          if (
+            message?.type !== "message" ||
+            message.message.roomId !== roomId ||
+            message.message.kind !== "human" ||
+            operation?.messageId !== response.messageId
+          )
+            throw Error(
+              "Room question resolution requires its human Room message and operation in the same transaction",
+            );
+          clients.set(response.clientId, question.id);
+          newQuestionClients.set(roomId, clients);
+        }
+        pending.set(question.id, {
+          entry: { revision: record.revision, event: index, messageId },
+          revision: question.revision,
+          state: question.state,
+          origin: originKey,
+          specificationHash,
+          createdAt: question.createdAt,
+        });
+        newQuestions.set(roomId, pending);
+        origins.set(originKey, question.id);
+        newQuestionOrigins.set(roomId, origins);
+      } else if (
         keys(event, ["type", "message"]) &&
         event.type === "message" &&
         isRoomMessage(event.message)
@@ -898,7 +1106,33 @@ export class AutomationTransactionStore {
     for (const event of events) {
       const room = this.#rooms.get(event.roomId)!;
       this.#rooms.set(event.roomId, room);
-      if (event.type === "message") {
+      if (event.type === "question") {
+        const body = frame.record.roomEvents[event.entry.event];
+        if (body?.type !== "question")
+          throw Error("Room question resource index mismatch");
+        const question = body.question;
+        const previous = room.questions.get(question.id);
+        if (previous?.state === "open") room.openQuestionCount--;
+        if (question.state === "open") room.openQuestionCount++;
+        const origin = JSON.stringify([
+          question.origin.threadId,
+          question.origin.callItemId,
+        ]);
+        room.questions.set(question.id, {
+          entry: event.entry,
+          revision: question.revision,
+          state: question.state,
+          origin,
+          createdAt: question.createdAt,
+          specificationHash: createHash("sha256")
+            .update(JSON.stringify(question.specification))
+            .digest("hex"),
+        });
+        room.questionOrigins.set(origin, question.id);
+        if (question.response)
+          room.questionClients.set(question.response.clientId, question.id);
+        room.questionRevision++;
+      } else if (event.type === "message") {
         const body = frame.record.roomEvents[event.entry.event];
         if (body?.type !== "message")
           throw Error("Room message index mismatch");
@@ -938,6 +1172,11 @@ export class AutomationTransactionStore {
 function emptyRoomIndex(createdRevision: number): RoomIndex {
   return {
     createdRevision,
+    questions: new Map(),
+    questionOrigins: new Map(),
+    questionClients: new Map(),
+    questionRevision: 0,
+    openQuestionCount: 0,
     operationBindings: new Map(),
     operationBodies: new Map(),
     messageBodies: new Map(),
