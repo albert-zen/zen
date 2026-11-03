@@ -878,7 +878,38 @@ test("native invalidation causes keep only fixed reason/target codes and owned n
   );
   assert.equal(isolated.eventCount, 1);
   assert.equal(isolated.groups[0].target, "other");
+  const tagged = styleInvalidationCauses(
+    [
+      {
+        ...events[1],
+        name: "ScheduleStyleInvalidationTracking",
+        args: {
+          data: {
+            ...events[1].args.data,
+            nodeName: "svg id='private-id'",
+            selectorPart: "svg",
+            changedPseudo: ":disabled",
+          },
+        },
+      },
+    ],
+    100,
+    125,
+    [bundle],
+  );
+  assert.equal(tagged.groups[0].nodeTag, "svg");
+  assert.equal(tagged.groups[0].selectorTag, "svg");
+  assert.equal(tagged.groups[0].change, "disabled");
+  assert.deepEqual(tagged.scheduledChanges, [
+    { code: "changedPseudo:disabled", events: 1 },
+  ]);
+  assert.equal(JSON.stringify(tagged).includes("private-"), false);
   assert.throws(() =>
     styleInvalidationCauses([{ ...events[0], ts: NaN }], 0, 200, [bundle]),
   );
+});
+test("invalidation trace is bounded to first sample while all three native sends remain", () => {
+  assert.ok(source.includes("traceSampleLimit: 1"));
+  assert.ok(source.includes("if (repetition === 0) await stopOwnedTrace();"));
+  assert.ok(source.includes("repetition < 3"));
 });

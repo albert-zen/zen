@@ -619,7 +619,7 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-style-invalidation-v1-not-acceptance",
+    "native-style-invalidation-v2-first-trace-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
@@ -788,6 +788,8 @@ try {
   );
   assert.equal(timeline.review?.passed, true);
   assert.equal(timeline.acceptance, false);
+  assert.equal(timeline.tracedSampleCount, 1);
+  assert.equal(timeline.samples.length, 1);
   const summary = {
     schemaVersion: 1,
     timeline,

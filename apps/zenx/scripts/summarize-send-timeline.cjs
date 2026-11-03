@@ -357,6 +357,7 @@ function styleInvalidationCauses(events, start, end, bundles) {
     "action-orb",
   ];
   const groups = new Map(),
+    scheduledChanges = new Map(),
     nodes = new Set(),
     ownedLocations = [],
     seen = new Set();
@@ -385,11 +386,63 @@ function styleInvalidationCauses(events, start, end, bundles) {
         : ""
     ).split(/\s+/);
     const target = targets.find((name) => classNames.includes(name)) ?? "other";
+    const tags =
+      "button input textarea select form fieldset div span p a summary details section article svg path g circle polyline line rect html body label text".split(
+        " ",
+      );
+    const rawTag =
+      typeof data.nodeName === "string"
+        ? /^[#a-z0-9-]+/i
+            .exec(data.nodeName)?.[0]
+            ?.replace(/^#/, "")
+            .toLowerCase()
+        : null;
+    const nodeTag = tags.includes(rawTag) ? rawTag : "other";
+    const selectorTag = tags.includes(data.selectorPart)
+      ? data.selectorPart
+      : "other";
+    const changeKind =
+      ["changedPseudo", "changedAttribute", "changedClass"].find(
+        (key) => typeof data[key] === "string",
+      ) ?? "none";
+    const rawChange =
+      changeKind === "none" ? "" : data[changeKind].replace(/^:/, "");
+    const change =
+      "disabled class style aria-disabled aria-busy data-scrollbar-active data-state data-action data-mode focus focus-visible focus-within hover active action-orb send stop steer batch-next queue replace"
+        .split(" ")
+        .includes(rawChange)
+        ? rawChange
+        : "other";
+    if (kind === "schedule") {
+      const scheduled = [changeKind, change].join(":");
+      scheduledChanges.set(
+        scheduled,
+        (scheduledChanges.get(scheduled) ?? 0) + 1,
+      );
+    }
     if (Number.isSafeInteger(data.nodeId) && data.nodeId > 0)
       nodes.add(data.nodeId);
-    const key = [kind, reason, target].join(":");
+    const key = [
+      kind,
+      reason,
+      target,
+      nodeTag,
+      selectorTag,
+      changeKind,
+      change,
+    ].join(":");
     if (!groups.has(key))
-      groups.set(key, { kind, reason, target, events: 0, subtreeEvents: 0 });
+      groups.set(key, {
+        kind,
+        reason,
+        target,
+        nodeTag,
+        selectorTag,
+        changeKind,
+        change,
+        events: 0,
+        subtreeEvents: 0,
+      });
     const group = groups.get(key);
     group.events++;
     if (data.subtree === true) group.subtreeEvents++;
@@ -435,11 +488,21 @@ function styleInvalidationCauses(events, start, end, bundles) {
     groups: [...groups.values()]
       .sort((a, b) => b.events - a.events)
       .slice(0, 16),
+    scheduledChanges: [...scheduledChanges]
+      .map(([code, events]) => ({ code, events }))
+      .sort((a, b) => b.events - a.events)
+      .slice(0, 8),
     ownedLocations,
   };
 }
 function summarizeSendTimeline(trace, profile, samples) {
-  valid(Array.isArray(trace.traceEvents) && samples?.length === 3);
+  const firstTraceOnly =
+    profile.schemaVersion === 3 && profile.traceSampleLimit === 1;
+  valid(profile.traceSampleLimit === undefined || firstTraceOnly);
+  valid(
+    Array.isArray(trace.traceEvents) &&
+      samples?.length === (firstTraceOnly ? 1 : 3),
+  );
   valid(
     finite(profile.bufferUsage?.percentage) &&
       profile.bufferUsage.percentage < 1,
@@ -648,6 +711,7 @@ function summarizeSendTimeline(trace, profile, samples) {
     ...(firstGap
       ? {
           traceDurationMs: profile.durationMs,
+          tracedSampleCount: projected.length,
           knownLossDetected: false,
           firstPendingDomMeaning:
             "First observer match of connected pending DOM; not the mutation time, paint or physical presentation",

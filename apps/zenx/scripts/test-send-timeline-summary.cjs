@@ -207,3 +207,52 @@ test("launcher failure reporting permits fixed phase/reason enums only", () => {
     { stage: "unclassified", reasonCodes: [] },
   );
 });
+
+test("explicit first-trace schema3 projects one complete sample without weakening legacy count", () => {
+  const f = fixture();
+  Object.assign(f.profile, {
+    schemaVersion: 3,
+    diagnosticOnly: true,
+    acceptance: false,
+    traceStopped: true,
+    durationMs: 50,
+    traceSampleLimit: 1,
+    invalidationTracking: true,
+  });
+  const samples = f.samples.slice(0, 1);
+  samples[0].pendingDomMs = 105;
+  for (const key of [
+    "firstVisibleFeedbackMs",
+    "clickToPendingDomMs",
+    "clickToPendingVisibleFrameMs",
+    "clickToBubbleDomMs",
+    "clickToVisibleFrameMs",
+    "clickToClearFrameMs",
+    "clickToCanonicalNotificationMs",
+    "clickToFeedbackGeometryCompleteMs",
+    "clickToFeedbackSubsequentFrameMs",
+    "clickToClearGeometryCompleteMs",
+    "clickToClearSubsequentFrameMs",
+    "feedbackTargetMs",
+  ])
+    samples[0][key] = 1;
+  f.trace.traceEvents = f.trace.traceEvents.filter(
+    (event) => event.ph === "M" || event.name.startsWith("zen-send-0-"),
+  );
+  f.trace.traceEvents.push({
+    ph: "I",
+    pid: 2,
+    tid: 22,
+    name: "zen-send-0-first-pending-dom-observed",
+    ts: 105000,
+  });
+  const result = summarizeSendTimeline(f.trace, f.profile, samples);
+  assert.equal(result.tracedSampleCount, 1);
+  assert.equal(result.samples.length, 1);
+  assert.equal(result.samples[0].firstGapInvalidations.eventCount, 0);
+  assert.throws(() => summarizeSendTimeline(f.trace, f.profile, f.samples));
+  f.profile.traceSampleLimit = 2;
+  assert.throws(() => summarizeSendTimeline(f.trace, f.profile, samples));
+  delete f.profile.traceSampleLimit;
+  assert.throws(() => summarizeSendTimeline(f.trace, f.profile, samples));
+});

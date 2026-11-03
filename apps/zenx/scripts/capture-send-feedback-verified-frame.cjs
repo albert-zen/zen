@@ -38,7 +38,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-style-invalidation-v1-not-acceptance",
+  harnessVersion: "native-style-invalidation-v2-first-trace-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
@@ -50,7 +50,7 @@ const result = {
   scope:
     "Production App, private production DomainThreadJournal history, native input and Send; no model network, no mock ACK or injected UI; actual product pending and canonical feedback measured separately.",
   measurementContract:
-    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. Native invalidation tracking adds event/stack capture overhead. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
+    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. Native invalidation tracking adds event/stack capture overhead. Only the first activation has timeline attribution; later real sends are untraced. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
   steps: [],
   blockedExternalRequests: 0,
 };
@@ -1233,7 +1233,10 @@ async function reviewAndPublishProfile(rawPath) {
     const summary = summarizeSendTimeline(
       JSON.parse(raw),
       { ...result.profile, ownBundles },
-      result.samples,
+      result.samples.slice(
+        0,
+        result.profile.traceSampleLimit ?? result.samples.length,
+      ),
     );
     summary.review = {
       passed: true,
@@ -1480,6 +1483,7 @@ async function run() {
   result.profile = {
     schemaVersion: 3,
     invalidationTracking: true,
+    traceSampleLimit: 1,
     diagnosticOnly: true,
     acceptance: false,
     reason:
@@ -1767,6 +1771,9 @@ async function run() {
           "Local pending and real receipt share identity",
         );
       assert.ok(sample.ipc[0].requestId);
+      // Attribution needs the initial mutation, not three full native traces.
+      // Later real sends retain all UI/storage/reader checks but are untraced.
+      if (repetition === 0) await stopOwnedTrace();
       await screenshot(
         "messages-" +
           manifest.visibleMessageCount +
