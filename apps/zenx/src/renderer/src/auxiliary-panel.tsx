@@ -296,13 +296,15 @@ export function AuxiliaryPanel({
     resourceTab: string | undefined;
     isCurrent?: () => boolean;
   } | null>(null);
+  /** Last resource tab to fall back to when the primary view is left. */
+  const primaryResourceTab = useRef<string | undefined>(undefined);
+  const selectionCurrent =
+    primarySelection?.owner === expandedKey
+      ? (primarySelection.isCurrent?.() ??
+        primarySelection.resourceTab === selectedTab)
+      : selectedTab === PRIMARY_CONVERSATION_TAB;
   const primaryActive = Boolean(
-    primaryConversation &&
-    open &&
-    expanded &&
-    primarySelection?.owner === expandedKey &&
-    (primarySelection.isCurrent?.() ??
-      primarySelection.resourceTab === selectedTab),
+    primaryConversation && open && expanded && selectionCurrent,
   );
   useLayoutEffect(() => {
     if (
@@ -315,6 +317,19 @@ export function AuxiliaryPanel({
     )
       setPrimarySelection(null);
   }, [open, expanded, expandedKey, selectedTab, primarySelection]);
+  // The primary tab only exists in fullscreen. Leaving fullscreen returns to
+  // the retained resource instead of keeping an invisible primary selection.
+  useEffect(() => {
+    if (expanded || selectedTab !== PRIMARY_CONVERSATION_TAB) return;
+    const fallback =
+      primaryResourceTab.current ??
+      (presentationState?.tabs[0]
+        ? sidebarTabId(presentationState.tabs[0])
+        : customTabs[0]
+          ? `custom:${customTabs[0].id}`
+          : "");
+    onSelectTab(fallback);
+  }, [expanded, selectedTab, onSelectTab, presentationState?.tabs, customTabs]);
   const setExpanded = (update: React.SetStateAction<boolean>) => {
     if (onFullscreenChange) {
       onFullscreenChange(
@@ -943,11 +958,16 @@ export function AuxiliaryPanel({
     setError("");
     if (id === PRIMARY_CONVERSATION_TAB && primaryConversation && expanded) {
       const isCurrent = primaryConversation.onSelect?.();
+      if (selectedTab !== PRIMARY_CONVERSATION_TAB)
+        primaryResourceTab.current = selectedTab;
       setPrimarySelection({
         owner: expandedKey,
         resourceTab: selectedTab,
         ...(isCurrent ? { isCurrent } : {}),
       });
+      // Remember the primary view as this conversation's selection so leaving
+      // and returning to the Thread restores it instead of the last resource.
+      onSelectTab(PRIMARY_CONVERSATION_TAB);
     } else {
       setPrimarySelection(null);
       onSelectTab(available.has(id) ? id : scopedId(id));
