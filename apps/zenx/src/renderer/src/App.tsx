@@ -2064,14 +2064,18 @@ function AppContent() {
   // read establishes a baseline; navigation itself does not reopen old questions.
   useEffect(() => {
     if (!selectedThreadId || selectedRoomId || page !== "agent") return;
-    const baseline = userQuestionStore.get(selectedThreadId);
-    let known = new Set(baseline.ids);
-    let loaded = baseline.loaded;
+    let known = new Set<string>();
+    let totalPending = 0;
+    let loaded = false;
     const unsubscribe = userQuestionStore.subscribe(() => {
       const next = userQuestionStore.get(selectedThreadId);
-      if (!next.loaded) return;
-      const added = loaded && next.ids.some((id) => !known.has(id));
+      if (!next.loaded || next.loading) return;
+      const added =
+        loaded &&
+        (next.totalPending > totalPending ||
+          next.ids.some((id) => !known.has(id)));
       known = new Set(next.ids);
+      totalPending = next.totalPending;
       loaded = true;
       if (added)
         setInformationReveal((current) => ({

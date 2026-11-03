@@ -53,6 +53,7 @@ export function ConversationInformationCards(
   );
   return (
     <MemoizedConversationInformationContent
+      key={props.threadId}
       {...props}
       navigate={navigateLatest}
     />

@@ -358,3 +358,149 @@ test("streaming a long conversation does not clone or redraw the information cat
     dom.window.close();
   }
 });
+
+test("trigger retry is failure-only and switches fence repeated, failed, and retired-owner intents", async () => {
+  await i18n.changeLanguage("en");
+  const dom = new JSDOM('<div id="root"></div>', {
+    url: "https://zenx.local/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let readFails = true,
+    reads = 0;
+  const writes: unknown[] = [];
+  let failWrite!: (error: Error) => void;
+  Object.assign(dom.window, {
+    zenx: {
+      plugins: {
+        executeCommand: async (
+          _plugin: string,
+          command: string,
+          input?: unknown,
+        ) => {
+          if (command === "sidebar-facts") {
+            reads++;
+            if (readFails) throw new Error("Synthetic unavailable facts");
+            return {
+              triggers: [
+                {
+                  id: "active",
+                  threadId: "owner",
+                  kind: "timer",
+                  active: true,
+                  label: "Synthetic active",
+                  definitionRevision: 8,
+                },
+                {
+                  id: "legacy",
+                  threadId: "owner",
+                  kind: "timer",
+                  active: false,
+                  label: "Unknown revision",
+                },
+              ],
+            };
+          }
+          writes.push([command, input]);
+          return new Promise((_resolve, reject) => {
+            failWrite = reject;
+          });
+        },
+      },
+    },
+  });
+  const snapshot = {
+    ...workspaceLauncherSnapshot,
+    plugins: workspaceLauncherSnapshot.plugins.map((p) => ({
+      ...p,
+      admissionId: "current",
+    })),
+    commands: [
+      {
+        key: "zenx-triggers:sidebar-facts",
+        pluginId: "zenx-triggers",
+        id: "sidebar-facts",
+        title: "Facts",
+        tool: "zenx_triggers_sidebar_facts",
+      },
+    ],
+  };
+  const root = createRoot(document.getElementById("root")!);
+  const render = (threadId: string) =>
+    act(async () =>
+      root.render(
+        React.createElement(ConversationInformationCards, {
+          threadId,
+          threads: [],
+          snapshot,
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          navigate: () => {},
+          types: ["triggers"],
+        }),
+      ),
+    );
+  try {
+    await render("owner");
+    const retry = document.querySelector<HTMLButtonElement>("header button")!;
+    assert.equal(retry.textContent, "Retry");
+    readFails = false;
+    await act(async () => retry.click());
+    assert.equal(document.querySelector("header button"), null);
+    assert.equal(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Enable trigger · Unknown revision"]',
+      )!.disabled,
+      true,
+    );
+    const pause = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Pause trigger · Synthetic active"]',
+    )!;
+    const propsKey = Object.keys(pause).find((key) =>
+      key.startsWith("__reactProps$"),
+    )!;
+    const retainedClick = (
+      pause as unknown as Record<string, { onClick(): void }>
+    )[propsKey]!.onClick;
+    await act(async () => {
+      retainedClick();
+      retainedClick();
+    });
+    assert.deepEqual(writes, [["cancel", { triggerId: "active" }]]);
+    assert.equal(pause.disabled, true);
+    const beforeFailureReads = reads;
+    await act(async () => failWrite(new Error("Synthetic revision conflict")));
+    assert.ok(
+      reads > beforeFailureReads,
+      "failure reconciles authoritative facts",
+    );
+    assert.match(
+      document.querySelector('[role="alert"]')!.textContent!,
+      /Synthetic revision conflict/,
+    );
+    assert.equal(
+      pause.getAttribute("aria-checked"),
+      "true",
+      "failure cannot optimistically change Host state",
+    );
+    assert.equal(pause.disabled, false);
+    await render("other");
+    assert.equal(
+      document.querySelector('[role="alert"]'),
+      null,
+      "errors belong to the previous owner",
+    );
+    await act(async () => retainedClick());
+    assert.equal(
+      writes.length,
+      1,
+      "retained old-owner callback cannot mutate a trigger",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
