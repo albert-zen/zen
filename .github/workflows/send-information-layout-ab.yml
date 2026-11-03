@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 12bff5c83a5c7d8601331c5027a5a1bbbe6f3707
+          ref: 7ffcc0f3db9081c2f21ef6ab20b8bfe82330eb9d
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4

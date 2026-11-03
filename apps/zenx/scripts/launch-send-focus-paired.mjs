@@ -61,14 +61,14 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   candidate: {
-    commit: "12bff5c83a5c7d8601331c5027a5a1bbbe6f3707",
-    tree: "cdcc49266539832ceec00cf1c38258cafd64f28c",
+    commit: "7ffcc0f3db9081c2f21ef6ab20b8bfe82330eb9d",
+    tree: "81ae1c701bed3ac8bbcafc5c9142c3b40557ba2d",
     expectedVirtualTranscript: true,
   },
 };
 // One exact latest UI quality source. This is not a new latency A/B.
-const frontendSourceTree = "b910d3bed997feb1efebdaef77f4a9569569244b";
-const rendererSourceTree = "6e101331da7fc276acb7275b1eeb6e2f30dcb0b3";
+const frontendSourceTree = "a8130442c5f25184e65b83e81581c25f989249fa";
+const rendererSourceTree = "9d5b783e718810bf605170fa631cde8c4b318e10";
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
