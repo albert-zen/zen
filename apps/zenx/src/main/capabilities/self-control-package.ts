@@ -720,6 +720,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
             error: error.message,
             visibility: "not-observed",
             authorizedScopes: error.choices,
+            authorizedScopesTotal: error.choices.length,
+            authorizedScopesTruncated: false,
           };
         throw error;
       }
