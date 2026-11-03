@@ -54,6 +54,23 @@ test("image capture resolves installed Chrome and keeps Chromium sandbox enabled
   assert.match(capture, /chromiumSandboxDisabled: false/);
 });
 
+test("capture waits for painted details and verifies keyboard focus before activation", () => {
+  assert.match(
+    capture,
+    /requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)/,
+  );
+  assert.match(
+    capture,
+    /last\.getBoundingClientRect\(\)\.bottom <= details\.getBoundingClientRect\(\)\.bottom/,
+  );
+  assert.match(capture, /getAnimations\(\{subtree:true\}\)/);
+  assert.match(capture, /summary'\)\.focus\(\)/);
+  assert.match(capture, /Enter did not close image details/);
+  assert.match(capture, /await key\("Enter", "Enter"\)/);
+  assert.match(capture, /await key\(" ", "Space"\)/);
+  assert.match(capture, /Synthetic snapshot: \$\{label\}/);
+});
+
 test("Ubuntu image capture is bounded and retains artifacts on failure without replacing prior coverage", () => {
   const job = workflow.jobs.zenx;
   assert.equal(job["runs-on"], "ubuntu-24.04");

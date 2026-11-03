@@ -121,6 +121,15 @@ try {
     await wait(
       `(() => { const notice=document.querySelector('.image-preparation-notice'), details=notice?.querySelector('details'), row=details?.querySelector('li'); return details?.open && row?.getClientRects().length > 0 && notice.innerText.includes(${JSON.stringify(visibleText)}); })()`,
     );
+    // The global details::details-content rule animates block-size. A visible
+    // innerText/row may still be partly clipped before the next paint.
+    await evaluate(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+    );
+    await wait(
+      "(() => { const details=document.querySelector('.image-preparation-notice details'), rows=details?.querySelectorAll('li'), last=rows?.[rows.length-1]; return details?.open && last?.getClientRects().length > 0 && last.getBoundingClientRect().bottom <= details.getBoundingClientRect().bottom + 1 && details.getAnimations({subtree:true}).every(animation => animation.playState !== 'running'); })()",
+    );
+    await evaluate("new Promise(resolve => requestAnimationFrame(resolve))");
   };
   const click = async (selector) => {
     const p = await evaluate(
@@ -141,7 +150,9 @@ try {
         key,
         code,
         windowsVirtualKeyCode: key === "Enter" ? 13 : 32,
-        text: type === "keyDown" && key === " " ? " " : undefined,
+        text: type === "keyDown" ? (key === "Enter" ? "\r" : " ") : undefined,
+        unmodifiedText:
+          type === "keyDown" && key === "Enter" ? "\r" : undefined,
       });
   };
   const screenshot = async (name) => {
@@ -204,10 +215,33 @@ try {
     assert.doesNotMatch(expanded.notice, /9999|synthetic-original|model-only/);
     assert.equal(expanded.overflow, false);
     await screenshot(`${scene}-expanded.png`);
-    await key("Enter", "Enter");
-    await wait(
-      "!document.querySelector('.image-preparation-notice details').open",
+    // Mouse activation does not guarantee focus on summary, and ThreadView's
+    // Composer may focus itself after mount. Establish and verify the keyboard
+    // precondition before dispatching actual CDP key events.
+    await evaluate(
+      "document.querySelector('.image-preparation-notice summary').focus()",
     );
+    await wait(
+      "document.activeElement===document.querySelector('.image-preparation-notice summary')",
+    );
+    const beforeKeyboard = await snapshot();
+    assert.equal(beforeKeyboard.summaryFocused, true);
+    await key("Enter", "Enter");
+    try {
+      await wait(
+        "!document.querySelector('.image-preparation-notice details').open",
+      );
+    } catch (error) {
+      const focus = await evaluate(
+        "({summaryFocused:document.activeElement===document.querySelector('.image-preparation-notice summary'),activeTag:document.activeElement?.tagName,detailsOpen:document.querySelector('.image-preparation-notice details')?.open})",
+      );
+      throw Error(
+        `Enter did not close image details: ${JSON.stringify(focus)}`,
+        {
+          cause: error,
+        },
+      );
+    }
     await key(" ", "Space");
     await wait(
       "document.querySelector('.image-preparation-notice details').open",
