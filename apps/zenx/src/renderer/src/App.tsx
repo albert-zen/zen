@@ -3138,10 +3138,9 @@ function AppContent() {
     const shouldPin = !pinnedThreadIds.includes(summary.threadId);
     await queuePinMutation((current) =>
       shouldPin
-        ? [
-            summary.threadId,
-            ...current.filter((threadId) => threadId !== summary.threadId),
-          ]
+        ? current.includes(summary.threadId)
+          ? current
+          : [...current, summary.threadId]
         : current.filter((threadId) => threadId !== summary.threadId),
     );
   };
