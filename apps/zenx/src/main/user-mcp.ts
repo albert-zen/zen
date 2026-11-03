@@ -21,6 +21,10 @@ import { validateBoardOwner, type BoardOwner } from "../board-host.js";
 import type { BoardHostService } from "./board-host-service.js";
 import { withNativeCapabilityArguments } from "./capability-tool-executor.js";
 import { invokeModelToolFacade } from "./capabilities/model-tool-facade.js";
+import {
+  mapUserMcpReferences,
+  mapUserMcpReferenceSchema,
+} from "./user-mcp-references.js";
 
 const names = [
   "zenx_threads_read",
@@ -42,7 +46,7 @@ const fields: Record<Name, readonly string[]> = {
   ],
   zenx_board_read: ["view", "instanceKey"],
   zenx_board_put: ["snapshot", "document"],
-  zenx_self_control_sidebar_read: [],
+  zenx_self_control_sidebar_read: ["includeInformation", "cursor", "pageSize"],
   zenx_self_control_sidebar_update: ["snapshot", "patch"],
 };
 export interface BoundUserMcpOptions {
@@ -75,7 +79,23 @@ export async function createBoundUserMcpServer(options: BoundUserMcpOptions) {
   const lifetime = AbortSignal.any([options.signal, revoked.signal]);
   const references = new ModelReferenceRegistry();
   const epoch = randomUUID();
-  const snapshotPrefix = `mcp:${epoch}:`;
+  const referencePrefix = `mcp:${epoch}:`;
+  const encodeReference = (ref: unknown) => {
+    if (typeof ref !== "string" || !/^r[1-9][0-9]*$/u.test(ref))
+      throw new Error("Host returned an invalid typed reference");
+    return referencePrefix + ref;
+  };
+  const decodeReference = (ref: unknown) => {
+    if (
+      typeof ref !== "string" ||
+      !ref.startsWith(referencePrefix) ||
+      !/^r[1-9][0-9]*$/u.test(ref.slice(referencePrefix.length))
+    )
+      throw new Error(
+        "Reference belongs to another or retired MCP connection; read again before making a deliberate update",
+      );
+    return ref.slice(referencePrefix.length);
+  };
   const scope = references.scope(owner.threadId);
   const threadRef = scope.bind("threads", "thread", {
     id: owner.threadId,
@@ -103,12 +123,10 @@ export async function createBoundUserMcpServer(options: BoundUserMcpOptions) {
           string,
           object
         >;
-        if (properties.snapshot)
-          properties.snapshot = {
-            type: "string",
-            pattern: `^mcp:${epoch}:r[1-9][0-9]*$`,
-            description: "Exact immutable snapshot from this MCP connection.",
-          };
+        mapUserMcpReferenceSchema(
+          projected.inputSchema,
+          `^mcp:${epoch}:r[1-9][0-9]*$`,
+        );
         const required = Array.isArray(projected.inputSchema.required)
           ? projected.inputSchema.required.filter((key) =>
               fields[name].includes(String(key)),
@@ -226,16 +244,7 @@ export async function createBoundUserMcpServer(options: BoundUserMcpOptions) {
         throw new Error(
           "Only bound tool arguments are accepted; owner, Thread, device and native revision cannot be supplied",
         );
-      if (args.snapshot !== undefined) {
-        if (
-          typeof args.snapshot !== "string" ||
-          !args.snapshot.startsWith(snapshotPrefix)
-        )
-          throw new Error(
-            "Snapshot belongs to another or retired MCP connection; read again before making a deliberate update",
-          );
-        args.snapshot = args.snapshot.slice(snapshotPrefix.length);
-      }
+      mapUserMcpReferences(name, args, "input", decodeReference);
       const signal = AbortSignal.any([lifetime, extra.signal]);
       const thread = await options.app.readThread(owner.threadId);
       await assertLive();
@@ -251,7 +260,12 @@ export async function createBoundUserMcpServer(options: BoundUserMcpOptions) {
                   : { kind: "thread" },
               }
             : name === "zenx_self_control_sidebar_read"
-              ? { scope: roomRef ?? "self" }
+              ? {
+                  ...args,
+                  ...(args.cursor === undefined
+                    ? { scope: roomRef ?? "self" }
+                    : {}),
+                }
               : args;
       const invocation: ToolInvocation = {
         name,
@@ -343,8 +357,7 @@ export async function createBoundUserMcpServer(options: BoundUserMcpOptions) {
       let output = result.output;
       if (result.exitCode === 0) {
         const value = JSON.parse(output);
-        if (typeof value.snapshot === "string")
-          value.snapshot = snapshotPrefix + value.snapshot;
+        mapUserMcpReferences(name, value, "output", encodeReference);
         output = JSON.stringify(value);
       }
       return {
