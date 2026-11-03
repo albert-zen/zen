@@ -566,7 +566,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes("for activation in enter; do"));
+  assert.match(workflow, /for activation in (?:enter|click); do/);
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,

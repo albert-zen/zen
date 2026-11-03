@@ -1,7 +1,7 @@
-name: Packaged Send select slot A/B (diagnostic)
+name: Packaged Send select slot narrow click A/B (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-select-slot-ab-20261103]
+    branches: [diagnostic/send-select-slot-narrow-click-ab-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -50,14 +50,14 @@ jobs:
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native matched Enter with private first-activation schedule linkage
+      - name: Native reversed narrow click with private first-activation schedule linkage
         timeout-minutes: 20
         run: |
           failed=0
-          for activation in enter; do
-            for source in baseline candidate; do
-              case="control-$source"
-              width=1280
+          for activation in click; do
+            for source in candidate baseline; do
+              case="narrow-$source"
+              width=1120
               mkdir -p "results/$case"
               echo "NATIVE_AB_CASE_BEGIN $case $source $width"
               set +e
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-select-slot-ab-5000
+          name: native-send-select-slot-narrow-click-ab-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json
