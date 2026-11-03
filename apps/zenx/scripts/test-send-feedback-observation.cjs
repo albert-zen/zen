@@ -518,7 +518,7 @@ test("timeline integration remains single source, bounded and private", () => {
     "utf8",
   );
   assert.ok(
-    workflow.includes("for case in control-baseline control-candidate; do"),
+    workflow.includes("for case in narrow-candidate narrow-baseline; do"),
   );
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),

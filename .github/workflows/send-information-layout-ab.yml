@@ -47,11 +47,11 @@ jobs:
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
-      - name: Native 1280 matched historical grid pair, three sends each
+      - name: Native 1120 reverse-order popover pair, three sends each
         timeout-minutes: 20
         run: |
           failed=0
-          for case in control-baseline control-candidate; do
+          for case in narrow-candidate narrow-baseline; do
             case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
             case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
             mkdir -p "results/$case"
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-history-grid-5000
+          name: native-send-history-grid-narrow-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json
