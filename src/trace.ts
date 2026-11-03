@@ -19,6 +19,14 @@ const identifier = /^[A-Za-z0-9_-]+$/u;
 const hashPattern = /^[a-f0-9]{64}$/u;
 const MAX_VERIFIED_PREFIX_BYTES = 32 * 1024 * 1024;
 const MAX_VERIFIED_SEGMENTS = 64;
+// Only freshly decoded JSON enters this graph; no caller-owned values are frozen.
+function freezeSnapshot<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeSnapshot(child);
+    Object.freeze(value);
+  }
+  return value;
+}
 export type { TraceClock } from "./trace-clock.js";
 export interface TraceArtifactRef {
   sha256: string;
@@ -89,12 +97,24 @@ export interface TraceReadResult {
   issues: TraceIssue[];
   artifactVerification?: "verified" | "not-checked";
 }
+/** Deeply frozen at runtime; callers may retain but never modify source facts. */
+export interface TraceReadSnapshot {
+  readonly records: readonly Readonly<TraceRecord>[];
+  readonly completeness: TraceReadResult["completeness"];
+  readonly issues: readonly Readonly<TraceIssue>[];
+  readonly artifactVerification?: TraceReadResult["artifactVerification"];
+}
 export interface RuntimeTrace {
   record(event: TraceEvent): Promise<TraceReceipt>;
   /** Same-Thread, artifact-free publication; a failed batch returns only degraded receipts. */
   recordBatch?(events: readonly TraceEvent[]): Promise<TraceReceipt[]>;
 }
 export interface TraceReader {
+  /** Optional immutable view; must perform the same fresh source checks as read. */
+  readSnapshot?(
+    threadId: string,
+    options?: { verifyArtifacts?: boolean },
+  ): Promise<TraceReadSnapshot>;
   read(
     threadId: string,
     options?: { verifyArtifacts?: boolean },
@@ -331,13 +351,25 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
     threadId: string,
     options: { verifyArtifacts?: boolean } = {},
   ): Promise<TraceReadResult> {
+    return structuredClone(await this.#readCurrent(threadId, options));
+  }
+  async readSnapshot(
+    threadId: string,
+    options: { verifyArtifacts?: boolean } = {},
+  ): Promise<TraceReadSnapshot> {
+    return this.#readCurrent(threadId, options);
+  }
+  async #readCurrent(
+    threadId: string,
+    options: { verifyArtifacts?: boolean },
+  ): Promise<TraceReadResult> {
     assertIdentifier(threadId);
     await this.#queues.get(threadId)?.catch(() => undefined);
-    return {
+    return freezeSnapshot({
       ...(await this.#readStored(threadId, options.verifyArtifacts !== false)),
       artifactVerification:
         options.verifyArtifacts === false ? "not-checked" : "verified",
-    };
+    });
   }
   async listThreadIds(): Promise<string[]> {
     try {
@@ -731,10 +763,10 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         prior !== undefined &&
         prior.bytes.length <= bytes.length &&
         bytes.subarray(0, prior.bytes.length).equals(prior.bytes);
-      // Each caller gets detached values; mutating a result cannot poison the
-      // validated prefix. No timestamp, size or hash-only shortcut proves it.
+      // Private frames are deeply immutable. Public read clones the final result;
+      // an internal snapshot shares frames only after fresh exact byte checks.
       const segmentRecords: TraceRecord[] = samePrefix
-        ? structuredClone([...prior.records])
+        ? [...prior.records]
         : [];
       let offset = samePrefix ? prior.bytes.length : 0,
         line = samePrefix ? prior.lines : 0;
@@ -764,7 +796,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
             frame.sha256 !== digest(JSON.stringify(frame.record))
           )
             throw new Error("Trace frame identity or checksum mismatch");
-          segmentRecords.push(frame.record);
+          segmentRecords.push(freezeSnapshot(frame.record));
         } catch (error) {
           invalid = true;
           issues.push({
@@ -793,14 +825,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         } else {
           verified.segments.set(segment, {
             bytes,
-            records: samePrefix
-              ? [
-                  ...prior.records,
-                  ...structuredClone(
-                    segmentRecords.slice(prior.records.length),
-                  ),
-                ]
-              : structuredClone(segmentRecords),
+            records: Object.freeze([...segmentRecords]),
             lines: line,
           });
         }
