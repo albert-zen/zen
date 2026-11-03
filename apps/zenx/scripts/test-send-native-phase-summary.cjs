@@ -4,6 +4,7 @@ const { test } = require("node:test");
 const {
   styleLayoutInitiators,
   nativeOtherPhases,
+  nativeCommitEvents,
   styleInvalidationCauses,
 } = require("./summarize-send-timeline.cjs");
 const bundles = [
@@ -15,6 +16,110 @@ const frame = {
   columnNumber: 7,
   functionName: "private-function-never-export",
 };
+test("native Commit exports whole CPU and temporally contained fixed phases without proration or private arguments", () => {
+  const result = nativeCommitEvents(
+    [
+      {
+        name: "Commit",
+        cat: "disabled-by-default-devtools.timeline",
+        ts: 1000,
+        dur: 10000,
+        tts: 20,
+        tdur: 7000,
+        args: { secret: "private-node-url" },
+      },
+      { name: "RunTask", ts: 0, dur: 15000 },
+      { name: "Paint", ts: 2000, dur: 3000 },
+      {
+        name: "IntersectionObserverController::computeIntersections",
+        cat: "blink,devtools.timeline",
+        ts: 5000,
+        dur: 4000,
+      },
+      {
+        name: "IntersectionObserverController::computeIntersections",
+        cat: "blink,devtools.timeline",
+        ts: 6000,
+        dur: 4000,
+      },
+      {
+        name: "Commit",
+        cat: "blink.user_timing",
+        ts: 1000,
+        dur: 10000,
+        tts: 20,
+        tdur: 10000,
+      },
+      {
+        name: "private-native-event",
+        ts: 2000,
+        dur: 1000,
+        args: { url: "private-node-url" },
+      },
+    ],
+    3000,
+    8000,
+  );
+  assert.equal(result.eventCount, 1);
+  assert.equal(result.omittedEvents, 0);
+  const entry = result.events[0];
+  assert.equal(entry.startRelativeMs, -2);
+  assert.equal(entry.endRelativeMs, 8);
+  assert.equal(entry.wholeWallMs, 10);
+  assert.equal(entry.wholeCpuMs, 7);
+  assert.equal(entry.clippedWallMs, 5);
+  assert.equal(entry.clipped, true);
+  assert.equal(entry.containedRecordedSpans.exclusiveWallMs.Paint, 3);
+  assert.equal(entry.containedRecordedSpans.exclusiveWallMs.Other, 5);
+  assert.equal(entry.containedRecordedSpans.uncoveredByRecordedSpansMs, 2);
+  assert.deepEqual(entry.containedNativePhases.phases, [
+    { phase: "intersection-compute", eventCount: 2, clippedInclusiveWallMs: 5 },
+  ]);
+  for (const secret of [
+    "private-node-url",
+    "private-native-event",
+    "secret",
+    "tts",
+    "tdur",
+  ])
+    assert.equal(JSON.stringify(result).includes(secret), false);
+});
+test("native Commit projection caps output and preserves unavailable CPU as null", () => {
+  const result = nativeCommitEvents(
+    Array.from({ length: 12 }, (_, index) => ({
+      name: "Commit",
+      cat: "devtools.timeline",
+      ts: 1000 + index,
+      dur: 5000,
+      tts: 10,
+      tdur: index === 0 ? undefined : 9000,
+    })),
+    0,
+    10000,
+  );
+  assert.equal(result.eventCount, 12);
+  assert.equal(result.events.length, 8);
+  assert.equal(result.omittedEvents, 4);
+  assert.ok(result.events.every((entry) => entry.wholeCpuMs === null));
+  assert.deepEqual(
+    nativeCommitEvents(
+      [{ name: "Commit", cat: "private-unrelated", ts: 1, dur: 20 }],
+      0,
+      100,
+    ).events,
+    [],
+  );
+  assert.deepEqual(nativeCommitEvents([], 0, 100).events, []);
+  assert.throws(
+    () =>
+      nativeCommitEvents(
+        [{ name: "Commit", cat: "devtools.timeline", ts: NaN, dur: 20 }],
+        0,
+        100,
+      ),
+    /Invalid private timeline input/,
+  );
+});
 test("style initiators export exact owned numeric locations and counts, never strings from private frames", () => {
   const result = styleLayoutInitiators(
     [

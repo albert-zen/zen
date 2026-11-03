@@ -242,6 +242,10 @@ const nativeOtherCodes = new Map([
   ["TaskQueueManager::ProcessTaskFromWorkQueue", "task-queue-work"],
   ["HitTest", "hit-test"],
   ["UpdateViewportIntersection", "viewport-intersection"],
+  [
+    "IntersectionObserverController::computeIntersections",
+    "intersection-compute",
+  ],
   ["AnimationFrame", "animation-frame"],
   ["AnimationFrame::Render", "animation-render"],
   ["LocalFrameView::UpdateLifecyclePhases", "frame-lifecycle"],
@@ -291,6 +295,51 @@ function nativeOtherPhases(events, start, end) {
       }))
       .sort((a, b) => b.clippedInclusiveWallMs - a.clippedInclusiveWallMs)
       .slice(0, 8),
+  };
+}
+
+function nativeCommitEvents(events, start, end) {
+  valid(finite(start) && finite(end) && end >= start);
+  const commits = events.filter(
+    (event) =>
+      event.name === "Commit" &&
+      !/user_timing|blink.console/.test(event.cat ?? "") &&
+      (event.cat ?? "")
+        .split(",")
+        .some((cat) =>
+          /^(?:disabled-by-default-)?devtools\.timeline$/.test(cat),
+        ),
+  );
+  commits.forEach((event) => valid(finite(event.ts) && finite(event.dur)));
+  const overlapping = commits
+    .filter((event) => event.ts < end && event.ts + event.dur > start)
+    .sort((a, b) => b.dur - a.dur || a.ts - b.ts);
+  return {
+    meaning:
+      "Whole native Commit wall and available whole thread CPU, never clipped CPU or proration. Temporal containment is not unique parentage. Contained phase unions overlap and must not be added to each other, Commit wall or CPU.",
+    eventCount: overlapping.length,
+    omittedEvents: Math.max(0, overlapping.length - 8),
+    events: overlapping.slice(0, 8).map((event) => {
+      const finish = event.ts + event.dur;
+      const contained = events.filter(
+        (entry) =>
+          entry !== event &&
+          entry.ts >= event.ts &&
+          entry.ts + entry.dur <= finish &&
+          !/user_timing|blink.console/.test(entry.cat ?? ""),
+      );
+      return {
+        startRelativeMs: (event.ts - start) / 1000,
+        endRelativeMs: (finish - start) / 1000,
+        wholeWallMs: event.dur / 1000,
+        wholeCpuMs: wholeTaskCpuMs(event),
+        clippedWallMs:
+          (Math.min(end, finish) - Math.max(start, event.ts)) / 1000,
+        clipped: event.ts < start || finish > end,
+        containedRecordedSpans: budget(contained, event.ts, finish),
+        containedNativePhases: nativeOtherPhases(contained, event.ts, finish),
+      };
+    }),
   };
 }
 
@@ -793,6 +842,11 @@ function summarizeSendTimeline(trace, profile, samples) {
               geometry,
               nextEntry,
             ),
+            geometryToNextFrameNativeCommits: nativeCommitEvents(
+              renderer,
+              geometry,
+              nextEntry,
+            ),
             geometryToNextFrameLongTasks: longTasks(
               renderer,
               geometry,
@@ -866,5 +920,6 @@ module.exports = {
   ownBundleCallsites,
   styleLayoutInitiators,
   nativeOtherPhases,
+  nativeCommitEvents,
   styleInvalidationCauses,
 };
