@@ -42,6 +42,17 @@ export function ImagePreparationNotice({
     reading?.snapshot ?? emptySnapshot,
   );
   const projection = projectImagePreparation(items);
+  const details = React.useRef<HTMLDetailsElement>(null);
+  const sampleId = projection?.sampleId;
+  React.useLayoutEffect(() => {
+    const node = details.current;
+    if (!reading || !node || sampleId === undefined) return;
+    // A sample can be replaced before native toggle is delivered. Capture the
+    // departing keyed node, never the next sample's DOM or reading choice.
+    return () => {
+      reading.set(imagePreparationDisclosureKey(sampleId), node.open);
+    };
+  }, [reading, sampleId]);
   if (projection === null) return null;
   const preparedCount = projection.images.filter(
     (image) => image.outcome === "prepared",
@@ -80,6 +91,8 @@ export function ImagePreparationNotice({
         </span>
       )}
       <details
+        key={reading ? projection.sampleId : undefined}
+        ref={reading ? details : undefined}
         open={
           reading
             ? (choices.get(
@@ -92,11 +105,17 @@ export function ImagePreparationNotice({
         }
         onToggle={
           reading
-            ? (event) =>
+            ? (event) => {
+                if (
+                  event.currentTarget !== details.current ||
+                  !event.currentTarget.isConnected
+                )
+                  return;
                 reading.set(
                   imagePreparationDisclosureKey(projection.sampleId),
                   event.currentTarget.open,
-                )
+                );
+              }
             : undefined
         }
       >

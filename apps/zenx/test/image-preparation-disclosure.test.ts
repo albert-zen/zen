@@ -4,6 +4,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import type { ContextItem } from "../../../src/item-list.js";
 import {
   captureImagePreparationDisclosure,
@@ -384,6 +385,257 @@ test("native viewport entry, cancellation and Selection exit capture image discl
     );
   } finally {
     document.removeEventListener("toggle", suppressToggle, true);
+    await env.close();
+  }
+});
+
+test("delayed native toggle does not transfer sample A open intent into sample B", async () => {
+  const env = setup();
+  const reading = createThreadReadingState();
+  const render = (sample: string) =>
+    env.root.render(
+      React.createElement(ImagePreparationNotice, {
+        items: imageItems(sample),
+        reading,
+      }),
+    );
+  try {
+    await act(async () => render("a"));
+    act(() => {
+      details().querySelector<HTMLElement>("summary")!.click();
+      assert.equal(
+        details().open,
+        true,
+        "native summary activation opens A before its queued toggle",
+      );
+      assert.equal(
+        reading.snapshot().size,
+        0,
+        "native toggle has not been delivered yet",
+      );
+      flushSync(() => render("b"));
+      assert.equal(details().dataset.imagePreparationSampleId, "b");
+    });
+    const observedImmediately = details().open;
+    await act(async () => {
+      await tick();
+    });
+    assert.equal(
+      observedImmediately,
+      false,
+      "new sample must begin closed, not inherit A's native DOM state",
+    );
+    assert.notEqual(
+      reading.snapshot().get(imagePreparationDisclosureKey("b")),
+      true,
+      "old A toggle must not write B's choice",
+    );
+  } finally {
+    await env.close();
+  }
+});
+
+test("delayed close is preserved for original sample when next sample arrives", async () => {
+  const env = setup();
+  const reading = createThreadReadingState();
+  reading.set(imagePreparationDisclosureKey("a"), true);
+  const render = (sample: string) =>
+    env.root.render(
+      React.createElement(ImagePreparationNotice, {
+        items: imageItems(sample),
+        reading,
+      }),
+    );
+  try {
+    await act(async () => {
+      render("a");
+      await tick();
+    });
+    assert.equal(details().open, true);
+    act(() => {
+      details().querySelector<HTMLElement>("summary")!.click();
+      assert.equal(details().open, false);
+      flushSync(() => render("b"));
+    });
+    await act(async () => {
+      await tick();
+      render("a");
+    });
+    assert.equal(
+      details().open,
+      false,
+      "return to A must not undo the user's last close",
+    );
+  } finally {
+    await env.close();
+  }
+});
+
+function nativeHarness(env: ReturnType<typeof setup>) {
+  const callbacks: { prepare?: () => boolean; cancelled?: () => void } = {};
+  Object.assign(env.dom.window, {
+    zenx: {
+      nativeEditing: {
+        onPrepareSelectAll(listener: () => boolean) {
+          callbacks.prepare = listener;
+          return () => {
+            if (callbacks.prepare === listener) callbacks.prepare = undefined;
+          };
+        },
+        onSelectAllCancelled(listener: () => void) {
+          callbacks.cancelled = listener;
+          return () => {
+            if (callbacks.cancelled === listener)
+              callbacks.cancelled = undefined;
+          };
+        },
+      },
+    },
+  });
+  const viewport = { current: null as HTMLDivElement | null };
+  const controller = { current: null as VirtualTranscriptHandle | null };
+  const rows = Array.from({ length: 1000 }, (_, i) => ({
+    key: `row-${i}`,
+    content: React.createElement("p", null, `Canonical ${i}`),
+  }));
+  const captures: string[] = [];
+  const render = (
+    reading: ReturnType<typeof createThreadReadingState>,
+    sample: string,
+    owner = "thread",
+  ) =>
+    env.root.render(
+      React.createElement(TranscriptViewport, {
+        key: owner,
+        experimental: true,
+        rows,
+        header: React.createElement(ImagePreparationNotice, {
+          items: imageItems(sample),
+          reading,
+        }),
+        footer: null,
+        viewport,
+        controller,
+        position: reading,
+        className: "messages",
+        children: null,
+        onViewportScroll() {},
+        onContentSettled() {},
+        onBeforeViewportChange(node) {
+          captures.push(owner);
+          captureImagePreparationDisclosure(node, reading);
+        },
+      }),
+    );
+  return { callbacks, viewport, controller, captures, render };
+}
+
+test("actual Legend isolates pending native toggles across sample replacement before Select All", async () => {
+  const env = setup();
+  const h = nativeHarness(env);
+  const reading = createThreadReadingState();
+  try {
+    await act(async () => h.render(reading, "a"));
+    const original = details();
+    act(() => {
+      original.querySelector<HTMLElement>("summary")!.click();
+      assert.equal(original.open, true);
+      flushSync(() => h.render(reading, "b"));
+      assert.notEqual(
+        details(),
+        original,
+        "sample replacement owns a new native details node",
+      );
+    });
+    await act(async () => {
+      await tick();
+    });
+    assert.equal(details().open, false);
+    original.dispatchEvent(new env.dom.window.Event("toggle"));
+    assert.notEqual(
+      reading.snapshot().get(imagePreparationDisclosureKey("b")),
+      true,
+    );
+    await act(async () => assert.equal(h.callbacks.prepare!(), true));
+    assert.equal(
+      details().open,
+      false,
+      "B remains a new closed sample after native preparation",
+    );
+  } finally {
+    await env.close();
+  }
+});
+
+test("actual delayed native open survives preparation and actual delayed close survives cancellation", async () => {
+  const env = setup();
+  const h = nativeHarness(env);
+  const reading = createThreadReadingState();
+  try {
+    await act(async () => h.render(reading, "a"));
+    act(() => {
+      details().querySelector<HTMLElement>("summary")!.click();
+      assert.equal(reading.snapshot().size, 0);
+      assert.equal(h.callbacks.prepare!(), true);
+    });
+    await act(async () => {
+      await tick();
+    });
+    assert.equal(details().open, true);
+    assert.equal(
+      reading.snapshot().get(imagePreparationDisclosureKey("a")),
+      true,
+    );
+    await act(async () => {
+      details().querySelector<HTMLElement>("summary")!.click();
+      h.callbacks.cancelled!();
+      await tick();
+    });
+    assert.equal(details().open, false);
+    assert.equal(
+      reading.snapshot().get(imagePreparationDisclosureKey("a")),
+      false,
+    );
+    assert.equal(
+      document.querySelectorAll(".image-preparation-notice").length,
+      1,
+    );
+  } finally {
+    await env.close();
+  }
+});
+
+test("retained native callbacks after keyed Thread change cannot capture another Thread", async () => {
+  const env = setup();
+  const h = nativeHarness(env);
+  const a = createThreadReadingState();
+  const b = createThreadReadingState();
+  try {
+    await act(async () => h.render(a, "sample", "thread-a"));
+    const stalePrepare = h.callbacks.prepare!;
+    const staleCancel = h.callbacks.cancelled!;
+    const oldDetails = details();
+    act(() => {
+      oldDetails.querySelector<HTMLElement>("summary")!.click();
+      assert.equal(h.callbacks.prepare!(), true);
+    });
+    await act(async () => h.render(b, "sample", "thread-b"));
+    assert.equal(details().open, false);
+    assert.equal(oldDetails.isConnected, false);
+    const bBefore = [...b.snapshot()];
+    await act(async () => {
+      assert.equal(stalePrepare(), false);
+      staleCancel();
+      oldDetails.dispatchEvent(new env.dom.window.Event("toggle"));
+      await tick();
+    });
+    assert.deepEqual([...b.snapshot()], bBefore);
+    assert.deepEqual(h.captures, ["thread-a"]);
+    assert.equal(details().open, false);
+    assert.ok(
+      document.querySelectorAll("[data-transcript-row-key]").length < 200,
+    );
+  } finally {
     await env.close();
   }
 });
