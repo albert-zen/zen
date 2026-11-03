@@ -14,6 +14,7 @@ export interface SidebarTrigger {
   kind: string;
   label?: string;
   active: boolean;
+  definitionRevision?: number;
   nextRunAt?: number;
   sourceError?: string;
 }
@@ -47,6 +48,11 @@ export function sidebarTriggerFacts(value: unknown): SidebarTrigger[] {
       kind: t.kind,
       ...(typeof t.label === "string" ? { label: t.label } : {}),
       active: t.active,
+      ...(typeof t.definitionRevision === "number" &&
+      Number.isSafeInteger(t.definitionRevision) &&
+      t.definitionRevision >= 0
+        ? { definitionRevision: t.definitionRevision }
+        : {}),
       ...(typeof timer?.nextRunAt === "number"
         ? { nextRunAt: timer.nextRunAt }
         : {}),

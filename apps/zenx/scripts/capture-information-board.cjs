@@ -94,6 +94,23 @@ async function click(selector, label = selector) {
   );
   result.steps.push(label);
 }
+async function pressKey(keyCode, label) {
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+  result.steps.push(label);
+}
+async function focusWithNativeTab(selector, label) {
+  for (let index = 0; index < 160; index++) {
+    if (await evaluate(`document.activeElement===${query(selector)}`)) {
+      result.steps.push(label);
+      return;
+    }
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+    await pause(35);
+  }
+  throw Error("Native Tab could not reach: " + label);
+}
 async function settledLayout() {
   await until(
     () =>
@@ -140,13 +157,13 @@ async function insertComposerText(text) {
   );
 }
 async function replaceNativeFieldText(selector, text) {
-  await click(selector, "Edit only second Board field");
+  await click(selector, "Edit exact native field " + selector);
   await until(
     () =>
       evaluate(
         `(()=>{const e=${query(selector)};return document.activeElement===e&&typeof e?.selectionStart==='number'})()`,
       ),
-    "owned Board field has native focus before replacement",
+    "owned field has native focus before replacement",
   );
   // Renderer key injection does not traverse macOS's application-menu
   // accelerator. Use Electron's native editing command, then observe the real
@@ -165,7 +182,16 @@ async function replaceNativeFieldText(selector, text) {
     "native insertion committed the exact field value",
   );
 }
+async function settleScreenshotFrame() {
+  // DOM acknowledgement can precede the compositor's visible frame on macOS.
+  // Allow the asserted native state to paint without mutating focus or inputs.
+  await evaluate(
+    "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+  );
+  await pause(100);
+}
 async function screenshot(name) {
+  await settleScreenshotFrame();
   await fs.writeFile(
     path.join(directory, name),
     (await window.webContents.capturePage()).toPNG(),
@@ -207,12 +233,17 @@ async function capture(name, mode) {
       visibleHeaders.every((rect) => geometry.card.top >= rect.bottom + 11),
       "card clears actual visible conversation/workspace headings on every platform",
     );
+    // Accepted questions are above component settings. With multiple questions,
+    // the settings toolbar is legitimately below the fold, not occluded.
+    // Check the first real heading in DOM order and retain the hit-test evidence.
+    geometry.firstCardHeading = await evaluate(
+      "(()=>{const e=document.querySelector('.information-dock .user-question-attention > header, .information-dock .room-question-attention > header, .information-dock .information-settings-toolbar');if(!e)throw Error('Missing information heading');const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {text:e.textContent,top:r.top,bottom:r.bottom,hitClass:hit?.className,unoccluded:e.contains(hit)}})()",
+    );
     assert.equal(
-      await evaluate(
-        "(()=>{const e=document.querySelector('.information-dock .information-settings-toolbar'),r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))})()",
-      ),
+      geometry.firstCardHeading.unoccluded,
       true,
-      "first card heading is not occluded by a higher titlebar layer",
+      "first card heading is not occluded by a higher titlebar layer: " +
+        JSON.stringify(geometry.firstCardHeading),
     );
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
@@ -395,6 +426,242 @@ async function run() {
       ),
     "real unanswered question survived completed Turn and seed Host restart",
   );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-trigger-list').closest('section').querySelector('header button')===null",
+    ),
+    true,
+    "healthy trigger facts have no always-visible refresh control",
+  );
+  await click(
+    '[aria-label="Pause trigger · Daily synthetic review"]',
+    "Pause exact trigger through its native information switch",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('[aria-label=\"Enable trigger · Daily synthetic review\"]')?.getAttribute('aria-checked')==='false'",
+      ),
+    "authoritative pause readback",
+  );
+  await screenshot("01b-trigger-paused.png");
+  await click(
+    '[aria-label="Enable trigger · Daily synthetic review"]',
+    "Resume exact trigger through its revision-bound native switch",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('[aria-label=\"Pause trigger · Daily synthetic review\"]')?.getAttribute('aria-checked')==='true'",
+      ),
+    "authoritative resume readback",
+  );
+  const switchFacts = await evaluate(
+    "window.zenx.plugins.executeCommand('zenx-triggers','sidebar-facts')",
+  );
+  assert.equal(
+    switchFacts.triggers.find((trigger) => trigger.id === active.id)?.active,
+    true,
+  );
+  result.cases.push({
+    name: "native-trigger-switches",
+    pauseThenResume: true,
+    currentFacts: switchFacts.triggers.filter(
+      (trigger) => trigger.threadId === "information-main",
+    ),
+  });
+  await screenshot("01c-trigger-resumed.png");
+  const option =
+    ".user-question-card:first-of-type .user-question-option:first-of-type";
+  await click(
+    option,
+    "Select a full question option row using native pointer input",
+  );
+  assert.equal(
+    await evaluate(`${query(option)}.querySelector('input').checked`),
+    true,
+  );
+  assert.equal(await evaluate(`${query(option)}.dataset.selected`), "true");
+  await pressKey(
+    "Down",
+    "Native radio Down selects the next option without submitting",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.user-question-card input[type=radio]:checked')?.closest('label').textContent.includes('Full suite later')",
+      ),
+    "native radio arrow selection",
+  );
+  assert.equal(
+    await evaluate(
+      "document.activeElement?.matches('input[type=radio]:checked')",
+    ),
+    true,
+  );
+  await screenshot("01d-radio-keyboard-focus.png");
+  await pressKey(
+    "Up",
+    "Native radio Up restores the first option without submitting",
+  );
+  await until(
+    () => evaluate(`${query(option)}.querySelector('input').checked`),
+    "native radio reverse selection",
+  );
+  const questionText =
+    ".user-question-card:first-of-type .user-question-text textarea";
+  const emptyHeight = await evaluate(
+    `${query(questionText)}.getBoundingClientRect().height`,
+  );
+  await replaceNativeFieldText(
+    questionText,
+    "Synthetic review notes.\nA second line.\nA third line.\nA fourth line.",
+  );
+  const questionSizing = await evaluate(
+    `(()=>{const e=${query(questionText)};return {height:e.getBoundingClientRect().height,resize:getComputedStyle(e).resize,fieldSizing:getComputedStyle(e).fieldSizing}})()`,
+  );
+  assert.ok(
+    questionSizing.height > emptyHeight,
+    "question textarea grows from real multiline input",
+  );
+  assert.equal(questionSizing.resize, "none");
+  result.cases.push({
+    name: "native-question-full-row-and-growth",
+    emptyHeight,
+    ...questionSizing,
+  });
+  await screenshot("01d-full-row-question-multiline.png");
+  await click(
+    ".information-toolbar button",
+    "Close information before a new foreground model question",
+  );
+  await click(
+    "#thread-composer",
+    "Retain native Composer focus during foreground question publication",
+  );
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-main')?.status==='idle')",
+      ),
+    "foreground actor idle before question publication",
+  );
+  const revealPrompt =
+    "Synthetic new foreground question reveals information without stealing focus.";
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({
+      threadId: "information-main",
+      clientUserMessageId: "native-information-reveal",
+      input: [
+        {
+          type: "text",
+          text:
+            "!tool ask_user_question " +
+            JSON.stringify({
+              questions: [
+                {
+                  id: "reveal",
+                  prompt: revealPrompt,
+                  multiSelect: true,
+                  options: [
+                    { id: "yes", label: "Keep the foreground draft" },
+                    { id: "verify", label: "Verify native keyboard selection" },
+                  ],
+                },
+              ],
+            }),
+        },
+      ],
+    })})`,
+  );
+  await until(
+    () =>
+      evaluate(
+        `document.querySelector('.user-question-attention')?.textContent.includes(${JSON.stringify(revealPrompt)})`,
+      ),
+    "real new foreground question automatically reveals its hidden panel",
+  );
+  assert.equal(
+    await evaluate(
+      "document.activeElement===document.querySelector('#thread-composer')",
+    ),
+    true,
+    "automatic reveal does not move native focus",
+  );
+  assert.equal(
+    await evaluate("document.querySelector('#thread-composer').value"),
+    "Synthetic draft must survive information and workspace toggles.",
+  );
+  await screenshot("01e-new-foreground-question-reveal.png");
+  result.cases.push({
+    name: "native-foreground-question-reveal",
+    composerFocusRetained: true,
+    draftRetained: true,
+  });
+  const checkbox = ".user-question-card input[type=checkbox]";
+  await click(
+    checkbox,
+    "Select a native full-row checkbox without sending an answer",
+  );
+  await until(
+    () => evaluate(`${query(checkbox)}.checked`),
+    "native checkbox pointer checked",
+  );
+  await pressKey("Space", "Native Space toggles only the focused checkbox");
+  await until(
+    () => evaluate(`!${query(checkbox)}.checked`),
+    "native checkbox Space unchecked",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.user-question-card input[type=checkbox]:checked').length",
+    ),
+    0,
+  );
+  await pressKey(
+    "Space",
+    "Native Space restores the focused checkbox selection",
+  );
+  await until(
+    () => evaluate(`${query(checkbox)}.checked`),
+    "native checkbox Space checked",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.user-question-card input[type=checkbox]:checked').length",
+    ),
+    1,
+  );
+  assert.equal(
+    await evaluate(
+      `document.activeElement===${query(checkbox)} && ${query(checkbox)}.matches(':focus-visible')`,
+    ),
+    true,
+    "native checkbox keyboard selection retains visible focus before capture",
+  );
+  await screenshot("01f-checkbox-keyboard-focus.png");
+  const keyboardSwitch =
+    '[aria-label="Pause trigger · Daily synthetic review"]';
+  // Native mouse focus differs by platform. Enter this keyboard flow with
+  // actual Tab navigation, then require both Space operations to retain focus.
+  await focusWithNativeTab(keyboardSwitch, "Tab to the native trigger switch");
+  await pressKey("Space", "Native Space pauses the focused trigger switch");
+  await until(
+    () =>
+      evaluate(
+        "document.activeElement?.getAttribute('aria-checked')==='false' && document.activeElement.getAttribute('aria-disabled')!=='true' && !document.activeElement.disabled",
+      ),
+    "paused native trigger switch retains focus",
+  );
+  await pressKey("Space", "Native Space resumes the focused trigger switch");
+  await until(
+    () =>
+      evaluate(
+        "document.activeElement?.getAttribute('aria-checked')==='true' && document.activeElement.getAttribute('aria-disabled')!=='true' && !document.activeElement.disabled",
+      ),
+    "native switch keyboard resume confirmed",
+  );
+  await screenshot("01g-trigger-keyboard-focus.png");
   await click(
     '[aria-label="Customize information"]',
     "Customize actual information layout",
@@ -650,9 +917,25 @@ async function run() {
       ),
     "owner-scoped draft preserved",
   );
-  await click(
-    ".information-toolbar button",
-    "Open original information for exact Trigger edit",
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='true'",
+      ),
+    "original owner's remembered open state is restored",
+  );
+  // A restored resource Tab uses an overlay; the main Tab uses the dock.
+  // Owner visibility must survive either independently restored workspace view.
+  const restoredMode = await evaluate(
+    "(()=>{const p=document.querySelector('.auxiliary-panel');return p?.dataset.open==='true' && p.dataset.expanded==='true' && p.dataset.primaryActive!=='true' ? 'overlay' : 'dock'})()",
+  );
+  await capture("10a-original-owner-restored", restoredMode);
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
+    ),
+    "true",
+    "returning owner restores its remembered open panel",
   );
   await click(
     '.information-trigger-list button[aria-label="Edit · Daily synthetic review"]',
@@ -1031,6 +1314,157 @@ async function run() {
   await evaluate(
     `window.zenx.shellPanel.request({operation:'stop',threadId:'information-main',taskId:${JSON.stringify(taskId)}})`,
   );
+  await click(main, "Return to main owner after its background command ended");
+  if (
+    await evaluate(
+      "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')==='false'",
+    )
+  )
+    await click(
+      ".information-toolbar button",
+      "Open information to inspect ended command removal",
+    );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.background-shell-list')===null && document.querySelector('.background-shell-status')?.textContent.includes('No background commands')",
+      ),
+    "ended command no longer appears as live work",
+  );
+  await screenshot("15-ended-command-removed.png");
+  result.cases.push({
+    name: "native-ended-command-removal",
+    endedCommandAbsent: true,
+  });
+  // Exercise the production language preference receiver with a synthetic
+  // same-origin preference event; this is not a native Settings-menu claim.
+  await evaluate(
+    "(()=>{localStorage.setItem('zenx.language','zh-CN');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',newValue:'zh-CN',storageArea:localStorage}));return true})()",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-content')?.textContent.includes('子对话')",
+      ),
+    "production Chinese child-conversation terminology",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-content').textContent.includes('子 Agent')",
+    ),
+    false,
+  );
+  await screenshot("16-chinese-child-conversations.png");
+  result.cases.push({
+    name: "chinese-child-conversations",
+    languageInput:
+      "production preference receiver with synthetic same-origin storage event",
+  });
+  // Reuse the original review's Chinese content for a comparable visual case,
+  // published through the actual native Host rather than injected into the DOM.
+  const referencePrompt = "资料卡里最该优先显示哪一类信息？";
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-main')?.status==='idle')",
+      ),
+    "reference visual question actor is idle",
+  );
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({
+      threadId: "information-main",
+      clientUserMessageId: "native-reference-visual-question",
+      input: [
+        {
+          type: "text",
+          text:
+            "!tool ask_user_question " +
+            JSON.stringify({
+              questions: [
+                {
+                  id: "reference-visual",
+                  prompt: referencePrompt,
+                  multiSelect: true,
+                  options: [
+                    {
+                      id: "live",
+                      label: "正在运行的事情",
+                      description: "后台命令、子对话和等待中的提问",
+                    },
+                    {
+                      id: "trigger",
+                      label: "触发器状态",
+                      description: "下一次运行时间与暂停状态",
+                    },
+                    {
+                      id: "recent",
+                      label: "最近活动",
+                      description: "刚才结束的任务与结果",
+                    },
+                  ],
+                },
+              ],
+            }),
+        },
+      ],
+    })})`,
+  );
+  await until(
+    () =>
+      evaluate(
+        `Array.from(document.querySelectorAll('.user-question-card')).some(e=>e.textContent.includes(${JSON.stringify(referencePrompt)}))`,
+      ),
+    "reference visual question accepted and rendered by the real Host",
+  );
+  const referenceCallId = await evaluate(
+    `Array.from(document.querySelectorAll('.user-question-card')).find(e=>e.textContent.includes(${JSON.stringify(referencePrompt)})).dataset.questionCallId`,
+  );
+  const referenceCard = `[data-question-call-id=${JSON.stringify(referenceCallId)}]`;
+  await click(
+    referenceCard + " .user-question-options > li:nth-child(1) input",
+    "Select first original-reference option",
+  );
+  await click(
+    referenceCard + " .user-question-options > li:nth-child(2) input",
+    "Select second original-reference option",
+  );
+  nativeTheme.themeSource = "dark";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance==='dark'"),
+    "reference comparison uses actual dark appearance",
+  );
+  await evaluate(
+    `${query(referenceCard)}.scrollIntoView({block:'start',inline:'nearest'})`,
+  );
+  await screenshot("17-reference-dark-Chinese-question-full-App.png");
+  const captureInformationCrop = async (name) => {
+    await settleScreenshotFrame();
+    const rectangle = await evaluate(
+      "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
+    );
+    await fs.writeFile(
+      path.join(directory, name),
+      (await window.webContents.capturePage(rectangle)).toPNG(),
+    );
+  };
+  await captureInformationCrop(
+    "17a-reference-dark-Chinese-question-native-crop.png",
+  );
+  await evaluate(
+    "document.querySelector('.information-trigger-list').closest('.information-widget').scrollIntoView({block:'start',inline:'nearest'})",
+  );
+  await screenshot("18-reference-dark-Chinese-triggers-full-App.png");
+  await captureInformationCrop(
+    "18a-reference-dark-Chinese-triggers-native-crop.png",
+  );
+  result.cases.push({
+    name: "original-reference-visual-comparison",
+    source:
+      "original #658/#659/#661/#662 reference wording; current production App with real native publication and pointer input",
+    crops:
+      "Electron capturePage of the actual information surface; no redrawing or image editing",
+    nativeInputsRetained: true,
+  });
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)

@@ -302,6 +302,9 @@ test("actual native summary counts only open requests and never re-dates publica
     return value;
   };
   const open = await summary();
+  const publishedId = (await f.server.listUserQuestions(f.thread.id))
+    .latestPublishedQuestionId;
+  assert.equal(publishedId, f.question.request.callItemId);
   assert.equal(open.status, "active");
   assert.deepEqual(open.userQuestionSummary, {
     openCount: 1,
@@ -318,6 +321,11 @@ test("actual native summary counts only open requests and never re-dates publica
     (item) => item.id === answer.turn.admission!.queuedItemId,
   )!;
   const received = await summary();
+  assert.equal(
+    (await f.server.listUserQuestions(f.thread.id)).latestPublishedQuestionId,
+    publishedId,
+    "answer admission is not a new publication",
+  );
   assert.deepEqual(received.userQuestionSummary, {
     openCount: 0,
     latestPublishedAt: f.question.createdAt,
@@ -347,6 +355,11 @@ test("actual native summary counts only open requests and never re-dates publica
     targets: [target],
   });
   const reopened = await summary();
+  assert.equal(
+    (await f.server.listUserQuestions(f.thread.id)).latestPublishedQuestionId,
+    publishedId,
+    "recall cannot mint a new publication identity",
+  );
   assert.deepEqual(reopened.userQuestionSummary, open.userQuestionSummary);
   assert.equal(reopened.recentActivityAt, received.recentActivityAt);
   await f.server.respondToUserQuestion(f.thread.id, {
