@@ -1843,13 +1843,13 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
     const copy = await evaluate(`(async()=>{
       await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);
       const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
-      return {clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
+      const lf=text=>text.replace(/\\r\\n?/g,'\\n'),nbsp=text=>text.replace(/\\u00a0/g,' '),collapsed=text=>text.replace(/\\s+/g,' '),nonWhitespace=text=>text.replace(/\\s/g,'');
+      const counts=(text,prefix)=>Object.fromEntries([['UTF16Length',text.length],['CRCount',text.split('\\r').length-1],['LFCount',text.split('\\n').length-1],['NBSPCount',text.split('\\u00a0').length-1],['TABCount',text.split('\\t').length-1]].map(([key,value])=>[prefix+key,value]));
+      return {...counts(b.text,'selected'),...counts(copied,'copied'),clipboardEqualAfterLF:lf(copied)===lf(b.text),clipboardEqualAfterEdgeTrim:copied.trim()===b.text.trim(),clipboardEqualAfterNBSP:nbsp(copied)===nbsp(b.text),clipboardEqualAfterLFAndNBSP:lf(nbsp(copied))===lf(nbsp(b.text)),clipboardEqualAfterCollapsedWhitespace:collapsed(copied)===collapsed(b.text),clipboardEqualNonWhitespace:nonWhitespace(copied)===nonWhitespace(b.text),clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
     })()`);
     Object.assign(result.nativeSelectAllQuality, copy);
-    assert.equal(
-      copy.clipboardMatchesSelection && copy.selectionSurvivesCopy,
-      true,
-    );
+    // Endpoint/body failures remain immediate. Raw equality is sticky at final acceptance.
+    assert.equal(copy.selectionSurvivesCopy, true);
     assert.equal(copy.copiedMarkerCount, 5003);
     assert.equal(copy.copiedMessageCount, 10006);
     assert.equal(copy.fullLastAssistantCopied, true);
@@ -1894,6 +1894,15 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
     "native edit cleanup leaves the owned Composer empty",
   );
   assert.equal(await evaluate("delete window.__nativeSelectAllQuality"), true);
+}
+
+// Comparison diagnostics cannot waive a raw native clipboard mismatch.
+function assertNativeClipboardMatch() {
+  assert.equal(
+    result.nativeSelectAllQuality?.clipboardMatchesSelection,
+    true,
+    "Native clipboard must match Selection exactly; comparison diagnostics do not waive this failure",
+  );
 }
 
 async function run() {
@@ -2955,6 +2964,7 @@ async function run() {
     );
     await screenshot(`responsive-history-${width}.png`);
   }
+  assertNativeClipboardMatch();
   result.ok = true;
 }
 async function verifyPackagedRuntime() {

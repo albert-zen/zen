@@ -1986,6 +1986,13 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       mountedUserRows: 5003,
       selectedMarkerCount: Infinity,
       copiedMarkerCount: "NEVER_EXPORT",
+      selectedUTF16Length: "NEVER_EXPORT",
+      copiedUTF16Length: Infinity,
+      selectedCRCount: 1,
+      copiedCRCount: NaN,
+      copiedTABCount: 2,
+      clipboardEqualAfterLF: "NEVER_EXPORT",
+      clipboardEqualAfterNBSP: false,
       selectedMessageCount: Infinity,
       copiedMessageCount: 10006,
       canonicalMessageOrder: "NEVER_EXPORT",
@@ -2017,6 +2024,13 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.equal(result.selectAll.mountedUserRows, 5003);
   assert.equal(result.selectAll.selectedMarkerCount, null);
   assert.equal(result.selectAll.copiedMarkerCount, null);
+  assert.equal(result.selectAll.selectedUTF16Length, null);
+  assert.equal(result.selectAll.copiedUTF16Length, null);
+  assert.equal(result.selectAll.selectedCRCount, 1);
+  assert.equal(result.selectAll.copiedCRCount, null);
+  assert.equal(result.selectAll.copiedTABCount, 2);
+  assert.equal(result.selectAll.clipboardEqualAfterLF, null);
+  assert.equal(result.selectAll.clipboardEqualAfterNBSP, false);
   assert.equal(result.selectAll.selectedMessageCount, null);
   assert.equal(result.selectAll.copiedMessageCount, 10006);
   assert.equal(result.selectAll.canonicalMessageOrder, null);
@@ -2286,6 +2300,8 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           clipboardText = clipboardText.replace(markers[2500], "");
         if (fault === "copy-missing-assistant")
           clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
+        if (fault === "copy-lf-variant") clipboardText = "\r\n" + clipboardText;
+        if (fault === "copy-nbsp-variant") clipboardText += "\u00a0";
         if (fault === "copy-lost-selection") w.getSelection().removeAllRanges();
       } else {
         assert.equal(action, "deleteBackward:");
@@ -2336,7 +2352,7 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     "until",
     "screenshot",
     source.slice(start, source.indexOf("\nasync function run()", start)) +
-      "; return checkNativeSelectAll;",
+      "; return async (...args) => { await checkNativeSelectAll(...args); assertNativeClipboardMatch(); };",
   )(
     assert,
     { platform: "darwin" },
@@ -2369,6 +2385,7 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     menuCalls,
     nativeCopyCalls,
     clipboardCleared,
+    cleared,
   };
 }
 
@@ -2441,8 +2458,14 @@ test("native Select All quality fails closed for missing bridge, partial selecti
         ].includes(fault)
       )
         assert.equal(run.nativeCopyCalls, 0, fault);
-      if (["copy-missing-row", "copy-lost-selection"].includes(fault))
+      if (["copy-missing-row", "copy-lost-selection"].includes(fault)) {
         assert.equal(run.clipboardCleared, true, fault);
+        assert.equal(
+          run.cleared,
+          false,
+          "Endpoint/body failure must stop before native clear",
+        );
+      }
     }
   } finally {
     sharedDom.window.close();
@@ -2483,6 +2506,114 @@ test("native canonical message oracle rejects unselected or partial final assist
   } finally {
     sharedDom.window.close();
   }
+});
+
+test("clipboard comparator executes the shipped wrapper with independent transforms and finite character counts", async () => {
+  const start = source.indexOf("const copy = await evaluate("),
+    literalStart = source.indexOf("`", start),
+    literalEnd = source.indexOf("`);", literalStart);
+  const expression = new Function(
+    "copied",
+    "return " + source.slice(literalStart, literalEnd + 1),
+  );
+  const dom = new JSDOM("<p></p>", { runScripts: "outside-only" }),
+    w = dom.window;
+  w.requestAnimationFrame = (callback) => queueMicrotask(callback);
+  const evaluate = wrappedDiagnosticEvaluator(w);
+  const compare = async (selected, copied) => {
+    const p = w.document.querySelector("p");
+    p.textContent = selected;
+    const range = w.document.createRange();
+    range.selectNodeContents(p);
+    const selection = w.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    w.__nativeSelectAllQuality = {
+      text: selected,
+      anchorNode: selection.anchorNode,
+      focusNode: selection.focusNode,
+      anchorOffset: selection.anchorOffset,
+      focusOffset: selection.focusOffset,
+      orderedMarkers: () => 0,
+      orderedMessages: () => 0,
+      lastAssistant: () => false,
+    };
+    return evaluate(expression(copied));
+  };
+  try {
+    const result = await compare("A\r\nB\u00a0\t😀", "A\nB \t😀");
+    for (const [key, expected] of Object.entries({
+      selectedUTF16Length: 8,
+      copiedUTF16Length: 7,
+      selectedCRCount: 1,
+      copiedCRCount: 0,
+      selectedLFCount: 1,
+      copiedLFCount: 1,
+      selectedNBSPCount: 1,
+      copiedNBSPCount: 0,
+      selectedTABCount: 1,
+      copiedTABCount: 1,
+      clipboardMatchesSelection: false,
+      clipboardEqualAfterLF: false,
+      clipboardEqualAfterNBSP: false,
+      clipboardEqualAfterEdgeTrim: false,
+      clipboardEqualAfterLFAndNBSP: true,
+      clipboardEqualAfterCollapsedWhitespace: true,
+      clipboardEqualNonWhitespace: true,
+    }))
+      assert.equal(result[key], expected, key);
+    const edge = await compare(" A ", "A");
+    assert.equal(edge.clipboardEqualAfterEdgeTrim, true);
+    assert.equal(edge.clipboardEqualAfterCollapsedWhitespace, false);
+    assert.equal((await compare("A", "AX")).clipboardEqualNonWhitespace, false);
+    assert.ok(
+      Object.values(result).every(
+        (value) => typeof value === "boolean" || Number.isFinite(value),
+      ),
+    );
+  } finally {
+    w.close();
+  }
+});
+
+test("raw native clipboard mismatch remains a final failure after restoration and editable checks", async () => {
+  const sharedDom = new JSDOM("", { runScripts: "outside-only" });
+  try {
+    for (const fault of ["copy-lf-variant", "copy-nbsp-variant"]) {
+      const run = await nativeSelectAllFixture(fault, sharedDom),
+        q = run.result.nativeSelectAllQuality;
+      assert.match(
+        run.error?.message ?? "",
+        /comparison diagnostics do not waive/,
+      );
+      assert.equal(q.clipboardMatchesSelection, false);
+      assert.equal(q.copiedMessageCount, 10006);
+      assert.equal(q.fullLastAssistantCopied, true);
+      assert.equal(q.selectionSurvivesCopy, true);
+      assert.equal(
+        q.selectionCleared &&
+          q.virtualRestored &&
+          q.restoredReaderAnchor &&
+          q.editableSelectionPreserved,
+        true,
+      );
+      assert.equal(
+        q.clipboardEqualAfterEdgeTrim && q.clipboardEqualNonWhitespace,
+        true,
+      );
+      assert.equal(
+        q.copiedUTF16Length - q.selectedUTF16Length,
+        fault === "copy-lf-variant" ? 2 : 1,
+      );
+      assert.equal(run.cleared && run.clipboardCleared, true);
+    }
+  } finally {
+    sharedDom.window.close();
+  }
+  assert.ok(
+    source.indexOf("  assertNativeClipboardMatch();\n  result.ok = true;") >
+      source.indexOf("await screenshot(`responsive-history-${width}.png`)"),
+  );
 });
 
 test("capture and exporter accept only the same fixed 19-image bound including native selection and failure", async () => {
