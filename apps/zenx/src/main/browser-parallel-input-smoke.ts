@@ -71,10 +71,42 @@ interface NativeState {
   titleSamples?: number;
   idleTitleCooldownMs?: number;
   drift: boolean;
+  firstDrift?: {
+    reason: string;
+    guardEpoch: number;
+    elapsedMs: number;
+    expectedPid: number;
+    observedPid: number;
+    activatedPid?: number;
+    axFocusedWindowStatus: number;
+    axTitleStatus: number;
+  };
   sentinelValue?: string;
   sentinelFocused?: boolean;
   focusedValueState?: "matched" | "pending" | "invalid";
 }
+/** Setup must establish a clean native baseline before any provider operation. */
+export function assertNativeFixtureBaseline(
+  observed: Pick<NativeState, "pid" | "hwnd" | "drift">,
+  expected: Pick<NativeState, "pid" | "hwnd">,
+): void {
+  assert.equal(
+    observed.pid,
+    expected.pid,
+    "Owned browser native baseline PID changed",
+  );
+  assert.equal(
+    observed.hwnd,
+    expected.hwnd,
+    "Owned browser native baseline HWND changed",
+  );
+  assert.equal(
+    observed.drift,
+    false,
+    "Owned browser native guard was already dirty before provider startup",
+  );
+}
+
 interface Target {
   id: string;
   title: string;
@@ -928,6 +960,17 @@ async function main(): Promise<void> {
   const profile = path.join(directory, "browser-profile");
   await mkdir(profile);
   const reports: Record<string, unknown>[] = [];
+  const nativeCheckpoints: Array<{
+    phase: string;
+    state: Omit<NativeState, "title">;
+  }> = [];
+  const recordNative = (state: NativeState) => {
+    // Never retain an unrelated application's title if foreground really changed.
+    const { title: _title, ...safe } = state;
+    if (nativeCheckpoints.length < 16)
+      nativeCheckpoints.push({ phase, state: safe });
+    return state;
+  };
   const cdpDiagnostics = new UserBrowserCdpDiagnosticObserver();
   let diagnosticOutcome: "running" | "passed" | "failed" = "running";
   let cleanupCompleted = false;
@@ -1075,11 +1118,15 @@ async function main(): Promise<void> {
       const state = await native!.call("snapshot");
       return state.pid === ownedBrowserPid ? state : undefined;
     }, "owned Chrome foreground");
-    await native.call("guard", {
-      pid: ownedBrowserPid,
-      hwnd: nativeBrowser.hwnd,
-      title: userTitle,
-    });
+    phase = "startup-native-guard";
+    const startupGuard = recordNative(
+      await native.call("guard", {
+        pid: ownedBrowserPid,
+        hwnd: nativeBrowser.hwnd,
+        title: userTitle,
+      }),
+    );
+    assertNativeFixtureBaseline(startupGuard, nativeBrowser);
     // Setup may focus/activate the owned window. Freeze its event history before
     // any provider work, and verify it before the scenario loop resets the guard.
     const beforeOpen = await userRpc.evaluate<PageState>(stateScript);
@@ -1172,7 +1219,7 @@ async function main(): Promise<void> {
       "User tab visibility changed during provider startup",
     );
     assert.equal(
-      (await native.call("snapshot")).drift,
+      recordNative(await native.call("snapshot")).drift,
       false,
       "backend.open changed native foreground",
     );
@@ -1625,6 +1672,7 @@ async function main(): Promise<void> {
       disposableProfile: true,
       fixtureOnly: true,
       osPermissionRequested: false,
+      nativeCheckpoints,
       reports,
     };
     console.log(JSON.stringify(report, null, 2));
@@ -1643,24 +1691,38 @@ async function main(): Promise<void> {
     diagnosticOutcome = "passed";
   } catch (error) {
     diagnosticOutcome = "failed";
-    console.error(
-      JSON.stringify({
-        status: "failed",
-        platform: process.platform,
-        reports,
-        phase,
-        transportDiagnostics,
-        transportDropped,
-        ownedBrowser: {
-          pid: browser?.pid,
-          exitCode: browser?.exitCode,
-          signalCode: browser?.signalCode,
-          killed: browser?.killed,
-          stderr: browserError,
-        },
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    const report = {
+      status: "failed",
+      platform: process.platform,
+      reports,
+      nativeCheckpoints,
+      phase,
+      transportDiagnostics,
+      transportDropped,
+      ownedBrowser: {
+        pid: browser?.pid,
+        exitCode: browser?.exitCode,
+        signalCode: browser?.signalCode,
+        killed: browser?.killed,
+        stderr: browserError,
+      },
+      error: error instanceof Error ? error.message : String(error),
+    };
+    console.error(JSON.stringify(report));
+    // Keep the failure and first native cause, not only the CDP transport tail.
+    // Evidence-write failure must never replace the original assertion.
+    try {
+      const artifacts = process.env.ZENX_PARALLEL_INPUT_ARTIFACT_DIR;
+      if (artifacts) {
+        await mkdir(artifacts, { recursive: true });
+        await writeFile(
+          path.join(artifacts, "browser-parallel-input.json"),
+          JSON.stringify(report, null, 2),
+        );
+      }
+    } catch {
+      /* Preserve the original failed acceptance. */
+    }
     throw error;
   } finally {
     cdpDiagnostics.mark("cleanup-start");
@@ -1893,28 +1955,52 @@ var nextIdleTitleSampleAt = 0.0
 var titleSamples = 0
 var guardEpoch = 0
 var activationObserver: NSObjectProtocol? = nil
+var guardStartedAt = 0.0
+var firstDrift: [String:Any]? = nil
+var ownershipFailure = "none"
+var axFocusedWindowStatus: Int32 = 0
+var axTitleStatus: Int32 = 0
 var sentinel: NSWindow? = nil
 var field: NSTextField? = nil
 func currentPid() -> pid_t { NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1 }
 func titleFor(_ pid: pid_t) -> String {
   titleSamples += 1
   var window: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, &window) == .success, let window else { return "" }
+  axTitleStatus = 0
+  axFocusedWindowStatus = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, &window).rawValue
+  guard axFocusedWindowStatus == 0, let window else { return "" }
   var title: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title) == .success else { return "" }
+  axTitleStatus = AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &title).rawValue
+  guard axTitleStatus == 0 else { return "" }
   return title as? String ?? ""
 }
 func owns(checkTitle: Bool = true) -> Bool {
   if expectedPid == 0 { return true }
-  guard currentPid() == expectedPid else { return false }
-  if expectedPid == getpid() { return sentinel?.isKeyWindow == true && field?.currentEditor() != nil }
+  guard currentPid() == expectedPid else { ownershipFailure = "foreground-pid-changed"; return false }
+  if expectedPid == getpid() {
+    let focused = sentinel?.isKeyWindow == true && field?.currentEditor() != nil
+    if !focused { ownershipFailure = "sentinel-focus-changed" }
+    return focused
+  }
   if !checkTitle { return true }
-  return !AXIsProcessTrusted() || titleFor(expectedPid).contains(expectedTitle)
+  if !AXIsProcessTrusted() { return true }
+  if titleFor(expectedPid).contains(expectedTitle) { return true }
+  ownershipFailure = axFocusedWindowStatus != 0 ? "ax-focused-window-unavailable" : axTitleStatus != 0 ? "ax-title-unavailable" : "focused-window-title-mismatch"
+  return false
+}
+func latchDrift(_ reason: String, _ activatedPid: pid_t = 0) {
+  if firstDrift == nil {
+    var observed: [String:Any] = ["reason":reason,"guardEpoch":guardEpoch,"elapsedMs":(ProcessInfo.processInfo.systemUptime - guardStartedAt) * 1000,
+      "expectedPid":Int(expectedPid),"observedPid":Int(currentPid()),"axFocusedWindowStatus":axFocusedWindowStatus,"axTitleStatus":axTitleStatus]
+    if activatedPid != 0 { observed["activatedPid"] = Int(activatedPid) }
+    firstDrift = observed
+  }
+  drift = true
 }
 func sample(checkTitle: Bool = true) {
   if expectedPid != 0 {
     samples += 1
-    if !owns(checkTitle: checkTitle) { drift = true }
+    if !owns(checkTitle: checkTitle) { latchDrift(ownershipFailure) }
     if checkTitle { nextIdleTitleSampleAt = ProcessInfo.processInfo.systemUptime + idleTitleCooldown }
   }
 }
@@ -1927,21 +2013,25 @@ func resetGuard(_ pid: pid_t = 0, _ title: String = "") {
   activationObserver = nil
   expectedPid = pid; expectedTitle = title
   drift = false; samples = 0; nextIdleTitleSampleAt = 0; titleSamples = 0
+  firstDrift = nil; ownershipFailure = "none"; axFocusedWindowStatus = 0; axTitleStatus = 0
+  guardStartedAt = ProcessInfo.processInfo.systemUptime
   if pid == 0 { return }
   let epoch = guardEpoch
   activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didActivateApplicationNotification,object:nil,queue:.main) { notification in
     // Ignore a callback already queued by a retired guard. Within this epoch,
     // use the historical owner even if foreground has since returned.
     guard guardEpoch == epoch, expectedPid != 0 else { return }
-    if let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, activated.processIdentifier != expectedPid { drift = true }
+    if let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, activated.processIdentifier != expectedPid { latchDrift("application-activated", activated.processIdentifier) }
     sample()
   }
 }
 func state() -> [String:Any] {
   sample()
-  return ["pid":Int(currentPid()),"axTrusted":AXIsProcessTrusted(),"samples":samples,"drift":drift,
+  var result: [String:Any] = ["pid":Int(currentPid()),"axTrusted":AXIsProcessTrusted(),"samples":samples,"drift":drift,
           "titleSamples":titleSamples,"idleTitleCooldownMs":idleTitleCooldown * 1000,
           "sentinelValue":field?.stringValue ?? "", "sentinelFocused":sentinel?.isKeyWindow == true && field?.currentEditor() != nil]
+  if let firstDrift { result["firstDrift"] = firstDrift }
+  return result
 }
 func emit(_ id: Int, _ result: [String:Any] = [:], _ error: String? = nil) {
   let response: [String:Any] = error == nil ? ["id":id,"result":result] : ["id":id,"error":error!]
