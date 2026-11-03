@@ -23,6 +23,7 @@ function fixture({
   cachedOwnValue = false,
   activationKind = "click",
   cachedPresenceStyle = false,
+  activationSnapshotCost = 0,
 } = {}) {
   const dom = new JSDOM(
     '<main class="thread-view"><div class="messages"><div class="messages-inner"></div></div><div class="bottom-zone"><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></div></main>',
@@ -96,6 +97,8 @@ function fixture({
       }
     };
   Object.defineProperty(w.performance, "now", { value: () => now });
+  const marks = new Map();
+  w.performance.mark = (name) => marks.set(name, now);
   w.requestAnimationFrame = (callback) => {
     frames.set(++id, callback);
     return id;
@@ -155,6 +158,14 @@ function fixture({
   }
   if (layoutObservation)
     layoutObserver.deliver(d.querySelector(".messages-inner"), 1000);
+  if (activationSnapshotCost) {
+    const query = d.querySelector.bind(d);
+    d.querySelector = (selector) => {
+      if (selector === '.composer-send-popover[data-state="open"]')
+        now += activationSnapshotCost;
+      return query(selector);
+    };
+  }
   if (activationKind === "enter")
     d.querySelector("#thread-composer").dispatchEvent(
       new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
@@ -190,6 +201,7 @@ function fixture({
     originalOwnValueDescriptor,
     presencePanel,
     presenceStyle,
+    marks,
     geometryReads: () => geometryReads,
     resize(height) {
       layoutObserver.deliver(d.querySelector(".messages-inner"), height);
@@ -702,6 +714,20 @@ test("synthetic Enter observer uses the activation clock without clicking Send",
     assert.ok(Number.isFinite(f.record.feedbackSubsequentFrameMs));
   } finally {
     f.close();
+  }
+});
+test("native activation trace mark precedes optional DOM snapshot work", () => {
+  for (const activationKind of ["click", "enter"]) {
+    const f = fixture({ activationKind, activationSnapshotCost: 12 });
+    try {
+      assert.equal(
+        f.marks.get("zen-send-0-native-click") - f.record.clickMs,
+        0,
+        "DOM queries must not skew the existing record-to-trace clock contract",
+      );
+    } finally {
+      f.close();
+    }
   }
 });
 test("cached exact-panel style Proxy measures existing reads and restores without CSS value export", () => {

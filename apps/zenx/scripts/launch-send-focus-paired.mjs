@@ -896,6 +896,38 @@ try {
     stage:
       capture?.waitingFor ?? capture?.pendingOperation ?? "launcher validation",
     reason: "native-capture-or-validation-failed",
+    captureCompleted: capture?.ok === true,
+    // Fixed stage/reason enums only. Raw trace, error stacks and paths stay
+    // private even when the final timeline contract rejects a capture.
+    validationLine:
+      Number(/launch-send-feedback\.mjs:(\d+):/.exec(error.stack ?? "")?.[1]) ||
+      null,
+    profileState: {
+      stage: ["private-review", "timeline-summary", "summary-write"].includes(
+        capture?.profile?.reviewStage,
+      )
+        ? capture.profile.reviewStage
+        : "unavailable",
+      passed: capture?.profile?.review?.passed === true,
+      reasonCodes: (capture?.profile?.review?.reasonCodes ?? [])
+        .filter((reason) =>
+          [
+            "known-credential-literal",
+            "private-configuration-content",
+            "credential-or-configuration-pattern",
+            "non-fixture-user-path",
+            "review-input-unavailable-or-invalid",
+            "timeline-contract-invalid",
+            "summary-write-failed",
+          ].includes(reason),
+        )
+        .slice(0, 8),
+      traceStopped: capture?.profile?.traceStopped === true,
+      deadlineExceeded: capture?.profile?.deadlineExceeded === true,
+      durationMs: Number.isFinite(capture?.profile?.durationMs)
+        ? capture.profile.durationMs
+        : null,
+    },
     rendererSourceBundles,
     driverHashes: {
       capture: hashes["scripts/capture-send-feedback.cjs"],

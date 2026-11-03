@@ -332,12 +332,14 @@ function installObservation(
         : event.target?.closest?.(".composer-send-control > button.action-orb");
     if (!button || record.clickMs !== undefined) return;
     record.clickMs = performance.now();
+    // Keep this adjacent to the timestamp: optional DOM snapshots can be slow
+    // on the full-history fixture and must not skew record-to-trace clocks.
+    mark("native-click");
     record.activationKind = activationKind;
     record.sendPanelOpenAtActivation = Boolean(
       document.querySelector('.composer-send-popover[data-state="open"]'),
     );
     record.editorFocusedAtActivation = document.activeElement === editor();
-    mark("native-click");
     visibility("click");
     record.trusted = event.isTrusted;
     record.disabledAtClick = button.disabled;
