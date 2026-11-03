@@ -1,3 +1,8 @@
+import {
+  NativeRoomQuestionService,
+  subscribeRoomQuestionInvalidations,
+} from "./native-room-question-service.js";
+import { nativeRoomQuestionFailure } from "../native-room-questions.js";
 import { createRoomQuestionPublisher } from "./room-question-publisher.js";
 import { browserObservationSubscribeReply } from "../preload/browser-observation-ipc.js";
 import { BoardHostService } from "./board-host-service.js";
@@ -452,6 +457,17 @@ async function bootstrapZenX(): Promise<void> {
     new FileTraceStore(join(zenDataDirectory, "trace")),
   );
   threadSidebarStore = threadSidebar;
+  const roomQuestions = new NativeRoomQuestionService(() =>
+    automationService?.roomsAvailable() &&
+    capabilityService
+      ?.pluginSnapshot()
+      .plugins.some(
+        (plugin) =>
+          plugin.id === "zenx-rooms" && plugin.enabled && plugin.available,
+      )
+      ? automationService
+      : undefined,
+  );
   const information = new NativeInformationService({
     sidebar: threadSidebar,
     rooms: () =>
@@ -554,6 +570,18 @@ async function bootstrapZenX(): Promise<void> {
   );
   ipcMain.handle(ipcChannels.informationUpdate, (event, request: unknown) =>
     nativeSidebarRequest(event, (admit) => information.update(request, admit)),
+  );
+  ipcMain.handle(
+    ipcChannels.roomQuestionsRequest,
+    async (event, input: unknown) => {
+      try {
+        return await nativeSidebarRequest(event, (admit) =>
+          roomQuestions.request(input, admit),
+        );
+      } catch (error) {
+        return nativeRoomQuestionFailure(error);
+      }
+    },
   );
   threadSidebar.onChanged((state) => {
     for (const window of appWindows()) {
@@ -1033,6 +1061,8 @@ async function bootstrapZenX(): Promise<void> {
       appServerPort: selfControlPort,
     });
     capabilityService.onChange(() => {
+      for (const room of automationService?.snapshot().rooms ?? [])
+        notifyRoomQuestionsChanged(room.id);
       try {
         void operationalDiagnostics
           .observePlugins(capabilityService!.diagnostics())
@@ -1230,6 +1260,10 @@ async function bootstrapZenX(): Promise<void> {
     bootstrapFence.throwIfCancelled();
     // This map is fresh for each Host bootstrap. Revisions never cross the wire.
     const roomVersions = new Map<string, number>();
+    subscribeRoomQuestionInvalidations(
+      automationService,
+      notifyRoomQuestionsChanged,
+    );
     automationService.onChange((snapshot, revision) => {
       for (const room of snapshot.rooms) {
         if (!room.assistant) continue;
@@ -2979,4 +3013,28 @@ function requireConfigurationRevision(value: unknown): void {
     throw new Error(
       "Configuration revision is required; reload settings before applying changes",
     );
+}
+
+/** Content-free invalidation to current trusted native documents only. */
+function notifyRoomQuestionsChanged(roomId: string): void {
+  for (const window of appWindows()) {
+    const contents = window.webContents;
+    if (contents.isDestroyed()) continue;
+    const frame = contents.mainFrame;
+    if (
+      frame.isDestroyed() ||
+      frame.detached ||
+      !isTrustedImZenXSetupSender(
+        {
+          ownedWindow: ownedAppWindowIds.has(window.id),
+          mainFrame: true,
+          url: frame.url,
+        },
+        process.env["ELECTRON_RENDERER_URL"] ??
+          pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+      )
+    )
+      continue;
+    contents.send(ipcChannels.roomQuestionsChanged, roomId);
+  }
 }
