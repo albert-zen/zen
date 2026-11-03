@@ -112,8 +112,26 @@
   ],
   "integratedMain": "869921bd6ba827880113ca1e14a12ac6e2324b1e",
   "completeCi": {
-    "statusAsOfPublication": "Pending: 5 of 8 successful, aggregate running, two macOS jobs queued. Native visual acceptance is not a full CI pass.",
-    "run": "https://github.com/albert-zen/zen/actions/runs/41724783462"
+    "status": "success",
+    "run": "https://github.com/albert-zen/zen/actions/runs/41724783462",
+    "successfulJobs": 8,
+    "zenxTests": {
+      "passed": 5480,
+      "skipped": 56,
+      "failed": 0
+    },
+    "capacityRetries": {
+      "originalJob": 126226596610,
+      "firstRetry": 126242066612,
+      "bothUnstarted": true,
+      "bothRunnerId": 0,
+      "bothSteps": 0,
+      "reason": "GitHub hosted macOS arm64 runner capacity; no runner acquired",
+      "delayedRetryAfterMinutes": 30,
+      "successfulJob": 126264953200,
+      "guardsOrSourceChanged": false
+    },
+    "otherWorkflows": "Native full App, both file-motion modes, Composer and Trace passed"
   },
   "verifiedAtUtc": "2026-11-03T21:58:44.861648+00:00",
   "nativeCurrentAttempts": {
@@ -132,5 +150,6 @@
     "oldSessionReplayed": false,
     "guardsOrTimeoutsChanged": false,
     "publicHead": "aeaa0332c0d6a6a520c47f226b316a3a79bee438"
-  }
+  },
+  "ciVerifiedAtUtc": "2026-11-03T23:09:00Z"
 }
