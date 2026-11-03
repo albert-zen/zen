@@ -120,6 +120,32 @@ async function insertComposerText(text) {
     "actual Composer committed exact native input",
   );
 }
+async function replaceNativeFieldText(selector, text) {
+  await click(selector, "Edit only second Board field");
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const e=${query(selector)};return document.activeElement===e&&typeof e?.selectionStart==='number'})()`,
+      ),
+    "owned Board field has native focus before replacement",
+  );
+  // Renderer key injection does not traverse macOS's application-menu
+  // accelerator. Use Electron's native editing command, then observe the real
+  // selection before inserting once. No DOM value or selection is assigned.
+  window.webContents.selectAll();
+  await until(
+    () =>
+      evaluate(
+        `(()=>{const e=${query(selector)};return document.activeElement===e&&e.selectionStart===0&&e.selectionEnd===e.value.length})()`,
+      ),
+    "native Select All selected the complete owned field",
+  );
+  await window.webContents.insertText(text);
+  await until(
+    () => evaluate(`${query(selector)}.value===${JSON.stringify(text)}`),
+    "native insertion committed the exact field value",
+  );
+}
 async function screenshot(name) {
   await fs.writeFile(
     path.join(directory, name),
@@ -424,21 +450,10 @@ async function run() {
       evaluate("document.querySelectorAll('.board-field input').length===2"),
     "two independent native Board fields",
   );
-  await click(
+  await replaceNativeFieldText(
     row(secondId) + " .board-field input",
-    "Edit only second Board field",
+    "second native draft only",
   );
-  window.webContents.sendInputEvent({
-    type: "keyDown",
-    keyCode: "A",
-    modifiers: [process.platform === "darwin" ? "meta" : "control"],
-  });
-  window.webContents.sendInputEvent({
-    type: "keyUp",
-    keyCode: "A",
-    modifiers: [process.platform === "darwin" ? "meta" : "control"],
-  });
-  await window.webContents.insertText("second native draft only");
   await until(
     () =>
       evaluate(
