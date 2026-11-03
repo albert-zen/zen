@@ -170,7 +170,7 @@ function enableVirtualGeometry() {
     },
     scrollHeight: {
       configurable: true,
-      get() {
+      get(this: HTMLElement) {
         if (!this.classList.contains("messages"))
           return this.closest(".virtual-transcript-content") ? 280 : 32;
         const region = [

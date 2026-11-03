@@ -5,10 +5,11 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { LegendListRef } from "@legendapp/list/react";
-import type { Turn } from "../src/protocol-client/index.js";
+import type { CommandItem, Turn } from "../src/protocol-client/index.js";
 import {
   ExperimentalTranscriptViewport,
   type VirtualTranscriptHandle,
+  type VirtualTranscriptRow,
 } from "../src/renderer/src/ExperimentalTranscriptViewport.js";
 import { VirtualTranscriptFind } from "../src/renderer/src/VirtualTranscriptFind.js";
 import { ToolResultRenderer } from "../src/renderer/src/ToolResultRenderer.js";
@@ -115,7 +116,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
         ],
       }) as Turn,
   );
-  let rows = turns.map((turn, index) => ({
+  let rows: VirtualTranscriptRow[] = turns.map((turn, index) => ({
     key: JSON.stringify(["thread", "turn", turn.id]),
     content: React.createElement(
       "div",
@@ -159,12 +160,20 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
   const tool = {
     type: "commandExecution",
     id: "tool-item",
+    pluginId: null,
+    scriptPath: null,
     command: "fixture-tool",
+    cwd: "/workspace/zen",
+    processId: null,
+    source: "agent",
+    status: "completed",
+    commandActions: [],
+    durationMs: null,
     contentType: "fixture/unknown",
     structuredContent: { body: "Visible structure" },
     aggregatedOutput: "Visible output",
     exitCode: 0,
-  } as Extract<Turn["items"][number], { type: "commandExecution" }>;
+  } satisfies CommandItem;
   turns = [
     ...turns,
     { id: "tool-turn", status: "completed", items: [tool] } as Turn,

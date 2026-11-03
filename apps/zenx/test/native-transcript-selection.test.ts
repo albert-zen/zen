@@ -14,24 +14,31 @@ import {
   alignTranscriptSelectionAnchor,
 } from "../src/renderer/src/native-transcript-selection.js";
 
+function rectList(...rects: DOMRect[]): DOMRectList {
+  return Object.assign(rects, {
+    item: (index: number) => rects[index] ?? null,
+  });
+}
+
 test("native page selection defers to editors and covers visible transcripts only", () => {
   const dom = new JSDOM(
     "<main class='thread-view'><div class='messages'><p>History</p></div><textarea></textarea><div contenteditable='true' tabindex='0'></div></main><main class='thread-view' hidden><div class='messages'></div></main>",
   );
-  dom.window.HTMLElement.prototype.getClientRects = () => [{}] as DOMRectList;
+  dom.window.HTMLElement.prototype.getClientRects = () =>
+    rectList(new dom.window.DOMRect());
   try {
     const [primary, hidden] =
       dom.window.document.querySelectorAll<HTMLElement>(".messages");
     assert.equal(ownsNativeTranscriptSelection(primary!), true);
     assert.equal(ownsNativeTranscriptSelection(hidden!), false);
     const view = primary!.closest<HTMLElement>(".thread-view")!;
-    view.getClientRects = () => [] as unknown as DOMRectList;
+    view.getClientRects = () => rectList();
     assert.equal(
       ownsNativeTranscriptSelection(primary!),
       false,
       "a CSS-hidden or detached cached viewport cannot claim native page selection",
     );
-    view.getClientRects = () => [{}] as DOMRectList;
+    view.getClientRects = () => rectList(new dom.window.DOMRect());
 
     const other = dom.window.document.createElement("main");
     other.className = "thread-view";
@@ -128,7 +135,7 @@ test("explicit native Select All mounts canonical order only until actual Select
     return rect(0, this.classList.contains("messages") ? 600 : 280);
   };
   dom.window.HTMLElement.prototype.getClientRects = function () {
-    return [this.getBoundingClientRect()] as unknown as DOMRectList;
+    return rectList(this.getBoundingClientRect());
   };
   Object.defineProperties(dom.window.HTMLElement.prototype, {
     clientHeight: {

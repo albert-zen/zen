@@ -21,12 +21,20 @@ import { transcriptFindRange } from "../src/renderer/src/transcript-find-ranges.
 const item = {
   type: "commandExecution",
   id: "call",
+  pluginId: null,
+  scriptPath: null,
   command: "fixture",
+  cwd: "/workspace/zen",
+  processId: null,
+  source: "agent",
+  status: "failed",
+  commandActions: [],
+  durationMs: null,
   contentType: "fixture/cards",
   structuredContent: { title: "Needle card", code: "**literal**" },
   aggregatedOutput: "Needle output\nexact second line",
   exitCode: 7,
-} as CommandItem;
+} satisfies CommandItem;
 function snapshot(
   kind: "trusted" | "isolated" = "trusted",
 ): ZenXPluginSnapshot {
