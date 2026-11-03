@@ -41,3 +41,28 @@ test("experimental warning color refers to the defined current theme alias", () 
   assert.match(theme, /--text-secondary:\s*var\(--color-text-secondary\);/);
   assert.match(theme, /--color-text-secondary:\s*#[0-9a-f]{6};/i);
 });
+
+test("empty virtual footer compensates only the final row gap at each breakpoint", () => {
+  assert.match(
+    wide,
+    /\.virtual-transcript-footer:empty\s*\{\s*padding-bottom:\s*calc\(\s*max\(38px, calc\(var\(--bottom-zone-height, 0px\) \+ 24px\)\) - 24px\s*\);/,
+  );
+  assert.match(
+    narrow,
+    /\.virtual-transcript-footer:empty\s*\{\s*padding-bottom:\s*calc\(\s*max\(28px, calc\(var\(--bottom-zone-height, 0px\) \+ 24px\)\) - 20px\s*\);/,
+  );
+  // The rendered DOM decides emptiness, including a Fragment whose pending
+  // component returns []; pending/progress footer children keep their own gap.
+  assert.doesNotMatch(wide + narrow, /:has\(/);
+  for (const [gap, minimum] of [
+    [24, 38],
+    [20, 28],
+  ]) {
+    for (const composerHeight of [0, 108, 280]) {
+      const standardClearance = Math.max(minimum, composerHeight + 24);
+      const emptyFooterClearance = standardClearance - gap;
+      assert.equal(gap + emptyFooterClearance, standardClearance);
+      assert.ok(emptyFooterClearance >= 0);
+    }
+  }
+});

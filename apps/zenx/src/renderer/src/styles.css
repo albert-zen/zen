@@ -12617,6 +12617,13 @@ button:disabled {
   gap: 24px;
   padding-bottom: max(38px, calc(var(--bottom-zone-height, 0px) + 24px));
 }
+/* The final row already carries its gap. With no rendered footer content,
+   subtract that gap once so the total composer clearance matches full DOM. */
+.virtual-transcript-footer:empty {
+  padding-bottom: calc(
+    max(38px, calc(var(--bottom-zone-height, 0px) + 24px)) - 24px
+  );
+}
 .virtual-transcript-warning {
   color: var(--text-secondary);
   font-size: 11px;
@@ -12632,6 +12639,11 @@ button:disabled {
   .virtual-transcript-footer {
     gap: 20px;
     padding-bottom: max(28px, calc(var(--bottom-zone-height, 0px) + 24px));
+  }
+  .virtual-transcript-footer:empty {
+    padding-bottom: calc(
+      max(28px, calc(var(--bottom-zone-height, 0px) + 24px)) - 20px
+    );
   }
 }
 
