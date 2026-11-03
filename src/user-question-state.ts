@@ -39,6 +39,8 @@ export interface UserQuestionSummary {
 export interface UserQuestionPage {
   questions: readonly UserQuestionState[];
   totalPending: number;
+  /** Last accepted local publication by append order, independent of pagination or replies. */
+  latestPublishedQuestionId?: string;
   /** A local request identity, not a persistent cursor or permission token. */
   nextAfter?: string;
 }
@@ -76,6 +78,7 @@ export class ThreadUserQuestionProjection {
   readonly #attentionCandidates = new Set<string>();
   #value: readonly UserQuestionState[] = emptyQuestions;
   #summary: UserQuestionSummary = { openCount: 0 };
+  #latestPublishedQuestionId: string | undefined;
   readonly #byRequest = new Map<
     string,
     { question: UserQuestionState; position: number }
@@ -95,6 +98,7 @@ export class ThreadUserQuestionProjection {
       this.#queuedIds.clear();
       this.#value = emptyQuestions;
       this.#summary = { openCount: 0 };
+      this.#latestPublishedQuestionId = undefined;
       this.#byRequest.clear();
       this.#pending = [];
       this.#dirty = false;
@@ -236,6 +240,24 @@ export class ThreadUserQuestionProjection {
       )
         latestPublishedAt = timestamp;
     });
+    // Calls can finish out of order. Only an accepted result's append position
+    // advances publication identity; answers, recall, and page shifts cannot.
+    this.#latestPublishedQuestionId = undefined;
+    const publishedByResult = new Map(
+      this.#value.map((question) => [
+        question.resultItemId,
+        question.request.callItemId,
+      ]),
+    );
+    if (publishedByResult.size > 0) {
+      for (let index = contexts.length - 1; index >= 0; index--) {
+        const id = publishedByResult.get(contexts[index]!.id);
+        if (id !== undefined) {
+          this.#latestPublishedQuestionId = id;
+          break;
+        }
+      }
+    }
     this.#summary = {
       openCount,
       ...(latestPublishedAt === undefined ? {} : { latestPublishedAt }),
@@ -297,6 +319,9 @@ export class ThreadUserQuestionProjection {
     return {
       questions: structuredClone(entries.map(({ question }) => question)),
       totalPending: this.#pending.length,
+      ...(this.#latestPublishedQuestionId === undefined
+        ? {}
+        : { latestPublishedQuestionId: this.#latestPublishedQuestionId }),
       ...(left + entries.length < this.#pending.length
         ? { nextAfter: entries.at(-1)!.question.request.callItemId }
         : {}),

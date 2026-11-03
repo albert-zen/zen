@@ -14,6 +14,11 @@ import {
 import { conversationKey, type BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/controls.js";
+import {
+  consumeInformationReveal,
+  readInformationOpen,
+  rememberInformationOpen,
+} from "./information-panel-memory.js";
 
 /** A separate contribution slot: no resource tab, navigation or execution ownership. */
 export function PluginInformationHost({
@@ -27,6 +32,7 @@ export function PluginInformationHost({
   resourcePanelWidth = 0,
   contextContent,
   managedBoard = false,
+  revealSignal = 0,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -43,13 +49,38 @@ export function PluginInformationHost({
   contextContent?: React.ReactNode;
   /** The native editable layout already places every built-in Board document. */
   managedBoard?: boolean;
+  /** Foreground question arrival; does not move keyboard focus. */
+  revealSignal?: number;
 }) {
   const { t } = useTranslation("panels");
   const contributions = (snapshot.information ?? []).filter(
     (entry) => !managedBoard || entry.pluginId !== "zenx-board",
   );
   const ownerKey = conversationKey(owner);
-  const [open, setOpen] = useState(false);
+  const [visibility, setVisibility] = useState(() => ({
+    ownerKey,
+    open: readInformationOpen(ownerKey),
+  }));
+  const open =
+    visibility.ownerKey === ownerKey
+      ? visibility.open
+      : readInformationOpen(ownerKey);
+  const setOpen = React.useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      const value =
+        typeof next === "function" ? next(readInformationOpen(ownerKey)) : next;
+      rememberInformationOpen(ownerKey, value);
+      setVisibility({ ownerKey, open: value });
+    },
+    [ownerKey],
+  );
+  const focusOnOpen = useRef(false);
+  useEffect(() => {
+    if (consumeInformationReveal(ownerKey, revealSignal)) {
+      focusOnOpen.current = false;
+      setOpen(true);
+    }
+  }, [ownerKey, revealSignal, setOpen]);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
   const trigger = useRef<HTMLButtonElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
@@ -85,6 +116,7 @@ export function PluginInformationHost({
         ? 0
         : element.getBoundingClientRect().bottom;
     };
+    let measured = false;
     const measure = () => {
       const bounds = workspace.getBoundingClientRect();
       const resourceOpen = panel?.dataset.open === "true";
@@ -115,14 +147,17 @@ export function PluginInformationHost({
             !primaryActive
           ),
       };
-      if (resourceOpen && !previousResourceOpen.current) setOpen(false);
+      if (measured && resourceOpen && !previousResourceOpen.current)
+        setOpen(false);
       if (
+        measured &&
         previousPrimaryActive.current &&
         !primaryActive &&
         resourceOpen &&
         panel?.dataset.expanded === "true"
       )
         setOpen(false);
+      measured = true;
       previousResourceOpen.current = resourceOpen;
       previousPrimaryActive.current = primaryActive;
       setLayout((current) =>
@@ -159,7 +194,7 @@ export function PluginInformationHost({
       observer?.disconnect();
       presentation?.disconnect();
     };
-  }, [resourcePanelWidth, contributions.length]);
+  }, [resourcePanelWidth, contributions.length, setOpen]);
   useEffect(() => {
     if (!open || !layout.dock) return;
     const escape = (event: KeyboardEvent) => {
@@ -177,10 +212,10 @@ export function PluginInformationHost({
     };
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
-  }, [open, layout.dock, contentId]);
+  }, [open, layout.dock, contentId, setOpen]);
   useEffect(() => {
-    setOpen(false);
-  }, [ownerKey, contributions.length === 0]);
+    if (contributions.length === 0 && !contextContent) setOpen(false);
+  }, [contributions.length, !!contextContent, setOpen]);
   const active =
     contributions.find((item) => item.key === selected) ?? contributions[0];
   if (!active && !contextContent) return null;
@@ -232,9 +267,10 @@ export function PluginInformationHost({
       <div ref={toolbar} className="information-toolbar">
         <Popover
           open={open && !layout.dock}
-          onOpenChange={(next) =>
-            setOpen((current) => (layout.dock ? !current : next))
-          }
+          onOpenChange={(next) => {
+            focusOnOpen.current = next;
+            setOpen((current) => (layout.dock ? !current : next));
+          }}
         >
           <PopoverTrigger asChild>
             <button
@@ -253,6 +289,10 @@ export function PluginInformationHost({
           {!layout.dock && (
             <PopoverContent
               id={contentId}
+              onOpenAutoFocus={(event) => {
+                if (!focusOnOpen.current) event.preventDefault();
+                focusOnOpen.current = false;
+              }}
               side="bottom"
               align="end"
               className="information-popover"

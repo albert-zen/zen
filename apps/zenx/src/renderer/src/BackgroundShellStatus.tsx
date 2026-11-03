@@ -83,6 +83,9 @@ export function BackgroundShellStatus({
   const pending = current.sessions.filter(
     (s) => backgroundShellPhase(s) !== "ended",
   );
+  // A background command surface is live work only. Ended commands are
+  // history; keeping one beside "no commands running" is never meaningful.
+  const listed = pending;
   const running = pending.filter(
     (s) => backgroundShellPhase(s) === "running",
   ).length;
@@ -168,9 +171,9 @@ export function BackgroundShellStatus({
           <pre>{current.error}</pre>
         </details>
       ) : null}
-      {expanded && !current.error ? (
+      {expanded && !current.error && listed.length > 0 ? (
         <ul className="background-shell-list">
-          {current.sessions.map((session) => (
+          {listed.map((session) => (
             <li key={session.taskId}>
               <button
                 type="button"
