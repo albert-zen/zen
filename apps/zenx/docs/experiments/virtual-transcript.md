@@ -38,3 +38,16 @@ not casts into private runtime APIs or an unsupported renderScrollComponent.
 Before enabling by default, finish whole-data find and precise target navigation,
 then run the existing native ordinary-Send and reading/selection acceptance on the
 exact final revision. Capture actual running UI screenshots before any merge.
+
+## Focused checks on the prototype
+
+- Web renderer TypeScript check passes.
+- Existing reading-state and side-chat quote routing tests: 21 pass on the
+  unchanged default DOM path.
+- Pin/anchor unit tests: 5 pass.
+- Actual npm LegendList component test with deterministic JSDOM geometry: 1 pass.
+  It confirms one viewport, pending-send footer inclusion, fewer than 60 mounted
+  rows from 1000 data rows, focused/selected mounted-row retention through native
+  pin/scroll events, no flushSync/nested-update warning in that flow, and a pending
+  reveal resolving cancelled on unmount. This is not real browser selection,
+  native layout or a Send latency result.

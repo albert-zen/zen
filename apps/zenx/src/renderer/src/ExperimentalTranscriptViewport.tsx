@@ -25,7 +25,7 @@ export interface VirtualTranscriptHandle {
 }
 interface Props extends Omit<
   HTMLAttributes<HTMLDivElement>,
-  "children" | "onScroll"
+  "children" | "onScroll" | "onLoad"
 > {
   rows: readonly VirtualTranscriptRow[];
   header: ReactNode;
@@ -53,6 +53,7 @@ export function ExperimentalTranscriptViewport({
   ...attributes
 }: Props) {
   const list = useRef<LegendListRef | null>(null);
+  const notifySettled = useRef<() => void>(() => {});
   const latest = useRef({ onViewportScroll, onContentSettled, rows, position });
   latest.current = { onViewportScroll, onContentSettled, rows, position };
   const [pins, setPins] = useState<string[]>([]);
@@ -111,6 +112,7 @@ export function ExperimentalTranscriptViewport({
         });
       });
     };
+    notifySettled.current = settle;
     const userInput = () => {
       generation.current++;
       readerUntil.current = performance.now() + 180;
@@ -191,6 +193,7 @@ export function ExperimentalTranscriptViewport({
       alive = false;
       generation.current++;
       controller.current = null;
+      notifySettled.current = () => {};
       for (const [id, resolve] of frames) {
         cancelAnimationFrame(id);
         resolve(false);
@@ -247,7 +250,7 @@ export function ExperimentalTranscriptViewport({
       ListFooterComponent={
         <div className="virtual-transcript-footer">{footer}</div>
       }
-      onItemSizeChanged={() => latest.current.onContentSettled()}
+      onItemSizeChanged={() => notifySettled.current()}
     />
   );
 }
