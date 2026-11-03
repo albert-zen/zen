@@ -74,9 +74,11 @@ export function installNativeEditing(options: {
     if (!current(state)) return;
     finish(state, false);
     const id = ++nextRequest;
+    // Bound an unresponsive renderer, allowing its synchronous DOM commit time.
+    // Preload's separate 1500ms Selection wait starts after preparation returns.
     const timer = setTimeout(() => {
       if (state.pending?.id === id) finish(state, false);
-    }, 1500);
+    }, 30_000);
     state.pending = { id, timer };
     try {
       state.frame.send(ipcChannels.nativeEditingPrepare, state.token, id);

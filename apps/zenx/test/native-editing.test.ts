@@ -10,6 +10,8 @@ import { ipcChannels } from "../src/preload/ipc.js";
 function fixture(platform: NodeJS.Platform = "darwin") {
   const ipc = new EventEmitter();
   const timers = new Set<() => void>();
+  const deadlines = new Map<() => void, number>();
+  let now = 0;
   const traffic: unknown[][] = [];
   const frame = {
     url: "file:///zenx/index.html",
@@ -61,12 +63,14 @@ function fixture(platform: NodeJS.Platform = "darwin") {
         };
       throw Error(`Unexpected import ${name}`);
     },
-    setTimeout(callback: () => void) {
+    setTimeout(callback: () => void, delay: number) {
       timers.add(callback);
+      deadlines.set(callback, now + delay);
       return callback;
     },
     clearTimeout(callback: () => void) {
       timers.delete(callback);
+      deadlines.delete(callback);
     },
     process: { platform },
   });
@@ -95,6 +99,21 @@ function fixture(platform: NodeJS.Platform = "darwin") {
     lastRequest,
     traffic,
     timers,
+    advance(milliseconds: number) {
+      const end = now + milliseconds;
+      while (true) {
+        const due = [...deadlines]
+          .filter(([, at]) => at <= end)
+          .sort((a, b) => a[1] - b[1])[0];
+        if (!due) break;
+        const [callback, at] = due;
+        now = at;
+        deadlines.delete(callback);
+        timers.delete(callback);
+        callback();
+      }
+      now = end;
+    },
     selected: () => selected,
     menuChanges: () => menuChanges,
     focus(value: unknown) {
@@ -598,3 +617,69 @@ test("first macOS editor menu intent survives an unprocessed focus registration 
   f.service.close();
   dom.window.close();
 });
+
+for (const duration of [2000, 29999, 30001])
+  test(`slow synchronous preparation ${duration}ms uses main renderer deadline, not post-prepare selection wait`, async () => {
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM("<body>Canonical transcript</body>");
+    const f = fixture();
+    const renderer = new EventEmitter();
+    let preparing = false;
+    const queued: unknown[][] = [];
+    const ipc = Object.assign(renderer, {
+      send(channel: string, ...args: unknown[]) {
+        f.ipc.emit(channel, f.event, ...args);
+      },
+    });
+    f.frame.send = (...args: unknown[]) => {
+      f.traffic.push(args);
+      // The real renderer is blocked in flushSync while main's independent clock
+      // can expire. Completion IPC cannot be consumed there until prepare returns.
+      if (preparing) queued.push(args);
+      else renderer.emit(args[0] as string, {}, ...args.slice(1));
+      return f.traffic.length;
+    };
+    const api = createNativeEditingApi(
+      ipc,
+      () => "slow-preparation",
+      dom.window.document,
+      "darwin",
+    );
+    let cancelled = 0;
+    const offCancel = api.onSelectAllCancelled(() => cancelled++);
+    const off = api.onPrepareSelectAll(() => {
+      preparing = true;
+      f.advance(duration);
+      assert.equal(
+        f.selected(),
+        0,
+        "native edit cannot precede the synchronous DOM commit ACK",
+      );
+      preparing = false;
+      return true;
+    });
+    try {
+      f.service.selectAll();
+      for (const args of queued)
+        renderer.emit(args[0] as string, {}, ...args.slice(1));
+      assert.equal(
+        f.selected(),
+        duration < 30000 ? 1 : 0,
+        "only preparation exceeding the independent 30s main deadline loses authority",
+      );
+      assert.equal(cancelled, duration < 30000 ? 0 : 1);
+      const [, token, id] = f.lastRequest();
+      f.ack(token, id);
+      assert.equal(
+        f.selected(),
+        duration < 30000 ? 1 : 0,
+        "duplicate or expired ACK cannot dispatch another edit",
+      );
+      assert.equal(f.timers.size, 0);
+    } finally {
+      off();
+      offCancel();
+      f.service.close();
+      dom.window.close();
+    }
+  });
