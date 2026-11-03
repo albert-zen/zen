@@ -64,6 +64,10 @@ const snapshots = {
     commit: "a44591da91c5f1bb075b913b97796951a1ac1289",
     tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   },
+  candidate: {
+    commit: "aba07f7835a4300aef76cac8bbefe5d231c58be2",
+    tree: "9b226e27c0b437ba526c46823e09bb0ecdb3956e",
+  },
 };
 const snapshot = snapshots[sourceLabel];
 const expected = snapshot?.commit;

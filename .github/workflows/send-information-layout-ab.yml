@@ -1,7 +1,7 @@
-name: Packaged Send span invalidation schedule linkage (diagnostic)
+name: Packaged Send select slot A/B (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-span-invalidation-link-20261103]
+    branches: [diagnostic/send-select-slot-ab-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -23,6 +23,11 @@ jobs:
           path: baseline
       - uses: actions/checkout@v4
         with:
+          ref: aba07f7835a4300aef76cac8bbefe5d231c58be2
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@v4
+        with:
           persist-credentials: false
           path: diagnostic
       - uses: actions/setup-node@v4
@@ -30,27 +35,27 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline; do
+          for source in baseline candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build locked current main source
+      - name: Build locked baseline and select-slot candidate
         timeout-minutes: 16
         run: |
-          for source in baseline; do
+          for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native Enter with private first-activation schedule linkage
+      - name: Native matched Enter with private first-activation schedule linkage
         timeout-minutes: 20
         run: |
           failed=0
           for activation in enter; do
-            for source in baseline; do
+            for source in baseline candidate; do
               case="control-$source"
               width=1280
               mkdir -p "results/$case"
@@ -68,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-span-invalidation-link-5000
+          name: native-send-select-slot-ab-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json
