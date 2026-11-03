@@ -21,10 +21,25 @@ export class ThreadSidebarController {
   #queues = new Map<string, Promise<number>>();
   // Disposable UI intent only; Host receipts never advance this local fence.
   #presentationIntents = new Map<string, number>();
+  // Primary is a disposable per-owner view choice, never a resource descriptor.
+  #primarySelections = new Map<string, number>();
+  selectPrimaryConversation(owner: SidebarOwner | string): number {
+    const intent = this.beginPresentationIntent(owner);
+    this.#primarySelections.set(sidebarOwnerKey(owner), intent);
+    this.#emit();
+    return intent;
+  }
+  isPrimaryConversationSelected(owner: SidebarOwner | string): boolean {
+    const intent = this.#primarySelections.get(sidebarOwnerKey(owner));
+    return (
+      intent !== undefined && this.isPresentationIntentCurrent(owner, intent)
+    );
+  }
   beginPresentationIntent(owner: SidebarOwner | string): number {
     const key = sidebarOwnerKey(owner);
     const intent = (this.#presentationIntents.get(key) ?? 0) + 1;
     this.#presentationIntents.set(key, intent);
+    this.#primarySelections.delete(key);
     // Local selection projections must observe same-ID explicit navigation too.
     // This publishes no new Host revision, descriptor, or durable fact.
     this.#emit();
@@ -62,6 +77,7 @@ export class ThreadSidebarController {
   accept = (state: ThreadSidebarState) => {
     const key = sidebarOwnerKey(state.owner);
     if ((this.#states[key]?.revision ?? -1) > state.revision) return;
+    if (!state.open || !state.fullscreen) this.#primarySelections.delete(key);
     this.#states = { ...this.#states, [key]: state };
     this.#emit();
   };

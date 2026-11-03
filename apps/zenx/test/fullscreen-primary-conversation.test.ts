@@ -150,7 +150,8 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
       { className: "workspace" },
       React.createElement(Main),
       React.createElement(AuxiliaryPanel, {
-        // Intentionally no React key: scope changes must be fenced even without remount.
+        // Production navigation remounts the panel; the controller owns selection.
+        key: `${owner.kind}:${owner.id}`,
         conversationContext: room
           ? {
               kind: "room",
@@ -162,8 +163,9 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
         primaryConversation: {
           title: room ? "Main Room conversation" : "Main agent conversation",
           contentId: "primary-conversation-content",
+          selected: controller.isPrimaryConversationSelected(owner),
           onSelect: () => {
-            const intent = controller.beginPresentationIntent(owner);
+            const intent = controller.selectPrimaryConversation(owner);
             return () => controller.isPresentationIntentCurrent(owner, intent);
           },
         },
@@ -444,9 +446,10 @@ test("fullscreen primary tab reuses main DOM, preserves resources and exact Thre
     await act(async () => navigateOwner(false));
     assert.equal(
       selected(),
-      "aux-tab-thread:child",
-      "Old owner's primary choice does not leak back",
+      `aux-tab-${primary}`,
+      "Each owner restores its own primary choice after navigation",
     );
+    await act(async () => controller.beginPresentationIntent(threadOwner));
     await act(async () =>
       controller.accept({
         ...controller.get(threadOwner)!,
@@ -547,4 +550,43 @@ test("primary view intent is reactive but background reconciliation never advanc
     !controller.isPresentationIntentCurrent("a", intent),
     "Same-ID explicit resource navigation supersedes primary",
   );
+});
+
+test("primary selection belongs to the exact owner and retires on Host collapse", async () => {
+  const controller = new ThreadSidebarController();
+  const thread = { kind: "thread" as const, id: "same" };
+  const room = { kind: "room" as const, id: "same" };
+  for (const owner of [thread, room])
+    controller.accept({
+      ...emptySidebarState(owner),
+      open: true,
+      fullscreen: true,
+      tabs: [{ kind: "custom", id: "resource" }],
+      selectedTab: "custom:resource",
+    });
+  controller.selectPrimaryConversation(thread);
+  assert.equal(controller.isPrimaryConversationSelected(thread), true);
+  assert.equal(controller.isPrimaryConversationSelected(room), false);
+  controller.selectPrimaryConversation(room);
+  // Removing the remembered resource while primary is visible uses the normal
+  // descriptor fallback; it never revives a removed tab on fullscreen exit.
+  await controller.edit(
+    thread,
+    () => ({ tabs: [{ kind: "custom", id: "fallback" }] }),
+    undefined,
+    "preserve",
+  );
+  assert.equal(controller.isPrimaryConversationSelected(thread), true);
+  assert.equal(controller.get(thread)!.selectedTab, "custom:fallback");
+  const current = controller.get(thread)!;
+  controller.accept({
+    ...current,
+    fullscreen: false,
+    revision: current.revision + 1,
+  });
+  assert.equal(controller.isPrimaryConversationSelected(thread), false);
+  assert.equal(controller.isPrimaryConversationSelected(room), true);
+  await controller.edit(thread, () => ({ fullscreen: true }));
+  assert.equal(controller.isPrimaryConversationSelected(thread), false);
+  assert.equal(controller.get(thread)!.selectedTab, "custom:fallback");
 });

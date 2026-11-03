@@ -62,6 +62,8 @@ export interface AuxiliaryPrimaryConversation {
   title: string;
   /** ID of the existing sibling conversation surface, never a second render. */
   contentId: string;
+  /** Owner-scoped renderer choice retained when this panel unmounts. */
+  selected?: boolean;
   /** Retire pending navigation and return its existing renderer intent fence. */
   onSelect?(): (() => boolean) | void;
 }
@@ -300,9 +302,10 @@ export function AuxiliaryPanel({
     primaryConversation &&
     open &&
     expanded &&
-    primarySelection?.owner === expandedKey &&
-    (primarySelection.isCurrent?.() ??
-      primarySelection.resourceTab === selectedTab),
+    (primaryConversation.selected ??
+      (primarySelection?.owner === expandedKey &&
+        (primarySelection.isCurrent?.() ??
+          primarySelection.resourceTab === selectedTab))),
   );
   useLayoutEffect(() => {
     if (

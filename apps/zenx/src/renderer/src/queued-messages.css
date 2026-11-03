@@ -461,50 +461,46 @@
   }
 }
 
-.pending-steer-panel {
-  width: calc(100% - 16px);
-  max-width: calc(var(--conversation-width) - 16px);
-  margin: 6px auto;
-  background: var(--color-surface-inset);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+.steer-shelf-status {
+  cursor: default;
   min-width: 0;
-  font-size: 12px;
-}
-.pending-steer-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.pending-steer-panel p {
-  margin: 6px 0;
-  color: var(--color-text-secondary);
-}
-.pending-steer-panel button {
-  min-height: 44px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  padding: 4px 8px;
-  cursor: pointer;
-  max-width: 100%;
   white-space: normal;
+}
+.steer-shelf-status .mini-spinner {
+  flex: 0 0 13px;
+}
+.steer-shelf .queue-shelf-header {
+  flex-wrap: wrap;
+}
+.steer-shelf-details > summary {
+  padding: 6px 14px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.steer-shelf-details > ol {
+  max-height: min(196px, 32dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.steer-shelf-row {
+  padding: 9px 8px;
+  overflow-wrap: anywhere;
+}
+.steer-shelf-notice,
+.steer-shelf > p,
+.steer-shelf > [role="status"] {
+  margin: 0;
+  padding: 0 14px 9px;
+}
+.steer-shelf > .steer-recovery {
+  padding: 8px 14px;
 }
 .pending-steer-panel summary {
   cursor: pointer;
 }
-.pending-steer-panel ol {
-  max-height: 160px;
-  overflow: auto;
-  padding-left: 20px;
-  overflow-wrap: anywhere;
+.queue-shelf + .steer-shelf {
+  border-radius: 0;
+  margin-top: 0;
 }
 .steer-recovery > div {
   margin-top: 8px;

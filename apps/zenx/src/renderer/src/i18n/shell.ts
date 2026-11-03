@@ -16,6 +16,8 @@ export const en = {
   steerPendingLabel: "Messages waiting for the model",
   steerPendingCount: "Waiting for the model: {{count}}",
   steerRecallAll: "Recall all to original inputs",
+  steerRecallAllShort: "Recall all",
+  steerRecallOneShort: "Recall",
   steerRecallOne: "Recall to original input",
   steerRecalling: "Recalling…",
   steerHeldNotice:
@@ -986,6 +988,8 @@ export const zhCN = {
   steerPendingLabel: "等待进入模型的消息",
   steerPendingCount: "等待进入模型：{{count}} 条",
   steerRecallAll: "全部撤回到原输入位置",
+  steerRecallAllShort: "全部撤回",
+  steerRecallOneShort: "撤回",
   steerRecallOne: "撤回到原输入位置",
   steerRecalling: "正在撤回…",
   steerHeldNotice:

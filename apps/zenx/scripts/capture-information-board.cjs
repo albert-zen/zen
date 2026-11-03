@@ -541,9 +541,86 @@ async function run() {
     '.auxiliary-heading button[aria-label="Expand side panel"]',
     "Internally maximize workspace (not OS fullscreen)",
   );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await click(
+      ".sidebar-collapse-button",
+      "Collapse sidebar in maximized resource workspace",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+        ),
+      "sidebar collapsed",
+    );
+    await pause(250);
+    if (process.platform === "darwin") {
+      const strip = await evaluate(
+        "(()=>{const b=document.querySelector('.sidebar-collapse-button').getBoundingClientRect(),h=document.querySelector('.auxiliary-heading').getBoundingClientRect();return {buttonRight:b.right,headingLeft:h.left}})()",
+      );
+      assert.ok(
+        strip.headingLeft >= strip.buttonRight,
+        "Fullscreen drag heading clears native toggle hit region",
+      );
+      result.sidebarNativeStrip = strip;
+    }
+    await click(
+      ".sidebar-collapse-button",
+      "Expand sidebar from native strip while workspace is maximized",
+    );
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+        ),
+      "sidebar expands after actual click",
+    );
+  }
   await click(
     '[data-tab-id="primary-conversation"] [role="tab"]',
     "Select the main-conversation workspace Tab",
+  );
+  await click(
+    '.thread-row-shell[data-thread-id="information-other"] > button.thread-row',
+    "Navigate away from maximized primary conversation",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.thread-row-shell[data-thread-id=\"information-other\"] > button.thread-row')?.getAttribute('aria-current')==='page' || !document.querySelector('.auxiliary-panel[data-primary-active=true]')",
+      ),
+    "second conversation shown",
+  );
+  await click(main, "Return to retained primary conversation");
+  await until(
+    () =>
+      evaluate(
+        "Boolean(document.querySelector('.auxiliary-panel[data-primary-active=true] [data-tab-id=\"primary-conversation\"] [aria-selected=true]'))",
+      ),
+    "primary selection survives production panel remount",
+  );
+  await click(
+    '.auxiliary-heading button[aria-label="Restore side panel"]',
+    "Restore original resource after retained primary conversation",
+  );
+  await until(
+    () =>
+      evaluate(
+        "Boolean(document.querySelector('[data-tab-id=\"file:fixture.txt\"] [aria-selected=true]'))",
+      ),
+    "original resource fallback retained",
+  );
+  await click(
+    '.auxiliary-heading button[aria-label="Expand side panel"]',
+    "Reenter fullscreen on retained resource",
+  );
+  await click(
+    '[data-tab-id="primary-conversation"] [role="tab"]',
+    "Select primary again after restoring resource",
+  );
+  // Navigation remounts the real ThreadView; subsequent tests compare its new DOM identity.
+  await evaluate(
+    "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
   await click(
     ".information-toolbar button",

@@ -107,6 +107,14 @@ test("actual ThreadView recalls exact whole snapshot while newer input and later
     });
     await h.render(thread, props());
     assert.equal(document.querySelector(".queue-row-steer"), null);
+    const shelf = document.querySelector(".pending-steer-panel")!;
+    assert.ok(shelf.classList.contains("queue-shelf"));
+    assert.ok(shelf.closest(".bottom-zone"));
+    assert.equal(shelf.closest(".messages"), null);
+    assert.equal(
+      document.querySelector(recallButton)!.textContent,
+      i18n.t("shell:steerRecallAllShort"),
+    );
     await h.click(recallButton);
     assert.deepEqual(
       request.targets.map((target) => target.queuedItemId),

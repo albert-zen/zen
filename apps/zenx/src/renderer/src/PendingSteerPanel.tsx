@@ -30,6 +30,7 @@ import { queuedInputDraft } from "./queue-edit-draft.js";
 import { parseSkillDraft } from "./skill-draft.js";
 import { inlineReferenceParts, referenceTitle } from "./reference-draft.js";
 import { ReferenceToken } from "./ReferenceToken.js";
+import { Icon } from "./icons.js";
 import { localErrorDetail } from "../../local-error-detail.js";
 import type { AttachmentRef } from "../../../../../src/attachment.js";
 import { AttachmentImage, ImagePreview } from "./ImagePresentation.js";
@@ -342,33 +343,51 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
     return null;
   return (
     <section
-      className="pending-steer-panel"
+      className={`pending-steer-panel queue-shelf steer-shelf${detailsOpen ? " is-open" : ""}`}
       aria-label={t("steerPendingLabel")}
     >
       {pending.length > 0 ? (
         <>
-          <div className="pending-steer-heading">
-            <strong>{t("steerPendingCount", { count: pending.length })}</strong>
+          <div className="pending-steer-heading queue-shelf-header">
+            <span
+              className="queue-shelf-toggle steer-shelf-status"
+              role="status"
+            >
+              {held ? (
+                <Icon name="trigger" size={14} />
+              ) : (
+                <span className="mini-spinner" aria-hidden="true" />
+              )}
+              {t("steerPendingCount", { count: pending.length })}
+            </span>
             <button
               type="button"
+              className="queue-header-action"
               onClick={() => void recall()}
               disabled={busy || !supported || props.onRestore === undefined}
             >
               {session?.phase === "pending"
                 ? t("steerRecalling")
-                : t(pending.length === 1 ? "steerRecallOne" : "steerRecallAll")}
+                : t(
+                    pending.length === 1
+                      ? "steerRecallOneShort"
+                      : "steerRecallAllShort",
+                  )}
             </button>
           </div>
-          <p>{t(held ? "steerHeldNotice" : "steerWaitingNotice")}</p>
+          {held ? (
+            <p className="steer-shelf-notice">{t("steerHeldNotice")}</p>
+          ) : null}
           {!supported ? (
             <p role="status">{t("steerRecallUnsupported")}</p>
           ) : null}
           <details
+            className="steer-shelf-details"
             open={detailsOpen}
             onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
           >
             <summary>{t("steerPendingDetails")}</summary>
-            <ol>
+            <ol className="queue-shelf-list">
               {pending.map((item) => {
                 const draft = queuedInputDraft(
                   item.input,
@@ -400,7 +419,7 @@ export function PendingSteerPanel(props: PendingSteerPanelProps) {
                     </span>
                   );
                 return (
-                  <li key={item.id}>
+                  <li className="queue-row steer-shelf-row" key={item.id}>
                     {text.length > 240 ? (
                       <details className="pending-steer-message">
                         <summary>{text.slice(0, 240)}…</summary>

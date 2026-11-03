@@ -4693,13 +4693,18 @@ function AppContent() {
                     title: selectedRoom.name,
                   }),
                   contentId: "primary-conversation-content",
+                  selected:
+                    sidebarState.controller.isPrimaryConversationSelected({
+                      kind: "room",
+                      id: selectedRoom.id,
+                    }),
                   onSelect: () => {
                     const owner = {
                       kind: "room" as const,
                       id: selectedRoom.id,
                     };
                     const intent =
-                      sidebarState.controller.beginPresentationIntent(owner);
+                      sidebarState.controller.selectPrimaryConversation(owner);
                     return () =>
                       sidebarState.controller.isPresentationIntentCurrent(
                         owner,
@@ -4835,10 +4840,14 @@ function AppContent() {
                       : i18n.t("shell:currentThread"),
                   }),
                   contentId: "primary-conversation-content",
+                  selected:
+                    sidebarState.controller.isPrimaryConversationSelected(
+                      threadDetail.id,
+                    ),
                   onSelect: () => {
                     const owner = threadDetail.id;
                     const intent =
-                      sidebarState.controller.beginPresentationIntent(owner);
+                      sidebarState.controller.selectPrimaryConversation(owner);
                     return () =>
                       sidebarState.controller.isPresentationIntentCurrent(
                         owner,
