@@ -110,14 +110,65 @@ export function normalizeUserQuestionReply(
   };
 }
 
+/** Compact display identity derived from the already committed call's source sequence. */
+export function userQuestionRequestRef(sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0)
+    throw new Error("Question call requires a committed source sequence");
+  return `q${sequence}`;
+}
+
+function questionSubject(specification: UserQuestionSpecification): string {
+  const questions = specification.questions.map((question) => question.id);
+  return questions.length === 1
+    ? `question ${questions[0]}`
+    : `questions ${questions.join(", ")}`;
+}
+
+function renderReply(
+  specification: UserQuestionSpecification,
+  reply: UserQuestionReply,
+  subject: string,
+): string {
+  return reply.outcome === "cancel"
+    ? `I chose not to answer ${subject}.`
+    : `Reply to ${subject}:\n${renderUserQuestionAnswer(specification, reply.answers)}`;
+}
+
 export function renderUserQuestionReply(
   specification: UserQuestionSpecification,
   value: UserQuestionReply,
+  requestRef?: string,
 ): string {
   const reply = normalizeUserQuestionReply(specification, value);
-  return reply.outcome === "cancel"
-    ? `I chose not to answer question ${reply.request.callItemId}.`
-    : `Reply to question ${reply.request.callItemId}:\n${renderUserQuestionAnswer(specification, reply.answers)}`;
+  // Legacy publications never issued a compact ref, so retain their exact
+  // request identity instead of making duplicate model-authored keys ambiguous.
+  return renderReply(
+    specification,
+    reply,
+    requestRef === undefined
+      ? `question ${reply.request.callItemId}`
+      : `${questionSubject(specification)} (${requestRef})`,
+  );
+}
+
+/** Read compatibility only: existing semantic bodies are never rewritten. */
+export function matchesUserQuestionReplyBody(
+  specification: UserQuestionSpecification,
+  value: UserQuestionReply,
+  body: string,
+  requestRef?: string,
+): boolean {
+  const reply = normalizeUserQuestionReply(specification, value);
+  return (
+    body === renderUserQuestionReply(specification, reply, requestRef) ||
+    body ===
+      renderReply(
+        specification,
+        reply,
+        `question ${reply.request.callItemId}`,
+      ) ||
+    body === renderReply(specification, reply, questionSubject(specification))
+  );
 }
 
 function record(

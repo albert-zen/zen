@@ -1768,6 +1768,9 @@ export class AgentRuntime {
             });
       if (traceOutput !== undefined)
         this.#toolTraces.set(toolCall.id, traceOutput);
+      const canonicalCall = options.thread.itemList.find(
+        (item) => item.id === toolCall.id,
+      );
       prepared = this.#tools.prepare({
         ...(options.configuration.supportsImageDetailOriginal === undefined
           ? {}
@@ -1779,6 +1782,9 @@ export class AgentRuntime {
         ...(traceOutput === undefined ? {} : { traceOutput }),
         callId: toolCall.callId,
         canonicalToolCallId: toolCall.id,
+        ...(canonicalCall === undefined
+          ? {}
+          : { canonicalToolCallSequence: canonicalCall.source.sequence }),
         name: toolCall.name,
         arguments: toolCall.arguments,
         cwd: options.configuration.cwd,

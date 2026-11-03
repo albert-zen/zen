@@ -9,6 +9,7 @@ import {
   ASK_USER_QUESTION_NAME,
   USER_QUESTION_PUBLICATION_KIND,
   parseUserQuestionSpecification,
+  userQuestionRequestRef,
 } from "./user-question.js";
 
 export interface RoomUserQuestionPublicationInput {
@@ -178,11 +179,15 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
         ? attachModelReferenceBindings(result, references.newBindings)
         : result;
     }
+    const requestRef = userQuestionRequestRef(
+      invocation.canonicalToolCallSequence!,
+    );
     return {
       exitCode: 0,
       output: JSON.stringify({
         kind: USER_QUESTION_PUBLICATION_KIND,
-        version: 1,
+        version: 2,
+        requestRef,
         request: {
           threadId: invocation.threadId,
           callItemId: invocation.canonicalToolCallId,

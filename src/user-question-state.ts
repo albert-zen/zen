@@ -8,7 +8,8 @@ import {
   parseUserQuestionSpecification,
   parseUserQuestionReply,
   normalizeUserQuestionReply,
-  renderUserQuestionReply,
+  matchesUserQuestionReplyBody,
+  userQuestionRequestRef,
   type QuestionIdentity,
   type UserQuestionReply,
   type UserQuestionSpecification,
@@ -17,6 +18,8 @@ import {
 export interface UserQuestionState {
   request: QuestionIdentity;
   resultItemId: string;
+  /** Display-only ref issued by a v2 publication; native authority stays request. */
+  requestRef?: string;
   createdAt: string;
   specification: UserQuestionSpecification;
   state:
@@ -396,40 +399,47 @@ export function readUserQuestions(
       continue;
     }
     const request = { threadId, callItemId: call.id };
-    const accepted = results.filter((result) => {
+    const accepted = results.flatMap((result) => {
       if (
         result.turnId !== call.turnId ||
         result.content.callId !== call.content.callId
       )
-        return false;
+        return [];
       const offset = result.source.metadata?.bodyStart;
       if (
         typeof offset !== "number" ||
         !Number.isSafeInteger(offset) ||
         offset < 0
       )
-        return false;
+        return [];
       try {
         const envelope = JSON.parse(result.content.text.slice(offset)) as {
           kind?: unknown;
           version?: unknown;
           request?: QuestionIdentity;
+          requestRef?: unknown;
         };
-        return (
-          envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
-          envelope.version === 1 &&
+        return envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
+          ((envelope.version === 1 && Object.keys(envelope).length === 3) ||
+            (envelope.version === 2 &&
+              Object.keys(envelope).length === 4 &&
+              envelope.requestRef ===
+                userQuestionRequestRef(call.source.sequence))) &&
           envelope.request?.threadId === threadId &&
-          envelope.request.callItemId === call.id &&
-          Object.keys(envelope).length === 3
-        );
+          envelope.request.callItemId === call.id
+          ? [{ result, envelope }]
+          : [];
       } catch {
-        return false;
+        return [];
       }
     });
     if (accepted.length === 0) continue;
-    const result = accepted[0]!;
+    const { result, envelope } = accepted[0]!;
     const question: UserQuestionState = {
       request,
+      ...(envelope.version === 2
+        ? { requestRef: envelope.requestRef as string }
+        : {}),
       resultItemId: result.id,
       createdAt: result.createdAt,
       specification,
@@ -454,7 +464,12 @@ export function readUserQuestions(
         const reply = normalizeUserQuestionReply(specification, candidate);
         if (
           typeof clientId !== "string" ||
-          body !== renderUserQuestionReply(specification, reply)
+          !matchesUserQuestionReplyBody(
+            specification,
+            reply,
+            body,
+            question.requestRef,
+          )
         )
           throw new Error("Question response provenance/body mismatch");
         responses.push({ clientId, itemId, reply, pending: isPending });
