@@ -20,9 +20,24 @@ export interface VirtualTranscriptRow {
   key: string;
   content: ReactNode;
 }
+export interface TranscriptRevealOwnership {
+  isCurrent(): boolean;
+  cancel(): void;
+}
+export interface MaterializedTranscriptRow extends TranscriptRevealOwnership {
+  element: HTMLElement;
+}
 export interface VirtualTranscriptHandle {
   /** Materialize one canonical row, without mounting intervening history. */
   reveal(key: string, onRevealed?: () => void): Promise<boolean>;
+  /** Capture cancellation for this request only; stale cleanup cannot cancel a newer source. */
+  captureReveal(): TranscriptRevealOwnership;
+  /** A user source action needs its exact DOM target synchronously, not a Promise. */
+  materialize(
+    key: string,
+    prepare: () => void,
+    onRevealed?: () => void,
+  ): MaterializedTranscriptRow | null;
 }
 interface Props extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -218,10 +233,64 @@ export function ExperimentalTranscriptViewport({
         if (alive && generation.current === version) setTarget(null);
       }
     };
+    const cancelNavigation = () => {
+      if (pending.size > 0) {
+        for (const cancel of pending) cancel();
+        void instance.scrollToOffset({
+          offset: node.scrollTop,
+          animated: false,
+        });
+      }
+      generation.current++;
+      setTarget(null);
+    };
+    const externalInput = (event: Event) => {
+      if (
+        pending.size === 0 ||
+        (event.target instanceof Node && node.contains(event.target))
+      )
+        return;
+      cancelNavigation();
+    };
+    const captureReveal = (): TranscriptRevealOwnership => {
+      const version = generation.current;
+      return {
+        isCurrent: () => alive && generation.current === version,
+        cancel: () => {
+          if (alive && generation.current === version) cancelNavigation();
+        },
+      };
+    };
     controller.current = {
+      captureReveal,
       reveal: (key, onRevealed) => {
         for (const cancel of pending) cancel();
         return restore(key, 0, ++generation.current, onRevealed);
+      },
+      materialize: (key, prepare, onRevealed) => {
+        if (!latest.current.rows.some((row) => row.key === key)) return null;
+        for (const cancel of pending) cancel();
+        const version = ++generation.current;
+        flushSync(() => {
+          prepare();
+          setTarget(key);
+          // The public index command materializes its target range in this user action.
+          void restore(key, 0, version, onRevealed);
+        });
+        const element = Array.from(
+          node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
+        ).find((row) => row.dataset.transcriptRowKey === key);
+        if (!element) {
+          cancelNavigation();
+          return null;
+        }
+        return {
+          element,
+          isCurrent: () => alive && generation.current === version,
+          cancel: () => {
+            if (alive && generation.current === version) cancelNavigation();
+          },
+        };
       },
     };
     node.addEventListener("scroll", beforeScroll, {
@@ -238,6 +307,11 @@ export function ExperimentalTranscriptViewport({
     node.ownerDocument.addEventListener("pointerup", release);
     node.ownerDocument.addEventListener("pointercancel", release);
     node.ownerDocument.addEventListener("selectionchange", selection);
+    for (const type of ["pointerdown", "keydown", "wheel"])
+      node.ownerDocument.addEventListener(type, externalInput, {
+        capture: true,
+        passive: true,
+      });
     const state = instance.getState();
     const unsubscribe = [
       state.listen("totalSize", settle),
@@ -277,6 +351,8 @@ export function ExperimentalTranscriptViewport({
       node.ownerDocument.removeEventListener("pointerup", release);
       node.ownerDocument.removeEventListener("pointercancel", release);
       node.ownerDocument.removeEventListener("selectionchange", selection);
+      for (const type of ["pointerdown", "keydown", "wheel"])
+        node.ownerDocument.removeEventListener(type, externalInput, true);
     };
   }, [controller, position, viewport]);
 
