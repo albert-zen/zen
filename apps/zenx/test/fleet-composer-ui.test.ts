@@ -284,6 +284,15 @@ test("machine picker opens a dedicated wider popover", async () => {
       popover?.classList.contains("fleet-machine-popover"),
       "the machine picker opts into its own minimum width",
     );
+    const option = popover.querySelector<HTMLElement>(
+      ".ui-select-option:has(.fleet-machine-choice)",
+    )!;
+    const textSlot = option.querySelector<HTMLElement>(
+      ":scope > span[data-ui-select-item-text]",
+    );
+    assert.ok(textSlot, "Radix forwards the marker to its existing label span");
+    assert.equal(textSlot, option.firstElementChild);
+    assert.ok(textSlot.querySelector(".fleet-machine-choice"));
     await act(async () => {
       trigger.dispatchEvent(
         new view.dom.window.KeyboardEvent("keydown", {
@@ -360,7 +369,11 @@ test("long machine names truncate only in the trigger; menu names retain disting
   );
   assert.match(
     css,
-    /\.ui-select-option:has\(\.fleet-machine-choice\) > span:first-child\s*\{[^}]*min-width:\s*0;/su,
+    /\.ui-select-option:has\(\.fleet-machine-choice\) > span\[data-ui-select-item-text\]\s*\{[^}]*min-width:\s*0;/su,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.ui-select-option:has\(\.fleet-machine-choice\) > span:first-child/su,
   );
 });
 

@@ -9920,7 +9920,7 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 
-.ui-select-option:has(.room-member-choice) > span:first-child {
+.ui-select-option:has(.room-member-choice) > span[data-ui-select-item-text] {
   min-width: 0;
   flex: 1;
 }
@@ -12539,6 +12539,14 @@ button:disabled {
   color: var(--text-3);
   font-size: 12px;
 }
+/* Reuse the reference question rows while keeping native input semantics. */
+.user-question-options {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
 .user-question-option {
   position: relative;
   display: flex;
@@ -12547,14 +12555,17 @@ button:disabled {
   box-sizing: border-box;
   width: 100%;
   min-height: 44px;
-  margin-block: 6px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: start;
   cursor: pointer;
 }
 .user-question-option:hover {
+  border-color: var(--border-control);
   background: var(--surface-inset);
 }
 .user-question-option[data-selected="true"] {
@@ -12570,7 +12581,7 @@ button:disabled {
   margin: 0;
   cursor: inherit;
 }
-.user-question-option:focus-within {
+.user-question-option:has(input:focus-visible) {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
 }

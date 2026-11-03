@@ -99,6 +99,18 @@ async function pressKey(keyCode, label) {
   window.webContents.sendInputEvent({ type: "keyUp", keyCode });
   result.steps.push(label);
 }
+async function focusWithNativeTab(selector, label) {
+  for (let index = 0; index < 160; index++) {
+    if (await evaluate(`document.activeElement===${query(selector)}`)) {
+      result.steps.push(label);
+      return;
+    }
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+    await pause(35);
+  }
+  throw Error("Native Tab could not reach: " + label);
+}
 async function settledLayout() {
   await until(
     () =>
@@ -614,7 +626,10 @@ async function run() {
   await screenshot("01f-checkbox-keyboard-focus.png");
   const keyboardSwitch =
     '[aria-label="Pause trigger · Daily synthetic review"]';
-  await click(keyboardSwitch, "Focus native trigger switch and pause once");
+  // Native mouse focus differs by platform. Enter this keyboard flow with
+  // actual Tab navigation, then require both Space operations to retain focus.
+  await focusWithNativeTab(keyboardSwitch, "Tab to the native trigger switch");
+  await pressKey("Space", "Native Space pauses the focused trigger switch");
   await until(
     () =>
       evaluate(
@@ -886,7 +901,19 @@ async function run() {
       ),
     "owner-scoped draft preserved",
   );
-  await capture("10a-original-owner-restored", "dock");
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='true'",
+      ),
+    "original owner's remembered open state is restored",
+  );
+  // A restored resource Tab uses an overlay; the main Tab uses the dock.
+  // Owner visibility must survive either independently restored workspace view.
+  const restoredMode = await evaluate(
+    "(()=>{const p=document.querySelector('.auxiliary-panel');return p?.dataset.open==='true' && p.dataset.expanded==='true' && p.dataset.primaryActive!=='true' ? 'overlay' : 'dock'})()",
+  );
+  await capture("10a-original-owner-restored", restoredMode);
   assert.equal(
     await evaluate(
       "document.querySelector('.information-toolbar button').getAttribute('aria-expanded')",
@@ -1316,6 +1343,110 @@ async function run() {
     name: "chinese-child-conversations",
     languageInput:
       "production preference receiver with synthetic same-origin storage event",
+  });
+  // Reuse the original review's Chinese content for a comparable visual case,
+  // published through the actual native Host rather than injected into the DOM.
+  const referencePrompt = "资料卡里最该优先显示哪一类信息？";
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-main')?.status==='idle')",
+      ),
+    "reference visual question actor is idle",
+  );
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({
+      threadId: "information-main",
+      clientUserMessageId: "native-reference-visual-question",
+      input: [
+        {
+          type: "text",
+          text:
+            "!tool ask_user_question " +
+            JSON.stringify({
+              questions: [
+                {
+                  id: "reference-visual",
+                  prompt: referencePrompt,
+                  multiSelect: true,
+                  options: [
+                    {
+                      id: "live",
+                      label: "正在运行的事情",
+                      description: "后台命令、子对话和等待中的提问",
+                    },
+                    {
+                      id: "trigger",
+                      label: "触发器状态",
+                      description: "下一次运行时间与暂停状态",
+                    },
+                    {
+                      id: "recent",
+                      label: "最近活动",
+                      description: "刚才结束的任务与结果",
+                    },
+                  ],
+                },
+              ],
+            }),
+        },
+      ],
+    })})`,
+  );
+  await until(
+    () =>
+      evaluate(
+        `Array.from(document.querySelectorAll('.user-question-card')).some(e=>e.textContent.includes(${JSON.stringify(referencePrompt)}))`,
+      ),
+    "reference visual question accepted and rendered by the real Host",
+  );
+  const referenceCallId = await evaluate(
+    `Array.from(document.querySelectorAll('.user-question-card')).find(e=>e.textContent.includes(${JSON.stringify(referencePrompt)})).dataset.questionCallId`,
+  );
+  const referenceCard = `[data-question-call-id=${JSON.stringify(referenceCallId)}]`;
+  await click(
+    referenceCard + " .user-question-options > li:nth-child(1) input",
+    "Select first original-reference option",
+  );
+  await click(
+    referenceCard + " .user-question-options > li:nth-child(2) input",
+    "Select second original-reference option",
+  );
+  nativeTheme.themeSource = "dark";
+  await until(
+    () => evaluate("document.documentElement.dataset.appearance==='dark'"),
+    "reference comparison uses actual dark appearance",
+  );
+  await evaluate(
+    `${query(referenceCard)}.scrollIntoView({block:'start',inline:'nearest'})`,
+  );
+  await screenshot("17-reference-dark-Chinese-question-full-App.png");
+  const captureInformationCrop = async (name) => {
+    const rectangle = await evaluate(
+      "(()=>{const e=document.querySelector('.information-dock,.information-popover'),r=e.getBoundingClientRect();return {x:Math.ceil(r.x),y:Math.ceil(r.y),width:Math.floor(r.width),height:Math.floor(r.height)}})()",
+    );
+    await fs.writeFile(
+      path.join(directory, name),
+      (await window.webContents.capturePage(rectangle)).toPNG(),
+    );
+  };
+  await captureInformationCrop(
+    "17a-reference-dark-Chinese-question-native-crop.png",
+  );
+  await evaluate(
+    "document.querySelector('.information-trigger-list').closest('.information-widget').scrollIntoView({block:'start',inline:'nearest'})",
+  );
+  await screenshot("18-reference-dark-Chinese-triggers-full-App.png");
+  await captureInformationCrop(
+    "18a-reference-dark-Chinese-triggers-native-crop.png",
+  );
+  result.cases.push({
+    name: "original-reference-visual-comparison",
+    source:
+      "original #658/#659/#661/#662 reference wording; current production App with real native publication and pointer input",
+    crops:
+      "Electron capturePage of the actual information surface; no redrawing or image editing",
+    nativeInputsRetained: true,
   });
   result.ok = true;
 }

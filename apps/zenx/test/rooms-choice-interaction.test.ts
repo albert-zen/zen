@@ -1,6 +1,7 @@
 import "./dom-primitives.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
@@ -83,6 +84,12 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
       );
       assert.equal(document.querySelectorAll('[role="option"]').length, 1);
       const option = document.querySelector<HTMLElement>('[role="option"]')!;
+      const textSlot = option.querySelector<HTMLElement>(
+        ":scope > span[data-ui-select-item-text]",
+      );
+      assert.ok(textSlot, "Combobox marks its existing room choice label span");
+      assert.equal(textSlot, option.firstElementChild);
+      assert.ok(textSlot.querySelector(".room-member-choice"));
       assert.ok(option.title.includes(id));
       assert.ok(option.getAttribute("aria-label")?.includes(id));
       assert.ok(
@@ -137,4 +144,19 @@ test("Rooms disambiguate same-title conversations and submit the exact searched 
     await act(async () => root.unmount());
     dom.window.close();
   }
+});
+
+test("room choice sizing targets the explicit shared label slot", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.ui-select-option:has\(\.room-member-choice\) > span\[data-ui-select-item-text\]\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1;/su,
+  );
+  assert.doesNotMatch(
+    css,
+    /\.ui-select-option:has\(\.room-member-choice\) > span:first-child/su,
+  );
 });
