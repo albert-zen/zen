@@ -110,7 +110,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ui-select-option:has(.fleet-machine-choice) > span:first-child {
+.ui-select-option:has(.fleet-machine-choice) > span[data-ui-select-item-text] {
   min-width: 0;
 }
 .ui-select-option .fleet-machine-choice {
