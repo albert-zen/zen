@@ -12157,3 +12157,96 @@ for (const initialQuestionCount of [0, 32]) {
     }
   });
 }
+
+test("a page shift caused by cancelling old questions must not reveal hidden information", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  const selected = await f.host.startThread();
+  const background = await f.host.startThread();
+  await f.host.setThreadName(selected.id, "Foreground reveal fixture");
+  await f.host.setThreadName(background.id, "Background reveal fixture");
+  for (let index = 0; index < 33; index++) await f.publish(selected.id);
+  let reads = 0;
+  let harness: AppHarness | undefined;
+  try {
+    harness = await mountApp(
+      {
+        projects: [
+          {
+            key: f.directory,
+            workspace: f.directory,
+            configured: true,
+            isDefault: true,
+            threadIds: [selected.id, background.id],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: f.directory,
+      },
+      {
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        threads: (archived) => f.host.listThreadSummaries({ archived }),
+        request: async (method, params) => {
+          const result = await f.request(method, params);
+          if (
+            method === "zen/thread/questions/list" &&
+            (params as { threadId: string }).threadId === selected.id
+          )
+            reads++;
+          return result;
+        },
+        onNotification: (listener) =>
+          f.onNotification((method, params) =>
+            listener(method as never, params as never),
+          ),
+      },
+    );
+    const row = (title: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (value) => value.textContent?.includes(title),
+      );
+    await act(async () =>
+      (await waitFor(() => row("Foreground reveal fixture"))).click(),
+    );
+    const composer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await waitFor(() => reads > 0);
+    const toggle = () =>
+      document.querySelector<HTMLButtonElement>(".information-toolbar button")!;
+    assert.equal(toggle().getAttribute("aria-expanded"), "false");
+    await setTextareaValue(composer, "Keep the unsent foreground draft");
+    await act(async () => composer.focus());
+    const first = (await f.host.listUserQuestions(selected.id)).questions[0]!;
+    const readsBefore = reads;
+    await act(async () => {
+      await f.transport.respond({
+        threadId: selected.id,
+        questionCallItemId: first.request.callItemId,
+        clientUserMessageId: "review-page-shift-cancel",
+        outcome: "cancel",
+      });
+    });
+    await waitFor(() => reads > readsBefore);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    assert.equal(
+      toggle().getAttribute("aria-expanded"),
+      "false",
+      "merely advancing an older question from page 2 must not auto-reveal",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await f.close();
+  }
+});

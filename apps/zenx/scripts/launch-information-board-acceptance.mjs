@@ -207,8 +207,11 @@ for (const file of [
   "scripts/launch-information-board-acceptance.mjs",
   "../../src/app-server.ts",
   "../../src/user-question-tool.ts",
+  "../../src/user-question-state.ts",
+  "src/renderer/src/user-question-state.ts",
   "../../dist/src/app-server.js",
   "../../dist/src/user-question-tool.js",
+  "../../dist/src/user-question-state.js",
   "../../dist/apps/cli/src/host.js",
 ])
   hashes[file] = createHash("sha256")

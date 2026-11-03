@@ -1760,3 +1760,5 @@ remote-tool recall or automatic cross-window exactly-once insertion. Acceptance 
 combined source version; historical branch checks do not accept an integration.
 
 Room Boards are existing workspace product resources addressed only by roomId and instanceKey; current member Thread identity is execution/admission context, never persisted Board ownership. Trusted human reads/drafts validate the live workspace, while Agent access and execution retain their exact live member and existing tool permissions.
+
+Native 问询分页读取携带从既有已接受发布结果 append 顺序推导的最新问题身份；前台资料卡只据此区分新发布与分页、答复或撤回，不增加持久状态，也不扩展 CAS。

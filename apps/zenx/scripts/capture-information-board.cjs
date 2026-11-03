@@ -94,6 +94,11 @@ async function click(selector, label = selector) {
   );
   result.steps.push(label);
 }
+async function pressKey(keyCode, label) {
+  window.webContents.sendInputEvent({ type: "keyDown", keyCode });
+  window.webContents.sendInputEvent({ type: "keyUp", keyCode });
+  result.steps.push(label);
+}
 async function settledLayout() {
   await until(
     () =>
@@ -397,7 +402,7 @@ async function run() {
   );
   assert.equal(
     await evaluate(
-      "document.querySelector('.conversation-information-section > header button')===null",
+      "document.querySelector('.information-trigger-list').closest('section').querySelector('header button')===null",
     ),
     true,
     "healthy trigger facts have no always-visible refresh control",
@@ -451,6 +456,32 @@ async function run() {
     true,
   );
   assert.equal(await evaluate(`${query(option)}.dataset.selected`), "true");
+  await pressKey(
+    "Down",
+    "Native radio Down selects the next option without submitting",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.user-question-card input[type=radio]:checked')?.closest('label').textContent.includes('Full suite later')",
+      ),
+    "native radio arrow selection",
+  );
+  assert.equal(
+    await evaluate(
+      "document.activeElement?.matches('input[type=radio]:checked')",
+    ),
+    true,
+  );
+  await screenshot("01d-radio-keyboard-focus.png");
+  await pressKey(
+    "Up",
+    "Native radio Up restores the first option without submitting",
+  );
+  await until(
+    () => evaluate(`${query(option)}.querySelector('input').checked`),
+    "native radio reverse selection",
+  );
   const questionText =
     ".user-question-card:first-of-type .user-question-text textarea";
   const emptyHeight = await evaluate(
@@ -492,7 +523,30 @@ async function run() {
   const revealPrompt =
     "Synthetic new foreground question reveals information without stealing focus.";
   await evaluate(
-    `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId: "information-main", clientUserMessageId: "native-information-reveal", input: [{ type: "text", text: "!tool ask_user_question " + JSON.stringify({ questions: [{ id: "reveal", prompt: revealPrompt, options: [{ id: "yes", label: "Keep the foreground draft" }] }] }) }] })})`,
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({
+      threadId: "information-main",
+      clientUserMessageId: "native-information-reveal",
+      input: [
+        {
+          type: "text",
+          text:
+            "!tool ask_user_question " +
+            JSON.stringify({
+              questions: [
+                {
+                  id: "reveal",
+                  prompt: revealPrompt,
+                  multiSelect: true,
+                  options: [
+                    { id: "yes", label: "Keep the foreground draft" },
+                    { id: "verify", label: "Verify native keyboard selection" },
+                  ],
+                },
+              ],
+            }),
+        },
+      ],
+    })})`,
   );
   await until(
     () =>
@@ -518,6 +572,60 @@ async function run() {
     composerFocusRetained: true,
     draftRetained: true,
   });
+  const checkbox = ".user-question-card input[type=checkbox]";
+  await click(
+    checkbox,
+    "Select a native full-row checkbox without sending an answer",
+  );
+  await until(
+    () => evaluate(`${query(checkbox)}.checked`),
+    "native checkbox pointer checked",
+  );
+  await pressKey("Space", "Native Space toggles only the focused checkbox");
+  await until(
+    () => evaluate(`!${query(checkbox)}.checked`),
+    "native checkbox Space unchecked",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.user-question-card input[type=checkbox]:checked').length",
+    ),
+    0,
+  );
+  await pressKey(
+    "Space",
+    "Native Space restores the focused checkbox selection",
+  );
+  await until(
+    () => evaluate(`${query(checkbox)}.checked`),
+    "native checkbox Space checked",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.user-question-card input[type=checkbox]:checked').length",
+    ),
+    1,
+  );
+  await screenshot("01f-checkbox-keyboard-focus.png");
+  const keyboardSwitch =
+    '[aria-label="Pause trigger · Daily synthetic review"]';
+  await click(keyboardSwitch, "Focus native trigger switch and pause once");
+  await until(
+    () =>
+      evaluate(
+        "document.activeElement?.getAttribute('aria-checked')==='false' && !document.activeElement.disabled",
+      ),
+    "paused native trigger switch retains focus",
+  );
+  await pressKey("Space", "Native Space resumes the focused trigger switch");
+  await until(
+    () =>
+      evaluate(
+        "document.activeElement?.getAttribute('aria-checked')==='true' && !document.activeElement.disabled",
+      ),
+    "native switch keyboard resume confirmed",
+  );
+  await screenshot("01g-trigger-keyboard-focus.png");
   await click(
     '[aria-label="Customize information"]',
     "Customize actual information layout",
