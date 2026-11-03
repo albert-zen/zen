@@ -3,6 +3,7 @@ import test from "node:test";
 import { InMemoryAttachmentStore } from "../src/attachment.js";
 import { projectModelMessages } from "../src/model-content.js";
 import type { ModelMessage } from "../src/model.js";
+import type { AttachmentRef } from "../src/attachment-ref.js";
 import { png1x1 } from "./fixtures.js";
 
 test("capability projection covers historical user and tool media without changing canonical content", async () => {
@@ -24,6 +25,116 @@ test("capability projection covers historical user and tool media without changi
   assert.deepEqual(projectModelMessages(messages), textOnly);
   assert.deepEqual(projectModelMessages(messages, ["text", "image"]), before);
   assert.deepEqual(messages, before);
+});
+
+function imageRef(index: number, byteLength = 1024): AttachmentRef {
+  return {
+    type: "attachment",
+    sha256: String(index).padStart(64, "0"),
+    mediaType: "image/png",
+    byteLength,
+    width: 800,
+    height: 600,
+  };
+}
+
+function userImage(ref: AttachmentRef): ModelMessage {
+  return { role: "user", content: [{ type: "image", attachment: ref }] };
+}
+
+function toolImage(ref: AttachmentRef): ModelMessage {
+  return {
+    role: "tool",
+    callId: "call",
+    text: "capture",
+    exitCode: 0,
+    modelContent: [{ type: "image", attachment: ref }],
+  };
+}
+
+test("image budget keeps the newest screenshots and receipts the rest", () => {
+  const oldest = imageRef(1);
+  const middle = imageRef(2);
+  const newest = imageRef(3);
+  const messages: ModelMessage[] = [
+    userImage(oldest),
+    toolImage(middle),
+    userImage(newest),
+  ];
+  const before = structuredClone(messages);
+  const projected = projectModelMessages(
+    messages,
+    ["text", "image"],
+    undefined,
+    {
+      maxImages: 2,
+      maxBytes: 1024 * 1024,
+    },
+  );
+  const json = JSON.stringify(projected);
+  assert.match(json, new RegExp(oldest.sha256.slice(0, 12)));
+  assert.match(json, /omitted from this request by the image budget/u);
+  assert.doesNotMatch(json, new RegExp(`"sha256":"${oldest.sha256}"`));
+  assert.match(json, new RegExp(`"sha256":"${middle.sha256}"`));
+  assert.match(json, new RegExp(`"sha256":"${newest.sha256}"`));
+  assert.deepEqual(messages, before);
+});
+
+test("image budget also bounds attachment bytes", () => {
+  const refs = [
+    imageRef(1, 3 * 1024 * 1024),
+    imageRef(2, 3 * 1024 * 1024),
+    imageRef(3, 3 * 1024 * 1024),
+  ];
+  const messages: ModelMessage[] = refs.map((ref) => toolImage(ref));
+  const projected = projectModelMessages(
+    messages,
+    ["text", "image"],
+    undefined,
+    {
+      maxImages: 24,
+      maxBytes: 7 * 1024 * 1024,
+    },
+  );
+  const json = JSON.stringify(projected);
+  assert.equal(
+    (projected[0] as Extract<ModelMessage, { role: "tool" }>).modelContent?.[0]
+      ?.type,
+    "text",
+  );
+  assert.match(json, new RegExp(refs[1]!.sha256));
+  assert.match(json, new RegExp(refs[2]!.sha256));
+});
+
+test("image budget always keeps the newest image even when it alone exceeds the byte cap", () => {
+  const huge = imageRef(1, 9 * 1024 * 1024);
+  const messages: ModelMessage[] = [userImage(huge)];
+  const projected = projectModelMessages(
+    messages,
+    ["text", "image"],
+    undefined,
+    {
+      maxImages: 1,
+      maxBytes: 1024,
+    },
+  );
+  assert.match(
+    JSON.stringify(projected),
+    new RegExp(`"sha256":"${huge.sha256}"`),
+  );
+});
+
+test("a null budget keeps every image", () => {
+  const messages: ModelMessage[] = Array.from({ length: 40 }, (_, index) =>
+    toolImage(imageRef(index, 1024)),
+  );
+  const projected = projectModelMessages(
+    messages,
+    ["text", "image"],
+    undefined,
+    null,
+  );
+  assert.equal(JSON.stringify(projected).match(/"type":"image"/gu)?.length, 40);
 });
 
 import {
