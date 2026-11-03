@@ -62,10 +62,12 @@ pending approval map, renderer request/resolved events and existing UI response
 path as ordinary tools. Abort, reconnect and Host replacement retire the old
 request/handler; it never creates a synthetic canonical Turn or tool Item.
 
-The production stdio launcher and main/child MCP IPC path are **not yet wired**.
-They must carry that existing generation-bound approval handler to the child
-which owns the actual AgentRuntime ToolEnvironment. The manager tests exercise
-the real child/manager/UI event seam, not packaged Desktop screenshot acceptance.
+The production connect-only stdio launcher and main/child MCP IPC path are now wired.
+Run `npm run user:mcp --workspace @zen/zenx -- --descriptor /absolute/path/to/existing/runtime/connection.json --thread THREAD_ID [--room ROOM_ID]`, or, after a repository build, run `node apps/zenx/out/main/user-mcp-stdio-cli.js` with the same arguments. These are developer/source and repository-built entries; the installed packaged-app invocation and real-user client registration are unverified. The descriptor and bearer file use existing restrictive-permission readers. The launcher never scans home, opens a journal, starts a Host, creates credentials, edits client configuration or registers a harness.
+
+The fixed-owner native `zen/mcp/bind` / `zen/mcp/message` tunnel uses the already authenticated loopback ZAS endpoint. Core injects a narrow product callback rather than importing Desktop state. The existing child embeds the official SDK Server and exact existing AgentRuntime ToolEnvironment. Typed IPC checks the immutable owner against main's existing BoardHostService; Room membership observation retires a binding one-way. Approval IPC captures AppServerManager's existing generation-bound normal renderer approval handler at binding time. Cancellation and owner/generation loss retire the normal pending approval request, without another approval or policy registry.
+
+`apps/zenx/test/user-mcp-live-host.test.ts` explicitly boots the real manager/child before launching the official SDK Client's stdio subprocess. It verifies canonical history, known absence, Board CAS/write/readback/stale conflict, unchanged child PID and unchanged ItemList; normal asynchronous Desktop approval events and responses; approval decline; same-name capability generation retirement during approval; and Room loss while waiting for approval, with no intervening MCP read and no revival on rejoin. The same two acceptance tests also pass with `ZEN_MCP_TEST_USE_BUILT=1`, which launches both the repository-built stdio entry and repository-built actual AppServer child. These are private real process-split tests, not installed packaged Electron pixel evidence.
 
 Thread permission/archive/delete events, Room membership loss, any capability
 Catalog publication and the supplied connection lifetime retire the binding.
@@ -87,7 +89,7 @@ Install the repository's normal dependencies, then prepare first-party artifacts
 
 ```sh
 npm run prepare:first-party-plugins --workspace @zen/zenx
-node --import tsx --test apps/zenx/test/user-mcp.test.ts
+node --import tsx --test apps/zenx/test/user-mcp.test.ts apps/zenx/test/user-mcp-live-host.test.ts
 node --import tsx apps/zenx/scripts/smoke-user-mcp-codex.ts
 ```
 

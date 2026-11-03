@@ -16,6 +16,12 @@ import {
   validateContextCompactionItem,
 } from "./context-compaction.js";
 import { codeStateFromItems, validateCodeStateWrite } from "./code-state.js";
+import {
+  ThreadUserQuestionProjection,
+  type UserQuestionState,
+  type UserQuestionPage,
+  type UserQuestionSummary,
+} from "./user-question-state.js";
 
 export type DerivedTurnStatus =
   "inProgress" | "completed" | "failed" | "interrupted";
@@ -42,6 +48,7 @@ export class Thread {
   readonly id: string;
   readonly #items: CanonicalItem[];
   readonly #itemList: ContextItem[];
+  readonly #userQuestions = new ThreadUserQuestionProjection();
 
   constructor(
     id: string,
@@ -57,10 +64,18 @@ export class Thread {
       // Domain reads validate individual persisted records. Observed Trace gaps
       // are not repaired with invented turn_started/control events.
       this.#items.push(
-        ...items.map((item) => deepFreeze(structuredClone(item))),
+        ...items.map((item, index) => {
+          const frozen = deepFreeze(structuredClone(item));
+          this.#userQuestions.observeFact(id, frozen, index);
+          return frozen;
+        }),
       );
       this.#itemList.push(
-        ...itemList.map((item) => deepFreeze(decodeContextItem(item))),
+        ...itemList.map((item) => {
+          const frozen = deepFreeze(decodeContextItem(item));
+          this.#userQuestions.observeContext(id, frozen);
+          return frozen;
+        }),
       );
       if (
         this.#items.some((item) => item.threadId !== id) ||
@@ -68,10 +83,40 @@ export class Thread {
       )
         throw new Error("Mixed Thread identities");
     }
+    this.#userQuestions.discardAttentionInvalidation();
   }
 
   get itemList(): readonly ContextItem[] {
     return Object.freeze([...this.#itemList]);
+  }
+  get userQuestions(): readonly UserQuestionState[] {
+    return this.#userQuestions.read(this.id, this.#itemList, this.#items);
+  }
+  get userQuestionSummary(): UserQuestionSummary {
+    return this.#userQuestions.summary(this.id, this.#itemList, this.#items);
+  }
+  takeUserQuestionAttentionInvalidation(): boolean {
+    return this.#userQuestions.takeAttentionInvalidation(
+      this.id,
+      this.#itemList,
+      this.#items,
+    );
+  }
+  userQuestion(callItemId: string): UserQuestionState | undefined {
+    return this.#userQuestions.get(
+      this.id,
+      this.#itemList,
+      this.#items,
+      callItemId,
+    );
+  }
+  userQuestionPage(after?: string): UserQuestionPage {
+    return this.#userQuestions.page(
+      this.id,
+      this.#itemList,
+      this.#items,
+      after,
+    );
   }
   appendContext(item: ContextItem): void {
     const valid = decodeContextItem(item);
@@ -81,6 +126,7 @@ export class Thread {
     )
       throw new Error("Invalid semantic append identity");
     this.#itemList.push(deepFreeze(valid));
+    this.#userQuestions.observeContext(this.id, valid);
   }
 
   get items(): readonly CanonicalItem[] {
@@ -318,7 +364,9 @@ export class Thread {
         this.#items.length,
         this.#itemList,
       );
-    this.#items.push(deepFreeze(structuredClone(item)));
+    const frozen = deepFreeze(structuredClone(item));
+    this.#items.push(frozen);
+    this.#userQuestions.observeFact(this.id, frozen, this.#items.length - 1);
     for (const semantic of context) this.appendContext(semantic);
   }
 

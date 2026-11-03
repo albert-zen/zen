@@ -21,6 +21,42 @@ export type NativeUserInputPart =
 export const NATIVE_QUEUED_INPUT_ADMISSION_CAPABILITY =
   "queued-input-admission-v1";
 export const NATIVE_INLINE_IMAGE_INPUT_CAPABILITY = "inline-image-input-v1";
+export const NATIVE_USER_QUESTIONS_CAPABILITY = "async-user-questions-v1";
+export const NATIVE_QUESTION_RESPOND_METHOD = "zen/thread/questions/respond";
+export const NATIVE_QUESTION_LIST_METHOD = "zen/thread/questions/list";
+export const NATIVE_QUESTION_READ_METHOD = "zen/thread/questions/read";
+export interface NativeQuestionListParams {
+  threadId: string;
+  afterQuestionCallItemId?: string;
+}
+export interface NativeQuestionReadParams {
+  threadId: string;
+  questionCallItemId: string;
+  clientUserMessageId: string;
+}
+export type NativeQuestionListResult =
+  import("../../user-question-state.js").UserQuestionPage;
+export type NativeQuestionReadResult =
+  import("../../user-question-state.js").UserQuestionReadback;
+
+export type NativeQuestionRespondParams = {
+  threadId: string;
+  questionCallItemId: string;
+  clientUserMessageId: string;
+  clientTimezone?: string;
+  clientObservation?: ClientSendObservation;
+} & (
+  | {
+      outcome: "answer";
+      answers: import("../../user-question.js").UserQuestionAnswer[];
+    }
+  | { outcome: "cancel" }
+);
+export interface NativeQuestionRespondResult {
+  turnId: string;
+  admission?: QueuedInputAdmission;
+  question: import("../../user-question-state.js").UserQuestionState;
+}
 
 export const NATIVE_TURN_WAKE_METHOD = "zen/turn/wake";
 export type NativeHostWakeupParams = import("../../item.js").HostWakeupInput & {
@@ -111,6 +147,12 @@ export interface NativeQueueEditParams {
 }
 export type NativeQueueEditResult =
   import("../../app-server.js").QueuedEditResult;
+
+export const NATIVE_STEER_RECALL_METHOD = "zen/thread/steer/recall";
+export type NativeSteerRecallParams =
+  import("../../app-server.js").SteerRecallRequest & { threadId: string };
+export type NativeSteerRecallResult =
+  import("../../app-server.js").SteerRecallResult;
 
 export const NATIVE_QUEUE_CANCEL_METHOD = "zen/thread/queue/cancel";
 export const NATIVE_THREAD_RESUME_METHOD = "zen/thread/resume";

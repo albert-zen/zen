@@ -43,7 +43,8 @@
     "test:prepared:observed": "tsx --test --test-reporter=tap --test-reporter=./scripts/test-execution-reporter.mjs --test-reporter-destination=stdout --test-reporter-destination=stderr test/**/*.test.ts test/**/*.test.mjs",
     "check:observed": "npm run brand:check && npm run prepare:first-party-plugins && npm run typecheck:prepared && npm run test:prepared:observed && npm run build:prepared",
     "smoke:user-mcp-codex": "node --import tsx ./scripts/smoke-user-mcp-codex.ts",
-    "smoke:user-mcp-codex-turn": "node --import tsx ./scripts/smoke-user-mcp-codex-turn.ts"
+    "smoke:user-mcp-codex-turn": "node --import tsx ./scripts/smoke-user-mcp-codex-turn.ts",
+    "user:mcp": "node --import tsx src/main/user-mcp-stdio-cli.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

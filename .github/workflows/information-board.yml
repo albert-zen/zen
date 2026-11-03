@@ -4,6 +4,11 @@ on:
     paths:
       - .github/workflows/information-board.yml
       - apps/zenx/scripts/*information-board*
+      - apps/zenx/scripts/*information-layout*
+      - apps/zenx/src/information-layout.ts
+      - apps/zenx/src/native-information.ts
+      - apps/zenx/src/main/native-information-*.ts
+      - apps/zenx/src/renderer/src/EditableInformationPanel.tsx
       - apps/zenx/src/renderer/src/App.tsx
       - apps/zenx/test/app-project-picker-interaction.test.ts
       - apps/zenx/src/renderer/src/plugin-information-host.tsx

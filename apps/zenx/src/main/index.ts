@@ -269,6 +269,8 @@ let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const workspaceBrowser = createElectronWorkspaceBrowser();
 const dirtyFileWindows = new Set<number>();
 const projectProjection = new ZenXProjectProjection();
+let userMcpOwners:
+  import("./user-mcp-main-bridge.js").UserMcpOwnerPort | undefined;
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 const bootstrapFence = new ZenXBootstrapFence();
@@ -804,61 +806,63 @@ async function bootstrapZenX(): Promise<void> {
       threads: selfControlPackage,
       fleet: fleetSettingsService,
     });
-    const boardPackage = new ZenXBoardCapabilityPackage(
-      new BoardHostService({
-        appServer: selfControlPort,
-        sidebar: threadSidebar,
-        isSidebarIntentClosed: (threadId, intentId) =>
-          workspaceBrowser.isSidebarIntentClosed(threadId, intentId),
-        readBrowserModelTarget: async (threadId, targetId) =>
-          capabilityService?.readBrowserModelTarget(threadId, targetId),
-        readThreadSummary: async (threadId) => {
-          if (!appServerManager) throw new Error("App Server is not attached");
-          return (await appServerManager.listThreadSummaries()).find(
-            (entry) =>
-              entry.threadId === threadId && entry.status !== "systemError",
-          );
-        },
-        get rooms() {
-          if (!automationService)
-            throw new Error("Rooms service is unavailable");
-          const rooms = automationService;
-          return {
-            roomsAvailable: () =>
-              rooms.roomsAvailable() &&
-              !!capabilityService
-                ?.pluginSnapshot()
-                .plugins.some(
-                  (plugin) =>
-                    plugin.id === "zenx-rooms" &&
-                    plugin.enabled &&
-                    plugin.available,
-                ),
-            snapshot: () => rooms.snapshot(),
-            postAddressedRoomMessage:
-              rooms.postAddressedRoomMessage.bind(rooms),
-            onChange: (listener: () => void) => {
-              const stopRooms = rooms.onChange(listener);
-              // Catalog publication is the existing disable/retirement signal;
-              // Room facts alone need not change when only its plugin stops.
-              const stopCatalog = capabilityService?.onChange(listener);
-              return () => {
-                stopRooms();
-                stopCatalog?.();
-              };
-            },
-          };
-        },
-        executeTool: async (input, signal, assertOwner) => {
-          if (!appServerManager) throw new Error("App Server is not attached");
-          return await appServerManager.boardToolRequest(
-            input,
-            signal,
-            assertOwner,
-          );
-        },
-      }),
-    );
+    const boardOwnerHost = new BoardHostService({
+      appServer: selfControlPort,
+      sidebar: threadSidebar,
+      isSidebarIntentClosed: (threadId, intentId) =>
+        workspaceBrowser.isSidebarIntentClosed(threadId, intentId),
+      readBrowserModelTarget: async (threadId, targetId) =>
+        capabilityService?.readBrowserModelTarget(threadId, targetId),
+      readThreadSummary: async (threadId) => {
+        if (!appServerManager) throw new Error("App Server is not attached");
+        return (await appServerManager.listThreadSummaries()).find(
+          (entry) =>
+            entry.threadId === threadId && entry.status !== "systemError",
+        );
+      },
+      get rooms() {
+        if (!automationService) throw new Error("Rooms service is unavailable");
+        const rooms = automationService;
+        return {
+          roomsAvailable: () =>
+            rooms.roomsAvailable() &&
+            !!capabilityService
+              ?.pluginSnapshot()
+              .plugins.some(
+                (plugin) =>
+                  plugin.id === "zenx-rooms" &&
+                  plugin.enabled &&
+                  plugin.available,
+              ),
+          snapshot: () => rooms.snapshot(),
+          postAddressedRoomMessage: rooms.postAddressedRoomMessage.bind(rooms),
+          onChange: (listener: () => void) => {
+            const stopRooms = rooms.onChange(listener);
+            // Catalog publication is the existing disable/retirement signal;
+            // Room facts alone need not change when only its plugin stops.
+            const stopCatalog = capabilityService?.onChange(listener);
+            return () => {
+              stopRooms();
+              stopCatalog?.();
+            };
+          },
+        };
+      },
+      executeTool: async (input, signal, assertOwner) => {
+        if (!appServerManager) throw new Error("App Server is not attached");
+        return await appServerManager.boardToolRequest(
+          input,
+          signal,
+          assertOwner,
+        );
+      },
+    });
+    const boardPackage = new ZenXBoardCapabilityPackage(boardOwnerHost);
+    userMcpOwners = {
+      readOwner: boardOwnerHost.readOwner.bind(boardOwnerHost),
+      onChange: (listener: () => void) =>
+        boardOwnerHost.options.rooms.onChange!(listener),
+    };
     const subagentsPackage = new ZenXSubagentsCapabilityPackage({
       appServer: selfControlPort,
       threads: selfControlPackage,
@@ -1067,6 +1071,7 @@ async function bootstrapZenX(): Promise<void> {
       hostConfig,
       execPath: process.execPath,
       capabilityHost: capabilityService,
+      userMcpOwners,
     });
     observeAppServer(appServerManager);
     await selfControlPort.attach(appServerManager);
@@ -1396,6 +1401,7 @@ async function bootstrapZenX(): Promise<void> {
           hostConfig,
           execPath: process.execPath,
           capabilityHost: capabilityService,
+          userMcpOwners,
         });
         observeAppServer(appServerManager);
         await selfControlPort.attach(appServerManager);

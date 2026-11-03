@@ -115,6 +115,7 @@ test("rebuilds native summaries and follows canonical and product metadata chang
       updatedAt: archived[0]?.updatedAt,
       turnSortAt: started.items[0]?.createdAt,
       recentActivityAt: started.items[0]?.createdAt,
+      userQuestionSummary: { openCount: 0 },
       preview: "",
       status: "idle",
     });

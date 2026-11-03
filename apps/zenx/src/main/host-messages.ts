@@ -1,4 +1,10 @@
 import {
+  isUserMcpHostCommand,
+  isUserMcpHostEvent,
+  type UserMcpHostCommand,
+  type UserMcpHostEvent,
+} from "./user-mcp-messages.js";
+import {
   validateBoardToolRequest,
   type BoardToolRequest,
 } from "../board-host.js";
@@ -77,6 +83,7 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | UserMcpHostCommand
   | { type: "board-tool/request"; requestId: string; input: BoardToolRequest }
   | { type: "board-tool/cancel"; requestId: string }
   | { type: "board-tool/owner-result"; requestId: string; error?: string }
@@ -168,6 +175,7 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | UserMcpHostEvent
   | { type: "board-tool/check-owner"; requestId: string }
   | {
       type: "board-tool/result";
@@ -343,6 +351,7 @@ export type HostEvent =
     };
 
 export function isHostCommand(value: unknown): value is HostCommand {
+  if (isUserMcpHostCommand(value)) return true;
   if (typeof value !== "object" || value === null || !("type" in value)) {
     return false;
   }
@@ -474,6 +483,7 @@ function isThreadSummaryListOptions(
 }
 
 export function isHostEvent(value: unknown): value is HostEvent {
+  if (isUserMcpHostEvent(value)) return true;
   try {
     return isHostEventUnsafe(value);
   } catch {

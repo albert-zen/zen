@@ -125,6 +125,10 @@ export default defineConfig({
             "src/main/chrome-native-host-cli.ts",
           ),
           "app-server-host": resolve(__dirname, "src/main/app-server-host.ts"),
+          "user-mcp-stdio-cli": resolve(
+            __dirname,
+            "src/main/user-mcp-stdio-cli.ts",
+          ),
           "code-runtime-worker": resolve(
             __dirname,
             "../../src/code-runtime-worker.ts",

@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { seedInformationLayoutQuestion } from "./seed-information-layout-acceptance.mjs";
 import { DomainThreadJournal } from "../../../dist/src/domain-journal.js";
 import { FileTraceStore } from "../../../dist/src/trace.js";
 import { JsonlThreadMetadataStore } from "../../../dist/src/thread-metadata.js";
@@ -157,6 +158,14 @@ try {
   await journal.close();
   await trace.flush();
 }
+const questionFixture = await seedInformationLayoutQuestion({
+  data,
+  workspace,
+});
+await writeFile(
+  path.join(temporary, "information-fixture.json"),
+  JSON.stringify(questionFixture),
+);
 const hashes = {};
 for (const file of [
   ...(await readdir(path.join(root, "out/renderer"), { recursive: true }))
@@ -167,6 +176,14 @@ for (const file of [
   "src/renderer/src/App.tsx",
   "src/renderer/src/plugin-information-host.tsx",
   "src/renderer/src/ConversationInformationCards.tsx",
+  "src/renderer/src/EditableInformationPanel.tsx",
+  "src/main/native-information-service.ts",
+  "src/main/native-information-document.ts",
+  "src/native-information.ts",
+  "src/information-layout.ts",
+  "src/renderer/src/board-ui.tsx",
+  "src/renderer/src/board-ui-state.ts",
+  "scripts/seed-information-layout-acceptance.mjs",
   "scripts/capture-information-board.cjs",
   "scripts/launch-information-board-acceptance.mjs",
 ])
@@ -182,7 +199,7 @@ await writeFile(
       hashes,
       synthetic: true,
       scope:
-        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only; no injected UI, no user data, no user device.",
+        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only; default-on async question genuinely published by a seed Host and retained through its shutdown before Desktop starts; Board documents authored through actual runtime model tools. No injected UI, no user data, no user device.",
     },
     null,
     2,

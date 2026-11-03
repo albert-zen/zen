@@ -1,4 +1,9 @@
 import {
+  UserMcpMainBridge,
+  type UserMcpOwnerPort,
+} from "./user-mcp-main-bridge.js";
+import { isUserMcpHostEvent } from "./user-mcp-messages.js";
+import {
   validateBoardToolRequest,
   type BoardToolRequest,
 } from "../board-host.js";
@@ -85,6 +90,8 @@ export interface AppServerManagerOptions {
   threadUsageReadTimeoutMs?: number;
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
+  /** Existing main-process Board owner facts; no alternate owner store. */
+  userMcpOwners?: UserMcpOwnerPort;
   capabilityReplacementTimeoutMs?: number;
   configurationControlTimeoutMs?: number;
   shutdownGraceMs?: number;
@@ -136,6 +143,7 @@ interface UncertainCapabilityReplacement {
 
 export class AppServerManager {
   readonly #options: AppServerManagerOptions;
+  #userMcpBridge: UserMcpMainBridge | undefined;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
   readonly #notificationListeners = new Set<NotificationListener>();
   readonly #recoveryListeners = new Set<ThreadRecoveryListener>();
@@ -1361,6 +1369,8 @@ export class AppServerManager {
   }
 
   async #performStop(preserveConnectionAuthority: boolean): Promise<void> {
+    this.#userMcpBridge?.close();
+    this.#userMcpBridge = undefined;
     const failures: Error[] = [];
     if (!preserveConnectionAuthority) {
       try {
@@ -1454,6 +1464,7 @@ export class AppServerManager {
     client.onStatus((status) => {
       if (client !== this.#client || this.#stopping) return;
       if (status.type === "reconnecting") {
+        this.#userMcpBridge?.retireAll();
         this.#cancelPendingApprovals((pending) => pending.client === client);
         this.#setStatus({
           type: "reconnecting",
@@ -1567,6 +1578,8 @@ export class AppServerManager {
     signal: NodeJS.Signals | null,
   ): void {
     if (this.#child !== child) return;
+    this.#userMcpBridge?.close();
+    this.#userMcpBridge = undefined;
     this.#child = undefined;
     this.#childObservation = undefined;
     this.#acceptingCapabilityInvocations = false;
@@ -1678,8 +1691,35 @@ export class AppServerManager {
   }
 
   #installCapabilityBridge(child: ChildProcess): void {
+    this.#userMcpBridge?.close();
+    const bridge = new UserMcpMainBridge({
+      owners: this.#options.userMcpOwners,
+      captureApproval: () => {
+        const client = this.#client;
+        const epoch = this.#processEpoch;
+        const generation = client?.connectionGeneration;
+        return {
+          requestApproval: this.hostToolApprovalHandler(),
+          current: () =>
+            !!client &&
+            this.#client === client &&
+            this.#processEpoch === epoch &&
+            client.connectionGeneration === generation &&
+            !this.#stopping &&
+            this.#status.type === "ready",
+        };
+      },
+      send: (command) => {
+        if (this.#child === child && child.connected) child.send(command);
+      },
+    });
+    this.#userMcpBridge = bridge;
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
+      if (isUserMcpHostEvent(message)) {
+        void bridge.receive(message);
+        return;
+      }
       const hostEvent = isHostEvent(message) ? message : undefined;
       if (hostEvent?.type === "board-tool/check-owner") {
         const pending = this.#pendingConfigurationRequests.get(

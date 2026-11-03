@@ -192,6 +192,7 @@ test("native advertises additive capabilities and preserves legacy start result"
     assert.deepEqual(init.capabilities, [
       "queued-input-admission-v1",
       "inline-image-input-v1",
+      "async-user-questions-v1",
     ]);
     const thread = await server.startThread();
     const finished = event(server, "turn_completed");

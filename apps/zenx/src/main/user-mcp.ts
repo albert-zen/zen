@@ -19,7 +19,6 @@ import type {
 } from "../../../../src/tool.js";
 import { validateBoardOwner, type BoardOwner } from "../board-host.js";
 import type { BoardHostService } from "./board-host-service.js";
-import type { ZenXCapabilityService } from "./capability-service.js";
 import { withNativeCapabilityArguments } from "./capability-tool-executor.js";
 import { invokeModelToolFacade } from "./capabilities/model-tool-facade.js";
 
@@ -52,8 +51,10 @@ export interface BoundUserMcpOptions {
     ZenAppServer,
     "readThread" | "subscribe" | "beginHostOperation" | "dispatchHostTool"
   >;
-  capabilities: Pick<ZenXCapabilityService, "onChange">;
-  board: BoardHostService;
+  capabilities: { onChange(listener: () => void): () => void };
+  board: Pick<BoardHostService, "readOwner"> & {
+    options: { rooms: Pick<BoardHostService["options"]["rooms"], "onChange"> };
+  };
   /** The exact ToolEnvironment already passed to this Host AgentRuntime. */
   tools: ToolEnvironment;
   /** Existing createZenXHostToolEnvironment currentGenerationToken, not a new lease. */

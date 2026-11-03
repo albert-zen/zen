@@ -1,3 +1,5 @@
+import { UserMcpChildBridge } from "./user-mcp-child-bridge.js";
+import { isUserMcpHostCommand } from "./user-mcp-messages.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import { BoardToolService } from "./board-tool-service.js";
 import { ShellPanelService } from "./shell-panel-service.js";
@@ -54,6 +56,7 @@ let replaceCapabilities:
   ((capabilities: ZenXCapabilityGenerationSnapshot) => void) | undefined;
 let currentCapabilityGeneration: (() => string) | undefined;
 let closeToolComposition: ((reason?: string) => Promise<void>) | undefined;
+let userMcpBridge: UserMcpChildBridge | undefined;
 let shuttingDown = false;
 let toolOutputSpool: ToolOutputSpool | undefined;
 let maintenance:
@@ -83,6 +86,10 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (isUserMcpHostCommand(command)) {
+    userMcpBridge?.receive(command);
+    return;
+  }
   if (command.type === "board-tool/owner-result") {
     boardActions
       .get(command.requestId)
@@ -416,6 +423,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
         throw new Error("Zen App Server is not ready");
       }
       replaceCapabilities(command.capabilities);
+      userMcpBridge?.capabilitiesChanged();
       send({
         type: "capabilities/replaced",
         requestId: command.requestId,
@@ -580,8 +588,15 @@ async function handleCommand(command: HostCommand): Promise<void> {
     onToolPresentationWarning: (warning) =>
       console.warn(`[tool presentation] ${warning}`),
   });
+  userMcpBridge = new UserMcpChildBridge({
+    app: appServer,
+    tools: toolComposition.toolEnvironment,
+    capabilityGeneration: toolComposition.currentGenerationToken,
+    send,
+  });
   server = await serveCodexWebSocket({
     appServer,
+    openBoundMcp: userMcpBridge.open,
     zenHome: command.config.dataDirectory,
     listen: command.listen ?? "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
@@ -602,6 +617,7 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  userMcpBridge?.close();
   for (const action of boardActions.values())
     action.controller.abort(new Error("Board Host is closing"));
   const failures: unknown[] = [];
