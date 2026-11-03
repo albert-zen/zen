@@ -7,7 +7,10 @@ import {
   decodeContextItem,
   type ContextItem,
 } from "./item-list.js";
-import { FileItemListStore } from "./item-list-store.js";
+import {
+  FileItemListStore,
+  type ItemListAppendSnapshot,
+} from "./item-list-store.js";
 import {
   ThreadJournalAppendOutcomeUnknownError,
   type ThreadJournal,
@@ -284,45 +287,49 @@ export class DomainThreadJournal implements ThreadJournal {
         this.#live.set(item.threadId, [item]);
         return semantic;
       }
-      const compiled = await this.#reconcileCompilation(item.threadId);
-      const previous = await this.#read(item.threadId);
-      if (previous.some((i) => i.id === item.id))
-        throw new Error(
-          "Duplicate canonical Item identity; reconcile instead of retrying",
+      return this.#items.withAppendSnapshot(item.threadId, async (snapshot) => {
+        const compiled = await this.#reconcileCompilation(
+          item.threadId,
+          snapshot,
         );
-      const contexts =
-        compiled?.contexts ?? (await this.#items.read(item.threadId));
-      const trace =
-        compiled?.trace ??
-        (await this.trace.read(item.threadId, { verifyArtifacts: false }));
-      const sequence =
-        Math.max(
-          previous.length - 1,
-          ...contexts.map((i) => i.source.sequence),
-          ...trace.records
-            .filter((r) => r.type === "runtime_item")
-            .map((r) =>
-              Number((r.data as { sequence?: number })?.sequence ?? -1),
-            ),
-        ) + 1;
-      let semantic: ContextItem[];
-      try {
-        await this.#route(item, sequence, []);
-        semantic = contextItemsFromLegacy(item, previous, sequence, contexts);
-        if (semantic.length) await this.#items.append(item.threadId, semantic);
-      } catch (error) {
-        this.#live.delete(item.threadId);
-        if (
-          this.#uncertain.has(item.threadId) ||
-          error instanceof ThreadJournalAppendOutcomeUnknownError
-        )
-          throw error;
-        throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
-      }
-      this.#live.set(item.threadId, [...previous, item]);
-      // These exact items were read/reconciled in this serialized append and
-      // the new suffix is durable now. No follow-up full-log scan is needed.
-      return [...contexts, ...semantic];
+        const previous = await this.#read(item.threadId);
+        if (previous.some((i) => i.id === item.id))
+          throw new Error(
+            "Duplicate canonical Item identity; reconcile instead of retrying",
+          );
+        const contexts = compiled?.contexts ?? (await snapshot.read());
+        const trace =
+          compiled?.trace ??
+          (await this.trace.read(item.threadId, { verifyArtifacts: false }));
+        const sequence =
+          Math.max(
+            previous.length - 1,
+            ...contexts.map((i) => i.source.sequence),
+            ...trace.records
+              .filter((r) => r.type === "runtime_item")
+              .map((r) =>
+                Number((r.data as { sequence?: number })?.sequence ?? -1),
+              ),
+          ) + 1;
+        let semantic: ContextItem[];
+        try {
+          await this.#route(item, sequence, []);
+          semantic = contextItemsFromLegacy(item, previous, sequence, contexts);
+          if (semantic.length) await snapshot.append(semantic);
+        } catch (error) {
+          this.#live.delete(item.threadId);
+          if (
+            this.#uncertain.has(item.threadId) ||
+            error instanceof ThreadJournalAppendOutcomeUnknownError
+          )
+            throw error;
+          throw new ThreadJournalAppendOutcomeUnknownError(error); // fact may be committed; compile-only reconciliation, never effect replay.
+        }
+        this.#live.set(item.threadId, [...previous, item]);
+        // These exact items were read/reconciled in this serialized append and
+        // the new suffix is durable now. No follow-up full-log scan is needed.
+        return [...contexts, ...semantic];
+      });
     });
   }
   async appendContext(raw: ContextItem): Promise<void> {
@@ -356,9 +363,12 @@ export class DomainThreadJournal implements ThreadJournal {
       await this.#reconcileCompilation(threadId);
     });
   }
-  async #reconcileCompilation(threadId: string): Promise<
+  async #reconcileCompilation(
+    threadId: string,
+    snapshot?: ItemListAppendSnapshot,
+  ): Promise<
     | {
-        contexts: ContextItem[];
+        contexts: readonly ContextItem[];
         trace: Awaited<ReturnType<TraceReader["read"]>>;
       }
     | undefined
@@ -388,7 +398,9 @@ export class DomainThreadJournal implements ThreadJournal {
         return;
       }
     }
-    const contexts = await this.#items.read(threadId);
+    const contexts = snapshot
+      ? await snapshot.read()
+      : await this.#items.read(threadId);
     const present = new Set(contexts.map((item) => item.id));
     const previous: CanonicalItem[] = [];
     const seenFacts = new Map<string, string>();
@@ -448,10 +460,22 @@ export class DomainThreadJournal implements ThreadJournal {
       previous.push(item);
     }
     if (!(await this.#items.exists(threadId))) {
+      // Only standalone reconciliation may recreate a missing compiled file.
+      // An append scope must not publish its retained prefix over that repair.
+      if (snapshot)
+        throw Object.assign(
+          new Error("Semantic source disappeared during append"),
+          {
+            code: "ENOENT",
+          },
+        );
       if (!previous.some((item) => item.type === "thread_metadata")) return;
       await this.#writeFence(threadId);
       await this.#items.create(threadId, missing);
-    } else if (missing.length) await this.#items.append(threadId, missing);
+    } else if (missing.length) {
+      if (snapshot) await snapshot.append(missing);
+      else await this.#items.append(threadId, missing);
+    }
     // Reuse only inside the caller's existing serialized operation, never across admissions.
     return {
       contexts: missing.length === 0 ? contexts : [...contexts, ...missing],
