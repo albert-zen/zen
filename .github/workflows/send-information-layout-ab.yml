@@ -42,7 +42,7 @@ jobs:
           npm run build --workspace @zen/zenx
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
-        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs
+        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
       - name: Native 1280 dock source, three sends with bounded getter attribution
         timeout-minutes: 20
         run: |

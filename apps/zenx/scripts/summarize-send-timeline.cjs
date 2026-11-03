@@ -134,6 +134,166 @@ function ownBundleCallsites(events, start, end, bundles) {
     .sort((a, b) => b.recordedWallMs - a.recordedWallMs)
     .slice(0, 8);
 }
+// Native initiator frames are projected only when their URL is an exact owned
+// bundle. No function names, raw URLs, arguments or unknown event names escape.
+function styleLayoutInitiators(events, start, end, bundles) {
+  valid(Array.isArray(bundles) && bundles.length <= 256);
+  for (const b of bundles)
+    valid(typeof b.url === "string" && /^[a-f0-9]{64}$/.test(b.sha256));
+  let eligibleEvents = 0,
+    eventsWithStack = 0,
+    eventsWithOwnedStack = 0;
+  const projected = [],
+    largestEvents = [];
+  for (const event of events) {
+    const kind = category(event.name);
+    if (
+      ![1, 2].includes(kind) ||
+      event.ts >= end ||
+      event.ts + event.dur <= start
+    )
+      continue;
+    valid(finite(event.ts) && finite(event.dur));
+    eligibleEvents++;
+    const objectCounts = {};
+    for (const key of ["elementCount", "dirtyObjects", "totalObjects"]) {
+      const value = [
+        event.args?.[key],
+        event.args?.beginData?.[key],
+        event.args?.data?.[key],
+        event.args?.endData?.[key],
+      ].find((value) => Number.isSafeInteger(value) && value >= 0);
+      if (value !== undefined) objectCounts[key] = value;
+    }
+    largestEvents.push({
+      kind: kind === 1 ? "Layout" : "Style",
+      startRelativeMs: (event.ts - start) / 1000,
+      clippedWallMs:
+        (Math.min(end, event.ts + event.dur) - Math.max(start, event.ts)) /
+        1000,
+      objectCounts,
+    });
+    const candidates = [
+      event.args?.beginData?.stackTrace,
+      event.args?.data?.stackTrace,
+      event.args?.stackTrace,
+    ];
+    const stack =
+      candidates.find(Array.isArray) ??
+      candidates.find((x) => Array.isArray(x?.callFrames))?.callFrames;
+    if (!stack?.length) continue;
+    eventsWithStack++;
+    const locations = [];
+    for (const frame of stack) {
+      const bundleIndex = bundles.findIndex((b) => b.url === frame?.url);
+      if (
+        bundleIndex < 0 ||
+        !Number.isSafeInteger(frame.lineNumber) ||
+        frame.lineNumber < 0 ||
+        !Number.isSafeInteger(frame.columnNumber) ||
+        frame.columnNumber < 0
+      )
+        continue;
+      locations.push({
+        bundleIndex,
+        bundleSha256: bundles[bundleIndex].sha256,
+        line: frame.lineNumber,
+        column: frame.columnNumber,
+      });
+      if (locations.length === 8) break;
+    }
+    if (!locations.length) continue;
+    eventsWithOwnedStack++;
+    projected.push({
+      kind: kind === 1 ? "Layout" : "Style",
+      startRelativeMs: (event.ts - start) / 1000,
+      clippedWallMs:
+        (Math.min(end, event.ts + event.dur) - Math.max(start, event.ts)) /
+        1000,
+      locations,
+    });
+  }
+  return {
+    eligibleEvents,
+    eventsWithStack,
+    eventsWithOwnedStack,
+    largestEvents: largestEvents
+      .sort((a, b) => b.clippedWallMs - a.clippedWallMs)
+      .slice(0, 8),
+    events: projected
+      .sort((a, b) => b.clippedWallMs - a.clippedWallMs)
+      .slice(0, 8),
+  };
+}
+const nativeOtherCodes = new Map([
+  ["Layerize", "layerize"],
+  ["UpdateLayerTree", "layer-tree-update"],
+  ["UpdateLayer", "layer-update"],
+  ["LayerTreeHost::UpdateLayers", "layer-host-update"],
+  ["PaintArtifactCompositor::Update", "paint-artifact-update"],
+  ["UpdatePaintProperties", "paint-property-update"],
+  ["Commit", "commit"],
+  ["CommitTree", "commit-tree"],
+  ["BeginMainThreadFrame", "main-thread-frame"],
+  ["BeginMainFrame", "main-frame"],
+  ["ThreadControllerImpl::RunTask", "thread-run-task"],
+  ["RunTask", "run-task"],
+  ["ThreadControllerImpl::DoWork", "thread-do-work"],
+  ["TaskQueueManager::ProcessTaskFromWorkQueue", "task-queue-work"],
+  ["HitTest", "hit-test"],
+  ["UpdateViewportIntersection", "viewport-intersection"],
+  ["AnimationFrame", "animation-frame"],
+  ["AnimationFrame::Render", "animation-render"],
+  ["LocalFrameView::UpdateLifecyclePhases", "frame-lifecycle"],
+  [
+    "LocalFrameView::RunStyleAndLayoutLifecyclePhases",
+    "style-layout-lifecycle",
+  ],
+  ["FrameView::performLayout", "frame-layout"],
+  ["Document::UpdateStyleAndLayout", "document-style-layout"],
+  ["WebFrameWidgetImpl::UpdateLifecycle", "widget-lifecycle"],
+  ["LayoutShift", "layout-shift"],
+  ["ScrollLayer", "scroll-layer"],
+  ["RasterTask", "raster-task"],
+]);
+function nativeOtherPhases(events, start, end) {
+  const grouped = new Map();
+  let unmappedEventCount = 0;
+  for (const event of events) {
+    if (
+      category(event.name) !== 6 ||
+      event.ts >= end ||
+      event.ts + event.dur <= start
+    )
+      continue;
+    valid(finite(event.ts) && finite(event.dur));
+    // User timing/console names can contain arbitrary content. They are never
+    // phase labels, even when equal to one of the fixed native stage names.
+    if (/user_timing|blink.console/.test(event.cat ?? "")) continue;
+    const phase = nativeOtherCodes.get(event.name);
+    if (!phase) {
+      unmappedEventCount++;
+      continue;
+    }
+    if (!grouped.has(phase)) grouped.set(phase, []);
+    grouped.get(phase).push(event);
+  }
+  return {
+    meaning:
+      "Clipped inclusive union within each fixed phase; phases can overlap and must not be added. Unknown native names remain private.",
+    unmappedEventCount,
+    phases: [...grouped]
+      .map(([phase, entries]) => ({
+        phase,
+        eventCount: entries.length,
+        clippedInclusiveWallMs: budget(entries, start, end).exclusiveWallMs
+          .Other,
+      }))
+      .sort((a, b) => b.clippedInclusiveWallMs - a.clippedInclusiveWallMs)
+      .slice(0, 8),
+  };
+}
+
 function knownLoss(value) {
   if (!value || typeof value !== "object") return false;
   for (const [key, entry] of Object.entries(value)) {
@@ -302,6 +462,22 @@ function summarizeSendTimeline(trace, profile, samples) {
               marks[1],
               profile.ownBundles ?? [],
             ),
+            firstGapStyleLayoutInitiators: styleLayoutInitiators(
+              renderer,
+              marks[0],
+              marks[1],
+              profile.ownBundles ?? [],
+            ),
+            geometryToNextFrameNativeOther: nativeOtherPhases(
+              renderer,
+              geometry,
+              nextEntry,
+            ),
+            geometryToNextFrameLongTasks: longTasks(
+              renderer,
+              geometry,
+              nextEntry,
+            ),
             originalTimingColumns: Object.fromEntries(
               [
                 "firstVisibleFeedbackMs",
@@ -367,4 +543,6 @@ module.exports = {
   wholeTaskCpuMs,
   longTasks,
   ownBundleCallsites,
+  styleLayoutInitiators,
+  nativeOtherPhases,
 };
