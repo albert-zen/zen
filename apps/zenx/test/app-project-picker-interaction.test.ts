@@ -1,14 +1,24 @@
 import { runtimeCommand } from "./fixtures/agent-runtime-data.js";
+import { defaultInformationLayout } from "../src/information-layout.js";
+import { NativeInformationService } from "../src/main/native-information-service.js";
+import { ThreadSidebarStore } from "../src/main/thread-sidebar-store.js";
 import "./dom-primitives.js";
 /// <reference path="../src/renderer/src/env.d.ts" />
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ZenXCredentialVault } from "../src/main/credential-vault.js";
+import { ZenXSettingsService } from "../src/main/settings-service.js";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import type { ZenXSidebarOrder } from "../src/main/host-profile.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { ServerNotificationParams } from "../src/protocol-client/types.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
 import type { ZenXImageDraft } from "../src/main/image-attachments.js";
@@ -2974,7 +2984,7 @@ test("passive UI activation pending or failed never gates admission or consumes 
   assert.equal(
     diagnostic.mock.callCount(),
     4,
-    "both activations in each degraded/rejected case produce explicit diagnostics",
+    `both activations in each degraded/rejected case produce explicit diagnostics: ${JSON.stringify(diagnostic.mock.calls.map((call) => call.arguments))}`,
   );
 });
 
@@ -4022,10 +4032,10 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
       await Promise.resolve();
     });
     await waitFor(() => requests.length === 2);
-    assert.deepEqual(requests[1]?.threadIds, ["thread-2", "thread-1"]);
+    assert.deepEqual(requests[1]?.threadIds, ["thread-1", "thread-2"]);
 
     await act(async () => {
-      requests[1]?.response.resolve(publicSettings(["thread-2", "thread-1"]));
+      requests[1]?.response.resolve(publicSettings(["thread-1", "thread-2"]));
       await Promise.resolve();
     });
     await waitFor(
@@ -4039,10 +4049,135 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
           ".pinned-thread-group .thread-title > span:first-child",
         ),
       ].map((title) => title.textContent),
-      ["Thread two", "Thread one"],
+      ["Thread one", "Thread two"],
     );
   } finally {
     await unmountApp(harness);
+  }
+});
+
+test("new Pins append after manual order and Unpin/re-Pin persists through host restart", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "zenx-app-pin-order-"));
+  const createSettings = () =>
+    new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: join(directory, "zen"),
+      vault: new ZenXCredentialVault(join(directory, "credentials.vault"), {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.from(value),
+        decryptString: (value) => value.toString(),
+      }),
+      subscription: {
+        login: async () => undefined,
+        logout: async () => undefined,
+        status: async () => ({ authenticated: false, expired: false }),
+      },
+    });
+  const service = createSettings();
+  const rows = [1, 2, 3, 4].map((id) =>
+    summary(false, `thread-${id}`, `Thread ${id}`),
+  );
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = rows.map((row) => row.threadId);
+  const projectOrder = {
+    projectKeys: ["/work/zen"],
+    threadIdsByProject: {
+      "/work/zen": ["thread-4", "thread-3", "thread-2", "thread-1"],
+    },
+  };
+  let harness: AppHarness | undefined;
+  try {
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    await service.setSidebarOrder(projectOrder);
+    await service.setPinnedThreadIds(["thread-2", "thread-1"]);
+    harness = await mountApp(projects, {
+      threads: async (archived) => (archived ? [] : rows),
+      initialPinnedThreadIds: ["thread-2", "thread-1"],
+      initialProfile: { sidebarOrder: projectOrder },
+      setPinnedThreadIds: async (threadIds) => {
+        await service.setPinnedThreadIds(threadIds);
+        const { profile } = await service.publicSettings();
+        const value = publicSettings(profile.pinnedThreadIds);
+        value.profile.sidebarOrder = profile.sidebarOrder;
+        return value;
+      },
+    });
+    const pinnedIds = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          ".pinned-thread-group .thread-row-shell",
+        ),
+      ].map((row) => row.dataset.threadId);
+    const expectPins = async (expected: string[]) => {
+      await waitFor(() => pinnedIds().join() === expected.join());
+      assert.deepEqual(pinnedIds(), expected);
+    };
+    const pin = async (name: string, label = "Pin") => {
+      await act(async () => threadMenuButton(name).click());
+      const button = await waitFor(() => exactMenuButton(label));
+      await act(async () => {
+        button.click();
+        button.click();
+      });
+    };
+    await expectPins(["thread-2", "thread-1"]);
+    await pin("Thread 3");
+    await expectPins(["thread-2", "thread-1", "thread-3"]);
+    const third = document.querySelector<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="thread-3"] .thread-row',
+    )!;
+    await act(async () =>
+      third.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowUp",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    await expectPins(["thread-2", "thread-3", "thread-1"]);
+    await pin("Thread 4");
+    await expectPins(["thread-2", "thread-3", "thread-1", "thread-4"]);
+    await pin("Thread 3", "Unpin");
+    await expectPins(["thread-2", "thread-1", "thread-4"]);
+    await pin("Thread 3");
+    const expected = ["thread-2", "thread-1", "thread-4", "thread-3"];
+    await expectPins(expected);
+    assert.deepEqual(
+      (await service.publicSettings()).profile.sidebarOrder,
+      projectOrder,
+    );
+    assert.deepEqual(
+      JSON.parse(await readFile(join(directory, "host-profile.json"), "utf8"))
+        .pinnedThreadIds,
+      expected,
+    );
+    const restarted = createSettings();
+    await restarted.initialize({});
+    assert.deepEqual(
+      (await restarted.publicSettings()).profile.pinnedThreadIds,
+      expected,
+    );
+    assert.deepEqual(
+      (await restarted.publicSettings()).profile.sidebarOrder,
+      projectOrder,
+    );
+    await unmountApp(harness);
+    harness = await mountApp(projects, {
+      threads: async (archived) => (archived ? [] : rows),
+      initialPinnedThreadIds: (await restarted.publicSettings()).profile
+        .pinnedThreadIds,
+      initialProfile: { sidebarOrder: projectOrder },
+    });
+    assert.deepEqual(
+      pinnedIds(),
+      expected,
+      "reopening App preserves persisted Pin order",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -4511,6 +4646,7 @@ async function mountApp(
   projects: ZenXProjectProjectionSnapshot,
   options: {
     threadSidebar?: Window["zenx"]["threadSidebar"];
+    information?: Window["zenx"]["information"];
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -4528,7 +4664,7 @@ async function mountApp(
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
-    modelUsage?(): Promise<ModelUsageProjection>;
+    modelUsage?(threadId: string): Promise<ModelUsageProjection>;
     markWorkspaceUsed?(
       workspace: string,
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -4654,6 +4790,7 @@ async function mountApp(
       ) => options.onNotification?.(listener) ?? (() => undefined),
     },
     threadSidebar: options.threadSidebar,
+    information: options.information,
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
         options.threads === undefined ? [] : await options.threads(archived),
@@ -4666,7 +4803,7 @@ async function mountApp(
       forThread: async () => ({}),
     },
     modelUsage: {
-      forThread: async () =>
+      forThread: async (threadId: string) =>
         options.modelUsage === undefined
           ? {
               thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
@@ -4678,7 +4815,7 @@ async function mountApp(
                 ratio: null,
               },
             }
-          : await options.modelUsage(),
+          : await options.modelUsage(threadId),
     },
     projects: {
       startProjectlessThread: async (
@@ -4843,7 +4980,10 @@ function publicSettings(pinnedThreadIds: string[]) {
       approvalPolicy: "never" as const,
       pinnedThreadIds,
       visibleSubagentThreadIds: [] as string[],
-      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+      sidebarOrder: {
+        projectKeys: [],
+        threadIdsByProject: {},
+      } as ZenXSidebarOrder,
     },
     hasApiKey: false,
     apiKeyProviderProfileIds: [],
@@ -4897,7 +5037,7 @@ function summary(
   threadId = "thread-1",
   name = "Thread one",
   cwd = "/work/zen",
-): NativeThreadSummary {
+): Exclude<NativeThreadSummary, { status: "systemError" }> {
   return {
     threadId,
     currentMetadata: {
@@ -6907,12 +7047,12 @@ test("App persists per-child visibility independently of Pin and preserves open 
     assert.ok(
       document.querySelector(".pinned-thread-group")?.contains(row("child-b")),
     );
-    assert.deepEqual(pinWrites, [["child-b", "child-a"]]);
+    assert.deepEqual(pinWrites, [["child-a", "child-b"]]);
     await click(toggle("Child B"));
     assert.equal(row("child-b"), null);
     assert.deepEqual(
       (await window.zenx.settings.get()).profile.pinnedThreadIds,
-      ["child-b", "child-a"],
+      ["child-a", "child-b"],
     );
     await click(toggle("Child B"));
     await click(row("child-b"));
@@ -6921,7 +7061,7 @@ test("App persists per-child visibility independently of Pin and preserves open 
     assert.equal(toggle("Child B")?.getAttribute("aria-checked"), "true");
     await click(toggle("Child A"));
     await click(toggle("Nested"));
-    assert.deepEqual(pinWrites, [["child-b", "child-a"], ["child-a"]]);
+    assert.deepEqual(pinWrites, [["child-a", "child-b"], ["child-a"]]);
     await click(
       [
         ...document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
@@ -8760,236 +8900,362 @@ test(
     }
   },
 );
-
-test("native streaming deltas update the real App without reloading or cloning information catalogs", async (t) => {
-  let notify:
-    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
-  let summaryReads = 0,
-    projectReads = 0,
-    contextClones = 0;
-  const clone = globalThis.structuredClone;
-  let summaries: NativeThreadSummary[] = [
-    summary(false),
-    ...Array.from({ length: 64 }, (_, index) => ({
-      ...summary(false, `child-${index}`, `Child ${index}`),
-      parentThreadId: "thread-1",
-    })),
-  ];
-  const snapshot = messageSourcePlugins();
-  globalThis.structuredClone = ((
-    value: unknown,
-    options?: StructuredSerializeOptions,
-  ) => {
-    if (
-      value &&
-      typeof value === "object" &&
-      "threadId" in value &&
-      "threads" in value
-    )
-      contextClones++;
-    return clone(value, options);
-  }) as typeof structuredClone;
-  const harness = await mountThreadApp({
-    threads: async (archived) => {
-      summaryReads++;
-      return clone(archived ? [] : summaries);
-    },
-    projectsGet: async () => {
-      projectReads++;
-      return {
-        ...oneProject(),
-        projects: [{ ...oneProject().projects[0]!, threadIds: ["thread-1"] }],
-      };
-    },
-    onNotification: (listener) => {
-      notify = listener;
-      return () => {
-        notify = undefined;
-      };
-    },
-    request: async (method) => {
-      if (method === "zen/thread/resume") return resumed(runningThread());
-      throw new Error(method);
-    },
-    plugins: {
-      get: async () => snapshot,
-      executeCommand: async (_plugin, command) => {
-        assert.equal(command, "list");
-        return { threads: clone(summaries.slice(1)) };
-      },
-    },
-  });
-  let watermark = 0;
-  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
-    act(async () =>
-      notify?.("zen/thread/event", {
-        threadId:
-          event.type === "item_completed"
-            ? event.item.threadId
-            : "threadId" in event
-              ? event.threadId
-              : "thread-1",
-        processEpoch: "test-process-epoch",
-        watermark: ++watermark,
-        event,
-      }),
-    );
-  try {
-    await selectedComposer();
-    await act(async () =>
-      document
-        .querySelector<HTMLButtonElement>(".information-toolbar button")!
-        .click(),
-    );
-    await waitFor(() =>
-      document.querySelector(".information-content .subagents-panel"),
-    );
-    for (const [itemId, itemType] of [
-      ["stream-answer", "agent_message"],
-      ["stream-reasoning", "reasoning"],
-    ] as const)
-      await emit({
-        type: "item_started",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId,
-        itemType,
-      });
-    const before = { summaryReads, projectReads, contextClones };
-    assert.ok(
-      before.contextClones > 0,
-      "real admitted GenericPluginUiHost has cloned its immutable context",
-    );
-    for (let index = 0; index < 10; index++) {
-      await emit({
-        type: "item_delta",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "stream-answer",
-        delta: `visible-token-${index} `,
-      });
-      await emit({
-        type: "reasoning_summary_delta",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "stream-reasoning",
-        delta: "summary ",
-      });
-      await emit({
-        type: "reasoning_content_delta",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "stream-reasoning",
-        delta: "reasoning ",
-      });
-    }
-    assert.match(
-      document.querySelector(".agent-surface")!.textContent!,
-      /visible-token-9/,
-    );
-    assert.deepEqual(
-      { summaryReads, projectReads, contextClones },
-      before,
-      "30 native transient deltas do not issue list/project IPC or clone catalog contexts, even when every RPC returns fresh arrays",
-    );
-    t.diagnostic(
-      JSON.stringify({
-        deltas: 30,
-        summaryReads: summaryReads - before.summaryReads,
-        projectReads: projectReads - before.projectReads,
-        contextClones: contextClones - before.contextClones,
-      }),
-    );
-    const refresh = async (
-      event: import("../../../src/app-server.js").AppServerEvent,
-    ) => {
-      const reads = summaryReads,
-        projects = projectReads;
-      await emit(event);
-      assert.equal(
-        summaryReads,
-        reads + 2,
-        `${event.type} refreshes active and archived summaries`,
-      );
-      assert.equal(
-        projectReads,
-        projects + 1,
-        `${event.type} refreshes project facts`,
-      );
-    };
-    summaries = summaries.map((row, index) =>
-      index === 1 && row.status !== "systemError"
-        ? { ...row, name: "Changed live child", status: "active" as const }
-        : row,
-    );
-    await refresh({
-      type: "thread_name_updated",
-      threadId: "child-0",
-      name: "Changed live child",
-    });
-    assert.match(
-      document.querySelector(".information-content")!.textContent!,
-      /Changed live child/,
-    );
-    assert.ok(
-      contextClones > before.contextClones,
-      "real child facts still reach the card",
-    );
-    await refresh({
-      type: "thread_settings_updated",
-      threadId: "thread-1",
-      settings: {
-        providerProfileId: "fake",
-        modelId: "fake",
-        reasoningEffort: "medium",
-        model: "fake",
+for (const claimWins of [false, true]) {
+  test(
+    "complete App and real native Host: " +
+      (claimWins
+        ? "claimed batch cannot be recalled or overwrite a newer draft"
+        : "whole pending batch restores into the latest Composer before any model claim"),
+    { timeout: 15_000 },
+    async () => {
+      const { fixture } =
+        await import("../../../test/thread-message-fixture.js");
+      const { NativeConnection } =
+        await import("../../../src/protocol/native/connection.js");
+      const { NativeRecoveryProjection } =
+        await import("../../../src/protocol/native/recovery.js");
+      const { pendingSteerMessages } =
+        await import("../../../src/steer-recall.js");
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const secondEntered = deferred<void>();
+      const releaseSecond = deferred<void>();
+      const recallEntered = deferred<void>();
+      const releaseRecall = deferred<void>();
+      const observed: import("../../../src/model.js").ModelRequest[] = [];
+      const f = fixture({
         provider: "fake",
-        cwd: "/work/zen",
-        sandbox: "danger-full-access",
-        approvalPolicy: "never",
-      },
-    });
-    await refresh({
-      type: "turn_started",
+        async *stream(request) {
+          observed.push(request);
+          if (observed.length === 1) {
+            entered.resolve();
+            await release.promise;
+          } else {
+            secondEntered.resolve();
+            await releaseSecond.promise;
+          }
+          yield { type: "text_delta", delta: "Synthetic gated provider reply" };
+        },
+      });
+      const native = new NativeRecoveryProjection(f.server);
+      const listeners = new Set<
+        Parameters<Window["zenx"]["protocol"]["onNotification"]>[0]
+      >();
+      const replies = new Map<
+        number,
+        {
+          resolve(value: unknown): void;
+          reject(reason: unknown): void;
+        }
+      >();
+      let nextId = 0;
+      const calls: string[] = [];
+      const connection = new NativeConnection({
+        appServer: f.server,
+        projection: native,
+        send(message) {
+          if ("id" in message && typeof message.id === "number") {
+            const waiter = replies.get(message.id);
+            if (!waiter) return;
+            replies.delete(message.id);
+            if ("error" in message)
+              waiter.reject(
+                Object.assign(new Error(message.error.message), {
+                  data: message.error.data,
+                }),
+              );
+            else if ("result" in message) waiter.resolve(message.result);
+          } else if ("method" in message) {
+            const method = message.method;
+            assert(
+              method === "zen/thread/event" ||
+                method === "model/catalog/updated",
+            );
+            const params =
+              message.params as ServerNotificationParams[typeof method];
+            for (const listener of listeners) listener(method, params);
+          }
+        },
+      });
+      const request = async (
+        method: string,
+        params?: unknown,
+      ): Promise<unknown> => {
+        calls.push(method);
+        if (method === "zen/thread/steer/recall" && claimWins) {
+          recallEntered.resolve();
+          await releaseRecall.promise;
+        }
+        const id = ++nextId;
+        return await new Promise((resolve, reject) => {
+          replies.set(id, { resolve, reject });
+          void connection.receive({ id, method, params }).catch(reject);
+        });
+      };
+      await request("zen/initialize", {});
+      const target = await f.server.startThread();
+      const active = await f.server.startTurn(target.id, "Initial model input");
+      await entered.promise;
+      let harness: AppHarness | undefined;
+      try {
+        harness = await mountApp(
+          {
+            projects: [
+              {
+                key: target.cwd,
+                workspace: target.cwd,
+                configured: true,
+                isDefault: true,
+                threadIds: [target.id],
+              },
+            ],
+            unavailableThreadIds: [],
+            lastUsedWorkspace: target.cwd,
+          },
+          {
+            composerSendMode: "soft",
+            threads: async (archived) =>
+              archived
+                ? []
+                : [
+                    {
+                      ...summary(
+                        false,
+                        target.id,
+                        "Native recall Thread",
+                        target.cwd,
+                      ),
+                      status: "active",
+                    },
+                  ],
+            request,
+            onNotification: (listener) => {
+              listeners.add(listener);
+              return () => {
+                listeners.delete(listener);
+              };
+            },
+          },
+        );
+        let composer = await selectedComposer();
+        for (const text of [
+          "First native pending input",
+          "Second native pending input",
+        ]) {
+          await setTextareaValue(composer, text);
+          const send = await waitFor(() =>
+            document.querySelector<HTMLButtonElement>(
+              ".composer-actions .action-orb.steer",
+            ),
+          );
+          await invokePrimarySubmit(send);
+          await waitFor(() => composer.value === "");
+        }
+        let snapshot = await f.server.readThread(target.id);
+        assert.equal(pendingSteerMessages(snapshot.items).length, 2);
+        assert.equal(
+          snapshot.items.filter((item) => item.type === "user_message").length,
+          1,
+        );
+        assert.equal(observed.length, 1);
+        await setTextareaValue(composer, "Latest independent draft");
+        const recall = await waitFor(() =>
+          document.querySelector<HTMLButtonElement>(
+            ".pending-steer-heading button",
+          ),
+        );
+        await act(async () => {
+          recall.click();
+        });
+        if (claimWins) {
+          await recallEntered.promise;
+          await act(async () => {
+            release.resolve();
+            await secondEntered.promise;
+          });
+          await act(async () => {
+            releaseRecall.resolve();
+          });
+          await waitFor(() =>
+            document
+              .querySelector(".pending-steer-panel")
+              ?.textContent?.includes(i18n.t("shell:steerRecallConflict")),
+          );
+          assert.equal(composer.value, "Latest independent draft");
+          snapshot = await f.server.readThread(target.id);
+          assert.equal(
+            snapshot.items.filter(
+              (item) => item.type === "user_message_steer_recalled",
+            ).length,
+            0,
+          );
+          assert.equal(
+            snapshot.items.filter((item) => item.type === "user_message")
+              .length,
+            3,
+          );
+          assert.equal(observed.length, 2);
+        } else {
+          await waitFor(
+            () =>
+              composer.value ===
+              "First native pending input\n\nSecond native pending input\n\nLatest independent draft",
+          );
+          assert.equal(document.querySelector("[data-queue-id]"), null);
+          snapshot = await f.server.readThread(target.id);
+          assert.equal(pendingSteerMessages(snapshot.items).length, 0);
+          assert.equal(
+            snapshot.items.filter(
+              (item) => item.type === "user_message_steer_recalled",
+            ).length,
+            1,
+          );
+          assert.equal(
+            snapshot.items.filter((item) => item.type === "user_message_queued")
+              .length,
+            2,
+          );
+          assert.equal(
+            snapshot.items.filter((item) => item.type === "user_message")
+              .length,
+            1,
+          );
+          await act(async () => {
+            release.resolve();
+            await active.done;
+          });
+          assert.equal(observed.length, 1);
+          assert.doesNotMatch(
+            JSON.stringify(observed),
+            /First native pending input|Second native pending input/,
+          );
+        }
+        assert.equal(
+          calls.filter((method) => method === "zen/thread/steer/recall").length,
+          1,
+        );
+        assert.equal((await f.server.readThread(target.id)).turns.length, 1);
+      } finally {
+        await act(async () => {
+          release.resolve();
+          releaseSecond.resolve();
+          releaseRecall.resolve();
+          await active.done;
+        });
+        if (harness) await unmountApp(harness);
+        connection.close();
+        native.close();
+      }
+    },
+  );
+}
+
+test("complete App late recall acknowledgement never navigates or refreshes the newly selected Thread", async () => {
+  const { pendingSteerMessages, recoverSteerRecall } =
+    await import("../../../src/steer-recall.js");
+  const first = nativeRecoveryForThread(runningThread());
+  first.thread.items = [
+    ...first.thread.items,
+    {
+      type: "user_message_queued",
+      id: "pending-one",
       threadId: "thread-1",
-      turnId: "turn-1",
-    });
-    await refresh({
-      type: "item_completed",
-      item: {
-        type: "user_message",
-        id: "first-input",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        createdAt: "2026-11-02T00:00:00Z",
-        text: "Canonical input still refreshes",
+      createdAt: "2026-11-02T00:00:00Z",
+      clientId: "pending-client",
+      input: [{ type: "text", text: "Recall only into Thread one" }],
+      deliveryMode: "steer",
+      expectedTurnId: "turn-1",
+    },
+  ];
+  const second = nativeRecoveryForThread({
+    ...liveThread(),
+    id: "thread-2",
+    name: "Thread two",
+  });
+  const ack =
+    deferred<
+      import("../../../src/protocol/native/wire.js").NativeSteerRecallResult
+    >();
+  let requested:
+    | import("../../../src/protocol/native/wire.js").NativeSteerRecallParams
+    | undefined;
+  const resumes: string[] = [];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const id = (params as { threadId: string }).threadId;
+          resumes.push(id);
+          return id === "thread-1" ? first : second;
+        }
+        if (method === "zen/thread/steer/recall") {
+          requested = params as typeof requested;
+          return ack.promise;
+        }
+        throw new Error("Unexpected navigation side effect: " + method);
       },
-    });
-    await refresh({
-      type: "turn_completed",
+    },
+  );
+  try {
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Thread one draft");
+    const recall = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".pending-steer-heading button",
+      ),
+    );
+    await act(async () => recall.click());
+    assert.ok(requested);
+    const row = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((entry) => entry.textContent?.includes("Thread two"));
+    assert.ok(row);
+    await act(async () => row.click());
+    await waitFor(() => resumes.includes("thread-2"));
+    const secondComposer = await waitFor(() =>
+      document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+    );
+    await setTextareaValue(secondComposer, "Thread two independent draft");
+    const receipt: import("../../../src/item.js").SteerRecalledItem = {
+      type: "user_message_steer_recalled",
+      id: "recall-receipt",
       threadId: "thread-1",
-      turnId: "turn-1",
-      status: "completed",
-    });
-    await refresh({
-      type: "thread_archived_updated",
-      threadId: "child-0",
-      archived: true,
-    });
-    await refresh({
-      type: "item_completed",
-      item: {
-        type: "agent_message",
-        id: "final-answer",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        createdAt: "2026-11-02T00:00:01Z",
-        text: "Canonical answer still refreshes",
-      },
-    });
+      createdAt: "2026-11-02T00:00:01Z",
+      recallId: requested.recallId,
+      targets: requested.targets,
+    };
+    first.thread.items = [...first.thread.items, receipt];
+    const result = recoverSteerRecall(
+      first.thread.items,
+      "thread-1",
+      requested.recallId,
+    )!;
+    assert.ok(result);
+    const before = [...resumes];
+    await act(async () => ack.resolve({ ...result, status: "recalled" }));
+    assert.deepEqual(resumes, before);
+    assert.equal(secondComposer.value, "Thread two independent draft");
+    assert.equal(pendingSteerMessages(first.thread.items).length, 0);
+    assert.equal(document.querySelector(".pending-steer-panel"), null);
   } finally {
     await unmountApp(harness);
-    globalThis.structuredClone = clone;
   }
 });
 
@@ -9257,3 +9523,2074 @@ test("real App canonical end and active-Turn derivations invalidate on append, b
     await unmountApp(harness);
   }
 });
+
+for (const activation of ["pointer", "keyboard-button"] as const) {
+  test(`real App ${activation} submit returns focused Send to its Composer before disabling`, async (t) => {
+    const admission = deferred<unknown>();
+    let sends = 0;
+    let observation:
+      | import("../../../src/client-observation.js").ClientSendObservation
+      | undefined;
+    const harness = await mountThreadApp({
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory());
+        if (method === "zen/turn/send") {
+          sends++;
+          observation = (params as { clientObservation?: typeof observation })
+            .clientObservation;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    const originalSetAttribute = Element.prototype.setAttribute;
+    let restoreFocus = () => {};
+    let removeFocusListeners = () => {};
+    try {
+      const composer = await selectedComposer();
+      await setTextareaValue(composer, "Synthetic focused Send");
+      const send = document.querySelector<HTMLButtonElement>(
+        ".composer-send-control > button.action-orb.send",
+      )!;
+      assert.ok(send);
+      // JSDOM does not synthesize native pointer/keyboard focus or button activation.
+      // Establish that focus precondition explicitly, then exercise App's real click route.
+      await act(async () => send.focus());
+      const calls: FocusOptions[] = [];
+      const order: string[] = [];
+      const focusEvents: string[] = [];
+      let observingFocus = true;
+      const recordFocus = (event: Event) => {
+        if (!observingFocus) return;
+        if (event.target === send) focusEvents.push(`send-${event.type}`);
+        if (event.target === composer)
+          focusEvents.push(`composer-${event.type}`);
+      };
+      for (const type of ["blur", "focusout", "focus", "focusin"])
+        document.addEventListener(type, recordFocus, true);
+      removeFocusListeners = () => {
+        for (const type of ["blur", "focusout", "focus", "focusin"])
+          document.removeEventListener(type, recordFocus, true);
+      };
+      let focusAt = 0;
+      const originalFocus = composer.focus;
+      composer.focus = function (options?: FocusOptions) {
+        calls.push(options ?? {});
+        focusAt = performance.now();
+        order.push("composer-focus");
+        originalFocus.call(this, options);
+      };
+      restoreFocus = () => {
+        composer.focus = originalFocus;
+      };
+      Element.prototype.setAttribute = function (name: string, value: string) {
+        if (this === send && name === "disabled") {
+          order.push(
+            document.activeElement === composer
+              ? "disable-after-focus"
+              : "disable-without-focus",
+          );
+        }
+        return originalSetAttribute.call(this, name, value);
+      };
+      await act(async () =>
+        send.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            detail: activation === "pointer" ? 1 : 0,
+          }),
+        ),
+      );
+      await waitFor(() => sends === 1);
+      observingFocus = false;
+      assert.equal(composer.value, "");
+      assert.ok(document.querySelector('[data-send-state="sending"]'));
+      assert.deepEqual(calls, [{ preventScroll: true }]);
+      assert.deepEqual(order, ["composer-focus", "disable-after-focus"]);
+      assert.deepEqual(focusEvents, [
+        "send-blur",
+        "send-focusout",
+        "composer-focus",
+        "composer-focusin",
+      ]);
+      assert.equal(document.activeElement === composer, true);
+      assert.equal(send.disabled, true);
+      assert.ok(observation);
+      assert.ok(
+        BigInt(observation.clock.monotonicNs) <=
+          BigInt(Math.floor(focusAt * 1e6)),
+        "activation clock includes the focus operation",
+      );
+      await act(async () => send.click());
+      assert.equal(
+        sends,
+        1,
+        "native disabled still prevents duplicate submission",
+      );
+      await setTextareaValue(composer, "New draft after immediate send");
+      const elsewhere =
+        document.querySelector<HTMLButtonElement>(".thread-row")!;
+      await act(async () => elsewhere.focus());
+      await act(async () => admission.resolve({ turnId: "focus-turn" }));
+      assert.equal(
+        document.activeElement === elsewhere,
+        true,
+        "old ACK must not reclaim focus",
+      );
+      assert.equal(composer.value, "New draft after immediate send");
+      assert.equal(calls.length, 1);
+      t.diagnostic(
+        JSON.stringify({
+          activation,
+          order,
+          focusEvents,
+          focusCalls: calls.length,
+          sends,
+        }),
+      );
+    } finally {
+      Element.prototype.setAttribute = originalSetAttribute;
+      removeFocusListeners();
+      restoreFocus();
+      admission.resolve({});
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("real App editor, invalid and external-owner submits do not acquire Composer focus", async () => {
+  let sends = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(derivedScanHistory());
+      if (method === "zen/turn/send") {
+        sends++;
+        return {};
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let restoreFocus = () => {};
+  try {
+    const composer = await selectedComposer();
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    let focuses = 0;
+    const originalFocus = composer.focus;
+    composer.focus = function (options?: FocusOptions) {
+      focuses++;
+      originalFocus.call(this, options);
+    };
+    restoreFocus = () => {
+      composer.focus = originalFocus;
+    };
+    const elsewhere = document.querySelector<HTMLButtonElement>(".thread-row")!;
+    await act(async () => elsewhere.focus());
+    await invokeButtonClick(send); // Even bypassing the DOM disabled check must hit submit's guard.
+    assert.equal(sends, 0);
+    assert.equal(document.activeElement === elsewhere, true);
+    assert.equal(focuses, 0);
+    await setTextareaValue(composer, "IME draft");
+    await act(async () => composer.focus());
+    focuses = 0;
+    await dispatchComposerKey(composer, { key: "Enter", isComposing: true });
+    await dispatchComposerKey(composer, { key: "Enter", repeat: true });
+    assert.equal(sends, 0);
+    assert.equal(focuses, 0);
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => sends === 1);
+    assert.equal(document.activeElement === composer, true);
+    assert.equal(focuses, 0, "textarea Enter does not refocus the editor");
+    await setTextareaValue(composer, "External focus remains owned");
+    await act(async () => elsewhere.focus());
+    await invokeButtonClick(send);
+    await waitFor(() => sends === 2);
+    assert.equal(
+      document.activeElement === elsewhere,
+      true,
+      "a Send without focus does not steal another owner's focus",
+    );
+    assert.equal(focuses, 0);
+  } finally {
+    restoreFocus();
+    await unmountApp(harness);
+  }
+});
+
+test("real App delayed send ACK after Thread navigation never focuses the new owner", async () => {
+  const admission = deferred<unknown>();
+  let sends = 0;
+  const resumes: string[] = [];
+  const harness = await mountApp(
+    {
+      projects: [
+        {
+          key: "/work/zen",
+          workspace: "/work/zen",
+          configured: true,
+          isDefault: true,
+          threadIds: ["thread-1", "thread-2"],
+        },
+      ],
+      unavailableThreadIds: [],
+      lastUsedWorkspace: "/work/zen",
+    },
+    {
+      threads: async (archived) =>
+        archived
+          ? []
+          : [summary(false), summary(false, "thread-2", "Thread two")],
+      request: async (method, params) => {
+        if (method === "zen/thread/resume") {
+          const id = (params as { threadId: string }).threadId;
+          resumes.push(id);
+          return resumed({
+            ...liveThread(),
+            id,
+            name: id === "thread-2" ? "Thread two" : "Thread one",
+          });
+        }
+        if (method === "zen/turn/send") {
+          sends++;
+          return admission.promise;
+        }
+        throw new Error(`Unexpected ${method}`);
+      },
+    },
+  );
+  try {
+    const first = await selectedComposer();
+    await setTextareaValue(first, "Thread one send");
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    await act(async () => send.focus());
+    await act(async () => send.click());
+    await waitFor(() => sends === 1);
+    assert.equal(document.activeElement === first, true);
+    const secondRow = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((row) => row.textContent?.includes("Thread two"))!;
+    await act(async () => secondRow.click());
+    await waitFor(() => resumes.includes("thread-2"));
+    const second =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    await setTextareaValue(second, "Thread two draft");
+    await act(async () => second.focus());
+    const before = [...resumes];
+    await act(async () => admission.resolve({ turnId: "old-turn" }));
+    assert.equal(document.activeElement === second, true);
+    assert.equal(second.value, "Thread two draft");
+    assert.deepEqual(resumes, before);
+    assert.equal(sends, 1);
+  } finally {
+    admission.resolve({});
+    await unmountApp(harness);
+  }
+});
+
+test("native streaming deltas update the real App without reloading or cloning information catalogs", async (t) => {
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let summaryReads = 0,
+    projectReads = 0,
+    contextClones = 0;
+  const clone = globalThis.structuredClone;
+  let summaries: NativeThreadSummary[] = [
+    summary(false),
+    ...Array.from({ length: 64 }, (_, index) => ({
+      ...summary(false, `child-${index}`, `Child ${index}`),
+      parentThreadId: "thread-1",
+    })),
+  ];
+  const snapshot = messageSourcePlugins();
+  globalThis.structuredClone = ((
+    value: unknown,
+    options?: StructuredSerializeOptions,
+  ) => {
+    if (
+      value &&
+      typeof value === "object" &&
+      "threadId" in value &&
+      "threads" in value
+    )
+      contextClones++;
+    return clone(value, options);
+  }) as typeof structuredClone;
+  const harness = await mountThreadApp({
+    information: {
+      read: async (value) => {
+        const owner =
+          typeof value === "string"
+            ? { kind: "thread" as const, id: value }
+            : value;
+        return {
+          owner,
+          revision: 0,
+          basis: "synthetic-default",
+          layout: defaultInformationLayout(owner),
+          members: [],
+          ...(owner.kind === "thread" ? { resourceThreadId: owner.id } : {}),
+        };
+      },
+      update: async () => {
+        throw Error("Streaming must not edit the layout");
+      },
+    },
+    threads: async (archived) => {
+      summaryReads++;
+      return clone(archived ? [] : summaries);
+    },
+    projectsGet: async () => {
+      projectReads++;
+      return {
+        ...oneProject(),
+        projects: [{ ...oneProject().projects[0]!, threadIds: ["thread-1"] }],
+      };
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(runningThread());
+      throw new Error(method);
+    },
+    plugins: {
+      get: async () => snapshot,
+      executeCommand: async (_plugin, command) => {
+        assert.equal(command, "list");
+        return { threads: clone(summaries.slice(1)) };
+      },
+    },
+  });
+  let watermark = 0;
+  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () =>
+      notify?.("zen/thread/event", {
+        threadId:
+          event.type === "item_completed"
+            ? event.item.threadId
+            : "threadId" in event
+              ? event.threadId
+              : "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      }),
+    );
+  try {
+    await selectedComposer();
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    await waitFor(() =>
+      document.querySelector(".information-content .subagents-panel"),
+    );
+    for (const [itemId, itemType] of [
+      ["stream-answer", "agent_message"],
+      ["stream-reasoning", "reasoning"],
+    ] as const)
+      await emit({
+        type: "item_started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId,
+        itemType,
+      });
+    const before = { summaryReads, projectReads, contextClones };
+    assert.ok(
+      before.contextClones > 0,
+      "real admitted GenericPluginUiHost has cloned its immutable context",
+    );
+    for (let index = 0; index < 10; index++) {
+      await emit({
+        type: "item_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-answer",
+        delta: `visible-token-${index} `,
+      });
+      await emit({
+        type: "reasoning_summary_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "summary ",
+      });
+      await emit({
+        type: "reasoning_content_delta",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "stream-reasoning",
+        delta: "reasoning ",
+      });
+    }
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /visible-token-9/,
+    );
+    assert.deepEqual(
+      { summaryReads, projectReads, contextClones },
+      before,
+      "30 native transient deltas do not issue list/project IPC or clone catalog contexts, even when every RPC returns fresh arrays",
+    );
+    t.diagnostic(
+      JSON.stringify({
+        deltas: 30,
+        summaryReads: summaryReads - before.summaryReads,
+        projectReads: projectReads - before.projectReads,
+        contextClones: contextClones - before.contextClones,
+      }),
+    );
+    const refresh = async (
+      event: import("../../../src/app-server.js").AppServerEvent,
+    ) => {
+      const reads = summaryReads,
+        projects = projectReads;
+      await emit(event);
+      assert.equal(
+        summaryReads,
+        reads + 2,
+        `${event.type} refreshes active and archived summaries`,
+      );
+      assert.equal(
+        projectReads,
+        projects + 1,
+        `${event.type} refreshes project facts`,
+      );
+    };
+    summaries = summaries.map((row, index) =>
+      index === 1 && row.status !== "systemError"
+        ? { ...row, name: "Changed live child", status: "active" as const }
+        : row,
+    );
+    await refresh({
+      type: "thread_name_updated",
+      threadId: "child-0",
+      name: "Changed live child",
+    });
+    assert.match(
+      document.querySelector(".information-content")!.textContent!,
+      /Changed live child/,
+    );
+    assert.ok(
+      contextClones > before.contextClones,
+      "real child facts still reach the card",
+    );
+    await refresh({
+      type: "thread_settings_updated",
+      threadId: "thread-1",
+      settings: {
+        providerProfileId: "fake",
+        modelId: "fake",
+        reasoningEffort: "medium",
+        model: "fake",
+        provider: "fake",
+        cwd: "/work/zen",
+        sandbox: "danger-full-access",
+        approvalPolicy: "never",
+      },
+    });
+    await refresh({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "user_message",
+        id: "first-input",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:00Z",
+        text: "Canonical input still refreshes",
+      },
+    });
+    await refresh({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+    });
+    await refresh({
+      type: "thread_archived_updated",
+      threadId: "child-0",
+      archived: true,
+    });
+    await refresh({
+      type: "item_completed",
+      item: {
+        type: "agent_message",
+        id: "final-answer",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-11-02T00:00:01Z",
+        text: "Canonical answer still refreshes",
+      },
+    });
+  } finally {
+    await unmountApp(harness);
+    globalThis.structuredClone = clone;
+  }
+});
+
+function usageProjection(inputTokens: number | null): ModelUsageProjection {
+  return {
+    thread: { responseCount: 1, inputTokens: 12, outputTokens: 3 },
+    turns: {},
+    context: {
+      inputTokens,
+      inputTokenSource: inputTokens === null ? null : "estimated",
+      contextWindow: inputTokens === null ? null : 100,
+      ratio: inputTokens === null ? null : inputTokens / 100,
+    },
+  };
+}
+
+function contextUsageLabel(): string {
+  return (
+    document
+      .querySelector(".context-usage-trigger")
+      ?.getAttribute("aria-label") ?? ""
+  );
+}
+
+test("App usage coalesces six native completion reads and drains the latest burst on long history", async (t) => {
+  const requests: ReturnType<typeof deferred<ModelUsageProjection>>[] = [];
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const history: Thread = {
+    ...liveThread(),
+    turns: Array.from({ length: 40 }, (_, index) => ({
+      id: `history-${index}`,
+      status: "completed" as const,
+      itemsView: "full" as const,
+      items: [
+        {
+          type: "userMessage" as const,
+          id: `input-${index}`,
+          clientId: `client-${index}`,
+          content: [
+            {
+              type: "text" as const,
+              text: `Historical input ${index}`,
+              text_elements: [],
+            },
+          ],
+        },
+        {
+          type: "agentMessage" as const,
+          id: `answer-${index}`,
+          text: `Historical answer ${index}`,
+          phase: "final_answer" as const,
+          memoryCitation: null,
+        },
+      ],
+      error: null,
+      startedAt: index + 1,
+      completedAt: index + 2,
+      durationMs: 1,
+    })),
+  };
+  const admission = deferred<unknown>();
+  let clientId: string | undefined;
+  const harness = await mountThreadApp({
+    composerSendMode: "soft",
+    modelUsage: () => {
+      const request = deferred<ModelUsageProjection>();
+      requests.push(request);
+      return request.promise;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return resumed(history);
+      if (method === "zen/turn/send") {
+        clientId = (params as { clientUserMessageId: string })
+          .clientUserMessageId;
+        return admission.promise;
+      }
+      throw new Error(method);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  let watermark = 0;
+  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () => {
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      });
+    });
+  try {
+    const composer = await selectedComposer();
+    await act(async () => requests[0]!.resolve(usageProjection(1)));
+    assert.match(contextUsageLabel(), /1 \/ 100 tokens/);
+    await setTextareaValue(composer, "Ordinary message");
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => clientId);
+    await act(async () => admission.resolve({ turnId: "ordinary-turn" }));
+    const common = {
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      createdAt: "2026-11-02T00:00:01Z",
+    };
+    const items: import("../../../src/item.js").CanonicalItem[] = [
+      {
+        ...common,
+        id: "ordinary-start",
+        type: "turn_started",
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+      {
+        ...common,
+        id: "ordinary-user",
+        type: "user_message",
+        clientId,
+        content: [{ type: "text", text: "Ordinary message" }],
+      },
+      {
+        ...common,
+        id: "ordinary-usage",
+        type: "model_usage",
+        modelResponseId: "ordinary-response",
+        inputTokens: 12,
+        outputTokens: 3,
+      },
+      {
+        ...common,
+        id: "ordinary-answer",
+        type: "agent_message",
+        text: "Ordinary answer",
+      },
+      {
+        ...common,
+        id: "ordinary-end",
+        type: "turn_completed",
+        status: "completed",
+      },
+    ];
+    await emit({ type: "item_completed", item: items[0]! });
+    await emit({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+    });
+    for (const [role, text, sequence] of [
+      ["user", "Ordinary message", 161],
+      ["assistant", "Ordinary answer", 162],
+    ] as const) {
+      await emit({
+        type: "context_item_completed",
+        threadId: "thread-1",
+        item: {
+          ...common,
+          id: `semantic-${role}`,
+          kind: "message",
+          role,
+          source: {
+            kind: role === "user" ? "user_message" : "agent_message",
+            sequence,
+          },
+          content: { text, parts: [{ type: "text", text }] },
+        },
+      });
+    }
+    for (const item of items.slice(1))
+      await emit({ type: "item_completed", item });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /Ordinary message/,
+    );
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /Ordinary answer/,
+    );
+    assert.equal(
+      requests.length,
+      2,
+      "six completion notifications share one in-flight read after the initial resume read",
+    );
+    await act(async () => requests[1]!.resolve(usageProjection(4)));
+    assert.equal(
+      requests.length,
+      3,
+      "one dirty follow-up reads after all six notifications",
+    );
+    assert.match(
+      contextUsageLabel(),
+      /1 \/ 100 tokens/,
+      "superseded read cannot publish",
+    );
+    await act(async () => requests[2]!.resolve(usageProjection(12)));
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+    t.diagnostic(
+      JSON.stringify({
+        historicalTurns: 40,
+        completionNotifications: 6,
+        completionUsageReads: requests.length - 1,
+      }),
+    );
+
+    // More events while the follow-up itself is pending must drain again, not
+    // freeze at an arbitrary two-read budget or run concurrent context builds.
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    await act(async () => requests[3]!.resolve(usageProjection(13)));
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    assert.equal(requests.length, 5);
+    await act(async () => requests[4]!.resolve(usageProjection(14)));
+    assert.equal(requests.length, 6);
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+    await act(async () => requests[5]!.resolve(usageProjection(15)));
+    assert.match(contextUsageLabel(), /15 \/ 100 tokens/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+async function mountUsageApp(options: Parameters<typeof mountApp>[1] = {}) {
+  const requests: Array<{
+    threadId: string;
+    response: ReturnType<typeof deferred<ModelUsageProjection>>;
+  }> = [];
+  const methods: string[] = [];
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let status: ((value: AppServerHostStatus) => void) | undefined;
+  const harness = await mountThreadApp({
+    threads: async (archived) =>
+      archived
+        ? []
+        : [summary(false), summary(false, "thread-2", "Thread two")],
+    modelUsage: (threadId) => {
+      const response = deferred<ModelUsageProjection>();
+      requests.push({ threadId, response });
+      return response.promise;
+    },
+    request: async (method, params) => {
+      methods.push(method);
+      if (method === "zen/thread/resume")
+        return resumed({
+          ...liveThread(),
+          id: (params as { threadId: string }).threadId,
+        });
+      if (method === "thread/archive") return {};
+      throw new Error(method);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    onStatus: (listener) => {
+      status = listener;
+      return () => {
+        status = undefined;
+      };
+    },
+    ...options,
+  });
+  const select = async (name = "Thread one") => {
+    const row = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((button) => button.textContent?.includes(name));
+    assert.ok(row, `Expected ${name} row`);
+    await act(async () => row.click());
+  };
+  const complete = async (threadId = "thread-1") =>
+    act(async () =>
+      notify?.("turn/completed", {
+        threadId,
+        turn: {
+          id: "completed-turn",
+          status: "completed",
+          items: [],
+          itemsView: "full",
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1,
+        },
+      }),
+    );
+  return {
+    harness,
+    requests,
+    methods,
+    select,
+    complete,
+    status: async (value: AppServerHostStatus) =>
+      act(async () => status?.(value)),
+    notify: async <
+      M extends
+        import("../src/protocol-client/index.js").ServerNotificationMethod,
+    >(
+      method: M,
+      params: import("../src/protocol-client/index.js").ServerNotificationParams[M],
+    ) => act(async () => notify?.(method, params)),
+    resolve: async (index: number, tokens: number | null) =>
+      act(async () =>
+        requests[index]!.response.resolve(usageProjection(tokens)),
+      ),
+  };
+}
+
+test("App usage keeps different Threads independent and drains only the latest returning owner", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.complete();
+    await app.complete();
+    await app.select("Thread two");
+    assert.deepEqual(
+      app.requests.map((request) => request.threadId),
+      ["thread-1", "thread-2"],
+    );
+    await app.resolve(1, 2);
+    await app.resolve(0, 99);
+    assert.equal(
+      app.requests.length,
+      2,
+      "leaving drops dirty demand rather than reading an unobserved Thread",
+    );
+    assert.match(contextUsageLabel(), /2 \/ 100 tokens/);
+
+    await app.select();
+    await app.complete();
+    await app.select("Thread two");
+    await app.select();
+    assert.equal(
+      app.requests.length,
+      4,
+      "returning owner shares the old in-flight slot, not its stale result",
+    );
+    await app.resolve(2, 98);
+    assert.equal(app.requests.length, 5);
+    assert.ok(!contextUsageLabel().includes("98 / 100 tokens"));
+    await app.resolve(4, 9);
+    await app.resolve(3, 97);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    assert.equal(app.requests.length, 5);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage retires disconnected reads without letting old callbacks remove the reconnect owner", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.complete();
+    await app.status({ type: "reconnecting", attempt: 1, delayMs: 0 });
+    await app.complete();
+    assert.equal(app.requests.length, 1);
+    await app.status({ type: "ready", reconnected: true });
+    assert.equal(
+      app.requests.length,
+      2,
+      "new connection does not wait for an old unresolved IPC",
+    );
+    await app.complete();
+    await app.resolve(0, 99);
+    assert.equal(
+      app.requests.length,
+      2,
+      "old finally neither drains nor removes the new owner",
+    );
+    assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    await app.resolve(1, 8);
+    assert.equal(app.requests.length, 3);
+    await app.resolve(2, 12);
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage fences a late ready snapshot after a disconnect notification", async () => {
+  const initialStatus = deferred<AppServerHostStatus>();
+  const app = await mountUsageApp({ getStatus: () => initialStatus.promise });
+  try {
+    await app.status({ type: "ready", reconnected: false });
+    await app.select();
+    await app.status({ type: "reconnecting", attempt: 1, delayMs: 0 });
+    await act(async () =>
+      initialStatus.resolve({ type: "ready", reconnected: false }),
+    );
+    await app.complete();
+    await app.resolve(0, 99);
+    assert.equal(app.requests.length, 1);
+    assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    await app.status({ type: "ready", reconnected: true });
+    await app.resolve(1, 9);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage preserves errors and unknown values without automatic retry or mutation", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.resolve(0, 12);
+    await app.complete();
+    await act(async () =>
+      app.requests[1]!.response.reject(new Error("usage unavailable")),
+    );
+    assert.equal(app.requests.length, 2, "clean failure is not retried");
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /usage unavailable/,
+    );
+    assert.match(
+      contextUsageLabel(),
+      /12 \/ 100 tokens/,
+      "failure does not replace the last real value with zero",
+    );
+    await app.complete();
+    await app.complete();
+    await act(async () =>
+      app.requests[2]!.response.reject(new Error("superseded failure")),
+    );
+    assert.equal(
+      app.requests.length,
+      4,
+      "a real dirty invalidation still drains after failure",
+    );
+    assert.doesNotMatch(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /superseded failure/,
+    );
+    await app.resolve(3, null);
+    assert.equal(
+      contextUsageLabel(),
+      "",
+      "unknown context retains the existing unavailable indicator, never a fabricated zero",
+    );
+    assert.doesNotMatch(contextUsageLabel(), /0%/);
+    assert.deepEqual(
+      app.methods,
+      ["zen/thread/resume"],
+      "usage refresh never retries model, tool, or send mutations",
+    );
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+for (const retirement of ["new-thread", "archive", "unmount"] as const) {
+  test(`App usage does not drain dirty reads after ${retirement}`, async () => {
+    const app = await mountUsageApp();
+    let mounted = true;
+    try {
+      await app.select();
+      await app.complete();
+      if (retirement === "unmount") {
+        await act(async () => app.harness.root.unmount());
+        mounted = false;
+      } else if (retirement === "new-thread") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+      } else {
+        await act(async () => threadMenuButton("Thread one").click());
+        const archive = await waitFor(() => exactButton("Archive"));
+        await act(async () => archive.click());
+        assert.ok(
+          document.querySelector(".thread-view") === null,
+          "archive leaves the old Thread owner",
+        );
+      }
+      await app.resolve(0, 99);
+      assert.equal(
+        app.requests.length,
+        1,
+        "retired demand cannot launch a follow-up",
+      );
+      assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    } finally {
+      if (mounted) await unmountApp(app.harness);
+      else {
+        Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: undefined });
+        app.harness.dom.window.close();
+      }
+    }
+  });
+}
+
+test("App usage coalesces model setting and catalog invalidations into the latest read", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.resolve(0, 1);
+    await app.complete();
+    await app.notify("zen/thread/event", {
+      threadId: "thread-1",
+      processEpoch: "test-process-epoch",
+      watermark: 1,
+      event: {
+        type: "thread_settings_updated",
+        threadId: "thread-1",
+        settings: { ...resumed(liveThread()).thread, modelId: "gpt-5.6-luna" },
+      },
+    });
+    assert.equal(app.requests.length, 2);
+    await app.resolve(1, 99);
+    assert.equal(app.requests.length, 3);
+    assert.match(contextUsageLabel(), /1 \/ 100 tokens/);
+    await app.resolve(2, 9);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    await app.notify("thread/settings/updated", {
+      threadId: "thread-1",
+      threadSettings: {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "fake", reasoning_effort: "medium" },
+        },
+        cwd: "/work/zen",
+        effort: "medium",
+        model: "fake",
+        modelProvider: "fake",
+        personality: null,
+        sandboxPolicy: { type: "dangerFullAccess" },
+        serviceTier: null,
+        summary: null,
+      },
+    });
+    assert.equal(
+      app.requests.length,
+      4,
+      "legacy settings publication also refreshes current usage",
+    );
+    await app.notify("model/catalog/updated", {
+      processEpoch: "test-process-epoch",
+      revision: 3,
+    });
+    assert.equal(app.requests.length, 4);
+    await app.resolve(3, 99);
+    assert.equal(
+      app.requests.length,
+      5,
+      "catalog invalidation drains with current Host settings",
+    );
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    await app.resolve(4, null);
+    assert.equal(
+      contextUsageLabel(),
+      "",
+      "unknown context retains the existing unavailable indicator, never a fabricated zero",
+    );
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+async function mountInitialUsageApp(options: Parameters<typeof mountApp>[1]) {
+  const { pluginUiRegistry } =
+    await import("../src/renderer/src/PluginProductPage.js");
+  const pluginId = "usage-navigation-fixture";
+  const route = `/plugins/${pluginId}/home`;
+  const dispose = pluginUiRegistry.registerTrusted(pluginId, {
+    overview: ({ sdk }) =>
+      createElement(
+        "button",
+        {
+          onClick: () => sdk.navigation.navigate("/threads/thread-1"),
+        },
+        "Open existing Thread",
+      ),
+  });
+  const snapshot: import("../src/main/capabilities/types.js").ZenXPluginSnapshot =
+    {
+      plugins: [
+        {
+          id: pluginId,
+          displayName: "Usage navigation",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          contributionCount: 1,
+          version: "1",
+          source: "bundled",
+        },
+      ],
+      pages: [
+        {
+          key: `${pluginId}:home`,
+          pluginId,
+          id: "home",
+          title: "Usage navigation",
+          route,
+          surfaceId: "overview",
+        },
+      ],
+      sidebar: [
+        {
+          key: `${pluginId}:home`,
+          pluginId,
+          id: "home",
+          label: "Usage navigation",
+          icon: "plug",
+          pageId: "home",
+        },
+      ],
+      bundles: [
+        {
+          key: `${pluginId}:main`,
+          pluginId,
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: pluginId,
+        },
+      ],
+      surfaces: [
+        {
+          key: `${pluginId}:overview`,
+          pluginId,
+          id: "overview",
+          bundleId: "main",
+          exportName: "overview",
+        },
+      ],
+      subroutes: [],
+      settings: [],
+      panels: [],
+      commands: [],
+      menus: [],
+    };
+  let recovered = 0;
+  const app = await mountUsageApp({
+    ...options,
+    markWorkspaceUsed: async () => {
+      recovered++;
+      return publicSettings([]);
+    },
+    plugins: { get: async () => snapshot },
+  });
+  return {
+    ...app,
+    recovered: () => recovered,
+    open: async () => {
+      // Production plugin pages remain usable while the initial status IPC is
+      // pending. Their real SDK navigation enters App's normal native resume.
+      const page = await waitFor(() => exactButton("Usage navigation"));
+      await act(async () => page.click());
+      const open = await waitFor(() => exactButton("Open existing Thread"));
+      await act(async () => open.click());
+    },
+    unmount: async () => {
+      await unmountApp(app.harness);
+      dispose();
+    },
+  };
+}
+
+for (const readySource of ["snapshot", "notification"] as const) {
+  test(`App usage first ready ${readySource} reads an already recovered Thread without another resume`, async () => {
+    const initialStatus = deferred<AppServerHostStatus>();
+    const app = await mountInitialUsageApp({
+      getStatus: () => initialStatus.promise,
+    });
+    try {
+      await app.open();
+      assert.equal(
+        app.recovered(),
+        1,
+        "native resume completed before readiness publication",
+      );
+      assert.deepEqual(app.methods, ["zen/thread/resume"]);
+      assert.equal(
+        app.requests.length,
+        0,
+        "usage waits for observed readiness",
+      );
+      if (readySource === "snapshot")
+        await act(async () =>
+          initialStatus.resolve({ type: "ready", reconnected: false }),
+        );
+      else await app.status({ type: "ready", reconnected: false });
+      assert.ok(document.querySelector(".thread-view") !== null);
+      assert.equal(
+        app.requests.length,
+        1,
+        "first ready must not lose completed-resume usage demand",
+      );
+      await app.resolve(0, 9);
+      assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+      assert.deepEqual(
+        app.methods,
+        ["zen/thread/resume"],
+        "readiness does not repeat native hydration",
+      );
+    } finally {
+      await app.unmount();
+    }
+  });
+
+  test(`App usage first ready ${readySource} does not read before cold resume completes`, async () => {
+    const initialStatus = deferred<AppServerHostStatus>();
+    const recovery = deferred<ReturnType<typeof resumed>>();
+    let resumeCalls = 0;
+    const app = await mountInitialUsageApp({
+      getStatus: () => initialStatus.promise,
+      request: async (method) => {
+        assert.equal(method, "zen/thread/resume");
+        resumeCalls++;
+        return recovery.promise;
+      },
+    });
+    try {
+      await app.open();
+      if (readySource === "snapshot")
+        await act(async () =>
+          initialStatus.resolve({ type: "ready", reconnected: false }),
+        );
+      else await app.status({ type: "ready", reconnected: false });
+      assert.equal(
+        app.requests.length,
+        0,
+        "first ready must not create pre-recovery usage hydration",
+      );
+      await act(async () => recovery.resolve(resumed(liveThread())));
+      assert.equal(app.requests.length, 1);
+      assert.equal(resumeCalls, 1);
+      await app.resolve(0, 9);
+      assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    } finally {
+      await app.unmount();
+    }
+  });
+}
+
+for (const burst of [false, true]) {
+  test(`real App native text deltas reuse canonical ordering and historical metadata (${burst ? "batched" : "separate"})`, async (t) => {
+    let notify:
+      Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+    const harness = await mountThreadApp({
+      onNotification: (listener) => {
+        notify = listener;
+        return () => {
+          notify = undefined;
+        };
+      },
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory(true));
+        throw new Error(method);
+      },
+    });
+    let observing = false;
+    let canonicalVisits = 0,
+      historicalItemVisits = 0;
+    const forEach = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      "forEach",
+    )!;
+    const iterator = Object.getOwnPropertyDescriptor(
+      Array.prototype,
+      Symbol.iterator,
+    )!;
+    // Observe actual immutable arrays created by App recovery. No production
+    // instrumentation or hand-rendered ThreadView substitutes for its cache.
+    Object.defineProperty(Array.prototype, "forEach", {
+      ...forEach,
+      value: function (
+        this: unknown[],
+        callback: (...args: unknown[]) => unknown,
+        thisArg?: unknown,
+      ) {
+        const canonical =
+          observing &&
+          (this[0] as { id?: string } | undefined)?.id === "thread-1-metadata";
+        return Reflect.apply(forEach.value, this, [
+          canonical
+            ? (...args: unknown[]) => {
+                canonicalVisits++;
+                return callback.apply(thisArg, args);
+              }
+            : callback,
+          thisArg,
+        ]);
+      },
+    });
+    Object.defineProperty(Array.prototype, Symbol.iterator, {
+      ...iterator,
+      value: function (this: unknown[]) {
+        const source = Reflect.apply(
+          iterator.value,
+          this,
+          [],
+        ) as IterableIterator<unknown>;
+        if (
+          !observing ||
+          !(this[0] as { id?: string } | undefined)?.id?.startsWith(
+            "derived-user-",
+          )
+        )
+          return source;
+        return {
+          next() {
+            const value = source.next();
+            if (!value.done) historicalItemVisits++;
+            return value;
+          },
+          [Symbol.iterator]() {
+            return this;
+          },
+        };
+      },
+    });
+    let watermark = 0;
+    const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      });
+    try {
+      await selectedComposer();
+      await act(async () =>
+        emit({
+          type: "item_started",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "incremental-answer",
+          itemType: "agent_message",
+        }),
+      );
+      const originalRows = [...document.querySelectorAll("section.turn")].slice(
+        0,
+        40,
+      );
+      const delta = (index: number) =>
+        emit({
+          type: "item_delta",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "incremental-answer",
+          delta: `incremental-${index} `,
+        });
+      observing = true;
+      if (burst)
+        await act(async () => {
+          for (let index = 0; index < 15; index++) delta(index);
+        });
+      else
+        for (let index = 0; index < 15; index++)
+          await act(async () => delta(index));
+      observing = false;
+      assert.match(
+        document.querySelector(".agent-surface")!.textContent!,
+        /incremental-14/u,
+      );
+      assert.deepEqual(
+        [...document.querySelectorAll("section.turn")].slice(0, 40),
+        originalRows,
+      );
+      t.diagnostic(
+        JSON.stringify({
+          burst,
+          deltas: 15,
+          canonicalVisits,
+          historicalItemVisits,
+        }),
+      );
+      assert.deepEqual(
+        { canonicalVisits, historicalItemVisits },
+        { canonicalVisits: 0, historicalItemVisits: 0 },
+      );
+      observing = true;
+      await act(async () =>
+        emit({
+          type: "item_completed",
+          item: {
+            type: "agent_message",
+            id: "incremental-backfill",
+            threadId: "thread-1",
+            turnId: "derived-history-0",
+            createdAt: "2026-11-02T00:02:00.000Z",
+            text: "Late canonical answer remains current",
+          },
+        }),
+      );
+      observing = false;
+      assert.ok(canonicalVisits > 0, "a real canonical append rebuilds order");
+      assert.ok(
+        historicalItemVisits > 0,
+        "new canonical metadata rechecks membership",
+      );
+      const backfilled = document.querySelector(
+        '[data-quote-item-id="incremental-backfill"]',
+      );
+      assert.match(backfilled?.textContent ?? "", /Late canonical answer/u);
+      assert.equal(
+        [...document.querySelectorAll("section.turn")]
+          .at(-1)
+          ?.contains(backfilled),
+        true,
+        "canonical backfill preserves existing transcript ordering semantics",
+      );
+    } finally {
+      observing = false;
+      Object.defineProperty(Array.prototype, "forEach", forEach);
+      Object.defineProperty(Array.prototype, Symbol.iterator, iterator);
+      await unmountApp(harness);
+    }
+  });
+}
+
+test("real Host questions render in full App information panel with independent drafts and explicit native answer/cancel", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  const sidebar = new ThreadSidebarStore(
+    join(f.directory, "information-layout"),
+  );
+  const information = new NativeInformationService({
+    sidebar,
+    rooms: () => [],
+    assertThreadExists: async (id) => {
+      await f.host.readThread(id);
+    },
+  });
+  const documentAdmission = () => {};
+  let harness: AppHarness | undefined;
+  let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+  try {
+    const thread = await f.host.startThread();
+    const first = await f.publish(thread.id);
+    const second = await f.publish(thread.id, {
+      questions: [{ id: "next", prompt: "Any additional constraint?" }],
+      answerTemplate: "Constraint: {{next}}",
+    });
+    let completedWrites = 0;
+    const writes: import("../../../src/protocol/native/wire.js").NativeQuestionRespondParams[] =
+      [];
+    harness = await mountApp(
+      {
+        projects: [
+          {
+            key: f.directory,
+            workspace: f.directory,
+            configured: true,
+            isDefault: true,
+            threadIds: [thread.id],
+          },
+        ],
+        unavailableThreadIds: [],
+        lastUsedWorkspace: f.directory,
+      },
+      {
+        information: {
+          read: (owner) => information.read(owner, documentAdmission),
+          update: (request) => information.update(request, documentAdmission),
+        },
+        threadSidebar: {
+          read: (owner) => information.readSidebar(owner, documentAdmission),
+          update: (request) =>
+            information.updateSidebar(request, documentAdmission),
+          onChanged: (listener) => sidebar.onChanged(listener),
+        },
+        onStatus: (listener) => {
+          statusListener = listener;
+          return () => {
+            statusListener = undefined;
+          };
+        },
+        threads: (archived) => f.host.listThreadSummaries({ archived }),
+        request: async (method, params) => {
+          if (method === "zen/thread/questions/respond")
+            writes.push(params as (typeof writes)[number]);
+          const result = await f.request(method, params);
+          if (method === "zen/thread/questions/respond") completedWrites++;
+          return result;
+        },
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        onNotification: (listener) =>
+          f.onNotification((method, params) =>
+            listener(method as never, params as never),
+          ),
+      },
+    );
+    const composer = await selectedComposer();
+    await setTextareaValue(composer, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const firstCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    const secondCard = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    await invokeButtonClick(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Customize information"]',
+      )!,
+    );
+    await waitFor(
+      () =>
+        document.querySelectorAll('.information-widget[data-visible="true"]')
+          .length === 6,
+    );
+    for (let index = 0; index < 6; index++) {
+      await invokeButtonClick(
+        document.querySelector<HTMLButtonElement>(
+          '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
+        )!,
+      );
+      await waitFor(
+        () =>
+          document.querySelectorAll('.information-widget[data-visible="true"]')
+            .length ===
+          5 - index,
+      );
+    }
+    await invokeButtonClick(
+      document.querySelector<HTMLButtonElement>(
+        '[aria-label="Customize information"]',
+      )!,
+    );
+    assert.equal(
+      document.querySelectorAll(".information-widget-body").length,
+      0,
+    );
+    assert.equal(
+      document.querySelectorAll(".user-question-card").length,
+      2,
+      "real Host question cards remain outside every hidden native widget",
+    );
+    assert.ok(
+      (
+        await sidebar.read({ kind: "thread", id: thread.id })
+      ).informationLayout!.widgets.every((widget) => !widget.visible),
+    );
+    assert.equal(firstCard.querySelectorAll("input:checked").length, 0);
+    const answerButton =
+      firstCard.querySelector<HTMLButtonElement>(".primary-button")!;
+    assert.equal(answerButton.disabled, true);
+    await act(async () =>
+      firstCard.querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+    );
+    const freeText = firstCard.querySelector<HTMLTextAreaElement>("textarea")!;
+    await setTextareaValue(freeText, "Also preserve keyboard focus");
+    await act(async () => freeText.focus());
+    let additional!: import("../../../src/user-question-state.js").UserQuestionState;
+    await act(async () => {
+      additional = await f.publish(thread.id);
+    });
+    await waitFor(() =>
+      document.querySelector(
+        `[data-question-call-id="${additional.request.callItemId}"]`,
+      ),
+    );
+    assert.ok(
+      document.activeElement === freeText,
+      "a new accepted question never steals existing input focus",
+    );
+
+    await setTextareaValue(
+      secondCard.querySelector<HTMLTextAreaElement>("textarea")!,
+      "Independent second draft",
+    );
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    assert.equal(writes.length, 0, "hiding is not cancellation");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+    const reopened = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${first.request.callItemId}"]`,
+      ),
+    );
+    assert.equal(
+      reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Also preserve keyboard focus",
+    );
+    assert.equal(
+      document
+        .querySelector<HTMLElement>(
+          `[data-question-call-id="${second.request.callItemId}"]`,
+        )!
+        .querySelector<HTMLTextAreaElement>("textarea")!.value,
+      "Independent second draft",
+    );
+    const retainedSend = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".primary-button")!,
+    ).onClick;
+    const retainedCancel = reactProps<{ onClick(): void }>(
+      reopened.querySelector(".user-question-actions button")!,
+    ).onClick;
+    const retainedEdit = reactProps<{
+      onChange(event: { target: { value: string } }): void;
+    }>(reopened.querySelector("textarea")!).onChange;
+    const invokeRetained = async () => {
+      await act(async () => {
+        retainedEdit({ target: { value: "stale owner edit" } });
+        retainedSend();
+        retainedCancel();
+      });
+      assert.equal(writes.length, 0);
+      assert.equal(
+        reopened.querySelector<HTMLTextAreaElement>("textarea")!.value,
+        "Also preserve keyboard focus",
+      );
+    };
+    await act(async () =>
+      statusListener?.({ type: "error", message: "synthetic disconnection" }),
+    );
+    await invokeRetained();
+    await act(async () =>
+      statusListener?.({ type: "ready", reconnected: true }),
+    );
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, true);
+    });
+    await waitFor(
+      () =>
+        reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await invokeRetained();
+    await act(async () => {
+      await f.host.setThreadArchived(thread.id, false);
+    });
+    await waitFor(
+      () =>
+        !reopened.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+    );
+    await invokeButtonClick(
+      reopened.querySelector<HTMLButtonElement>(".primary-button")!,
+      2,
+    );
+    await waitFor(() => completedWrites === 1);
+    const sent = await f.host.readUserQuestion(
+      thread.id,
+      first.request.callItemId,
+      writes[0]!.clientUserMessageId,
+    );
+    assert.ok(
+      sent.response.status === "claimed" || sent.response.status === "pending",
+    );
+    assert.equal(sent.response.reply?.outcome, "answer");
+    if (sent.response.reply?.outcome === "answer")
+      assert.deepEqual(sent.response.reply.answers, [
+        {
+          questionId: "scope",
+          optionIds: ["small"],
+          text: "Also preserve keyboard focus",
+        },
+      ]);
+    const currentSecond = await waitFor(() =>
+      document.querySelector<HTMLElement>(
+        `[data-question-call-id="${second.request.callItemId}"]`,
+      ),
+    );
+    const cancel = [
+      ...currentSecond.querySelectorAll<HTMLButtonElement>("button"),
+    ].find((button) => button.textContent === "Cancel request")!;
+    await invokeButtonClick(cancel, 2);
+    await waitFor(() => completedWrites === 2);
+    assert.equal(writes[1]!.outcome, "cancel");
+    assert.equal("answers" in writes[1]!, false);
+    assert.equal(composer.value, "Ordinary composer draft stays here");
+    const snapshot = await f.host.readThread(thread.id);
+    const bound = snapshot.items.filter(
+      (item) =>
+        (item.type === "user_message" || item.type === "user_message_queued") &&
+        item.questionReply !== undefined,
+    );
+    assert.equal(
+      bound.length,
+      2,
+      "only two explicit human response intents were admitted",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await sidebar.close();
+    await f.close();
+  }
+});
+
+for (const outcome of [
+  "restored",
+  "newer-question-draft",
+  "navigation",
+  "disconnect",
+  "archive",
+] as const) {
+  test(`real Host full App atomic mixed recall returns to original inputs: ${outcome}`, async () => {
+    const { questionNativeFixture } =
+      await import("./user-question-native-fixture.js");
+    const { ToolEnvironment } = await import("../../../src/tool.js");
+    const entered = deferred<void>(),
+      release = deferred<void>();
+    const environment = new ToolEnvironment({
+      runtimes: [
+        {
+          name: "synthetic_hold",
+          enforcesSandbox: true,
+          specification: {
+            name: "synthetic_hold",
+            description: "Hold synthetic test work",
+            inputSchema: { type: "object", properties: {} },
+          },
+          execute: async () => {
+            entered.resolve();
+            await release.promise;
+            return { exitCode: 0, output: "Synthetic hold released" };
+          },
+        },
+      ],
+    });
+    const f = await questionNativeFixture(environment);
+    let harness: AppHarness | undefined;
+    let held: import("../../../src/app-server.js").TurnHandle | undefined;
+    let statusListener: ((status: AppServerHostStatus) => void) | undefined;
+    const readGate = deferred<void>();
+    try {
+      const thread = await f.host.startThread();
+      const question = await f.publish(thread.id);
+      held = await f.host.startTurn(thread.id, "!tool synthetic_hold {}");
+      await entered.promise;
+      let answers = 0,
+        sends = 0,
+        recalls = 0,
+        restoreReads = 0;
+      let deferRestoreRead = false;
+      let originalClient = "";
+      harness = await mountApp(
+        {
+          projects: [
+            {
+              key: f.directory,
+              workspace: f.directory,
+              configured: true,
+              isDefault: true,
+              threadIds: [thread.id],
+            },
+          ],
+          unavailableThreadIds: [],
+          lastUsedWorkspace: f.directory,
+        },
+        {
+          composerSendMode: "soft",
+          onStatus: (listener) => {
+            statusListener = listener;
+            return () => {
+              statusListener = undefined;
+            };
+          },
+          threads: (archived) => f.host.listThreadSummaries({ archived }),
+          plugins: {
+            get: async () => ({
+              ...workspaceLauncherSnapshot,
+              plugins: [],
+              panels: [],
+              information: [],
+              commands: [],
+            }),
+          },
+          onNotification: (listener) =>
+            f.onNotification((method, params) =>
+              listener(method as never, params as never),
+            ),
+          request: async (method, params) => {
+            const result = await f.request(method, params);
+            if (method === "zen/thread/questions/respond") {
+              answers++;
+              originalClient = (params as { clientUserMessageId: string })
+                .clientUserMessageId;
+            }
+            if (method === "zen/turn/send") sends++;
+            if (method === "zen/thread/steer/recall") recalls++;
+            if (method === "zen/thread/questions/read" && deferRestoreRead) {
+              restoreReads++;
+              await readGate.promise;
+            }
+            return result;
+          },
+        },
+      );
+      const composer = await selectedComposer();
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(".information-toolbar button")!
+          .click(),
+      );
+      const card = () =>
+        document.querySelector<HTMLElement>(
+          `[data-question-call-id="${question.request.callItemId}"]`,
+        )!;
+      await waitFor(card);
+      await act(async () =>
+        card().querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+      );
+      await setTextareaValue(
+        card().querySelector<HTMLTextAreaElement>("textarea")!,
+        "Original question free text",
+      );
+      await invokeButtonClick(
+        card().querySelector<HTMLButtonElement>(".primary-button")!,
+      );
+      await waitFor(() => answers === 1);
+      await setTextareaValue(composer, "Original ordinary message");
+      await invokePrimarySubmit(
+        document.querySelector<HTMLButtonElement>(
+          ".composer-send-control > button.action-orb",
+        )!,
+      );
+      await waitFor(() => sends === 1);
+      await setTextareaValue(composer, "New ordinary draft");
+      const { pendingSteerMessages } =
+        await import("../../../src/steer-recall.js");
+      assert.equal(
+        pendingSteerMessages((await f.host.readThread(thread.id)).items).length,
+        2,
+      );
+      deferRestoreRead = outcome !== "restored";
+      const recall = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".pending-steer-heading button",
+        ),
+      );
+      await invokeButtonClick(recall, 2);
+      await waitFor(() => recalls === 1);
+      if (outcome === "disconnect" || outcome === "archive") {
+        await waitFor(() => restoreReads > 0);
+        if (outcome === "disconnect") {
+          await act(async () =>
+            statusListener?.({
+              type: "error",
+              message: "Synthetic disconnect during origin preflight",
+            }),
+          );
+        } else {
+          await act(async () => {
+            release.resolve();
+            await held!.done;
+            await f.host.setThreadArchived(thread.id, true);
+          });
+          await waitFor(
+            () =>
+              card()?.querySelector<HTMLButtonElement>(".primary-button")
+                ?.disabled,
+          );
+        }
+        await act(async () => readGate.resolve());
+        if (outcome === "disconnect")
+          await act(async () =>
+            statusListener?.({ type: "ready", reconnected: true }),
+          );
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "unwritable owner leaves the whole batch unapplied",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+      } else if (outcome === "navigation") {
+        await waitFor(() => restoreReads > 0);
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+        const newComposer = await waitFor(() =>
+          document.querySelector<HTMLTextAreaElement>("#thread-composer"),
+        );
+        await setTextareaValue(newComposer, "New navigation draft");
+        await act(async () => readGate.resolve());
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+        assert.equal(newComposer.value, "New navigation draft");
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(
+              `[data-thread-id="${thread.id}"] .thread-row`,
+            )!
+            .click(),
+        );
+        const originalComposer = await waitFor(() => {
+          const input =
+            document.querySelector<HTMLTextAreaElement>("#thread-composer");
+          return input?.value === "New ordinary draft" ? input : null;
+        });
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          originalComposer.value,
+          "New ordinary draft",
+          "navigation blocks the whole original restoration",
+        );
+      } else if (outcome === "newer-question-draft") {
+        await waitFor(() => restoreReads > 0);
+        // The receipt is confirmed but one question-origin preflight is still pending.
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(
+          () =>
+            card()?.querySelector<HTMLFieldSetElement>("fieldset")?.disabled ===
+            false,
+        );
+        await setTextareaValue(
+          card().querySelector<HTMLTextAreaElement>("textarea")!,
+          "New question draft must win",
+        );
+        await act(async () => readGate.resolve());
+        await waitFor(() =>
+          document.body.textContent?.includes(
+            "Recoverable recalled batches: 1",
+          ),
+        );
+        assert.equal(
+          composer.value,
+          "New ordinary draft",
+          "no partial ordinary restoration",
+        );
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "New question draft must win",
+        );
+      } else {
+        await waitFor(
+          () =>
+            composer.value ===
+            "Original ordinary message\n\nNew ordinary draft",
+        );
+        if (!card())
+          await act(async () =>
+            document
+              .querySelector<HTMLButtonElement>(".information-toolbar button")!
+              .click(),
+          );
+        await waitFor(card);
+        assert.equal(
+          card().querySelector<HTMLTextAreaElement>("textarea")!.value,
+          "Original question free text",
+        );
+        assert.equal(card().querySelectorAll("input:checked").length, 1);
+        assert.doesNotMatch(
+          composer.value,
+          /Reply to question|Original question free text/,
+        );
+      }
+      const current = await f.host.readThread(thread.id);
+      assert.equal(pendingSteerMessages(current.items).length, 0);
+      assert.equal(
+        current.items.filter(
+          (item) => item.type === "user_message_steer_recalled",
+        ).length,
+        1,
+      );
+      assert.equal(
+        (
+          await f.host.readUserQuestion(
+            thread.id,
+            question.request.callItemId,
+            originalClient,
+          )
+        ).response.status,
+        "withdrawn",
+      );
+      assert.equal(answers, 1, "restoration never sends an answer");
+      assert.equal(sends, 1, "restoration never sends an ordinary message");
+      assert.equal(
+        recalls,
+        1,
+        "mixed destinations use one atomic native recall",
+      );
+    } finally {
+      readGate.resolve();
+      release.resolve();
+      if (harness) await unmountApp(harness);
+      await held?.done.catch(() => undefined);
+      await f.close();
+    }
+  });
+}

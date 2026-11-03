@@ -316,6 +316,7 @@ test("hosts a real App Server and removes its private token on shutdown", async 
       updatedAt: summary.updatedAt,
       turnSortAt: summary.createdAt,
       recentActivityAt: summary.createdAt,
+      userQuestionSummary: { openCount: 0 },
       preview: "",
       status: "idle",
     });

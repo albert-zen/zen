@@ -1,4 +1,5 @@
 import { bindModelMediaOrigin } from "./model-media-origin.js";
+import { parseUserQuestionReply } from "./user-question.js";
 import {
   validateUserInput,
   validateToolDiscoveryContent,
@@ -142,6 +143,7 @@ const sourceKinds: readonly ContextSourceKind[] = [
   "media_unavailable",
 ];
 const metadataKeys = new Set([
+  "questionReply",
   "clientId",
   "deliveryAfter",
   "mode",
@@ -207,6 +209,16 @@ export function decodeContextItem(value: unknown): ContextItem {
     for (const key of Object.keys(metadata))
       if (!metadataKeys.has(key))
         throw new Error(`Nonsemantic source metadata: ${key}`);
+    if (metadata.questionReply !== undefined) {
+      if (
+        item.kind !== "message" ||
+        item.role !== "user" ||
+        source.kind !== "user_message"
+      )
+        throw new Error("questionReply requires semantic human input");
+      // Ownership is checked at native admission, not inferred from typed metadata.
+      parseUserQuestionReply(metadata.questionReply);
+    }
     if (
       metadata.historicalSnapshot !== undefined &&
       (metadata.historicalSnapshot !== true || item.kind !== "tool_result")

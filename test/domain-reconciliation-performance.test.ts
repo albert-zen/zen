@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -221,7 +223,8 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
     let traceReads = 0;
     let semanticReads = 0;
     const readTrace = FileTraceStore.prototype.read;
-    const readItems = FileItemListStore.prototype.read;
+    const readItems = fs.readFile;
+    const filename = path.join(options.directory, "items", "t.jsonl");
     const traceMock = t.mock.method(
       FileTraceStore.prototype,
       "read",
@@ -234,13 +237,15 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
       },
     );
     const itemsMock = t.mock.method(
-      FileItemListStore.prototype,
-      "read",
-      function (this: FileItemListStore, threadId: string) {
-        semanticReads++;
-        return readItems.call(this, threadId);
+      fs,
+      "readFile",
+      async (...args: Parameters<typeof readItems>) => {
+        const bytes = await readItems(...args);
+        if (args[0] === filename) semanticReads++;
+        return bytes;
       },
     );
+    syncBuiltinESMExports();
     let first: ContextItem[] = [];
     let second: ContextItem[] = [];
     try {
@@ -261,6 +266,7 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
     } finally {
       traceMock.mock.restore();
       itemsMock.mock.restore();
+      syncBuiltinESMExports();
     }
     assert.deepEqual(second, await journal.readItemList("t"));
     assert.deepEqual(second.slice(0, -1), first);

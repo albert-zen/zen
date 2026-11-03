@@ -79,7 +79,7 @@ export function ComposerSendControl({
   primaryMode: string;
   primaryLabel: string;
   compact: boolean;
-  onPrimary(): void;
+  onPrimary(trigger?: HTMLButtonElement): void;
   onSend(intent: ComposerIntent): void;
   onStop(): void;
   onModeChange?(mode: ComposerSendMode): Promise<void>;
@@ -245,7 +245,7 @@ export function ComposerSendControl({
             disabled={disabled}
             onClick={() => {
               close();
-              onPrimary();
+              onPrimary(primary.current ?? undefined);
             }}
           />
         </div>

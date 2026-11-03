@@ -8,6 +8,7 @@ import { decodeCanonicalItem } from "../src/item.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
 import { pendingQueuedMessages } from "../src/input-queue.js";
+import { pendingSteerMessages } from "../src/steer-recall.js";
 
 async function idle(f: ReturnType<typeof fixture>, id: string) {
   for (let i = 0; i < 200; i++) {
@@ -221,6 +222,10 @@ test("native omitted human mode and Host mode both soft steer; explicit queue re
       },
     });
     assert.equal(sent.find((m) => m.id === 1)?.result.turnId, active.id);
+    assert.equal(
+      sent.find((m) => m.id === 1)?.result.admission.state,
+      "queued",
+    );
     await connection.receive({
       id: 2,
       method: "zen/turn/wake",
@@ -243,10 +248,22 @@ test("native omitted human mode and Host mode both soft steer; explicit queue re
         input: [{ type: "text", text: "later" }],
       },
     });
-    assert.equal(
-      pendingQueuedMessages((await f.server.readThread(target.id)).items)
-        .length,
-      1,
+    const snapshot = await f.server.readThread(target.id);
+    const pending = pendingQueuedMessages(snapshot.items);
+    assert.equal(pending.length, 2);
+    assert.equal(pendingSteerMessages(snapshot.items).length, 1);
+    assert(
+      pending.some(
+        (item) =>
+          item.clientId === "human-later" &&
+          item.type === "user_message_queued" &&
+          item.deliveryMode !== "steer",
+      ),
+    );
+    assert(
+      !snapshot.items.some(
+        (item) => item.type === "user_message" && item.clientId === "human-2",
+      ),
     );
     await connection.receive({
       id: 4,
@@ -517,7 +534,7 @@ test("ordinary human default starts idle, steers busy, and ignores no explicit q
 test(
   "CLI ordinary prompt defaults to native soft steer on an existing busy Thread",
   { timeout: 10_000 },
-  async () => {
+  async (t) => {
     const { spawn } = await import("node:child_process");
     const { serveCodexWebSocket } =
       await import("../src/protocol/codex/websocket.js");
@@ -534,7 +551,8 @@ test(
     const stop = f.server.subscribe((event) => {
       if (
         event.type === "item_completed" &&
-        event.item.type === "user_message" &&
+        event.item.type === "user_message_queued" &&
+        event.item.deliveryMode === "steer" &&
         event.item.clientId !== undefined
       )
         observed.resolve();
@@ -559,6 +577,11 @@ test(
       error += String(chunk);
     });
     const exited = once(child, "exit");
+    const abort = () => {
+      f.release.resolve();
+      if (child.exitCode === null) child.kill("SIGKILL");
+    };
+    t.signal.addEventListener("abort", abort, { once: true });
     try {
       await Promise.race([
         observed.promise,
@@ -566,6 +589,12 @@ test(
           throw new Error(`CLI exited before admission: ${error}`);
         }),
       ]);
+      const before = await f.server.readThread(target.id);
+      assert.equal(pendingSteerMessages(before.items).length, 1);
+      assert.equal(
+        before.items.filter((item) => item.type === "user_message").length,
+        1,
+      );
       f.release.resolve();
       await active.done;
       assert.equal((await exited)[0], 0, error);
@@ -575,14 +604,26 @@ test(
         snapshot.items.filter((item) => item.type === "user_message").length,
         2,
       );
-      assert.equal(
-        snapshot.items.some((item) => item.type === "user_message_queued"),
-        false,
+      assert.equal(pendingSteerMessages(snapshot.items).length, 0);
+      const admission = snapshot.items.find(
+        (item) => item.type === "user_message_queued",
+      );
+      assert(admission?.type === "user_message_queued");
+      assert.equal(admission.deliveryMode, "steer");
+      assert(
+        snapshot.items.some(
+          (item) =>
+            item.type === "user_message" &&
+            item.clientId === admission.clientId &&
+            item.turnId === active.id,
+        ),
       );
     } finally {
       f.release.resolve();
       stop();
       if (child.exitCode === null) child.kill();
+      await exited;
+      t.signal.removeEventListener("abort", abort);
       await host.close();
     }
   },

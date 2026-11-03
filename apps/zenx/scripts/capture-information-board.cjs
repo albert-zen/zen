@@ -102,6 +102,24 @@ async function selectValue(selector, value, label) {
   );
   await settledLayout();
 }
+async function insertComposerText(text) {
+  await until(
+    () =>
+      evaluate(
+        "(()=>{const e=document.querySelector('#thread-composer');return e instanceof HTMLTextAreaElement && document.activeElement===e})()",
+      ),
+    "actual Composer has native focus before input",
+  );
+  await window.webContents.insertText(text);
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('#thread-composer')?.value === " +
+          JSON.stringify(text),
+      ),
+    "actual Composer committed exact native input",
+  );
+}
 async function screenshot(name) {
   await fs.writeFile(
     path.join(directory, name),
@@ -252,7 +270,7 @@ async function run() {
     "#thread-composer",
     "Author independent Boards through actual model tools",
   );
-  await window.webContents.insertText(
+  await insertComposerText(
     "!tool run_code " + JSON.stringify({ code: bodyProgram }),
   );
   await click(
@@ -284,7 +302,7 @@ async function run() {
     "#thread-composer",
     "Focus actual Composer for owned background command",
   );
-  await window.webContents.insertText(command);
+  await insertComposerText(command);
   await click(
     ".composer-send-control > button.action-orb.send:not(:disabled)",
     "Send synthetic fake-provider shell command",
@@ -310,7 +328,7 @@ async function run() {
     "editable Composer",
   );
   await click("#thread-composer", "Keep an unsent Composer draft");
-  await window.webContents.insertText(
+  await insertComposerText(
     "Synthetic draft must survive information and workspace toggles.",
   );
   await evaluate(
@@ -753,6 +771,13 @@ void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
     console.error(result.error);
     if (window && !window.isDestroyed())
       try {
+        result.inputFailureState = {
+          windowFocused: window.isFocused(),
+          webContentsFocused: window.webContents.isFocused(),
+          renderer: await evaluate(
+            "(()=>{const e=document.querySelector('#thread-composer'),a=document.activeElement;return {activeTag:a?.tagName,activeId:a?.id,composerExists:Boolean(e),composerDisabled:e?.disabled,composerValue:e?.value,hasComposerFocus:a===e,visibilityState:document.visibilityState,documentFocused:document.hasFocus()}})()",
+          ),
+        };
         await screenshot("failure.png");
       } catch {}
   })

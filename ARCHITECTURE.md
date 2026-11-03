@@ -33,6 +33,7 @@ Native Computer diagnostics capture a bounded, allowlisted per-request observati
 - **Interrupted calls** — Cold inspection is read-only. Explicit continuation appends an exact locally accepted result when verified durable evidence exists; otherwise it appends an unknown-outcome receipt. Neither path dispatches a historical call, and missing Trace is never proof of non-dispatch.
 - **Semantic ItemList** — `ContextItem` is the strict append-only model-semantic format: explicit roles, real text/parts, tool calls/results, exposed reasoning and immutable compression selection; provenance is not a second editable body. `compileItemList` selects and encodes these committed contents, never manufactures late instructions. Legacy mixed `CanonicalItem` decoding remains a migration/read projection, not a second writable authority.
   Within one serialized Domain journal operation, append may reuse the exact Trace and semantic input already validated by its own reconciliation; this operation-local value is never retained across admissions and does not bypass missing-source, uncertain-write, or durability checks.
+  The same append holds the existing ItemList write lane while a private callback-scoped snapshot retains exact validated prefix bytes, immutable decoded items, and a private semantic-ID index through reconciliation and atomic publication; only new suffixes repeat schema validation, successful repair refreshes the prefix and index, any failure retires them, and every later operation reads and validates afresh under the cooperative-writer contract.
   A successful journal append may return its exact already-durable semantic snapshot to the AppServer commit caller; this per-call receipt avoids immediate duplicate compilation/read work, is never retained as a journal cache, and is unavailable on failed or uncertain writes. Stores without a receipt retain the normal read/reconciliation path.
 - **Observed Trace** — Always-on durable request bytes, response bytes/events, complete tool output/artifacts, attempts/errors and per-process monotonic observations are evidence, never an execution coordinator. Capture gaps are explicit; absence never proves non-dispatch. Recovery uses unmatched semantic calls and verified accepted evidence, otherwise reports unknown without replay. Local capture omits authentication headers, not arbitrary body fields; sanitized exports are separate copies.
 - **Log authority and current projections** — Durable logs are the factual and recovery source of truth. Current permission, pending-input and lifecycle state are projections/caches of those records, not an independently authoritative snapshot. Queue/config/edit/cancel/delete mutations acknowledge only after their exact control fact is durable; uncertain append invalidates cached dispatch authority until reconciled. Existing operation identities in the log provide idempotency, without another tombstone/revision store. Logging failure cannot roll back an already-performed effect or justify replay.
@@ -82,6 +83,10 @@ Reconstruction is being landed in independently tested source checkpoints. The d
 - **ZenX login-shell PATH** — After opening the static startup window, a bounded, cancellable macOS GUI-startup probe captures only the login shell’s framed PATH before Host initialization; a pipe-held supervisor pins the owned process group until cleanup, including helpers surviving login-shell exit, without persistent state. PATH semantics are preserved, failure retains the inherited environment, and the existing tool-environment whitelist remains the disclosure boundary. Native CI observes the same bootstrap and Host tool composition through fail-closed pre-sign instrumentation in an isolated acceptance app; a fixture-only authenticated worker can terminate only its own process when the main loop hangs, while unconfirmed or abnormal shutdown retains evidence and blocks later smoke work. The fixture publishes its complete private ownership receipt atomically without replacing an existing owner. Normal packaging and production runtime gain no observer hook. A fixture-only Host shell observation retains bounded monotonic control-event timing and allowlisted result facts (never output, IPC payloads, or environment), without changing execution, cancellation, or startup deadlines.
 
 ## 核心概念
+
+- **Desktop question attention** — An App-owned disposable view cache reads bounded native question pages and exact response identities, keeps per-request drafts separate from Composer and Board, and treats uncertain writes as read-only reconciliation; it adds no execution authority, publication permission, or persistent answer ledger. After one confirmed whole-batch recall, all origin drafts are preflighted before a synchronous UI commit: ordinary inputs merge into the latest Composer and question replies return to their original cards; failed preflight preserves the entire native receipt without partial insertion or automatic resend.
+
+- **Native asynchronous user questions** — A direct builtin publishes an immutable semantic call/result pair; native response admission validates the exact Thread/request under the ordinary start/recallable-steer mutation boundary, preserves human reply provenance in semantic ItemList and existing pending-input Trace facts, and derives attention without a question store, durable reservation, permission grant, or change to manual pinned order. Model calls may omit an answer template; the read projection supplies a deterministic ID-labelled template in authored question order without rewriting the immutable call or interpolating question text, while explicit templates retain their existing byte semantics. Its disposable Thread-owned question index folds discriminators during existing decode/append work and only rebuilds on relevant semantic publication/input/control facts; ordinary snapshots do not walk or parse question history. The same disposable index supplies bounded native summary open-request count and immutable latest local publication time; only that publication extends the existing automatic Recent/Project timestamp, while reply receipt follows ordinary human ordering and pinned order stays manual. Question publication is an ordinary default-on Host capability delivered together with native question cards and their Asking attention projection; no settings opt-in or experimental enablement is required. The existing `experimentalUserQuestions` startup option remains a backward-compatible embedding opt-out only when explicitly false, and changes use the existing pending-restart boundary; disabling publication does not remove native reads, attention or response admission for existing questions. Questions never grant tool permission or replace action approval.
 
 - **ZenX 更新内容** — Renderer 仅展示随构建分发、以稳定条目 ID 标识的本地更新说明；打开状态为易失 UI 状态，不联网、不检查更新、不进入 Core journal。
 
@@ -1514,6 +1519,8 @@ ZenX external file opening is a local desktop UI operation: the main process res
 
 ZenX shared native connection delivery owns only generation-local event watermarks and coalesces identical in-flight Thread resume reads: validated resume overlap is synchronously fanned out at the raw response boundary before later frames, while callers retain the complete recovery snapshot and their existing epoch/watermark projection fences. Reconnect retains its separate ready-then-recovery publication boundary; no new Thread authority or durable state is introduced.
 
+ZenX App coalesces overlapping read-only usage refreshes per Thread into one in-flight read and one latest dirty request; existing selection/usage epochs fence publication, connection retirement and unmount discard pending ownership, and settlement drains only current demand without caching results, polling, replaying effects or changing Host token accounting. First readiness refreshes an already-recovered selected Thread; a still-pending cold resume retains its own usage-read boundary.
+
 ZenX promotes a newly created Thread's draft before establishing its native recovery epoch and canonical projection, and completes that read before first send; overlapping native notifications remain untrusted buffered input until the snapshot watermark fences replay, and a failed read retries the same Thread without a second creation or dispatch.
 
 ZenX trigger message bubbles are a disposable UI projection: only the exact known Host wakeup envelope with matching canonical sourceId may supply a historical display name and be omitted from the readable prompt/context body; unknown or malformed formats stay visible in full, ordinary copy matches the displayed text, and stored/model input is never rewritten. Message-source navigation opens the exact definition in a thread-scoped right-side panel using canonical metadata, without executing the trigger or leaving the owning conversation.
@@ -1693,3 +1700,53 @@ Canonical presentation metadata is scoped to each rendered Turn. Full trusted ca
 Browser operation previews are an ephemeral projection of exact Host target activity in the existing workspace tab rail; operation admission order selects the preview, while turn completion releases existing pages and retires temporary pages/observations without persisting a second execution state.
 
 The per-Turn presentation bundle also preserves quote-source metadata introduced by native Item quotations: full canonical call/result pairing happens before partitioning, and unchanged member identities reuse the quote map. Late result additions, replacements, and removals invalidate the owning quote consumer without freezing its canonical source.
+
+## Native pending steer and atomic recall
+
+Native human Send/Steer with a stable client ID stages input through Core's
+existing pending-input domain whenever the Thread is busy. The immutable
+`user_message_queued` fact uses `deliveryMode: steer`; it confirms admission,
+not model consumption. A native start can race into this same staged path.
+Renderer submission and local Sending copies reconcile only their exact client
+identity and matching admission kind; ordinary next-turn queue facts cannot
+confirm a start/steer submission. Legacy Core/CAS `steerTurn` retains its immediate
+model-semantic compatibility behavior and is not retroactively recallable.
+
+`zen/thread/steer/recall` validates the exact Thread, operation ID and complete
+message/client/revision snapshot under the same Thread mutation fence used for
+model-input claim. All targets pass or none are withdrawn. One durable control
+fact precedes ACK; original input and committed edits reconstruct the receipt
+through `zen/thread/read`, without a fourth journal, another editable transcript,
+or a persistent Composer store. New arrivals are excluded from the old snapshot.
+Once claimed, input becomes irrevocable model semantics; HTTP dispatch, first
+token and renderer status are not this boundary. Unknown transport outcomes
+permit exact read-only receipt reconciliation, never automatic command replay.
+
+Normal final completion with pending steer bound to the active Turn continues
+that same Turn. Stop/error/crash leaves unclaimed input held and unscheduled.
+Only an independently authorized human Start/Send, Retry or Replace carries held
+human steer, in admission order before fresh input. Automatic queue draining,
+Host/Agent wakeups and queued promotion do not acquire that authority. Existing
+ordinary next-Turn selection and queue-pending checks exclude held steer.
+
+Active automatic compaction plans under the Thread fence, runs its auxiliary
+summary outside it, then revalidates Thread/Turn and context boundary at commit.
+Pending-human pressure is an ephemeral estimate, not a claim or summary input.
+Sample preparation re-reads exact revisions and model selection under the claim
+fence after at most one proactive compaction attempt. Input that still does not
+fit fails before claim and remains recoverable; new arrivals are not dropped or
+automatically retried. Ordinary send admission does not wait for compaction.
+
+ZenX's pending/recalled view is disposable projection of these control facts.
+The initiating mounted view may merge a confirmed receipt into the latest
+App-owned draft only while its exact Thread/page remains selected and the
+Composer is not submitting. View authority changes only after committed render
+and is invalidated on unmount. Other windows, navigation and reload provide
+explicit recovery without automatic insertion, sending, focus or navigation.
+Structured references and ordered images survive the merge; unsupported input
+is rejected before recall. Applied-in-this-window markers are not durable proof.
+The same-thread canonical receipt also invalidates the older queue projection.
+
+This implementation does not add Room, Host/Agent or cross-author recall,
+remote-tool recall or automatic cross-window exactly-once insertion. Acceptance evidence is recorded separately against the exact
+combined source version; historical branch checks do not accept an integration.

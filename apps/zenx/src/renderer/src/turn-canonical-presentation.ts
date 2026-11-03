@@ -14,6 +14,15 @@ export interface TurnCanonicalPresentation {
 export interface TurnCanonicalPresentationIndex {
   scope: string;
   turns: ReadonlyMap<string, TurnCanonicalPresentation>;
+  // Immutable inputs of this disposable projection, not a second authority.
+  source: {
+    turns: readonly Turn[];
+    inputs: ReadonlyMap<string, UserMessage>;
+    forkItems: ReadonlyMap<string, string | undefined>;
+    attachments: ZenXThreadAttachmentProjection;
+    toolTargets: ReadonlyMap<string, ToolActionTarget>;
+    quoteItems: ReadonlyMap<string, readonly CanonicalItem[]>;
+  };
 }
 
 function sameEntries<T>(
@@ -66,8 +75,23 @@ export function indexTurnCanonicalPresentation(
   quoteItems: ReadonlyMap<string, readonly CanonicalItem[]> = new Map(),
 ): TurnCanonicalPresentationIndex {
   const before = previous?.scope === scope ? previous.turns : undefined;
+  const source = previous?.scope === scope ? previous.source : undefined;
+  const sameMetadata =
+    source !== undefined &&
+    source.inputs === inputs &&
+    source.forkItems === forkItems &&
+    source.attachments === attachments &&
+    source.toolTargets === toolTargets &&
+    source.quoteItems === quoteItems;
   const next = new Map<string, TurnCanonicalPresentation>();
-  for (const turn of turns) {
+  for (const [index, turn] of turns.entries()) {
+    const old = before?.get(turn.id);
+    // Text deltas replace only their Turn. Retained historical Turns already
+    // have exact membership; a new canonical metadata input still rechecks it.
+    if (sameMetadata && source.turns[index] === turn && old !== undefined) {
+      next.set(turn.id, old);
+      continue;
+    }
     const inputEntries: [string, UserMessage][] = [];
     const quoteEntries: [string, readonly CanonicalItem[]][] = [];
     const forkEntries: [string, string | undefined][] = [];
@@ -90,7 +114,6 @@ export function indexTurnCanonicalPresentation(
       const target = toolTargets.get(item.id);
       if (target !== undefined) targetEntries.push([item.id, target]);
     }
-    const old = before?.get(turn.id);
     if (
       old !== undefined &&
       sameEntries(old.inputs, inputEntries) &&
@@ -115,7 +138,11 @@ export function indexTurnCanonicalPresentation(
       });
     }
   }
-  return { scope, turns: next };
+  return {
+    scope,
+    turns: next,
+    source: { turns, inputs, forkItems, attachments, toolTargets, quoteItems },
+  };
 }
 
 /** Preserve complete call/result quote ownership before per-Turn partitioning. */

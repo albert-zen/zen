@@ -359,3 +359,144 @@ test("quote metadata preserves call/result pairs, immutable reuse, late replacem
   );
   assert.equal(removed.turns.get("result-row")!.quoteItems.size, 0);
 });
+
+test("streaming Turn changes do not traverse unchanged Turn items with identical metadata inputs", () => {
+  let historicalItemVisits = 0;
+  const historical = Array.from({ length: 40 }, (_, index) => {
+    const value = turn(`history-${index}`, [
+      `user-${index}`,
+      `answer-${index}`,
+    ]);
+    const iterate = value.items[Symbol.iterator].bind(value.items);
+    value.items[Symbol.iterator] = function* () {
+      for (const item of iterate()) {
+        historicalItemVisits++;
+        yield item;
+      }
+      return undefined;
+    };
+    return value;
+  });
+  const active = turn("active", ["streaming-answer"]);
+  const inputs = new Map<string, User>();
+  const forks = new Map<string, string | undefined>();
+  const attachments = {};
+  const targets = new Map();
+  const quotes = new Map<string, readonly CanonicalItem[]>();
+  const first = indexTurnCanonicalPresentation(
+    "scope",
+    [...historical, active],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    undefined,
+    quotes,
+  );
+  assert.equal(historicalItemVisits, 80);
+  historicalItemVisits = 0;
+  const streamed = {
+    ...active,
+    items: active.items.map((item) => ({ ...item })),
+  };
+  const second = indexTurnCanonicalPresentation(
+    "scope",
+    [...historical, streamed],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(
+    historicalItemVisits,
+    0,
+    "immutable historical Turn membership is already known",
+  );
+  for (const value of historical)
+    assert.equal(second.turns.get(value.id), first.turns.get(value.id));
+  assert.equal(second.turns.get(active.id), first.turns.get(active.id));
+  // A discarded render must not change the source identities of its predecessor.
+  const third = indexTurnCanonicalPresentation(
+    "scope",
+    [...historical, active],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(historicalItemVisits, 0);
+  assert.equal(third.turns.get(active.id), first.turns.get(active.id));
+});
+
+test("stable Turn identity still rechecks changed metadata and reordered or removed membership", () => {
+  const a = turn("a", ["u"]),
+    b = turn("b", ["answer"]);
+  const inputs = new Map([["u", user("u")]]);
+  const forks = new Map<string, string | undefined>();
+  const attachments = {};
+  const targets = new Map();
+  const quotes = new Map<string, readonly CanonicalItem[]>();
+  const first = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    undefined,
+    quotes,
+  );
+  const changed = user("u", "Late metadata replacement");
+  const next = indexTurnCanonicalPresentation(
+    "scope",
+    [a, b],
+    new Map([["u", changed]]),
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(next.turns.get("a")!.inputs.get("u"), changed);
+  assert.equal(first.turns.get("a")!.inputs.get("u"), inputs.get("u"));
+  const reordered = indexTurnCanonicalPresentation(
+    "scope",
+    [b, a],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(reordered.turns.get("a"), first.turns.get("a"));
+  assert.equal(reordered.turns.get("b"), first.turns.get("b"));
+  const removed = indexTurnCanonicalPresentation(
+    "scope",
+    [b],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(removed.turns.has("a"), false);
+  const replacedTurn = { ...a, items: [] };
+  const missing = indexTurnCanonicalPresentation(
+    "scope",
+    [replacedTurn, b],
+    inputs,
+    forks,
+    attachments,
+    targets,
+    first,
+    quotes,
+  );
+  assert.equal(missing.turns.get("a")!.inputs.size, 0);
+  assert.equal(first.turns.get("a")!.inputs.size, 1);
+});
