@@ -25,6 +25,7 @@ import {
 } from "./trace-observation.js";
 import type { TraceEvent, TraceReceipt } from "./trace.js";
 import {
+  CompactionBudgetExceededError,
   materializeAuxiliaryInputs,
   streamAuxiliaryModel,
   type AuxiliaryModelOptions,
@@ -6001,6 +6002,7 @@ export class ZenAppServer {
     operationId: string,
     concurrentAdmission = false,
   ) {
+    const contextWindow = selection.model.contextWindow;
     const assertDispatchAllowed = () => {
       this.#assertCurrentThreadAuthority(thread);
       const lease = selection as Partial<ProviderSelectionLease>;
@@ -6018,6 +6020,7 @@ export class ZenAppServer {
         configuration: {
           compaction: { ownerThreadId: thread.id, operationId },
         },
+        contextWindow,
         onPrepared: async ({ ownerId, sampleId }) => {
           await this.observeTrace({
             threadId: thread.id,
@@ -6079,6 +6082,7 @@ export class ZenAppServer {
       selection: selection.selection,
       inputModalities: selection.model.inputModalities,
     });
+    assertCompactionRequestBudget(compiled.messages, contextWindow);
     yield* selection.adapter.stream({
       ...compiled,
       model: selection.selection.modelId,
@@ -7748,6 +7752,21 @@ function automaticCompactionThreshold(
   return contextCompactionTokenBudget(contextWindow, triggerPercent);
 }
 
+/** Validate the durable, compiled view, including image-preparation notices. */
+function assertCompactionRequestBudget(
+  messages: readonly ModelMessage[],
+  contextWindow: number | null,
+): void {
+  if (
+    contextWindow === null ||
+    estimateModelMessageInputTokens(messages) > contextWindow
+  )
+    throw new AppServerError(
+      "compaction_budget_exceeded",
+      "Prepared context compaction request exceeds the model window",
+    );
+}
+
 async function generateContextCompactionSummary(options: {
   debugThreadId: string;
   debugBoundaryItemId: string;
@@ -7830,6 +7849,8 @@ async function generateContextCompactionSummary(options: {
     if (error instanceof CompactionSummaryValidationError) {
       throw new AppServerError("compaction_invalid_summary", error.message);
     }
+    if (error instanceof CompactionBudgetExceededError)
+      throw new AppServerError(error.code, error.message);
     if (error instanceof AppServerError) throw error;
     throw new AppServerError(
       "compaction_generation_failed",
@@ -7859,8 +7880,36 @@ function contextCompactionSummaryChunks(
         ? "original"
         : "high",
     );
-  const estimate = (group: readonly ModelMessage[]) =>
-    estimateModelMessageInputTokens(group, imageDimensions);
+  const estimate = (group: readonly ModelMessage[]) => {
+    let preparationNotices = 0;
+    for (const message of group) {
+      const content =
+        message.role === "user" && "content" in message
+          ? message.content
+          : message.role === "tool"
+            ? (message.modelContent ?? [])
+            : [];
+      for (const part of content) {
+        if (
+          part.type !== "image" ||
+          part.attachment.width === undefined ||
+          part.attachment.height === undefined
+        )
+          continue;
+        // Every image may receive a preparation/provenance notice, even when
+        // its dimensions stay unchanged (original detail or codec conversion).
+        // The notice includes the full original ref; reserve that exact length
+        // plus 2048 characters for bounded profile text and numeric metadata.
+        // No synthetic attachment or model-visible part is constructed here.
+        preparationNotices +=
+          512 + Math.ceil(JSON.stringify(part.attachment).length / 4);
+      }
+    }
+    return (
+      estimateModelMessageInputTokens(group, imageDimensions) +
+      preparationNotices
+    );
+  };
   const instructionTokens = estimateModelMessageInputTokens([
     { role: "user", text: summaryInstruction },
   ]);

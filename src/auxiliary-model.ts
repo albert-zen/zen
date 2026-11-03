@@ -16,6 +16,7 @@ import {
   type ModelRequest,
   type ModelTool,
 } from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import { observeModelWithTrace } from "./trace-model.js";
 import type { RuntimeTrace } from "./trace.js";
 
@@ -34,6 +35,8 @@ export interface AuxiliaryModelOptions {
   reasoningEffort: string | null;
   signal: AbortSignal;
   maxOutputTokens?: number;
+  /** Frozen model window, checked against the durable compiled compaction input. */
+  contextWindow?: number | null;
   assertDispatchAllowed?: () => void;
   configuration?: Record<string, unknown>;
   selection?: { providerProfileId: string; modelId: string };
@@ -66,6 +69,7 @@ export function streamAuxiliaryModel(
     model: options.model,
     reasoningEffort: options.reasoningEffort,
     maxOutputTokens: options.maxOutputTokens,
+    contextWindow: options.contextWindow,
     configuration: options.configuration,
     selection: options.selection,
     inputModalities: options.inputModalities,
@@ -126,6 +130,14 @@ export function streamAuxiliaryModel(
         ? {}
         : { inputModalities: frozen.inputModalities }),
     });
+    if (
+      frozen.purpose === "compaction" &&
+      frozen.contextWindow !== undefined &&
+      (frozen.contextWindow === null ||
+        estimateModelMessageInputTokens(compiled.messages) >
+          frozen.contextWindow)
+    )
+      throw new CompactionBudgetExceededError();
     await onPrepared?.({
       ownerId,
       sampleId,
@@ -263,4 +275,12 @@ export function materializeAuxiliaryInputs(
     content: { tools: [...tools] },
   });
   return items.map(decodeContextItem);
+}
+
+export class CompactionBudgetExceededError extends Error {
+  readonly code = "compaction_budget_exceeded";
+  constructor() {
+    super("Prepared context compaction request exceeds the model window");
+    this.name = "CompactionBudgetExceededError";
+  }
 }

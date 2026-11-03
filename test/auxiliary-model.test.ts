@@ -339,3 +339,50 @@ test("auxiliary compaction media is prepared before durable bundle capture and c
   assert.deepEqual([metadata.width, metadata.height], [1600, 1600]);
   assert.equal(original.width, 2048);
 });
+
+test("auxiliary compaction rejects an over-window durable compiled input before transport", async (t) => {
+  const f = await fixture(t);
+  let fetches = 0;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://synthetic.invalid/v1",
+    apiKey: "synthetic-not-real",
+    provider: "synthetic",
+    fetch: async () => {
+      fetches += 1;
+      return complete();
+    },
+  });
+  const options = {
+    ...f,
+    adapter,
+    purpose: "compaction" as const,
+    model: "tiny",
+    reasoningEffort: null,
+    signal: new AbortController().signal,
+    messages: [{ role: "user" as const, text: "X".repeat(100) }],
+    tools: [],
+    contextWindow: 10,
+  };
+  const request = streamAuxiliaryModel(options);
+  // Mutation after construction cannot enlarge the frozen allowance.
+  options.contextWindow = 10_000;
+  await assert.rejects(
+    async () => {
+      for await (const _event of request) {
+        /* drain */
+      }
+    },
+    { code: "compaction_budget_exceeded" },
+  );
+  assert.equal(fetches, 0);
+  const owners = await f.itemListStore.listThreadIds();
+  assert.equal(owners.length, 1);
+  const cold = await f.itemListStore.read(owners[0]!);
+  assert.equal(compileItemList(cold).messages[0]?.role, "user");
+  assert.equal(
+    (await f.trace.read(owners[0]!)).records.some(
+      (r) => r.type === "model_request",
+    ),
+    false,
+  );
+});
