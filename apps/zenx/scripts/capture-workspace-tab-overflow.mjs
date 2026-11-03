@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
+import {
+  assertWorkspaceTabIconVisible,
+  measureWorkspaceTabIcon,
+} from "./workspace-tab-icon-visibility.mjs";
 
 const directory = path.resolve(process.argv[2] ?? ".workspace-tab-overflow");
 const baseline = process.argv.includes("--baseline");
@@ -20,7 +24,7 @@ const measure = `(() => {
     return {id:tab.id,active:tab.getAttribute('aria-selected')==='true',bounds,icon,iconlessLeading:bounds.left<r.left-1 && bounds.right>r.left+12 && icon.right<=r.left};
   });
   const chrome=['.window-titlebar','.window-titlebar-session','.window-titlebar-drag'].map(selector=>{const e=document.querySelector(selector);if(!e)return {selector,bounds:null};const s=getComputedStyle(e);return {selector,bounds:rect(e),visibility:s.visibility,pointerEvents:s.pointerEvents,opacity:s.opacity};});
-  return {rail:r,chrome,spacer:{basis:spacer.flexBasis,transitionProperty:spacer.transitionProperty,transitionDuration:spacer.transitionDuration},endGap:rail.style.getPropertyValue("--workspace-tab-end-gap"),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
+  return {selectedIcon:(${measureWorkspaceTabIcon.toString()})(),sidebarDrawerOpen:document.documentElement.clientWidth<=720&&!document.querySelector(".app-shell").classList.contains("sidebar-collapsed"),platform:document.documentElement.dataset.platform,rail:r,chrome,spacer:{basis:spacer.flexBasis,transitionProperty:spacer.transitionProperty,transitionDuration:spacer.transitionDuration},endGap:rail.style.getPropertyValue("--workspace-tab-end-gap"),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,tabs,expanded:document.querySelector('.auxiliary-panel').dataset.expanded,focused:document.activeElement.id,pageWidth:document.documentElement.scrollWidth,controls:rect(document.querySelector('.window-titlebar-native-actions'))};
 })()`;
 await withPreviewBrowser(
   directory,
@@ -68,6 +72,14 @@ await withPreviewBrowser(
       await stable();
     };
     const valid = (m) => {
+      if (!m.sidebarDrawerOpen)
+        assertWorkspaceTabIconVisible(
+          m.selectedIcon,
+          m.platform === "darwin" && m.rail.top < 44
+            ? m.chrome.find((item) => item.selector === ".window-titlebar")
+                ?.bounds?.right
+            : undefined,
+        );
       assert.equal(
         m.spacer.transitionProperty,
         "none",

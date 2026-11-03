@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { delay, withPreviewBrowser } from "./preview-browser.mjs";
+import {
+  assertWorkspaceTabIconVisible,
+  measureWorkspaceTabIcon,
+} from "./workspace-tab-icon-visibility.mjs";
 const directory = path.resolve(
   process.argv[2] ?? ".titlebar-safe-area-preview",
 );
@@ -13,7 +17,7 @@ const evidence = {
 const measure = `(() => {
  const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}};
  const heading=document.querySelector('.auxiliary-heading'), rail=heading.querySelector('[role=tablist]'), button=document.querySelector('.sidebar-collapse-button');
- return {heading:rect(heading),rail:rect(rail),titlebar:rect(document.querySelector('.window-titlebar')),controls:rect(document.querySelector('.window-titlebar-native-actions')),toggle:rect(button),toggleVisible:getComputedStyle(button).display!=='none',expanded:document.querySelector('.auxiliary-panel').dataset.expanded,collapsed:document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,headingDrag:getComputedStyle(heading).webkitAppRegion,railDrag:getComputedStyle(rail).webkitAppRegion,buttonDrag:getComputedStyle(button).webkitAppRegion,selected:rail.querySelector('[aria-selected=true]')?.id,pageWidth:document.documentElement.scrollWidth};
+ return {selectedIcon:(${measureWorkspaceTabIcon.toString()})(),heading:rect(heading),rail:rect(rail),titlebar:rect(document.querySelector('.window-titlebar')),controls:rect(document.querySelector('.window-titlebar-native-actions')),toggle:rect(button),toggleVisible:getComputedStyle(button).display!=='none',expanded:document.querySelector('.auxiliary-panel').dataset.expanded,collapsed:document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),scrollLeft:rail.scrollLeft,scrollWidth:rail.scrollWidth,clientWidth:rail.clientWidth,headingDrag:getComputedStyle(heading).webkitAppRegion,railDrag:getComputedStyle(rail).webkitAppRegion,buttonDrag:getComputedStyle(button).webkitAppRegion,selected:rail.querySelector('[aria-selected=true]')?.id,pageWidth:document.documentElement.scrollWidth};
 })()`;
 await withPreviewBrowser(
   directory,
@@ -62,6 +66,14 @@ await withPreviewBrowser(
       assert.equal(m.headingDrag, "drag");
       assert.equal(m.railDrag, "no-drag");
       assert.equal(m.buttonDrag, "no-drag");
+      // Narrow Sidebar drawers intentionally cover the resource panel.
+      if (width > 720 || m.collapsed)
+        assertWorkspaceTabIconVisible(
+          m.selectedIcon,
+          platform === "darwin" && m.heading.y < 44
+            ? m.titlebar.right
+            : undefined,
+        );
       if (platform === "darwin" && m.heading.y < 44) {
         assert.ok(
           m.rail.x >= 128 - 1,
