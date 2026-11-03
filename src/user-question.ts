@@ -115,9 +115,17 @@ export function renderUserQuestionReply(
   value: UserQuestionReply,
 ): string {
   const reply = normalizeUserQuestionReply(specification, value);
+  // The opaque call Item ID stays in structured metadata; model-visible text
+  // uses the short, model-authored question keys the answer template already
+  // names, so a reply costs a handful of tokens instead of a transport ID.
+  const questions = specification.questions.map((question) => question.id);
+  const subject =
+    questions.length === 1
+      ? `question ${questions[0]}`
+      : `questions ${questions.join(", ")}`;
   return reply.outcome === "cancel"
-    ? `I chose not to answer question ${reply.request.callItemId}.`
-    : `Reply to question ${reply.request.callItemId}:\n${renderUserQuestionAnswer(specification, reply.answers)}`;
+    ? `I chose not to answer ${subject}.`
+    : `Reply to ${subject}:\n${renderUserQuestionAnswer(specification, reply.answers)}`;
 }
 
 function record(
