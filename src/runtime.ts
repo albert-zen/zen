@@ -546,6 +546,7 @@ export class AgentRuntime {
           hostInput: undefined,
           mode: undefined,
           messageType: undefined,
+          questionReply: undefined,
         },
       ]) {
         const userItem: UserMessageItem | ThreadMessageItem | HostMessageItem =
@@ -568,6 +569,9 @@ export class AgentRuntime {
                 ...(message.sender === undefined
                   ? {
                       type: "user_message" as const,
+                      ...(message.questionReply === undefined
+                        ? {}
+                        : { questionReply: message.questionReply }),
                       receiptTimezone: captureReceiptTimezone(
                         options.clientTimezone,
                       ),

@@ -2194,6 +2194,13 @@ function ThreadRow({
     information?.triggers.triggers.filter(
       (t) => t.threadId === thread.threadId && t.active,
     ) ?? [];
+  const openQuestionCount =
+    thread.status === "systemError"
+      ? 0
+      : (thread.userQuestionSummary?.openCount ?? 0);
+  const askingLabel = i18n.t("shell:threadAskingCount", {
+    count: openQuestionCount,
+  });
   const unread =
     !hasActiveTurn &&
     !pendingApproval &&
@@ -2303,6 +2310,16 @@ function ThreadRow({
       ) : null}
       <span className="thread-title">
         <span>{threadTitle(thread)}</span>
+        {openQuestionCount > 0 ? (
+          <span
+            className="thread-asking-badge"
+            role="img"
+            aria-label={askingLabel}
+            title={askingLabel}
+          >
+            {i18n.t("shell:threadAsking")}
+          </span>
+        ) : null}
       </span>
       {(identity === null || modelProvider === null) &&
       !pendingApproval &&

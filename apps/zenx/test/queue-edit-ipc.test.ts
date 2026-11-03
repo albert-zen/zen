@@ -10,6 +10,7 @@ import { i18n } from "../src/renderer/src/i18n.js";
 import {
   queueEditIpcRejection,
   unwrapQueueEditIpcReply,
+  unwrapQueueMutationIpcReply,
 } from "../src/preload/queue-edit-ipc.js";
 import type { NativeQueueEditParams } from "../../../src/protocol/native/wire.js";
 
@@ -402,4 +403,150 @@ test("unknown queue envelope preserves causal details without a rejection code o
     });
   });
   assert.deepEqual(calls, ["zen/thread/queue/edit", "zen/thread/read"]);
+});
+
+test("whole-batch recall is allowlisted and its exact receipt survives real main/preload serialization", async () => {
+  const recall = {
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
+      { queuedItemId: "one", clientId: "client-one", expectedRevision: 2 },
+      { queuedItemId: "two", clientId: "client-two", expectedRevision: 0 },
+    ],
+  };
+  const result = {
+    status: "recalled",
+    receipt: {
+      type: "user_message_steer_recalled",
+      id: "receipt",
+      threadId: "thread",
+      createdAt: "2026-11-02T00:00:00Z",
+      recallId: recall.recallId,
+      targets: recall.targets,
+    },
+    messages: [],
+  };
+  const calls: unknown[] = [];
+  const bridge = boundary(async (method, request) => {
+    calls.push({ method, request });
+    return result;
+  });
+  const reply = await bridge.request("zen/thread/steer/recall", recall);
+  assert.deepEqual(reply, result);
+  assert.deepEqual(calls, [
+    { method: "zen/thread/steer/recall", request: recall },
+  ]);
+});
+
+test("recall conflict stays a known refusal after Electron strips thrown Error fields", async () => {
+  const bridge = boundary(async () => {
+    throw Object.assign(new Error("Claim won"), {
+      data: { zenCode: "steer_recall_conflict" },
+    });
+  });
+  const reply = await bridge.request("zen/thread/steer/recall", {
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
+      { queuedItemId: "one", clientId: "client-one", expectedRevision: 0 },
+    ],
+  });
+  assert.throws(
+    () =>
+      unwrapQueueMutationIpcReply(
+        reply as Parameters<typeof unwrapQueueMutationIpcReply>[0],
+      ),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "data" in error &&
+      (error.data as { zenCode: string }).zenCode === "steer_recall_conflict",
+  );
+});
+
+test("lost recall ACK remains unknown data without falsely authorizing a write retry", async () => {
+  let writes = 0;
+  const bridge = boundary(async () => {
+    writes++;
+    throw new Error("Transport closed after commit");
+  });
+  const reply = await bridge.request("zen/thread/steer/recall", {
+    threadId: "thread",
+    recallId: "recall",
+    targets: [
+      { queuedItemId: "one", clientId: "client-one", expectedRevision: 0 },
+    ],
+  });
+  assert.equal(
+    (reply as { type: string }).type,
+    "zenx.queue-outcome-unknown.v1",
+  );
+  assert.equal((reply as { data?: unknown }).data, undefined);
+  assert.throws(
+    () =>
+      unwrapQueueMutationIpcReply(
+        reply as Parameters<typeof unwrapQueueMutationIpcReply>[0],
+      ),
+    /Transport closed/,
+  );
+  assert.equal(writes, 1);
+});
+
+test("question native methods preserve rejected versus uncertain outcome through actual main/preload serialization", async () => {
+  const { unwrapQuestionIpcReply } =
+    await import("../src/preload/user-question-ipc.js");
+  for (const code of [
+    "invalid_request",
+    "question_response_pending",
+    "question_state_unavailable",
+    "thread_not_found",
+    "operation_forbidden",
+    "provider_unavailable",
+    "model_unavailable",
+    "context_window_unknown",
+    "reasoning_effort_unknown",
+    "reasoning_effort_unavailable",
+    "admission_outcome_unknown",
+    "future_code",
+  ]) {
+    const bridge = boundary(async (method, params) => {
+      assert.equal(method, "zen/thread/questions/respond");
+      assert.deepEqual(params, { threadId: "synthetic" });
+      throw Object.assign(new Error("Synthetic question failure"), {
+        data: { zenCode: code },
+        cause: new Error("Local diagnostic evidence"),
+      });
+    });
+    const reply = await bridge.request("zen/thread/questions/respond", {
+      threadId: "synthetic",
+    });
+    assert.throws(
+      () => unwrapQuestionIpcReply(reply),
+      (error: unknown) => {
+        const result = error as Error & {
+          questionRejected: boolean;
+          localDiagnosticDetail: string;
+        };
+        assert.equal(
+          result.questionRejected,
+          code === "invalid_request" || code === "question_response_pending",
+        );
+        assert.match(result.localDiagnosticDetail, /Local diagnostic evidence/);
+        return true;
+      },
+    );
+  }
+  for (const method of [
+    "zen/thread/questions/list",
+    "zen/thread/questions/read",
+    "zen/thread/questions/respond",
+  ]) {
+    const result = { synthetic: "plain native DTO" };
+    assert.deepEqual(
+      unwrapQuestionIpcReply(
+        await boundary(async () => result).request(method, {}),
+      ),
+      result,
+    );
+  }
 });
