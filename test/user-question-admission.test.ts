@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { createHostedAppServer } from "../apps/cli/src/host.js";
 import { ZenAppServer, type AppServerEvent } from "../src/app-server.js";
 import { DomainThreadJournal } from "../src/domain-journal.js";
 import { FileTraceStore } from "../src/trace.js";
@@ -69,7 +70,7 @@ async function fixture(
               questions: [
                 {
                   id: "scope",
-                  prompt: "Which scope?",
+                  prompt: `Which scope ${i}?`,
                   options: [{ id: "small", label: "Small" }],
                 },
               ],
@@ -624,7 +625,7 @@ test("ordinary text cannot answer by matching text or forged JSON; cancelling pe
   const f = await fixture(t, { pause: true });
   await f.server.sendMessage(
     f.thread.id,
-    `Reply to question ${f.question.request.callItemId}:\nScope: Small`,
+    `Reply to question scope:\nScope: Small`,
     {
       clientId: "plain-body",
       recallableSteer: true,
@@ -755,4 +756,155 @@ test("real native question paging keeps every pending request reachable and exac
     f.server.listUserQuestions(f.thread.id, "foreign-cursor"),
     { code: "invalid_request" },
   );
+});
+
+test("parallel Ask calls with duplicate keys keep exact refs through out-of-order answer and cancel", async (t) => {
+  const f = await fixture(t, { pause: true, questionCount: 2 });
+  const questions = (await f.server.listUserQuestions(f.thread.id)).questions;
+  assert.equal(questions.length, 2);
+  const refs = questions.map((question) => question.requestRef);
+  assert.ok(
+    refs.every((ref) => typeof ref === "string" && /^q[0-9]+$/.test(ref)),
+  );
+  assert.notEqual(refs[0], refs[1]);
+  const answer = await f.server.respondToUserQuestion(f.thread.id, {
+    questionCallItemId: questions[1]!.request.callItemId,
+    clientId: "parallel-answer-later",
+    outcome: "answer",
+    answers: [{ questionId: "scope", optionIds: ["small"] }],
+  });
+  const cancel = await f.server.respondToUserQuestion(f.thread.id, {
+    questionCallItemId: questions[0]!.request.callItemId,
+    clientId: "parallel-cancel-earlier",
+    outcome: "cancel",
+  });
+  assert.equal(answer.question.state, "answer-pending");
+  assert.equal(cancel.question.state, "cancel-pending");
+  f.release.resolve();
+  await f.initial.done;
+  const snapshot = await f.snapshot();
+  const expected = [
+    `Reply to question scope (${refs[1]}):\nScope: Small`,
+    `I chose not to answer question scope (${refs[0]}).`,
+  ];
+  const delivered = f.requests
+    .at(-1)!
+    .messages.flatMap((message) =>
+      message.role === "user"
+        ? "content" in message
+          ? message.content.flatMap((part) =>
+              part.type === "text" ? [part.text] : [],
+            )
+          : [message.text]
+        : [],
+    );
+  for (const body of expected) assert.ok(delivered.includes(body), body);
+  assert.equal(
+    (
+      await f.server.readUserQuestion(
+        f.thread.id,
+        questions[1]!.request.callItemId,
+        "parallel-answer-later",
+      )
+    ).question?.state,
+    "answered",
+  );
+  assert.equal(
+    (
+      await f.server.readUserQuestion(
+        f.thread.id,
+        questions[0]!.request.callItemId,
+        "parallel-cancel-earlier",
+      )
+    ).question?.state,
+    "cancelled",
+  );
+  assert.deepEqual(
+    readUserQuestions(f.thread.id, snapshot.itemList!, snapshot.items).map(
+      (question) => question.state,
+    ),
+    ["cancelled", "answered"],
+  );
+});
+
+test("cold Host claims pre-upgrade pending replies with their exact original bytes", async (t) => {
+  for (const format of ["original", "key-only"] as const) {
+    const f = await fixture(t, { pause: true });
+    await f.answer("legacy-pending");
+    const snapshot = await f.snapshot();
+    const body = `Reply to question ${format === "original" ? f.question.request.callItemId : "scope"}:\nScope: Small`;
+    const facts = snapshot.items.map((item) => {
+      if (item.type === "tool_result") {
+        try {
+          const receipt = JSON.parse(item.output);
+          if (receipt.kind === "zen.user-question.published") {
+            delete receipt.requestRef;
+            receipt.version = 1;
+            return { ...item, output: JSON.stringify(receipt) };
+          }
+        } catch {
+          /* Not a publication receipt. */
+        }
+      }
+      return item.type === "user_message_queued" && item.questionReply
+        ? { ...item, input: [{ type: "text" as const, text: body }] }
+        : item;
+    });
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "zen-question-pending-upgrade-"),
+    );
+    const journal = new DomainThreadJournal({
+      directory: path.join(directory, "threads"),
+      trace: new FileTraceStore(path.join(directory, "trace")),
+      metadata: new InMemoryThreadMetadataStore(),
+    });
+    await journal.create(facts);
+    await journal.close();
+    const host = createHostedAppServer({
+      cwd: directory,
+      dataDirectory: directory,
+      model: "fake",
+      provider: { type: "fake" },
+      approvalPolicy: "never",
+      toolPresentation: "direct",
+    });
+    try {
+      assert.equal(
+        (
+          await host.readUserQuestion(
+            f.thread.id,
+            f.question.request.callItemId,
+            "legacy-pending",
+          )
+        ).response.status,
+        "pending",
+        format,
+      );
+      const resumed = await host.startTurn(
+        f.thread.id,
+        "Resume independent work",
+        { selection: { providerProfileId: "fake", modelId: "fake" } },
+      );
+      await resumed.done;
+      const read = await host.readUserQuestion(
+        f.thread.id,
+        f.question.request.callItemId,
+        "legacy-pending",
+      );
+      assert.equal(read.response.status, "claimed", format);
+      assert.equal(read.question?.state, "answered", format);
+      const after = await host.readThread(f.thread.id);
+      const reply = after.itemList!.find(
+        (item) => item.source.metadata?.clientId === "legacy-pending",
+      );
+      assert.ok(reply?.kind === "message");
+      assert.deepEqual(reply.content.parts.at(-1), {
+        type: "text",
+        text: body,
+      });
+    } finally {
+      await host.closeHostResources();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
 });
