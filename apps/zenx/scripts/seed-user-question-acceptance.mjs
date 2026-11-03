@@ -190,7 +190,7 @@ export async function verifyUserQuestionAcceptance({
       }
       return {
         synthetic: true,
-        defaultOffColdHost: true,
+        defaultOnColdHost: true,
         boundedThreadReads: snapshots.size,
         evidence,
       };
@@ -230,7 +230,7 @@ export async function verifyUserQuestionAcceptance({
     }
     return {
       synthetic: true,
-      defaultOffColdHost: true,
+      defaultOnColdHost: true,
       boundedThreadReads: snapshots.size,
       evidence,
     };

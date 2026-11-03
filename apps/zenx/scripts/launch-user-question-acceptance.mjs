@@ -141,7 +141,7 @@ await writeFile(
       synthetic: true,
       scenario,
       scope:
-        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published by a separate explicitly enabled Host, closed before normal Desktop starts with default-off publication. Driver-only transport faults: cards loses one actual reply; origin delays one exact withdrawn read during native navigation; no injected UI, no user data, no user device.",
+        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only. Questions genuinely published through the default-on asynchronous Host capability; that Host completes its Turns and closes before a normal default-on Desktop Host restores the same pending questions. Driver-only transport faults: cards loses one actual reply; origin delays one exact withdrawn read during native navigation; no injected UI, no user data, no user device.",
     },
     null,
     2,
