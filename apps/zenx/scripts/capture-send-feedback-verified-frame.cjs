@@ -249,7 +249,12 @@ async function screenshot(name) {
 
 // Full-DOM checks run before/after timing only. Virtual rows are ordered by real
 // geometry, not Legend's recyclable DOM order. Export numeric membership only.
-async function inspectMountedTranscript(canonicalTurns, threadId) {
+async function inspectMountedTranscript(
+  canonicalTurns,
+  threadId,
+  stage = "before",
+) {
+  result.mountedInspectionStage = stage;
   const inspectionStartedMainMs = performance.now();
   const snapshot = await evaluate(`(()=>{
     const scroller=document.querySelector('.messages');
@@ -257,15 +262,24 @@ async function inspectMountedTranscript(canonicalTurns, threadId) {
     const selector=virtual?'.messages > .virtual-transcript-content':'.messages-inner';
     const content=document.querySelector(selector);
     if(!content||content.parentElement!==scroller)throw Error('Missing actual total-content box');
+    const postTiming=${JSON.stringify(stage !== "before")};
     const history=content.querySelector(':scope > .transcript-history');
-    const rows=Array.from(scroller.querySelectorAll('section.turn'),row=>({
-      top:virtual?row.getBoundingClientRect().top:null,
-      userId:row.querySelector('article.user-row[data-sent-message-id]')?.dataset.sentMessageId,
-      key:row.closest('[data-transcript-row-key]')?.dataset.transcriptRowKey??null,
-    }));
+    const v=scroller.getBoundingClientRect(), viewport={top:Math.max(0,v.top),bottom:Math.min(innerHeight,v.bottom),left:Math.max(0,v.left),right:Math.min(innerWidth,v.right),scrollTop:scroller.scrollTop,scrollHeight:scroller.scrollHeight,clientHeight:scroller.clientHeight,clientWidth:scroller.clientWidth};
+    const rows=Array.from(scroller.querySelectorAll('section.turn'),row=>{
+      const rect=virtual?row.getBoundingClientRect():null;
+      return {top:rect?.top??null,bottom:rect?.bottom??null,
+        paddingBottom:postTiming&&virtual?parseFloat(getComputedStyle(row.closest('.virtual-transcript-row')).paddingBottom):null,
+        visible:rect?rect.width>0&&rect.height>0&&rect.bottom>viewport.top&&rect.top<viewport.bottom&&rect.right>viewport.left&&rect.left<viewport.right:null,
+        userId:row.querySelector('article.user-row[data-sent-message-id]')?.dataset.sentMessageId,
+        key:row.closest('[data-transcript-row-key]')?.dataset.transcriptRowKey??null};
+    });
     if(virtual)rows.sort((a,b)=>a.top-b.top);
-    return {virtual,contentSelector:selector,contentDisplay:getComputedStyle(content).display,
-      contentHeight:content.getBoundingClientRect().height,
+    const c=content.getBoundingClientRect(), footer=content.querySelector('.virtual-transcript-footer'), f=postTiming?footer?.getBoundingClientRect():null, composer=postTiming?document.querySelector('.bottom-zone')?.getBoundingClientRect():null;
+    const ordered=Array.from(scroller.querySelectorAll('section.turn'));
+    const last=virtual?ordered.find(row=>row.querySelector('article.user-row[data-sent-message-id]')?.dataset.sentMessageId===rows.at(-1)?.userId):ordered.at(-1);
+    const lastRect=postTiming?(virtual?rows.at(-1):last?.getBoundingClientRect()):null;
+    return {virtual,viewport,spacing:{postTiming,contentTop:c.top,contentBottom:c.bottom,footerTop:f?.top??null,footerBottom:f?.bottom??null,footerChildCount:footer?.childElementCount??0,lastCanonicalRowBottom:lastRect?.bottom??null,finalRowPaddingBottom:virtual?(rows.at(-1)?.paddingBottom??null):0,viewportBottom:viewport.bottom,composerTop:composer?.top??null},contentSelector:selector,contentDisplay:getComputedStyle(content).display,
+      contentHeight:c.height,
       userRows:scroller.querySelectorAll('article.user-row').length,
       assistantRows:scroller.querySelectorAll('article.agent-copy').length,
       turnBlocks:rows.length,
@@ -281,12 +295,71 @@ async function inspectMountedTranscript(canonicalTurns, threadId) {
       rows};
   })()`);
   const canonicalUsers = new Map();
+  let canonicalTurnsWithoutUser = 0;
   canonicalTurns.forEach((turn, index) => {
     const user = turn.items.find((item) => item.type === "userMessage");
-    assert.ok(user, "Synthetic canonical Turn has a user message");
-    canonicalUsers.set(user.id, { index, turnId: turn.id });
+    if (user) canonicalUsers.set(user.id, { index, turnId: turn.id });
+    else canonicalTurnsWithoutUser++;
   });
-  const indices = snapshot.rows.map((row) => {
+  const indices = snapshot.rows.map(
+    (row) => canonicalUsers.get(row.userId)?.index ?? -1,
+  );
+  const ranges = (values) => {
+    const result = [];
+    for (const value of values) {
+      const last = result.at(-1);
+      if (last && value === last[1] + 1) last[1] = value;
+      else result.push([value, value]);
+    }
+    return result;
+  };
+  if (snapshot.virtual && stage !== "before") {
+    const lastIndex = Math.max(...indices);
+    const last = snapshot.rows[indices.indexOf(lastIndex)];
+    snapshot.spacing.lastCanonicalRowBottom = last?.bottom ?? null;
+    snapshot.spacing.finalRowPaddingBottom = last?.paddingBottom ?? null;
+    snapshot.spacing.lastCanonicalIndex = lastIndex;
+  }
+  const visibleIndices = indices.filter(
+    (_index, i) => snapshot.rows[i].visible === true,
+  );
+  // Retain bounded, text/ID-free evidence even if an assertion below rejects.
+  result.mountedInspectionDiagnostic = {
+    stage,
+    virtual: snapshot.virtual,
+    mountedCount: indices.length,
+    canonicalTurnsWithoutUser,
+    unknownCanonicalCount: indices.filter((index) => index < 0).length,
+    mountedIndices: indices.slice(0, 200),
+    mountedIndicesTruncated: indices.length > 200,
+    mountedRanges: ranges(indices).slice(0, 32),
+    mountedRangesTruncated: ranges(indices).length > 32,
+    viewportCoverage: {
+      geometryOnly: true,
+      available: snapshot.virtual,
+      rowCount: snapshot.virtual ? visibleIndices.length : null,
+      ranges: ranges(visibleIndices).slice(0, 32),
+      canonicalContiguous: visibleIndices.every(
+        (index, i) => i === 0 || index === visibleIndices[i - 1] + 1,
+      ),
+    },
+    viewport: snapshot.viewport,
+    spacing: snapshot.spacing,
+    rows: snapshot.rows.slice(0, 32).map((row, i) => ({
+      canonicalIndex: indices[i],
+      top: row.top,
+      bottom: row.bottom,
+      visible: row.visible,
+    })),
+    rowsTruncated: snapshot.rows.length > 32,
+  };
+  assert.ok(["before", "live", "earlier", "returned"].includes(stage));
+  assert.equal(
+    canonicalTurnsWithoutUser,
+    0,
+    "Synthetic canonical Turns each have a user message",
+  );
+  snapshot.rows.forEach((row) => {
     const canonical = canonicalUsers.get(row.userId);
     assert.ok(
       canonical,
@@ -297,7 +370,6 @@ async function inspectMountedTranscript(canonicalTurns, threadId) {
         row.key,
         JSON.stringify([threadId, "turn", canonical.turnId]),
       );
-    return canonical.index;
   });
   assert.ok(
     indices.length >= 2,
@@ -324,6 +396,11 @@ async function inspectMountedTranscript(canonicalTurns, threadId) {
       mainWallMs: performance.now() - inspectionStartedMainMs,
       rendererRowRectReads: snapshot.virtual ? indices.length : 0,
       rendererContentRectReads: 1,
+      rendererViewportRectReads: 1,
+      rendererPostTimingSpacingRectReads:
+        stage === "before"
+          ? 0
+          : (snapshot.virtual ? 0 : 1) + (snapshot.virtual ? 1 : 0) + 1,
       withinSendTiming: false,
     },
     canonicalMembers: indices.length,
@@ -835,38 +912,105 @@ function installObservation(
     ].filter(([target]) => target),
   );
   const latestLayout = {};
-  let pendingIntersectionVisible = false;
+  const nativeIntersections = new Map();
+  const nativeFrames = new Set();
+  const nativeIdentity = (node, kind) => {
+    if (!node?.isConnected || node.textContent?.trim() !== nonce) return false;
+    if (kind === "pending")
+      return (
+        node === record.pendingBubble &&
+        typeof record.pendingClientId === "string" &&
+        node.closest("article")?.dataset.pendingSendClientId ===
+          record.pendingClientId
+      );
+    return (
+      node === record.bubble &&
+      typeof record.pendingClientId === "string" &&
+      node.closest("article")?.dataset.sentMessageId === record.messageId &&
+      record.notifications.some(
+        (event) =>
+          event.threadId === threadId &&
+          event.itemType === "user_message" &&
+          event.itemId === record.messageId &&
+          event.clientId === record.pendingClientId,
+      )
+    );
+  };
+  const queueNativeFrame = () => {
+    if (stopped || nativeFrames.size > 0) return;
+    const id = requestAnimationFrame(() => {
+      nativeFrames.delete(id);
+      if (stopped || !Number.isFinite(record.pendingNativeIntersectionMs))
+        return;
+      const now = performance.now();
+      for (const kind of ["pending", "canonical"]) {
+        const node = kind === "pending" ? record.pendingBubble : record.bubble;
+        const entry = nativeIntersections.get(node);
+        if (
+          !entry?.visible ||
+          !nativeIdentity(node, kind) ||
+          now <= entry.callbackMs
+        )
+          continue;
+        if (
+          kind === "pending" &&
+          record.pendingNativeSubsequentFrameMs === undefined
+        )
+          record.pendingNativeSubsequentFrameMs = now;
+        if (record.nativeFeedbackContinuity === undefined)
+          record.nativeFeedbackContinuity = {
+            owner: kind,
+            pendingToCanonical: kind === "canonical",
+            identityVerified: true,
+            ownerConnected: true,
+            pendingNativeIntersectionMs: record.pendingNativeIntersectionMs,
+            ownerNativeIntersectionEntryMs: entry.entryMs,
+            ownerNativeIntersectionMs: entry.callbackMs,
+            subsequentFrameMs: now,
+          };
+        break;
+      }
+    });
+    nativeFrames.add(id);
+  };
   const intersectionObserver =
     typeof IntersectionObserver === "undefined"
       ? null
       : new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
-              if (entry.target !== record.pendingBubble) continue;
-              pendingIntersectionVisible =
+              const kind =
+                entry.target === record.pendingBubble
+                  ? "pending"
+                  : entry.target === record.bubble
+                    ? "canonical"
+                    : null;
+              if (kind === null) continue;
+              const visible =
                 entry.isIntersecting && entry.intersectionRatio > 0;
-              if (!pendingIntersectionVisible || !entry.target.isConnected)
-                continue;
-              if (record.pendingNativeIntersectionMs === undefined) {
-                record.pendingNativeIntersectionMs = performance.now();
-                record.pendingNativeIntersectionEntryMs = entry.time;
-                record.pendingNativeIntersectionRatio = entry.intersectionRatio;
+              const callbackMs = performance.now();
+              nativeIntersections.set(entry.target, {
+                visible,
+                callbackMs,
+                entryMs: entry.time,
+              });
+              if (!visible || !entry.target.isConnected) continue;
+              const prefix = kind === "pending" ? "pending" : "canonical";
+              if (record[prefix + "NativeIntersectionMs"] === undefined) {
+                record[prefix + "NativeIntersectionMs"] = callbackMs;
+                record[prefix + "NativeIntersectionEntryMs"] = entry.time;
+                record[prefix + "NativeIntersectionRatio"] =
+                  entry.intersectionRatio;
                 const r = entry.intersectionRect;
-                record.pendingNativeIntersectionBounds = {
+                record[prefix + "NativeIntersectionBounds"] = {
                   left: r.left,
                   top: r.top,
                   width: r.width,
                   height: r.height,
                 };
-                requestAnimationFrame(() => {
-                  if (
-                    pendingIntersectionVisible &&
-                    record.pendingBubble?.isConnected
-                  )
-                    record.pendingNativeSubsequentFrameMs = performance.now();
-                });
               }
             }
+            queueNativeFrame();
           },
           { root: document.querySelector(".messages"), threshold: [0, 0.01] },
         );
@@ -914,8 +1058,10 @@ function installObservation(
         record.pendingClientId = row.dataset.pendingSendClientId;
         record.pendingStateAtDom = row.dataset.sendState;
         if (record.pendingBubble !== bubble) {
-          if (record.pendingBubble)
+          if (record.pendingBubble) {
             intersectionObserver?.unobserve(record.pendingBubble);
+            nativeIntersections.delete(record.pendingBubble);
+          }
           record.pendingBubble = bubble;
           intersectionObserver?.observe(bubble);
         }
@@ -939,7 +1085,14 @@ function installObservation(
         if (record.bubbleDomMs === undefined)
           record.bubbleDomMs = performance.now();
         record.messageId = row.dataset.sentMessageId;
-        record.bubble = bubble;
+        if (record.bubble !== bubble) {
+          if (record.bubble) {
+            intersectionObserver?.unobserve(record.bubble);
+            nativeIntersections.delete(record.bubble);
+          }
+          record.bubble = bubble;
+          intersectionObserver?.observe(bubble);
+        }
       }
     }
   };
@@ -947,7 +1100,8 @@ function installObservation(
     if (
       record.clickMs === undefined ||
       (record.bubbleVisibleFrameMs !== undefined &&
-        record.feedbackSubsequentFrameMs !== undefined)
+        record.feedbackSubsequentFrameMs !== undefined &&
+        record.nativeFeedbackContinuity !== undefined)
     )
       return;
     const observedStart = performance.now();
@@ -985,6 +1139,8 @@ function installObservation(
       turnId: event?.turnId ?? event?.item?.turnId,
       watermark: params.watermark,
     });
+    if (params.threadId === threadId && event?.item?.type === "user_message")
+      queueNativeFrame();
   });
   // Verification binds nodes to the real pending client or canonical event,
   // never just to an old detached node or equal text. No full-history query.
@@ -1190,6 +1346,9 @@ function installObservation(
     for (const restore of restoreGeometry.reverse()) restore();
     layoutObserver?.disconnect();
     intersectionObserver?.disconnect();
+    nativeIntersections.clear();
+    for (const id of nativeFrames) cancelAnimationFrame(id);
+    nativeFrames.clear();
     off();
     document.removeEventListener(activationEvent, capture, true);
     window.removeEventListener("focus", focused);
@@ -1780,7 +1939,7 @@ async function run() {
       await until(
         async () =>
           await evaluate(
-            "window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined && window.__sendLatency?.feedbackSubsequentFrameMs !== undefined && window.__sendLatency?.clearSubsequentFrameMs !== undefined",
+            "window.__sendLatency?.followingFrameMs !== undefined && window.__sendLatency?.inputClearFrameMs !== undefined && window.__sendLatency?.feedbackSubsequentFrameMs !== undefined && window.__sendLatency?.clearSubsequentFrameMs !== undefined && window.__sendLatency?.nativeFeedbackContinuity !== undefined",
           ),
         "real visible bubble and cleared composer",
       );
@@ -1873,13 +2032,18 @@ async function run() {
         "Inserted real pending row must intersect the actual scrollport via native browser observer",
       );
       assert.ok(
-        Number.isFinite(sample.pendingNativeSubsequentFrameMs),
-        "Pending row must remain connected and natively intersecting into a later frame opportunity",
+        Number.isFinite(sample.nativeFeedbackContinuity?.subsequentFrameMs),
+        "Later native-intersecting owner must be pending or exact admitted canonical handoff",
       );
       sample.clickToPendingNativeIntersectionMs =
         sample.pendingNativeIntersectionMs - sample.clickMs;
-      sample.clickToPendingNativeSubsequentFrameMs =
-        sample.pendingNativeSubsequentFrameMs - sample.clickMs;
+      sample.clickToPendingNativeSubsequentFrameMs = Number.isFinite(
+        sample.pendingNativeSubsequentFrameMs,
+      )
+        ? sample.pendingNativeSubsequentFrameMs - sample.clickMs
+        : null;
+      sample.clickToNativeFeedbackSubsequentFrameMs =
+        sample.nativeFeedbackContinuity.subsequentFrameMs - sample.clickMs;
       sample.feedbackTargetMs = 200;
       sample.feedbackWithinTarget = sample.firstVisibleFeedbackMs <= 200;
       sample.verifiedFeedbackWithinTarget =
@@ -2028,6 +2192,7 @@ async function run() {
   result.afterRendered = await inspectMountedTranscript(
     finalRead.thread.turns,
     threadId,
+    "live",
   );
   if (result.before.rendered.virtual) {
     const live = result.afterRendered;
@@ -2057,6 +2222,7 @@ async function run() {
     const earlier = await inspectMountedTranscript(
       finalRead.thread.turns,
       threadId,
+      "earlier",
     );
     assert.ok(
       earlier.firstCanonicalIndex < live.firstCanonicalIndex,
@@ -2084,6 +2250,7 @@ async function run() {
     result.virtualHistoryVisual.returned = await inspectMountedTranscript(
       finalRead.thread.turns,
       threadId,
+      "returned",
     );
     assert.equal(
       result.virtualHistoryVisual.returned.exactCanonicalSuffix,

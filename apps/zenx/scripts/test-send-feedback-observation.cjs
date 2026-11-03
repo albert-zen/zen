@@ -214,6 +214,7 @@ function fixture({
     presenceStyle,
     marks,
     geometryReads: () => geometryReads,
+    queuedFrames: () => frames.size,
     resize(height) {
       layoutObserver.deliver(content, height);
     },
@@ -1000,7 +1001,7 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     source.includes("if(virtual)turns.sort((a,b)=>a.rect.top-b.rect.top)"),
   );
   assert.ok(
-    source.includes("top:virtual?row.getBoundingClientRect().top:null"),
+    source.includes("const rect=virtual?row.getBoundingClientRect():null"),
   );
   assert.ok(source.includes("if(virtual)rows.sort((a,b)=>a.top-b.top)"));
   assert.ok(source.includes("turnNodes.slice(0,2)"));
@@ -1028,11 +1029,25 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     runScripts: "outside-only",
   });
   const d = dom.window.document;
+  const inspectionResult = {};
   const inspect = new Function(
     "assert",
     "evaluate",
+    "result",
     "return (" + mountedInspector + ")",
-  )(assert, async (expression) => dom.window.eval(expression));
+  )(
+    assert,
+    async (expression) => dom.window.eval(expression),
+    inspectionResult,
+  );
+  d.querySelector(".messages").getBoundingClientRect = () => ({
+    top: 100,
+    bottom: 350,
+    left: 0,
+    right: 400,
+    width: 400,
+    height: 250,
+  });
   let rowRectReads = 0;
   const render = (indices, virtual) => {
     const scroller = d.querySelector(".messages");
@@ -1053,7 +1068,14 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
         '"></article><article class="agent-copy"></article>';
       row.getBoundingClientRect = () => {
         rowRectReads++;
-        return { top: index * 100 };
+        return {
+          top: index * 100,
+          bottom: index * 100 + 80,
+          left: 10,
+          right: 390,
+          width: 380,
+          height: 80,
+        };
       };
       if (virtual) {
         const wrapper = d.createElement("div");
@@ -1083,7 +1105,7 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     assert.equal(full.inspection.rendererRowRectReads, 0);
     assert.equal(full.inspection.withinSendTiming, false);
     render([4, 2, 3], true); // DOM order differs from real geometry.
-    const live = await inspect(canonical, "thread-A");
+    const live = await inspect(canonical, "thread-A", "live");
     assert.equal(live.firstCanonicalIndex, 2);
     assert.equal(live.lastCanonicalIndex, 4);
     assert.equal(live.canonicalMembers, 3);
@@ -1096,15 +1118,38 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
       "Raw canonical IDs never enter exported snapshot",
     );
     render([2, 0, 1], true);
-    const earlier = await inspect(canonical, "thread-A");
+    const earlier = await inspect(canonical, "thread-A", "earlier");
     assert.equal(earlier.firstCanonicalIndex, 0);
     assert.equal(earlier.lastCanonicalIndex, 2);
     assert.equal(earlier.exactCanonicalSuffix, false);
     render([0, 2], true);
     await assert.rejects(
-      inspect(canonical, "thread-A"),
+      inspect(canonical, "thread-A", "returned"),
       /contiguous canonical order/,
     );
+    const rejected = JSON.parse(
+      JSON.stringify(inspectionResult.mountedInspectionDiagnostic),
+    );
+    assert.equal(rejected.stage, "returned");
+    assert.deepEqual(rejected.mountedIndices, [0, 2]);
+    assert.deepEqual(rejected.mountedRanges, [
+      [0, 0],
+      [2, 2],
+    ]);
+    assert.equal(rejected.viewportCoverage.rowCount, 1);
+    assert.equal(
+      rejected.viewportCoverage.canonicalContiguous,
+      true,
+      "Viewport coverage is distinct from all mounted rows; original all-row assertion still rejects",
+    );
+    assert.deepEqual(
+      rejected.rows.map((row) => row.visible),
+      [false, true],
+    );
+    assert.equal(rejected.spacing.lastCanonicalRowBottom, 280);
+    assert.equal(rejected.spacing.finalRowPaddingBottom, 24);
+    assert.equal(JSON.stringify(rejected).includes("user-"), false);
+    assert.equal(JSON.stringify(rejected).includes("thread-A"), false);
     render([0, 0], true);
     await assert.rejects(inspect(canonical, "thread-A"));
     render([0, 1], true);
@@ -1117,7 +1162,338 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     d.querySelector("[data-transcript-row-key]").dataset.transcriptRowKey =
       JSON.stringify(["other-thread", "turn", "turn-0"]);
     await assert.rejects(inspect(canonical, "thread-A"));
+    const many = Array.from({ length: 201 }, (_, i) => ({
+      id: "turn-" + i,
+      items: [{ type: "userMessage", id: "user-" + i }],
+    }));
+    render(
+      Array.from({ length: 201 }, (_, i) => i),
+      true,
+    );
+    await assert.rejects(
+      inspect(many, "thread-A", "returned"),
+      /mounted DOM bounded/,
+    );
+    assert.equal(inspectionResult.mountedInspectionDiagnostic.rows.length, 32);
+    assert.equal(
+      inspectionResult.mountedInspectionDiagnostic.mountedIndices.length,
+      200,
+    );
+    assert.equal(
+      inspectionResult.mountedInspectionDiagnostic.rowsTruncated,
+      true,
+    );
+    assert.equal(
+      inspectionResult.mountedInspectionDiagnostic.mountedIndicesTruncated,
+      true,
+    );
   } finally {
     dom.window.close();
+  }
+});
+
+test("native continuity keeps pending RO/IO but permits exact independently native-observed canonical handoff", async () => {
+  for (const notificationFirst of [true, false]) {
+    const f = fixture({
+      layoutObservation: true,
+      intersectionObservation: true,
+    });
+    try {
+      const pending = await f.row("pending");
+      f.resize(1100);
+      f.intersect(pending.bubble, true);
+      pending.article.remove();
+      const canonical = await f.row("canonical");
+      if (notificationFirst) f.notify();
+      const reads = f.geometryReads();
+      f.intersect(canonical.bubble, true);
+      assert.equal(
+        f.geometryReads(),
+        reads,
+        "Canonical IO callback adds no geometry reads",
+      );
+      if (!notificationFirst) {
+        f.frame();
+        assert.equal(f.record.nativeFeedbackContinuity, undefined);
+        f.notify();
+      }
+      f.frame();
+      assert.equal(
+        f.record.pendingNativeSubsequentFrameMs,
+        undefined,
+        "Canonical frame is never relabeled pending",
+      );
+      assert.equal(f.record.nativeFeedbackContinuity.owner, "canonical");
+      assert.equal(f.record.nativeFeedbackContinuity.pendingToCanonical, true);
+      assert.equal(f.record.nativeFeedbackContinuity.identityVerified, true);
+      assert.ok(
+        f.record.nativeFeedbackContinuity.subsequentFrameMs >
+          f.record.canonicalNativeIntersectionMs,
+      );
+      assert.equal(f.record.nativeLayoutEvents[0].pendingConnected, true);
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test("canonical handoff rejects wrong identity, offscreen, detached, remounted or never-native-observed owners", async () => {
+  for (const failure of [
+    "client",
+    "thread",
+    "message",
+    "offscreen",
+    "detached",
+    "remounted",
+    "no-canonical-IO",
+    "no-pending-IO",
+  ]) {
+    const f = fixture({ intersectionObservation: true });
+    try {
+      const pending = await f.row("pending");
+      if (failure !== "no-pending-IO") f.intersect(pending.bubble, true);
+      pending.article.remove();
+      const canonical = await f.row("canonical");
+      f.notify(
+        failure === "client"
+          ? { clientId: "wrong" }
+          : failure === "thread"
+            ? { threadId: "wrong" }
+            : failure === "message"
+              ? { messageId: "wrong" }
+              : {},
+      );
+      const reads = f.geometryReads();
+      if (failure !== "no-canonical-IO")
+        f.intersect(canonical.bubble, failure !== "offscreen");
+      assert.equal(f.geometryReads(), reads);
+      if (failure === "detached" || failure === "remounted")
+        canonical.article.remove();
+      if (failure === "remounted") await f.row("canonical");
+      f.frame();
+      assert.equal(f.record.pendingNativeSubsequentFrameMs, undefined);
+      assert.equal(
+        f.record.nativeFeedbackContinuity,
+        undefined,
+        failure + " cannot establish native owner continuity",
+      );
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test("stopping cancels the queued native owner frame and disconnects both owner observations", async () => {
+  const f = fixture({ intersectionObservation: true });
+  const pending = await f.row("pending");
+  f.intersect(pending.bubble, true);
+  assert.ok(f.queuedFrames() > 0);
+  f.close();
+  assert.equal(f.queuedFrames(), 0);
+  assert.equal(f.intersectionDisconnected(), true);
+  f.frame();
+  assert.equal(f.record.nativeFeedbackContinuity, undefined);
+});
+
+test("native continuity export retains separate owner/handoff clocks and rejects malformed ownership", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const code = launch.slice(
+    launch.indexOf("function projectNativeContinuity("),
+    launch.indexOf("// One fixed image allowlist"),
+  );
+  const project = new Function("assert", "return (" + code + ")")(assert);
+  const sample = {
+    clickMs: 100,
+    nativeFeedbackContinuity: {
+      owner: "canonical",
+      pendingToCanonical: true,
+      identityVerified: true,
+      ownerConnected: true,
+      pendingNativeIntersectionMs: 110,
+      ownerNativeIntersectionEntryMs: 120,
+      ownerNativeIntersectionMs: 121,
+      subsequentFrameMs: 140,
+    },
+  };
+  assert.deepEqual(project(sample), {
+    owner: "canonical",
+    pendingToCanonical: true,
+    identityVerified: true,
+    ownerConnected: true,
+    pendingNativeIntersectionMs: 10,
+    ownerNativeIntersectionEntryMs: 20,
+    ownerNativeIntersectionMs: 21,
+    subsequentFrameMs: 40,
+  });
+  assert.throws(() =>
+    project({
+      ...sample,
+      nativeFeedbackContinuity: {
+        ...sample.nativeFeedbackContinuity,
+        identityVerified: false,
+      },
+    }),
+  );
+  assert.throws(() =>
+    project({
+      ...sample,
+      nativeFeedbackContinuity: {
+        ...sample.nativeFeedbackContinuity,
+        ownerConnected: false,
+      },
+    }),
+  );
+  assert.throws(() =>
+    project({
+      ...sample,
+      nativeFeedbackContinuity: {
+        ...sample.nativeFeedbackContinuity,
+        pendingToCanonical: false,
+      },
+    }),
+  );
+  assert.throws(() =>
+    project({
+      ...sample,
+      nativeFeedbackContinuity: {
+        ...sample.nativeFeedbackContinuity,
+        subsequentFrameMs: 120,
+      },
+    }),
+  );
+  assert.ok(
+    source.includes(
+      "Real inserted pending row must cause a native observed content growth before canonical replacement",
+    ),
+  );
+});
+
+test("fixed synthetic screenshot exporter preserves failed-case PNGs and rejects unsafe inputs without exporting private files", async () => {
+  const fs = require("node:fs/promises"),
+    os = require("node:os"),
+    fsConstants = require("node:fs").constants;
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const code = launch.slice(
+    launch.indexOf("async function copyOwnedSyntheticScreenshots("),
+    launch.indexOf("let cleanupSafe ="),
+  );
+  const copy = new Function(
+    "assert",
+    "readdir",
+    "open",
+    "writeFile",
+    "path",
+    "fsConstants",
+    "return (" + code + ")",
+  )(assert, fs.readdir, fs.open, fs.writeFile, path, fsConstants);
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "zen-native-synthetic-shots-unit-"),
+  );
+  const directory = path.join(root, "private"),
+    uploadDirectory = path.join(root, "upload");
+  await fs.mkdir(directory);
+  await fs.mkdir(uploadDirectory);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nS0AAAAASUVORK5CYII=",
+    "base64",
+  );
+  const names = [
+    "messages-10000-sample-0-before.png",
+    "legend-history-after-canonical.png",
+    "send-latency-failure.png",
+  ].sort();
+  const capture = {
+    ok: false,
+    seed: { synthetic: true, userMessageCount: 5000 },
+    fixtureModel: { provider: "fake" },
+    packagedRuntime: { isPackaged: true },
+  };
+  let scans = 0;
+  const args = {
+    directory,
+    uploadDirectory,
+    capture,
+    close: { code: 1, signal: null },
+    privateConfig: "synthetic-only-private-config",
+    guard: {
+      scan(serialized, config) {
+        scans++;
+        assert.equal(config, "synthetic-only-private-config");
+        assert.equal(serialized.includes(config), false);
+      },
+    },
+  };
+  try {
+    for (const name of names)
+      await fs.writeFile(path.join(directory, name), png);
+    for (const name of [
+      "owned-native-send-profile.private.json",
+      "native-process.log",
+      "host-profile.json",
+      "unlisted.png",
+    ])
+      await fs.writeFile(path.join(directory, name), "synthetic private bytes");
+    assert.deepEqual(await copy(args), names);
+    assert.equal(scans, 1);
+    assert.deepEqual((await fs.readdir(uploadDirectory)).sort(), names);
+    for (const name of names)
+      assert.deepEqual(
+        await fs.readFile(path.join(uploadDirectory, name)),
+        png,
+      );
+    for (const [i, override] of [
+      { capture: undefined },
+      {
+        capture: {
+          ...capture,
+          seed: { synthetic: false, userMessageCount: 5000 },
+        },
+      },
+      { capture: { ...capture, fixtureModel: { provider: "real" } } },
+      { close: { code: null, signal: "SIGTERM" } },
+      { guard: undefined },
+      {
+        guard: {
+          scan() {
+            throw Error("private export guard rejected");
+          },
+        },
+      },
+    ].entries()) {
+      const target = path.join(root, "denied-" + i);
+      await fs.mkdir(target);
+      await assert.rejects(
+        copy({ ...args, ...override, uploadDirectory: target }),
+      );
+      assert.deepEqual(await fs.readdir(target), []);
+    }
+    const bad = path.join(root, "bad"),
+      badOutput = path.join(root, "bad-output");
+    await fs.mkdir(bad);
+    await fs.mkdir(badOutput);
+    await fs.writeFile(
+      path.join(bad, "send-latency-failure.png"),
+      "not a PNG payload",
+    );
+    await assert.rejects(
+      copy({ ...args, directory: bad, uploadDirectory: badOutput }),
+    );
+    await fs.rm(path.join(bad, "send-latency-failure.png"));
+    await fs.symlink(
+      path.join(directory, names[0]),
+      path.join(bad, "send-latency-failure.png"),
+    );
+    await assert.rejects(
+      copy({ ...args, directory: bad, uploadDirectory: badOutput }),
+    );
+    assert.deepEqual(await fs.readdir(badOutput), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

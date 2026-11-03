@@ -566,9 +566,103 @@ async function captureLiveExportGuard(tokenFile, isClosed) {
   }
   throw new Error("Owned fixture credential unavailable before shutdown");
 }
+function projectFailureNativeContinuity(sample) {
+  try {
+    return projectNativeContinuity(sample);
+  } catch {
+    return { unavailable: true, reason: "native-continuity-contract-invalid" };
+  }
+}
+function projectNativeContinuity(sample) {
+  const evidence = sample.nativeFeedbackContinuity;
+  if (!evidence) return null;
+  assert.ok(["pending", "canonical"].includes(evidence.owner));
+  assert.equal(evidence.identityVerified, true);
+  assert.equal(evidence.ownerConnected, true);
+  assert.equal(evidence.pendingToCanonical, evidence.owner === "canonical");
+  const timing = {};
+  for (const field of [
+    "pendingNativeIntersectionMs",
+    "ownerNativeIntersectionEntryMs",
+    "ownerNativeIntersectionMs",
+    "subsequentFrameMs",
+  ]) {
+    assert.ok(
+      Number.isFinite(evidence[field]) && evidence[field] >= sample.clickMs,
+    );
+    timing[field] = evidence[field] - sample.clickMs;
+  }
+  assert.ok(timing.subsequentFrameMs > timing.ownerNativeIntersectionMs);
+  return {
+    owner: evidence.owner,
+    pendingToCanonical: evidence.pendingToCanonical,
+    identityVerified: true,
+    ownerConnected: true,
+    ...timing,
+  };
+}
+
+// One fixed image allowlist for successful and failed owned-synthetic captures.
+// No raw trace, process log, profile, configuration or arbitrary path is eligible.
+async function copyOwnedSyntheticScreenshots({
+  directory,
+  uploadDirectory,
+  capture,
+  close,
+  guard,
+  privateConfig,
+}) {
+  assert.ok(
+    close && close.signal === null && [0, 1].includes(close.code),
+    "Normal owned App exit required for screenshot export",
+  );
+  assert.equal(capture?.seed?.synthetic, true);
+  assert.equal(capture?.seed?.userMessageCount, 5000);
+  assert.equal(capture?.fixtureModel?.provider, "fake");
+  assert.equal(capture?.packagedRuntime?.isPackaged, true);
+  assert.equal(typeof guard?.scan, "function");
+  const names = (await readdir(directory))
+    .filter((name) =>
+      /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|send-latency-failure)\.png$/.test(
+        name,
+      ),
+    )
+    .sort();
+  assert.ok(names.length <= 15, "Owned synthetic image count stays bounded");
+  guard.scan(
+    JSON.stringify({ synthetic: true, provider: "fake", screenshots: names }),
+    privateConfig,
+  );
+  for (const name of names) {
+    let handle;
+    try {
+      handle = await open(
+        path.join(directory, name),
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+      );
+      const stat = await handle.stat();
+      assert.ok(
+        stat.isFile() &&
+          stat.nlink === 1 &&
+          stat.size >= 8 &&
+          stat.size <= 32 * 1024 * 1024,
+        "Owned screenshot must be a bounded regular PNG",
+      );
+      const bytes = await handle.readFile();
+      assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+      await writeFile(path.join(uploadDirectory, name), bytes, { flag: "wx" });
+    } finally {
+      await handle?.close();
+    }
+  }
+  return names;
+}
+
 let cleanupSafe = false;
 let observedClose;
 let exportGuard;
+let captureForScreenshots;
+let screenshotExport = { status: "not-eligible", copiedCount: 0 };
 child.once("close", (code, signal) => {
   observedClose = { code, signal };
 });
@@ -600,6 +694,7 @@ try {
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
+  captureForScreenshots = result;
   assert.equal(code, 0, "Owned full App diagnostic must pass");
   assert.equal(result.ok, true);
   assert.equal(result.packagedRuntime?.isPackaged, true);
@@ -819,6 +914,7 @@ try {
       clickToPendingNativeIntersectionEntryMs:
         sample.pendingNativeIntersectionEntryMs - sample.clickMs,
       nativeFinalOwnership: sample.nativeFinalOwnership,
+      nativeFeedbackContinuity: projectNativeContinuity(sample),
       pendingNativeIntersectionRatio: sample.pendingNativeIntersectionRatio,
       pendingNativeIntersectionBounds: sample.pendingNativeIntersectionBounds,
       nativeLayoutEvents: sample.nativeLayoutEvents.map(
@@ -920,16 +1016,6 @@ try {
   console.log(
     "REVIEWED_NATIVE_AB_OBSERVATION_NOT_ACCEPTANCE " + JSON.stringify(summary),
   );
-  for (const name of (await readdir(directory)).filter((name) =>
-    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up))\.png$/.test(
-      name,
-    ),
-  ))
-    await copyFile(
-      path.join(directory, name),
-      path.join(uploadDirectory, name),
-      fsConstants.COPYFILE_EXCL,
-    );
   cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
 } catch (error) {
   let capture;
@@ -941,6 +1027,7 @@ try {
       ),
     );
   } catch {}
+  captureForScreenshots = capture;
   const failure = {
     diagnosticOnly: true,
     acceptance: false,
@@ -992,6 +1079,7 @@ try {
     informationPresentation: capture?.informationPresentation,
     readerBeforeSend: capture?.readerBeforeSend,
     rendered: capture?.before?.rendered,
+    mountedInspection: capture?.mountedInspectionDiagnostic,
     pausedReaderResize: capture?.pausedReaderResize,
     responsiveHistoryLayout: capture?.responsiveHistoryLayout,
     observedSamples: (capture?.samples ?? [])
@@ -1005,6 +1093,7 @@ try {
         editorFocusedAfterSend: sample.editorFocusedAfterSend,
         geometryProbes: sample.geometryProbes,
         nativeFinalOwnership: sample.nativeFinalOwnership,
+        nativeFeedbackContinuity: projectFailureNativeContinuity(sample),
         nativeLayoutAtClick: sample.nativeLayoutAtClick,
         nativeLayoutEvents: (sample.nativeLayoutEvents ?? [])
           .slice(0, 16)
@@ -1070,6 +1159,26 @@ try {
   console.error("NATIVE_AB_CASE_FAILED " + JSON.stringify(failure));
   process.exitCode = 1;
 } finally {
+  if (captureForScreenshots && observedClose && exportGuard) {
+    try {
+      const names = await copyOwnedSyntheticScreenshots({
+        directory,
+        uploadDirectory,
+        capture: captureForScreenshots,
+        close: observedClose,
+        guard: exportGuard,
+        privateConfig: await readFile(
+          path.join(profile, "host-profile.json"),
+          "utf8",
+        ),
+      });
+      screenshotExport = { status: "copied", copiedCount: names.length };
+    } catch {
+      screenshotExport = { status: "failed", copiedCount: null };
+      cleanupSafe = false;
+      process.exitCode = 1;
+    }
+  }
   exportGuard?.clear();
   exportGuard = undefined;
   await privateLog.close();
@@ -1081,6 +1190,7 @@ try {
         exitCode: observedClose?.code ?? null,
         signal: observedClose?.signal ?? null,
         captureValidated: cleanupSafe,
+        screenshotExport,
         privateFixturePolicy: cleanupSafe
           ? "remove after validated normal close"
           : "retained conservatively; not uploaded",
