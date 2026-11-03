@@ -356,6 +356,15 @@ function styleInvalidationCauses(events, start, end, bundles) {
     "composer-send-popover",
     "action-orb",
   ];
+  // Chromium writes both invalidationSet and invalidationList[].id using
+  // DescendantInvalidationSetToIdString. IDs stay private to this window.
+  const setId = (value) =>
+    typeof value === "string" && value.length > 0 ? value : null;
+  const scheduledSets = new Map(),
+    invalidations = [],
+    linkGroups = new Map();
+  let scheduleEvents = 0,
+    scheduleEventsWithSetId = 0;
   const groups = new Map(),
     scheduledChanges = new Map(),
     nodes = new Set(),
@@ -408,18 +417,44 @@ function styleInvalidationCauses(events, start, end, bundles) {
     const rawChange =
       changeKind === "none" ? "" : data[changeKind].replace(/^:/, "");
     const change =
-      "disabled class style aria-disabled aria-busy data-scrollbar-active data-state data-action data-mode focus focus-visible focus-within hover active action-orb send stop steer batch-next queue replace"
+      "disabled enabled class style tabindex aria-disabled aria-busy aria-label aria-describedby data-scrollbar-active data-state data-action data-mode focus focus-visible focus-within hover active first-child last-child only-child nth-child nth-last-child checked indeterminate placeholder-shown read-only read-write valid invalid required optional default action-orb send stop steer batch-next queue replace"
         .split(" ")
         .includes(rawChange)
         ? rawChange
         : "other";
     if (kind === "schedule") {
+      scheduleEvents++;
+      const id = setId(data.invalidationSet);
+      if (id !== null) {
+        scheduleEventsWithSetId++;
+        if (!scheduledSets.has(id)) scheduledSets.set(id, []);
+        scheduledSets.get(id).push({
+          ts: event.ts,
+          changeKind,
+          changeCode: change,
+          scheduleTarget: target,
+          scheduleNodeTag: nodeTag,
+        });
+      }
       const scheduled = [changeKind, change].join(":");
       scheduledChanges.set(
         scheduled,
         (scheduledChanges.get(scheduled) ?? 0) + 1,
       );
     }
+    if (kind === "invalidate")
+      invalidations.push({
+        ts: event.ts,
+        ids: new Set(
+          (Array.isArray(data.invalidationList) ? data.invalidationList : [])
+            .map((entry) => setId(entry?.id))
+            .filter((id) => id !== null),
+        ),
+        reason,
+        target,
+        nodeTag,
+        selectorTag,
+      });
     if (Number.isSafeInteger(data.nodeId) && data.nodeId > 0)
       nodes.add(data.nodeId);
     const key = [
@@ -479,6 +514,52 @@ function styleInvalidationCauses(events, start, end, bundles) {
       });
     }
   }
+  let invalidationEventsWithSetIds = 0,
+    invalidationSetReferences = 0,
+    linkedSetReferences = 0,
+    linkedInvalidationEvents = 0,
+    partiallyLinkedInvalidationEvents = 0,
+    ambiguousInvalidationEvents = 0;
+  for (const invalidation of invalidations) {
+    if (invalidation.ids.size > 0) invalidationEventsWithSetIds++;
+    invalidationSetReferences += invalidation.ids.size;
+    const candidates = [];
+    let linkedSets = 0;
+    for (const id of invalidation.ids) {
+      const schedules = (scheduledSets.get(id) ?? []).filter(
+        (schedule) => schedule.ts <= invalidation.ts,
+      );
+      if (schedules.length > 0) linkedSets++;
+      for (const schedule of schedules) candidates.push(schedule);
+    }
+    linkedSetReferences += linkedSets;
+    if (candidates.length === 0) continue;
+    linkedInvalidationEvents++;
+    if (linkedSets < invalidation.ids.size) partiallyLinkedInvalidationEvents++;
+    const ambiguous = candidates.length > 1;
+    if (ambiguous) ambiguousInvalidationEvents++;
+    const eventGroups = new Map();
+    for (const candidate of candidates) {
+      const { ts, ...cause } = candidate;
+      const { reason, target, nodeTag, selectorTag } = invalidation;
+      const projection = { ...cause, reason, target, nodeTag, selectorTag };
+      const key = JSON.stringify(projection);
+      if (!linkGroups.has(key))
+        linkGroups.set(key, {
+          ...projection,
+          invalidationEvents: 0,
+          candidateLinks: 0,
+          ambiguousInvalidationEvents: 0,
+        });
+      eventGroups.set(key, (eventGroups.get(key) ?? 0) + 1);
+    }
+    for (const [key, count] of eventGroups) {
+      const group = linkGroups.get(key);
+      group.invalidationEvents++;
+      group.candidateLinks += count;
+      if (ambiguous) group.ambiguousInvalidationEvents++;
+    }
+  }
   return {
     meaning:
       "Recorded renderer-main invalidations inside the existing first-gap window. Fixed target classes are buckets, not node identities. Unknown/absent events do not prove no invalidation; instrumentation adds overhead.",
@@ -492,6 +573,26 @@ function styleInvalidationCauses(events, start, end, bundles) {
       .map(([code, events]) => ({ code, events }))
       .sort((a, b) => b.events - a.events)
       .slice(0, 8),
+    scheduleLinks: {
+      meaning:
+        "Exact opaque set-ID matches to earlier/simultaneous schedules in this window only. Candidate groups overlap and are not unique causal attribution; multiple schedule events remain ambiguous. Missing schema or matches leave targets unlinked.",
+      scheduleEvents,
+      scheduleEventsWithSetId,
+      uniqueScheduledSets: scheduledSets.size,
+      invalidationEvents: invalidations.length,
+      invalidationEventsWithSetIds,
+      invalidationSetReferences,
+      linkedSetReferences,
+      linkedInvalidationEvents,
+      unlinkedInvalidationEvents:
+        invalidations.length - linkedInvalidationEvents,
+      partiallyLinkedInvalidationEvents,
+      ambiguousInvalidationEvents,
+      omittedGroups: Math.max(0, linkGroups.size - 16),
+      groups: [...linkGroups.values()]
+        .sort((a, b) => b.invalidationEvents - a.invalidationEvents)
+        .slice(0, 16),
+    },
     ownedLocations,
   };
 }

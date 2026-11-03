@@ -1,7 +1,7 @@
-name: Packaged Send pending mutation parent A/B (diagnostic)
+name: Packaged Send span invalidation schedule linkage (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-pending-host-ab-20261103]
+    branches: [diagnostic/send-span-invalidation-link-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -23,11 +23,6 @@ jobs:
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 0c74840fc2f1732f3841aad90dff5b9083f8f3a2
-          persist-credentials: false
-          path: candidate
-      - uses: actions/checkout@v4
-        with:
           persist-credentials: false
           path: diagnostic
       - uses: actions/setup-node@v4
@@ -35,27 +30,27 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline candidate; do
+          for source in baseline; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build both locked production source snapshots
+      - name: Build locked current main source
         timeout-minutes: 16
         run: |
-          for source in baseline candidate; do
+          for source in baseline; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
-        working-directory: candidate
+        working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Matched native Enter with first-activation invalidation trace
+      - name: Native Enter with private first-activation schedule linkage
         timeout-minutes: 20
         run: |
           failed=0
           for activation in enter; do
-            for source in baseline candidate; do
+            for source in baseline; do
               case="control-$source"
               width=1280
               mkdir -p "results/$case"
@@ -73,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-pending-host-ab-5000
+          name: native-send-span-invalidation-link-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

@@ -64,10 +64,6 @@ const snapshots = {
     commit: "a44591da91c5f1bb075b913b97796951a1ac1289",
     tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   },
-  candidate: {
-    commit: "0c74840fc2f1732f3841aad90dff5b9083f8f3a2",
-    tree: "afe39de073dac118e24c07719ec58e422b2381c0",
-  },
 };
 const snapshot = snapshots[sourceLabel];
 const expected = snapshot?.commit;
@@ -328,10 +324,7 @@ await writeFile(
       sourceTree: snapshot.tree,
       packagedHashes,
       comparisonRole:
-        "locked-production-source pending mutation parent comparison: " +
-        sourceLabel +
-        " " +
-        activationKind,
+        "locked-main span invalidation schedule linkage: " + activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
       visibleHistoricalMessages: count * 2,
@@ -702,10 +695,7 @@ try {
   assert.equal(result.before.rendered.historyGroups, 1);
   assert.equal(result.before.rendered.directTurns, 0);
   assert.equal(result.before.rendered.groupTurns, count);
-  assert.equal(
-    result.before.rendered.pendingHosts,
-    sourceLabel === "baseline" ? 0 : 1,
-  );
+  assert.equal(result.before.rendered.pendingHosts, 0);
   assert.equal(result.before.rendered.outerGapPx, 24);
   assert.equal(result.before.rendered.historyGapPx, 24);
   const samples = result.samples.map((sample, index) => {

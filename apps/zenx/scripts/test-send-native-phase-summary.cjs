@@ -4,6 +4,7 @@ const { test } = require("node:test");
 const {
   styleLayoutInitiators,
   nativeOtherPhases,
+  styleInvalidationCauses,
 } = require("./summarize-send-timeline.cjs");
 const bundles = [
   { url: "file:///owned/index-synthetic.js", sha256: "a".repeat(64) },
@@ -182,4 +183,247 @@ test("style count metadata preserves missing fields and excludes raw node IDs", 
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes("nodeId"), false);
   assert.equal(serialized.includes("private-frame"), false);
+});
+
+const invalidationCategory =
+  "disabled-by-default-devtools.timeline.invalidationTracking";
+const invalidationEvent = (name, ts, data, extra = {}) => ({
+  name,
+  cat: invalidationCategory,
+  ph: "I",
+  ts,
+  args: { data },
+  ...extra,
+});
+const schedule = (ts, data, extra) =>
+  invalidationEvent("ScheduleStyleInvalidationTracking", ts, data, extra);
+const invalidate = (ts, data, extra) =>
+  invalidationEvent("StyleInvalidatorInvalidationTracking", ts, data, extra);
+
+test("invalidation set links join two exact IDs to fixed scheduled features and target tags", () => {
+  const firstId = "private-opaque-set-a",
+    secondId = "private-opaque-set-b";
+  const result = styleInvalidationCauses(
+    [
+      invalidate(110, {
+        invalidationList: [{ id: firstId }, { id: firstId }],
+        reason: "Invalidation set matched tagName",
+        nodeName: "SPAN class='agent-copy private-text' id='private-node'",
+        selectorPart: "span",
+        extraData: "https://private.example/secret",
+      }),
+      schedule(100, {
+        invalidationSet: firstId,
+        changedAttribute: "aria-label",
+        nodeName: "BUTTON class='action-orb'",
+      }),
+      schedule(101, {
+        invalidationSet: secondId,
+        changedPseudo: ":enabled",
+        nodeName: "INPUT",
+      }),
+      invalidate(111, {
+        invalidationList: [{ id: secondId }],
+        reason: "Invalidation set matched tagName",
+        nodeName: "P",
+        selectorPart: "p",
+      }),
+    ],
+    100,
+    120,
+    bundles,
+  );
+  const links = result.scheduleLinks;
+  assert.equal(links.scheduleEventsWithSetId, 2);
+  assert.equal(links.uniqueScheduledSets, 2);
+  assert.equal(links.invalidationEventsWithSetIds, 2);
+  assert.equal(links.invalidationSetReferences, 2);
+  assert.equal(links.linkedSetReferences, 2);
+  assert.equal(links.linkedInvalidationEvents, 2);
+  assert.equal(links.unlinkedInvalidationEvents, 0);
+  assert.equal(links.ambiguousInvalidationEvents, 0);
+  assert.deepEqual(links.groups, [
+    {
+      changeKind: "changedAttribute",
+      changeCode: "aria-label",
+      scheduleTarget: "action-orb",
+      scheduleNodeTag: "button",
+      reason: "matched-tag",
+      target: "agent-copy",
+      nodeTag: "span",
+      selectorTag: "span",
+      invalidationEvents: 1,
+      candidateLinks: 1,
+      ambiguousInvalidationEvents: 0,
+    },
+    {
+      changeKind: "changedPseudo",
+      changeCode: "enabled",
+      scheduleTarget: "other",
+      scheduleNodeTag: "input",
+      reason: "matched-tag",
+      target: "other",
+      nodeTag: "p",
+      selectorTag: "p",
+      invalidationEvents: 1,
+      candidateLinks: 1,
+      ambiguousInvalidationEvents: 0,
+    },
+  ]);
+  const serialized = JSON.stringify(result);
+  for (const raw of [
+    firstId,
+    secondId,
+    "private-",
+    "https://",
+    "invalidationList",
+  ])
+    assert.equal(serialized.includes(raw), false);
+});
+
+test("invalidation links reject nonmatching, user timing, out-of-window, future and alternate-schema IDs", () => {
+  const result = styleInvalidationCauses(
+    [
+      schedule(99, { invalidationSet: "private-before" }),
+      schedule(140, { invalidationSet: "private-end" }),
+      schedule(
+        100,
+        { invalidationSet: "private-user" },
+        {
+          cat: `${invalidationCategory},blink.user_timing`,
+        },
+      ),
+      schedule(
+        100,
+        { invalidationSet: "private-console" },
+        {
+          cat: `${invalidationCategory},blink.console`,
+        },
+      ),
+      schedule(
+        100,
+        { invalidationSet: "private-category" },
+        {
+          cat: `${invalidationCategory}.lookalike`,
+        },
+      ),
+      schedule(100, { invalidationSet: "private-phase" }, { ph: "X" }),
+      schedule(130, { invalidationSet: "private-future" }),
+      schedule(100, { invalidationSet: 42 }),
+      schedule(100, { invalidationSet: { id: "private-object" } }),
+      ...[
+        "private-before",
+        "private-end",
+        "private-user",
+        "private-console",
+        "private-category",
+        "private-phase",
+        "private-future",
+        "42",
+        "private-missing",
+      ].map((id) => invalidate(110, { invalidationList: [{ id }] })),
+      invalidate(110, { invalidationSet: 42 }),
+      invalidate(110, { invalidationList: [{ id: 42 }] }),
+      invalidate(110, { invalidationList: [42, { id: {} }, { id: null }] }),
+      invalidate(
+        110,
+        { invalidationList: [{ id: 42 }] },
+        { cat: "blink.user_timing" },
+      ),
+    ],
+    100,
+    140,
+    bundles,
+  );
+  const links = result.scheduleLinks;
+  assert.equal(links.scheduleEvents, 3);
+  assert.equal(links.scheduleEventsWithSetId, 1);
+  assert.equal(links.invalidationEvents, 12);
+  assert.equal(links.invalidationEventsWithSetIds, 9);
+  assert.equal(links.linkedInvalidationEvents, 0);
+  assert.equal(links.unlinkedInvalidationEvents, 12);
+  assert.equal(links.linkedSetReferences, 0);
+  assert.deepEqual(links.groups, []);
+  assert.equal(JSON.stringify(result).includes("private-"), false);
+});
+
+test("shared sets preserve ambiguity even when fixed cause labels deduplicate", () => {
+  const result = styleInvalidationCauses(
+    [
+      ...["aria-describedby", "tabindex", "aria-describedby"].map((change, i) =>
+        schedule(100 + i, {
+          invalidationSet: "private-shared-id",
+          changedAttribute: change,
+          nodeId: 881001 + i,
+          nodeName: "BUTTON class='action-orb' id='private-origin'",
+        }),
+      ),
+      invalidate(110, {
+        invalidationList: [
+          { id: "private-shared-id" },
+          { id: "private-unmatched-id" },
+        ],
+        nodeName: "SPAN",
+        selectorPart: "span",
+      }),
+    ],
+    100,
+    120,
+    bundles,
+  );
+  const links = result.scheduleLinks;
+  assert.equal(links.uniqueScheduledSets, 1);
+  assert.equal(links.linkedInvalidationEvents, 1);
+  assert.equal(links.partiallyLinkedInvalidationEvents, 1);
+  assert.equal(links.ambiguousInvalidationEvents, 1);
+  assert.equal(links.groups.length, 2);
+  assert.deepEqual(
+    links.groups.map((group) => [
+      group.changeCode,
+      group.invalidationEvents,
+      group.candidateLinks,
+      group.ambiguousInvalidationEvents,
+    ]),
+    [
+      ["aria-describedby", 1, 2, 1],
+      ["tabindex", 1, 1, 1],
+    ],
+  );
+  for (const raw of ["private-", "881001", "nodeId"])
+    assert.equal(JSON.stringify(result).includes(raw), false);
+});
+
+test("invalidation set link output stays capped and unknown feature strings never escape", () => {
+  const tags =
+    "button input textarea select form fieldset div span p a summary details section article svg path g".split(
+      " ",
+    );
+  const events = tags.flatMap((tag, i) => [
+    schedule(100, {
+      invalidationSet: `https://private.example/set/${i}`,
+      changedClass: "private-feature",
+      nodeName: "CUSTOM-ELEMENT class='private-class'",
+    }),
+    invalidate(110, {
+      invalidationList: [{ id: `https://private.example/set/${i}` }],
+      nodeName: tag.toUpperCase(),
+      selectorPart: tag,
+    }),
+  ]);
+  const result = styleInvalidationCauses(events, 100, 120, bundles);
+  assert.equal(result.scheduleLinks.linkedInvalidationEvents, 17);
+  assert.equal(result.scheduleLinks.groups.length, 16);
+  assert.equal(result.scheduleLinks.omittedGroups, 1);
+  assert.ok(
+    result.scheduleLinks.groups.every(
+      (group) =>
+        group.changeKind === "changedClass" &&
+        group.changeCode === "other" &&
+        group.scheduleNodeTag === "other",
+    ),
+  );
+  assert.ok(result.groups.length <= 16);
+  assert.ok(result.ownedLocations.length <= 8);
+  for (const raw of ["private-", "https://", "CUSTOM-ELEMENT"])
+    assert.equal(JSON.stringify(result).includes(raw), false);
 });
