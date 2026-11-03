@@ -264,18 +264,18 @@ export function ExperimentalTranscriptViewport({
     controller.current = {
       captureReveal,
       reveal: (key, onRevealed) => {
+        protect(true);
         for (const cancel of pending) cancel();
         return restore(key, 0, ++generation.current, onRevealed);
       },
       materialize: (key, prepare, onRevealed) => {
         if (!latest.current.rows.some((row) => row.key === key)) return null;
+        protect(true);
         for (const cancel of pending) cancel();
         const version = ++generation.current;
         flushSync(() => {
           prepare();
           setTarget(key);
-          // The public index command materializes its target range in this user action.
-          void restore(key, 0, version, onRevealed);
         });
         const element = Array.from(
           node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
@@ -284,6 +284,7 @@ export function ExperimentalTranscriptViewport({
           cancelNavigation();
           return null;
         }
+        void restore(key, 0, version, onRevealed);
         return {
           element,
           isCurrent: () => alive && generation.current === version,
@@ -364,6 +365,7 @@ export function ExperimentalTranscriptViewport({
       ref={attach}
       contentContainerClassName="virtual-transcript-content"
       data={rows}
+      dataVersion={JSON.stringify([target, pins])}
       keyExtractor={(row) => row.key}
       renderItem={({ item }) => (
         <div

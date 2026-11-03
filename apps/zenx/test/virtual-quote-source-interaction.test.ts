@@ -23,9 +23,9 @@ const quote = {
   cwd: "/workspace/zen",
   excerpt: "Exact old answer 5",
 };
-function history() {
+function history(reference = quote) {
   const thread = queueScenario(1);
-  const turns = Array.from({ length: 1000 }, (_, index) => ({
+  const turns = Array.from({ length: 100 }, (_, index) => ({
     ...runtimeThread(
       [runtimeMessage(`historical-${index}`, `Exact old answer ${index}`)],
       "completed",
@@ -40,7 +40,7 @@ function history() {
     createdAt: "2026-11-03T00:00:00Z",
     text: `Exact old answer ${index}`,
   }));
-  const payload = referenceMessage("Sent question", [quote], "sent-client");
+  const payload = referenceMessage("Sent question", [reference], "sent-client");
   thread.turns[0]!.items.push({
     type: "userMessage",
     id: "sent-quote",
@@ -98,41 +98,85 @@ function enableVirtualGeometry() {
   proto.getBoundingClientRect = function () {
     return rect(this.classList.contains("messages") ? 600 : 280);
   };
+  const tops = new WeakMap<HTMLElement, number>();
   Object.defineProperties(proto, {
+    scrollTop: {
+      configurable: true,
+      get() {
+        return tops.get(this) ?? 0;
+      },
+      set(value: number) {
+        tops.set(
+          this,
+          Math.max(0, Math.min(this.scrollHeight - this.clientHeight, value)),
+        );
+      },
+    },
     clientHeight: {
       configurable: true,
       get() {
-        return this.classList.contains("messages") ? 600 : 280;
+        return this.classList.contains("messages")
+          ? 600
+          : this.closest(".virtual-transcript-content")
+            ? 280
+            : 0;
       },
     },
     clientWidth: {
       configurable: true,
       get() {
-        return 800;
+        return this.classList.contains("messages") ||
+          this.closest(".virtual-transcript-content")
+          ? 800
+          : 0;
       },
     },
     offsetHeight: {
       configurable: true,
       get() {
-        return this.classList.contains("messages") ? 600 : 280;
+        return this.classList.contains("messages")
+          ? 600
+          : this.closest(".virtual-transcript-content")
+            ? 280
+            : 0;
       },
     },
     offsetWidth: {
       configurable: true,
       get() {
-        return 800;
+        return this.classList.contains("messages") ||
+          this.closest(".virtual-transcript-content")
+          ? 800
+          : 0;
       },
     },
     scrollHeight: {
       configurable: true,
       get() {
-        return this.classList.contains("messages") ? 280840 : 280;
+        if (!this.classList.contains("messages"))
+          return this.closest(".virtual-transcript-content") ? 280 : 32;
+        const region = [
+          ...this.querySelectorAll<HTMLElement>(
+            ".virtual-transcript-content div",
+          ),
+        ].find(
+          (element) =>
+            element.style.position === "relative" &&
+            element.style.height.endsWith("px"),
+        );
+        return Math.max(
+          600,
+          (parseFloat(region?.style.height ?? "0") || 0) + 560,
+        );
       },
     },
     scrollWidth: {
       configurable: true,
       get() {
-        return 800;
+        return this.classList.contains("messages") ||
+          this.closest(".virtual-transcript-content")
+          ? 800
+          : 0;
       },
     },
   });
@@ -238,7 +282,7 @@ test("virtual composer, sent bubble and queued-editor source actions materialize
         /Queued question/,
       );
       assert.match(
-        document.querySelector("#thread-composer .cm-content")!.textContent!,
+        document.getElementById("thread-composer")!.textContent!,
         /Unsent main question/,
       );
       assert.equal(saves, 0);

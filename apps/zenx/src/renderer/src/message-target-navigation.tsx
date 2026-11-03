@@ -71,7 +71,10 @@ export function useMessageTargetNavigation(
       );
       navigation?.consumed(request.requestId);
     };
-    if (materializeTurn) void materializeTurn(turn.id, focusTarget);
+    if (materializeTurn)
+      queueMicrotask(() => {
+        if (active) void materializeTurn(turn.id, focusTarget);
+      });
     else frame = requestAnimationFrame(focusTarget);
     return () => {
       active = false;
