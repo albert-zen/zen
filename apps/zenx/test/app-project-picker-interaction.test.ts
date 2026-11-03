@@ -9257,3 +9257,67 @@ test("real App canonical end and active-Turn derivations invalidate on append, b
     await unmountApp(harness);
   }
 });
+
+test("real App draft, Send and ACK never measure the closed information trigger", async () => {
+  const admission = deferred<unknown>();
+  let sends = 0;
+  const harness = await mountThreadApp({
+    request: async (method) => {
+      if (method === "zen/thread/resume") return resumed(derivedScanHistory());
+      if (method === "zen/turn/send") {
+        sends++;
+        return admission.promise;
+      }
+      throw new Error(`Unexpected ${method}`);
+    },
+  });
+  let restore = () => {};
+  try {
+    const composer = await selectedComposer();
+    const trigger = document.querySelector<HTMLButtonElement>(
+      ".information-toolbar button",
+    )!;
+    assert.ok(trigger);
+    assert.equal(trigger.getAttribute("aria-expanded"), "false");
+    let reads = 0;
+    const measure = trigger.getBoundingClientRect;
+    trigger.getBoundingClientRect = function () {
+      reads++;
+      return measure.call(this);
+    };
+    restore = () => {
+      trigger.getBoundingClientRect = measure;
+    };
+    await setTextareaValue(composer, "Synthetic immediate input");
+    assert.equal(
+      reads,
+      0,
+      "typing must not force information geometry during App render",
+    );
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    await act(async () => send.focus());
+    await act(async () => send.click());
+    assert.equal(sends, 1);
+    assert.equal(composer.value, "");
+    assert.ok(document.querySelector('[data-send-state="sending"]'));
+    assert.equal(document.querySelectorAll(".turn").length, 40);
+    assert.equal(
+      reads,
+      0,
+      "local pending feedback commits without closed-popover geometry",
+    );
+    await act(async () => admission.resolve({ turnId: "next-turn" }));
+    assert.ok(document.querySelector('[data-send-state="admitted"]'));
+    assert.equal(
+      reads,
+      0,
+      "ACK rerenders do not measure the closed trigger either",
+    );
+  } finally {
+    restore();
+    admission.resolve({});
+    await unmountApp(harness);
+  }
+});
