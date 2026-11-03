@@ -1055,7 +1055,7 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
 
-### Native question cards (experimental Desktop slice)
+### Native question cards and Asking attention
 
 Native accepted questions appear in the existing information panel attention slot,
 with independent `(Thread, call Item)` drafts, authored options, always-available
@@ -1077,10 +1077,13 @@ Question actions use the committed private Thread owner and current writable
 state, including archive/disconnection, with no authority published during render.
 Retained handlers cannot write after owner change or unmount. Local diagnostics
 remain expandable plain text. Current Host authority, not disabled controls,
-resolves concurrent clients. Publication remains behind the default-off Host
-experiment; this slice does not enable shared Room/CLI/remote publication, change
-Pinned/hidden state, or provide selected-thread live reveal or hidden-child
-attention discovery.
+resolves concurrent clients. Question publication is available by default, as one feature with native question
+cards and Asking attention, without a hidden experiment or a Settings opt-in. The
+existing Host embedding startup option can still explicitly disable new
+publication; it never hides accepted questions, removes Asking attention or
+disables responses to existing questions. Questions do not grant tool permission
+or replace action approval. The feature does not change Pinned/hidden state or
+provide selected-thread live reveal or hidden-child attention discovery.
 
 The sidebar renders a compact **Asking / 待回答** capsule only from the native
 summary’s positive `openCount`; its accessible label and tooltip count request

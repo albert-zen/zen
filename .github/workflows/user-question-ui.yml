@@ -6,6 +6,10 @@ on:
       - apps/zenx/scripts/capture-user-question.cjs
       - apps/zenx/scripts/launch-user-question-acceptance.mjs
       - apps/zenx/scripts/seed-user-question-acceptance.mjs
+      - apps/cli/src/host.ts
+      - src/user-question*.ts
+      - apps/zenx/src/renderer/src/UserQuestionCards.tsx
+      - apps/zenx/src/renderer/src/user-question-state.ts
   workflow_dispatch:
 permissions:
   contents: read

@@ -18,12 +18,11 @@ export async function seedUserQuestionAcceptance({
     provider: { type: "fake" },
     approvalPolicy: "never",
     toolPresentation: "direct",
-    experimentalUserQuestions: true,
   });
   const fixture = {
     synthetic: true,
     scenario,
-    publicationGate: true,
+    publicationDefault: true,
     questions: [],
   };
   try {

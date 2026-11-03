@@ -37,7 +37,7 @@ function options(directory: string): ZenHostOptions {
   };
 }
 
-test("Host defaults Ask off in every model presentation; only explicit owner opt-in publishes", async (t) => {
+test("Host defaults Ask on in every model presentation and preserves explicit embedding opt-out", async (t) => {
   for (const toolPresentation of ["direct", "code", "both"] as const)
     for (const enabled of [undefined, false, true])
       await t.test(`${toolPresentation}: ${String(enabled)}`, async () => {
@@ -66,10 +66,13 @@ test("Host defaults Ask off in every model presentation; only explicit owner opt
               item.content.tools.some(
                 (tool) => tool.name === ASK_USER_QUESTION_NAME,
               ),
-              enabled === true,
+              enabled !== false,
             );
-          assert.equal(snapshot.userQuestions!.length, enabled ? 1 : 0);
-          if (!enabled) {
+          assert.equal(
+            snapshot.userQuestions!.length,
+            enabled !== false ? 1 : 0,
+          );
+          if (enabled === false) {
             await (
               await host.startTurn(
                 thread.id,
@@ -88,7 +91,7 @@ test("Host defaults Ask off in every model presentation; only explicit owner opt
       });
 });
 
-test("Ask startup configuration uses existing pending restart; omitted and false are equivalent", async () => {
+test("Ask startup configuration uses existing pending restart; omitted and true are equivalent", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "zen-question-config-"),
   );
@@ -96,22 +99,26 @@ test("Ask startup configuration uses existing pending restart; omitted and false
   const host = createHostedAppServer(base);
   try {
     const unchanged = await host.prepareConfiguration(
-      { ...base, experimentalUserQuestions: false },
+      { ...base, experimentalUserQuestions: true },
       1,
     );
     assert.deepEqual(host.publishConfiguration(unchanged).pendingRestart, []);
-    const enable = await host.prepareConfiguration(
-      { ...base, experimentalUserQuestions: true },
+    const disable = await host.prepareConfiguration(
+      { ...base, experimentalUserQuestions: false },
       2,
     );
-    assert.deepEqual(host.publishConfiguration(enable).pendingRestart, [
+    assert.deepEqual(host.publishConfiguration(disable).pendingRestart, [
       "experimentalUserQuestions",
     ]);
     const thread = await host.startThread();
     await (
       await host.startTurn(thread.id, ask)
     ).done;
-    assert.deepEqual((await host.readThread(thread.id)).userQuestions, []);
+    assert.equal(
+      (await host.readThread(thread.id)).userQuestions!.length,
+      1,
+      "saving an opt-out never mutates the running tool environment",
+    );
     const revert = await host.prepareConfiguration(base, 3);
     assert.deepEqual(host.publishConfiguration(revert).pendingRestart, []);
   } finally {
@@ -129,11 +136,88 @@ test("Host reserves Ask's builtin name even while publication is disabled", asyn
   });
   try {
     assert.throws(
-      () => createHostedAppServer({ ...options(directory), toolEnvironment }),
+      () =>
+        createHostedAppServer({
+          ...options(directory),
+          experimentalUserQuestions: false,
+          toolEnvironment,
+        }),
       /Tool name ask_user_question is reserved for the builtin runtime/,
     );
   } finally {
     await toolEnvironment.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("default-on asynchronous Ask survives completed independent work and Host restart for a later exact answer", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-question-async-"),
+  );
+  const base = options(directory);
+  let host = createHostedAppServer(base);
+  try {
+    const thread = await host.startThread();
+    const turn = await host.startTurn(thread.id, ask);
+    await turn.done;
+    const question = (await host.listUserQuestions(thread.id)).questions[0]!;
+    assert.equal(
+      question.state,
+      "open",
+      "completing the tool's Turn never cancels its question",
+    );
+    await (
+      await host.startTurn(thread.id, "Continue independent synthetic work")
+    ).done;
+    assert.equal(
+      (await host.listUserQuestions(thread.id)).questions[0]!.state,
+      "open",
+    );
+    const summary = await host.readThreadSummary(thread.id);
+    assert.equal(summary.status, "idle");
+    assert.equal(summary.userQuestionSummary?.openCount, 1);
+    await host.closeHostResources();
+    host = createHostedAppServer(base);
+    assert.deepEqual(
+      (await host.listUserQuestions(thread.id)).questions,
+      [question],
+      "a cold Host derives the same pending request without a replay",
+    );
+    const response = await host.respondToUserQuestion(thread.id, {
+      questionCallItemId: question.request.callItemId,
+      clientId: "late-async-question-answer",
+      outcome: "answer",
+      answers: [
+        { questionId: "scope", optionIds: [], text: "Small, answered later" },
+      ],
+    });
+    await response.turn.done;
+    const read = await host.readUserQuestion(
+      thread.id,
+      question.request.callItemId,
+      "late-async-question-answer",
+    );
+    assert.equal(read.response.status, "claimed");
+    assert.equal(read.question?.state, "answered");
+    const semanticReplies = (await host.readThread(thread.id)).itemList!.filter(
+      (item) =>
+        item.role === "user" &&
+        item.source.metadata?.questionReply !== undefined,
+    );
+    assert.equal(
+      semanticReplies.length,
+      1,
+      "the later answer is one ordinary durable human input",
+    );
+    const answered = await host.readThreadSummary(thread.id);
+    assert.equal(
+      answered.status === "systemError"
+        ? undefined
+        : answered.userQuestionSummary?.openCount,
+      0,
+    );
+  } finally {
+    await host.closeHostResources();
     await rm(directory, { recursive: true, force: true });
   }
 });
@@ -156,7 +240,7 @@ test("disabling publication after reload preserves native list/read/respond for 
     ).done;
     const question = (await host.readThread(thread.id)).userQuestions![0]!;
     await host.closeHostResources();
-    host = createHostedAppServer(base);
+    host = createHostedAppServer({ ...base, experimentalUserQuestions: false });
     projection = new NativeRecoveryProjection(host);
     const replies: JsonRpcMessage[] = [];
     connection = new NativeConnection({

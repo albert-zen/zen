@@ -127,7 +127,7 @@ export interface ZenHostOptions {
   maxToolRounds?: number;
   /** Host-owned model-facing tool entry points; defaults to both. */
   toolPresentation?: ToolPresentation;
-  /** Host-owned experimental publication; defaults off and changes require restart. */
+  /** Ordinary question publication defaults on; explicit false is a Host embedding opt-out. Changes require restart. */
   experimentalUserQuestions?: boolean;
   /** Application-owned pinned resource; changes take effect at next Host launch. */
   experimentalRtk?: { executable: string; sha256: string };
@@ -286,7 +286,7 @@ export function createHostedAppServer(
       kind: "builtin",
       id: "apply-patch",
     });
-    if (options.experimentalUserQuestions === true)
+    if (options.experimentalUserQuestions !== false)
       toolEnvironment.registerRuntime(new AskUserQuestionToolRuntime(), {
         kind: "builtin",
         id: "user-question",
@@ -627,7 +627,7 @@ function observableHostConfiguration(
     defaultSelection: options.defaultSelection ?? null,
     approvalPolicy: options.approvalPolicy,
     toolPresentation: options.toolPresentation ?? "both",
-    experimentalUserQuestions: options.experimentalUserQuestions === true,
+    experimentalUserQuestions: options.experimentalUserQuestions !== false,
     contextCompaction: options.contextCompaction ?? null,
     maxToolRounds: options.maxToolRounds ?? null,
     maxConcurrentToolBodies: options.maxConcurrentToolBodies ?? null,
@@ -965,7 +965,7 @@ function restartDomainValue(
   domain: (typeof RESTART_CONFIGURATION_DOMAINS)[number],
 ): unknown {
   if (domain === "experimentalUserQuestions")
-    return options.experimentalUserQuestions === true;
+    return options.experimentalUserQuestions !== false;
   if (domain !== "codeRuntimeOptions") return options[domain];
   const codeRuntimeOptions = options.codeRuntimeOptions;
   if (codeRuntimeOptions === undefined) return undefined;

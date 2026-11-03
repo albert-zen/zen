@@ -20,7 +20,6 @@ export async function questionNativeFixture(toolEnvironment?: ToolEnvironment) {
     provider: { type: "fake" },
     approvalPolicy: "never",
     toolPresentation: "direct",
-    experimentalUserQuestions: true,
     ...(toolEnvironment ? { toolEnvironment } : {}),
   });
   const projection = new NativeRecoveryProjection(host);
