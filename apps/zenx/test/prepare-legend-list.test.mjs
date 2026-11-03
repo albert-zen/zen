@@ -51,7 +51,7 @@ function fixture(run) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
-test("exact web-only patch applies once and produces the upstream blob", () =>
+test("exact web-only patch applies once and produces the reviewed T3-plus-Zen blob", () =>
   fixture((directory, module) => {
     assert.equal(
       prepareLegendList({ root: directory, modulePath: module }),

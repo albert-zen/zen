@@ -30,9 +30,10 @@ path. The virtual path displays an explicit experimental warning.
 
 ## Dependency and licensing boundary
 
-The experiment pins npm LegendList 3.3.5 and applies the unchanged `react.mjs`
-section of T3's patch at `cefb544af3c98224874419198c0359b652ca3c94` through a
-67-line idempotent local preparer. Original/patched git blob hashes are checked.
+The experiment pins npm LegendList 3.3.5 and applies the `react.mjs` section of
+T3's patch at `cefb544af3c98224874419198c0359b652ca3c94`, plus a narrow Zen guard
+that postpones DOM sorting while a noncollapsed Selection intersects the list.
+The idempotent local preparer checks exact original/final git blob hashes.
 Both MIT notices are preserved in `apps/zenx/patches`; the copied patch is web ESM
 only, not T3's mobile/CJS/types changes or its entire timeline implementation.
 CommonJS `react.js` remains stock and is not used by this adapter's tested Node
@@ -41,7 +42,9 @@ Normal `npm ci` invokes the preparer in the existing workspace postinstall. A
 fresh full-repository npm ci passed with all lifecycle scripts enabled in an
 isolated Linux / Node 24.22.1 dependency tree. Cache/temp paths were relocated to
 the writable workspace; no lifecycle scripts or source were bypassed. The fresh
-installed ESM blob matched the upstream target and preparation was idempotent.
+installed ESM blob matched the then-current upstream-only target and preparation
+was idempotent. The later Zen selection guard has separate deterministic hook and
+patch-application tests; it is not covered by that earlier native acceptance.
 The preparer refuses symlinked/external dependencies rather than modifying a
 shared tree.
 The adapter uses supported web types and `getScrollableNode`/`getState`/scroll APIs,

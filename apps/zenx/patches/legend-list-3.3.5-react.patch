@@ -1,5 +1,5 @@
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff754f1c899 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..306a3f71b9b19ae6047f88f0f743ae5d5677c559 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1887,6 +1887,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -190,7 +190,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff7
        }
      }
    }
-@@ -5713,37 +5766,55 @@ function findLIS(arr) {
+@@ -5713,37 +5766,62 @@ function findLIS(arr) {
  }
  
  // src/hooks/useDOMOrder.ts
@@ -217,23 +217,25 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff7
 -            if (element && index !== void 0) {
 -              indexByElement.set(element, index);
 -            }
--          }
--          sortDOMElements(parent, indexByElement);
 +  const [containerOrderUpdate] = useArr$(["containerOrderUpdate"]);
 +  const settleRef = useRef(void 0);
 +  useLayoutEffect(() => {
-+    const sort = () => {
++    const ownerDocument = ref.current?.ownerDocument;
++    let selectionDeferred = false;
++    const settle = () => {
 +      settleRef.current = void 0;
 +      const parent = ref.current;
-+      if (!parent) {
-+        return;
-+      }
-+      const indexByElement = /* @__PURE__ */ new Map();
-+      for (const [containerId, viewRef] of ctx.viewRefs) {
-+        const element = viewRef.current;
-+        const index = peek$(ctx, `containerItemIndex${containerId}`);
-+        if (element && index !== void 0) {
-+          indexByElement.set(element, index);
++      if (!parent) return;
++      // Zen: even moveBefore resets live DOM Range boundaries. Keep selected
++      // containers in place; never reconstruct or change the user's Selection.
++      const selection = parent.ownerDocument.getSelection();
++      if (selection && !selection.isCollapsed) {
++        for (let i = 0; i < selection.rangeCount; i++) {
++          if (selection.getRangeAt(i).intersectsNode(parent)) {
++            selectionDeferred = true;
++            return;
+           }
+-          sortDOMElements(parent, indexByElement);
          }
 -        debounceRef.current = void 0;
 -      }, 500);
@@ -243,36 +245,40 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff7
 -      if (debounceRef.current !== void 0) {
 -        clearTimeout(debounceRef.current);
        }
++      selectionDeferred = false;
++      // Preserve upstream's scroll-settle behavior and before-paint ordering
++      // when idle. Selection release rechecks the latest indices and scroll.
++      if (isUserScrolling(ctx.state)) {
++        settleRef.current = setTimeout(settle, DOM_ORDER_SETTLE_MS);
++        return;
++      }
++      const indexByElement = /* @__PURE__ */ new Map();
++      for (const [containerId, viewRef] of ctx.viewRefs) {
++        const element = viewRef.current;
++        const index = peek$(ctx, `containerItemIndex${containerId}`);
++        if (element && index !== void 0) {
++          indexByElement.set(element, index);
++        }
++      }
 +      sortDOMElements(parent, indexByElement);
      };
 -  }, [ctx]);
-+    if (settleRef.current !== void 0) {
-+      clearTimeout(settleRef.current);
-+    }
-+    // Before paint: NVDA's browse mode keeps the first DOM order it reads. Each move
-+    // lays its row out again, so during a continuous scroll, sort once it settles.
-+    if (!isUserScrolling(ctx.state)) {
-+      sort();
-+      return;
-+    }
-+    const settle = () => {
-+      if (isUserScrolling(ctx.state)) {
-+        settleRef.current = setTimeout(settle, DOM_ORDER_SETTLE_MS);
-+      } else {
-+        sort();
-+      }
++    const selectionChanged = () => {
++      if (selectionDeferred) settle();
 +    };
-+    settleRef.current = setTimeout(settle, DOM_ORDER_SETTLE_MS);
++    ownerDocument?.addEventListener("selectionchange", selectionChanged);
++    if (settleRef.current !== void 0) clearTimeout(settleRef.current);
++    settle();
++    return () => {
++      ownerDocument?.removeEventListener("selectionchange", selectionChanged);
++      if (settleRef.current !== void 0) clearTimeout(settleRef.current);
++      settleRef.current = void 0;
++    };
 +  }, [ctx, containerOrderUpdate]);
-+  useEffect(() => () => {
-+    if (settleRef.current !== void 0) {
-+      clearTimeout(settleRef.current);
-+    }
-+  }, []);
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = useState(transitionEpoch);
-@@ -6425,8 +6496,8 @@ function ScrollAdjust() {
+@@ -6425,8 +6503,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;

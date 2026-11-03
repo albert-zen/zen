@@ -5,7 +5,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const originalBlob = "95465f2ab89ce41a10553f58af83618f7310e83c";
-export const patchedBlob = "252a9d5b23e271c089d30c357a78dff754f1c899";
+export const patchedBlob = "306a3f71b9b19ae6047f88f0f743ae5d5677c559";
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const patchPath = fileURLToPath(
   new URL("../patches/legend-list-3.3.5-react.patch", import.meta.url),
@@ -17,7 +17,7 @@ export function blobHash(source) {
     .digest("hex");
 }
 
-/** Apply only the pinned upstream web ESM patch, never to a shared dependency tree. */
+/** Apply only the pinned web ESM patch, never to a shared dependency tree. */
 export function prepareLegendList({
   root = repositoryRoot,
   modulePath = fileURLToPath(import.meta.resolve("@legendapp/list/react")),
@@ -56,7 +56,7 @@ export function prepareLegendList({
   execFileSync("git", ["apply", ...args], { cwd: root, stdio: "pipe" });
   if (blobHash(readFileSync(modulePath)) !== patchedBlob)
     throw new Error(
-      "LegendList patch result does not match the exact upstream web blob.",
+      "LegendList patch result does not match the exact reviewed web blob.",
     );
   return "patched";
 }
