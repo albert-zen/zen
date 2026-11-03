@@ -1,0 +1,72 @@
+{
+  "productHead": "174c61abf124f15250caf8b4cb82e44ff33b3e15",
+  "testedMergeCommit": "ef2322470c92d0874d9acb72f306925fbeadf07d",
+  "productTree": "6901e71428265f314f8b86ab14c96e3aedb04d28",
+  "workflow": "https://github.com/albert-zen/zen/actions/runs/41663262018",
+  "synthetic": true,
+  "platforms": {
+    "macos": {
+      "casesPassed": 26,
+      "nativeInputSteps": 81,
+      "archiveSha256": "52ca6254e029acdecbb7c202a36805b76417765d748e90773fbee9de21c73411"
+    },
+    "windows": {
+      "casesPassed": 26,
+      "nativeInputSteps": 81,
+      "archiveSha256": "661fb017c286dc595d3a91f061dd265b20a61e7fe4e809e00100c430331f571d"
+    }
+  },
+  "sourceVerification": "38 checked-in source files matched on both platforms. Windows matches include Git CRLF checkout conversion for 34 files. Tested merge tree exactly matches product head tree.",
+  "files": [
+    {
+      "path": "macos/17a-reference-dark-Chinese-question-native-crop.png",
+      "sha256": "06e4270ae5f267fd699fde0d63c357f29681adeb8f7cca0525a8b549aa7d62af",
+      "bytes": 55954
+    },
+    {
+      "path": "macos/18a-reference-dark-Chinese-triggers-native-crop.png",
+      "sha256": "24523d7e6703a81501c15c7b6ffbc62450387e39a6203775873f97108c766bae",
+      "bytes": 35441
+    },
+    {
+      "path": "macos/01e-new-foreground-question-reveal.png",
+      "sha256": "2f0c9234b41de99c3736fafa072febc780ec2187990cd4868328b66208a7d1ce",
+      "bytes": 216140
+    },
+    {
+      "path": "macos/12a-native-room-workspace-two-questions.png",
+      "sha256": "8318e8cf951102b9e3bb9c0e2967c3587846d904b48ce74ae80121228f6a6891",
+      "bytes": 147589
+    },
+    {
+      "path": "macos/source.json",
+      "sha256": "f8d6a84a7a4fce8733340f977fe941d0a4eabf355c4a93ddb9385208e9d8dbb4",
+      "bytes": 10324
+    },
+    {
+      "path": "windows/17a-reference-dark-Chinese-question-native-crop.png",
+      "sha256": "beca6c65b8d65e047b8794416e71eae46e88f2a700e8b17341d7cdbe5c93a546",
+      "bytes": 36203
+    },
+    {
+      "path": "windows/18a-reference-dark-Chinese-triggers-native-crop.png",
+      "sha256": "15452ea88d6068ec040a90c30126cad339ac76f16e53aa7a0e18234001500a2a",
+      "bytes": 28464
+    },
+    {
+      "path": "windows/01e-new-foreground-question-reveal.png",
+      "sha256": "c68b2ef52b680cdb30802ff706341815d765a16f9420074e79ddbc26d16c832c",
+      "bytes": 167373
+    },
+    {
+      "path": "windows/12a-native-room-workspace-two-questions.png",
+      "sha256": "d0c7bce508ef443f5f893d5e85c2d82fb80ad6c71fdc8042b68a3903f0d3dbbd",
+      "bytes": 123082
+    },
+    {
+      "path": "windows/source.json",
+      "sha256": "643ee815bdbdcc2567cf9263efd1e1469e65b6cfa49da0a428fe9fce178c6e6a",
+      "bytes": 10352
+    }
+  ]
+}
