@@ -54,6 +54,7 @@ export async function probeOpenAiCompatibleImage(options: {
   try {
     for await (const _event of streamAuxiliaryModel({
       adapter,
+      attachments: options.attachments,
       trace: options.trace,
       itemListStore: options.itemListStore,
       purpose: "image-probe",
