@@ -100,6 +100,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
   });
   let current: ZenXPluginSnapshot = { ...snapshot, information: [] };
   let threadId = "fixture";
+  let revealSignal = 0;
   localStorage.setItem("zenx.information.pin.thread:fixture", "fixture:info");
   function Harness() {
     const theme = useAppearance();
@@ -108,6 +109,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       registry,
       resourcePanelWidth: 480,
       owner: { kind: "thread", threadId },
+      revealSignal,
       theme,
       navigate() {},
       executeCommand: async () => null,
@@ -329,6 +331,24 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
     assert.ok(
       document.querySelector(".information-popover") === null,
       "owner changes close presentation without auto-opening the next owner",
+    );
+    threadId = "fixture";
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "returning to an owner restores the visibility it was left with",
+    );
+    threadId = "another-owner";
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover") === null,
+      "an owner that was never opened still starts closed",
+    );
+    revealSignal = 1;
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "a foreground attention signal reveals the current owner's surface",
     );
     await click(".information-toolbar button");
     current = { ...snapshot, information: [] };
