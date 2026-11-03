@@ -4247,24 +4247,32 @@ func pointerWindow(_ point: CGPoint, _ expectedPID: pid_t) throws -> AXUIElement
   // CG rectangles (including mouse-ignoring overlays) are not input recipients.
   // This is accessibility-hit admission, not an atomic event-delivery receipt.
   var hit: AXUIElement?
-  guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-        let hit else { try refuse("Global accessibility pointer recipient is unavailable") }
+  let hitX = Float(point.x), hitY = Float(point.y)
+  let hitStatus = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), hitX, hitY, &hit)
+  // Bounded scalar evidence from this exact query; no foreign labels or content.
+  // A PID-query failure must not be mistaken for a proved foreign recipient.
+  let pointDetails = " (point=" + String(Double(hitX)) + "," + String(Double(hitY)) + ", selectedPID=" + String(expectedPID) + ", axHitStatus=" + String(hitStatus.rawValue)
+  guard hitStatus == .success, let hit else {
+    try refuse("Global accessibility pointer recipient is unavailable" + pointDetails + ", axPIDStatus=not_queried, hitPID=unknown)")
+  }
   var hitPID: pid_t = 0
-  guard AXUIElementGetPid(hit, &hitPID) == .success, hitPID == expectedPID else {
-    try refuse("Global accessibility pointer recipient is not the selected application")
+  let pidStatus = AXUIElementGetPid(hit, &hitPID)
+  let diagnostic = pointDetails + ", axPIDStatus=" + String(pidStatus.rawValue) + ", hitPID=" + String(hitPID) + ")"
+  guard pidStatus == .success, hitPID == expectedPID else {
+    try refuse("Global accessibility pointer recipient is not the selected application" + diagnostic)
   }
   let window: AXUIElement
   if attribute(hit, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String { window = hit }
   else {
     guard let containing = attribute(hit, kAXWindowAttribute as CFString), CFGetTypeID(containing) == AXUIElementGetTypeID() else {
-      try refuse("Global accessibility pointer recipient window is ambiguous")
+      try refuse("Global accessibility pointer recipient window is ambiguous" + diagnostic)
     }
     window = containing as! AXUIElement
   }
   var windowPID: pid_t = 0
   guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == expectedPID,
         attribute(window, kAXRoleAttribute as CFString) as? String == kAXWindowRole as String else {
-    try refuse("Global accessibility pointer recipient window is not owned by the selected application")
+    try refuse("Global accessibility pointer recipient window is not owned by the selected application" + diagnostic)
   }
   return window
 }

@@ -40,6 +40,24 @@ import {
   PluginDiscoveryToolRuntime,
 } from "./plugin-discovery.js";
 
+// Only trusted in-process Host composition can mark native arguments. The symbol
+// is intentionally not exported, never a tool argument and never crosses IPC.
+const nativeCapabilityArguments = Symbol(
+  "zenx-host-native-capability-arguments",
+);
+export function withNativeCapabilityArguments(
+  invocation: ToolInvocation,
+): ToolInvocation {
+  return { ...invocation, [nativeCapabilityArguments]: true } as ToolInvocation;
+}
+function hasNativeCapabilityArguments(invocation: ToolInvocation): boolean {
+  return (
+    (invocation as ToolInvocation & { [nativeCapabilityArguments]?: true })[
+      nativeCapabilityArguments
+    ] === true
+  );
+}
+
 interface PendingInvocation {
   resolve(result: ToolExecutionResult): void;
   reject(error: Error): void;
@@ -135,14 +153,17 @@ export class ZenXHostToolBundle implements ToolBundle {
           resolveBrowser,
         ),
         execute: async (invocation: ToolInvocation) =>
-          await invokeModelToolFacade({
-            invocation,
-            epoch: this.#modelReferenceEpoch,
-            browserConnections,
-            references: (this.#state.references ??=
-              new ModelReferenceRegistry()),
-            dispatch: (resolved) => this.#execute(definition.name, resolved),
-          }),
+          hasNativeCapabilityArguments(invocation)
+            ? await this.#execute(definition.name, invocation)
+            : await invokeModelToolFacade({
+                invocation,
+                epoch: this.#modelReferenceEpoch,
+                browserConnections,
+                references: (this.#state.references ??=
+                  new ModelReferenceRegistry()),
+                dispatch: (resolved) =>
+                  this.#execute(definition.name, resolved),
+              }),
       }));
     this.#send = options.send;
     this.#state = options.state ?? { pending: new Map() };

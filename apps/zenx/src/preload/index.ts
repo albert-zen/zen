@@ -1,3 +1,7 @@
+import type {
+  NativeInformationApi,
+  NativeInformationUpdate,
+} from "../native-information.js";
 import { subscribeBrowserObservation } from "./browser-observation-ipc.js";
 import type {
   SidebarOwner,
@@ -83,7 +87,44 @@ import type { ComputerObservationEnvelope } from "../main/computer-live-observat
 import type { ChromeBridgeSettingsSnapshot } from "../main/chrome-extension-bridge.js";
 import type { ZenXComputerReadinessSnapshot } from "../main/computer-readiness.js";
 
+import {
+  unwrapNativeRoomQuestionReply,
+  type NativeRoomQuestionApi,
+  type NativeRoomQuestionRequest,
+  type NativeRoomQuestionResults,
+} from "../native-room-questions.js";
+
 contextBridge.exposeInMainWorld("zenx", {
+  threadQuestionAttention: {
+    onChanged: (listener: () => void) => {
+      const receive = () => listener();
+      ipcRenderer.on(ipcChannels.threadQuestionAttentionChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.threadQuestionAttentionChanged,
+          receive,
+        );
+    },
+  },
+  roomQuestions: {
+    request: async <T extends NativeRoomQuestionRequest>(input: T) =>
+      unwrapNativeRoomQuestionReply<NativeRoomQuestionResults[T["method"]]>(
+        await ipcRenderer.invoke(ipcChannels.roomQuestionsRequest, input),
+      ),
+    onChanged: (listener: (roomId: string) => void) => {
+      const receive = (_event: Electron.IpcRendererEvent, roomId: string) =>
+        listener(roomId);
+      ipcRenderer.on(ipcChannels.roomQuestionsChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(ipcChannels.roomQuestionsChanged, receive);
+    },
+  } satisfies NativeRoomQuestionApi,
+  information: {
+    read: (owner: SidebarOwner | string) =>
+      ipcRenderer.invoke(ipcChannels.informationRead, owner),
+    update: (request: NativeInformationUpdate) =>
+      ipcRenderer.invoke(ipcChannels.informationUpdate, request),
+  } satisfies NativeInformationApi,
   threadSidebar: {
     read: (threadId: SidebarOwner | string) =>
       ipcRenderer.invoke(ipcChannels.threadSidebarRead, threadId),

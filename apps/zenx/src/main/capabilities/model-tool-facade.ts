@@ -122,7 +122,7 @@ export function modelPluginDocument(id: string, original: string): string {
   if (id === "zenx-self-control")
     return "Manage Threads by semantic name or exact scoped ref. Read history preserves literal user/tool text, failures and unknown outcomes; selected sources are read-only. Workflow updates use immutable snapshots and native CAS. Discover models by semantic name and exact selection refs. Created/accepted is not completed work; never retry uncertain mutations automatically.";
   if (id === "zenx-rooms")
-    return "Use exact scoped Room, Thread and message refs. Workspace edits use immutable snapshots and original CAS. Literal names, messages and planning notes are unchanged. Refs never grant membership, permission, delivery or completed work.";
+    return "Use exact scoped Room, Thread and message refs. Room-owned workspace questions are separate from private Thread questions; questions reads return revision-bound question refs and bounded page refs for current-member edits or withdrawal. Workspace edits use immutable snapshots and original CAS. Literal names, messages and planning notes are unchanged. Refs never grant membership, permission, delivery or completed work.";
   if (id === "zenx-triggers")
     return "Discover Trigger definitions/history with exact short refs. Notification and watched source Threads retain their exact native routes. Resume and target creation use immutable snapshots; native permissions and definition/configuration fences still run. Programs/prompts/signal names are literal. Preserve unknown delivery and failed outcomes; never infer work completion from dispatch or retry uncertain mutations automatically.";
   return original;

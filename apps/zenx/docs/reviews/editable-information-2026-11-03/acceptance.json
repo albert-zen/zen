@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "synthetic": true,
+  "fullNativeAppAcceptance": false,
+  "captureMethod": "Supported cloud browser, actual pointer/keyboard/DOM controls, production components with synthetic in-memory ports.",
+  "cases": [
+    "Default Thread layout reads without a write and explicitly reports missing PR/artifact providers.",
+    "Customization shows add/remove/hide/order and Trigger configuration controls.",
+    "Concurrent-edit fixture retains the exact operation and requires explicit Reapply.",
+    "Every customizable widget hidden leaves separate Asking attention visible.",
+    "Two same-ID/revision Boards preserve independent field values; editing second leaves first and Composer unchanged.",
+    "Dark theme and narrow workspace popover render; Escape restores information trigger focus.",
+    "Empty Room has no invented source member and only Room/owner widgets."
+  ],
+  "scriptedLocalCapture": "Not executed successfully: local Chromium sandbox socket EPERM. This file records the cloud-browser pass, not the blocked local script."
+}

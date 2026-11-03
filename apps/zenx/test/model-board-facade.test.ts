@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { JsonPluginStorage } from "../src/main/plugin-host-sdk.js";
+import { ZenXBoardCapabilityPackage } from "../src/main/capabilities/board-package.js";
 import type { ModelTool } from "../../../src/model.js";
 import type { ToolExecutionResult, ToolInvocation } from "../../../src/tool.js";
 import {
@@ -63,10 +68,27 @@ function fixture() {
     external,
     native,
     rawResults,
+    snapshot(
+      owner: Record<string, unknown> = { kind: "thread", threadId: caller },
+      revision = 0,
+      completeDocument = true,
+    ) {
+      return refs.bind(
+        "board",
+        "content-snapshot",
+        asJson({ owner, address: "default", revision, completeDocument }),
+        epoch,
+      );
+    },
     call(
       name: string,
       args: Record<string, unknown>,
-      raw: ToolExecutionResult = { output: "{}", exitCode: 0 },
+      raw:
+        | ToolExecutionResult
+        | ((invocation: ToolInvocation) => Promise<ToolExecutionResult>) = {
+        output: "{}",
+        exitCode: 0,
+      },
     ) {
       return invokeModelToolFacade({
         epoch,
@@ -95,7 +117,7 @@ function fixture() {
         },
         async dispatch(invocation) {
           native.push(invocation);
-          return raw;
+          return typeof raw === "function" ? await raw(invocation) : raw;
         },
       });
     },
@@ -154,6 +176,7 @@ function nativeSnapshot() {
       ...doc,
       events: [...doc.events, { id: "navigate", label: "Open", actions }],
     },
+    contentSnapshot: { owner: doc.owner, revision: 7, completeDocument: true },
     revision: 7,
     draftRevision: 12,
     values: { scope: "x".repeat(8192), approved: true },
@@ -177,6 +200,8 @@ test("Board definitions expose scoped owners and explicit full document reads", 
   const put = modelToolDefinition(source("zenx_board_put"));
   assert.match(JSON.stringify(put.inputSchema), /external-browser/);
   assert.match(JSON.stringify(put.inputSchema), /\^r/);
+  assert.deepEqual(put.inputSchema.required, ["snapshot", "document"]);
+  assert.equal(object(put.inputSchema.properties).expectedRevision, undefined);
   const schema = JSON.stringify(put.inputSchema);
   for (const key of [
     "values",
@@ -279,7 +304,7 @@ test("Board model definitions teach every template and the actual isolated SDK",
 test("Board owner defaults to the caller and resolves scoped Room refs only", async () => {
   const f = fixture();
   const doc = document();
-  await f.call("zenx_board_put", { document: doc });
+  await f.call("zenx_board_put", { snapshot: f.snapshot(), document: doc });
   assert.deepEqual(f.native.at(-1)!.arguments.document, {
     ...doc,
     owner: { kind: "thread", threadId: caller },
@@ -352,7 +377,7 @@ test("Board navigation resolves exact Browser refs and retains private admission
       },
     ],
   };
-  await f.call("zenx_board_put", { document: doc });
+  await f.call("zenx_board_put", { snapshot: f.snapshot(), document: doc });
   const native = f.native.at(-1)!;
   const actions = (native.arguments.document as typeof doc).events[0]!.actions;
   assert.deepEqual(actions[0]!.then[0], {
@@ -373,6 +398,7 @@ test("Board navigation resolves exact Browser refs and retains private admission
     const before = f.native.length;
     await assert.rejects(
       f.call("zenx_board_put", {
+        snapshot: f.snapshot(),
         document: {
           ...doc,
           events: [
@@ -479,7 +505,9 @@ test("compact Board receipts omit product bookkeeping without changing literal f
   for (const name of ["zenx_board_read", "zenx_board_put"]) {
     const result = await f.call(
       name,
-      name === "zenx_board_put" ? { document: document() } : {},
+      name === "zenx_board_put"
+        ? { snapshot: f.snapshot(), document: document() }
+        : {},
       { output: JSON.stringify(semantic), exitCode: 0 },
     );
     const {
@@ -510,6 +538,7 @@ test("stale epoch and cross-owner Browser provenance cannot reach Board dispatch
   for (const tab of [stale, foreign]) {
     await assert.rejects(
       f.call("zenx_board_put", {
+        snapshot: f.snapshot(),
         document: {
           ...document(),
           events: [
@@ -573,6 +602,7 @@ test("full Board read preserves legacy route text inertly while new puts reject 
   const before = f.native.length;
   await assert.rejects(
     f.call("zenx_board_put", {
+      snapshot: f.snapshot(),
       document: { ...document(), events: [legacyEvent] },
     }),
   );
@@ -612,4 +642,501 @@ test("Board target diagnostics retain actual failure reasons without native rout
   assert.equal(projected.document.html, snapshot.document.html);
   assert.equal(f.rawResults[0], raw);
   assert.match(raw.output, /RAW-product-target|LOCAL-ONLY/);
+});
+
+async function realBoard() {
+  const root = await mkdtemp(path.join(tmpdir(), "board-model-cas-"));
+  after(() => rm(root, { recursive: true, force: true }));
+  const storage = await JsonPluginStorage.open({
+    root,
+    pluginId: "zenx-board",
+    version: 1,
+    initialValue: {},
+  });
+  let writes = 0,
+    effects = 0;
+  const service = new ZenXBoardCapabilityPackage({
+    readOwner: async (owner) => owner,
+    deliver: async () => {
+      effects++;
+    },
+    execute: async () => {
+      effects++;
+    },
+  });
+  service.start({
+    storage: {
+      version: storage.version,
+      get: () => storage.get(),
+      set: async (value) => {
+        writes++;
+        await storage.set(value);
+      },
+    },
+  });
+  return {
+    service,
+    storage,
+    writes: () => writes,
+    effects: () => effects,
+    async dispatch(invocation: ToolInvocation): Promise<ToolExecutionResult> {
+      const result = await service.invoke(invocation.name, invocation);
+      return {
+        output: JSON.stringify(result),
+        structuredContent: asJson(result),
+        exitCode: 0,
+      };
+    },
+  };
+}
+
+test("real model/native content CAS requires complete same-owner snapshots and preserves UI field drafts", async () => {
+  const f = fixture(),
+    host = await realBoard();
+  const absent = JSON.parse(
+    (await f.call("zenx_board_read", {}, host.dispatch)).output,
+  );
+  assert.equal(absent.exists, false);
+  assert.match(absent.snapshot, /^r\d+$/);
+  assert.doesNotMatch(
+    JSON.stringify(absent),
+    /RAW-|revision|completeDocument|default/,
+  );
+  assert.equal(host.writes(), 0);
+  const created = JSON.parse(
+    (
+      await f.call(
+        "zenx_board_put",
+        { snapshot: absent.snapshot, document: document() },
+        host.dispatch,
+      )
+    ).output,
+  );
+  assert.equal(created.applied, true);
+  await assert.rejects(
+    f.call(
+      "zenx_board_put",
+      { snapshot: created.snapshot, document: document() },
+      host.dispatch,
+    ),
+    /view:document/,
+  );
+  const semantic = JSON.parse(
+    (await f.call("zenx_board_read", {}, host.dispatch)).output,
+  );
+  await assert.rejects(
+    f.call(
+      "zenx_board_put",
+      { snapshot: semantic.snapshot, document: document() },
+      host.dispatch,
+    ),
+    /view:document/,
+  );
+  const full = JSON.parse(
+    (await f.call("zenx_board_read", { view: "document" }, host.dispatch))
+      .output,
+  );
+  assert.equal(full.document.html, document().html);
+  assert.deepEqual(full.document.events, document().events);
+  await host.service.invoke("zenx_board_ui", {
+    name: "zenx_board_ui",
+    threadId: caller,
+    callId: "human-draft",
+    cwd: "/synthetic",
+    signal: new AbortController().signal,
+    trustedPluginUi: true,
+    arguments: {
+      input: {
+        operation: "draft",
+        owner: { kind: "thread", threadId: caller },
+        expectedDraftRevision: 0,
+        values: { scope: "latest human draft" },
+      },
+    },
+  });
+  const updates = await Promise.all(
+    ["A", "B"].map((title) =>
+      f.call(
+        "zenx_board_put",
+        { snapshot: full.snapshot, document: { ...full.document, title } },
+        host.dispatch,
+      ),
+    ),
+  );
+  const results = updates.map((result) => JSON.parse(result.output));
+  assert.equal(results.filter((result) => result.applied === true).length, 1);
+  const conflict = results.find((result) => result.applied === false);
+  assert.ok(conflict);
+  assert.equal(conflict.values.scope, "latest human draft");
+  const before = host.writes();
+  await assert.rejects(
+    f.call(
+      "zenx_board_put",
+      { snapshot: conflict.snapshot, document: document() },
+      host.dispatch,
+    ),
+    /view:document/,
+  );
+  assert.equal(host.writes(), before);
+  const saved = (await host.storage.get()) as any;
+  assert.equal(saved.boards[`thread:${caller}`].revision, 2);
+  assert.equal(saved.boards[`thread:${caller}`].draftRevision, 1);
+  assert.equal(
+    saved.boards[`thread:${caller}`].values.scope,
+    "latest human draft",
+  );
+  assert.equal(host.effects(), 0);
+});
+
+test("model snapshot inputs cannot substitute owner, address, revision, incomplete view or retired epoch", async () => {
+  const f = fixture();
+  const own = f.snapshot();
+  const roomSnapshot = f.snapshot({ kind: "room", roomId, threadId: caller });
+  await f.call("zenx_board_put", {
+    snapshot: roomSnapshot,
+    document: { ...document(), owner: undefined },
+  });
+  assert.deepEqual((f.native.at(-1)!.arguments.document as any).owner, {
+    kind: "room",
+    roomId,
+    threadId: caller,
+  });
+  assert.equal(f.native.at(-1)!.arguments.expectedRevision, 0);
+  assert.equal(f.native.at(-1)!.arguments.snapshot, undefined);
+  const stale = f.refs.bind(
+    "board",
+    "content-snapshot",
+    {
+      owner: { kind: "thread", threadId: caller },
+      address: "default",
+      revision: 0,
+      completeDocument: true,
+    },
+    "retired-epoch",
+  );
+  const wrongAddress = f.refs.bind(
+    "board",
+    "content-snapshot",
+    {
+      owner: { kind: "thread", threadId: caller },
+      address: "invalid/document/address",
+      revision: 0,
+      completeDocument: true,
+    },
+    epoch,
+  );
+  const cases = [
+    { document: document() },
+    { snapshot: own, document: document(), expectedRevision: 0 },
+    { snapshot: own, document: document(), owner: { kind: "thread" } },
+    { snapshot: own, document: document({ kind: "room", room: f.room }) },
+    { snapshot: roomSnapshot, document: document() },
+    { snapshot: own, document: document({ kind: "thread", threadId: caller }) },
+    ...[
+      "r999999",
+      stale,
+      wrongAddress,
+      f.room,
+      f.snapshot({ kind: "thread", threadId: "foreign" }),
+      f.snapshot(undefined, 1, false),
+      f.snapshot(undefined, Number.MAX_SAFE_INTEGER + 1),
+    ].map((snapshot) => ({ snapshot, document: document() })),
+  ];
+  const before = f.native.length;
+  for (const args of cases) {
+    await assert.rejects(f.call("zenx_board_put", args));
+    assert.equal(
+      f.native.length,
+      before,
+      "rejected input never reaches native dispatch",
+    );
+  }
+});
+
+test("a lost model put reply is checked by read without replaying the committed write", async () => {
+  const f = fixture(),
+    host = await realBoard();
+  const absent = JSON.parse(
+    (await f.call("zenx_board_read", {}, host.dispatch)).output,
+  );
+  let dispatched = 0;
+  await assert.rejects(
+    f.call(
+      "zenx_board_put",
+      { snapshot: absent.snapshot, document: document() },
+      async (invocation) => {
+        dispatched++;
+        await host.dispatch(invocation);
+        throw new Error("Injected reply lost after storage accepted put");
+      },
+    ),
+    /reply lost/,
+  );
+  assert.equal(dispatched, 1);
+  assert.equal(host.writes(), 1);
+  const checked = JSON.parse(
+    (await f.call("zenx_board_read", { view: "document" }, host.dispatch))
+      .output,
+  );
+  assert.equal(checked.document.title, document().title);
+  assert.equal(host.writes(), 1);
+  assert.equal(host.effects(), 0);
+  assert.equal(
+    ((await host.storage.get()) as any).boards[`thread:${caller}`].revision,
+    1,
+  );
+  assert.notEqual(checked.snapshot, absent.snapshot);
+});
+
+test("real Thread and Room snapshots retain separate default addresses and Room live membership", async () => {
+  const f = fixture(),
+    host = await realBoard();
+  const roomOwner = { kind: "room", room: f.room };
+  const thread = JSON.parse(
+    (await f.call("zenx_board_read", {}, host.dispatch)).output,
+  );
+  const room = JSON.parse(
+    (await f.call("zenx_board_read", { owner: roomOwner }, host.dispatch))
+      .output,
+  );
+  assert.notEqual(thread.snapshot, room.snapshot);
+  await f.call(
+    "zenx_board_put",
+    { snapshot: thread.snapshot, document: document() },
+    host.dispatch,
+  );
+  await f.call(
+    "zenx_board_put",
+    { snapshot: room.snapshot, document: document(roomOwner) },
+    host.dispatch,
+  );
+  const state = (await host.storage.get()) as any;
+  assert.deepEqual(
+    Object.keys(state.boards).sort(),
+    [`room:${roomId}`, `thread:${caller}`].sort(),
+  );
+  assert.equal(state.boards[`thread:${caller}`].revision, 1);
+  assert.equal(state.boards[`room:${roomId}`].revision, 1);
+  assert.deepEqual(state.boards[`room:${roomId}`].document.owner, {
+    kind: "room",
+    roomId,
+  });
+  const full = JSON.parse(
+    (
+      await f.call(
+        "zenx_board_read",
+        { owner: roomOwner, view: "document" },
+        host.dispatch,
+      )
+    ).output,
+  );
+  host.service.host.readOwner = async (owner) => {
+    if (owner.kind === "room") throw Error("Room membership revoked");
+    return owner;
+  };
+  await assert.rejects(
+    f.call(
+      "zenx_board_put",
+      { snapshot: full.snapshot, document: full.document },
+      host.dispatch,
+    ),
+    /membership revoked/,
+  );
+  await assert.rejects(
+    f.call(
+      "zenx_board_read",
+      { owner: roomOwner, view: "document" },
+      host.dispatch,
+    ),
+    /membership revoked/,
+  );
+  assert.deepEqual(await host.storage.get(), state);
+  assert.equal(host.writes(), 2);
+});
+
+test("real Board disable delete-data re-enable and Host replacement retire old content snapshots", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { ZenXCapabilityService } =
+    await import("../src/main/capability-service.js");
+  const { ZenXPluginCatalog } =
+    await import("../src/main/capabilities/plugin-catalog.js");
+  const { createZenXHostToolEnvironment } =
+    await import("../src/main/capability-tool-executor.js");
+  const { ToolOutputSpool } = await import("../../../src/tool-output-spool.js");
+  const root = await mkdtemp(path.join(tmpdir(), "board-lifecycle-cas-"));
+  const capabilities = new ZenXCapabilityService({
+    userDataDirectory: root,
+    bundledProvidersOnly: true,
+    providerCatalogOptions: { platform: "darwin", environment: {} },
+  });
+  const spool = new ToolOutputSpool();
+  let composition: ReturnType<typeof createZenXHostToolEnvironment> | undefined;
+  let catalog: InstanceType<typeof ZenXPluginCatalog> | undefined;
+  const initialize = ZenXPluginCatalog.prototype.initialize;
+  // Observe the service's real Catalog; no lifecycle/storage/epoch is replaced.
+  ZenXPluginCatalog.prototype.initialize = async function () {
+    catalog = this;
+    await initialize.call(this);
+  };
+  try {
+    try {
+      await capabilities.initialize();
+    } finally {
+      ZenXPluginCatalog.prototype.initialize = initialize;
+    }
+    assert.ok(catalog);
+    await catalog.install(
+      new ZenXBoardCapabilityPackage({
+        readOwner: async (owner) => owner,
+        deliver: async () => {
+          throw Error("No action expected");
+        },
+        execute: async () => {
+          throw Error("No action expected");
+        },
+      }),
+      "bundled",
+    );
+    const firstGeneration = capabilities.captureHostSnapshot();
+    let dispatches = 0;
+    composition = createZenXHostToolEnvironment({
+      capabilities: firstGeneration,
+      toolOutputSpool: spool,
+      send: (event) => {
+        if (event.type === "capabilities/released") {
+          capabilities.releaseHostGeneration(event.generationToken);
+          return;
+        }
+        if (event.type !== "capability/invoke") return;
+        dispatches++;
+        void capabilities
+          .execute(
+            {
+              ...event.invocation,
+              signal: new AbortController().signal,
+            },
+            event.generationToken,
+          )
+          .then(
+            (result) => {
+              composition!.capabilityBundle.handleResult({
+                type: "capability/result",
+                invocationId: event.invocationId,
+                generationToken: event.generationToken,
+                ...result,
+              });
+            },
+            (error: unknown) => {
+              composition!.capabilityBundle.handleResult({
+                type: "capability/result",
+                invocationId: event.invocationId,
+                generationToken: event.generationToken,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            },
+          );
+      },
+    });
+    let call = 0;
+    const invoke = async (name: string, args: Record<string, unknown>) => {
+      const result = await composition!.toolEnvironment.execute(
+        composition!.toolEnvironment.prepare({
+          name,
+          arguments: args,
+          threadId: caller,
+          callId: `lifecycle-${++call}`,
+          cwd: root,
+          signal: new AbortController().signal,
+        }),
+      );
+      assert.equal(result.exitCode, 0, result.output);
+      return JSON.parse(result.output);
+    };
+    const storagePath = path.join(
+      root,
+      "plugin-data",
+      "zenx-board",
+      "storage.json",
+    );
+    const absent = await invoke("zenx_board_read", {});
+    assert.equal(absent.exists, false);
+    await invoke("zenx_board_put", {
+      snapshot: absent.snapshot,
+      document: document(),
+    });
+    const old = await invoke("zenx_board_read", { view: "document" });
+    assert.equal(
+      JSON.parse(await readFile(storagePath, "utf8")).value.boards[
+        `thread:${caller}`
+      ].revision,
+      1,
+    );
+    await assert.rejects(
+      capabilities.deletePluginData("zenx-board"),
+      /Disable or uninstall/,
+    );
+
+    // Keep the actual old Host generation leased across disable/delete/re-enable.
+    // It must not silently route to the new runtime's empty storage authority.
+    await capabilities.setEnabled("zenx-board", false);
+    await capabilities.deletePluginData("zenx-board");
+    await assert.rejects(readFile(storagePath, "utf8"), { code: "ENOENT" });
+    await capabilities.setEnabled("zenx-board", true);
+    await assert.rejects(
+      capabilities.execute(
+        {
+          name: "zenx_board_read",
+          arguments: {},
+          threadId: caller,
+          callId: "old-native-generation",
+          cwd: root,
+          signal: new AbortController().signal,
+        },
+        firstGeneration.generationToken,
+      ),
+      /generation was replaced/,
+    );
+    const nextGeneration = capabilities.captureHostSnapshot();
+    assert.notEqual(
+      nextGeneration.generationToken,
+      firstGeneration.generationToken,
+    );
+    composition.replaceCapabilities(nextGeneration); // actual new Host bundle/epoch
+    const fresh = await invoke("zenx_board_read", {});
+    assert.equal(fresh.exists, false);
+    const rejected = async (snapshot: string) => {
+      const before = dispatches;
+      await assert.rejects(
+        invoke("zenx_board_put", { snapshot, document: document() }),
+        /Reference unavailable or retired/,
+      );
+      assert.equal(
+        dispatches,
+        before,
+        "old snapshot is rejected before native dispatch",
+      );
+    };
+    await rejected(absent.snapshot); // old rev0 cannot recreate into new absence
+    await invoke("zenx_board_put", {
+      snapshot: fresh.snapshot,
+      document: { ...document(), title: "New generation body" },
+    });
+    const before = await readFile(storagePath, "utf8");
+    assert.equal(
+      JSON.parse(before).value.boards[`thread:${caller}`].revision,
+      1,
+    );
+    await rejected(old.snapshot); // same numeric rev1 cannot pass across epochs
+    assert.equal(await readFile(storagePath, "utf8"), before);
+    assert.equal(
+      (await invoke("zenx_board_read", { view: "document" })).document.title,
+      "New generation body",
+    );
+  } finally {
+    ZenXPluginCatalog.prototype.initialize = initialize;
+    await composition?.close();
+    await capabilities.close();
+    await spool.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

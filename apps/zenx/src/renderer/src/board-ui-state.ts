@@ -1,9 +1,10 @@
 import { localErrorDetail } from "../../local-error-detail.js";
-import type {
-  BoardEventResult,
-  BoardOwner,
-  BoardSnapshot,
-  BoardValues,
+import {
+  normalizeBoardInstanceKey,
+  type BoardEventResult,
+  type BoardOwner,
+  type BoardSnapshot,
+  type BoardValues,
 } from "../../../../../packages/zenx-board-plugin/src/board.js";
 export type BoardConversation =
   { kind: "thread"; threadId: string } | { kind: "room"; roomId: string };
@@ -24,10 +25,28 @@ export class BoardUiSession {
   #saving: Promise<void> | null = null;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #listeners = new Set<() => void>();
+  readonly instanceKey: string;
   constructor(
     readonly owner: BoardConversation,
     readonly command: (input: Record<string, unknown>) => Promise<unknown>,
-  ) {}
+    instanceKey?: string,
+  ) {
+    this.instanceKey = normalizeBoardInstanceKey(instanceKey);
+  }
+  #address(input: Record<string, unknown>) {
+    return this.instanceKey === "default"
+      ? input
+      : { ...input, instanceKey: this.instanceKey };
+  }
+  #checkSnapshot(snapshot: BoardSnapshot | null) {
+    if (
+      snapshot &&
+      (normalizeBoardInstanceKey(snapshot.instanceKey) !== this.instanceKey ||
+        conversationKey(snapshot.document.owner) !==
+          conversationKey(this.owner))
+    )
+      throw new Error("Board response belongs to a different document");
+  }
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener);
     return () => {
@@ -49,11 +68,14 @@ export class BoardUiSession {
   async refresh() {
     const read = ++this.#read;
     try {
-      const next = (await this.command({
-        operation: "read",
-        owner: this.owner,
-      })) as BoardSnapshot | null;
+      const next = (await this.command(
+        this.#address({
+          operation: "read",
+          owner: this.owner,
+        }),
+      )) as BoardSnapshot | null;
       if (read !== this.#read) return;
+      this.#checkSnapshot(next);
       if (this.#readError) this.#clearError();
       if (
         next &&
@@ -112,12 +134,15 @@ export class BoardUiSession {
     const snapshot = this.snapshot;
     this.#saving = (async () => {
       try {
-        const next = (await this.command({
-          operation: "draft",
-          owner: snapshot.document.owner,
-          expectedDraftRevision: snapshot.draftRevision,
-          values: sent,
-        })) as BoardSnapshot;
+        const next = (await this.command(
+          this.#address({
+            operation: "draft",
+            owner: snapshot.document.owner,
+            expectedDraftRevision: snapshot.draftRevision,
+            values: sent,
+          }),
+        )) as BoardSnapshot;
+        this.#checkSnapshot(next);
         this.#read++;
         this.snapshot =
           this.snapshot && this.snapshot.revision > next.revision
@@ -143,7 +168,11 @@ export class BoardUiSession {
     })();
     return this.#saving;
   }
-  async run(eventId: string, values?: BoardValues): Promise<BoardEventResult> {
+  async run(
+    eventId: string,
+    values?: BoardValues,
+    execution?: { executionThreadId?: string; assertCurrent?(): void },
+  ): Promise<BoardEventResult> {
     if (this.busy) throw new Error("A Board action is already running");
     const clicked = this.snapshot;
     if (!clicked) throw new Error("No Board exists");
@@ -152,7 +181,9 @@ export class BoardUiSession {
     this.#clearError();
     this.#emit();
     try {
+      execution?.assertCurrent?.();
       await this.flush();
+      execution?.assertCurrent?.();
       if (
         !this.snapshot ||
         this.snapshot.revision !== clicked.revision ||
@@ -165,14 +196,20 @@ export class BoardUiSession {
         );
       const current = this.snapshot;
       const edit = this.#edit;
-      const result = (await this.command({
-        operation: "event",
-        owner: current.document.owner,
-        eventId,
-        values,
-        revision: current.revision,
-        draftRevision: current.draftRevision,
-      })) as BoardEventResult;
+      const result = (await this.command(
+        this.#address({
+          operation: "event",
+          owner: current.document.owner,
+          eventId,
+          values,
+          ...(execution?.executionThreadId === undefined
+            ? {}
+            : { executionThreadId: execution.executionThreadId }),
+          revision: current.revision,
+          draftRevision: current.draftRevision,
+        }),
+      )) as BoardEventResult;
+      this.#checkSnapshot(result.snapshot);
       // A poll begun before this receipt cannot subsequently roll its state back.
       this.#read++;
       this.result = result;
@@ -212,10 +249,13 @@ export class BoardUiSession {
           "Newer local typing was preserved; discard again if intended",
         );
       const read = ++this.#read;
-      const next = (await this.command({
-        operation: "read",
-        owner: this.owner,
-      })) as BoardSnapshot | null;
+      const next = (await this.command(
+        this.#address({
+          operation: "read",
+          owner: this.owner,
+        }),
+      )) as BoardSnapshot | null;
+      this.#checkSnapshot(next);
       if (this.#edit !== edit)
         throw new Error(
           "Newer local typing was preserved; discard again if intended",
@@ -247,11 +287,14 @@ export class BoardUiSession {
   }
   async pin(pinned: boolean) {
     if (!this.snapshot) return;
-    const next = (await this.command({
-      operation: "pin",
-      owner: this.snapshot.document.owner,
-      pinned,
-    })) as BoardSnapshot;
+    const next = (await this.command(
+      this.#address({
+        operation: "pin",
+        owner: this.snapshot.document.owner,
+        pinned,
+      }),
+    )) as BoardSnapshot;
+    this.#checkSnapshot(next);
     this.snapshot = { ...this.snapshot, pinned: next.pinned };
     this.#emit();
   }
@@ -263,4 +306,17 @@ export function conversationKey(owner: BoardConversation | BoardOwner) {
   return owner.kind === "thread"
     ? `thread:${owner.threadId}`
     : `room:${owner.roomId}`;
+}
+
+/** Cache and interaction identities must distinguish equal authored IDs/revisions. */
+export function boardUiSessionKey(
+  owner: BoardConversation,
+  instanceKey?: string,
+  admissionId: unknown = "fixture",
+) {
+  return JSON.stringify([
+    String(admissionId ?? "fixture"),
+    conversationKey(owner),
+    normalizeBoardInstanceKey(instanceKey),
+  ]);
 }

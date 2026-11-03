@@ -147,6 +147,40 @@ export interface ZenXRoomsTrustedService {
     readSince: unknown,
   ): ReturnType<typeof roomMessageReadProjection> | undefined;
   roomOperations?(roomId: string): RoomOperation[];
+  roomQuestionSummary?(
+    roomId: string,
+  ):
+    { revision: number; openCount: number; totalQuestions: number } | undefined;
+  roomQuestions?(
+    roomId: string,
+    options: {
+      afterQuestionId?: string;
+      expectedWorkspaceRevision?: number;
+      includeClosed?: boolean;
+      limit?: number;
+    },
+  ): Promise<unknown>;
+  modelReadRoomQuestions?(
+    roomId: string,
+    options: {
+      afterQuestionId?: string;
+      expectedWorkspaceRevision?: number;
+      includeClosed?: boolean;
+      limit?: number;
+    },
+  ): Promise<unknown>;
+  modelUpdateRoomQuestion?(input: {
+    roomId: string;
+    questionId: string;
+    expectedRevision: number;
+    specification: unknown;
+  }): Promise<unknown>;
+  modelWithdrawRoomQuestion?(input: {
+    roomId: string;
+    questionId: string;
+    expectedRevision: number;
+  }): Promise<unknown>;
+
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
@@ -270,6 +304,102 @@ export function createZenXTrustedPlugin(
           : null;
       const args = uiInput ?? invocation.arguments;
       switch (toolName) {
+        case "zenx_rooms_questions": {
+          fields(args, [
+            "roomId",
+            "afterQuestionId",
+            "expectedWorkspaceRevision",
+            "includeClosed",
+            "limit",
+          ]);
+          const readQuestions =
+            uiInput === null
+              ? service.modelReadRoomQuestions
+              : service.roomQuestions;
+          if (!readQuestions)
+            throw Error("Room question workspace service unavailable");
+          if (
+            args.expectedWorkspaceRevision !== undefined &&
+            (!Number.isSafeInteger(args.expectedWorkspaceRevision) ||
+              Number(args.expectedWorkspaceRevision) < 0)
+          )
+            throw Error("Invalid Room question workspace revision");
+          if (
+            args.includeClosed !== undefined &&
+            typeof args.includeClosed !== "boolean"
+          )
+            throw Error("Invalid Room question state filter");
+          if (
+            args.limit !== undefined &&
+            (!Number.isSafeInteger(args.limit) ||
+              Number(args.limit) < 1 ||
+              Number(args.limit) > 4)
+          )
+            throw Error("Room model question page limit must be 1..4");
+          return readQuestions.call(
+            service,
+            string(args, "roomId", MAX_ID_BYTES),
+            {
+              limit: args.limit === undefined ? 4 : Number(args.limit),
+              ...(args.afterQuestionId === undefined
+                ? {}
+                : {
+                    afterQuestionId: string(
+                      args,
+                      "afterQuestionId",
+                      MAX_ID_BYTES,
+                    ),
+                  }),
+              ...(args.expectedWorkspaceRevision === undefined
+                ? {}
+                : {
+                    expectedWorkspaceRevision: Number(
+                      args.expectedWorkspaceRevision,
+                    ),
+                  }),
+              ...(args.includeClosed === undefined
+                ? {}
+                : { includeClosed: args.includeClosed as boolean }),
+            },
+          );
+        }
+        case "zenx_rooms_update_question": {
+          fields(args, [
+            "roomId",
+            "questionId",
+            "expectedRevision",
+            "specification",
+          ]);
+          if (!service.modelUpdateRoomQuestion)
+            throw Error("Room question workspace service unavailable");
+          if (
+            !Number.isSafeInteger(args.expectedRevision) ||
+            Number(args.expectedRevision) < 1 ||
+            !record(args.specification)
+          )
+            throw Error("Invalid Room question content or revision");
+          return service.modelUpdateRoomQuestion({
+            roomId: string(args, "roomId", MAX_ID_BYTES),
+            questionId: string(args, "questionId", MAX_ID_BYTES),
+            expectedRevision: Number(args.expectedRevision),
+            specification: args.specification,
+          });
+        }
+        case "zenx_rooms_withdraw_question": {
+          fields(args, ["roomId", "questionId", "expectedRevision"]);
+          if (!service.modelWithdrawRoomQuestion)
+            throw Error("Room question workspace service unavailable");
+          if (
+            !Number.isSafeInteger(args.expectedRevision) ||
+            Number(args.expectedRevision) < 1
+          )
+            throw Error("Invalid Room question revision");
+          return service.modelWithdrawRoomQuestion({
+            roomId: string(args, "roomId", MAX_ID_BYTES),
+            questionId: string(args, "questionId", MAX_ID_BYTES),
+            expectedRevision: Number(args.expectedRevision),
+          });
+        }
         case "zenx_rooms_workspace":
           fields(args, ["roomId"]);
           if (!service.assistantWorkspace)
@@ -306,6 +436,7 @@ export function createZenXTrustedPlugin(
             rooms: state.rooms.slice(cursor, cursor + 1).map((room) => ({
               ...readSafeRoom(room),
               messageCount: room.messageCount ?? room.messages.length,
+              ...questionSummary(service, room.id),
               ...readProjection(
                 service,
                 room,
@@ -855,4 +986,9 @@ function historySnapshot(value: unknown, roomId: string): RoomHistorySnapshot {
   )
     throw Error("Invalid Room history snapshot");
   return { ...input } as unknown as RoomHistorySnapshot;
+}
+
+function questionSummary(service: ZenXRoomsTrustedService, roomId: string) {
+  const value = service.roomQuestionSummary?.(roomId);
+  return value === undefined ? {} : { questionSummary: value };
 }

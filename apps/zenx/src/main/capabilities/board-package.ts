@@ -10,12 +10,16 @@ import type { ZenXPluginHostSdkV1 } from "../plugin-host-sdk.js";
 import type { ZenXCapabilityPackage } from "./types.js";
 import { boardManifest } from "../../../../../packages/zenx-board-plugin/src/manifest.js";
 import {
+  boardDocumentKey,
   boardOwnerKey,
+  boardResourceOwner,
+  normalizeBoardInstanceKey,
   type BoardAction,
   type BoardNavigationTarget,
   type BoardDocument,
   type BoardEventResult,
   type BoardOwner,
+  type BoardResourceOwner,
   type BoardSnapshot,
   type BoardValue,
   type BoardValues,
@@ -23,6 +27,8 @@ import {
 
 export interface BoardHostPort {
   readOwner(owner: BoardOwner): Promise<BoardOwner>;
+  /** Trusted human product access, never Agent execution authority. */
+  readResourceOwner?(owner: BoardResourceOwner): Promise<BoardResourceOwner>;
   makeClientId?(owner: BoardOwner): string;
   readNavigationTarget?(
     owner: BoardOwner,
@@ -67,45 +73,65 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     if (name === "zenx_board_ui" && !ui)
       throw new Error("Board actions require an explicit human UI event");
     const args = record(ui ? invocation.arguments.input : invocation.arguments);
+    const instanceKey = normalizeBoardInstanceKey(args.instanceKey);
+    if (name === "zenx_board_put") {
+      only(args, ["document", "expectedRevision", "instanceKey"]);
+      contentRevision(args.expectedRevision);
+    } else if (name === "zenx_board_read")
+      only(args, ["owner", "view", "instanceKey"]);
     const document =
       name === "zenx_board_put"
         ? validateDocument(args.document, invocation.threadId)
         : undefined;
-    // Room UI reads resolve the persisted execution member; never guess from the foreground selection.
-    if (
-      ui &&
-      args.operation === "read" &&
-      typeof args.owner === "object" &&
-      args.owner !== null
-    ) {
-      const candidate = args.owner as Record<string, unknown>;
-      if (candidate.kind === "room" && candidate.threadId === undefined) {
-        const saved = await this.#serial(
-          async () =>
-            (await this.#boards())[
-              `room:${text(candidate.roomId, "roomId", 512)}`
-            ],
-        );
-        if (!saved) return null;
-        args.owner = saved.document.owner;
-      }
-    }
-    const owner =
+    const resource =
       document?.owner ??
-      validateOwner(
+      validateResourceOwner(
         args.owner ?? { kind: "thread", threadId: invocation.threadId },
       );
-    if (!ui && owner.threadId !== invocation.threadId)
+    const rawOwner = record(
+      document
+        ? (record(args.document).owner ?? resource)
+        : (args.owner ?? resource),
+    );
+    if (
+      !ui &&
+      rawOwner.threadId !== undefined &&
+      rawOwner.threadId !== invocation.threadId
+    )
       throw new Error("Board owner must be the calling Thread");
-    await this.host.readOwner(owner);
-    if (document) {
+    const actor = ui ? args.executionThreadId : invocation.threadId;
+    const owner: BoardOwner | undefined =
+      resource.kind === "thread"
+        ? resource
+        : actor === undefined
+          ? undefined
+          : { ...resource, threadId: text(actor, "threadId", 512) };
+    if (!ui && (!owner || owner.threadId !== invocation.threadId))
+      throw new Error("Board owner must be the calling Thread");
+    const revalidate = async () => {
+      invocation.signal.throwIfAborted();
+      if (ui) {
+        if (this.host.readResourceOwner)
+          await this.host.readResourceOwner(resource);
+        else if (resource.kind === "thread")
+          await this.host.readOwner(resource);
+        else throw new Error("Room Board workspace validation is unavailable");
+      } else await this.host.readOwner(owner!);
+      invocation.signal.throwIfAborted();
+    };
+    // Passive refresh admits once, after queued storage I/O, rather than reading
+    // the same Thread summary both before and after that await.
+    if (!(name === "zenx_board_ui" && args.operation === "read"))
+      await revalidate();
+    const validateTargets = async () => {
+      if (!document) return;
       const targets = navigationTargets(
         document.events.flatMap((event) => event.actions),
       );
       const supplied = readBrowserSidebarTargets(invocation);
       for (const target of targets) {
         if (target.kind === "url") continue;
-        const route = await this.host.readNavigationTarget?.(owner, target);
+        const route = await this.host.readNavigationTarget?.(owner!, target);
         if (
           !route ||
           (supplied && !supplied.some((entry) => sameRoute(entry, route)))
@@ -114,21 +140,43 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             "Board navigation requires the exact live Browser target owned by this Thread",
           );
       }
-    }
+    };
+    if (
+      name === "zenx_board_ui" &&
+      ["event", "navigate"].includes(String(args.operation)) &&
+      !owner
+    )
+      throw new Error(
+        "Choose an explicit current Room member for Board execution; workspace ownership does not select an executor",
+      );
     if (name === "zenx_board_ui" && args.operation === "event")
-      return await this.#event(owner, args, invocation.signal);
+      return await this.#event(owner!, instanceKey, args, invocation.signal);
     if (name === "zenx_board_ui" && args.operation === "navigate")
-      return await this.#navigate(owner, args, invocation.signal);
+      return await this.#navigate(owner!, instanceKey, args, invocation.signal);
     return await this.#serial(async () => {
-      const boards = await this.#boards();
-      const key = boardOwnerKey(owner);
+      const key = boardDocumentKey(resource, instanceKey);
+      const boards = await this.#boards(key);
+      await revalidate();
       const current = boards[key];
-      if (current && current.document.owner.threadId !== owner.threadId)
-        throw new Error("Board belongs to a different execution member");
+      if (
+        current &&
+        boardOwnerKey(current.document.owner) !== boardOwnerKey(resource)
+      )
+        throw new Error("Board belongs to a different workspace or Thread");
       if (document) {
+        const revision = contentRevision(current ? current.revision : 0);
+        if (args.expectedRevision !== revision)
+          return {
+            applied: false,
+            ...contentRead(owner!, current, false, instanceKey),
+          };
+        const nextRevision = contentRevision(revision + 1);
+        await validateTargets();
+        await revalidate();
         const next: BoardSnapshot = {
+          ...(instanceKey === "default" ? {} : { instanceKey }),
           document,
-          revision: (current?.revision ?? 0) + 1,
+          revision: nextRevision,
           draftRevision: current?.draftRevision ?? 0,
           values: {
             ...(document.initialValues ?? {}),
@@ -137,7 +185,19 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           pinned: current?.pinned ?? false,
         };
         boards[key] = next;
-        await this.#save(boards);
+        try {
+          await this.#save(boards);
+        } catch (error) {
+          // A rejected write is not a CAS conflict or permission to retry. Keep
+          // any underlying storage fence, and stop this old body's interaction.
+          this.#running
+            .get(key)
+            ?.abort(new Error("Board content save is unconfirmed"));
+          throw new Error(
+            "Board content save failed or its outcome is unconfirmed; inspect this same Board before editing again, and never retry automatically",
+            { cause: error },
+          );
+        }
         // The existing in-flight interaction guard follows committed document replacement.
         // Its signal is checked again by native sidebar/tool admission after async preparation.
         this.#running
@@ -147,7 +207,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
               "Board document changed; the pending interaction was stopped. Review the replacement before running another action.",
             ),
           );
-        return semantic(next);
+        return {
+          applied: true,
+          ...contentRead(owner!, next, false, instanceKey),
+        };
       }
       if (name === "zenx_board_read") {
         if (
@@ -156,8 +219,9 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
           args.view !== "document"
         )
           throw new Error("Board read view must be semantic or document");
-        if (!current) return null;
-        if (args.view !== "document") return semantic(current);
+        if (!current) return contentRead(owner!, undefined, false, instanceKey);
+        if (args.view !== "document")
+          return contentRead(owner!, current, false, instanceKey);
         const routes: BrowserModelRoute[] = [];
         const navigationDiagnostics: Array<{
           kind: string;
@@ -171,7 +235,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         )) {
           if (target.kind === "url") continue;
           try {
-            const route = await this.host.readNavigationTarget?.(owner, target);
+            const route = await this.host.readNavigationTarget?.(
+              owner!,
+              target,
+            );
             if (
               route &&
               routes.length < 64 &&
@@ -195,9 +262,12 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
             });
           }
         }
+        // Browser liveness awaits may outlive Room membership or cancellation.
+        // A complete body/snapshot is published only after a fresh owner check.
+        await revalidate();
         return attachBrowserSidebarTargets(
           {
-            ...current,
+            ...contentRead(owner!, current, true, instanceKey),
             ...(navigationDiagnostics.length ? { navigationDiagnostics } : {}),
           },
           routes,
@@ -223,11 +293,12 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
   }
   async #navigate(
     owner: BoardOwner,
+    instanceKey: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<BoardEventResult> {
     const target = validateNavigationTarget(args.target);
-    const key = boardOwnerKey(owner);
+    const key = boardDocumentKey(owner, instanceKey);
     if (this.#running.has(key))
       throw new Error("A Board action is already running; it was not repeated");
     const replaced = new AbortController();
@@ -235,8 +306,14 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     this.#running.set(key, replaced);
     try {
       const snapshot = await this.#serial(async () => {
-        const current = (await this.#boards())[key];
-        if (!current || current.document.owner.threadId !== owner.threadId)
+        const current = (await this.#boards(key))[key];
+        signal.throwIfAborted();
+        await this.host.readOwner(owner);
+        signal.throwIfAborted();
+        if (
+          !current ||
+          boardOwnerKey(current.document.owner) !== boardOwnerKey(owner!)
+        )
           throw new Error("Board owner is unavailable");
         if (current.revision !== args.revision)
           throw new Error(
@@ -247,6 +324,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       try {
         signal.throwIfAborted();
         await this.host.readOwner(owner);
+        signal.throwIfAborted();
         if (!this.host.navigate)
           throw new Error("Board resource navigation is unavailable");
         await this.host.navigate(owner, target, signal);
@@ -271,10 +349,11 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
 
   async #event(
     owner: BoardOwner,
+    instanceKey: string,
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<BoardEventResult> {
-    const key = boardOwnerKey(owner);
+    const key = boardDocumentKey(owner, instanceKey);
     if (this.#running.has(key))
       throw new Error("A Board action is already running; it was not repeated");
     const replaced = new AbortController();
@@ -282,8 +361,14 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     this.#running.set(key, replaced);
     try {
       const snapshot = await this.#serial(async () => {
-        const current = (await this.#boards())[key];
-        if (!current || current.document.owner.threadId !== owner.threadId)
+        const current = (await this.#boards(key))[key];
+        signal.throwIfAborted();
+        await this.host.readOwner(owner);
+        signal.throwIfAborted();
+        if (
+          !current ||
+          boardOwnerKey(current.document.owner) !== boardOwnerKey(owner!)
+        )
           throw new Error("Board owner is unavailable");
         if (
           current.revision !== args.revision ||
@@ -312,6 +397,7 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
         for (const action of actions) {
           signal.throwIfAborted();
           await this.host.readOwner(owner);
+          signal.throwIfAborted();
           if (action.kind === "if") {
             await run(
               working[action.field] === action.equals
@@ -473,7 +559,10 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
       if (Object.keys(changed).length) {
         try {
           result.snapshot = await this.#serial(async () => {
-            const boards = await this.#boards();
+            const boards = await this.#boards(key);
+            signal.throwIfAborted();
+            await this.host.readOwner(owner);
+            signal.throwIfAborted();
             const current = boards[key];
             if (
               !current ||
@@ -510,18 +599,58 @@ export class ZenXBoardCapabilityPackage implements ZenXCapabilityPackage {
     this.#tail = next.catch(() => {});
     return next;
   }
-  async #boards(): Promise<Record<string, BoardSnapshot>> {
+  async #boards(key: string): Promise<Record<string, BoardSnapshot>> {
     if (!this.#sdk) throw new Error("Board plugin storage is unavailable");
     const stored = await this.#sdk.storage.get();
-    return structuredClone(record(stored.boards ?? {})) as Record<
+    const boards = structuredClone(record(stored.boards ?? {})) as Record<
       string,
       BoardSnapshot
     >;
+    // Decode only the addressed resource; later saves preserve all other owners.
+    const snapshot = boards[key];
+    if (snapshot?.document?.owner?.kind === "room")
+      snapshot.document.owner = boardResourceOwner(snapshot.document.owner);
+    return boards;
   }
   async #save(boards: Record<string, BoardSnapshot>) {
     if (!this.#sdk) throw new Error("Board plugin storage is unavailable");
     await this.#sdk.storage.set({ boards });
   }
+}
+function contentRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0)
+    throw new Error(
+      "Board content revision must be a nonnegative safe integer",
+    );
+  return Number(value);
+}
+function contentRead(
+  owner: BoardOwner,
+  current: BoardSnapshot | undefined,
+  completeDocument = false,
+  instanceKey = "default",
+) {
+  const contentSnapshot = {
+    ...(instanceKey === "default" ? {} : { instanceKey }),
+    owner: structuredClone(owner),
+    revision: contentRevision(current ? current.revision : 0),
+    completeDocument: !current || completeDocument,
+  };
+  return current
+    ? {
+        ...(completeDocument ? structuredClone(current) : semantic(current)),
+        ...(instanceKey === "default" ? {} : { instanceKey }),
+        contentSnapshot,
+      }
+    : {
+        exists: false,
+        ...(instanceKey === "default" ? {} : { instanceKey }),
+        contentSnapshot,
+      };
+}
+function only(value: Record<string, unknown>, keys: readonly string[]) {
+  if (Object.keys(value).some((key) => !keys.includes(key)))
+    throw new Error("Unknown Board argument");
 }
 function semantic(state: BoardSnapshot) {
   const fields = state.document.blocks.filter(
@@ -600,6 +729,12 @@ function values(value: unknown): BoardValues {
 }
 export function validateOwner(value: unknown): BoardOwner {
   const owner = record(value);
+  only(
+    owner,
+    owner.kind === "room"
+      ? ["kind", "roomId", "threadId"]
+      : ["kind", "threadId"],
+  );
   const threadId = text(owner.threadId, "threadId", 512);
   if (owner.kind === "thread") return { kind: "thread", threadId };
   if (owner.kind === "room")
@@ -609,6 +744,15 @@ export function validateOwner(value: unknown): BoardOwner {
       threadId,
     };
   throw new Error("Invalid Board owner");
+}
+function validateResourceOwner(value: unknown): BoardResourceOwner {
+  const owner = record(value);
+  if (owner.kind === "room") {
+    only(owner, ["kind", "roomId", "threadId"]);
+    if (owner.threadId !== undefined) text(owner.threadId, "threadId", 512);
+    return { kind: "room", roomId: text(owner.roomId, "roomId", 512) };
+  }
+  return validateOwner(value);
 }
 function interpolate(template: string, values: BoardValues): string {
   return template.replace(
@@ -626,7 +770,13 @@ export function validateDocument(
   if (value === undefined || JSON.stringify(value).length > 256 * 1024)
     throw new Error("Board document exceeds 256 KiB");
   const doc = record(value);
-  const owner = validateOwner(doc.owner ?? { kind: "thread", threadId });
+  if ("instanceKey" in doc)
+    throw new Error(
+      "Board instanceKey is an address, not authored document content",
+    );
+  const owner = validateResourceOwner(
+    doc.owner ?? { kind: "thread", threadId },
+  );
   if (
     !Array.isArray(doc.blocks) ||
     doc.blocks.length > 64 ||

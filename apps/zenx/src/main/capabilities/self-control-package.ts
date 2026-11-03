@@ -10,15 +10,22 @@ import {
 } from "../sidebar-tool-scope.js";
 import { sidebarTabId } from "../../thread-sidebar-state.js";
 import {
+  bindInformationEdits,
+  defaultInformationLayout,
+  informationEditSchema,
+  informationPage,
+} from "../../information-layout.js";
+import {
   parseSidebarUpdate,
   type ThreadSidebarPort,
+  type ThreadSidebarState,
 } from "../../thread-sidebar-state.js";
 import { deliverAssistantInput } from "../assistant-preset.js";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fleetTools, type FleetRouter } from "../fleet.js";
 import { readThreadHistory } from "../thread-history.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { matchesSkillInputSnapshot } from "../../../../../src/skill-input.js";
 import { resolveThreadTarget } from "../thread-target.js";
 
@@ -577,10 +584,23 @@ manifest.tools.push(
   {
     name: "zenx_self_control_sidebar_read",
     description:
-      "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI.",
+      "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI. includeInformation reads paged static component definitions/layout only, not provider availability or content; paging does not impose a component-count limit.",
     inputSchema: {
       type: "object",
-      properties: { scope: sidebarScopeSchema },
+      properties: {
+        scope: sidebarScopeSchema,
+        includeInformation: { type: "boolean" },
+        informationPage: {
+          type: "object",
+          properties: {
+            offset: { type: "integer", minimum: 0 },
+            pageSize: { type: "integer", minimum: 1 },
+            revision: { type: "integer", minimum: 0 },
+            basis: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+      },
       additionalProperties: false,
     },
     permissions: [ZENX_SELF_CONTROL_WORKSPACE_PERMISSION],
@@ -591,12 +611,13 @@ manifest.tools.push(
   {
     name: "zenx_self_control_sidebar_update",
     description:
-      "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits.",
+      "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits. information accepts only local add/move/set/remove/reset operations with informationBase from the same read; ordinary local edits preserve unseen instances, while explicit reset only restores ordering/visibility as described. New instance identities and member bindings are Host-owned; foreign instances may only be moved. No provider content/action or foreground change occurs.",
     inputSchema: {
       type: "object",
       properties: {
         scope: sidebarScopeSchema,
         expectedRevision: { type: "integer", minimum: 0 },
+        informationBase: { type: "string" },
         patch: {
           type: "object",
           properties: {
@@ -604,6 +625,7 @@ manifest.tools.push(
             fullscreen: { type: "boolean" },
             tabs: { type: "array", maxItems: 64, items: sidebarTabSchema },
             selectedTab: { type: ["string", "null"] },
+            information: informationEditSchema({ type: "string" }),
           },
           additionalProperties: false,
         },
@@ -701,6 +723,7 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
           };
         throw error;
       }
+      let requiredDefaultBasis: string | undefined;
       const admit = () => {
         invocation.signal.throwIfAborted();
         for (const route of readBrowserSidebarTargets(invocation) ?? []) {
@@ -713,23 +736,151 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
           scope.effectiveScope,
           this.#sidebarRooms(),
         );
+        if (
+          requiredDefaultBasis !== undefined &&
+          requiredDefaultBasis !==
+            JSON.stringify(defaults().widgets.map((widget) => widget.id))
+        )
+          throw Error(
+            "Information default binding changed before admission; read again",
+          );
+      };
+      const defaults = () => {
+        const room =
+          scope.effectiveScope.kind === "room"
+            ? this.#sidebarRooms().find(
+                (room) => room.id === scope.effectiveScope.id,
+              )
+            : undefined;
+        const assistant = room?.assistant?.threadId;
+        return defaultInformationLayout(
+          scope.effectiveScope,
+          assistant &&
+            room?.members.some((member) => member.threadId === assistant)
+            ? assistant
+            : undefined,
+        );
+      };
+      const project = (
+        state: ThreadSidebarState,
+        include: boolean,
+        page?: unknown,
+      ) => {
+        // A scope grant is not a grant to another member's component content.
+        // Never leak the full layout through a conflict/read tool receipt.
+        const { informationLayout, ...presentation } = state;
+        const layout = informationLayout ?? defaults();
+        const basis = informationLayout
+          ? "saved"
+          : JSON.stringify(layout.widgets.map((widget) => widget.id));
+        return {
+          state: presentation,
+          ...(include
+            ? {
+                information: informationPage(
+                  layout,
+                  state.revision,
+                  threadId,
+                  page,
+                  basis,
+                ),
+              }
+            : {}),
+        };
       };
       if (name === "zenx_self_control_sidebar_read") {
-        assertOnly(invocation.arguments, ["scope"]);
+        assertOnly(invocation.arguments, [
+          "scope",
+          "includeInformation",
+          "informationPage",
+        ]);
+        if (
+          invocation.arguments.includeInformation !== undefined &&
+          typeof invocation.arguments.includeInformation !== "boolean"
+        )
+          throw Error("includeInformation must be boolean");
+        if (
+          invocation.arguments.informationPage !== undefined &&
+          invocation.arguments.includeInformation !== true
+        )
+          throw Error("Information paging requires includeInformation");
+        const state = await this.#sidebar.read(scope.effectiveScope, admit);
         return {
           source: "zenx.sidebar-state",
           visibility: "not-observed",
           ...scope,
-          state: await this.#sidebar.read(scope.effectiveScope, admit),
+          ...project(
+            state,
+            invocation.arguments.includeInformation === true,
+            invocation.arguments.informationPage,
+          ),
         };
       }
-      assertOnly(invocation.arguments, ["scope", "expectedRevision", "patch"]);
+      assertOnly(invocation.arguments, [
+        "scope",
+        "expectedRevision",
+        "informationBase",
+        "patch",
+      ]);
       const current = await this.#sidebar.read(scope.effectiveScope, admit);
+      const inputPatch = invocation.arguments.patch;
+      if (
+        !inputPatch ||
+        typeof inputPatch !== "object" ||
+        Array.isArray(inputPatch)
+      )
+        throw Error("Sidebar patch required");
+      const { information, ...presentationPatch } = inputPatch as Record<
+        string,
+        unknown
+      >;
+      if (Object.hasOwn(presentationPatch, "informationLayout"))
+        throw Error(
+          "Information edits require local operations, never full layout replacement",
+        );
       const request = parseSidebarUpdate({
         owner: scope.effectiveScope,
         expectedRevision: invocation.arguments.expectedRevision,
-        patch: invocation.arguments.patch,
+        patch: presentationPatch,
       });
+      if (information !== undefined) {
+        const initial = defaults();
+        const basis = current.informationLayout
+          ? "saved"
+          : JSON.stringify(initial.widgets.map((widget) => widget.id));
+        if (typeof invocation.arguments.informationBase !== "string")
+          throw Error("Read information before editing its exact layout basis");
+        if (
+          request.expectedRevision !== current.revision ||
+          invocation.arguments.informationBase !== basis
+        )
+          return {
+            source: "zenx.sidebar-state",
+            visibility: "not-observed",
+            ...scope,
+            applied: false,
+            ...project(current, true),
+          };
+        request.patch.informationLayout = {
+          ...(current.informationLayout ? {} : { initial }),
+          operations: bindInformationEdits(information, {
+            owner: scope.effectiveScope,
+            callerThreadId: threadId,
+            current: current.informationLayout ?? initial,
+            defaults: initial,
+            newId: randomUUID,
+          }),
+        };
+        if (
+          !current.informationLayout ||
+          request.patch.informationLayout.operations.some(
+            (operation) => operation.op === "reset",
+          )
+        )
+          requiredDefaultBasis = JSON.stringify(
+            initial.widgets.map((widget) => widget.id),
+          );
+      }
       if (request.patch.resourceThreadId !== undefined)
         throw new Error(
           "The resource picker is a user choice; resource tabs bind to your caller Thread",
@@ -757,7 +908,8 @@ export class ZenXSelfControlCapabilityPackage implements ZenXCapabilityPackage {
         source: "zenx.sidebar-state",
         visibility: "not-observed",
         ...scope,
-        ...result,
+        applied: result.applied,
+        ...project(result.state, information !== undefined),
       };
     }
 

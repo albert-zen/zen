@@ -72,7 +72,6 @@
           }
         },
         "required": ["model"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -80,7 +79,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -192,7 +192,6 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["cwd"]
@@ -203,7 +202,8 @@
           {
             "required": ["projectless"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -235,6 +235,10 @@
             "type": "string",
             "enum": ["turns", "items", "agent_messages", "item"]
           },
+          "throughItemId": {
+            "type": "string",
+            "description": "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn."
+          },
           "turnId": {
             "type": "string"
           },
@@ -257,13 +261,8 @@
           "device": {
             "type": "string",
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
-          },
-          "throughItemId": {
-            "type": "string",
-            "description": "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -271,7 +270,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -301,7 +301,6 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -309,7 +308,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -339,7 +339,6 @@
           }
         },
         "required": ["name"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -347,7 +346,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -376,7 +376,6 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -384,7 +383,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -413,7 +413,6 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -421,7 +420,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -463,7 +463,6 @@
           }
         },
         "required": ["text"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -471,7 +470,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -584,7 +584,6 @@
           }
         },
         "required": ["turnId"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -592,7 +591,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -601,7 +601,7 @@
     },
     {
       "name": "zenx_self_control_sidebar_read",
-      "description": "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI.",
+      "description": "Read the effective Thread or Room persisted sidebar presentation: revision, open/fullscreen, ordered typed tabs and selectedTab. This is state, not evidence of screen visibility. Default is the unique dedicated PAW Room binding, otherwise your private Thread. Explicit scope may be your private Thread or a Room whose membership is checked live. Multiple dedicated bindings require an explicit scope. Response reports effectiveScope/defaultReason/authorizedScopes; never infer the default from visible UI. includeInformation reads paged static component definitions/layout only, not provider availability or content; paging does not impose a component-count limit.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -618,6 +618,30 @@
             },
             "required": ["kind", "id"],
             "additionalProperties": false
+          },
+          "includeInformation": {
+            "type": "boolean"
+          },
+          "informationPage": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pageSize": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "basis": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -629,7 +653,7 @@
     },
     {
       "name": "zenx_self_control_sidebar_update",
-      "description": "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits.",
+      "description": "Update authorized Thread/Room sidebar state using expectedRevision from sidebar_read. Runs even while another Thread is foreground; never switches focus or opens content in the background. tabs replaces ordered descriptors (max 64); preserve tabs you want to keep. selectedTab uses IDs returned by read: file:path, webpage:intentId, plugin:pluginId:panelId, thread:threadId, browser:id, terminal or computer. Omit webpage id to mint a stable persisted intent ID; duplicate URLs with different IDs are distinct tabs. Read returned IDs before selecting a newly minted tab. Room resource descriptors bind to your caller Thread, not another member; preserve existing descriptors unchanged. File paths are normalized workspace-relative paths (not absolute); file/webpage contents load through existing controls only when selected and visible. Conflict returns applied:false plus current state; read/reconsider rather than blindly overwrite. Does not save/discard file edits. information accepts only local add/move/set/remove/reset operations with informationBase from the same read; ordinary local edits preserve unseen instances, while explicit reset only restores ordering/visibility as described. New instance identities and member bindings are Host-owned; foreign instances may only be moved. No provider content/action or foreground change occurs.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -650,6 +674,9 @@
           "expectedRevision": {
             "type": "integer",
             "minimum": 0
+          },
+          "informationBase": {
+            "type": "string"
           },
           "patch": {
             "type": "object",
@@ -708,6 +735,350 @@
               },
               "selectedTab": {
                 "type": ["string", "null"]
+              },
+              "information": {
+                "type": "object",
+                "properties": {
+                  "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "pull-requests"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "lineage"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "artifacts"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "triggers"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {
+                                "filter": {
+                                  "enum": ["all", "timer", "event"]
+                                },
+                                "showPaused": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "shell"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "room-members"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "add"
+                            },
+                            "type": {
+                              "const": "board"
+                            },
+                            "config": {
+                              "type": "object",
+                              "properties": {
+                                "instanceKey": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "type"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "move"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "before": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "id", "before"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "set"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "visible": {
+                              "type": "boolean"
+                            },
+                            "collapsed": {
+                              "type": "boolean"
+                            },
+                            "config": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "filter": {
+                                      "enum": ["all", "timer", "event"]
+                                    },
+                                    "showPaused": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "instanceKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 128,
+                                      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["op", "id"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "remove"
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["op", "id"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "op": {
+                              "const": "reset"
+                            }
+                          },
+                          "required": ["op"],
+                          "additionalProperties": false,
+                          "description": "Explicitly restore default order/visibility and hide extra instances, preserving all configurations and bindings. Refused if any affected instance belongs to another member."
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": ["operations"],
+                "additionalProperties": false
               }
             },
             "additionalProperties": false

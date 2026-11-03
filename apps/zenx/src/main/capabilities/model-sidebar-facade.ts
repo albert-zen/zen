@@ -5,6 +5,7 @@ import {
 } from "./model-browser-metadata.js";
 import type { ModelTool } from "../../../../../src/model.js";
 import type { ModelReferenceScope } from "../../../../../src/model-references.js";
+import { informationEditSchema } from "../../information-layout.js";
 import {
   sidebarTabId,
   type ThreadSidebarTab,
@@ -59,7 +60,16 @@ export function sidebarModelDefinition<T extends ModelTool>(source: T): T {
     additionalProperties: false,
   };
   tool.inputSchema = source.name.endsWith("_read")
-    ? { type: "object", properties: { scope }, additionalProperties: false }
+    ? {
+        type: "object",
+        properties: {
+          scope,
+          includeInformation: { type: "boolean" },
+          cursor: MODEL_REF,
+          pageSize: { type: "integer", minimum: 1 },
+        },
+        additionalProperties: false,
+      }
     : {
         type: "object",
         properties: {
@@ -85,6 +95,7 @@ export function sidebarModelDefinition<T extends ModelTool>(source: T): T {
                 },
               },
               selectedTab: { anyOf: [MODEL_REF, { type: "null" }] },
+              information: informationEditSchema(MODEL_REF),
             },
             additionalProperties: false,
           },
@@ -93,8 +104,8 @@ export function sidebarModelDefinition<T extends ModelTool>(source: T): T {
         additionalProperties: false,
       };
   tool.description = source.name.endsWith("_read")
-    ? "Read authorized sidebar presentation, not screen visibility. Returns semantic scope choices, immutable snapshot and exact existing-tab refs. Paths/URLs stay literal. Default follows current Room/private Thread rules."
-    : "Patch sidebar against the exact immutable snapshot. tabs replaces ordered descriptors: preserve existing tabs with {ref}, or add a typed descriptor. selectedTab uses a returned tab ref. Conflict applied:false requires fresh read and deliberate reconsideration, never automatic retry. No file contents are read/written or saved/discarded; existing live membership and resource-owner guards run.";
+    ? "Read authorized sidebar presentation, not screen visibility. Returns semantic scope choices, immutable snapshot and exact existing-tab refs. includeInformation returns a paged static component catalog/layout, never provider content or availability. Follow cursor without scope to read remaining instances; pageSize is a response preference, not a component limit. Default follows current Room/private Thread rules."
+    : "Patch sidebar against the exact immutable snapshot. tabs preserves its existing replacement semantics. information accepts local add/move/set/remove/reset operations against a snapshot from includeInformation; instance id/before use widget refs, never native owner/binding IDs. Ordinary local edits preserve unseen instances; explicit reset only restores ordering/visibility as described. No content/Ask state is modified. Another member's opaque widget may only be moved. Conflict applied:false requires fresh read and deliberate reconsideration, never automatic retry; no foreground navigation or provider execution.";
   return tool;
 }
 export function decodeSidebarArguments(
@@ -105,7 +116,30 @@ export function decodeSidebarArguments(
 ): Record<string, unknown> {
   const args = structuredClone(input);
   if (name.endsWith("_read")) {
-    only(args, ["scope"]);
+    only(args, ["scope", "includeInformation", "cursor", "pageSize"]);
+    if (args.cursor !== undefined) {
+      if (args.scope !== undefined || args.includeInformation === false)
+        throw Error("Information cursor already binds its exact scope");
+      const cursor = object(
+        refs.resolve(args.cursor, "sidebar", "information-cursor", epoch),
+      );
+      return {
+        scope: cursor.owner,
+        includeInformation: true,
+        informationPage: {
+          offset: cursor.offset,
+          revision: cursor.revision,
+          basis: cursor.basis,
+          ...(args.pageSize === undefined ? {} : { pageSize: args.pageSize }),
+        },
+      };
+    }
+    if (args.pageSize !== undefined) {
+      if (args.includeInformation !== true)
+        throw Error("pageSize requires includeInformation");
+      args.informationPage = { pageSize: args.pageSize };
+      delete args.pageSize;
+    }
     if (args.scope === "self")
       args.scope = { kind: "thread", id: refs.ownerThreadId };
     else if (args.scope !== undefined) {
@@ -129,7 +163,47 @@ export function decodeSidebarArguments(
       refs.resolve(args.snapshot, "sidebar", "snapshot", epoch),
     ),
     patch = object(args.patch);
-  only(patch, ["open", "fullscreen", "tabs", "selectedTab"]);
+  only(patch, ["open", "fullscreen", "tabs", "selectedTab", "information"]);
+  if (patch.information !== undefined) {
+    if (typeof baseline.informationBase !== "string")
+      throw Error("Read includeInformation before editing components");
+    const information = object(patch.information);
+    only(information, ["operations"]);
+    if (!Array.isArray(information.operations))
+      throw Error("Information operations required");
+    const widgetId = (value: unknown) => {
+      const widget = object(
+        refs.resolve(value, "sidebar", "information-widget", epoch),
+      );
+      if (
+        JSON.stringify(widget.owner) !== JSON.stringify(baseline.owner) ||
+        widget.revision !== baseline.revision ||
+        widget.basis !== baseline.informationBase
+      )
+        throw Error(
+          "Information reference belongs to another scope or snapshot",
+        );
+      return widget.id;
+    };
+    information.operations = information.operations.map((value) => {
+      const operation = object(value);
+      if (operation.op === "add")
+        only(operation, ["op", "type", "config", "before"]);
+      else if (operation.op === "move") only(operation, ["op", "id", "before"]);
+      else if (operation.op === "set")
+        only(operation, ["op", "id", "visible", "collapsed", "config"]);
+      else if (operation.op === "remove") only(operation, ["op", "id"]);
+      else if (operation.op === "reset") only(operation, ["op"]);
+      else throw Error("Unknown information operation");
+      return {
+        ...operation,
+        ...(operation.id === undefined ? {} : { id: widgetId(operation.id) }),
+        ...(operation.before === undefined || operation.before === null
+          ? {}
+          : { before: widgetId(operation.before) }),
+      };
+    });
+  }
   const tabBinding = (ref: unknown) => {
     const bound = object(refs.resolve(ref, "sidebar", "tab", epoch));
     if (JSON.stringify(bound.owner) !== JSON.stringify(baseline.owner))
@@ -182,6 +256,9 @@ export function decodeSidebarArguments(
   const output = {
     scope: baseline.owner,
     expectedRevision: baseline.revision,
+    ...(patch.information === undefined
+      ? {}
+      : { informationBase: baseline.informationBase }),
     patch,
   };
   return browserTargets.length
@@ -249,10 +326,15 @@ export function projectSidebarResult(
         };
       })
     : [];
+  const information = record(result.information);
   output.snapshot = refs.bind(
     "sidebar",
     "snapshot",
-    asJson({ owner, revision: state.revision }),
+    asJson({
+      owner,
+      revision: state.revision,
+      ...(information ? { informationBase: information.basis } : {}),
+    }),
     epoch,
   );
   output.state = {
@@ -271,5 +353,51 @@ export function projectSidebarResult(
         }
       : {}),
   };
+  if (information) {
+    output.information = {
+      ...pick(information, [
+        "catalog",
+        "content",
+        "availability",
+        "offset",
+        "total",
+        "hasMore",
+      ]),
+      widgets: Array.isArray(information.widgets)
+        ? information.widgets.map((value) => {
+            const widget = object(value);
+            return {
+              ref: refs.bind(
+                "sidebar",
+                "information-widget",
+                asJson({
+                  owner,
+                  revision: state.revision,
+                  basis: information.basis,
+                  id: widget.id,
+                }),
+                epoch,
+              ),
+              ...pick(widget, ["type", "visible", "collapsed", "editable"]),
+              ...(widget.editable === true ? pick(widget, ["config"]) : {}),
+            };
+          })
+        : [],
+      cursor:
+        typeof information.nextOffset === "number"
+          ? refs.bind(
+              "sidebar",
+              "information-cursor",
+              asJson({
+                owner,
+                revision: state.revision,
+                basis: information.basis,
+                offset: information.nextOffset,
+              }),
+              epoch,
+            )
+          : null,
+    };
+  }
   return output;
 }

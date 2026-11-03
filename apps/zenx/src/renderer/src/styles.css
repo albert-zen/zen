@@ -12303,6 +12303,199 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* Shared native information layout; customization never owns provider content. */
+.editable-information-panel {
+  padding: 4px 14px 12px;
+  min-width: 0;
+}
+.information-settings-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.information-settings-toolbar > span {
+  flex: 1;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.information-settings-toolbar .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.information-settings-toolbar [aria-pressed="true"] {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.information-widget {
+  padding: 10px 0;
+  min-width: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.information-widget > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 30px;
+}
+.information-widget-disclosure {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+.information-widget-disclosure h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.information-widget-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.information-widget-actions button {
+  min-width: 25px;
+  min-height: 28px;
+  padding: 3px 5px;
+  font-size: 11px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.information-widget-actions button:hover {
+  background: var(--color-surface-hover);
+}
+.information-widget[data-visible="false"] {
+  opacity: 0.65;
+}
+.information-widget-body {
+  min-width: 0;
+}
+.information-widget-body .conversation-information-cards {
+  padding: 0;
+}
+.information-widget-body .conversation-information-section {
+  padding: 2px 0;
+}
+.information-widget-body .board-surface {
+  padding: 8px 0;
+}
+.information-widget-body .board-empty {
+  padding: 12px 0;
+}
+.editable-information-panel p,
+.information-members {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+.information-source-label {
+  display: block;
+  margin: 3px 0 6px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.information-add-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.information-add-controls label,
+.information-trigger-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  min-width: 0;
+}
+.information-add-controls label,
+.information-add-controls p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.information-add-controls select,
+.information-add-controls input,
+.information-trigger-config select {
+  min-height: 30px;
+  max-width: 100%;
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+.information-add-controls button,
+.information-conflict button {
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+  font-size: 11px;
+}
+.information-trigger-config {
+  display: grid;
+  gap: 8px;
+  padding: 6px 0 10px;
+}
+.information-trigger-config label:has(input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+}
+.information-conflict {
+  margin: 8px 0;
+  padding: 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 7px;
+}
+.information-conflict > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.information-conflict details {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.information-conflict pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.information-error {
+  color: var(--color-status-danger) !important;
+}
+.information-attention {
+  padding-block: 8px;
+}
+.information-widget[draggable="true"] {
+  cursor: grab;
+}
+.information-members {
+  padding-left: 18px;
+}
+
 /* Native question drafts stay in the existing information surface. */
 .user-question-card {
   min-width: 0;
@@ -12376,8 +12569,14 @@ button:disabled {
 }
 .user-question-actions button,
 .user-question-attention > button,
-.user-question-attention > header button {
+.user-question-attention > header button,
+.room-question-attention > button,
+.room-question-attention > header button,
+.room-question-review {
   min-height: 44px;
+}
+.room-question-attention > header button {
+  min-width: 44px;
 }
 .user-question-error {
   overflow-wrap: anywhere;
@@ -12388,4 +12587,12 @@ button:disabled {
   max-height: 180px;
   overflow: auto;
   font-size: 12px;
+}
+
+.room-question-origin {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.room-asking-badge {
+  flex: 0 0 auto;
 }

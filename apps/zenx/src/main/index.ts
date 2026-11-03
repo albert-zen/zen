@@ -1,3 +1,9 @@
+import {
+  NativeRoomQuestionService,
+  subscribeRoomQuestionInvalidations,
+} from "./native-room-question-service.js";
+import { nativeRoomQuestionFailure } from "../native-room-questions.js";
+import { createRoomQuestionPublisher } from "./room-question-publisher.js";
 import { browserObservationSubscribeReply } from "../preload/browser-observation-ipc.js";
 import { BoardHostService } from "./board-host-service.js";
 import { ZenXBoardCapabilityPackage } from "./capabilities/board-package.js";
@@ -15,6 +21,9 @@ import {
 } from "./workspace-external-open.js";
 import type { SidebarOwner } from "../thread-sidebar-state.js";
 import { ThreadSidebarStore } from "./thread-sidebar-store.js";
+import { NativeInformationService } from "./native-information-service.js";
+import { captureNativeInformationDocument } from "./native-information-document.js";
+import type { SidebarAdmission } from "../thread-sidebar-state.js";
 import { FileTraceStore } from "../../../../src/trace.js";
 import { installModelRequestDebugIpc } from "./model-request-debug-electron.js";
 import { ForegroundActivity } from "./foreground-activity.js";
@@ -266,6 +275,8 @@ let pluginDevControl: ZenXPluginDevControlServer | undefined;
 const workspaceBrowser = createElectronWorkspaceBrowser();
 const dirtyFileWindows = new Set<number>();
 const projectProjection = new ZenXProjectProjection();
+let userMcpOwners:
+  import("./user-mcp-main-bridge.js").UserMcpOwnerPort | undefined;
 const selfControlPort = new MutableAppServerRequestPort(projectProjection);
 let titleCoordinator: ZenXThreadTitleCoordinator | undefined;
 const bootstrapFence = new ZenXBootstrapFence();
@@ -448,16 +459,153 @@ async function bootstrapZenX(): Promise<void> {
     new FileTraceStore(join(zenDataDirectory, "trace")),
   );
   threadSidebarStore = threadSidebar;
+  const roomQuestions = new NativeRoomQuestionService(() =>
+    automationService?.roomsAvailable() &&
+    capabilityService
+      ?.pluginSnapshot()
+      .plugins.some(
+        (plugin) =>
+          plugin.id === "zenx-rooms" && plugin.enabled && plugin.available,
+      )
+      ? automationService
+      : undefined,
+  );
+  const information = new NativeInformationService({
+    sidebar: threadSidebar,
+    rooms: () =>
+      automationService?.roomsAvailable() &&
+      capabilityService
+        ?.pluginSnapshot()
+        .plugins.some(
+          (plugin) =>
+            plugin.id === "zenx-rooms" && plugin.enabled && plugin.available,
+        )
+        ? automationService.snapshot().rooms
+        : [],
+    async assertThreadExists(threadId) {
+      const manager = appServerManager;
+      if (!manager) throw Error("Information Host is unavailable");
+      const epoch = manager.processEpoch;
+      const summaries = await Promise.all([
+        manager.listThreadSummaries(),
+        manager.listThreadSummaries({ archived: true }),
+      ]);
+      if (
+        manager !== appServerManager ||
+        manager.processEpoch !== epoch ||
+        manager.status.type !== "ready"
+      )
+        throw Error("Information Host changed during admission; read again");
+      if (
+        !summaries
+          .flat()
+          .some(
+            (thread) =>
+              thread.threadId === threadId && thread.status !== "systemError",
+          )
+      )
+        throw Error("Information Thread does not exist or is unavailable");
+    },
+  });
+  const nativeSidebarRequest = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    action: (admit: SidebarAdmission) => Promise<T>,
+  ): Promise<T> => {
+    const frame = event.senderFrame;
+    const document = captureNativeInformationDocument({
+      rendererUrl:
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+      sender: () => {
+        const destroyed =
+          event.sender.isDestroyed() ||
+          !frame ||
+          frame.isDestroyed() ||
+          frame.detached;
+        const window = destroyed
+          ? null
+          : BrowserWindow.fromWebContents(event.sender);
+        return {
+          ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+          mainFrame: !destroyed && frame === event.sender.mainFrame,
+          url: destroyed ? "" : frame.url,
+          document: destroyed ? null : frame,
+          destroyed: !!destroyed,
+        };
+      },
+      onDocumentNavigation(invalidate) {
+        const navigating = (
+          details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+        ) => {
+          if (details.isMainFrame && !details.isSameDocument) invalidate();
+        };
+        event.sender.on("did-start-navigation", navigating);
+        return () =>
+          event.sender.removeListener("did-start-navigation", navigating);
+      },
+    });
+    try {
+      const result = await action(document.admit);
+      // Never deliver a late layout/resource receipt to a replacement document.
+      document.admit();
+      return result;
+    } finally {
+      document.close();
+    }
+  };
   ipcMain.handle(
     ipcChannels.threadSidebarRead,
-    (_event, owner: SidebarOwner | string) => threadSidebar.read(owner),
+    (event, owner: SidebarOwner | string) =>
+      nativeSidebarRequest(event, (admit) =>
+        information.readSidebar(owner, admit),
+      ),
   );
-  ipcMain.handle(ipcChannels.threadSidebarUpdate, (_event, request) =>
-    threadSidebar.update(request, undefined, { kind: "ui" }),
+  ipcMain.handle(ipcChannels.threadSidebarUpdate, (event, request: unknown) =>
+    nativeSidebarRequest(event, (admit) =>
+      information.updateSidebar(request, admit),
+    ),
+  );
+  ipcMain.handle(
+    ipcChannels.informationRead,
+    (event, owner: SidebarOwner | string) =>
+      nativeSidebarRequest(event, (admit) => information.read(owner, admit)),
+  );
+  ipcMain.handle(ipcChannels.informationUpdate, (event, request: unknown) =>
+    nativeSidebarRequest(event, (admit) => information.update(request, admit)),
+  );
+  ipcMain.handle(
+    ipcChannels.roomQuestionsRequest,
+    async (event, input: unknown) => {
+      try {
+        return await nativeSidebarRequest(event, (admit) =>
+          roomQuestions.request(input, admit),
+        );
+      } catch (error) {
+        return nativeRoomQuestionFailure(error);
+      }
+    },
   );
   threadSidebar.onChanged((state) => {
-    for (const window of appWindows())
-      window.webContents.send(ipcChannels.threadSidebarChanged, state);
+    for (const window of appWindows()) {
+      const contents = window.webContents;
+      if (contents.isDestroyed()) continue;
+      const frame = contents.mainFrame;
+      if (
+        frame.isDestroyed() ||
+        frame.detached ||
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: ownedAppWindowIds.has(window.id),
+            mainFrame: true,
+            url: frame.url,
+          },
+          process.env["ELECTRON_RENDERER_URL"] ??
+            pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+        )
+      )
+        continue;
+      contents.send(ipcChannels.threadSidebarChanged, state);
+    }
   });
   installModelRequestDebugIpc({
     rendererUrl:
@@ -525,6 +673,9 @@ async function bootstrapZenX(): Promise<void> {
   const operationalDiagnostics = (mainWindowDiagnostics ??=
     new OperationalDiagnosticLog(userDataDirectory));
   const observeAppServer = (manager: AppServerManager) => {
+    manager.setRoomQuestionPublisher(
+      createRoomQuestionPublisher(manager, () => automationService),
+    );
     manager.setRemoteRoomsHandler(
       createFleetRoomsHandler(manager, () => automationService),
     );
@@ -687,61 +838,63 @@ async function bootstrapZenX(): Promise<void> {
       threads: selfControlPackage,
       fleet: fleetSettingsService,
     });
-    const boardPackage = new ZenXBoardCapabilityPackage(
-      new BoardHostService({
-        appServer: selfControlPort,
-        sidebar: threadSidebar,
-        isSidebarIntentClosed: (threadId, intentId) =>
-          workspaceBrowser.isSidebarIntentClosed(threadId, intentId),
-        readBrowserModelTarget: async (threadId, targetId) =>
-          capabilityService?.readBrowserModelTarget(threadId, targetId),
-        readThreadSummary: async (threadId) => {
-          if (!appServerManager) throw new Error("App Server is not attached");
-          return (await appServerManager.listThreadSummaries()).find(
-            (entry) =>
-              entry.threadId === threadId && entry.status !== "systemError",
-          );
-        },
-        get rooms() {
-          if (!automationService)
-            throw new Error("Rooms service is unavailable");
-          const rooms = automationService;
-          return {
-            roomsAvailable: () =>
-              rooms.roomsAvailable() &&
-              !!capabilityService
-                ?.pluginSnapshot()
-                .plugins.some(
-                  (plugin) =>
-                    plugin.id === "zenx-rooms" &&
-                    plugin.enabled &&
-                    plugin.available,
-                ),
-            snapshot: () => rooms.snapshot(),
-            postAddressedRoomMessage:
-              rooms.postAddressedRoomMessage.bind(rooms),
-            onChange: (listener: () => void) => {
-              const stopRooms = rooms.onChange(listener);
-              // Catalog publication is the existing disable/retirement signal;
-              // Room facts alone need not change when only its plugin stops.
-              const stopCatalog = capabilityService?.onChange(listener);
-              return () => {
-                stopRooms();
-                stopCatalog?.();
-              };
-            },
-          };
-        },
-        executeTool: async (input, signal, assertOwner) => {
-          if (!appServerManager) throw new Error("App Server is not attached");
-          return await appServerManager.boardToolRequest(
-            input,
-            signal,
-            assertOwner,
-          );
-        },
-      }),
-    );
+    const boardOwnerHost = new BoardHostService({
+      appServer: selfControlPort,
+      sidebar: threadSidebar,
+      isSidebarIntentClosed: (threadId, intentId) =>
+        workspaceBrowser.isSidebarIntentClosed(threadId, intentId),
+      readBrowserModelTarget: async (threadId, targetId) =>
+        capabilityService?.readBrowserModelTarget(threadId, targetId),
+      readThreadSummary: async (threadId) => {
+        if (!appServerManager) throw new Error("App Server is not attached");
+        return (await appServerManager.listThreadSummaries()).find(
+          (entry) =>
+            entry.threadId === threadId && entry.status !== "systemError",
+        );
+      },
+      get rooms() {
+        if (!automationService) throw new Error("Rooms service is unavailable");
+        const rooms = automationService;
+        return {
+          roomsAvailable: () =>
+            rooms.roomsAvailable() &&
+            !!capabilityService
+              ?.pluginSnapshot()
+              .plugins.some(
+                (plugin) =>
+                  plugin.id === "zenx-rooms" &&
+                  plugin.enabled &&
+                  plugin.available,
+              ),
+          snapshot: () => rooms.snapshot(),
+          postAddressedRoomMessage: rooms.postAddressedRoomMessage.bind(rooms),
+          onChange: (listener: () => void) => {
+            const stopRooms = rooms.onChange(listener);
+            // Catalog publication is the existing disable/retirement signal;
+            // Room facts alone need not change when only its plugin stops.
+            const stopCatalog = capabilityService?.onChange(listener);
+            return () => {
+              stopRooms();
+              stopCatalog?.();
+            };
+          },
+        };
+      },
+      executeTool: async (input, signal, assertOwner) => {
+        if (!appServerManager) throw new Error("App Server is not attached");
+        return await appServerManager.boardToolRequest(
+          input,
+          signal,
+          assertOwner,
+        );
+      },
+    });
+    const boardPackage = new ZenXBoardCapabilityPackage(boardOwnerHost);
+    userMcpOwners = {
+      readOwner: boardOwnerHost.readOwner.bind(boardOwnerHost),
+      onChange: (listener: () => void) =>
+        boardOwnerHost.options.rooms.onChange!(listener),
+    };
     const subagentsPackage = new ZenXSubagentsCapabilityPackage({
       appServer: selfControlPort,
       threads: selfControlPackage,
@@ -912,6 +1065,8 @@ async function bootstrapZenX(): Promise<void> {
       appServerPort: selfControlPort,
     });
     capabilityService.onChange(() => {
+      for (const room of automationService?.snapshot().rooms ?? [])
+        notifyRoomQuestionsChanged(room.id);
       try {
         void operationalDiagnostics
           .observePlugins(capabilityService!.diagnostics())
@@ -950,6 +1105,7 @@ async function bootstrapZenX(): Promise<void> {
       hostConfig,
       execPath: process.execPath,
       capabilityHost: capabilityService,
+      userMcpOwners,
     });
     observeAppServer(appServerManager);
     await selfControlPort.attach(appServerManager);
@@ -1109,6 +1265,10 @@ async function bootstrapZenX(): Promise<void> {
     bootstrapFence.throwIfCancelled();
     // This map is fresh for each Host bootstrap. Revisions never cross the wire.
     const roomVersions = new Map<string, number>();
+    subscribeRoomQuestionInvalidations(
+      automationService,
+      notifyRoomQuestionsChanged,
+    );
     automationService.onChange((snapshot, revision) => {
       for (const room of snapshot.rooms) {
         if (!room.assistant) continue;
@@ -1279,6 +1439,7 @@ async function bootstrapZenX(): Promise<void> {
           hostConfig,
           execPath: process.execPath,
           capabilityHost: capabilityService,
+          userMcpOwners,
         });
         observeAppServer(appServerManager);
         await selfControlPort.attach(appServerManager);
@@ -1762,6 +1923,10 @@ function installProtocolIpc(
         error,
       );
     });
+  });
+  manager.onThreadQuestionAttentionInvalidated(() => {
+    for (const window of appWindows())
+      window.webContents.send(ipcChannels.threadQuestionAttentionChanged);
   });
   manager.onNotification((method, params) => {
     void observeCompletedInputTitle(titles, method, params);
@@ -2858,4 +3023,28 @@ function requireConfigurationRevision(value: unknown): void {
     throw new Error(
       "Configuration revision is required; reload settings before applying changes",
     );
+}
+
+/** Content-free invalidation to current trusted native documents only. */
+function notifyRoomQuestionsChanged(roomId: string): void {
+  for (const window of appWindows()) {
+    const contents = window.webContents;
+    if (contents.isDestroyed()) continue;
+    const frame = contents.mainFrame;
+    if (
+      frame.isDestroyed() ||
+      frame.detached ||
+      !isTrustedImZenXSetupSender(
+        {
+          ownedWindow: ownedAppWindowIds.has(window.id),
+          mainFrame: true,
+          url: frame.url,
+        },
+        process.env["ELECTRON_RENDERER_URL"] ??
+          pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+      )
+    )
+      continue;
+    contents.send(ipcChannels.roomQuestionsChanged, roomId);
+  }
 }

@@ -102,6 +102,36 @@ function hostFixture() {
   };
 }
 
+test("Room resource access survives member removal but never authorizes member execution", async () => {
+  const f = hostFixture();
+  f.rooms[0]!.members = [];
+  const resource = { kind: "room" as const, roomId: "room" };
+  assert.deepEqual(await f.host.readResourceOwner(resource), resource);
+  assert.equal(
+    f.requests.length,
+    0,
+    "Workspace access does not resolve a creator Thread",
+  );
+  await assert.rejects(
+    f.host.readOwner({ ...resource, threadId: owner.threadId }),
+    /member/,
+  );
+  await assert.rejects(
+    f.host.execute(
+      { ...resource, threadId: owner.threadId },
+      { tool: "shell", arguments: { command: "echo blocked" } },
+      signal(),
+    ),
+    /member/,
+  );
+  assert.equal(f.executions.length, 0);
+  f.rooms.length = 0;
+  await assert.rejects(
+    f.host.readResourceOwner(resource),
+    /workspace.*unavailable/,
+  );
+});
+
 test("Board Thread send reports native start/steer admission without awaiting completion", async () => {
   const f = hostFixture();
   assert.deepEqual(
@@ -987,6 +1017,7 @@ test(
           ...(ui ? { trustedPluginUi: true as const } : {}),
         });
       await invoke("zenx_board_put", {
+        expectedRevision: 0,
         document: {
           id: "slow-check",
           owner: boardOwner,
