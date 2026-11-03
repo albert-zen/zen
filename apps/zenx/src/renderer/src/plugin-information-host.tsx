@@ -26,6 +26,7 @@ export function PluginInformationHost({
   readHandle,
   resourcePanelWidth = 0,
   contextContent,
+  managedBoard = false,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -40,9 +41,13 @@ export function PluginInformationHost({
   readHandle(pluginId: string, handleId: string): Promise<unknown>;
   resourcePanelWidth?: number;
   contextContent?: React.ReactNode;
+  /** The native editable layout already places every built-in Board document. */
+  managedBoard?: boolean;
 }) {
   const { t } = useTranslation("panels");
-  const contributions = snapshot.information ?? [];
+  const contributions = (snapshot.information ?? []).filter(
+    (entry) => !managedBoard || entry.pluginId !== "zenx-board",
+  );
   const ownerKey = conversationKey(owner);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");
@@ -53,6 +58,7 @@ export function PluginInformationHost({
   const previousPrimaryActive = useRef(false);
   const [layout, setLayout] = useState({
     headerBottom: 0,
+    triggerBottom: undefined as number | undefined,
     top: 12,
     right: 12,
     dock: false,
@@ -94,6 +100,9 @@ export function PluginInformationHost({
       );
       const next = {
         headerBottom,
+        // Render must not synchronously flush the transcript's dirty layout,
+        // including when Radix keeps the information popover closed.
+        triggerBottom: trigger.current?.getBoundingClientRect().bottom,
         top: Math.max(0, headerBottom - bounds.top) + 12,
         right: resourceWidth + 12,
         // Our responsive allocation, not a value copied from a reference app:
@@ -132,6 +141,7 @@ export function PluginInformationHost({
         ? undefined
         : new ResizeObserver(measure);
     observer?.observe(workspace);
+    if (trigger.current) observer?.observe(trigger.current);
     if (heading) observer?.observe(heading);
     if (titlebar) observer?.observe(titlebar);
     // The primary conversation stays mounted in place while a workspace tab is
@@ -247,13 +257,11 @@ export function PluginInformationHost({
               align="end"
               className="information-popover"
               style={{
-                maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, trigger.current?.getBoundingClientRect().bottom ?? 44) + 16}px))`,
+                maxHeight: `min(720px, calc(100vh - ${Math.max(layout.headerBottom, layout.triggerBottom ?? 44) + 16}px))`,
               }}
               sideOffset={Math.max(
                 8,
-                layout.headerBottom -
-                  (trigger.current?.getBoundingClientRect().bottom ?? 0) +
-                  8,
+                layout.headerBottom - (layout.triggerBottom ?? 0) + 8,
               )}
               aria-label={active?.title ?? t("boardTitle")}
             >

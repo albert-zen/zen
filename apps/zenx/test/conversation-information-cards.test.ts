@@ -331,7 +331,7 @@ test("streaming a long conversation does not clone or redraw the information cat
     );
     assert.match(
       app,
-      /<ConversationInformationCards[\s\S]*?threads=\{informationThreads\}/,
+      /<(?:ConversationInformationCards|EditableInformationPanel)[\s\S]*?threads=\{informationThreads\}/,
     );
   } finally {
     await act(async () => root.unmount());
