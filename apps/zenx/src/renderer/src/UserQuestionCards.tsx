@@ -165,33 +165,47 @@ function QuestionCard({
         return (
           <fieldset key={q.id} disabled={unavailable}>
             <legend>{q.prompt}</legend>
-            {q.options?.map((option) => {
-              const selected = answer?.optionIds.includes(option.id) ?? false;
-              return (
-                <label className="user-question-option" key={option.id}>
-                  <input
-                    type={q.multiSelect ? "checkbox" : "radio"}
-                    name={JSON.stringify([threadId, callItemId, q.id])}
-                    checked={selected}
-                    onChange={() =>
-                      edit(q.id, {
-                        optionIds: q.multiSelect
-                          ? selected
-                            ? answer!.optionIds.filter((id) => id !== option.id)
-                            : [...(answer?.optionIds ?? []), option.id]
-                          : [option.id],
-                      })
-                    }
-                  />
-                  <span>
-                    <strong>{option.label}</strong>
-                    {option.description ? (
-                      <small>{option.description}</small>
-                    ) : null}
-                  </span>
-                </label>
-              );
-            })}
+            <ul className="user-question-options">
+              {q.options?.map((option) => {
+                const selected =
+                  answer?.optionIds.includes(option.id) ?? false;
+                return (
+                  <li key={option.id}>
+                    <button
+                      type="button"
+                      role={q.multiSelect ? "checkbox" : "radio"}
+                      aria-checked={selected}
+                      className="user-question-option"
+                      data-selected={selected ? "true" : undefined}
+                      onClick={() =>
+                        edit(q.id, {
+                          optionIds: q.multiSelect
+                            ? selected
+                              ? answer!.optionIds.filter(
+                                  (id) => id !== option.id,
+                                )
+                              : [...(answer?.optionIds ?? []), option.id]
+                            : [option.id],
+                        })
+                      }
+                    >
+                      <span
+                        className="user-question-option-mark"
+                        aria-hidden="true"
+                      >
+                        {selected ? <Icon name="check" size={12} /> : null}
+                      </span>
+                      <span className="user-question-option-copy">
+                        <strong>{option.label}</strong>
+                        {option.description ? (
+                          <small>{option.description}</small>
+                        ) : null}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
             <label className="user-question-text">
               <span>{t("questionFreeText")}</span>
               <textarea
