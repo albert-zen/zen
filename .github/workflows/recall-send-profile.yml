@@ -1,22 +1,23 @@
-name: Owned short native send timeline (not acceptance)
-# Corrected Chromium instant-mark projection; this edit triggers one approved retry.
+name: Packaged send first-gap attribution (diagnostic only)
+# One approved packaged 5000-turn fixture and three send samples; never rerun.
 on:
   push:
-    branches: [diagnostic/send-latency-e2e-20261102]
+    branches: [diagnostic/packaged-send-first-gap-20261102]
     paths: [.github/workflows/recall-send-profile.yml]
 permissions:
   contents: read
 jobs:
   native-macos:
+    if: ${{ github.event_name == 'push' && github.run_attempt == 1 }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: profile
-            source: 3d8f9cd24109f7fbf7abaca32c1bae4ade130f80
+            source: 9188f8e915f25ae4d693fae43ad5b8350282a87f
             count: 5000
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,11 +51,12 @@ jobs:
           npm run build --workspace @zen/zenx
       - name: Profile full native App ordinary send (diagnostic only)
         working-directory: product
-        timeout-minutes: 12
+        timeout-minutes: 25
         run: node apps/zenx/scripts/launch-send-feedback.mjs ../results '${{ matrix.count }}' '${{ matrix.label }}'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: owned-native-send-timeline-3d8f
+          name: packaged-send-first-gap-9188
           path: results/owned-native-send-profile.summary.json
           if-no-files-found: error
+

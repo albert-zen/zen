@@ -49,6 +49,59 @@ function budget(events, start, end) {
     uncoveredByRecordedSpansMs: uncovered / 1000,
   };
 }
+// Select outer task envelopes before clipping, including duplicate instrumentation names.
+// Only complete thread CPU endpoints are usable. Never prorate a thread CPU duration.
+function outerTasks(events) {
+  const taskNames = /^(RunTask|ThreadControllerImpl::RunTask|TaskQueueManager::ProcessTaskFromWorkQueue|ThreadControllerWithMessagePumpImpl::DoWork)$/;
+  const candidates=events.filter(e=>taskNames.test(e.name));
+  candidates.forEach(e=>valid(finite(e.ts)&&finite(e.dur)));
+  candidates.sort((a,b)=>a.ts-b.ts||b.dur-a.dur);
+  const outer=[];
+  for(const event of candidates){
+    const previous=outer.at(-1);
+    if(previous && event.ts>=previous.ts && event.ts+event.dur<=previous.ts+previous.dur)continue;
+    outer.push(event);
+  }
+  return outer;
+}
+function wholeTaskCpuMs(event) {
+  return finite(event.tts)&&finite(event.tdur)&&event.tdur<=event.dur ? event.tdur/1000 : null;
+}
+function longTasks(events,start,end) {
+  return outerTasks(events).filter(e=>e.dur>=50000&&e.ts<end&&e.ts+e.dur>start)
+    .sort((a,b)=>b.dur-a.dur||a.ts-b.ts).slice(0,8).map(e=>({
+      startRelativeMs:(e.ts-start)/1000,
+      wholeTaskWallMs:e.dur/1000,
+      clippedWallMs:(Math.min(end,e.ts+e.dur)-Math.max(start,e.ts))/1000,
+      wholeTaskCpuMs:wholeTaskCpuMs(e),
+      clipped:e.ts<start||e.ts+e.dur>end,
+      attribution:budget(events,Math.max(start,e.ts),Math.min(end,e.ts+e.dur)),
+    }));
+}
+function ownBundleCallsites(events,start,end,bundles) {
+  valid(Array.isArray(bundles)&&bundles.length<=256);
+  for(const b of bundles)valid(typeof b.url==="string"&&/^[a-f0-9]{64}$/.test(b.sha256));
+  const grouped=new Map();
+  for(const e of events){
+    if(e.name!=="FunctionCall"||e.ts>=end||e.ts+e.dur<=start)continue;
+    const d=e.args?.data, bundleIndex=bundles.findIndex(b=>b.url===d?.url);
+    if(bundleIndex<0||!Number.isSafeInteger(d.lineNumber)||d.lineNumber<0||!Number.isSafeInteger(d.columnNumber)||d.columnNumber<0)continue;
+    const key=[bundleIndex,d.lineNumber,d.columnNumber].join(":");
+    if(!grouped.has(key))grouped.set(key,{bundleIndex,line:d.lineNumber,column:d.columnNumber,events:[]});
+    grouped.get(key).events.push(e);
+  }
+  return [...grouped.values()].map(g=>({bundleIndex:g.bundleIndex,bundleSha256:bundles[g.bundleIndex].sha256,line:g.line,column:g.column,
+    recordedWallMs:budget(g.events,start,end).exclusiveWallMs.JS,eventCount:g.events.length}))
+    .sort((a,b)=>b.recordedWallMs-a.recordedWallMs).slice(0,8);
+}
+function knownLoss(value) {
+  if(!value||typeof value!=="object")return false;
+  for(const [key,entry] of Object.entries(value)){
+    if(/^(data_loss|data_loss_count|trace_buffer_overflow|buffer_overflow|events_lost|dropped_events)$/i.test(key)&&entry!==false&&entry!==0&&entry!==null)return true;
+    if(knownLoss(entry))return true;
+  }
+  return false;
+}
 function summarizeSendTimeline(trace, profile, samples) {
   valid(Array.isArray(trace.traceEvents) && samples?.length === 3);
   valid(
@@ -56,6 +109,13 @@ function summarizeSendTimeline(trace, profile, samples) {
       profile.bufferUsage.percentage < 1,
   );
   const events = trace.traceEvents;
+  const firstGap=profile.schemaVersion===3;
+  valid(!knownLoss(trace.metadata));
+  valid(!events.some(e=>/^(TraceBufferOverflow|TracingBufferOverflow|TraceEventBufferOverflow|DataLoss)$/.test(e.name)||knownLoss(e.args?.stats)));
+  if(firstGap){
+    valid(profile.diagnosticOnly===true&&profile.acceptance===false&&profile.traceStopped===true);
+    valid(finite(profile.durationMs)&&profile.durationMs<=120000&&profile.deadlineExceeded!==true);
+  }
   valid(
     !events.some((e) => /^(Profile|ProfileChunk|CpuProfile)$/.test(e.name)),
   );
@@ -105,7 +165,9 @@ function summarizeSendTimeline(trace, profile, samples) {
   ]);
   const projected = samples.map((sample, index) => {
     valid(sample.clockDomain === "renderer");
-    const marks = markNames.map((name) => {
+    const names=firstGap?[markNames[0],"first-pending-dom-observed",...markNames.slice(1)]:markNames;
+    const records=firstGap?[recordNames[0],"pendingDomMs",...recordNames.slice(1)]:recordNames;
+    const marks = names.map((name) => {
       const found = events.filter(
         (e) =>
           e.name === `zen-send-${index}-${name}` && ["I", "R"].includes(e.ph),
@@ -120,9 +182,13 @@ function summarizeSendTimeline(trace, profile, samples) {
     });
     valid(marks.every((at, i) => i === 0 || at >= marks[i - 1]));
     const offsets = marks.map((at, i) => {
-      valid(finite(sample[recordNames[i]]));
-      return at / 1000 - sample[recordNames[i]];
+      valid(finite(sample[records[i]]));
+      return at / 1000 - sample[records[i]];
     });
+    const spread=Math.max(...offsets)-Math.min(...offsets);
+    if(firstGap)valid(spread<=5);
+    const geometryIndex=firstGap?2:1;
+    const geometry=marks[geometryIndex], nextEntry=marks[geometryIndex+1], nextGeometry=marks[geometryIndex+2];
     const visibility = (sample.visibilitySnapshots ?? []).map((entry) => {
       valid(
         phases.has(entry.phase) &&
@@ -141,24 +207,35 @@ function summarizeSendTimeline(trace, profile, samples) {
     return {
       index,
       tracePhaseRelativeMs: marks.map((at) => (at - marks[0]) / 1000),
-      recordToTraceClockOffsetSpreadMs:
-        Math.max(...offsets) - Math.min(...offsets),
-      clickToGeometry: budget(renderer, marks[0], marks[1]),
-      geometryToNextFrameEntry: budget(renderer, marks[1], marks[2]),
-      nextFrameEntryToGeometry: budget(renderer, marks[2], marks[3]),
-      mainGeometryToNextFrameEntry: budget(main, marks[1], marks[2]),
+      recordToTraceClockOffsetSpreadMs:spread,
+      clickToGeometry: budget(renderer, marks[0], geometry),
+      geometryToNextFrameEntry: budget(renderer, geometry, nextEntry),
+      nextFrameEntryToGeometry: budget(renderer, nextEntry, nextGeometry),
+      mainGeometryToNextFrameEntry: budget(main, geometry, nextEntry),
       checkCallbackGapWallMs: budget(
         renderer.filter(
           (e) =>
             e.name === "FunctionCall" && e.args?.data?.functionName === "check",
         ),
-        marks[1],
-        marks[2],
+        geometry,
+        nextEntry,
       ).exclusiveWallMs.JS,
       visibility,
+      ...(firstGap?{
+        clickToFirstPendingDom:budget(renderer,marks[0],marks[1]),
+        firstPendingDomToGeometry:budget(renderer,marks[1],geometry),
+        clickToStrictGeometry:budget(renderer,marks[0],nextGeometry),
+        firstGapLongTasks:longTasks(renderer,marks[0],marks[1]),
+        firstGapOwnBundleCallsites:ownBundleCallsites(renderer,marks[0],marks[1],profile.ownBundles??[]),
+        originalTimingColumns:Object.fromEntries([
+          "firstVisibleFeedbackMs","clickToPendingDomMs","clickToPendingVisibleFrameMs","clickToBubbleDomMs","clickToVisibleFrameMs","clickToClearFrameMs","clickToCanonicalNotificationMs","clickToFeedbackGeometryCompleteMs","clickToFeedbackSubsequentFrameMs","clickToClearGeometryCompleteMs","clickToClearSubsequentFrameMs","feedbackTargetMs"
+        ].map(key=>{valid(finite(sample[key]));return [key,sample[key]];})),
+      }:{}) ,
     };
   });
   return {
+    schemaVersion:firstGap?3:2,
+    ...(firstGap?{traceDurationMs:profile.durationMs,knownLossDetected:false,firstPendingDomMeaning:"First observer match of connected pending DOM; not the mutation time, paint or physical presentation",longTaskCpuMeaning:"Whole outer task thread CPU when both tts and tdur are valid; no clipping proration; null is unavailable",callsiteMeaning:"At most eight numeric locations in exact packaged renderer bundles; overlapping callsites are not additive"}:{}),
     diagnosticOnly: true,
     acceptance: false,
     cpuSampling: false,
@@ -180,4 +257,5 @@ function summarizeSendTimeline(trace, profile, samples) {
     samples: projected,
   };
 }
-module.exports = { summarizeSendTimeline, budget };
+module.exports = { summarizeSendTimeline, budget, outerTasks, wholeTaskCpuMs, longTasks, ownBundleCallsites };
+

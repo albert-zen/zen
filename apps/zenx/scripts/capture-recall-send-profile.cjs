@@ -2,6 +2,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { app, BrowserWindow, session, ipcMain, contentTracing } = require("electron");
 const { summarizeSendTimeline } = require("./summarize-send-timeline.cjs");
@@ -13,7 +14,9 @@ assert.ok(
     (a) => a === "--no-sandbox" || a.startsWith("--remote-debugging"),
   ),
 );
-const [directory, version, temporary] = process.argv.slice(2, 5);
+assert.equal(app.isPackaged, true, "A real packaged bundle is required");
+assert.notEqual(process.defaultApp, true, "Default Electron script mode is not representative");
+const [directory, version, temporary] = process.argv.slice(1, 4);
 assert.ok(directory && temporary && ["before", "current"].includes(version));
 app.setPath("userData", path.join(temporary, "profile"));
 app.setPath("home", path.join(temporary, "home"));
@@ -22,7 +25,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-send-profile-v2-short-timeline-no-cpu-not-acceptance",
+  harnessVersion: "packaged-send-first-gap-v3-not-acceptance",
   version,
   platform: process.platform,
   electron: process.versions.electron,
@@ -32,6 +35,8 @@ const result = {
 };
 let window;
 let traceStarted = false;
+let traceDeadline;
+let traceStopPromise;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 // Catch renderer exceptions before Electron replaces them with an opaque IPC rejection.
 // JSON-normalize successes too: only plain data crosses this diagnostic boundary.
@@ -260,8 +265,10 @@ function installObservation(nonce, threadId, profileIndex) {
         (record.pendingClientId === undefined ||
           record.pendingClientId === row.dataset.pendingSendClientId)
       ) {
-        if (record.pendingDomMs === undefined)
+        if (record.pendingDomMs === undefined) {
           record.pendingDomMs = performance.now();
+          mark("first-pending-dom-observed");
+        }
         record.pendingClientId = row.dataset.pendingSendClientId;
         record.pendingStateAtDom = row.dataset.sendState;
         record.pendingBubble = bubble;
@@ -555,11 +562,19 @@ async function reviewAndPublishProfile(rawPath) {
  result.profile.review={passed:false,knownCredentialCount:secrets.length,privateConfigurationCount:1,reasonCodes};
  assert.equal(reasonCodes.length,0,"Raw profile withheld: private review did not pass");
  result.profile.reviewStage="timeline-summary";
- const summary=summarizeSendTimeline(JSON.parse(raw),result.profile,result.samples);
+ const rendererRoot=result.profile.schemaVersion===3?path.resolve(__dirname,"../out/renderer"):null;
+ const ownBundles=[];
+ if(result.profile.schemaVersion===3)for(const relative of (await fs.readdir(rendererRoot,{recursive:true})).filter(f=>f.endsWith(".js")).sort()){
+   const file=path.join(rendererRoot,relative);
+   ownBundles.push({url:pathToFileURL(file).href,sha256:createHash("sha256").update(await fs.readFile(file)).digest("hex")});
+ }
+ const summary=summarizeSendTimeline(JSON.parse(raw),{...result.profile,ownBundles},result.samples);
  summary.review={passed:true,knownCredentialCount:secrets.length,privateConfigurationCount:1};
  result.profile.reviewStage="summary-write";
+ const serializedSummary=JSON.stringify(summary,null,2);
+ assert.equal(profileReviewReasons(serializedSummary,secrets,[config,JSON.stringify(parsed)],[process.cwd(),temporary]).length,0,"Projected summary failed private scan");
  const published=path.join(directory,"owned-native-send-profile.summary.json");
- await fs.writeFile(published,JSON.stringify(summary,null,2),{flag:"wx",mode:0o600});
+ await fs.writeFile(published,serializedSummary,{flag:"wx",mode:0o600});
  result.profile.traceFile="private-only-not-exported"; result.profile.summaryFile=path.basename(published);
  result.profile.review.passed=true;
  } catch {
@@ -570,8 +585,42 @@ async function reviewAndPublishProfile(rawPath) {
  }
 }
 
+async function verifyPackagedRuntime() {
+  const helperHashes = {};
+  for (const name of ["zenx-accessibility", "zenx-bound-target", "zenx-foreground-input", "zenx-ocr"]) {
+    const relative = `native-helpers/${name}`, file = path.join(process.resourcesPath, relative);
+    const stat = await fs.lstat(file);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o111));
+    helperHashes[relative] = createHash("sha256").update(await fs.readFile(file)).digest("hex");
+  }
+  const mainDirectory=path.resolve(__dirname,"../out/main");
+  const mainHashes={};
+  for(const file of (await fs.readdir(mainDirectory,{recursive:true})).filter(file=>file.endsWith(".js")).sort())mainHashes[file]=createHash("sha256").update(await fs.readFile(path.join(mainDirectory,file))).digest("hex");
+  result.packagedRuntime = {
+    mainBundleSha256:createHash("sha256").update(JSON.stringify(mainHashes)).digest("hex"),
+    isPackaged: app.isPackaged, defaultApp: process.defaultApp === true, helperHashes,
+    productionEntrySha256: createHash("sha256").update(await fs.readFile(path.join(__dirname,"../out/main/index.js"))).digest("hex"),
+    preloadSha256: createHash("sha256").update(await fs.readFile(path.join(__dirname,"../out/preload/index.cjs"))).digest("hex"),
+  };
+}
+async function stopOwnedTrace() {
+  if (traceStopPromise) return traceStopPromise;
+  assert.equal(traceStarted,true);
+  traceStopPromise=(async()=>{
+    clearTimeout(traceDeadline);
+    result.profile.bufferUsage=await contentTracing.getTraceBufferUsage();
+    const rawPath=await contentTracing.stopRecording(path.join(temporary,"owned-native-send-profile.private.json"));
+    result.profile.traceStoppedMainMs=performance.now();
+    result.profile.durationMs=result.profile.traceStoppedMainMs-result.profile.traceStartedMainMs;
+    result.profile.traceStopped=true;
+    result.profile.rawPath=rawPath;
+    return rawPath;
+  })();
+  return traceStopPromise;
+}
 async function run() {
   await networkReady;
+  await verifyPackagedRuntime();
   await until(async () => {
     window = BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith("/renderer/index.html"));
     return Boolean(window);
@@ -599,6 +648,20 @@ async function run() {
   result.seed = manifest;
   const threadId = manifest.threadId;
   await evaluate("(()=>{window.__baselineEvents=[];window.__stopBaseline=window.zenx.protocol.onNotification((method,params)=>{if(method==='zen/thread/event'&&params.threadId==="+JSON.stringify(threadId)+"){window.__baselineEvents.push({type:params.event?.type,itemType:params.event?.item?.type});}})})()");
+  result.profile={schemaVersion:3,diagnosticOnly:true,acceptance:false,reason:"Timeline overhead: none of these timings are acceptance evidence; CPU sampling disabled",electron:process.versions.electron,mainPid:process.pid,rendererPid:window.webContents.getOSProcessId(),api:"Electron 43.2.0 contentTracing.startRecording(TraceConfig)/stopRecording"};
+  const categories=["toplevel","devtools.timeline","disabled-by-default-devtools.timeline","disabled-by-default-devtools.timeline.frame","v8","blink.user_timing"];
+  result.profile.backgroundThrottling=window.webContents.getLastWebPreferences().backgroundThrottling??null;
+  result.profile.requestedCategories=categories;
+  result.profile.availableCategories=await contentTracing.getCategories();
+  await contentTracing.startRecording({recording_mode:"record-until-full",included_categories:categories,excluded_categories:["disabled-by-default-v8.cpu_profiler","disabled-by-default-v8.cpu_profiler.hires"],trace_buffer_size_in_kb:131072});
+  traceStarted=true;
+  result.profile.traceStartedMainMs=performance.now();
+  traceDeadline=setTimeout(()=>{
+    result.profile.deadlineExceeded=true;
+    result.ok=false;
+    void stopOwnedTrace().catch(()=>{});
+  },120000);
+  result.profile.processesBefore=app.getAppMetrics().map(({pid,type,cpu,memory,name,serviceName})=>({pid,type,cpu,memory,name,serviceName}));
   const threadTarget = 'document.querySelector('+JSON.stringify(".thread-row-shell[data-thread-id="+JSON.stringify(threadId)+"] > button.thread-row")+')';
   await until(async()=>await evaluate("Boolean("+threadTarget+")"),"seeded production Thread in sidebar");
   await revealThreadWithSidebarWheel(threadTarget);
@@ -612,14 +675,6 @@ async function run() {
   await pause(500);
   result.processResourcesBefore=app.getAppMetrics().map(({type,cpu,memory})=>({type,cpu,memory}));
   result.samples=[];
-  result.profile={acceptance:false,reason:"Timeline overhead: none of these timings are acceptance evidence; CPU sampling disabled",electron:process.versions.electron,mainPid:process.pid,rendererPid:window.webContents.getOSProcessId(),api:"Electron 43.2.0 contentTracing.startRecording(TraceConfig)/stopRecording"};
-  const categories=["toplevel","devtools.timeline","disabled-by-default-devtools.timeline","disabled-by-default-devtools.timeline.frame","v8","blink.user_timing"];
-  result.profile.backgroundThrottling=window.webContents.getLastWebPreferences().backgroundThrottling??null;
-  result.profile.requestedCategories=categories;
-  result.profile.availableCategories=await contentTracing.getCategories();
-  await contentTracing.startRecording({recording_mode:"record-until-full",included_categories:categories,excluded_categories:["disabled-by-default-v8.cpu_profiler","disabled-by-default-v8.cpu_profiler.hires"],trace_buffer_size_in_kb:131072});
-  traceStarted=true;
-  result.profile.processesBefore=app.getAppMetrics().map(({pid,type,cpu,memory,name,serviceName})=>({pid,type,cpu,memory,name,serviceName}));
   assert.equal(await evaluate("document.querySelector('#thread-composer') instanceof HTMLTextAreaElement"),true,"Baseline is native plain-text composer");
   result.frameMeaning="DOM visibility at a requestAnimationFrame opportunity, not proof of physical screen scanout; synthetic whole-window screenshots included";
   for(let repetition=0;repetition<3;repetition++) {
@@ -679,6 +734,9 @@ async function run() {
     }
     await pause(300);
   }
+  await stopOwnedTrace();
+  assert.notEqual(result.profile.deadlineExceeded,true,"Owned timeline exceeded 120 seconds");
+  assert.ok(result.profile.durationMs<=120000,"Owned timeline exceeded 120 seconds");
   console.log("SYNTHETIC_SEND_STAGE "+JSON.stringify({phase:"final-projection-read",mainMs:performance.now()}));
   const finalRead=await evaluate("window.zenx.protocol.request('thread/read',{threadId:"+JSON.stringify(threadId)+",includeTurns:true})");
   const finalItems=finalRead.thread.turns.flatMap(t=>t.items);
@@ -705,13 +763,13 @@ void import(pathToFileURL(path.join(__dirname,"../out/main/index.js")).href)
     if(window&&!window.isDestroyed())try{await screenshot("send-latency-failure.png")}catch{}
   }).finally(async()=>{
     if(traceStarted)try{
-      result.profile.bufferUsage=await contentTracing.getTraceBufferUsage();
-      result.profile.processesAfter=app.getAppMetrics().map(({pid,type,cpu,memory,name,serviceName})=>({pid,type,cpu,memory,name,serviceName}));
-      const rawPath=await contentTracing.stopRecording(path.join(temporary,"owned-native-send-profile.private.json"));
-      await reviewAndPublishProfile(rawPath);
-      result.profile.traceStopped=true;
+      const rawPath=await stopOwnedTrace();
+      assert.notEqual(result.profile.deadlineExceeded,true);
+      assert.ok(result.profile.durationMs<=120000);
+      if(result.ok)await reviewAndPublishProfile(rawPath);
     }catch(error){result.diagnosticFailure??={stage:result.profile.reviewStage??"trace-collection",reasonCodes:result.profile.review?.reasonCodes??["trace-collection-failed"]};result.profile.traceError="Profile collection or private review failed";result.ok=false;}
     await fs.writeFile(path.join(directory,"full-app-measurements.json"),JSON.stringify(result,null,2));
     process.exitCode=result.ok?0:1;
     app.quit();
   });
+
