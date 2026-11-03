@@ -1416,7 +1416,7 @@ async function run() {
     baselineKind:
       "existing selected idle Thread; initial production thread/read verified and warmed before timing",
     rendered: await evaluate(
-      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
+      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,pendingHosts:inner.querySelectorAll(':scope > .pending-send-host').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
     ),
   };
   const informationTrigger =

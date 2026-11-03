@@ -573,19 +573,20 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("historical grid comparison keeps exact sources and reader regression outside timing", () => {
+test("pending host comparison keeps exact sources and reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
+    "0c74840fc2f1732f3841aad90dff5b9083f8f3a2",
     "a44591da91c5f1bb075b913b97796951a1ac1289",
-    "406b7116f3ece53770f7064ff59f818d365232f5",
+    "afe39de073dac118e24c07719ec58e422b2381c0",
     "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   ])
     assert.ok(launch.includes(identity));
   for (const contract of [
+    "pendingHosts",
     "historyGroups",
     "directTurns",
     "groupTurns",

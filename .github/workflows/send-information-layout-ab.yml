@@ -1,7 +1,7 @@
-name: Packaged Send native invalidation causes (diagnostic)
+name: Packaged Send pending mutation parent A/B (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-style-invalidations-20261103]
+    branches: [diagnostic/send-pending-host-ab-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -20,6 +20,11 @@ jobs:
         with:
           ref: a44591da91c5f1bb075b913b97796951a1ac1289
           persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 0c74840fc2f1732f3841aad90dff5b9083f8f3a2
+          persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
         with:
@@ -30,44 +35,45 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build exact current source once
+      - name: Build both locked production source snapshots
         timeout-minutes: 16
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: candidate
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native Enter with private bounded invalidation cause attribution
+      - name: Matched native Enter with first-activation invalidation trace
         timeout-minutes: 20
         run: |
           failed=0
           for activation in enter; do
-            case="control-$activation"
-            source=candidate
-            width=1280
-            mkdir -p "results/$case"
-            echo "NATIVE_AB_CASE_BEGIN $case $source $width"
-            set +e
-            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "control-candidate" "$width" "$activation")
-            status=$?
-            set -e
-            printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
-            if [ "$status" -ne 0 ]; then failed=1; fi
-            echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
+            for source in baseline candidate; do
+              case="control-$source"
+              width=1280
+              mkdir -p "results/$case"
+              echo "NATIVE_AB_CASE_BEGIN $case $source $width"
+              set +e
+              (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width" "$activation")
+              status=$?
+              set -e
+              printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
+              if [ "$status" -ne 0 ]; then failed=1; fi
+              echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
+            done
           done
           exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-invalidation-causes-5000
+          name: native-send-pending-host-ab-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

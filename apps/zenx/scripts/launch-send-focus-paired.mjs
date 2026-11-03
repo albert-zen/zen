@@ -61,12 +61,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
-    tree: "406b7116f3ece53770f7064ff59f818d365232f5",
-  },
-  candidate: {
     commit: "a44591da91c5f1bb075b913b97796951a1ac1289",
     tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
+  },
+  candidate: {
+    commit: "0c74840fc2f1732f3841aad90dff5b9083f8f3a2",
+    tree: "afe39de073dac118e24c07719ec58e422b2381c0",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -328,7 +328,10 @@ await writeFile(
       sourceTree: snapshot.tree,
       packagedHashes,
       comparisonRole:
-        "locked-production-source activation comparison: " + activationKind,
+        "locked-production-source pending mutation parent comparison: " +
+        sourceLabel +
+        " " +
+        activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
       visibleHistoricalMessages: count * 2,
@@ -696,23 +699,15 @@ try {
     "clickToClearFrameMs",
     "clickToCanonicalNotificationMs",
   ];
+  assert.equal(result.before.rendered.historyGroups, 1);
+  assert.equal(result.before.rendered.directTurns, 0);
+  assert.equal(result.before.rendered.groupTurns, count);
   assert.equal(
-    result.before.rendered.historyGroups,
+    result.before.rendered.pendingHosts,
     sourceLabel === "baseline" ? 0 : 1,
   );
-  assert.equal(
-    result.before.rendered.directTurns,
-    sourceLabel === "baseline" ? count : 0,
-  );
-  assert.equal(
-    result.before.rendered.groupTurns,
-    sourceLabel === "baseline" ? 0 : count,
-  );
   assert.equal(result.before.rendered.outerGapPx, 24);
-  assert.equal(
-    result.before.rendered.historyGapPx,
-    sourceLabel === "baseline" ? null : 24,
-  );
+  assert.equal(result.before.rendered.historyGapPx, 24);
   const samples = result.samples.map((sample, index) => {
     for (const name of [
       "own.value.set",
