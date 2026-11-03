@@ -1679,14 +1679,18 @@ function ThreadViewContent({
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
               />
-              {transcriptRows.length === 0
-                ? (emptyContent ?? (
-                    <div className="thread-empty">
-                      <h2>{i18n.t("shell:startANewThread")}</h2>
-                      <p>{i18n.t("shell:describeOutcome")}</p>
-                    </div>
-                  ))
-                : renderedTranscriptRows}
+              {transcriptRows.length === 0 ? (
+                (emptyContent ?? (
+                  <div className="thread-empty">
+                    <h2>{i18n.t("shell:startANewThread")}</h2>
+                    <p>{i18n.t("shell:describeOutcome")}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="transcript-history">
+                  {renderedTranscriptRows}
+                </div>
+              )}
               {composer.pendingSends && (
                 <PendingSendRows
                   key={thread?.id ?? composerId}
