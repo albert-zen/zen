@@ -1,7 +1,7 @@
-name: Packaged immutable backend fixed-latest-UI pair (WIP)
+name: Packaged immutable backend reverse fixed-UI pair (WIP)
 on:
   push:
-    branches: [diagnostic/send-immutable-backend-fixed-ui-20261103]
+    branches: [diagnostic/send-immutable-backend-reverse-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -75,7 +75,7 @@ jobs:
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control candidate baseline"; do
+          for case_spec in "1280 enter control baseline candidate"; do
             read -r width activation prefix first second <<< "$case_spec"
             for source in "$first" "$second"; do
               case="$prefix-$source"
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-immutable-backend-fixed-ui-5000
+          name: native-send-immutable-backend-reverse-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

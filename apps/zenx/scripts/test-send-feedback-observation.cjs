@@ -591,9 +591,9 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes('"1280 enter control candidate baseline"'));
+  assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
   assert.equal(
-    workflow.includes('"1120 click narrow candidate baseline"'),
+    workflow.includes('"1120 click narrow baseline candidate"'),
     false,
   );
   assert.equal(
@@ -638,7 +638,7 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
     "utf8",
   );
   assert.ok(
-    workflow.includes("diagnostic/send-immutable-backend-fixed-ui-20261103"),
+    workflow.includes("diagnostic/send-immutable-backend-reverse-20261103"),
   );
   assert.ok(workflow.includes("assert.deepEqual(builds[0], builds[1]"));
   for (const contract of [
