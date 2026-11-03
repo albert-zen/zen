@@ -261,6 +261,8 @@ export interface TextUserInputPart {
 export interface ImageUserInputPart {
   type: "image";
   attachment: AttachmentRef;
+  /** An explicit request, not a provider capability or an unbounded bypass. */
+  detail?: "high" | "original";
 }
 
 export interface AudioUserInputPart {
@@ -1659,6 +1661,12 @@ export function validateUserInput(value: unknown, name: string): void {
         }
       }
     } else if (part.type === "image" || part.type === "audio") {
+      if (part.type === "image" && part.detail !== undefined)
+        requireEnum(
+          part.detail,
+          ["high", "original"],
+          `${name}[${String(index)}].detail`,
+        );
       validateAttachmentRef(
         part.attachment,
         `${name}[${String(index)}].attachment`,

@@ -2296,6 +2296,15 @@ function enrichConfiguredModel(
     defaultReasoningEffort:
       configured.defaultReasoningEffort ?? discovered.defaultReasoningEffort,
     inputModalities: configured.inputModalities ?? discovered.inputModalities,
+    ...(configured.supportsImageDetailOriginal === undefined &&
+    discovered.supportsImageDetailOriginal === undefined
+      ? {}
+      : {
+          supportsImageDetailOriginal:
+            configured.supportsImageDetailOriginal ??
+            discovered.supportsImageDetailOriginal ??
+            null,
+        }),
     contextWindow: configured.contextWindow ?? discovered.contextWindow,
     source: discovered.source,
   };

@@ -356,7 +356,7 @@ export class OpenAiResponsesModel implements ModelAdapter {
         return {
           type: "input_image",
           image_url: `data:${part.attachment.mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
-          detail: "auto",
+          detail: part.detail ?? "auto",
         };
       }),
     );

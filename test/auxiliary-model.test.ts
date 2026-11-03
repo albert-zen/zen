@@ -276,3 +276,113 @@ test("semantic bundle write failure keeps committed source facts but never dispa
   assert.ok(records.every((record) => record.type === "context_source"));
   assert.deepEqual(await f.itemListStore.listThreadIds(), []);
 });
+
+test("auxiliary compaction media is prepared before durable bundle capture and cold replay", async (t) => {
+  const f = await fixture(t);
+  const sharp = (await import("sharp")).default;
+  const { InMemoryAttachmentStore } = await import("../src/attachment.js");
+  const attachments = new InMemoryAttachmentStore();
+  const original = await attachments.importBytes(
+    await sharp({
+      create: { width: 2048, height: 2048, channels: 3, background: "purple" },
+    })
+      .png()
+      .toBuffer(),
+  );
+  let prepared:
+    Parameters<NonNullable<AuxiliaryModelOptions["onPrepared"]>>[0] | undefined;
+  let sent: any;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://synthetic.invalid/v1",
+    apiKey: "synthetic-not-real",
+    provider: "synthetic",
+    attachments,
+    fetch: async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return complete();
+    },
+  });
+  for await (const _event of streamAuxiliaryModel({
+    ...f,
+    adapter,
+    attachments,
+    purpose: "compaction",
+    model: "image-model",
+    reasoningEffort: "medium",
+    selection: { providerProfileId: "synthetic", modelId: "image-model" },
+    inputModalities: ["text", "image"],
+    signal: new AbortController().signal,
+    messages: [
+      { role: "user", content: [{ type: "image", attachment: original }] },
+    ],
+    tools: [],
+    onPrepared: (value) => {
+      prepared = value;
+    },
+  })) {
+    /* drain */
+  }
+  assert.ok(prepared);
+  const cold = await f.itemListStore.read(prepared.ownerId);
+  assert(cold.some((i) => i.source.kind === "image_preparation"));
+  const compiled = compileItemList(cold, {
+    sampleId: prepared.sampleId,
+    selection: { providerProfileId: "synthetic", modelId: "image-model" },
+  });
+  assert.deepEqual(compiled.messages, prepared.messages);
+  const image = sent.messages
+    .flatMap((m: any) => (Array.isArray(m.content) ? m.content : []))
+    .find((p: any) => p.type === "image_url");
+  const metadata = await sharp(
+    Buffer.from(image.image_url.url.split(",")[1], "base64"),
+  ).metadata();
+  assert.deepEqual([metadata.width, metadata.height], [1600, 1600]);
+  assert.equal(original.width, 2048);
+});
+
+test("auxiliary compaction rejects an over-window durable compiled input before transport", async (t) => {
+  const f = await fixture(t);
+  let fetches = 0;
+  const adapter = new OpenAiCompatibleModel({
+    baseUrl: "https://synthetic.invalid/v1",
+    apiKey: "synthetic-not-real",
+    provider: "synthetic",
+    fetch: async () => {
+      fetches += 1;
+      return complete();
+    },
+  });
+  const options = {
+    ...f,
+    adapter,
+    purpose: "compaction" as const,
+    model: "tiny",
+    reasoningEffort: null,
+    signal: new AbortController().signal,
+    messages: [{ role: "user" as const, text: "X".repeat(100) }],
+    tools: [],
+    contextWindow: 10,
+  };
+  const request = streamAuxiliaryModel(options);
+  // Mutation after construction cannot enlarge the frozen allowance.
+  options.contextWindow = 10_000;
+  await assert.rejects(
+    async () => {
+      for await (const _event of request) {
+        /* drain */
+      }
+    },
+    { code: "compaction_budget_exceeded" },
+  );
+  assert.equal(fetches, 0);
+  const owners = await f.itemListStore.listThreadIds();
+  assert.equal(owners.length, 1);
+  const cold = await f.itemListStore.read(owners[0]!);
+  assert.equal(compileItemList(cold).messages[0]?.role, "user");
+  assert.equal(
+    (await f.trace.read(owners[0]!)).records.some(
+      (r) => r.type === "model_request",
+    ),
+    false,
+  );
+});
