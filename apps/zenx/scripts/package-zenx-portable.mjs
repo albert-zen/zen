@@ -818,6 +818,13 @@ export async function stagePackage(options) {
   await stageStorageWriter(options.rootDirectory, options.appDirectory);
   // Both entry points import shared Host chunks with an external native codec.
   await stageImageCodec(options.rootDirectory, options.appDirectory);
+  // The provider smoke's Host transport statically imports ws too; its optional
+  // native accelerators are not required and are intentionally not copied.
+  await cp(
+    await realpath(path.join(options.rootDirectory, "node_modules", "ws")),
+    path.join(options.appDirectory, "node_modules", "ws"),
+    { recursive: true },
+  );
   const sdkManifest = await realpath(
     path.join(
       options.rootDirectory,
@@ -870,11 +877,6 @@ export async function stagePackage(options) {
     await cp(options.outDirectory, path.join(options.appDirectory, "out"), {
       recursive: true,
     });
-    await cp(
-      path.join(options.rootDirectory, "node_modules", "ws"),
-      path.join(options.appDirectory, "node_modules", "ws"),
-      { recursive: true },
-    );
     const pluginSdkSource = path.join(
       options.rootDirectory,
       "node_modules",
@@ -1214,7 +1216,11 @@ export function packageManifest(target, zenxPackage) {
         private: true,
         type: "module",
         main: "main/packaged-provider-smoke.js",
-        dependencies: { sharp: "0.35.5", "fs-native-extensions": "1.4.5" },
+        dependencies: {
+          ws: zenxPackage.dependencies.ws,
+          sharp: "0.35.5",
+          "fs-native-extensions": "1.4.5",
+        },
       };
 }
 

@@ -1031,7 +1031,7 @@ test("stages only the provider smoke through the same digest path", async () => 
     await access(
       path.join(appDirectory, "node_modules", "fs-native-extensions"),
     );
-    for (const omitted of ["ws", "node-pty"])
+    for (const omitted of ["node-pty"])
       await assert.rejects(
         access(path.join(appDirectory, "node_modules", omitted)),
         { code: "ENOENT" },
@@ -1048,7 +1048,7 @@ test("stages only the provider smoke through the same digest path", async () => 
   }
 });
 
-test("detached provider smoke resolves its external image codec through ESM and CJS without NODE_PATH", async () => {
+test("detached provider smoke resolves its required external runtime closure through ESM and CJS without NODE_PATH", async () => {
   const fixture = await createFixture();
   const appDirectory = await mkdtemp(
     path.join(os.tmpdir(), "zenx-detached-image-smoke-"),
@@ -1060,13 +1060,16 @@ test("detached provider smoke resolves its external image codec through ESM and 
       path.join(chunks, "app-server-image.js"),
       `
       import sharp from "sharp";
+      import WebSocket from "ws";
       import { createRequire } from "node:module";
       const require = createRequire(import.meta.url);
       const cjsSharp = require("sharp");
+      const cjsWebSocket = require("ws");
       export async function verify() {
         const input = await sharp({ create: { width: 10, height: 10, channels: 3, background: "blue" } }).png().toBuffer();
         const output = await sharp(input).resize(3, 2).png().toBuffer();
         const metadata = await cjsSharp(output).metadata();
+        if (typeof WebSocket !== "function" || typeof cjsWebSocket !== "function" || WebSocket.CLOSED !== 3) throw new Error("detached smoke ws mismatch");
         if (sharp.versions.sharp !== "0.35.5" || cjsSharp.versions.sharp !== "0.35.5" || metadata.width !== 3 || metadata.height !== 2) throw new Error("detached smoke codec mismatch");
         console.log("DETACHED_IMAGE_CODEC_OK");
       }
@@ -1085,7 +1088,11 @@ test("detached provider smoke resolves its external image codec through ESM and 
     });
     const manifest = packageManifest("smoke", {
       version: "0.1.0",
-      dependencies: {},
+      dependencies: {
+        ws: JSON.parse(
+          await readFile(new URL("../package.json", import.meta.url), "utf8"),
+        ).dependencies.ws,
+      },
     });
     await writeFile(
       path.join(appDirectory, "package.json"),
@@ -1107,6 +1114,12 @@ test("detached provider smoke resolves its external image codec through ESM and 
     );
     assert.match(stdout, /DETACHED_IMAGE_CODEC_OK/u);
     assert.equal(manifest.dependencies.sharp, "0.35.5");
+    assert.equal(
+      manifest.dependencies.ws,
+      JSON.parse(
+        await readFile(new URL("../package.json", import.meta.url), "utf8"),
+      ).dependencies.ws,
+    );
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
     await rm(appDirectory, { recursive: true, force: true });
@@ -1725,6 +1738,11 @@ test("Shell packaging retains platform native resources including Windows ConPTY
 async function writeStorageWriterFixture(rootDirectory) {
   const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
   await stageStorageWriter(realRoot, rootDirectory);
+  await cp(
+    await realpath(path.join(realRoot, "node_modules", "ws")),
+    path.join(rootDirectory, "node_modules", "ws"),
+    { recursive: true },
+  );
   await symlink(
     await realpath(path.join(realRoot, "node_modules", "sharp")),
     path.join(rootDirectory, "node_modules", "sharp"),
