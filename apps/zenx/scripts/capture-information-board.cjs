@@ -172,8 +172,51 @@ async function runPinnedSidebarAcceptance() {
       persisted: saved.pinnedThreadIds,
     });
   };
+  const revealSidebarRow = async (selector) => {
+    await until(async () => {
+      const geometry = await evaluate(
+        `(()=>{const row=document.querySelector(${JSON.stringify(selector)}),scroll=document.querySelector('.sidebar-scroll');if(!row||!scroll)return null;const r=row.getBoundingClientRect(),s=scroll.getBoundingClientRect();return {top:r.top,bottom:r.bottom,scrollTop:s.top,scrollBottom:s.bottom,x:s.left+Math.min(80,s.width/2),y:s.top+s.height/2}})()`,
+      );
+      if (!geometry) return false;
+      if (
+        geometry.top >= geometry.scrollTop &&
+        geometry.bottom <= geometry.scrollBottom
+      )
+        return true;
+      window.webContents.sendInputEvent({
+        type: "mouseMove",
+        x: Math.round(geometry.x),
+        y: Math.round(geometry.y),
+      });
+      // Same native wheel convention as capture-file-sidebar-electron.cjs:
+      // negative Electron deltaY scrolls down, opposite to DOM WheelEvent.
+      window.webContents.sendInputEvent({
+        type: "mouseWheel",
+        x: Math.round(geometry.x),
+        y: Math.round(geometry.y),
+        deltaX: 0,
+        deltaY:
+          geometry.top < geometry.scrollTop
+            ? Math.min(400, geometry.scrollTop - geometry.top + 30)
+            : -Math.min(400, geometry.bottom - geometry.scrollBottom + 30),
+        canScroll: true,
+        hasPreciseScrollingDeltas: true,
+      });
+      return false;
+    }, "native Sidebar scroll reveals the exact synthetic row");
+  };
+  const capturePins = async (name) => {
+    await revealSidebarRow(".pinned-thread-group");
+    await screenshot(name);
+  };
   const togglePin = async (threadId, action = "pin") => {
-    const prefix = action === "pin" ? ".project-group" : ".pinned-thread-group";
+    // A global New thread can be projectless; Recent is its real navigation
+    // projection regardless of owning Project. Do not invent Project membership.
+    const prefix =
+      action === "pin" ? ".recent-thread-group" : ".pinned-thread-group";
+    await revealSidebarRow(
+      `${prefix} [data-thread-id=${JSON.stringify(threadId)}]`,
+    );
     await click(
       `${prefix} [data-thread-id=${JSON.stringify(threadId)}] .thread-row`,
       "Focus row to reveal its real native menu affordance",
@@ -240,7 +283,7 @@ async function runPinnedSidebarAcceptance() {
   }
   assert.equal(new Set(created).size, 4);
   result.createdThreadCount = created.length;
-  await screenshot("01-three-ui-created-pins.png");
+  await capturePins("01-three-ui-created-pins.png");
   const third = `.pinned-thread-group [data-thread-id=${JSON.stringify(created[2])}] .thread-row`;
   const affordance = await evaluate(
     `(()=>{const row=document.querySelector(${JSON.stringify(third)});return {draggable:row.closest('.thread-row-shell').draggable,shortcut:row.getAttribute('aria-keyshortcuts')}})()`,
@@ -281,11 +324,11 @@ async function runPinnedSidebarAcceptance() {
     created[2],
     "native keyboard reorder preserves moved-row focus",
   );
-  await screenshot("02-native-manual-reorder.png");
+  await capturePins("02-native-manual-reorder.png");
   await togglePin(created[3]);
   const appended = [...manual, created[3]];
   await expectPins(appended, "fourth Pin appends below saved manual order");
-  await screenshot("03-new-pin-below-manual-order.png");
+  await capturePins("03-new-pin-below-manual-order.png");
   await togglePin(created[2], "unpin");
   await expectPins(
     [created[0], created[1], created[3]],
@@ -294,7 +337,7 @@ async function runPinnedSidebarAcceptance() {
   await togglePin(created[2]);
   const finalOrder = [created[0], created[1], created[3], created[2]];
   await expectPins(finalOrder, "Unpin then re-Pin appends at bottom");
-  await screenshot("04-repin-at-bottom.png");
+  await capturePins("04-repin-at-bottom.png");
   const selected = `.pinned-thread-group [data-thread-id=${JSON.stringify(created[0])}] .thread-row`;
   await click(selected, "Select existing Pin before real model activity");
   await click(
@@ -321,7 +364,7 @@ async function runPinnedSidebarAcceptance() {
     finalOrder,
     "real model activity leaves Pin order unchanged",
   );
-  await screenshot("05-model-activity-preserves-order.png");
+  await capturePins("05-model-activity-preserves-order.png");
   window.webContents.reload();
   await until(
     () => evaluate("Boolean(document.querySelector('.app-shell'))"),
@@ -331,7 +374,7 @@ async function runPinnedSidebarAcceptance() {
     finalOrder,
     "reopened production renderer reads persisted order",
   );
-  await screenshot("06-reopened-persisted-order.png");
+  await capturePins("06-reopened-persisted-order.png");
   result.scope =
     "Full production Electron App/preload/child Host. Four Threads created with native New thread/Composer/Send input; Pins and Alt+Arrow manual reorder use native UI input. Synthetic private profile only. Screenshots capture the complete App client window, not a component preview. No renderer state or preload mocks.";
   result.ok = true;
