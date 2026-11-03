@@ -88,6 +88,7 @@ export function createNativeEditingApi(
       pending = undefined;
       return;
     }
+    if (request.timer) clearTimeout(request.timer);
     request.timer = setTimeout(() => {
       if (pending !== request) return;
       if (document.getSelection()?.isCollapsed === false) pending = undefined;
@@ -123,6 +124,8 @@ export function createNativeEditingApi(
     )
       return;
     const ready = runPreparers(id);
+    // Also bound cleanup if a native completion message is lost.
+    if (ready && document) watchSelection();
     ipc.send(ipcChannels.nativeEditingPrepared, token, id, ready);
   };
   const completed = (

@@ -501,3 +501,57 @@ for (const platform of ["darwin", "win32", "linux"])
     off();
     dom.window.close();
   });
+
+test("preload lost completion timer is request-bound and never cancels an existing Selection", async (t) => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM("<body><div>Canonical transcript text</div></body>");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ipc = new EventEmitter();
+  let cancelled = 0;
+  const api = createNativeEditingApi(
+    Object.assign(ipc, { send() {} }),
+    () => "timer",
+    dom.window.document,
+  );
+  const offCancel = api.onSelectAllCancelled(() => cancelled++);
+  const off = api.onPrepareSelectAll(() => true);
+  const prepare = (id: number) =>
+    ipc.emit(ipcChannels.nativeEditingPrepare, {}, "timer", id);
+  prepare(1);
+  t.mock.timers.tick(1000);
+  prepare(2);
+  assert.equal(cancelled, 1, "new preparation cancels the old request once");
+  t.mock.timers.tick(500);
+  assert.equal(cancelled, 1, "old timer cannot cancel newer preparation");
+  t.mock.timers.tick(1000);
+  assert.equal(
+    cancelled,
+    2,
+    "lost completion with no Selection releases current preparation",
+  );
+  prepare(3);
+  const range = dom.window.document.createRange();
+  range.selectNodeContents(dom.window.document.body);
+  dom.window.document.getSelection()!.addRange(range);
+  t.mock.timers.tick(1500);
+  assert.equal(
+    cancelled,
+    2,
+    "actual Selection remains owned by renderer lifecycle",
+  );
+  off();
+  offCancel();
+  dom.window.close();
+});
+
+test("main safely retires a request when its captured frame cannot receive IPC", () => {
+  const f = fixture();
+  f.register();
+  f.frame.send = () => {
+    throw Error("frame detached between checks");
+  };
+  assert.doesNotThrow(() => f.service.selectAll());
+  assert.equal(f.selected(), 0);
+  assert.equal(f.timers.size, 0);
+  assert.doesNotThrow(() => f.service.close());
+});

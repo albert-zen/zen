@@ -51,13 +51,17 @@ export function installNativeEditing(options: {
     if (!pending) return;
     state.pending = undefined;
     clearTimeout(pending.timer);
-    if (!state.sender.isDestroyed() && !state.frame.isDestroyed())
-      state.frame.send(
-        ipcChannels.nativeEditingCompleted,
-        state.token,
-        pending.id,
-        executed,
-      );
+    try {
+      if (!state.sender.isDestroyed() && !state.frame.isDestroyed())
+        state.frame.send(
+          ipcChannels.nativeEditingCompleted,
+          state.token,
+          pending.id,
+          executed,
+        );
+    } catch {
+      // A retired document cannot receive cleanup; no new edit is dispatched.
+    }
   };
   const retire = (state: Registration) => {
     if (registrations.get(state.sender.id) !== state) return;
@@ -74,7 +78,11 @@ export function installNativeEditing(options: {
       if (state.pending?.id === id) finish(state, false);
     }, 1500);
     state.pending = { id, timer };
-    state.frame.send(ipcChannels.nativeEditingPrepare, state.token, id);
+    try {
+      state.frame.send(ipcChannels.nativeEditingPrepare, state.token, id);
+    } catch {
+      finish(state, false);
+    }
   };
   const register = (
     event: Electron.IpcMainEvent,
