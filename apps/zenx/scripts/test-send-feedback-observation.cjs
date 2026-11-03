@@ -591,7 +591,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
+  assert.ok(workflow.includes('"1280 enter control candidate baseline"'));
   assert.equal(
     workflow.includes('"1120 click narrow candidate baseline"'),
     false,

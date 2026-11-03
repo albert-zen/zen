@@ -1,4 +1,4 @@
-name: Packaged Send backend fixed-Legend pair (WIP experiment)
+name: Packaged Send backend fixed-Legend pair (reverse order)
 on:
   push:
     branches: [diagnostic/send-backend-fixed-frontend-20261103]
@@ -75,7 +75,7 @@ jobs:
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control baseline candidate"; do
+          for case_spec in "1280 enter control candidate baseline"; do
             read -r width activation prefix first second <<< "$case_spec"
             for source in "$first" "$second"; do
               case="$prefix-$source"
