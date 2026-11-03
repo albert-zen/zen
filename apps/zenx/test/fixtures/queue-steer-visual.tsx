@@ -86,6 +86,30 @@ initial = applyQueueItem(initial, {
     },
   ],
 });
+initial = applyQueueItem(initial, {
+  ...queueItem(7, [
+    {
+      type: "text",
+      text: zh
+        ? "等一下，先把 390px 窄窗的截图补上，再继续后面的检查。"
+        : "Wait — add the 390px narrow-window screenshots before continuing.",
+    },
+  ]),
+  deliveryMode: "steer",
+  expectedTurnId: "runtime-turn",
+});
+initial = applyQueueItem(initial, {
+  ...queueItem(8, [
+    {
+      type: "text",
+      text: zh
+        ? "还有，深色下问题卡和待发送区域也一起看一遍。"
+        : "Also review the question card and pending area in dark mode.",
+    },
+  ]),
+  deliveryMode: "steer",
+  expectedTurnId: "runtime-turn",
+});
 if (params.has("many"))
   initial = applyQueueItem(
     initial,
@@ -261,6 +285,7 @@ function Fixture() {
                   })),
                 };
               }}
+              onRestoreRecalled={async () => true}
               onEditQueued={async (target) => {
                 setThread((value) => editQueueFact(value, target));
                 return {

@@ -1777,18 +1777,6 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
-        {thread?.canonicalItems ? (
-          <PendingSteerPanel
-            key={`steer-recall:${thread.id}`}
-            threadId={thread.id}
-            items={thread.canonicalItems}
-            pending={pendingSteer}
-            runningTurnId={runningTurn?.id ?? null}
-            store={steerRecallStore}
-            onRestore={onRestoreRecalled}
-            onReadAttachment={onReadAttachment}
-          />
-        ) : null}
         {thread ? (
           <QueuedMessages
             threadId={thread.id}
@@ -1936,6 +1924,18 @@ function ThreadViewContent({
             focusComposer={() =>
               composerTextareaRef.current?.focus({ preventScroll: true })
             }
+          />
+        ) : null}
+        {thread?.canonicalItems ? (
+          <PendingSteerPanel
+            key={`steer-recall:${thread.id}`}
+            threadId={thread.id}
+            items={thread.canonicalItems}
+            pending={pendingSteer}
+            runningTurnId={runningTurn?.id ?? null}
+            store={steerRecallStore}
+            onRestore={onRestoreRecalled}
+            onReadAttachment={onReadAttachment}
           />
         ) : null}
         {composer.compaction?.status === "failed" ||

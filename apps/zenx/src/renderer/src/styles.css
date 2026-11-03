@@ -12287,6 +12287,9 @@ button:disabled {
 
 /* Local Send feedback is not a canonical message or delivery receipt. */
 .pending-send-content {
+  /* Match a settled bubble: the browser's default paragraph margins puffed
+     the local echo up by two lines' worth of space before admission. */
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

@@ -543,3 +543,48 @@
   gap: 6px;
   margin: 6px 0;
 }
+
+/* Pending steer reuses the queue shelf so both waiting states read as one
+   band above the input instead of two different surfaces. */
+.steer-shelf-status {
+  cursor: default;
+  gap: 8px;
+}
+
+.steer-shelf-status .mini-spinner {
+  flex: 0 0 13px;
+}
+
+.steer-shelf .queue-header-action {
+  gap: 6px;
+}
+
+.steer-shelf .queue-shelf-details {
+  max-height: min(196px, 32dvh);
+}
+
+.steer-shelf .queue-preview {
+  padding-block: 9px;
+}
+
+.steer-shelf-notice {
+  margin: 0;
+  padding: 0 10px 9px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.steer-shelf-notice > p {
+  margin: 0 0 4px;
+}
+
+.queue-shelf + .steer-shelf {
+  border-radius: 0;
+}
+
+.steer-shelf + .composer {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+}
