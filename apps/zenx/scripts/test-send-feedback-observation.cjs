@@ -1954,3 +1954,55 @@ test("native Find replacement observes native responder selection before insertT
   );
   assert.equal(inserted, true);
 });
+
+test("failed native quality exports fixed finite evidence without text or DOM identities", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const start = launch.indexOf("function projectFailureTranscriptQuality(");
+  assert.ok(start >= 0);
+  const project = new Function(
+    launch.slice(
+      start,
+      launch.indexOf("async function readReviewedFailedFirstTrace(", start),
+    ) + "; return projectFailureTranscriptQuality;",
+  )();
+  const result = project({
+    virtualFindQuality: {
+      oldHistory: {
+        accepted: true,
+        counts: [1, 1, 999],
+        mountedRows: 9,
+        text: "NEVER_EXPORT",
+      },
+      wrappedTail: { accepted: true, counts: [5000, 5000], mountedRows: 10 },
+      totalMatches: 5000,
+    },
+    nativeSelectionQuality: {
+      selectionOwnedByTarget: false,
+      preservedAfterNativeWheel: false,
+      selectedCharacterCount: 0,
+      beforeScrollTop: 10000,
+      afterScrollTop: 9000,
+      beforeViewportHeight: 600,
+      targetOffscreenAfterWheel: true,
+      pausedReader: true,
+      mountedRows: 12,
+      bottomDistance: Infinity,
+      text: "NEVER_EXPORT",
+      anchor: { private: "NEVER_EXPORT" },
+    },
+  });
+  assert.deepEqual(result.find.oldHistory.counts, [1, 1]);
+  assert.equal(result.selection.selectionOwnedByTarget, false);
+  assert.equal(result.selection.beforeScrollTop, 10000);
+  assert.equal(result.selection.bottomDistance, null);
+  assert.equal(JSON.stringify(result).includes("NEVER_EXPORT"), false);
+  assert.deepEqual(project(undefined), { find: null, selection: null });
+  assert.ok(
+    launch.includes(
+      "transcriptQuality: projectFailureTranscriptQuality(capture)",
+    ),
+  );
+});

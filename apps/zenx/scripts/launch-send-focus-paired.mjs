@@ -580,6 +580,52 @@ async function captureLiveExportGuard(tokenFile, isClosed) {
   }
   throw new Error("Owned fixture credential unavailable before shutdown");
 }
+// Existing post-timing quality evidence only: fixed finite/boolean projection,
+// never Selection text, DOM references, queries or arbitrary renderer properties.
+function projectFailureTranscriptQuality(capture) {
+  const finite = (value) => (Number.isFinite(value) ? value : null);
+  const boolean = (value) => (typeof value === "boolean" ? value : null);
+  const find = (state) =>
+    state
+      ? {
+          accepted: boolean(state.accepted),
+          counts: Array.isArray(state.counts)
+            ? state.counts.slice(0, 2).map(finite)
+            : [],
+          mountedRows: finite(state.mountedRows),
+        }
+      : null;
+  const selected = capture?.nativeSelectionQuality;
+  return {
+    find: capture?.virtualFindQuality
+      ? {
+          oldHistory: find(capture.virtualFindQuality.oldHistory),
+          wrappedTail: find(capture.virtualFindQuality.wrappedTail),
+          totalMatches: finite(capture.virtualFindQuality.totalMatches),
+        }
+      : null,
+    selection: selected
+      ? Object.fromEntries([
+          ...[
+            "selectionOwnedByTarget",
+            "preservedAfterNativeWheel",
+            "targetOffscreenAfterWheel",
+            "pausedReader",
+            "nativeMouseDrag",
+            "afterTiming",
+          ].map((key) => [key, boolean(selected[key])]),
+          ...[
+            "selectedCharacterCount",
+            "beforeScrollTop",
+            "afterScrollTop",
+            "beforeViewportHeight",
+            "mountedRows",
+            "bottomDistance",
+          ].map((key) => [key, finite(selected[key])]),
+        ])
+      : null,
+  };
+}
 // A failed case may retain only an already-reviewed complete first-sample
 // projection. The whole case remains failed; raw trace is never a fallback.
 async function readReviewedFailedFirstTrace({
@@ -1154,6 +1200,7 @@ try {
     initialReaderPreparation: capture?.initialReaderPreparation,
     rendered: capture?.before?.rendered,
     mountedInspection: capture?.mountedInspectionDiagnostic,
+    transcriptQuality: projectFailureTranscriptQuality(capture),
     pausedReaderResize: capture?.pausedReaderResize,
     responsiveHistoryLayout: capture?.responsiveHistoryLayout,
     observedSamples: (capture?.samples ?? [])
