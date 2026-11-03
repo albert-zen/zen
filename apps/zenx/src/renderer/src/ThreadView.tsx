@@ -849,6 +849,11 @@ function ThreadViewContent({
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
+  const [virtualViewportRevision, setVirtualViewportRevision] = useState(0);
+  const handleVirtualViewportChanged = useCallback(
+    () => setVirtualViewportRevision((version) => version + 1),
+    [],
+  );
   const [virtualTranscript] = useState(() => {
     try {
       return (
@@ -1733,6 +1738,7 @@ function ThreadViewContent({
           view={viewRef}
           viewport={scrollRef}
           controller={virtualViewport}
+          viewportRevision={virtualViewportRevision}
           reading={readingState}
           wakeups={wakeups}
           pluginSnapshot={pluginSnapshot}
@@ -1775,6 +1781,7 @@ function ThreadViewContent({
               }
               onContentSettled={followBottom}
               onNativeSelectionStart={pauseFollowing}
+              onViewportChanged={handleVirtualViewportChanged}
               className="messages"
               style={{ overflowAnchor: atLive ? "none" : undefined }}
               onWheel={(event) => {

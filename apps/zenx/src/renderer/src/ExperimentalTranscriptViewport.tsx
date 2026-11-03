@@ -62,6 +62,7 @@ interface Props extends Omit<
   onViewportScroll(node: HTMLDivElement, layoutCorrection: boolean): void;
   onContentSettled(): void;
   onNativeSelectionStart?(): void;
+  onViewportChanged?(): void;
 }
 
 /** WIP, opt-in viewport. Legend owns the only scroll node; ZenX owns follow intent. */
@@ -76,6 +77,7 @@ export function ExperimentalTranscriptViewport({
   onViewportScroll,
   onContentSettled,
   onNativeSelectionStart: _selectionStarted,
+  onViewportChanged: _viewportChanged,
   ...attributes
 }: Props) {
   const list = useRef<LegendListRef | null>(null);
@@ -431,6 +433,7 @@ export function TranscriptViewport({
     onViewportScroll,
     onContentSettled: _settled,
     onNativeSelectionStart: _selectionStarted,
+    onViewportChanged: _viewportChanged,
     ...attributes
   } = props;
   return (
@@ -452,6 +455,14 @@ function NativeSelectableTranscriptViewport(props: Props) {
   const latest = useRef(props);
   latest.current = props;
   const selectionEpoch = useRef(0);
+  const lastViewport = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const node = props.viewport.current;
+    if (lastViewport.current !== node) {
+      lastViewport.current = node;
+      latest.current.onViewportChanged?.();
+    }
+  });
   useEffect(() => {
     const bridge = window.zenx?.nativeEditing;
     if (!bridge) return;
@@ -626,6 +637,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
     onViewportScroll,
     onContentSettled: _settled,
     onNativeSelectionStart: _selectionStarted,
+    onViewportChanged: _viewportChanged,
     ...attributes
   } = props;
   return (

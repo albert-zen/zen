@@ -35,6 +35,7 @@ interface Props {
   canonical: ReadonlyMap<string, TurnCanonicalPresentation>;
   view: RefObject<HTMLElement | null>;
   viewport: RefObject<HTMLDivElement | null>;
+  viewportRevision?: number;
   controller: RefObject<VirtualTranscriptHandle | null>;
   reading: ReturnType<typeof createThreadReadingState>;
   wakeups?: readonly TriggerHistoryEntry[];
@@ -50,6 +51,7 @@ export function VirtualTranscriptFind({
   canonical,
   view,
   viewport,
+  viewportRevision = 0,
   controller,
   reading,
   wakeups,
@@ -366,6 +368,7 @@ export function VirtualTranscriptFind({
     threadId,
     controller,
     viewport,
+    viewportRevision,
     reading,
     pauseFollowing,
     view,
