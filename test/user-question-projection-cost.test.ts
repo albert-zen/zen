@@ -389,6 +389,7 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
   assert.equal(thread.userQuestionSummary.openCount, 34);
   const before = thread.userQuestionPage();
   assert.equal(before.questions[0]!.request.callItemId, "call-1");
+  assert.equal(before.latestPublishedQuestionId, "call-34");
   assert.equal(thread.takeUserQuestionAttentionInvalidation(), true);
   const latePublicationAt = "2026-11-02T00:00:20.000Z";
   complete(0, latePublicationAt);
@@ -405,6 +406,22 @@ test("late earlier-call publication invalidates non-atomic page traversal rather
   );
   const restarted = thread.userQuestionPage();
   assert.equal(restarted.questions[0]!.request.callItemId, "call-0");
+  assert.equal(
+    restarted.latestPublishedQuestionId,
+    "call-0",
+    "late earlier-call result advances publication independently of call order",
+  );
+  assert.equal(
+    thread.userQuestionPage(restarted.nextAfter!).latestPublishedQuestionId,
+    "call-0",
+    "page traversal has one canonical publication identity",
+  );
+  assert.equal(
+    new Thread(threadId, thread.items, thread.itemList).userQuestionPage()
+      .latestPublishedQuestionId,
+    "call-0",
+    "cold reconstruction preserves append-order publication identity",
+  );
   assert.equal(
     new Set(
       [

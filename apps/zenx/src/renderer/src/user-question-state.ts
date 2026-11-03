@@ -55,6 +55,7 @@ export interface QuestionAttention {
   cards: Readonly<Record<string, QuestionView>>;
   ids: readonly string[];
   totalPending: number;
+  latestPublishedQuestionId?: string;
   nextAfter?: string;
   loaded: boolean;
   loading: boolean;
@@ -153,6 +154,7 @@ export function createUserQuestionStore(
       cards,
       ids,
       totalPending: page.totalPending,
+      latestPublishedQuestionId: page.latestPublishedQuestionId,
       nextAfter: page.nextAfter,
       loaded: true,
       error: undefined,

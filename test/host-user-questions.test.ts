@@ -300,7 +300,11 @@ test("disabling publication after reload preserves native list/read/respond for 
     await request(1, "zen/initialize", {});
     assert.deepEqual(
       await request(2, NATIVE_QUESTION_LIST_METHOD, { threadId: thread.id }),
-      { questions: [question], totalPending: 1 },
+      {
+        questions: [question],
+        totalPending: 1,
+        latestPublishedQuestionId: question.request.callItemId,
+      },
     );
     const identity = {
       threadId: thread.id,
