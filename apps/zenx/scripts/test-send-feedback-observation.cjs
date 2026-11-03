@@ -1848,3 +1848,39 @@ test("native Selection oracle rejects no movement, wrong row, onscreen retention
   ])
     assert.throws(() => validate({ ...good, ...bad }));
 });
+
+test("native startup opt-in is executable inside the real diagnostic expression wrapper", async () => {
+  const start = source.indexOf("function diagnosticEvaluation(");
+  const makeExpression = new Function(
+    source.slice(start, source.indexOf("\nconst evaluate =", start)) +
+      "; return diagnosticEvaluation;",
+  )();
+  const preparation = source.indexOf("// Test-only opt-in");
+  const call =
+    source.indexOf("await evaluate(", preparation) + "await evaluate(".length;
+  const literal = source
+    .slice(call, source.indexOf("\n  );", call))
+    .trim()
+    .replace(/,$/, "");
+  const expression = JSON.parse(literal);
+  const dom = new JSDOM("", {
+    runScripts: "outside-only",
+    url: "https://synthetic.invalid",
+  });
+  try {
+    const reply = await dom.window.eval(makeExpression(expression));
+    assert.equal(reply.ok, true);
+    assert.equal(
+      dom.window.sessionStorage.getItem("zenx.experimental.virtualTranscript"),
+      "1",
+    );
+    assert.equal(
+      dom.window.sessionStorage.getItem(
+        "zenx.experimental.virtualTranscriptFind",
+      ),
+      "1",
+    );
+  } finally {
+    dom.window.close();
+  }
+});

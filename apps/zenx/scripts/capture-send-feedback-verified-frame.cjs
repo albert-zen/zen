@@ -1727,7 +1727,7 @@ async function run() {
   );
   // Test-only opt-in on this exact owned App, before thread selection.
   await evaluate(
-    "sessionStorage.setItem('zenx.experimental.virtualTranscript','1');sessionStorage.setItem('zenx.experimental.virtualTranscriptFind','1')",
+    "(()=>{sessionStorage.setItem('zenx.experimental.virtualTranscript','1');sessionStorage.setItem('zenx.experimental.virtualTranscriptFind','1');return true})()",
   );
   let reloadTimer, reloadFinished;
   try {
