@@ -18,11 +18,16 @@ import type { ZenXRoom } from "../../src/main/trigger-types.js";
 /** Booted explicitly by tests, never by the production stdio launcher. */
 export async function createLiveUserMcpHost(
   root: string,
-  options: { environment?: NodeJS.ProcessEnv; useBuilt?: boolean } = {},
+  options: {
+    environment?: NodeJS.ProcessEnv;
+    useBuilt?: boolean;
+    builtMainDirectory?: string;
+  } = {},
 ) {
   const environment = options.environment ?? process.env;
   const useBuilt =
-    options.useBuilt ?? process.env.ZEN_MCP_TEST_USE_BUILT === "1";
+    options.builtMainDirectory !== undefined ||
+    (options.useBuilt ?? process.env.ZEN_MCP_TEST_USE_BUILT === "1");
   let manager!: AppServerManager;
   const port = new MutableAppServerRequestPort();
   const sidebar = new ThreadSidebarStore(path.join(root, "sidebar"));
@@ -104,14 +109,16 @@ export async function createLiveUserMcpHost(
       );
     const descriptorFile = path.join(root, "runtime", "connection.json");
     manager = new AppServerManager({
-      entryPath: fileURLToPath(
-        new URL(
-          useBuilt
-            ? "../../out/main/app-server-host.js"
-            : "../../src/main/app-server-host.ts",
-          import.meta.url,
-        ),
-      ),
+      entryPath: options.builtMainDirectory
+        ? path.join(options.builtMainDirectory, "app-server-host.js")
+        : fileURLToPath(
+            new URL(
+              useBuilt
+                ? "../../out/main/app-server-host.js"
+                : "../../src/main/app-server-host.ts",
+              import.meta.url,
+            ),
+          ),
       environment,
       tokenFile: path.join(root, "runtime", "token"),
       descriptorFile,

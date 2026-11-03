@@ -40,15 +40,16 @@ export function isUserMcpHostCommand(
 function isUserMcpHostCommandUnsafe(
   value: unknown,
 ): value is UserMcpHostCommand {
-  if (!record(value)) return false;
+  if (!record(value) || typeof value.type !== "string") return false;
   return (
     (value.type === "user-mcp/result" &&
       typeof value.requestId === "string" &&
       (value.error === undefined || typeof value.error === "string") &&
       (value.decision === undefined ||
-        ["accept", "acceptForSession", "decline", "cancel"].includes(
-          String(value.decision),
-        ))) ||
+        (typeof value.decision === "string" &&
+          ["accept", "acceptForSession", "decline", "cancel"].includes(
+            value.decision,
+          )))) ||
     (value.type === "user-mcp/revoked" &&
       typeof value.connectionId === "string" &&
       typeof value.error === "string")
@@ -62,10 +63,15 @@ export function isUserMcpHostEvent(value: unknown): value is UserMcpHostEvent {
   }
 }
 function isUserMcpHostEventUnsafe(value: unknown): value is UserMcpHostEvent {
-  if (!record(value) || typeof value.connectionId !== "string") return false;
+  if (
+    !record(value) ||
+    typeof value.type !== "string" ||
+    typeof value.connectionId !== "string"
+  )
+    return false;
   if (value.type === "user-mcp/close") return true;
   if (typeof value.requestId !== "string") return false;
-  if (["user-mcp/check-owner", "user-mcp/cancel"].includes(String(value.type)))
+  if (["user-mcp/check-owner", "user-mcp/cancel"].includes(value.type))
     return true;
   if (value.type === "user-mcp/open") {
     try {
@@ -83,7 +89,12 @@ function isUserMcpHostEventUnsafe(value: unknown): value is UserMcpHostEvent {
       (key) => typeof request[key] === "string",
     ) &&
     (request.toolName === undefined || typeof request.toolName === "string") &&
-    (request.toolArguments === undefined || record(request.toolArguments))
+    (request.toolArguments === undefined || record(request.toolArguments)) &&
+    (request.scope === undefined || request.scope === "once") &&
+    (request.approvalTarget === undefined ||
+      (record(request.approvalTarget) &&
+        typeof request.approvalTarget.key === "string" &&
+        typeof request.approvalTarget.label === "string"))
   );
 }
 function record(value: unknown): value is Record<string, unknown> {

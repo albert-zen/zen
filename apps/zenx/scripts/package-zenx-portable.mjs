@@ -17,6 +17,7 @@ import {
   stat,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   writeFile,
@@ -25,6 +26,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import { createRequire } from "node:module";
 import { packZenXFirstPartyPlugins } from "./pack-first-party-plugins.mjs";
 import ts from "typescript";
 import { downstreamAssemblyArguments } from "../../../scripts/assemble-zenx-providers.mjs";
@@ -38,6 +40,17 @@ const artifactRoot = path.join(packagedRoot, "artifact");
 const artifactCache = path.join(packagedRoot, "cache", "artifacts");
 export const MACOS_MINIMUM_VERSION = "12.0";
 export const MACOS_CODESIGN_MODE_ENV = "ZENX_CODESIGN_MODE";
+// Packages rendered by the pinned SDK's stdio/server dependency closure.
+export const BUNDLED_MCP_LICENSE_PACKAGES = [
+  "@modelcontextprotocol/sdk",
+  "ajv",
+  "ajv-formats",
+  "fast-deep-equal",
+  "fast-uri",
+  "json-schema-traverse",
+  "zod",
+  "zod-to-json-schema",
+];
 
 if (isDirectExecution()) await packageZenX(process.argv.slice(2));
 
@@ -802,6 +815,36 @@ export async function publishPackagedArtifact(
 
 export async function stagePackage(options) {
   await stageStorageWriter(options.rootDirectory, options.appDirectory);
+  const sdkManifest = await realpath(
+    path.join(
+      options.rootDirectory,
+      "node_modules",
+      "@modelcontextprotocol",
+      "sdk",
+      "package.json",
+    ),
+  );
+  const sdkRequire = createRequire(sdkManifest);
+  const bundledLicenseDirectory = path.join(options.appDirectory, "licenses");
+  await mkdir(bundledLicenseDirectory, { recursive: true });
+  for (const name of BUNDLED_MCP_LICENSE_PACKAGES) {
+    let manifest =
+      name === "@modelcontextprotocol/sdk" ? sdkManifest : undefined;
+    for (const directory of sdkRequire.resolve.paths(name) ?? []) {
+      if (manifest) break;
+      try {
+        manifest = await realpath(path.join(directory, name, "package.json"));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    if (!manifest)
+      throw new Error(`Bundled MCP license package missing: ${name}`);
+    await cp(
+      path.join(path.dirname(manifest), "LICENSE"),
+      path.join(bundledLicenseDirectory, `${name.replaceAll("/", "-")}.txt`),
+    );
+  }
   const stagedMain =
     options.target === "app"
       ? path.join(options.appDirectory, "out", "main")
