@@ -1332,6 +1332,9 @@ export class ZenXTriggerService {
         kind: trigger.kind,
         label: trigger.label,
         active: trigger.active,
+        ...(trigger.definitionRevision === undefined
+          ? {}
+          : { definitionRevision: trigger.definitionRevision }),
         ...(trigger.timer === undefined
           ? {}
           : { timer: { nextRunAt: trigger.timer.nextRunAt } }),

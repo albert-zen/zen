@@ -4,6 +4,7 @@ import React, {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,6 +18,7 @@ import {
 import {
   sidebarTriggerAdmissionId,
   useSidebarTriggers,
+  type SidebarTrigger,
 } from "./sidebar-thread-information.js";
 import { triggerSourceRoute } from "./message-source-navigation.js";
 import { Icon } from "./icons.js";
@@ -75,6 +77,33 @@ function ConversationInformationContent({
   const subagents = snapshot.panels.find(
     (panel) => panel.pluginId === "zenx-subagents",
   );
+  const [busyTrigger, setBusyTrigger] = useState<string | null>(null);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+  const setTriggerActive = async (trigger: SidebarTrigger, next: boolean) => {
+    if (busyTrigger !== null) return;
+    setBusyTrigger(trigger.id);
+    setTriggerError(null);
+    try {
+      await window.zenx.plugins.executeCommand(
+        "zenx-triggers",
+        next ? "resume" : "cancel",
+        next
+          ? {
+              triggerId: trigger.id,
+              expectedRevision: trigger.definitionRevision ?? 0,
+            }
+          : { triggerId: trigger.id },
+      );
+      await refresh(true);
+    } catch {
+      setTriggerError(t("triggerToggleFailed"));
+      // Reconcile a stale revision or a concurrent edit instead of leaving a
+      // switch that no longer matches the Host definition.
+      await refresh(true);
+    } finally {
+      setBusyTrigger(null);
+    }
+  };
   return (
     <div className="conversation-information-cards">
       {attention}
@@ -104,27 +133,47 @@ function ConversationInformationContent({
             {state.status === "loading" ? t("boardLoading") : t("unavailable")}
           </p>
         ) : triggers.length ? (
-          <ul className="information-trigger-list">
-            {triggers.map((trigger) => (
-              <li key={trigger.id}>
-                <span>
-                  <strong title={trigger.label ?? trigger.id}>
-                    {trigger.label ?? trigger.id}
-                  </strong>
-                  <small>{t(trigger.active ? "enabled" : "paused")}</small>
-                </span>
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t("edit")}
-                  aria-label={`${t("edit")} · ${trigger.label ?? trigger.id}`}
-                  onClick={() => navigate(triggerSourceRoute(trigger.id))}
-                >
-                  <Icon name="compose" size={15} />
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="information-trigger-list">
+            {triggers.map((trigger) => {
+              const label = trigger.label ?? trigger.id;
+              const busy = busyTrigger === trigger.id;
+              return (
+                <li key={trigger.id}>
+                  <span className="information-trigger-main">
+                    <strong title={label}>{label}</strong>
+                    <small>{t(trigger.active ? "enabled" : "paused")}</small>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={trigger.active}
+                    aria-busy={busy}
+                    aria-label={`${t(trigger.active ? "pauseTrigger" : "enableTrigger")} · ${label}`}
+                    title={t(trigger.active ? "pauseTrigger" : "enableTrigger")}
+                    className="plugin-switch"
+                    disabled={busy}
+                    onClick={() => void setTriggerActive(trigger, !trigger.active)}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("edit")}
+                    aria-label={`${t("edit")} · ${label}`}
+                    onClick={() => navigate(triggerSourceRoute(trigger.id))}
+                  >
+                    <Icon name="compose" size={15} />
+                  </button>
+                </li>
+              );
+            })}
+            </ul>
+            {triggerError ? (
+              <p className="information-trigger-error" role="alert">
+                {triggerError}
+              </p>
+            ) : null}
+          </>
         ) : (
           <p>{t("informationNoTriggers")}</p>
         )}
