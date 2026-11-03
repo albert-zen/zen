@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { createHostedAppServer } from "../../../apps/cli/src/host.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
+import type { NativeQuestionListResult } from "../../../src/protocol/native/wire.js";
 import { AppServerManager } from "../src/main/app-server-manager.js";
 import {
   readZenXConnectionDescriptor,
@@ -221,9 +222,12 @@ test(
         }),
       );
       await discoverAfter(priorEdge, 1);
-      const page = await external.request("zen/thread/questions/list", {
-        threadId,
-      });
+      const page: NativeQuestionListResult = await external.request(
+        "zen/thread/questions/list",
+        {
+          threadId,
+        },
+      );
       assert.equal(page.totalPending, 1);
       const question = page.questions.find((entry) => entry.state === "open");
       assert.ok(
