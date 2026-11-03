@@ -99,6 +99,7 @@ function installDom(): JSDOM {
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
   Object.defineProperty(globalThis, "navigator", {
@@ -183,32 +184,77 @@ test("trusted result renderer receives immutable structured data and lifecycle f
 
 test("isolated result renderer uses the ZP6 sandbox and receives the same bounded context", async () => {
   const dom = installDom();
-  const root = createRoot(dom.window.document.getElementById("root")!);
-  await act(async () =>
-    root.render(
-      React.createElement(ToolResultRenderer, {
-        item: projectCommandCompleted(call, result, "/workspace"),
-        snapshot: snapshot("isolated"),
-        registry: createPluginUiRegistry(),
-        theme: "dark",
-      }),
-    ),
-  );
-  const frame = dom.window.document.querySelector("iframe")!;
-  assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
-  assert.doesNotMatch(frame.getAttribute("sandbox")!, /allow-same-origin/u);
-  assert.ok(frame.src.endsWith("/plugin-frame.html"));
-  let documentMessage: { type: string; html: string } | undefined;
-  frame.contentWindow!.postMessage = (value) => {
-    documentMessage = value;
+  const messages: Array<{
+    type: string;
+    html?: string;
+    targetOrigin: unknown;
+  }> = [];
+  const order: string[] = [];
+  // Observe the first real load before React's onLoad, including an automatic JSDOM load.
+  // Attaching after render can miss the one document transfer protected by the duplicate-load guard.
+  const observeLoad = (event: Event) => {
+    const frame = event.target;
+    if (!(frame instanceof dom.window.HTMLIFrameElement)) return;
+    order.push("load-capture");
+    assert.ok(frame.contentWindow);
+    frame.contentWindow.postMessage = (value, targetOrigin) => {
+      order.push(value.type);
+      messages.push({ ...value, targetOrigin });
+    };
   };
-  await act(async () => {
-    frame.dispatchEvent(new dom.window.Event("load"));
-  });
-  assert.equal(documentMessage?.type, "zenx-plugin-ui:document");
-  assert.match(documentMessage!.html, /fixture\\u002fcards|fixture\/cards/u);
-  assert.match(documentMessage!.html, /text fallback/u);
-  await act(async () => root.unmount());
+  dom.window.document.addEventListener("load", observeLoad, true);
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  try {
+    await act(async () =>
+      root.render(
+        React.createElement(ToolResultRenderer, {
+          item: projectCommandCompleted(call, result, "/workspace"),
+          snapshot: snapshot("isolated"),
+          registry: createPluginUiRegistry(),
+          theme: "dark",
+        }),
+      ),
+    );
+    const frame = dom.window.document.querySelector("iframe")!;
+    assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
+    assert.doesNotMatch(frame.getAttribute("sandbox")!, /allow-same-origin/u);
+    assert.ok(frame.src.endsWith("/plugin-frame.html"));
+    await act(async () => {
+      frame.dispatchEvent(new dom.window.Event("load"));
+    });
+    const documentMessages = messages.filter(
+      (message) => message.type === "zenx-plugin-ui:document",
+    );
+    assert.equal(
+      documentMessages.length,
+      1,
+      "the first actual load transfers exactly one document",
+    );
+    assert.ok(
+      order.indexOf("load-capture") < order.indexOf("zenx-plugin-ui:document"),
+      "capture spy runs before the actual production load handler",
+    );
+    assert.equal(documentMessages[0]?.type, "zenx-plugin-ui:document");
+    assert.equal(documentMessages[0]?.targetOrigin, "*");
+    assert.match(
+      documentMessages[0]!.html!,
+      /fixture\\u002fcards|fixture\/cards/u,
+    );
+    assert.match(documentMessages[0]!.html!, /text fallback/u);
+    await act(async () => {
+      frame.dispatchEvent(new dom.window.Event("load"));
+    });
+    assert.equal(
+      messages.filter((message) => message.type === "zenx-plugin-ui:document")
+        .length,
+      1,
+      "a duplicate load cannot retransmit or replace the initialized document",
+    );
+  } finally {
+    dom.window.document.removeEventListener("load", observeLoad, true);
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
 });
 
 test("unknown historical structured result is always readable through deterministic JSON and text fallback", async () => {
