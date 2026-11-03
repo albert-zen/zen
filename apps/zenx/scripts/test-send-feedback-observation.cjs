@@ -989,9 +989,7 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     source.includes("Mounted user ID belongs to full canonical projection"),
   );
   assert.ok(
-    source.includes(
-      "Geometry-ordered mounted rows preserve contiguous canonical order",
-    ),
+    source.includes("Visible rows preserve contiguous canonical order"),
   );
   const natural = source.indexOf("if (result.before.rendered.virtual)");
   assert.ok(
@@ -1067,9 +1065,11 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     async (expression) => dom.window.eval(expression),
     inspectionResult,
   );
+  let viewportTop = 100,
+    viewportBottom = 350;
   d.querySelector(".messages").getBoundingClientRect = () => ({
-    top: 100,
-    bottom: 350,
+    top: viewportTop,
+    bottom: viewportBottom,
     left: 0,
     right: 400,
     width: 400,
@@ -1117,6 +1117,12 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
         parent.append(wrapper);
       } else parent.append(row);
     }
+    const footer = scroller.querySelector(".virtual-transcript-footer");
+    if (footer)
+      footer.getBoundingClientRect = () => ({
+        top: Math.max(...indices) * 100 + 104,
+        bottom: Math.max(...indices) * 100 + 254,
+      });
   };
   try {
     render([0, 1, 2, 3, 4], false);
@@ -1131,6 +1137,8 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
     );
     assert.equal(full.inspection.rendererRowRectReads, 0);
     assert.equal(full.inspection.withinSendTiming, false);
+    viewportTop = 250;
+    viewportBottom = 450;
     render([4, 2, 3], true); // DOM order differs from real geometry.
     const live = await inspect(canonical, "thread-A", "live");
     assert.equal(live.firstCanonicalIndex, 2);
@@ -1144,11 +1152,15 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
       false,
       "Raw canonical IDs never enter exported snapshot",
     );
+    viewportTop = 50;
+    viewportBottom = 250;
     render([2, 0, 1], true);
     const earlier = await inspect(canonical, "thread-A", "earlier");
     assert.equal(earlier.firstCanonicalIndex, 0);
     assert.equal(earlier.lastCanonicalIndex, 2);
     assert.equal(earlier.exactCanonicalSuffix, false);
+    viewportTop = 0;
+    viewportBottom = 280;
     render([0, 2], true);
     await assert.rejects(
       inspect(canonical, "thread-A", "returned"),
@@ -1163,20 +1175,87 @@ test("real Legend experiment keeps full canonical data and natural buffer replac
       [0, 0],
       [2, 2],
     ]);
-    assert.equal(rejected.viewportCoverage.rowCount, 1);
+    assert.equal(rejected.viewportCoverage.rowCount, 2);
     assert.equal(
       rejected.viewportCoverage.canonicalContiguous,
-      true,
-      "Viewport coverage is distinct from all mounted rows; original all-row assertion still rejects",
+      false,
+      "Missing canonical rows inside the visible interval remain rejected",
     );
     assert.deepEqual(
       rejected.rows.map((row) => row.visible),
-      [false, true],
+      [true, true],
     );
     assert.equal(rejected.spacing.lastCanonicalRowBottom, 280);
     assert.equal(rejected.spacing.finalRowPaddingBottom, 24);
     assert.equal(JSON.stringify(rejected).includes("user-"), false);
     assert.equal(JSON.stringify(rejected).includes("thread-A"), false);
+    viewportTop = 250;
+    viewportBottom = 450;
+    render([0, 4, 2, 3], true);
+    const retained = await inspect(canonical, "thread-A", "returned");
+    assert.equal(retained.canonicalContiguous, false);
+    assert.equal(retained.viewportCanonicalContiguous, true);
+    assert.equal(retained.exactCanonicalSuffix, true);
+    assert.deepEqual(
+      inspectionResult.mountedInspectionDiagnostic.mountedRanges,
+      [
+        [0, 0],
+        [2, 4],
+      ],
+    );
+    viewportTop = 100;
+    viewportBottom = 350;
+    render([0, 2], true);
+    await assert.rejects(
+      inspect(canonical, "thread-A", "returned"),
+      /coverage reaches the viewport leading edge/,
+    );
+    render([1, 2], true);
+    d.querySelectorAll("section.turn")[1].getBoundingClientRect = () => ({
+      top: 260,
+      bottom: 340,
+      left: 10,
+      right: 390,
+      width: 380,
+      height: 80,
+    });
+    await assert.rejects(
+      inspect(canonical, "thread-A", "earlier"),
+      /physical gap or overlap/,
+    );
+    viewportBottom = 450;
+    render([1, 2, 4], true);
+    d.querySelectorAll("section.turn")[2].getBoundingClientRect = () => ({
+      top: 1000,
+      bottom: 1080,
+      left: 10,
+      right: 390,
+      width: 380,
+      height: 80,
+    });
+    d.querySelector(".virtual-transcript-footer").getBoundingClientRect =
+      () => ({ top: 304, bottom: 454 });
+    await assert.rejects(
+      inspect(canonical, "thread-A", "returned"),
+      /coverage reaches the viewport or actual footer/,
+      "An offscreen final row cannot let a premature footer hide a visible tail gap",
+    );
+    viewportTop = 250;
+    render([2, 3, 4], true);
+    d.querySelector(".virtual-transcript-footer").getBoundingClientRect =
+      () => ({ top: 400, bottom: 550 });
+    await assert.rejects(
+      inspect(canonical, "thread-A", "returned"),
+      /footer cannot precede the final visible canonical row/,
+    );
+    viewportTop = 100;
+    render([1, 2], true);
+    d.querySelector(".virtual-transcript-footer").getBoundingClientRect =
+      () => ({ top: 1000, bottom: 1150 });
+    await assert.rejects(
+      inspect(canonical, "thread-A", "earlier"),
+      /coverage reaches the viewport or actual footer/,
+    );
     render([0, 0], true);
     await assert.rejects(inspect(canonical, "thread-A"));
     render([0, 1], true);
@@ -1550,5 +1629,69 @@ test("later diagnostic failure retains only finite or null observed main handler
     source.includes(
       "Main-process durations are never subtracted from renderer performance.now()",
     ),
+  );
+});
+
+test("native returned-buffer geometry permits only offscreen retained gaps", async () => {
+  const mountedInspector = source.slice(
+    source.indexOf("async function inspectMountedTranscript("),
+    source.indexOf(
+      "// Instrumented getter attribution plus existing browser observations.",
+    ),
+  );
+  const canonical = Array.from({ length: 5003 }, (_, index) => ({
+    id: "turn-" + index,
+    items: [{ type: "userMessage", id: "user-" + index }],
+  }));
+  // Numeric geometry from native macOS85e run41673312561 attempt2. Synthetic
+  // identities are reconstructed here; no original IDs or content are saved.
+  const geometry = [
+    [4990, -2873, -2628.90625, false],
+    [4991, -2605, -2360.90625, false],
+    [4996, -1220, -975.90625, false],
+    [4997, -952, -707.90625, false],
+    [4998, -684, -439.90625, false],
+    [4999, -416, -171.90625, false],
+    [5000, -148, 52.71875, true],
+    [5001, 77, 277.71875, true],
+    [5002, 302, 502.71875, true],
+  ];
+  const snapshot = {
+    virtual: true,
+    viewport: { top: 44, bottom: 677 },
+    spacing: { footerTop: 527, footerBottom: 677 },
+    rowGapPx: 24,
+    contentDisplay: "block",
+    turnBlocks: 9,
+    virtualRows: 9,
+    rows: geometry.map(([index, top, bottom, visible]) => ({
+      userId: "user-" + index,
+      key: JSON.stringify(["thread-A", "turn", "turn-" + index]),
+      top,
+      bottom,
+      visible,
+      paddingBottom: 24,
+    })),
+  };
+  const result = {};
+  const inspect = new Function(
+    "assert",
+    "evaluate",
+    "result",
+    "return (" + mountedInspector + ")",
+  )(assert, async () => structuredClone(snapshot), result);
+  const returned = await inspect(canonical, "thread-A", "returned");
+  assert.equal(returned.canonicalContiguous, false);
+  assert.equal(returned.viewportCanonicalContiguous, true);
+  assert.equal(returned.exactCanonicalSuffix, true);
+  assert.deepEqual(result.mountedInspectionDiagnostic.viewportCoverage.ranges, [
+    [5000, 5002],
+  ]);
+  snapshot.rows.splice(7, 1);
+  snapshot.turnBlocks--;
+  snapshot.virtualRows--;
+  await assert.rejects(
+    inspect(canonical, "thread-A", "returned"),
+    /Visible rows preserve contiguous/,
   );
 });
