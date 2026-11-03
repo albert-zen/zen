@@ -1924,6 +1924,10 @@ function installProtocolIpc(
       );
     });
   });
+  manager.onThreadQuestionAttentionInvalidated(() => {
+    for (const window of appWindows())
+      window.webContents.send(ipcChannels.threadQuestionAttentionChanged);
+  });
   manager.onNotification((method, params) => {
     void observeCompletedInputTitle(titles, method, params);
     if (method === "thread/started") {

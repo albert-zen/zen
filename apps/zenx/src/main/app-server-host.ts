@@ -108,6 +108,7 @@ let replaceCapabilities:
 let currentCapabilityGeneration: (() => string) | undefined;
 let closeToolComposition: ((reason?: string) => Promise<void>) | undefined;
 let userMcpBridge: UserMcpChildBridge | undefined;
+let unsubscribeQuestionAttention: (() => void) | undefined;
 let shuttingDown = false;
 let toolOutputSpool: ToolOutputSpool | undefined;
 let maintenance:
@@ -647,6 +648,12 @@ async function handleCommand(command: HostCommand): Promise<void> {
     onToolPresentationWarning: (warning) =>
       console.warn(`[tool presentation] ${warning}`),
   });
+  // Catalog attention is content-free and does not require this Desktop's
+  // native protocol connection to have read/resumed the publishing Thread.
+  unsubscribeQuestionAttention = appServer.subscribe((event) => {
+    if (event.type === "user_question_attention_invalidated")
+      send({ type: "thread-question/attention-invalidated" });
+  });
   userMcpBridge = new UserMcpChildBridge({
     app: appServer,
     tools: toolComposition.toolEnvironment,
@@ -676,6 +683,8 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  unsubscribeQuestionAttention?.();
+  unsubscribeQuestionAttention = undefined;
   userMcpBridge?.close();
   for (const action of boardActions.values())
     action.controller.abort(new Error("Board Host is closing"));

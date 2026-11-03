@@ -151,6 +151,7 @@ export class AppServerManager {
   #userMcpBridge: UserMcpMainBridge | undefined;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  readonly #threadQuestionAttentionListeners = new Set<() => void>();
   readonly #recoveryListeners = new Set<ThreadRecoveryListener>();
   readonly #approvalListeners = new Set<
     (event: ApprovalRequestEvent) => void
@@ -1239,6 +1240,11 @@ export class AppServerManager {
     return () => this.#recoveryListeners.delete(listener);
   }
 
+  onThreadQuestionAttentionInvalidated(listener: () => void): () => void {
+    this.#threadQuestionAttentionListeners.add(listener);
+    return () => this.#threadQuestionAttentionListeners.delete(listener);
+  }
+
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
     return () => this.#notificationListeners.delete(listener);
@@ -1750,6 +1756,12 @@ export class AppServerManager {
         return;
       }
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "thread-question/attention-invalidated") {
+        if (!this.#stopping && this.#status.type === "ready")
+          for (const listener of this.#threadQuestionAttentionListeners)
+            listener();
+        return;
+      }
       if (hostEvent?.type === "room-question/publish-cancel") {
         roomPublications
           .get(hostEvent.requestId)

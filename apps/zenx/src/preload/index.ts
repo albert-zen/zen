@@ -95,6 +95,17 @@ import {
 } from "../native-room-questions.js";
 
 contextBridge.exposeInMainWorld("zenx", {
+  threadQuestionAttention: {
+    onChanged: (listener: () => void) => {
+      const receive = () => listener();
+      ipcRenderer.on(ipcChannels.threadQuestionAttentionChanged, receive);
+      return () =>
+        ipcRenderer.removeListener(
+          ipcChannels.threadQuestionAttentionChanged,
+          receive,
+        );
+    },
+  },
   roomQuestions: {
     request: async <T extends NativeRoomQuestionRequest>(input: T) =>
       unwrapNativeRoomQuestionReply<NativeRoomQuestionResults[T["method"]]>(

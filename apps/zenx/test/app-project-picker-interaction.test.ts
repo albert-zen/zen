@@ -4647,6 +4647,7 @@ async function mountApp(
   options: {
     threadSidebar?: Window["zenx"]["threadSidebar"];
     information?: Window["zenx"]["information"];
+    threadQuestionAttention?: Window["zenx"]["threadQuestionAttention"];
     addWorkspace?(workspace: string): Promise<void>;
     getStatus?(): Promise<AppServerHostStatus>;
     initialPinnedThreadIds?: string[];
@@ -4791,6 +4792,7 @@ async function mountApp(
     },
     threadSidebar: options.threadSidebar,
     information: options.information,
+    threadQuestionAttention: options.threadQuestionAttention,
     threads: {
       list: async ({ archived }: { archived: boolean }) =>
         options.threads === undefined ? [] : await options.threads(archived),
@@ -11656,5 +11658,220 @@ test("real App draft, Send and ACK never measure the closed information trigger"
     restore();
     admission.resolve({});
     await unmountApp(harness);
+  }
+});
+
+test("unsubscribed private Thread question edges discover and remove Asking without navigation, coalesce bursts, and unsubscribe", async () => {
+  const { questionNativeFixture } =
+    await import("./user-question-native-fixture.js");
+  const f = await questionNativeFixture();
+  const selected = await f.host.startThread();
+  const background = await f.host.startThread();
+  await f.host.setThreadName(selected.id, "Selected private conversation");
+  await f.host.setThreadName(background.id, "Unselected private conversation");
+  for (let index = 0; index < 33; index++) await f.publish(selected.id);
+  const projects = {
+    projects: [
+      {
+        key: f.directory,
+        workspace: f.directory,
+        configured: true,
+        isDefault: true,
+        threadIds: [selected.id, background.id],
+      },
+    ],
+    unavailableThreadIds: [],
+    lastUsedWorkspace: f.directory,
+  };
+  let summaries = 0,
+    projectReads = 0,
+    sourceDisposals = 0,
+    selectedQuestionReads = 0;
+  let listener: (() => void) | undefined;
+  let gate: Promise<void> | undefined;
+  const resumedIds: string[] = [];
+  let harness: AppHarness | undefined;
+  const backgroundRow = () =>
+    [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+      (row) => row.textContent?.includes("Unselected private conversation"),
+    );
+  try {
+    harness = await mountApp(projects, {
+      plugins: {
+        get: async () => ({
+          ...workspaceLauncherSnapshot,
+          plugins: [],
+          panels: [],
+          information: [],
+          commands: [],
+        }),
+      },
+      threadQuestionAttention: {
+        onChanged(callback) {
+          listener = callback;
+          const end = f.host.subscribe((event) => {
+            if (event.type === "user_question_attention_invalidated")
+              callback();
+          });
+          return () => {
+            sourceDisposals++;
+            listener = undefined;
+            end();
+          };
+        },
+      },
+      threads: async (archived) => {
+        summaries++;
+        await gate;
+        return f.host.listThreadSummaries({ archived });
+      },
+      projectsGet: async () => {
+        projectReads++;
+        await gate;
+        return projects;
+      },
+      request: async (method, params) => {
+        if (method === "zen/thread/resume")
+          resumedIds.push((params as { threadId: string }).threadId);
+        if (
+          method === "zen/thread/questions/list" &&
+          (params as { threadId: string }).threadId === selected.id
+        )
+          selectedQuestionReads++;
+        return f.request(method, params);
+      },
+    });
+    const row = await waitFor(() =>
+      [...document.querySelectorAll<HTMLButtonElement>(".thread-row")].find(
+        (value) => value.textContent?.includes("Selected private conversation"),
+      ),
+    );
+    await act(async () => row.click());
+    await waitFor(() => document.querySelector("#thread-composer"));
+    const informationToggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".information-toolbar button"),
+    );
+    await act(async () => informationToggle.click());
+    assert.ok(backgroundRow());
+    assert.equal(backgroundRow()!.querySelector(".thread-asking-badge"), null);
+    assert.equal(resumedIds.includes(background.id), false);
+    await waitFor(
+      () => document.querySelectorAll(".user-question-card").length === 32,
+    );
+    const more = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        ".user-question-attention > .quiet-button",
+      ),
+    );
+    await act(async () => more.click());
+    await waitFor(
+      () => document.querySelectorAll(".user-question-card").length === 33,
+    );
+    const pageTwoCard = [
+      ...document.querySelectorAll<HTMLElement>(".user-question-card"),
+    ].at(-1)!;
+    const pageTwoEditor =
+      pageTwoCard.querySelector<HTMLTextAreaElement>("textarea")!;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(pageTwoEditor, "Keep the page-two answer draft");
+      pageTwoEditor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await act(async () => pageTwoEditor.focus());
+    const readsBeforeBackground = selectedQuestionReads;
+    const composer =
+      document.querySelector<HTMLTextAreaElement>("#thread-composer")!;
+    let question!: Awaited<ReturnType<typeof f.publish>>;
+    await act(async () => {
+      question = await f.publish(background.id);
+    });
+    await waitFor(() => backgroundRow()?.querySelector(".thread-asking-badge"));
+    assert.equal(
+      document.activeElement,
+      pageTwoEditor,
+      "background Asking discovery preserves the page-two answer editor focus",
+    );
+    assert.equal(document.querySelectorAll(".user-question-card").length, 33);
+    assert.equal(pageTwoCard.isConnected, true);
+    assert.equal(pageTwoEditor.value, "Keep the page-two answer draft");
+    assert.equal(
+      selectedQuestionReads,
+      readsBeforeBackground,
+      "unrelated background question does not reset the selected Thread's pagination",
+    );
+    assert.equal(
+      resumedIds.includes(background.id),
+      false,
+      "discovery never subscribes or navigates to the background Thread",
+    );
+    assert.match(
+      document.querySelector(".thread-header")?.textContent ??
+        document.body.textContent!,
+      /Selected private conversation/,
+    );
+    // Returning to Composer deliberately dismisses the information popover.
+    await act(async () => composer.focus());
+    await act(async () => {
+      const result = await f.host.respondToUserQuestion(background.id, {
+        questionCallItemId: question.request.callItemId,
+        clientId: "external-background-cancel",
+        outcome: "cancel",
+      });
+      await result.turn.done;
+    });
+    await waitFor(
+      () => backgroundRow()?.querySelector(".thread-asking-badge") === null,
+    );
+    assert.equal(
+      document.activeElement,
+      composer,
+      "background resolution does not steal Composer focus",
+    );
+    assert.equal(selectedQuestionReads, readsBeforeBackground);
+    const baseline = { summaries, projectReads };
+    const held = deferred<void>();
+    gate = held.promise;
+    await act(async () => {
+      for (let i = 0; i < 50; i++) listener?.();
+    });
+    assert.equal(
+      summaries - baseline.summaries,
+      2,
+      "one active+archived summary pair per in-flight burst",
+    );
+    assert.equal(projectReads - baseline.projectReads, 1);
+    await act(async () => {
+      for (let i = 0; i < 50; i++) listener?.();
+    });
+    assert.equal(summaries - baseline.summaries, 2);
+    await act(async () => {
+      gate = undefined;
+      held.resolve();
+    });
+    await waitFor(() => summaries - baseline.summaries === 4);
+    assert.equal(
+      projectReads - baseline.projectReads,
+      2,
+      "one dirty follow-up, not one read per event",
+    );
+    const stale = listener!;
+    await unmountApp(harness);
+    harness = undefined;
+    assert.equal(sourceDisposals, 1);
+    const stopped = { summaries, projectReads };
+    await act(async () => {
+      stale();
+    });
+    assert.deepEqual(
+      { summaries, projectReads },
+      stopped,
+      "retained disposed source callback starts no new reads",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await f.close();
   }
 });

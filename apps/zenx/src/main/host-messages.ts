@@ -190,6 +190,7 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | { type: "thread-question/attention-invalidated" }
   | {
       type: "room-question/publish-request";
       requestId: string;
@@ -529,6 +530,8 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "thread-question/attention-invalidated")
+    return Object.hasOwn(fleet, "type") && Object.keys(fleet).length === 1;
   if (fleet.type === "room-question/publish-cancel")
     return typeof fleet.requestId === "string";
   if (fleet.type === "room-question/publish-request") {
