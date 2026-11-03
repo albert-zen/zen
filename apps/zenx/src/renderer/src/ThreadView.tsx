@@ -1100,7 +1100,10 @@ function ThreadViewContent({
     composer.pendingSends?.length,
   ]);
   useEffect(() => {
-    followBottom();
+    // The existing content ResizeObserver follows after the browser lays out.
+    // A discrete-click passive effect would otherwise force that whole layout
+    // synchronously before local Send feedback can reach a frame.
+    if (typeof ResizeObserver === "undefined") followBottom();
   }, [followBottom, transcriptArrival]);
 
   useEffect(() => {

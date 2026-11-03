@@ -11570,3 +11570,253 @@ test("real App draft, Send and ACK never measure the closed information trigger"
     await unmountApp(harness);
   }
 });
+
+for (const [mode, width] of [
+  ["dock", 1016],
+  ["popover", 856],
+] as const) {
+  for (const reader of ["live", "wheel", "selection"] as const) {
+    test(`real App ${mode} Send waits for observed layout and honors ${reader} reader intent`, async () => {
+      const prior = globalThis.ResizeObserver;
+      const observers = new Set<Observer>();
+      class Observer {
+        readonly targets = new Set<Element>();
+        constructor(readonly callback: ResizeObserverCallback) {
+          observers.add(this);
+        }
+        observe(target: Element) {
+          this.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+        }
+        disconnect() {
+          this.targets.clear();
+          observers.delete(this);
+        }
+        deliver(target: Element) {
+          this.callback(
+            [
+              {
+                target,
+                contentRect: { width: 500, height: 1200 },
+              } as ResizeObserverEntry,
+            ],
+            this as unknown as ResizeObserver,
+          );
+        }
+      }
+      globalThis.ResizeObserver = Observer as unknown as typeof ResizeObserver;
+      const admission = deferred<unknown>();
+      let harness: AppHarness | undefined;
+      try {
+        harness = await mountThreadApp({
+          plugins: {
+            get: async () =>
+              ({
+                ...messageSourcePlugins(),
+                plugins: [],
+                panels: [],
+                pages: [],
+                surfaces: [],
+                bundles: [],
+              }) as any,
+          },
+          request: async (method) => {
+            if (method === "zen/thread/resume")
+              return resumed(derivedScanHistory());
+            if (method === "zen/turn/send") return admission.promise;
+            throw new Error(`Unexpected ${method}`);
+          },
+        });
+        const composer = await selectedComposer();
+        const workspace = document.querySelector<HTMLElement>(".workspace")!;
+        workspace.getBoundingClientRect = () => ({ width, top: 44 }) as DOMRect;
+        await act(async () => {
+          for (const observer of [...observers]) {
+            if (observer.targets.has(workspace)) observer.deliver(workspace);
+          }
+        });
+        const toggle = document.querySelector<HTMLButtonElement>(
+          ".information-toolbar button",
+        )!;
+        await act(async () => toggle.click());
+        assert.ok(
+          document.querySelector(
+            mode === "dock" ? ".information-dock" : ".information-popover",
+          ),
+        );
+        await act(async () => toggle.click());
+        assert.equal(toggle.getAttribute("aria-expanded"), "false");
+        const scroll = document.querySelector<HTMLElement>(".messages")!;
+        const content = scroll.firstElementChild!;
+        const zone = document.querySelector<HTMLElement>(".bottom-zone")!;
+        const contentObserver = [...observers].find(
+          (observer) =>
+            observer.targets.has(content) && observer.targets.has(zone),
+        )!;
+        assert.ok(
+          contentObserver,
+          "real ThreadView observes its transcript content",
+        );
+        let height = 1000,
+          top = 600,
+          reads = 0;
+        Object.defineProperties(scroll, {
+          clientHeight: { configurable: true, get: () => 400 },
+          scrollHeight: {
+            configurable: true,
+            get: () => {
+              reads++;
+              return height;
+            },
+          },
+          scrollTop: {
+            configurable: true,
+            get: () => top,
+            set: (value: number) => {
+              top = Math.max(0, Math.min(height - 400, value));
+            },
+          },
+        });
+        await act(async () => scroll.dispatchEvent(new window.Event("scroll")));
+        await setTextareaValue(composer, "Synthetic observed layout input");
+        const send = document.querySelector<HTMLButtonElement>(
+          ".composer-send-control > button.action-orb.send",
+        )!;
+        await act(async () => send.focus());
+        await act(async () =>
+          scroll.dispatchEvent(
+            new window.WheelEvent("wheel", { deltaY: 60, bubbles: true }),
+          ),
+        );
+        reads = 0;
+        height = 1200;
+        await act(async () => send.click());
+        assert.ok(document.querySelector('[data-send-state="sending"]'));
+        assert.equal(composer.value, "");
+        assert.equal(
+          reads,
+          0,
+          "the click commits local feedback without forcing transcript layout",
+        );
+        assert.equal(
+          top,
+          600,
+          "scroll waits for the browser's observed layout",
+        );
+        if (reader === "wheel") {
+          await act(async () => {
+            scroll.dispatchEvent(
+              new window.WheelEvent("wheel", { deltaY: -60, bubbles: true }),
+            );
+            scroll.scrollTop = 300;
+            scroll.dispatchEvent(new window.Event("scroll"));
+          });
+        } else if (reader === "selection") {
+          const range = document.createRange();
+          range.selectNodeContents(scroll.querySelector(".agent-copy")!);
+          window.getSelection()!.removeAllRanges();
+          window.getSelection()!.addRange(range);
+        }
+        await act(async () => contentObserver.deliver(content));
+        const expected =
+          reader === "live" ? 800 : reader === "wheel" ? 300 : 600;
+        assert.equal(
+          top,
+          expected,
+          "observed follow yields to intervening reader intent",
+        );
+        reads = 0;
+        await act(async () => admission.resolve({ turnId: "next-turn" }));
+        if (reader !== "selection")
+          assert.equal(
+            reads,
+            0,
+            "admission-only rerenders without a new selection do not force transcript geometry",
+          );
+        // Late media/Markdown layout uses the same observer and current intent.
+        height = 1500;
+        await act(async () => contentObserver.deliver(content));
+        assert.equal(top, reader === "live" ? 1100 : expected);
+        window.getSelection()?.removeAllRanges();
+      } finally {
+        admission.resolve({});
+        try {
+          window.getSelection()?.removeAllRanges();
+          if (harness) await unmountApp(harness);
+        } finally {
+          globalThis.ResizeObserver = prior;
+        }
+        assert.equal(
+          observers.size,
+          0,
+          "owner unmount disconnects observed surfaces",
+        );
+      }
+    });
+  }
+}
+
+test("real App keeps synchronous arrival follow when ResizeObserver is unavailable", async () => {
+  const prior = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
+  const admission = deferred<unknown>();
+  let harness: AppHarness | undefined;
+  try {
+    harness = await mountThreadApp({
+      request: async (method) => {
+        if (method === "zen/thread/resume")
+          return resumed(derivedScanHistory());
+        if (method === "zen/turn/send") return admission.promise;
+        throw new Error(`Unexpected ${method}`);
+      },
+    });
+    const composer = await selectedComposer();
+    const scroll = document.querySelector<HTMLElement>(".messages")!;
+    let height = 1000,
+      top = 600,
+      reads = 0;
+    Object.defineProperties(scroll, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: {
+        configurable: true,
+        get: () => {
+          reads++;
+          return height;
+        },
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => top,
+        set: (value: number) => {
+          top = Math.max(0, Math.min(height - 400, value));
+        },
+      },
+    });
+    await act(async () => scroll.dispatchEvent(new window.Event("scroll")));
+    await setTextareaValue(composer, "Synthetic fallback arrival");
+    const send = document.querySelector<HTMLButtonElement>(
+      ".composer-send-control > button.action-orb.send",
+    )!;
+    await act(async () => send.focus());
+    await act(async () =>
+      scroll.dispatchEvent(
+        new window.WheelEvent("wheel", { deltaY: 60, bubbles: true }),
+      ),
+    );
+    reads = 0;
+    height = 1200;
+    await act(async () => send.click());
+    assert.ok(document.querySelector('[data-send-state="sending"]'));
+    assert.ok(reads > 0, "fallback still reads the current transcript range");
+    assert.equal(top, 800);
+  } finally {
+    admission.resolve({});
+    try {
+      if (harness) await unmountApp(harness);
+    } finally {
+      globalThis.ResizeObserver = prior;
+    }
+  }
+});
