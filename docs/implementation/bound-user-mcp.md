@@ -16,16 +16,18 @@ integration entry point; it is not presented as production registration.
 The MCP tool inventory is projected from currently exposed native tools:
 
 - `zenx_threads_read`: bounded public canonical history for the bound Thread.
-- `zenx_board_read`: semantic or explicit full default Board document read.
+- `zenx_board_read`: semantic or explicit full Board document read, with optional
+  authored `instanceKey` for independent Boards. Omit it for the legacy default.
 - `zenx_board_put`: replacement against an immutable complete-document snapshot,
   or a known-absence snapshot. Native Board CAS preserves unsent user fields.
 - `zenx_self_control_sidebar_read`: the exact bound Thread/Room sidebar state.
 - `zenx_self_control_sidebar_update`: immutable-snapshot CAS on that state.
 
-Only the existing default Board address is exposed in this slice. Independent
-Board instance selection is deliberately not an MCP argument yet. Board UI events,
-scripts, model sending, thread management, credentials and device access are not
-exposed.
+Board writes take their exact owner/address/revision only from an immutable full
+read or known-absence snapshot; `instanceKey` cannot be supplied to a write or
+substituted through `document.id`. Independent Boards and the legacy default stay
+isolated. Board UI events, scripts, model sending, thread management, credentials
+and device access are not exposed.
 
 ## Authority and lifetime
 

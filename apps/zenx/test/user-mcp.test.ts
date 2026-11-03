@@ -550,3 +550,153 @@ test(
     }
   },
 );
+
+test(
+  "independent Board reads bind exact instance snapshots and preserve the legacy default Board",
+  { timeout: 60000 },
+  async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "zen-mcp-board-instances-"),
+    );
+    const host = await createRealUserMcpHost(root);
+    const connection = await createBoundUserMcpServer({
+      ...host,
+      owner: { kind: "thread", threadId: host.threadId },
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({
+      name: "independent-board-instances",
+      version: "1",
+    });
+    await connection.server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const defaultBefore = await call(client, "zenx_board_read", {
+        view: "document",
+      });
+      assert.equal(defaultBefore.exists, false);
+      const alpha = await call(client, "zenx_board_read", {
+        instanceKey: "alpha",
+        view: "document",
+      });
+      const beta = await call(client, "zenx_board_read", {
+        instanceKey: "beta",
+        view: "document",
+      });
+      const alphaDoc = { ...document, title: "Independent alpha" },
+        betaDoc = { ...document, title: "Independent beta" };
+      assert.equal(
+        (
+          await call(client, "zenx_board_put", {
+            snapshot: alpha.snapshot,
+            document: alphaDoc,
+          })
+        ).applied,
+        true,
+      );
+      assert.equal(
+        (
+          await call(client, "zenx_board_put", {
+            snapshot: beta.snapshot,
+            document: betaDoc,
+          })
+        ).applied,
+        true,
+      );
+      assert.deepEqual(
+        (
+          await call(client, "zenx_board_read", {
+            instanceKey: "alpha",
+            view: "document",
+          })
+        ).document,
+        { ...alphaDoc, owner: { kind: "thread" } },
+      );
+      assert.deepEqual(
+        (
+          await call(client, "zenx_board_read", {
+            instanceKey: "beta",
+            view: "document",
+          })
+        ).document,
+        { ...betaDoc, owner: { kind: "thread" } },
+      );
+      assert.equal(
+        (await call(client, "zenx_board_read", { view: "document" })).exists,
+        false,
+      );
+      const compact = await call(client, "zenx_board_read", {
+        instanceKey: "alpha",
+      });
+      assert.equal(
+        (
+          await client.callTool({
+            name: "zenx_board_put",
+            arguments: { snapshot: compact.snapshot, document: alphaDoc },
+          })
+        ).isError,
+        true,
+      );
+      assert.equal(
+        (
+          await client.callTool({
+            name: "zenx_board_put",
+            arguments: {
+              snapshot: alpha.snapshot,
+              instanceKey: "beta",
+              document: alphaDoc,
+            },
+          })
+        ).isError,
+        true,
+      );
+      assert.equal(
+        (
+          await call(client, "zenx_board_put", {
+            snapshot: alpha.snapshot,
+            document: { ...alphaDoc, title: "Stale overwrite" },
+          })
+        ).applied,
+        false,
+      );
+      assert.deepEqual(
+        (
+          await call(client, "zenx_board_read", {
+            instanceKey: "beta",
+            view: "document",
+          })
+        ).document,
+        { ...betaDoc, owner: { kind: "thread" } },
+      );
+      assert.equal(
+        (
+          await call(client, "zenx_board_put", {
+            snapshot: defaultBefore.snapshot,
+            document: { ...document, title: "Legacy default" },
+          })
+        ).applied,
+        true,
+      );
+      assert.equal(
+        (await call(client, "zenx_board_read", { view: "document" })).document
+          .title,
+        "Legacy default",
+      );
+      assert.equal(
+        (
+          await call(client, "zenx_board_read", {
+            instanceKey: "alpha",
+            view: "document",
+          })
+        ).document.title,
+        "Independent alpha",
+      );
+    } finally {
+      await client.close();
+      await connection.close();
+      await host.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -41,7 +41,7 @@ const fields: Record<Name, readonly string[]> = {
     "item",
     "through",
   ],
-  zenx_board_read: ["view"],
+  zenx_board_read: ["view", "instanceKey"],
   zenx_board_put: ["snapshot", "document"],
   zenx_self_control_sidebar_read: [],
   zenx_self_control_sidebar_update: ["snapshot", "patch"],
