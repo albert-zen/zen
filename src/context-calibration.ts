@@ -10,6 +10,7 @@ import {
   estimateModelInput,
   type ModelInputEstimate,
   type ImageDimensionEstimate,
+  type ImageInputTokenEstimate,
 } from "./model-usage.js";
 
 export interface ContextEstimateRequest {
@@ -24,6 +25,7 @@ export interface ContextEstimateRequest {
   instructionsMaterialized?: boolean;
   /** Preflight only; never used to create or serialize model-visible media. */
   imageDimensions?: ImageDimensionEstimate;
+  imageTokens?: ImageInputTokenEstimate;
 }
 interface Receipt {
   adapter: number;
@@ -64,6 +66,7 @@ export class ContextCalibration {
         : request.adapter.contextInstructions,
       request.providerToolPresentation,
       request.imageDimensions,
+      request.imageTokens,
     );
     let adapterId = this.#adapterIds.get(request.adapter);
     if (adapterId === undefined) {
@@ -82,6 +85,9 @@ export class ContextCalibration {
         ...(request.imageDimensions === undefined
           ? {}
           : { imageDimensionEstimate: true }),
+        ...(request.imageTokens === undefined
+          ? {}
+          : { imageTokenEstimate: true }),
         boundary:
           request.items.findLast((item) => item.type === "context_compaction")
             ?.id ?? null,

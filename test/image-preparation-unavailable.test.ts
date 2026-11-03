@@ -638,3 +638,193 @@ test("real Host user/tool same-hash unavailable overlays survive fork and cold r
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("durable unavailable observations budget historical pixels as text across smaller-model preflight and compaction", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-unavailable-budget-"),
+  );
+  const attachments = new FileAttachmentStore(
+    path.join(directory, "attachments"),
+  );
+  const bad = await attachments.importBytes(await undecodablePng(4096));
+  const healthy = await attachments.importBytes(
+    await sharp({
+      create: { width: 2048, height: 2048, channels: 3, background: "blue" },
+    })
+      .png()
+      .toBuffer(),
+  );
+  const previousFetch = globalThis.fetch;
+  const bodies: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(
+      'data: {"choices":[{"index":0,"delta":{"content":"short synthetic summary or answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    );
+  };
+  const host = createHostedAppServer({
+    cwd: directory,
+    dataDirectory: directory,
+    approvalPolicy: "never",
+    model: "large",
+    toolPresentation: "direct",
+    provider: {
+      type: "openai-compatible",
+      baseUrl: "https://synthetic.invalid/v1",
+      apiKey: "synthetic-not-real",
+    },
+    modelCatalog: [
+      {
+        id: "large",
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        contextWindow: 64000,
+        inputModalities: ["text", "image"],
+        source: "manual",
+      },
+      {
+        id: "small",
+        supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+        contextWindow: 5000,
+        inputModalities: ["text", "image"],
+        source: "manual",
+      },
+    ],
+    contextCompaction: { triggerPercent: 100, targetPercent: 100 },
+    toolEnvironment: new ToolEnvironment({ runtimes: [] }),
+    attachments,
+  });
+  try {
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(thread.id, [
+        { type: "image", attachment: bad },
+        { type: "image", attachment: healthy },
+        { type: "image", attachment: bad },
+      ])
+    ).done;
+    const snapshot = await host.readThread(thread.id);
+    assert.equal(snapshot.turns[0]!.status, "completed");
+    const originalId = snapshot.items.find(
+      (item) => item.type === "user_message",
+    )!.id;
+    await host.updateThreadSettings(thread.id, {
+      selection: { providerProfileId: "openai-compatible", modelId: "small" },
+    });
+    const usage = await host.readModelUsage(thread.id);
+    assert(
+      usage.context.inputTokens! < 5000,
+      "read-only historical estimate must use durable unavailable notices rather than guessed image patches",
+    );
+    await host.compactThread(thread.id, {
+      includeOriginalReference: false,
+      retention: {
+        mode: "selected-items",
+        itemRanges: [{ fromItemId: originalId, toItemId: originalId }],
+      },
+    });
+    assert.equal(bodies.length, 2);
+    const summary = JSON.stringify(bodies[1]);
+    assert.equal(
+      bodies[1].messages
+        .flatMap((message: any) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((part: any) => part.type === "image_url").length,
+      1,
+      "healthy pixels still fit alongside two actual unavailable notices",
+    );
+    assert.equal((summary.match(/Image input unavailable/g) ?? []).length, 2);
+    assert(!summary.includes("[excerpt]"));
+    await (
+      await host.startTurn(thread.id, "Continue with retained sources")
+    ).done;
+    assert.equal(
+      bodies.length,
+      3,
+      "historical bad images must not force another automatic compaction",
+    );
+    assert.equal(
+      (JSON.stringify(bodies[2]).match(/Image input unavailable/g) ?? [])
+        .length,
+      2,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("read-only unavailable estimates bind exact occurrence, requested profile and capability without decoding or sticky negatives", async () => {
+  const { unavailableImageTokenEstimate } =
+    await import("../src/image-preparation.js");
+  const { estimateModelMessageInputTokens } =
+    await import("../src/model-usage.js");
+  const store = new InMemoryAttachmentStore();
+  const bad = await store.importBytes(await undecodablePng(4096));
+  const source = userItem(bad);
+  const [overlay] = await prepareSampleImages({
+    ...preparationOptions([source], store),
+    supportsImageDetailOriginal: null,
+  });
+  assert(overlay?.kind === "message");
+  const compiled = compileItemList([source], {
+    inputModalities: ["text", "image"],
+  });
+  const image = compiled.messages
+    .flatMap((message) =>
+      message.role === "user" && "content" in message ? message.content : [],
+    )
+    .find((part) => part.type === "image")!;
+  const estimate = unavailableImageTokenEstimate([overlay], null);
+  assert.equal(estimate(image), Math.ceil(overlay.content.text.length / 4));
+  assert.equal(
+    unavailableImageTokenEstimate([overlay], false)(image),
+    undefined,
+  );
+  const different = compileItemList([{ ...source, id: "other-origin" }], {
+    inputModalities: ["text", "image"],
+  }).messages[0]!;
+  assert(
+    different.role === "user" &&
+      "content" in different &&
+      different.content[0]?.type === "image",
+  );
+  assert.equal(estimate(different.content[0]), undefined);
+  const originalRequest = { ...image, detail: "original" as const };
+  const { bindModelMediaOrigin, modelMediaOrigin } =
+    await import("../src/model-media-origin.js");
+  bindModelMediaOrigin(originalRequest, modelMediaOrigin(image)!);
+  assert.equal(
+    estimate(originalRequest),
+    undefined,
+    "HIGH codec observations do not stand in for ORIGINAL transforms",
+  );
+  const healthy = await store.importBytes(
+    await sharp({
+      create: { width: 1, height: 1, channels: 3, background: "blue" },
+    })
+      .png()
+      .toBuffer(),
+  );
+  const later = JSON.parse(JSON.stringify(overlay));
+  later.source.metadata.imagePreparation.outcome = "prepared";
+  delete later.source.metadata.imagePreparation.reason;
+  later.content.parts.push({ type: "image", attachment: healthy });
+  decodeContextItem(later);
+  assert.equal(
+    unavailableImageTokenEstimate([overlay, later], null)(image),
+    undefined,
+    "a later success supersedes an earlier unavailable estimate",
+  );
+  for (const value of [-1, NaN, Infinity, 1.5])
+    assert.throws(() =>
+      estimateModelMessageInputTokens(
+        compiled.messages,
+        undefined,
+        () => value,
+      ),
+    );
+});

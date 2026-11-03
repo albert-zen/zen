@@ -12,6 +12,7 @@ import {
   type UserInputPart,
 } from "./item.js";
 import { compileItemList, type ContextItem } from "./item-list.js";
+import type { ImageInputTokenEstimate } from "./model-usage.js";
 import { modelMediaOrigin } from "./model-media-origin.js";
 
 /** Versioned Zen input profile, following Codex f05aa41's per-image HIGH limits. */
@@ -326,3 +327,79 @@ export async function prepareSampleImages(options: {
 }
 
 export type ImagePreparationOccurrence = RecoveryMediaOccurrence;
+
+/** Read-only pressure estimate, never a preparation or dispatch decision. Reuse
+ * only an exact origin's durable codec observation for the same profile/detail
+ * capability. A later real sample still verifies and prepares the original. */
+export function unavailableImageTokenEstimate(
+  itemList: readonly ContextItem[],
+  supportsImageDetailOriginal: boolean | null,
+): ImageInputTokenEstimate {
+  const observations = new Map<string, number>();
+  const key = (
+    origin: RecoveryMediaOccurrence,
+    requestedDetail: string,
+    profile: string,
+  ) =>
+    JSON.stringify([
+      origin.itemId,
+      origin.field,
+      origin.partIndex,
+      origin.sha256,
+      requestedDetail,
+      profile,
+    ]);
+  for (const item of itemList) {
+    if (item.source.kind !== "image_preparation" || item.kind !== "message")
+      continue;
+    const preparation = item.source.metadata?.imagePreparation as
+      | {
+          outcome?: string;
+          reason?: string;
+          profile?: string;
+          requestedDetail?: string;
+          supportsImageDetailOriginal?: boolean | null;
+          occurrence?: RecoveryMediaOccurrence;
+        }
+      | undefined;
+    if (
+      preparation?.occurrence === undefined ||
+      preparation.requestedDetail === undefined ||
+      preparation.profile === undefined ||
+      preparation.supportsImageDetailOriginal !== supportsImageDetailOriginal
+    )
+      continue;
+    const observationKey = key(
+      preparation.occurrence,
+      preparation.requestedDetail,
+      preparation.profile,
+    );
+    if (preparation.outcome !== "unavailable") {
+      observations.delete(observationKey);
+      continue;
+    }
+    if (
+      preparation.reason !== "image_decode_failed" &&
+      preparation.reason !== "image_processing_failed"
+    )
+      continue;
+    observations.set(
+      key(
+        preparation.occurrence,
+        preparation.requestedDetail,
+        preparation.profile,
+      ),
+      Math.ceil(item.content.text.length / 4),
+    );
+  }
+  return (part) => {
+    const origin = modelMediaOrigin(part);
+    if (origin === undefined) return undefined;
+    const detail = part.detail ?? "high";
+    const profile =
+      detail === "original" && supportsImageDetailOriginal === true
+        ? "codex-original-v1"
+        : IMAGE_PREPARATION_PROFILE;
+    return observations.get(key(origin, detail, profile));
+  };
+}

@@ -44,12 +44,18 @@ export type ImageDimensionEstimate = (
   part: ImageUserInputPart,
 ) => readonly [number, number];
 
+/** Optional numeric estimate for an already observed preparation outcome. */
+export type ImageInputTokenEstimate = (
+  part: ImageUserInputPart,
+) => number | undefined;
+
 export function estimateModelInput(
   messages: readonly ModelMessage[],
   tools: readonly ModelTool[],
   instructions = "",
   providerToolPresentation?: ProviderToolPresentation,
   imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): ModelInputEstimate {
   const estimate: ModelInputEstimate = {
     total: 0,
@@ -62,7 +68,7 @@ export function estimateModelInput(
     const category = modelMessageContextCategory(message);
     estimate[category] = add(
       estimate[category],
-      estimateModelMessage(message, imageDimensions),
+      estimateModelMessage(message, imageDimensions, imageTokens),
     );
   }
   for (const tool of providerToolPresentation === undefined ? tools : [])
@@ -167,10 +173,11 @@ export function projectModelUsage(
 export function estimateModelMessageInputTokens(
   messages: readonly ModelMessage[],
   imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): number {
   return messages.reduce(
     (total, message) =>
-      add(total, estimateModelMessage(message, imageDimensions)),
+      add(total, estimateModelMessage(message, imageDimensions, imageTokens)),
     0,
   );
 }
@@ -339,6 +346,7 @@ function isPositiveCount(value: unknown): value is number {
 function estimateModelMessage(
   message: ModelMessage,
   imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): number {
   switch (message.role) {
     case "system":
@@ -357,10 +365,18 @@ function estimateModelMessage(
         estimateText(`${message.callId}\n${message.text}`),
         message.modelContent === undefined
           ? 0
-          : estimateUserInput(message.modelContent, imageDimensions),
+          : estimateUserInput(
+              message.modelContent,
+              imageDimensions,
+              imageTokens,
+            ),
       );
     case "user":
-      return estimateUserInput(modelUserContent(message), imageDimensions);
+      return estimateUserInput(
+        modelUserContent(message),
+        imageDimensions,
+        imageTokens,
+      );
   }
 }
 
@@ -368,6 +384,7 @@ function estimateModelMessage(
 function estimateUserInput(
   content: UserInput,
   imageDimensions?: ImageDimensionEstimate,
+  imageTokens?: ImageInputTokenEstimate,
 ): number {
   return content.reduce((total, part) => {
     if (part.type === "text")
@@ -378,6 +395,12 @@ function estimateUserInput(
       part.attachment.height === undefined
     )
       return add(total, 256 + Math.ceil(part.attachment.byteLength / 32));
+    const preparedTokens = imageTokens?.(part);
+    if (preparedTokens !== undefined) {
+      if (!Number.isSafeInteger(preparedTokens) || preparedTokens < 0)
+        throw new Error("Invalid prepared image input token estimate");
+      return add(total, preparedTokens);
+    }
     const [width, height] = imageDimensions?.(part) ?? [
       part.attachment.width,
       part.attachment.height,

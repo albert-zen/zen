@@ -1,6 +1,7 @@
 import {
   prepareSampleImages,
   preparedImageDimensions,
+  unavailableImageTokenEstimate,
 } from "./image-preparation.js";
 import {
   parseUserQuestionReply,
@@ -5401,6 +5402,20 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
     });
+    const imageTokens = unavailableImageTokenEstimate(
+      contexts,
+      resolved.model.supportsImageDetailOriginal ?? null,
+    );
+    const hasUnavailableEstimate = compiled.messages.some((message) =>
+      (message.role === "user" && "content" in message
+        ? message.content
+        : message.role === "tool"
+          ? (message.modelContent ?? [])
+          : []
+      ).some(
+        (part) => part.type === "image" && imageTokens(part) !== undefined,
+      ),
+    );
     return this.#runtime.estimateContextInput({
       threadId,
       items,
@@ -5411,6 +5426,7 @@ export class ZenAppServer {
       selection: resolved.selection,
       inputModalities: resolved.model.inputModalities,
       instructionsMaterialized: true,
+      ...(hasUnavailableEstimate ? { imageTokens } : {}),
       ...(compiled.messages.some((message) =>
         (message.role === "user" && "content" in message
           ? message.content
@@ -6231,6 +6247,10 @@ export class ZenAppServer {
       inputTokenBudget: options.selection.model.contextWindow,
       supportsImageDetailOriginal:
         options.selection.model.supportsImageDetailOriginal === true,
+      imageTokens: unavailableImageTokenEstimate(
+        sourceContext,
+        options.selection.model.supportsImageDetailOriginal ?? null,
+      ),
       signal: options.signal,
       stream: (messages) =>
         this.#streamCompactionInput(
@@ -7777,6 +7797,7 @@ async function generateContextCompactionSummary(options: {
   summaryInstruction: string;
   inputTokenBudget: number | null;
   supportsImageDetailOriginal: boolean;
+  imageTokens: import("./model-usage.js").ImageInputTokenEstimate;
   signal: AbortSignal;
   stream(
     messages: ModelMessage[],
@@ -7796,6 +7817,7 @@ async function generateContextCompactionSummary(options: {
     options.summaryInstruction,
     options.inputTokenBudget,
     options.supportsImageDetailOriginal,
+    options.imageTokens,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
@@ -7868,6 +7890,7 @@ function contextCompactionSummaryChunks(
   summaryInstruction: string,
   inputTokenBudget: number,
   supportsImageDetailOriginal: boolean,
+  imageTokens: import("./model-usage.js").ImageInputTokenEstimate,
 ): ModelMessage[][] {
   // Estimate the exact image profile that the frozen auxiliary sample will
   // materialize. Raw attachment dimensions can needlessly turn an image into
@@ -7893,7 +7916,8 @@ function contextCompactionSummaryChunks(
         if (
           part.type !== "image" ||
           part.attachment.width === undefined ||
-          part.attachment.height === undefined
+          part.attachment.height === undefined ||
+          imageTokens(part) !== undefined
         )
           continue;
         // Every image may receive a preparation/provenance notice, even when
@@ -7906,7 +7930,7 @@ function contextCompactionSummaryChunks(
       }
     }
     return (
-      estimateModelMessageInputTokens(group, imageDimensions) +
+      estimateModelMessageInputTokens(group, imageDimensions, imageTokens) +
       preparationNotices
     );
   };
