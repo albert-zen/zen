@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Sidebar } from "../../src/renderer/src/Sidebar.js";
+import { MessageSourceNavigationContext } from "../../src/renderer/src/message-source-navigation.js";
 import { ThreadView } from "../../src/renderer/src/ThreadView.js";
 import { ThreadReadingStateProvider } from "../../src/renderer/src/thread-reading-state.js";
 import { Icon } from "../../src/renderer/src/icons.js";
@@ -127,7 +128,12 @@ const summaries: NativeThreadSummary[] = [
   zh ? "计划助手" : "Planning assistant",
   zh ? "设计检查" : "Design review",
 ].map((name, index) => ({
-  threadId: index === 0 ? initial.id : `synthetic-${index}`,
+  threadId:
+    index === 0
+      ? initial.id
+      : index === 1
+        ? "synthetic-planner"
+        : `synthetic-${index}`,
   title: name,
   preview: name,
   createdAt: "2026-10-14T06:00:00Z",
@@ -147,6 +153,24 @@ const summaries: NativeThreadSummary[] = [
 };
 function Fixture() {
   const [thread, setThread] = useState(initial);
+  const [selectedThreadId, setSelectedThreadId] = useState(initial.id);
+  const sourceThread: Thread = {
+    ...runtimeThread(
+      [
+        runtimeMessage(
+          "synthetic-source-message",
+          zh
+            ? "这条来源会话明确要求下一轮检查。普通线程消息仍默认 soft steer。"
+            : "This source explicitly requested a follow-up check. Ordinary thread messages still default to soft steer.",
+        ),
+      ],
+      "completed",
+    ),
+    id: "synthetic-planner",
+    name: zh ? "计划助手" : "Planning assistant",
+    cwd: initial.cwd,
+  };
+  const view = selectedThreadId === initial.id ? thread : sourceThread;
   const [composer, setComposer] = useState(emptyComposerState());
   const narrow = params.has("narrow");
   return (
@@ -183,13 +207,16 @@ function Fixture() {
         onOpenSettings={() => {}}
         onRetryThreads={() => {}}
         onRenameThread={async () => {}}
-        onSelectThread={() => {}}
+        onSelectThread={(id) => {
+          if (id === initial.id || id === sourceThread.id)
+            setSelectedThreadId(id);
+        }}
         pendingApprovalThreadIds={new Set()}
         pluginContributions={[]}
         selectedPage="agent"
-        selectedThreadId={thread.id}
+        selectedThreadId={view.id}
         serverStatus={{ type: "ready", reconnected: false }}
-        liveThread={thread}
+        liveThread={view}
         threadError={null}
         threadLoading={false}
         projects={{
@@ -211,92 +238,112 @@ function Fixture() {
       />
       <main className="workspace">
         <section className="agent-surface">
-          <ThreadReadingStateProvider>
-            <ThreadView
-              thread={thread}
-              composer={composer}
-              approvals={[]}
-              composerSendMode="soft"
-              onDraftChange={(text) =>
-                setComposer((value) => ({
-                  ...value,
-                  draft: { ...value.draft, text },
-                }))
-              }
-              onInterrupt={async () => {}}
-              onRespondToApproval={async () => {}}
-              onSubmit={async () => {}}
-              onSteerQueued={async (target) => {
-                await new Promise((resolve) => setTimeout(resolve, 700));
-                if (params.has("error"))
-                  throw new Error(
-                    zh
-                      ? "尚未确认送达。请检查连接并刷新后重试。"
-                      : "Delivery is unconfirmed. Check the connection and refresh.",
-                  );
-                const original = thread.canonicalItems!.find(
-                  (item) => item.id === target.queuedItemId,
-                )!;
-                if (original.type === "thread_message_queued")
-                  setThread((value) =>
-                    applyQueueItem(value, {
-                      type: "thread_message",
-                      id: "delivered-thread",
-                      threadId: target.threadId,
-                      turnId: "runtime-turn",
-                      createdAt: new Date().toISOString(),
-                      clientId: target.clientId,
-                      sender: original.sender,
-                      messageType: original.messageType,
-                      mode: "steer",
-                      content: original.input,
-                    }),
-                  );
-                else if (original.type === "user_message_queued")
-                  setThread((value) =>
-                    applyQueueItem(value, {
-                      type: "user_message",
-                      id: "delivered-user",
-                      threadId: target.threadId,
-                      turnId: "runtime-turn",
-                      createdAt: new Date().toISOString(),
-                      clientId: target.clientId,
-                      content: original.input,
-                    }),
-                  );
-                return { ...target, status: "steered", turnId: "runtime-turn" };
-              }}
-              onCancelQueued={async (targets) => {
-                setThread((value) =>
-                  targets.reduce(
-                    (result, target) =>
-                      cancelQueueFact(
-                        result,
-                        target.queuedItemId,
-                        target.clientId,
-                      ),
-                    value,
-                  ),
-                );
-                return {
-                  results: targets.map((target) => ({
+          <MessageSourceNavigationContext.Provider
+            value={async (target, owner) => {
+              if (!owner.isCurrent() || owner.threadId !== initial.id) return;
+              if (
+                target.kind !== "thread" ||
+                target.id !== sourceThread.id ||
+                target.deviceId
+              )
+                throw new Error("Synthetic source target is unavailable");
+              setSelectedThreadId(sourceThread.id);
+            }}
+          >
+            <ThreadReadingStateProvider>
+              <ThreadView
+                key={view.id}
+                thread={view}
+                composer={
+                  view.id === initial.id ? composer : emptyComposerState()
+                }
+                approvals={[]}
+                composerSendMode="soft"
+                onDraftChange={(text) =>
+                  setComposer((value) => ({
+                    ...value,
+                    draft: { ...value.draft, text },
+                  }))
+                }
+                onInterrupt={async () => {}}
+                onRespondToApproval={async () => {}}
+                onSubmit={async () => {}}
+                onSteerQueued={async (target) => {
+                  await new Promise((resolve) => setTimeout(resolve, 700));
+                  if (params.has("error"))
+                    throw new Error(
+                      zh
+                        ? "尚未确认送达。请检查连接并刷新后重试。"
+                        : "Delivery is unconfirmed. Check the connection and refresh.",
+                    );
+                  const original = thread.canonicalItems!.find(
+                    (item) => item.id === target.queuedItemId,
+                  )!;
+                  if (original.type === "thread_message_queued")
+                    setThread((value) =>
+                      applyQueueItem(value, {
+                        type: "thread_message",
+                        id: "delivered-thread",
+                        threadId: target.threadId,
+                        turnId: "runtime-turn",
+                        createdAt: new Date().toISOString(),
+                        clientId: target.clientId,
+                        sender: original.sender,
+                        messageType: original.messageType,
+                        mode: "steer",
+                        content: original.input,
+                      }),
+                    );
+                  else if (original.type === "user_message_queued")
+                    setThread((value) =>
+                      applyQueueItem(value, {
+                        type: "user_message",
+                        id: "delivered-user",
+                        threadId: target.threadId,
+                        turnId: "runtime-turn",
+                        createdAt: new Date().toISOString(),
+                        clientId: target.clientId,
+                        content: original.input,
+                      }),
+                    );
+                  return {
                     ...target,
-                    status: "cancelled",
-                  })),
-                };
-              }}
-              onRestoreRecalled={async () => true}
-              onEditQueued={async (target) => {
-                setThread((value) => editQueueFact(value, target));
-                return {
-                  ...target,
-                  status: "edited",
-                  revision: target.expectedRevision + 1,
-                  editItemId: "synthetic-edit",
-                };
-              }}
-            />
-          </ThreadReadingStateProvider>
+                    status: "steered",
+                    turnId: "runtime-turn",
+                  };
+                }}
+                onCancelQueued={async (targets) => {
+                  setThread((value) =>
+                    targets.reduce(
+                      (result, target) =>
+                        cancelQueueFact(
+                          result,
+                          target.queuedItemId,
+                          target.clientId,
+                        ),
+                      value,
+                    ),
+                  );
+                  return {
+                    results: targets.map((target) => ({
+                      ...target,
+                      status: "cancelled",
+                    })),
+                  };
+                }}
+                onRestoreRecalled={async () => true}
+                onEditQueued={async (target) => {
+                  setThread((value) => editQueueFact(value, target));
+                  return {
+                    ...target,
+                    status: "edited",
+                    revision: target.expectedRevision + 1,
+                    editItemId: "synthetic-edit",
+                  };
+                }}
+              />
+            </ThreadReadingStateProvider>
+          </MessageSourceNavigationContext.Provider>
         </section>
       </main>
     </div>

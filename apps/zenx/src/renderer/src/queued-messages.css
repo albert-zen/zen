@@ -461,29 +461,42 @@
   }
 }
 
-.steer-shelf-status {
-  cursor: default;
+/* Reuse the reference outbox's visible, right-aligned message bubbles while
+   keeping the shared Queue shelf, theme tokens and 44px control targets. */
+.steer-shelf .queue-shelf-toggle {
   min-width: 0;
+  min-height: 44px;
   white-space: normal;
 }
-.steer-shelf-status .mini-spinner {
+.steer-shelf .mini-spinner {
   flex: 0 0 13px;
 }
 .steer-shelf .queue-shelf-header {
   flex-wrap: wrap;
 }
-.steer-shelf-details > summary {
-  padding: 6px 14px;
-  min-height: 44px;
-  cursor: pointer;
+.steer-shelf-details {
+  max-height: min(196px, 32dvh);
+}
+.steer-shelf-details[hidden] {
+  display: none;
 }
 .steer-shelf-details > ol {
-  max-height: min(196px, 32dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  padding: 0 10px 10px;
 }
-.steer-shelf-row {
-  padding: 9px 8px;
+.steer-shelf-row,
+.steer-shelf-row + .steer-shelf-row {
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 13px 13px 4px 13px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 .steer-shelf-notice,

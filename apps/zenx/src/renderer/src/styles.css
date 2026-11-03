@@ -9931,7 +9931,7 @@ button:disabled {
   font-size: var(--font-size-caption);
 }
 
-.ui-select-option:has(.room-member-choice) > span:first-child {
+.ui-select-option:has(.room-member-choice) > span[data-ui-select-item-text] {
   min-width: 0;
   flex: 1;
 }
