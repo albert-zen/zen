@@ -2,6 +2,17 @@
 export type BoardOwner =
   | { kind: "thread"; threadId: string }
   | { kind: "room"; roomId: string; threadId: string };
+/** Persisted resource identity. A Room's execution member is not its owner. */
+export type BoardResourceOwner =
+  { kind: "thread"; threadId: string } | { kind: "room"; roomId: string };
+
+export function boardResourceOwner(
+  owner: BoardResourceOwner,
+): BoardResourceOwner {
+  return owner.kind === "room"
+    ? { kind: "room", roomId: owner.roomId }
+    : { kind: "thread", threadId: owner.threadId };
+}
 export type BoardValue = string | number | boolean | null;
 export type BoardValues = Record<string, BoardValue>;
 export type BoardBlock =
@@ -54,7 +65,7 @@ export interface BoardDocument {
   id: string;
   title: string;
   summary: string;
-  owner: BoardOwner;
+  owner: BoardResourceOwner;
   /** Convenience templates compose freely; custom HTML is not restricted to them. */
   blocks: BoardBlock[];
   events: BoardEvent[];
@@ -63,6 +74,8 @@ export interface BoardDocument {
   html?: string;
 }
 export interface BoardSnapshot {
+  /** Independent product document address; omitted means the legacy default. */
+  instanceKey?: string;
   document: BoardDocument;
   revision: number;
   draftRevision: number;
@@ -78,8 +91,30 @@ export interface BoardEventResult {
   /** Owner-readable transient local diagnostic; never stored or model-projected. */
   errorDetail?: string;
 }
-export function boardOwnerKey(owner: BoardOwner): string {
+export function boardOwnerKey(owner: BoardResourceOwner): string {
   return owner.kind === "thread"
     ? `thread:${owner.threadId}`
     : `room:${owner.roomId}`;
+}
+
+/** Addressing is separate from authored BoardDocument.id and execution ownership. */
+export function normalizeBoardInstanceKey(value: unknown = "default"): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(value) ||
+    ["__proto__", "constructor", "prototype"].includes(value)
+  )
+    throw new Error("Invalid Board instanceKey");
+  return value;
+}
+
+export function boardDocumentKey(
+  owner: BoardResourceOwner,
+  instanceKey?: string,
+): string {
+  const address = normalizeBoardInstanceKey(instanceKey);
+  // Do not migrate or shadow the pre-existing default owner's storage address.
+  return address === "default"
+    ? boardOwnerKey(owner)
+    : `document:${JSON.stringify([boardOwnerKey(owner), address])}`;
 }

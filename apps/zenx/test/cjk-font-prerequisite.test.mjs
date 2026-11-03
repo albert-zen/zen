@@ -298,7 +298,7 @@ test("workflow prepares fonts before every capture and never caches apt state", 
     .split("  zenx-capability-smoke:\n")[0];
   // Keep the existing workload budget. Room screenshots are one-time evidence,
   // not an additional capture on every unrelated change.
-  assert.ok(zenx.includes("timeout-minutes: 26"));
+  assert.ok(zenx.includes("timeout-minutes: 32"));
   const tabCapture = zenx
     .split("      - ")
     .find((step) =>

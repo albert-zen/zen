@@ -68,6 +68,9 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      threadQuestionAttention?: { onChanged(listener: () => void): () => void };
+      information?: import("../../native-information.js").NativeInformationApi;
+      roomQuestions?: import("../../native-room-questions.js").NativeRoomQuestionApi;
       threadSidebar?: import("../../thread-sidebar-state.js").ThreadSidebarApi;
       modelRequestDebug?: {
         request(

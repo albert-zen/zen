@@ -1,3 +1,7 @@
+import type { RoomUserQuestionPublisher } from "../../../../src/user-question-tool.js";
+import { validateRoomQuestionPublicationReceipt } from "../room-question-publication.js";
+import { UserMcpChildBridge } from "./user-mcp-child-bridge.js";
+import { isUserMcpHostCommand } from "./user-mcp-messages.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import { BoardToolService } from "./board-tool-service.js";
 import { ShellPanelService } from "./shell-panel-service.js";
@@ -28,6 +32,55 @@ import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
+const roomQuestionPublications = new Map<
+  string,
+  {
+    resolve: (result: Awaited<ReturnType<RoomUserQuestionPublisher>>) => void;
+    reject: (error: Error) => void;
+  }
+>();
+const publishRoomQuestion: RoomUserQuestionPublisher = async (
+  input,
+  signal,
+) => {
+  signal.throwIfAborted();
+  if (roomQuestionPublications.size >= 32)
+    throw new Error("Too many Room question publications");
+  return await new Promise((resolve, reject) => {
+    const requestId = randomUUID();
+    const unknown = () => {
+      send({ type: "room-question/publish-cancel", requestId });
+      done(
+        new Error(
+          "Room question publication outcome is unknown; read the original Room resource and do not replay",
+        ),
+      );
+    };
+    const timer = setTimeout(unknown, 15000);
+    const done = (
+      error?: Error,
+      result?: Awaited<ReturnType<RoomUserQuestionPublisher>>,
+    ) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", unknown);
+      roomQuestionPublications.delete(requestId);
+      if (error) reject(error);
+      else if (result?.roomId !== input.roomId)
+        reject(
+          new Error(
+            "Room question receipt target disagrees; outcome may be unknown",
+          ),
+        );
+      else resolve(result);
+    };
+    roomQuestionPublications.set(requestId, {
+      resolve: (result) => done(undefined, result),
+      reject: (error) => done(error),
+    });
+    signal.addEventListener("abort", unknown, { once: true });
+    send({ type: "room-question/publish-request", requestId, input });
+  });
+};
 const boardActions = new Map<
   string,
   {
@@ -54,6 +107,8 @@ let replaceCapabilities:
   ((capabilities: ZenXCapabilityGenerationSnapshot) => void) | undefined;
 let currentCapabilityGeneration: (() => string) | undefined;
 let closeToolComposition: ((reason?: string) => Promise<void>) | undefined;
+let userMcpBridge: UserMcpChildBridge | undefined;
+let unsubscribeQuestionAttention: (() => void) | undefined;
 let shuttingDown = false;
 let toolOutputSpool: ToolOutputSpool | undefined;
 let maintenance:
@@ -83,6 +138,17 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "room-question/publish-result") {
+    const pending = roomQuestionPublications.get(command.requestId);
+    if (command.error !== undefined) pending?.reject(new Error(command.error));
+    else
+      pending?.resolve(validateRoomQuestionPublicationReceipt(command.result));
+    return;
+  }
+  if (isUserMcpHostCommand(command)) {
+    userMcpBridge?.receive(command);
+    return;
+  }
   if (command.type === "board-tool/owner-result") {
     boardActions
       .get(command.requestId)
@@ -416,6 +482,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
         throw new Error("Zen App Server is not ready");
       }
       replaceCapabilities(command.capabilities);
+      userMcpBridge?.capabilitiesChanged();
       send({
         type: "capabilities/replaced",
         requestId: command.requestId,
@@ -570,6 +637,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   closeToolComposition = toolComposition.close;
   appServer = createHostedAppServer({
     ...command.config,
+    publishRoomQuestion,
     toolEnvironment: toolComposition.toolEnvironment,
     toolDefinitionProjection: toolComposition.toolDefinitionProjection,
     toolOutputSpool,
@@ -580,8 +648,21 @@ async function handleCommand(command: HostCommand): Promise<void> {
     onToolPresentationWarning: (warning) =>
       console.warn(`[tool presentation] ${warning}`),
   });
+  // Catalog attention is content-free and does not require this Desktop's
+  // native protocol connection to have read/resumed the publishing Thread.
+  unsubscribeQuestionAttention = appServer.subscribe((event) => {
+    if (event.type === "user_question_attention_invalidated")
+      send({ type: "thread-question/attention-invalidated" });
+  });
+  userMcpBridge = new UserMcpChildBridge({
+    app: appServer,
+    tools: toolComposition.toolEnvironment,
+    capabilityGeneration: toolComposition.currentGenerationToken,
+    send,
+  });
   server = await serveCodexWebSocket({
     appServer,
+    openBoundMcp: userMcpBridge.open,
     zenHome: command.config.dataDirectory,
     listen: command.listen ?? "ws://127.0.0.1:0",
     bearerToken: command.bearerToken,
@@ -602,8 +683,20 @@ function codeRuntimeWorkerEntry(): URL {
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  unsubscribeQuestionAttention?.();
+  unsubscribeQuestionAttention = undefined;
+  userMcpBridge?.close();
   for (const action of boardActions.values())
     action.controller.abort(new Error("Board Host is closing"));
+  for (const [requestId, request] of roomQuestionPublications) {
+    send({ type: "room-question/publish-cancel", requestId });
+    request.reject(
+      new Error(
+        "Room question Host is closing; publication outcome may be unknown",
+      ),
+    );
+  }
+  roomQuestionPublications.clear();
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {

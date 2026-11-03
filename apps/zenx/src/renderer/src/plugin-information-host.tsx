@@ -26,6 +26,7 @@ export function PluginInformationHost({
   readHandle,
   resourcePanelWidth = 0,
   contextContent,
+  managedBoard = false,
 }: {
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
@@ -40,9 +41,13 @@ export function PluginInformationHost({
   readHandle(pluginId: string, handleId: string): Promise<unknown>;
   resourcePanelWidth?: number;
   contextContent?: React.ReactNode;
+  /** The native editable layout already places every built-in Board document. */
+  managedBoard?: boolean;
 }) {
   const { t } = useTranslation("panels");
-  const contributions = snapshot.information ?? [];
+  const contributions = (snapshot.information ?? []).filter(
+    (entry) => !managedBoard || entry.pluginId !== "zenx-board",
+  );
   const ownerKey = conversationKey(owner);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(contributions[0]?.key ?? "");

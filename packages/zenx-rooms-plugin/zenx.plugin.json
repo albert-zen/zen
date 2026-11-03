@@ -11,7 +11,7 @@
     "type": "bundled",
     "entry": "./dist/runtime.js"
   },
-  "mainDocument": "Use Rooms for shared communication. PAW workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads.",
+  "mainDocument": "Use Rooms for shared communication. PAW workspace/read/update tools maintain bounded editable planning annotations with revision CAS; inspect real Thread/Trigger status separately. No mutable notes are injected into context without explicit reads. Room workspace questions are independent of member Threads. Use ask_user_question with an explicit roomId to publish; zenx_rooms_questions reads this Room-owned resource, and current members may update or withdraw open questions with exact revision checks. Never infer a Room question from a private Thread question.",
   "storageVersion": 2,
   "provider": {
     "id": "zenx-automation-service",
@@ -44,14 +44,21 @@
             "type": "integer",
             "minimum": 0
           },
-          "readSince": { "type": "number" },
+          "readSince": {
+            "type": "number"
+          },
           "readCursors": {
             "type": "object",
             "additionalProperties": {
               "type": "object",
               "properties": {
-                "id": { "type": "string", "maxLength": 512 },
-                "createdAt": { "type": "number" }
+                "id": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "createdAt": {
+                  "type": "number"
+                }
               },
               "required": ["id", "createdAt"],
               "additionalProperties": false
@@ -391,11 +398,26 @@
           "snapshot": {
             "type": "object",
             "properties": {
-              "generation": { "type": "string", "maxLength": 36 },
-              "revision": { "type": "integer", "minimum": 0 },
-              "hash": { "type": "string", "maxLength": 64 },
-              "roomId": { "type": "string", "maxLength": 512 },
-              "messageCount": { "type": "integer", "minimum": 0 }
+              "generation": {
+                "type": "string",
+                "maxLength": 36
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "hash": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "roomId": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "messageCount": {
+                "type": "integer",
+                "minimum": 0
+              }
             },
             "required": [
               "generation",
@@ -780,15 +802,7 @@
             "maxLength": 512
           },
           "emoji": {
-            "enum": [
-              "\ud83d\udc4d",
-              "\u2764\ufe0f",
-              "\ud83c\udf89",
-              "\ud83d\udc40",
-              "\u2705",
-              "\ud83e\udd14",
-              null
-            ]
+            "enum": ["👍", "❤️", "🎉", "👀", "✅", "🤔", null]
           }
         },
         "required": ["roomId", "messageId", "emoji"],
@@ -842,7 +856,12 @@
       "description": "Trusted UI only: explicitly add the hourly PAW heartbeat preset to an existing Room. Returns an existing preset unchanged when present; never re-enables a paused timer.",
       "inputSchema": {
         "type": "object",
-        "properties": { "roomId": { "type": "string", "maxLength": 512 } },
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
         "required": ["roomId"],
         "additionalProperties": false
       }
@@ -919,6 +938,126 @@
       "interactionMode": "background_safe",
       "capabilities": ["zenx.rooms.manage"],
       "maxOutputBytes": 65536
+    },
+    {
+      "name": "zenx_rooms_questions",
+      "description": "Read independent Room workspace questions and exact revisions, in pages of at most four complete resources. These are not participant Thread questions. Use ask_user_question with roomId to publish.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "afterQuestionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "expectedWorkspaceRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "includeClosed": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          }
+        },
+        "required": ["roomId"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.read"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 1048576
+    },
+    {
+      "name": "zenx_rooms_update_question",
+      "description": "Revise an open Room workspace question with its exact current revision. Current Room members only; does not change original source provenance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "questionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "specification": {
+            "type": "object",
+            "properties": {
+              "questions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                  "type": "object"
+                }
+              },
+              "answerTemplate": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": ["questions"],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "roomId",
+          "questionId",
+          "expectedRevision",
+          "specification"
+        ],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 1048576
+    },
+    {
+      "name": "zenx_rooms_withdraw_question",
+      "description": "Explicitly withdraw an open Room workspace question using its exact current revision. Current Room members only; never impersonates a human answer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "questionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": ["roomId", "questionId", "expectedRevision"],
+        "additionalProperties": false
+      },
+      "permissions": ["zenx-rooms.write"],
+      "interactionMode": "background_safe",
+      "capabilities": ["zenx.rooms.manage"],
+      "maxOutputBytes": 1048576
     }
   ],
   "ui": {

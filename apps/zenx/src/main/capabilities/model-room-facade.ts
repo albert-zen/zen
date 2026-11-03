@@ -20,6 +20,9 @@ const names = new Set([
   "zenx_rooms_react",
   "zenx_rooms_workspace",
   "zenx_rooms_update_workspace",
+  "zenx_rooms_questions",
+  "zenx_rooms_update_question",
+  "zenx_rooms_withdraw_question",
 ]);
 export const isRoomModelTool = (name: string) => names.has(name);
 export function roomModelDefinition<T extends ModelTool>(source: T): T {
@@ -37,6 +40,25 @@ export function roomModelDefinition<T extends ModelTool>(source: T): T {
   if (member) renameField(member, "threadId", "thread");
   delete fields.readCursors;
   delete fields.operationId;
+  if (tool.name === "zenx_rooms_questions") {
+    delete fields.afterQuestionId;
+    delete fields.expectedWorkspaceRevision;
+    fields.page = structuredClone(MODEL_REF);
+    schema.required = [];
+  }
+  if (
+    tool.name === "zenx_rooms_update_question" ||
+    tool.name === "zenx_rooms_withdraw_question"
+  ) {
+    delete fields.room;
+    delete fields.questionId;
+    delete fields.expectedRevision;
+    fields.question = structuredClone(MODEL_REF);
+    schema.required =
+      tool.name === "zenx_rooms_update_question"
+        ? ["question", "specification"]
+        : ["question"];
+  }
   if (tool.name === "zenx_rooms_update_workspace") {
     delete fields.room;
     delete fields.expectedRevision;
@@ -65,6 +87,15 @@ export function roomModelDefinition<T extends ModelTool>(source: T): T {
     tool.name === "zenx_rooms_update_workspace"
       ? "Replace Room planning annotations against the exact immutable workspace snapshot. Conflicts require a fresh read and deliberate merge, never automatic retry. Does not execute Threads or Triggers."
       : "Use scoped Room, Thread and message refs from reads. Literal message/planning text is preserved. Refs do not grant authority, delivery or completion; native Room membership and exact identity checks still apply.";
+  if (tool.name === "zenx_rooms_questions")
+    tool.description =
+      "Read Room-owned workspace questions using a scoped Room ref, or continue with the exact returned page ref. Pages contain complete resources. Thread-private questions never appear here. Use returned question refs for revision-checked edits; references never grant current Room membership.";
+  if (
+    tool.name === "zenx_rooms_update_question" ||
+    tool.name === "zenx_rooms_withdraw_question"
+  )
+    tool.description =
+      "Revise or explicitly withdraw an open Room workspace question against its exact returned question snapshot ref. Current Room membership is checked independently. Conflicts require a fresh read and deliberate edit, never an automatic retry. Does not impersonate a human answer.";
   return tool;
 }
 export function decodeRoomArguments(
@@ -87,6 +118,46 @@ export function decodeRoomArguments(
   if (args.room !== undefined) {
     args.roomId = object(refs.resolve(args.room, "rooms", "room")).id;
     delete args.room;
+  }
+  if (name === "zenx_rooms_questions") {
+    if (
+      args.afterQuestionId !== undefined ||
+      args.expectedWorkspaceRevision !== undefined
+    )
+      throw Error("Use the exact returned Room question page ref");
+    if (args.page !== undefined) {
+      const page = object(
+        refs.resolve(args.page, "rooms", "question-page", epoch),
+      );
+      if (args.roomId !== undefined && args.roomId !== page.roomId)
+        throw Error("Question page belongs to another Room");
+      if (
+        args.includeClosed !== undefined &&
+        args.includeClosed !== page.includeClosed
+      )
+        throw Error("Question page binds its original open/closed filter");
+      args.roomId = page.roomId;
+      args.afterQuestionId = page.afterQuestionId;
+      args.expectedWorkspaceRevision = page.revision;
+      args.includeClosed = page.includeClosed;
+      delete args.page;
+    }
+    if (typeof args.roomId !== "string")
+      throw Error("Choose an exact Room or question page ref");
+  }
+  if (
+    name === "zenx_rooms_update_question" ||
+    name === "zenx_rooms_withdraw_question"
+  ) {
+    if (args.roomId !== undefined || args.questionId !== undefined)
+      throw Error("Question snapshot already binds its exact Room resource");
+    const question = object(
+      refs.resolve(args.question, "rooms", "question", epoch),
+    );
+    delete args.question;
+    args.roomId = question.roomId;
+    args.questionId = question.id;
+    args.expectedRevision = question.revision;
   }
   if (args.thread !== undefined) {
     const bound = object(refs.resolve(args.thread, "threads", "thread"));
@@ -214,12 +285,95 @@ export function projectRoomResult(
         : {}),
     };
   };
+  const projectQuestion = (value: unknown): Record<string, unknown> => {
+    const entry = object(value);
+    if (
+      typeof entry.roomId !== "string" ||
+      typeof entry.id !== "string" ||
+      !Number.isSafeInteger(entry.revision)
+    )
+      throw Error("Invalid Room question resource projection");
+    const origin = record(entry.origin);
+    const response = record(entry.response);
+    return {
+      ref: refs.bind(
+        "rooms",
+        "question",
+        asJson({
+          roomId: entry.roomId,
+          id: entry.id,
+          revision: entry.revision,
+        }),
+        epoch,
+      ),
+      room: room(entry.roomId),
+      ...pick(entry, ["createdAt", "updatedAt", "specification", "state"]),
+      ...(origin && typeof origin.threadId === "string"
+        ? { origin: { thread: thread(origin.threadId) } }
+        : {}),
+      ...(response
+        ? {
+            response: {
+              ...pick(response, ["outcome", "answers", "receivedAt"]),
+              ...(typeof response.messageId === "string"
+                ? {
+                    message: refs.bind(
+                      "rooms",
+                      "message",
+                      asJson({ roomId: entry.roomId, id: response.messageId }),
+                    ),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  };
+  if (name === "zenx_rooms_questions") {
+    const roomId =
+      typeof result.roomId === "string" ? result.roomId : args.roomId;
+    if (typeof roomId !== "string")
+      throw Error("Room question workspace has no exact owner");
+    return {
+      room: room(roomId),
+      ...pick(result, ["openCount", "totalQuestions"]),
+      questions: Array.isArray(result.questions)
+        ? result.questions.map(projectQuestion)
+        : [],
+      ...(typeof result.nextAfter === "string"
+        ? {
+            next: refs.bind(
+              "rooms",
+              "question-page",
+              asJson({
+                roomId,
+                afterQuestionId: result.nextAfter,
+                revision: result.revision,
+                includeClosed: args.includeClosed === true,
+              }),
+              epoch,
+            ),
+          }
+        : {}),
+    };
+  }
+  if (
+    name === "zenx_rooms_update_question" ||
+    name === "zenx_rooms_withdraw_question"
+  )
+    return projectQuestion(result);
   const projectRoom = (value: unknown): unknown => {
     const entry = object(value),
       assistant = record(entry.assistant);
     return {
       ...(typeof entry.id === "string" ? { ref: room(entry.id) } : {}),
-      ...pick(entry, ["name", "createdAt", "messageCount", "unreadCount"]),
+      ...pick(entry, [
+        "name",
+        "createdAt",
+        "messageCount",
+        "unreadCount",
+        "questionSummary",
+      ]),
       ...(Array.isArray(entry.members)
         ? {
             members: entry.members.map((value) => {

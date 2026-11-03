@@ -20,6 +20,7 @@ import {
 } from "./sidebar-thread-information.js";
 import { triggerSourceRoute } from "./message-source-navigation.js";
 import { Icon } from "./icons.js";
+import type { InformationType } from "../../information-layout.js";
 
 type ConversationInformationProps = {
   threadId: string;
@@ -30,6 +31,9 @@ type ConversationInformationProps = {
   navigate(route: string): void;
   /** Dedicated question UI never shares Board fields or main Composer state. */
   attention?: ReactNode;
+  types?: readonly InformationType[];
+  triggerConfig?: { filter: "all" | "timer" | "event"; showPaused: boolean };
+  embedded?: boolean;
 };
 
 /** Keep App's latest navigation closure without making token deltas redraw cards. */
@@ -61,16 +65,29 @@ function ConversationInformationContent({
   theme,
   navigate,
   attention,
+  types,
+  triggerConfig,
+  embedded,
 }: ConversationInformationProps) {
   const { t } = useTranslation("panels");
   const lineageContext = useMemo(
     () => ({ threadId, threads }),
     [threadId, threads],
   );
-  const admissionId = sidebarTriggerAdmissionId(snapshot);
+  const show = (type: InformationType) => !types || types.includes(type);
+  const admissionId = show("triggers")
+    ? sidebarTriggerAdmissionId(snapshot)
+    : null;
   const { state, refresh } = useSidebarTriggers(admissionId, threadId);
   const triggers = state.triggers.filter(
-    (trigger) => trigger.threadId === threadId,
+    (trigger) =>
+      trigger.threadId === threadId &&
+      (!triggerConfig ||
+        ((triggerConfig.showPaused || trigger.active) &&
+          (triggerConfig.filter === "all" ||
+            (triggerConfig.filter === "timer"
+              ? trigger.kind === "timer"
+              : trigger.kind !== "timer")))),
   );
   const subagents = snapshot.panels.find(
     (panel) => panel.pluginId === "zenx-subagents",
@@ -78,58 +95,64 @@ function ConversationInformationContent({
   return (
     <div className="conversation-information-cards">
       {attention}
-      <section
-        className="conversation-information-section"
-        aria-label={t("threadTriggers")}
-      >
-        <header>
-          <h3>
-            <Icon name="clock" size={15} />
-            {t("threadTriggers")}
-          </h3>
-          {admissionId ? (
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={t("refresh")}
-              title={t("refresh")}
-              onClick={() => void refresh(true)}
-            >
-              <Icon name="reload" size={14} />
-            </button>
-          ) : null}
-        </header>
-        {state.status !== "ready" ? (
-          <p role="status">
-            {state.status === "loading" ? t("boardLoading") : t("unavailable")}
-          </p>
-        ) : triggers.length ? (
-          <ul className="information-trigger-list">
-            {triggers.map((trigger) => (
-              <li key={trigger.id}>
-                <span>
-                  <strong title={trigger.label ?? trigger.id}>
-                    {trigger.label ?? trigger.id}
-                  </strong>
-                  <small>{t(trigger.active ? "enabled" : "paused")}</small>
-                </span>
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t("edit")}
-                  aria-label={`${t("edit")} · ${trigger.label ?? trigger.id}`}
-                  onClick={() => navigate(triggerSourceRoute(trigger.id))}
-                >
-                  <Icon name="compose" size={15} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>{t("informationNoTriggers")}</p>
-        )}
-      </section>
-      {subagents ? (
+      {show("triggers") ? (
+        <section
+          className="conversation-information-section"
+          aria-label={t("threadTriggers")}
+        >
+          <header>
+            {!embedded && (
+              <h3>
+                <Icon name="clock" size={15} />
+                {t("threadTriggers")}
+              </h3>
+            )}
+            {admissionId ? (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t("refresh")}
+                title={t("refresh")}
+                onClick={() => void refresh(true)}
+              >
+                <Icon name="reload" size={14} />
+              </button>
+            ) : null}
+          </header>
+          {state.status !== "ready" ? (
+            <p role="status">
+              {state.status === "loading"
+                ? t("boardLoading")
+                : t("unavailable")}
+            </p>
+          ) : triggers.length ? (
+            <ul className="information-trigger-list">
+              {triggers.map((trigger) => (
+                <li key={trigger.id}>
+                  <span>
+                    <strong title={trigger.label ?? trigger.id}>
+                      {trigger.label ?? trigger.id}
+                    </strong>
+                    <small>{t(trigger.active ? "enabled" : "paused")}</small>
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    title={t("edit")}
+                    aria-label={`${t("edit")} · ${trigger.label ?? trigger.id}`}
+                    onClick={() => navigate(triggerSourceRoute(trigger.id))}
+                  >
+                    <Icon name="compose" size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>{t("informationNoTriggers")}</p>
+          )}
+        </section>
+      ) : null}
+      {show("lineage") && subagents ? (
         <section className="conversation-information-section">
           <GenericPluginUiHost
             registry={registry}
@@ -143,19 +166,28 @@ function ConversationInformationContent({
             readHandle={window.zenx.plugins.readHandle}
           />
         </section>
+      ) : show("lineage") ? (
+        <p role="status">{t("unavailable")}</p>
       ) : null}
-      <section
-        className="conversation-information-section"
-        aria-label={t("backgroundShellTitle")}
-      >
-        <header>
-          <h3>
-            <Icon name="terminal" size={15} />
-            {t("backgroundShellTitle")}
-          </h3>
-        </header>
-        <BackgroundShellStatus threadId={threadId} presentation="information" />
-      </section>
+      {show("shell") ? (
+        <section
+          className="conversation-information-section"
+          aria-label={t("backgroundShellTitle")}
+        >
+          {!embedded && (
+            <header>
+              <h3>
+                <Icon name="terminal" size={15} />
+                {t("backgroundShellTitle")}
+              </h3>
+            </header>
+          )}
+          <BackgroundShellStatus
+            threadId={threadId}
+            presentation="information"
+          />
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -41,10 +41,28 @@ test("automation manifests retain independent read and write permissions", () =>
     [ZENX_AUTOMATION_WRITE_PERMISSION],
   );
   assert.deepEqual(
+    capability.manifest.tools.find(
+      (tool) => tool.name === "zenx_rooms_questions",
+    )?.permissions,
+    [ZENX_AUTOMATION_READ_PERMISSION],
+  );
+  for (const name of [
+    "zenx_rooms_update_question",
+    "zenx_rooms_withdraw_question",
+  ]) {
+    assert.deepEqual(
+      capability.manifest.tools.find((tool) => tool.name === name)?.permissions,
+      [ZENX_AUTOMATION_WRITE_PERMISSION],
+    );
+  }
+  assert.deepEqual(
     capability.manifest.tools
       .filter((tool) => tool.name.startsWith("zenx_rooms"))
       .map((tool) => tool.name),
     [
+      "zenx_rooms_questions",
+      "zenx_rooms_update_question",
+      "zenx_rooms_withdraw_question",
       "zenx_rooms_list",
       "zenx_rooms_create",
       "zenx_rooms_rename",

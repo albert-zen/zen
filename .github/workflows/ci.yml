@@ -45,9 +45,9 @@ jobs:
   zenx:
     name: ZenX typecheck, tests, and build
     runs-on: ubuntu-24.04
-    # Existing accepted workload takes about 19 minutes; add only the bounded
-    # six-minute normal/expanded tab acceptance step without reducing coverage.
-    timeout-minutes: 26
+    # Complete previews, typechecks, tests and build reached the former 26-minute
+    # budget with zero test failures; keep all coverage and bounded cleanup headroom.
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

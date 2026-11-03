@@ -14,7 +14,7 @@ import {
 } from "./plugin-ui-host.js";
 import {
   BoardUiSession,
-  conversationKey,
+  boardUiSessionKey,
   message,
   type BoardConversation,
 } from "./board-ui-state.js";
@@ -28,14 +28,55 @@ export function registerBoardUi(registry: PluginUiRegistry) {
 export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   const { t } = useTranslation("panels");
   const owner = sdk.context.owner as BoardConversation;
-  const key = `${String(sdk.context.admissionId ?? "fixture")}:${conversationKey(owner)}`;
-  const commands = useRef(sdk.commands);
-  commands.current = sdk.commands;
+  const instanceKey = sdk.context.instanceKey as string | undefined;
+  const key = boardUiSessionKey(owner, instanceKey, sdk.context.admissionId);
+  const members = Array.isArray(sdk.context.members)
+    ? (sdk.context.members as { threadId: string; name?: string }[]).filter(
+        (member) => typeof member?.threadId === "string",
+      )
+    : [];
+  const [selection, setSelection] = useState({ key, threadId: "" });
+  const executor = useRef({ key, threadId: "" });
+  executor.current = {
+    key,
+    threadId:
+      selection.key === key &&
+      members.some((member) => member.threadId === selection.threadId)
+        ? selection.threadId
+        : "",
+  };
+  useEffect(() => {
+    if (
+      selection.key !== key ||
+      (selection.threadId && !executor.current.threadId)
+    )
+      setSelection({ key, threadId: "" });
+  }, [key, selection.key, selection.threadId, executor.current.threadId]);
+  const command = (input: Record<string, unknown>) => {
+    if (
+      owner.kind !== "room" ||
+      !["event", "navigate"].includes(String(input.operation))
+    )
+      return sdk.commands.execute("ui", input);
+    if (
+      !active.mounted ||
+      executor.current.key !== key ||
+      !executor.current.threadId
+    )
+      throw new Error(t("boardChooseExecutionMember"));
+    return sdk.commands.execute("ui", {
+      ...input,
+      executionThreadId: executor.current.threadId,
+    });
+  };
   const session = useMemo(() => {
     let current = sessions.get(key);
     if (!current) {
-      current = new BoardUiSession(owner, (input) =>
-        commands.current.execute("ui", input),
+      // Keep a cached/in-flight document bound to its own admitted command port.
+      current = new BoardUiSession(
+        owner,
+        (input) => sdk.commands.execute("ui", input),
+        instanceKey,
       );
       sessions.set(key, current);
     }
@@ -76,9 +117,27 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
   };
   const run = async (id: string, values?: BoardValues) => {
     setLocalError(null);
-    // Session failures already belong to this owner. Navigation is performed by
-    // the Host against its exact sidebar resource; receipts are not app routes.
-    return await session.run(id, values);
+    // Execution is per human click, never retained in the shared document cache.
+    const actor = owner.kind === "room" ? executor.current.threadId : undefined;
+    const assertCurrent = () => {
+      if (
+        !active.mounted ||
+        executor.current.key !== key ||
+        (owner.kind === "room" &&
+          (!actor || executor.current.threadId !== actor))
+      )
+        throw new Error(t("boardChooseExecutionMember"));
+    };
+    try {
+      assertCurrent();
+      return await session.run(id, values, {
+        executionThreadId: actor,
+        assertCurrent,
+      });
+    } catch (error) {
+      showLocalError(error);
+      throw error;
+    }
   };
   const visibleLocalError = localError?.scope === active ? localError : null;
   const error = session.error ?? visibleLocalError?.message;
@@ -101,7 +160,10 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
             "Board changed; review the current document before navigating",
           );
         setLocalError(null);
-        const result = (await commands.current.execute("ui", {
+        const result = (await command({
+          ...(session.instanceKey === "default"
+            ? {}
+            : { instanceKey: session.instanceKey }),
           operation: "navigate",
           owner: captured.document.owner,
           revision: captured.revision,
@@ -139,6 +201,10 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
       },
       commands: {
         execute: async (command: string, input?: unknown) => {
+          if (!currentDocument())
+            throw new Error(
+              "Board changed; review the current document before interacting",
+            );
           if (command === "navigate") {
             const target = (
               input as { target?: BoardNavigationTarget } | undefined
@@ -220,6 +286,23 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
           · <code>{board.id}</code>
         </small>
       </header>
+      {owner.kind === "room" ? (
+        <label className="board-field">
+          <span>{t("boardExecutionMember")}</span>
+          <Select
+            value={executor.current.threadId}
+            onValueChange={(threadId) => setSelection({ key, threadId })}
+            aria-label={t("boardExecutionMember")}
+          >
+            <option value="">{t("boardChooseExecutionMember")}</option>
+            {members.map((member) => (
+              <option key={member.threadId} value={member.threadId}>
+                {member.name ?? member.threadId}
+              </option>
+            ))}
+          </Select>
+        </label>
+      ) : null}
       {board.blocks.map((block) => (
         <BoardBlockView
           key={block.id}
@@ -232,6 +315,7 @@ export function BoardSurface({ sdk }: PluginUiSurfaceProps) {
       ))}
       {board.html ? (
         <IsolatedPluginSurface
+          key={key}
           className="board-custom"
           bundleHtml={board.html}
           exportName="board"

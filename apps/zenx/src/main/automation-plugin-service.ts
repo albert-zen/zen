@@ -1,3 +1,9 @@
+import type {
+  RoomQuestion,
+  RoomQuestionResponseInput,
+  RoomQuestionWorkspaceReadOptions,
+  RoomQuestionWriteInput,
+} from "../room-questions.js";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -1106,6 +1112,118 @@ export class ZenXBundledAutomationPluginService implements ZenXAutomationControl
     this.#assertStorageReadable();
     return await this.#service.createRoom(input);
   }
+  #questionAdmission(admit: () => Promise<void>) {
+    return async () => {
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
+      await admit();
+      if (!this.roomsAvailable())
+        throw Error("Rooms are disabled or unavailable");
+      this.#assertStorageReadable();
+    };
+  }
+  roomQuestionSummary(roomId: string) {
+    if (!this.roomsAvailable())
+      throw Error("Rooms are disabled or unavailable");
+    this.#assertStorageReadable();
+    return this.#service.roomQuestionSummary(roomId);
+  }
+  async roomQuestions(
+    roomId: string,
+    options: RoomQuestionWorkspaceReadOptions = {},
+  ) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.roomQuestions(roomId, options);
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+  async roomQuestionsAsMember(
+    roomId: string,
+    callerThreadId: string,
+    options: RoomQuestionWorkspaceReadOptions,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.roomQuestionsAsMember(
+      roomId,
+      callerThreadId,
+      options,
+      this.#questionAdmission(admit),
+    );
+  }
+  async readRoomQuestion(roomId: string, questionId: string) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.readRoomQuestion(roomId, questionId);
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+  async publishRoomQuestion(
+    roomId: string,
+    origin: RoomQuestion["origin"],
+    specification: unknown,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.publishRoomQuestion(
+      roomId,
+      origin,
+      specification,
+      this.#questionAdmission(admit),
+    );
+  }
+  async updateRoomQuestion(
+    input: RoomQuestionWriteInput,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.updateRoomQuestion(
+      input,
+      callerThreadId,
+      this.#questionAdmission(admit),
+    );
+  }
+  async withdrawRoomQuestion(
+    input: Pick<
+      RoomQuestionWriteInput,
+      "roomId" | "questionId" | "expectedRevision"
+    >,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.withdrawRoomQuestion(
+      input,
+      callerThreadId,
+      this.#questionAdmission(admit),
+    );
+  }
+  async respondRoomQuestion(
+    input: RoomQuestionResponseInput,
+    admit: () => Promise<void>,
+  ) {
+    await this.#questionAdmission(admit)();
+    return this.#service.respondRoomQuestion(
+      input,
+      this.#questionAdmission(admit),
+    );
+  }
+  async readRoomQuestionResponse(
+    roomId: string,
+    questionId: string,
+    clientId: string,
+  ) {
+    await this.#questionAdmission(async () => {})();
+    const value = await this.#service.readRoomQuestionResponse(
+      roomId,
+      questionId,
+      clientId,
+    );
+    await this.#questionAdmission(async () => {})();
+    return value;
+  }
+
   assistantWorkspace(roomId: string): AssistantWorkspace {
     if (!this.roomsAvailable())
       throw Error("Rooms are disabled or unavailable");
