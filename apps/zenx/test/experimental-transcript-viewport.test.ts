@@ -91,6 +91,7 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
   const controller = { current: null as VirtualTranscriptHandle | null };
   const listRef = { current: null as LegendListRef | null };
   const scrollKinds: boolean[] = [];
+  let contentSettled = 0;
   const position = {
     scroll: { top: 0, following: false },
     virtualAnchor: null,
@@ -123,7 +124,9 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
       onViewportScroll(_node, correction) {
         scrollKinds.push(correction);
       },
-      onContentSettled() {},
+      onContentSettled() {
+        contentSettled++;
+      },
     });
   const pendingFooter = React.createElement(
     "p",
@@ -188,6 +191,31 @@ test("real Legend viewport bounds mounted rows and cancels a reveal when unmount
     const count = document.querySelectorAll("[data-transcript-row-key]").length;
     assert.ok(count > 0 && count < 60, `mounted ${count} of ${rows.length}`);
     const node = viewport.current!;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    });
+    const beforeCorrection = contentSettled;
+    await act(async () => {
+      node.dispatchEvent(new dom.window.Event("scroll"));
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    });
+    assert.ok(
+      contentSettled > beforeCorrection,
+      "A library/native layout correction resettles existing follow intent even without a size change",
+    );
+    const beforeReaderGesture = contentSettled;
+    await act(async () => {
+      node.dispatchEvent(
+        new dom.window.WheelEvent("wheel", { deltaY: -10, bubbles: true }),
+      );
+      node.dispatchEvent(new dom.window.Event("scroll"));
+      await new Promise((resolve) => setTimeout(resolve, 70));
+    });
+    assert.equal(
+      contentSettled,
+      beforeReaderGesture,
+      "A real reader gesture does not schedule layout-driven follow settlement",
+    );
     const firstRow = node.querySelector<HTMLElement>(
       "[data-transcript-row-key]",
     )!;

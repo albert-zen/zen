@@ -183,6 +183,9 @@ export function ExperimentalTranscriptViewport({
       const correction =
         pending.size > 0 || (!readerScrolling && !pointerActive);
       latest.current.onViewportScroll(node, correction);
+      // Legend can correct only an offset after its final size notification.
+      // Re-check the app's existing follow intent after that correction too.
+      if (correction) settle();
       if (!saved.current)
         latest.current.position.virtualAnchor = readTranscriptAnchor(node);
     };
