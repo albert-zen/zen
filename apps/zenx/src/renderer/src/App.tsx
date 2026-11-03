@@ -2018,6 +2018,50 @@ function AppContent() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const informationOwnerKey = selectedRoomId
+    ? `room:${selectedRoomId}`
+    : selectedThreadId
+      ? `thread:${selectedThreadId}`
+      : "";
+  const [informationReveal, setInformationReveal] = useState<{
+    key: string;
+    token: number;
+  }>({ key: "", token: 0 });
+  const knownQuestionIds = useRef<ReadonlySet<string>>(new Set());
+  // Attention exists even while the surface is hidden: keep the owning
+  // Thread's question projection mounted so a new native question can reveal it.
+  useEffect(() => {
+    if (!selectedThreadId) {
+      knownQuestionIds.current = new Set();
+      return;
+    }
+    return userQuestionStore.mount(selectedThreadId);
+  }, [selectedThreadId, userQuestionStore]);
+  useEffect(() => {
+    if (!selectedThreadId) {
+      knownQuestionIds.current = new Set();
+      return;
+    }
+    const read = () => new Set(userQuestionStore.get(selectedThreadId).ids);
+    knownQuestionIds.current = read();
+    return userQuestionStore.subscribe(() => {
+      const next = read();
+      const added = [...next].some((id) => !knownQuestionIds.current.has(id));
+      knownQuestionIds.current = next;
+      if (added)
+        setInformationReveal((current) => ({
+          key: `thread:${selectedThreadId}`,
+          token: current.token + 1,
+        }));
+    });
+  }, [selectedThreadId, userQuestionStore]);
+  useEffect(() => {
+    setInformationReveal((current) =>
+      current.key === informationOwnerKey
+        ? current
+        : { key: informationOwnerKey, token: 0 },
+    );
+  }, [informationOwnerKey]);
   const [roomHeaderTarget, setRoomHeaderTarget] =
     useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
@@ -4620,6 +4664,11 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                revealSignal={
+                  informationReveal.key === informationOwnerKey
+                    ? informationReveal.token
+                    : 0
+                }
                 contextContent={
                   !selectedRoomId && selectedThreadId ? (
                     <ConversationInformationCards
