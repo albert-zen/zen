@@ -60,20 +60,15 @@ const hostSnapshot = () => ({
 });
 const hostBefore = hostSnapshot();
 const snapshots = {
-  baseline: {
-    commit: "85ea447d369c144a5d1125fc7c5518ec62b276f2",
-    tree: "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
-    expectedVirtualTranscript: true,
-  },
   candidate: {
-    commit: "662484149d6cfe97f427833cc37e9523cad03efe",
-    tree: "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
+    commit: "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
+    tree: "ba960dd46644a9f8d87bd5c524b0d31019261444",
     expectedVirtualTranscript: true,
   },
 };
-// The controlled backend pair has byte-identical ZenX source on both sides.
-const frontendSourceTree = "3f139c57708aae4abc1e083e401171f4ca39c200";
-const rendererSourceTree = "873fe8b84a6dadcf3defd3fa4948a05caefdb362";
+// One exact latest UI quality source. This is not a new latency A/B.
+const frontendSourceTree = "a5b6da40df0538dee66ee7b13effd9c9995d1d19";
+const rendererSourceTree = "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad";
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
@@ -83,7 +78,7 @@ for (const [subtree, expectedTree] of [
       encoding: "utf8",
     }).trim(),
     expectedTree,
-    "Controlled backend pair must preserve the fixed frontend source",
+    "Native quality source must preserve its exact frontend subtree",
   );
 const snapshot = snapshots[sourceLabel];
 const expected = snapshot?.commit;
@@ -347,7 +342,7 @@ await writeFile(
       expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
       packagedHashes,
       comparisonRole:
-        "backend-only change with fixed real Legend frontend, not production acceptance: " +
+        "single latest Legend/Find quality source, default-off and not production acceptance: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
@@ -688,12 +683,12 @@ async function copyOwnedSyntheticScreenshots({
   assert.equal(typeof guard?.scan, "function");
   const names = (await readdir(directory))
     .filter((name) =>
-      /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|send-latency-failure)\.png$/.test(
+      /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641)|legend-history-(?:after-canonical|before-natural-up|after-natural-up)|virtual-find-(?:old-history|wrapped-tail)|virtual-selection-before-scroll|send-latency-failure)\.png$/.test(
         name,
       ),
     )
     .sort();
-  assert.ok(names.length <= 15, "Owned synthetic image count stays bounded");
+  assert.ok(names.length <= 18, "Owned synthetic image count stays bounded");
   guard.scan(
     JSON.stringify({ synthetic: true, provider: "fake", screenshots: names }),
     privateConfig,
@@ -858,9 +853,15 @@ try {
     "clickToCanonicalNotificationMs",
   ];
   assert.deepEqual(result.experimentalSession, {
-    enabledOnBothApps: true,
+    virtualTranscript: true,
+    virtualTranscriptFind: true,
     reloadedBeforeSelection: true,
   });
+  assert.equal(result.virtualFindQuality?.oldHistory?.accepted, true);
+  assert.equal(result.virtualFindQuality?.wrappedTail?.accepted, true);
+  assert.equal(result.virtualFindQuality?.totalMatches, 5000);
+  assert.equal(result.nativeSelectionQuality?.preservedAfterNativeWheel, true);
+  assert.equal(result.emptyFooterGeometry?.reserveMatchesFullDom, true);
   assert.equal(result.before.turns, count);
   assert.equal(result.before.messages, count * 2);
   const virtual = snapshot.expectedVirtualTranscript;
@@ -1026,6 +1027,9 @@ try {
       messages: result.before.messages,
     },
     virtualHistoryVisual: result.virtualHistoryVisual,
+    virtualFindQuality: result.virtualFindQuality,
+    nativeSelectionQuality: result.nativeSelectionQuality,
+    emptyFooterGeometry: result.emptyFooterGeometry,
     rendered: result.before.rendered,
     renderedAfter: result.afterRendered,
     readerBeforeSend: result.readerBeforeSend,

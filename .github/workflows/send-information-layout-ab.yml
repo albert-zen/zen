@@ -1,7 +1,7 @@
-name: Packaged Send backend fixed-Legend pair (WIP experiment)
+name: Packaged Legend Find and reader quality (WIP experiment)
 on:
   push:
-    branches: [diagnostic/send-backend-fixed-frontend-20261103]
+    branches: [diagnostic/send-legend-ui-quality-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 85ea447d369c144a5d1125fc7c5518ec62b276f2
-          persist-credentials: false
-          path: baseline
-      - uses: actions/checkout@v4
-        with:
-          ref: 662484149d6cfe97f427833cc37e9523cad03efe
+          ref: dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -35,66 +30,44 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build locked backend pair with identical real Legend frontend
+      - name: Build the exact latest single-source Legend quality candidate
         timeout-minutes: 16
         run: |
-          for source in baseline candidate; do
+          for source in candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
-      - name: Require byte-identical renderer sources and production builds
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { execFileSync } from 'node:child_process';
-          import { createHash } from 'node:crypto';
-          import { readdir, readFile } from 'node:fs/promises';
-          const digest = bytes => createHash('sha256').update(bytes).digest('hex');
-          const builds = [];
-          for (const source of ['baseline', 'candidate']) {
-            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), '3f139c57708aae4abc1e083e401171f4ca39c200');
-            const root = source + '/apps/zenx/out/renderer/';
-            const files = (await readdir(root, { recursive: true })).filter(file => /\.(html|js|css)$/.test(file)).sort();
-            assert.ok(files.length > 0);
-            builds.push(Object.fromEntries(await Promise.all(files.map(async file => ['out/renderer/' + file, digest(await readFile(root + file))]))));
-          }
-          assert.deepEqual(builds[0], builds[1], 'Both backend sources must ship the identical renderer build');
-          console.log('IDENTICAL_RENDERER_BUNDLE_SHA256 ' + digest(JSON.stringify(builds[0])));
-          // Main/host bundles include the backend change and are expected to differ.
-          NODE
       - name: Verify existing observer identity and post-geometry timing contracts
-        working-directory: baseline
+        working-directory: candidate
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
       # Reviewed visible coverage permits offscreen retained rows, never visible gaps.
-      - name: Native dock Enter backend pair, not production acceptance
+      - name: Native dock Enter and post-timing Find/selection quality, default remains off
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control baseline candidate"; do
-            read -r width activation prefix first second <<< "$case_spec"
-            for source in "$first" "$second"; do
-              case="$prefix-$source"
-              mkdir -p "results/$case"
-              echo "NATIVE_AB_CASE_BEGIN $case $source $width"
-              set +e
-              (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width" "$activation")
-              status=$?
-              set -e
-              printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
-              if [ "$status" -ne 0 ]; then failed=1; fi
-              echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
-            done
+          for case_spec in "1280 enter control candidate"; do
+            read -r width activation prefix source <<< "$case_spec"
+            case="$prefix-$source"
+            mkdir -p "results/$case"
+            echo "NATIVE_AB_CASE_BEGIN $case $source $width"
+            set +e
+            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width" "$activation")
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
+            if [ "$status" -ne 0 ]; then failed=1; fi
+            echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
           done
           exit "$failed"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-backend-fixed-legend-5000
+          name: native-legend-find-reader-quality-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

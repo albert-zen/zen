@@ -591,7 +591,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
+  assert.ok(workflow.includes('"1280 enter control candidate"'));
   assert.equal(
     workflow.includes('"1120 click narrow candidate baseline"'),
     false,
@@ -602,18 +602,16 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("backend pair locks identical real Legend frontend and keeps reader regression outside timing", () => {
+test("single-source UI quality locks exact latest Legend frontend and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "85ea447d369c144a5d1125fc7c5518ec62b276f2",
-    "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
-    "662484149d6cfe97f427833cc37e9523cad03efe",
-    "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
-    "3f139c57708aae4abc1e083e401171f4ca39c200",
-    "873fe8b84a6dadcf3defd3fa4948a05caefdb362",
+    "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
+    "ba960dd46644a9f8d87bd5c524b0d31019261444",
+    "a5b6da40df0538dee66ee7b13effd9c9995d1d19",
+    "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad",
   ])
     assert.ok(launch.includes(identity));
   const snapshots = new Function(
@@ -624,7 +622,7 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
       ) +
       ")",
   )();
-  assert.equal(snapshots.baseline.expectedVirtualTranscript, true);
+  assert.equal(snapshots.baseline, undefined);
   assert.equal(snapshots.candidate.expectedVirtualTranscript, true);
   assert.ok(
     launch.includes("const virtual = snapshot.expectedVirtualTranscript"),
@@ -637,10 +635,12 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
     ),
     "utf8",
   );
-  assert.ok(
-    workflow.includes("diagnostic/send-backend-fixed-frontend-20261103"),
+  assert.ok(workflow.includes("diagnostic/send-legend-ui-quality-20261103"));
+  assert.equal(
+    workflow.includes("assert.deepEqual(builds[0], builds[1]"),
+    false,
   );
-  assert.ok(workflow.includes("assert.deepEqual(builds[0], builds[1]"));
+  assert.equal(workflow.includes("path: baseline"), false);
   for (const contract of [
     "pendingHosts",
     "historyGroups",
@@ -1774,4 +1774,45 @@ test("backend pair explicitly prepares and reports real live reader state before
       "initialReaderPreparation: capture?.initialReaderPreparation",
     ),
   );
+});
+
+test("native Find and Selection quality use real input after timing and bounded synthetic export", () => {
+  const start = source.indexOf("result.emptyFooterGeometry =");
+  assert.ok(
+    start >
+      source.indexOf(
+        "await stopOwnedTrace();",
+        source.indexOf("result.samples = []"),
+      ),
+  );
+  for (const contract of [
+    "nativeKey('F',['meta'])",
+    "window.webContents.insertText('Synthetic user 42.')",
+    "nativeKey('Return',['shift'])",
+    "CSS.highlights.get('zenx-thread-find-active')",
+    "range.startContainer.isConnected",
+    "range.toString()===",
+    "mountedRows<200",
+    "modifiers:['leftButtonDown']",
+    "s.anchorNode===b.anchor",
+    "b.anchor.isConnected",
+    "nativeSelectionQuality.preservedAfterNativeWheel,true",
+  ])
+    assert.ok(
+      source
+        .replace(/\s+/g, " ")
+        .replace(/"/g, "\'")
+        .replace(/\s+/g, "")
+        .includes(contract.replace(/\s+/g, "").replace(/"/g, "\'")),
+      contract,
+    );
+  assert.equal(source.slice(start).includes("addRange("), false);
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  assert.ok(launch.includes("names.length <= 18"));
+  assert.ok(launch.includes("virtual-find-(?:old-history|wrapped-tail)"));
+  assert.ok(launch.includes("virtual-selection-before-scroll"));
+  assert.ok(launch.includes("virtualFindQuality: result.virtualFindQuality"));
 });

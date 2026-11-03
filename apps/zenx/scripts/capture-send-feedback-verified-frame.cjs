@@ -1710,9 +1710,9 @@ async function run() {
       ),
     "App mounted",
   );
-  // Identical test-only preparation on both owned Apps, before selection.
+  // Test-only opt-in on this exact owned App, before thread selection.
   await evaluate(
-    "sessionStorage.setItem('zenx.experimental.virtualTranscript','1')",
+    "sessionStorage.setItem('zenx.experimental.virtualTranscript','1');sessionStorage.setItem('zenx.experimental.virtualTranscriptFind','1')",
   );
   let reloadTimer, reloadFinished;
   try {
@@ -1732,12 +1732,13 @@ async function run() {
   await until(
     async () =>
       await evaluate(
-        "Boolean(document.querySelector('.app-shell') && window.zenx?.protocol && sessionStorage.getItem('zenx.experimental.virtualTranscript')==='1')",
+        "Boolean(document.querySelector('.app-shell') && window.zenx?.protocol && sessionStorage.getItem('zenx.experimental.virtualTranscript')==='1' && sessionStorage.getItem('zenx.experimental.virtualTranscriptFind')==='1')",
       ),
-    "App remounted after identical experimental session opt-in",
+    "App remounted after experimental viewport and Find opt-in",
   );
   result.experimentalSession = {
-    enabledOnBothApps: true,
+    virtualTranscript: true,
+    virtualTranscriptFind: true,
     reloadedBeforeSelection: true,
   };
   await until(
@@ -2407,6 +2408,161 @@ async function run() {
       true,
     );
   }
+  // Additional native quality checks are deliberately after every timed Send and trace stop.
+  // These fixed synthetic queries and numeric/boolean observations export no user data.
+  result.emptyFooterGeometry = await evaluate(`(()=>{
+    const footer=document.querySelector('.virtual-transcript-footer'),row=Array.from(document.querySelectorAll('.virtual-transcript-row')).at(-1);
+    const last=document.querySelectorAll('section.turn'); const end=last[last.length-1];
+    const empty=footer.matches(':empty'),rowGap=parseFloat(getComputedStyle(row).paddingBottom),padding=parseFloat(getComputedStyle(footer).paddingBottom);
+    const zone=parseFloat(getComputedStyle(footer).getPropertyValue('--bottom-zone-height'))||0;
+    const reserve=Math.max(innerWidth<=640?28:38,zone+24),actual=rowGap+padding;
+    return {empty,rowGapPx:rowGap,footerPaddingPx:padding,fullDomReservePx:reserve,totalReservePx:actual,reserveMatchesFullDom:empty&&Math.abs(actual-reserve)<0.1,lastTurnBottom:end.getBoundingClientRect().bottom,composerTop:document.querySelector('.bottom-zone').getBoundingClientRect().top};
+  })()`);
+  assert.equal(result.emptyFooterGeometry.reserveMatchesFullDom, true);
+  const oldUserId = before.thread.turns[42].items.find(
+    (item) => item.type === "userMessage",
+  ).id;
+  const tailUserId = before.thread.turns[4999].items.find(
+    (item) => item.type === "userMessage",
+  ).id;
+  assert.equal(
+    await evaluate(
+      `Array.from(document.querySelectorAll('article.user-row')).some(n=>n.dataset.sentMessageId===${JSON.stringify(oldUserId)})`,
+    ),
+    false,
+    "Historical Find target must begin unmounted",
+  );
+  const nativeKey = (keyCode, modifiers = []) => {
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+  };
+  const findState = async (id, query) =>
+    evaluate(`(()=>{
+    const input=document.querySelector('.virtual-transcript-find input');
+    const status=document.querySelector('.virtual-transcript-find [role="status"]')?.textContent??'';
+    const ranges=Array.from(CSS.highlights.get('zenx-thread-find-active')??[]);
+    const range=ranges.find(r=>r.startContainer.parentElement?.closest('article.user-row')?.dataset.sentMessageId===${JSON.stringify(id)});
+    const box=range?.getBoundingClientRect(),scroll=document.querySelector('.messages').getBoundingClientRect(),bottom=document.querySelector('.bottom-zone').getBoundingClientRect().top;
+    return {accepted:Boolean(input?.value===${JSON.stringify(query)}&&range&&range.startContainer.isConnected&&range.endContainer.isConnected&&range.toString()===${JSON.stringify(query.trim())}&&box.height>0&&box.bottom>scroll.top&&box.top<Math.min(scroll.bottom,bottom)),counts:(status.match(/\\d+/g)??[]).map(Number),mountedRows:document.querySelectorAll('section.turn').length};
+  })()`);
+  await click(
+    "document.querySelector('.messages')",
+    "Focus transcript before native Cmd-F",
+  );
+  nativeKey("F", ["meta"]);
+  await until(
+    async () =>
+      evaluate(
+        "document.activeElement===document.querySelector('.virtual-transcript-find input')",
+      ),
+    "native Cmd-F opens and focuses real Find input",
+  );
+  await window.webContents.insertText("Synthetic user 42.");
+  let oldHistory;
+  await until(async () => {
+    oldHistory = await findState(oldUserId, "Synthetic user 42.");
+    return oldHistory.accepted;
+  }, "Find materializes unmounted historical row and paints its real DOM Range");
+  assert.deepEqual(oldHistory.counts, [1, 1]);
+  assert.ok(oldHistory.mountedRows < 200);
+  await screenshot("virtual-find-old-history.png");
+  nativeKey("A", ["meta"]);
+  await window.webContents.insertText("Synthetic user ");
+  await until(async () => {
+    const state = await findState(
+      before.thread.turns[0].items.find((item) => item.type === "userMessage")
+        .id,
+      "Synthetic user ",
+    );
+    return state.accepted && state.counts[0] === 1 && state.counts[1] === 5000;
+  }, "Find indexes all 5000 canonical historical users");
+  nativeKey("Return", ["shift"]);
+  let wrappedTail;
+  await until(async () => {
+    wrappedTail = await findState(tailUserId, "Synthetic user ");
+    return (
+      wrappedTail.accepted &&
+      wrappedTail.counts[0] === 5000 &&
+      wrappedTail.counts[1] === 5000
+    );
+  }, "native Shift-Enter wraps from first to last full-history match");
+  assert.ok(wrappedTail.mountedRows < 200);
+  result.virtualFindQuality = {
+    oldHistory,
+    wrappedTail,
+    totalMatches: 5000,
+    nativeKeyboard: true,
+    afterTiming: true,
+  };
+  await screenshot("virtual-find-wrapped-tail.png");
+  nativeKey("Escape");
+  await until(
+    async () => evaluate("!document.querySelector('.virtual-transcript-find')"),
+    "native Escape closes Find",
+  );
+  // Drag actual visible text, not programmatic addRange. Keep exact local nodes only in the private owned renderer.
+  const drag = await evaluate(`(()=>{
+    const row=Array.from(document.querySelectorAll('article.user-row')).find(n=>n.dataset.sentMessageId===${JSON.stringify(tailUserId)}),walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+    let node;while(node=walker.nextNode()){if(!node.textContent.trim())continue;const r=document.createRange();r.selectNodeContents(node);const b=r.getClientRects()[0];if(b&&b.width>40&&b.height>0)return {x:Math.round(b.left+2),y:Math.round(b.top+b.height/2),endX:Math.round(b.left+Math.min(90,b.width-2))};}throw Error('No visible synthetic text for native selection');
+  })()`);
+  window.webContents.sendInputEvent({
+    type: "mouseMove",
+    x: drag.x,
+    y: drag.y,
+  });
+  window.webContents.sendInputEvent({
+    type: "mouseDown",
+    button: "left",
+    clickCount: 1,
+    x: drag.x,
+    y: drag.y,
+  });
+  window.webContents.sendInputEvent({
+    type: "mouseMove",
+    button: "left",
+    modifiers: ["leftButtonDown"],
+    x: drag.endX,
+    y: drag.y,
+  });
+  window.webContents.sendInputEvent({
+    type: "mouseUp",
+    button: "left",
+    clickCount: 1,
+    x: drag.endX,
+    y: drag.y,
+  });
+  await until(
+    async () =>
+      evaluate(
+        "(()=>{const s=getSelection();return s&&!s.isCollapsed&&s.toString().length>0})()",
+      ),
+    "native mouse drag creates a real transcript Selection",
+  );
+  await evaluate(
+    "(()=>{const s=getSelection();window.__qualitySelection={text:s.toString(),anchor:s.anchorNode,focus:s.focusNode,anchorOffset:s.anchorOffset,focusOffset:s.focusOffset};return true})()",
+  );
+  await screenshot("virtual-selection-before-scroll.png");
+  window.webContents.sendInputEvent({
+    type: "mouseWheel",
+    x: drag.x,
+    y: drag.y,
+    deltaX: 0,
+    deltaY: 3600,
+    canScroll: true,
+    hasPreciseScrollingDeltas: true,
+  });
+  await pause(500);
+  result.nativeSelectionQuality = await evaluate(
+    "(()=>{const s=getSelection(),b=window.__qualitySelection,scroll=document.querySelector('.messages');return {preservedAfterNativeWheel:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchor&&s.focusNode===b.focus&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchor.isConnected&&b.focus.isConnected,selectedCharacterCount:s.toString().length,mountedRows:document.querySelectorAll('section.turn').length,pausedReader:Boolean(document.querySelector('.back-live')),bottomDistance:scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop,nativeMouseDrag:true,afterTiming:true}})()",
+  );
+  assert.equal(result.nativeSelectionQuality.preservedAfterNativeWheel, true);
+  assert.equal(result.nativeSelectionQuality.pausedReader, true);
+  assert.ok(result.nativeSelectionQuality.bottomDistance > 100);
+  assert.ok(result.nativeSelectionQuality.mountedRows < 200);
+  await click(
+    "document.querySelector('#thread-composer')",
+    "Clear native Selection by focusing Composer",
+  );
   const readerPoint = await evaluate(
     `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
   );
