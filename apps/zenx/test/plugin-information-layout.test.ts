@@ -147,6 +147,13 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
     const trigger = document.querySelector<HTMLButtonElement>(
       ".information-toolbar button",
     )!;
+    assert.ok(
+      observed.has(trigger),
+      "trigger resizing updates the cached popover geometry",
+    );
+    let triggerBottom = 40;
+    trigger.getBoundingClientRect = () =>
+      ({ bottom: triggerBottom }) as DOMRect;
     assert.equal(trigger.getAttribute("aria-pressed"), "true");
     assert.equal(trigger.getAttribute("aria-expanded"), "true");
     assert.ok(
@@ -177,6 +184,20 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       /176px/,
       "wrapped/fullscreen header remains clear",
     );
+    triggerBottom = 220;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
+    assert.match(
+      document.querySelector<HTMLElement>(".information-popover")!.style
+        .maxHeight,
+      /236px/,
+      "popover clears the live trigger when it extends below the header",
+    );
+    triggerBottom = 40;
+    await act(async () => {
+      for (const callback of callbacks) callback([]);
+    });
     for (const theme of ["dark", "light", "dark"]) {
       await act(async () => {
         document.documentElement.dataset.appearance = theme;
