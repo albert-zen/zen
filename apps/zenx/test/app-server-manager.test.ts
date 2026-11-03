@@ -25,6 +25,11 @@ import { ZenXSelfControlCapabilityPackage } from "../src/main/capabilities/self-
 import { ZenXProjectProjection } from "../src/main/project-projection.js";
 import { ZenXTriggerService } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
+import { AutomationTransactionStore } from "../src/main/automation-transaction-store.js";
+import {
+  automationTransactionForSnapshot,
+  readAutomationProjection,
+} from "../src/main/automation-transaction-adapter.js";
 
 function managerFor(
   directory: string,
@@ -1242,10 +1247,19 @@ test("bridges all Agent Room tools through the real child App Server", async () 
     execArgv: ["--import", "tsx"],
     startupTimeoutMs: 10_000,
   });
-  const triggers = new ZenXTriggerService(
-    manager,
-    new ZenXTriggerStore(path.join(directory, "triggers.json")),
+  const journal = await AutomationTransactionStore.create(
+    { directory, assertWriterLease: () => {} },
+    { triggers: [], history: [], rooms: [] },
   );
+  const triggers = new ZenXTriggerService(manager, {
+    roomHistory: journal,
+    read: () => readAutomationProjection(journal),
+    write: async (snapshot, events = []) => {
+      await journal.append(
+        automationTransactionForSnapshot(journal, snapshot, events),
+      );
+    },
+  });
   automationPackage = new ZenXAutomationControlCapabilityPackage(triggers);
   selfControl = new ZenXSelfControlCapabilityPackage({
     appServer: {
@@ -1446,6 +1460,7 @@ test("bridges all Agent Room tools through the real child App Server", async () 
     );
   } finally {
     await triggers.stop();
+    await journal.close();
     await manager.stop();
     await rm(directory, { recursive: true, force: true });
   }
