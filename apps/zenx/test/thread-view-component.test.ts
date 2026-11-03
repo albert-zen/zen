@@ -2041,6 +2041,34 @@ test("only the final assistant message exposes metadata and hover actions", asyn
   });
 });
 
+test("terminal message mounts share timestamp presentation formatters", () => {
+  const original = Intl.DateTimeFormat;
+  const formats: Intl.DateTimeFormatOptions[] = [];
+  Intl.DateTimeFormat = new Proxy(original, {
+    construct(target, args) {
+      if (args[1]?.hour || args[1]?.month) formats.push(args[1]);
+      return Reflect.construct(target, args);
+    },
+  });
+  try {
+    const html = renderTurns(
+      Array.from({ length: 100 }, (_, index) => ({
+        ...turnWithItems("completed", [
+          user(`Request ${index}`),
+          agent(`Answer ${index}`),
+        ]),
+        id: `timestamp-turn-${index}`,
+        completedAt: 1_700_000_000 + index,
+      })),
+    );
+    assert.equal((html.match(/class="message-time"/gu) ?? []).length, 200);
+    assert.equal(formats.filter((options) => options.hour).length, 1);
+    assert.equal(formats.filter((options) => options.month).length, 1);
+  } finally {
+    Intl.DateTimeFormat = original;
+  }
+});
+
 test("running Turns do not invent a completion timestamp in message controls", () => {
   const html = renderTurns([
     turnWithItems("inProgress", [user("Still running"), agent("Partial")]),

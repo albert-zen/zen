@@ -1,3 +1,4 @@
+import { formatCompletedAt } from "./completed-at.js";
 import { VirtualTranscriptFind } from "./VirtualTranscriptFind.js";
 import {
   findMessageQuoteSource,
@@ -4475,7 +4476,7 @@ function MessageActions({
           className="message-time"
           dateTime={new Date(turn.completedAt * 1_000).toISOString()}
         >
-          {formatCompletedAt(turn.completedAt)}
+          {formatCompletedAt(turn.completedAt, i18n.resolvedLanguage)}
         </time>
       )}
       {usage === undefined ? null : (
@@ -4712,30 +4713,6 @@ function completedTurnLabel(turn: Turn): string {
     status: result,
     duration: formatDuration(duration),
   });
-}
-
-function formatCompletedAt(seconds: number): string {
-  const completed = new Date(seconds * 1_000);
-  const now = new Date();
-  const time = new Intl.DateTimeFormat(i18n.resolvedLanguage, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(completed);
-  if (
-    completed.getFullYear() === now.getFullYear() &&
-    completed.getMonth() === now.getMonth() &&
-    completed.getDate() === now.getDate()
-  ) {
-    return time;
-  }
-  const date = new Intl.DateTimeFormat(
-    i18n.resolvedLanguage,
-    completed.getFullYear() === now.getFullYear()
-      ? { month: "short", day: "numeric" }
-      : { year: "numeric", month: "short", day: "numeric" },
-  ).format(completed);
-  return `${date} ${time}`;
 }
 
 function formatDuration(milliseconds: number): string {
