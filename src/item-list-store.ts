@@ -11,6 +11,7 @@ import {
   syncDirectory,
   type PublicationPhase,
 } from "./storage-files.js";
+const MAX_VERIFIED_PREFIX_BYTES = 32 * 1024 * 1024;
 // Decoded JSON belongs to this scope; callbacks cannot desynchronize it from bytes.
 function freezeSnapshot<T>(value: T): T {
   if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
@@ -124,6 +125,7 @@ export class FileItemListStore {
     try {
       return this.#decode(threadId, await this.#bytes(threadId)).items;
     } catch (error) {
+      this.#verifiedAppend = undefined;
       if (isMissing(error)) return [];
       throw error;
     }
@@ -207,7 +209,13 @@ export class FileItemListStore {
       };
       const load = async () => {
         if (retained === undefined) {
-          const bytes = await this.#bytes(threadId);
+          let bytes: Buffer;
+          try {
+            bytes = await this.#bytes(threadId);
+          } catch (error) {
+            this.#verifiedAppend = undefined;
+            throw error;
+          }
           const known = this.#verifiedAppend;
           if (known?.threadId === threadId && bytes.equals(known.bytes)) {
             retained = { bytes, items: known.items, ids: known.ids };
@@ -221,7 +229,10 @@ export class FileItemListStore {
           }
           // The owned file is still read in full for every operation. Only exact
           // byte equality can reuse a private immutable decoded prefix.
-          this.#verifiedAppend = { threadId, ...retained };
+          this.#verifiedAppend =
+            bytes.length <= MAX_VERIFIED_PREFIX_BYTES
+              ? { threadId, ...retained }
+              : undefined;
         }
         return retained;
       };
@@ -263,7 +274,10 @@ export class FileItemListStore {
             }
             for (const id of addedIds) prior.ids.add(id);
             retained = { bytes, items: combined, ids: prior.ids };
-            this.#verifiedAppend = { threadId, ...retained };
+            this.#verifiedAppend =
+              bytes.length <= MAX_VERIFIED_PREFIX_BYTES
+                ? { threadId, ...retained }
+                : undefined;
           });
         },
       };

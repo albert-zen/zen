@@ -17,6 +17,8 @@ const clockDomain = randomUUID();
 const clockStart = process.hrtime.bigint();
 const identifier = /^[A-Za-z0-9_-]+$/u;
 const hashPattern = /^[a-f0-9]{64}$/u;
+const MAX_VERIFIED_PREFIX_BYTES = 32 * 1024 * 1024;
+const MAX_VERIFIED_SEGMENTS = 64;
 export type { TraceClock } from "./trace-clock.js";
 export interface TraceArtifactRef {
   sha256: string;
@@ -776,17 +778,33 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
       }
       for (const record of segmentRecords) records.push(record);
       if (invalid) verified.segments.delete(segment);
-      else if (!samePrefix || prior.bytes.length !== bytes.length)
-        verified.segments.set(segment, {
-          bytes,
-          records: samePrefix
-            ? [
-                ...prior.records,
-                ...structuredClone(segmentRecords.slice(prior.records.length)),
-              ]
-            : structuredClone(segmentRecords),
-          lines: line,
-        });
+      else if (!samePrefix || prior.bytes.length !== bytes.length) {
+        const retainedBytes = [...verified.segments.entries()].reduce(
+          (total, [name, retained]) =>
+            total + (name === segment ? 0 : retained.bytes.length),
+          0,
+        );
+        if (
+          retainedBytes + bytes.length > MAX_VERIFIED_PREFIX_BYTES ||
+          (!verified.segments.has(segment) &&
+            verified.segments.size >= MAX_VERIFIED_SEGMENTS)
+        ) {
+          verified.segments.delete(segment);
+        } else {
+          verified.segments.set(segment, {
+            bytes,
+            records: samePrefix
+              ? [
+                  ...prior.records,
+                  ...structuredClone(
+                    segmentRecords.slice(prior.records.length),
+                  ),
+                ]
+              : structuredClone(segmentRecords),
+            lines: line,
+          });
+        }
+      }
     }
     records.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
     const seen = new Set<string>();

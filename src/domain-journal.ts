@@ -409,7 +409,6 @@ export class DomainThreadJournal implements ThreadJournal {
       : await this.#items.read(threadId);
     const present = new Set(contexts.map((item) => item.id));
     const previous: CanonicalItem[] = [];
-    const seenFacts = new Map<string, string>();
     const originals = new Map<
       string,
       { sequence: number; item: CanonicalItem }
@@ -445,16 +444,18 @@ export class DomainThreadJournal implements ThreadJournal {
       const item = decodeCanonicalItem(data.item);
       if (item.threadId !== threadId || !Number.isSafeInteger(data.sequence))
         throw new Error("Invalid accepted source fact");
+      const known = originals.get(item.id);
+      if (known !== undefined) {
+        // Only a repeated identity needs the full body comparison. Unique facts
+        // were already decoded and need no second JSON serialization.
+        if (JSON.stringify(known.item) !== JSON.stringify(item))
+          throw new Error("Conflicting accepted fact identity");
+        originals.set(item.id, { sequence: data.sequence, item });
+        continue;
+      }
       // Read projections use original fact sequence, not Trace occurrence order.
       // Repeated identical facts keep their last recorded sequence, as #read does.
       originals.set(item.id, { sequence: data.sequence, item });
-      const known = seenFacts.get(item.id);
-      if (known !== undefined) {
-        if (known !== JSON.stringify(item))
-          throw new Error("Conflicting accepted fact identity");
-        continue;
-      }
-      seenFacts.set(item.id, JSON.stringify(item));
       // Frozen fork sources are authoritative compiler inputs for their exact IDs.
       const encoded =
         present.has(item.id) || frozen.has(item.id)

@@ -93,3 +93,102 @@ test("append scopes read current bytes and reuse only an exact immutable decoded
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("semantic byte reuse retires on absence and on switching Threads", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-item-prefix-retire-"));
+  const store = new FileItemListStore(root);
+  const item = (threadId: string) =>
+    contextItemsFromLegacy({
+      id: "item",
+      threadId,
+      turnId: "turn",
+      createdAt: "2026-11-03T00:00:00.000Z",
+      type: "user_message",
+      text: "Synthetic",
+    })[0]!;
+  try {
+    await store.create("t", [item("t")]);
+    await store.create("other", [item("other")]);
+    await store.withAppendSnapshot("t", (scope) => scope.read());
+    let parses = 0;
+    const parse = JSON.parse;
+    const mocked = t.mock.method(
+      JSON,
+      "parse",
+      (...args: Parameters<typeof JSON.parse>) => {
+        parses++;
+        return parse(...args);
+      },
+    );
+    try {
+      await store.withAppendSnapshot("other", (scope) => scope.read());
+      parses = 0;
+      await store.withAppendSnapshot("t", (scope) => scope.read());
+      assert.equal(parses, 1, "only the most recently used Thread is retained");
+      const file = path.join(root, "t.jsonl");
+      const bytes = await readFile(file);
+      await rm(file);
+      await store.withAppendSnapshot("t", async (scope) =>
+        assert.deepEqual(await scope.read(), []),
+      );
+      await writeFile(file, bytes);
+      parses = 0;
+      await store.withAppendSnapshot("t", (scope) => scope.read());
+      assert.equal(
+        parses,
+        1,
+        "source absence retires the private decoded prefix",
+      );
+    } finally {
+      mocked.mock.restore();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic prefixes above the source-byte budget are revalidated", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "zen-item-prefix-budget-"));
+  const store = new FileItemListStore(root);
+  try {
+    const item = contextItemsFromLegacy({
+      id: "item",
+      threadId: "t",
+      turnId: "turn",
+      createdAt: "2026-11-03T00:00:00.000Z",
+      type: "user_message",
+      text: "Synthetic",
+    })[0]!;
+    await store.create("t", [item]);
+    const file = path.join(root, "t.jsonl");
+    await writeFile(
+      file,
+      Buffer.concat([Buffer.alloc(32 * 1024 * 1024, 32), await readFile(file)]),
+    );
+    await store.withAppendSnapshot("t", (scope) => scope.read());
+    let parses = 0;
+    const parse = JSON.parse;
+    const mocked = t.mock.method(
+      JSON,
+      "parse",
+      (...args: Parameters<typeof JSON.parse>) => {
+        parses++;
+        return parse(...args);
+      },
+    );
+    try {
+      await store.withAppendSnapshot("t", async (scope) =>
+        assert.deepEqual(await scope.read(), [item]),
+      );
+      assert.equal(
+        parses,
+        1,
+        "an oversized source is decoded again instead of retained",
+      );
+    } finally {
+      mocked.mock.restore();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
