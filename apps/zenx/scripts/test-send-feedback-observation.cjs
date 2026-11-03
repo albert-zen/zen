@@ -608,10 +608,10 @@ test("single-source UI quality locks exact latest Legend frontend and keeps read
     "utf8",
   );
   for (const identity of [
-    "a61903616ef741432d2e6d90fc57b44e41122196",
-    "ca0a5a03956103d79cec93cad998496367570cbc",
-    "1fe31417e3ffa3db885b20186d0c5304dbc3fc04",
-    "8b112f71f846140979e9dc5074e9bd4268d4f9b4",
+    "3005aa82f567fb021ebd0ab1058d16beb04e13e4",
+    "9663d3a988cd463bbe4b82268f9e36e705f9084e",
+    "5feb43dba2ab9ca60d9aa8191e9d28b48397a1d2",
+    "d76aaff53d99ce140ad8ebf714719060cdd12db9",
   ])
     assert.ok(launch.includes(identity));
   const snapshots = new Function(
