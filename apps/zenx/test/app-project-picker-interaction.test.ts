@@ -4,10 +4,16 @@ import "./dom-primitives.js";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ZenXCredentialVault } from "../src/main/credential-vault.js";
+import { ZenXSettingsService } from "../src/main/settings-service.js";
 import { JSDOM } from "jsdom";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import type { ZenXSidebarOrder } from "../src/main/host-profile.js";
 import type { NativeThreadSummary } from "../../../src/thread-summary.js";
 import type { ModelUsageProjection } from "../../../src/model-usage.js";
 import type { AppServerHostStatus } from "../src/main/app-server-manager.js";
@@ -4022,10 +4028,10 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
       await Promise.resolve();
     });
     await waitFor(() => requests.length === 2);
-    assert.deepEqual(requests[1]?.threadIds, ["thread-2", "thread-1"]);
+    assert.deepEqual(requests[1]?.threadIds, ["thread-1", "thread-2"]);
 
     await act(async () => {
-      requests[1]?.response.resolve(publicSettings(["thread-2", "thread-1"]));
+      requests[1]?.response.resolve(publicSettings(["thread-1", "thread-2"]));
       await Promise.resolve();
     });
     await waitFor(
@@ -4039,10 +4045,135 @@ test("serializes cross-row Pin mutations against the latest confirmed order", as
           ".pinned-thread-group .thread-title > span:first-child",
         ),
       ].map((title) => title.textContent),
-      ["Thread two", "Thread one"],
+      ["Thread one", "Thread two"],
     );
   } finally {
     await unmountApp(harness);
+  }
+});
+
+test("new Pins append after manual order and Unpin/re-Pin persists through host restart", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "zenx-app-pin-order-"));
+  const createSettings = () =>
+    new ZenXSettingsService({
+      userDataDirectory: directory,
+      zenDataDirectory: join(directory, "zen"),
+      vault: new ZenXCredentialVault(join(directory, "credentials.vault"), {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.from(value),
+        decryptString: (value) => value.toString(),
+      }),
+      subscription: {
+        login: async () => undefined,
+        logout: async () => undefined,
+        status: async () => ({ authenticated: false, expired: false }),
+      },
+    });
+  const service = createSettings();
+  const rows = [1, 2, 3, 4].map((id) =>
+    summary(false, `thread-${id}`, `Thread ${id}`),
+  );
+  const projects = oneProject();
+  projects.projects[0]!.threadIds = rows.map((row) => row.threadId);
+  const projectOrder = {
+    projectKeys: ["/work/zen"],
+    threadIdsByProject: {
+      "/work/zen": ["thread-4", "thread-3", "thread-2", "thread-1"],
+    },
+  };
+  let harness: AppHarness | undefined;
+  try {
+    await service.initialize({ ZENX_PROVIDER: "fake" });
+    await service.setSidebarOrder(projectOrder);
+    await service.setPinnedThreadIds(["thread-2", "thread-1"]);
+    harness = await mountApp(projects, {
+      threads: async (archived) => (archived ? [] : rows),
+      initialPinnedThreadIds: ["thread-2", "thread-1"],
+      initialProfile: { sidebarOrder: projectOrder },
+      setPinnedThreadIds: async (threadIds) => {
+        await service.setPinnedThreadIds(threadIds);
+        const { profile } = await service.publicSettings();
+        const value = publicSettings(profile.pinnedThreadIds);
+        value.profile.sidebarOrder = profile.sidebarOrder;
+        return value;
+      },
+    });
+    const pinnedIds = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          ".pinned-thread-group .thread-row-shell",
+        ),
+      ].map((row) => row.dataset.threadId);
+    const expectPins = async (expected: string[]) => {
+      await waitFor(() => pinnedIds().join() === expected.join());
+      assert.deepEqual(pinnedIds(), expected);
+    };
+    const pin = async (name: string, label = "Pin") => {
+      await act(async () => threadMenuButton(name).click());
+      const button = await waitFor(() => exactMenuButton(label));
+      await act(async () => {
+        button.click();
+        button.click();
+      });
+    };
+    await expectPins(["thread-2", "thread-1"]);
+    await pin("Thread 3");
+    await expectPins(["thread-2", "thread-1", "thread-3"]);
+    const third = document.querySelector<HTMLElement>(
+      '.pinned-thread-group [data-thread-id="thread-3"] .thread-row',
+    )!;
+    await act(async () =>
+      third.dispatchEvent(
+        new window.KeyboardEvent("keydown", {
+          key: "ArrowUp",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
+    await expectPins(["thread-2", "thread-3", "thread-1"]);
+    await pin("Thread 4");
+    await expectPins(["thread-2", "thread-3", "thread-1", "thread-4"]);
+    await pin("Thread 3", "Unpin");
+    await expectPins(["thread-2", "thread-1", "thread-4"]);
+    await pin("Thread 3");
+    const expected = ["thread-2", "thread-1", "thread-4", "thread-3"];
+    await expectPins(expected);
+    assert.deepEqual(
+      (await service.publicSettings()).profile.sidebarOrder,
+      projectOrder,
+    );
+    assert.deepEqual(
+      JSON.parse(await readFile(join(directory, "host-profile.json"), "utf8"))
+        .pinnedThreadIds,
+      expected,
+    );
+    const restarted = createSettings();
+    await restarted.initialize({});
+    assert.deepEqual(
+      (await restarted.publicSettings()).profile.pinnedThreadIds,
+      expected,
+    );
+    assert.deepEqual(
+      (await restarted.publicSettings()).profile.sidebarOrder,
+      projectOrder,
+    );
+    await unmountApp(harness);
+    harness = await mountApp(projects, {
+      threads: async (archived) => (archived ? [] : rows),
+      initialPinnedThreadIds: (await restarted.publicSettings()).profile
+        .pinnedThreadIds,
+      initialProfile: { sidebarOrder: projectOrder },
+    });
+    assert.deepEqual(
+      pinnedIds(),
+      expected,
+      "reopening App preserves persisted Pin order",
+    );
+  } finally {
+    if (harness) await unmountApp(harness);
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -4843,7 +4974,10 @@ function publicSettings(pinnedThreadIds: string[]) {
       approvalPolicy: "never" as const,
       pinnedThreadIds,
       visibleSubagentThreadIds: [] as string[],
-      sidebarOrder: { projectKeys: [], threadIdsByProject: {} },
+      sidebarOrder: {
+        projectKeys: [],
+        threadIdsByProject: {},
+      } as ZenXSidebarOrder,
     },
     hasApiKey: false,
     apiKeyProviderProfileIds: [],
@@ -6907,12 +7041,12 @@ test("App persists per-child visibility independently of Pin and preserves open 
     assert.ok(
       document.querySelector(".pinned-thread-group")?.contains(row("child-b")),
     );
-    assert.deepEqual(pinWrites, [["child-b", "child-a"]]);
+    assert.deepEqual(pinWrites, [["child-a", "child-b"]]);
     await click(toggle("Child B"));
     assert.equal(row("child-b"), null);
     assert.deepEqual(
       (await window.zenx.settings.get()).profile.pinnedThreadIds,
-      ["child-b", "child-a"],
+      ["child-a", "child-b"],
     );
     await click(toggle("Child B"));
     await click(row("child-b"));
@@ -6921,7 +7055,7 @@ test("App persists per-child visibility independently of Pin and preserves open 
     assert.equal(toggle("Child B")?.getAttribute("aria-checked"), "true");
     await click(toggle("Child A"));
     await click(toggle("Nested"));
-    assert.deepEqual(pinWrites, [["child-b", "child-a"], ["child-a"]]);
+    assert.deepEqual(pinWrites, [["child-a", "child-b"], ["child-a"]]);
     await click(
       [
         ...document.querySelectorAll<HTMLButtonElement>(".subagent-tree-row"),
