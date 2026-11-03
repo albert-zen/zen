@@ -222,15 +222,15 @@ test("append reuses only its own reconciliation reads and keeps exact receipts",
     await journal.create(original);
     let traceReads = 0;
     let semanticReads = 0;
-    const readTrace = FileTraceStore.prototype.read;
+    const readTrace = FileTraceStore.prototype.readSnapshot;
     const readItems = fs.readFile;
     const filename = path.join(options.directory, "items", "t.jsonl");
     const traceMock = t.mock.method(
       FileTraceStore.prototype,
-      "read",
+      "readSnapshot",
       function (
         this: FileTraceStore,
-        ...args: Parameters<FileTraceStore["read"]>
+        ...args: Parameters<FileTraceStore["readSnapshot"]>
       ) {
         traceReads++;
         return readTrace.apply(this, args);
@@ -429,11 +429,11 @@ test("cold append and recovery reuse their own verified Trace without retaining 
     assert.deepEqual(await journal.read("t"), original);
     await journal.readItemList("t");
     let traceReads = 0;
-    const read = options.trace.read.bind(options.trace);
+    const read = options.trace.readSnapshot.bind(options.trace);
     const mocked = t.mock.method(
       options.trace,
-      "read",
-      (...args: Parameters<FileTraceStore["read"]>) => {
+      "readSnapshot",
+      (...args: Parameters<FileTraceStore["readSnapshot"]>) => {
         traceReads++;
         return read(...args);
       },
