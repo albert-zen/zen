@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -74,7 +74,7 @@ test("an admitted undecodable image becomes a durable per-sample placeholder wit
       'data: {"choices":[{"index":0,"delta":{"content":"Synthetic answer or summary"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
     );
   };
-  const host = createHostedAppServer({
+  const options: import("../apps/cli/src/host.js").ZenHostOptions = {
     cwd: directory,
     dataDirectory: directory,
     approvalPolicy: "never",
@@ -97,7 +97,8 @@ test("an admitted undecodable image becomes a durable per-sample placeholder wit
     toolPresentation: "direct",
     toolEnvironment: new ToolEnvironment(),
     attachments,
-  });
+  };
+  const host = createHostedAppServer(options);
   try {
     const thread = await host.startThread();
     threadId = thread.id;
@@ -175,6 +176,38 @@ test("an admitted undecodable image becomes a durable per-sample placeholder wit
       ),
     );
     assert(!content.some((part) => part.type === "image"));
+    await host.closeHostResources();
+    const filename = path.join(directory, "threads/items", `${threadId}.jsonl`);
+    const stored = (await readFile(filename, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const poisoned = stored.find(
+      (item) => item.source.kind === "image_preparation",
+    );
+    poisoned.content.text += " private-codec-error /private/path.png";
+    poisoned.content.parts[0].text = poisoned.content.text;
+    await writeFile(
+      filename,
+      stored.map((item) => JSON.stringify(item)).join("\n") + "\n",
+    );
+    const coldHost = createHostedAppServer({
+      ...options,
+      toolEnvironment: new ToolEnvironment(),
+    });
+    try {
+      await assert.rejects(
+        coldHost.readThread(threadId),
+        /unavailable image notice.*template|Invalid persisted context item/iu,
+      );
+      assert.equal(
+        bodies.length,
+        3,
+        "tampered cold unavailable prose must never reach another wire request",
+      );
+    } finally {
+      await coldHost.closeHostResources();
+    }
   } finally {
     globalThis.fetch = previousFetch;
     await host.closeHostResources();
@@ -235,6 +268,9 @@ test("unavailable metadata rejects forged outcome, pixels, identity, reason and 
         "raw private /workspace/error"),
     (value) => delete value.source.metadata.imagePreparation.originalAttachment,
     (value) =>
+      (value.source.metadata.imagePreparation.originalAttachment.privatePath =
+        "/private/path.png"),
+    (value) =>
       (value.source.metadata.imagePreparation.originalAttachment.sha256 =
         "0".repeat(64)),
     (value) => delete value.source.metadata.imagePreparation.requestedDetail,
@@ -249,6 +285,10 @@ test("unavailable metadata rejects forged outcome, pixels, identity, reason and 
     (value) =>
       value.content.parts.push({ type: "image", attachment: original }),
     (value) => (value.content.parts[0].text = "different notice"),
+    (value) => {
+      value.content.text += " private-codec-error /private/path.png";
+      value.content.parts[0].text = value.content.text;
+    },
     (value) => {
       value.content.text = "";
       value.content.parts[0].text = "";

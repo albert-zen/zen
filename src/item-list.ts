@@ -1,3 +1,5 @@
+import { imageUnavailableNotice } from "./image-preparation-notice.js";
+import type { AttachmentRef } from "./attachment-ref.js";
 import { bindModelMediaOrigin } from "./model-media-origin.js";
 import { parseUserQuestionReply } from "./user-question.js";
 import {
@@ -619,7 +621,25 @@ export function decodeContextItem(value: unknown): ContextItem {
         throw Error(
           "Unavailable image requires one persisted text notice and no pixels",
         );
-      string(content.text, "unavailable image notice", false);
+      const originalRef = record(
+        preparation.originalAttachment,
+        "unavailable image original",
+      );
+      keys(
+        originalRef,
+        ["type", "sha256", "mediaType", "byteLength", "width", "height"],
+        "unavailable image original",
+      );
+      if (
+        content.text !==
+        imageUnavailableNotice(
+          preparation.reason,
+          preparation.originalAttachment as unknown as AttachmentRef,
+        )
+      )
+        throw Error(
+          "Unavailable image notice does not match its safe template",
+        );
     } else {
       if (preparation.reason !== undefined)
         throw Error("Prepared image cannot carry an unavailable reason");

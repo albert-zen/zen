@@ -1,3 +1,9 @@
+import {
+  imageOriginalReceipt,
+  imageUnavailableNotice,
+  type ImageUnavailableReason,
+} from "./image-preparation-notice.js";
+export type { ImageUnavailableReason } from "./image-preparation-notice.js";
 import { preserveImageExif } from "./image-metadata.js";
 import sharp from "sharp";
 import {
@@ -56,9 +62,6 @@ export function preparedImageDimensions(
     Math.max(1, Math.floor(height * scale)),
   ];
 }
-
-export type ImageUnavailableReason =
-  "image_decode_failed" | "image_processing_failed";
 
 /** Only errors from an in-memory codec operation receive this safe category. */
 class ImageCodecFailure extends Error {
@@ -256,18 +259,11 @@ export async function prepareSampleImages(options: {
           !unavailableOriginal
         )
           continue;
-        const receipt = {
-          type: original.type,
-          sha256: original.sha256,
-          mediaType: original.mediaType,
-          byteLength: original.byteLength,
-          width: original.width,
-          height: original.height,
-        };
+        const receipt = imageOriginalReceipt(original);
         let notice: string;
         let parts: UserInputPart[];
         if (view.outcome === "unavailable") {
-          notice = `[Image input unavailable (${view.reason}). No image pixels from this occurrence were sent in this sample. The original attachment is unchanged and remains referenced: ${JSON.stringify(receipt)}.]`;
+          notice = imageUnavailableNotice(view.reason, receipt);
           parts = [{ type: "text", text: notice }];
         } else {
           const prepared = view.attachment;
