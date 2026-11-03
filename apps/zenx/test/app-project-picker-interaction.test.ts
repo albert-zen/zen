@@ -439,7 +439,9 @@ test("fresh Thread establishes native provenance before sending and only durable
       requests.some(({ method }) => method === "zen/turn/send"),
     );
     assert.deepEqual(
-      requests.map(({ method }) => method),
+      requests
+        .filter(({ method }) => method !== "zen/thread/questions/list")
+        .map(({ method }) => method),
       ["zen/thread/resume", "zen/turn/send"],
     );
     await emit(1, {
@@ -6233,7 +6235,11 @@ test("message source reads and opens its exact canonical thread without sending,
     );
     assert.ok(
       calls.every((call) =>
-        ["zen/thread/read", "zen/thread/resume"].includes(call.method),
+        [
+          "zen/thread/read",
+          "zen/thread/resume",
+          "zen/thread/questions/list",
+        ].includes(call.method),
       ),
     );
   } finally {
@@ -6710,7 +6716,11 @@ for (const visibility of ["keep", "hide", "reopen"] as const) {
       }
       assert.ok(
         calls.every((method) =>
-          ["zen/thread/read", "zen/thread/resume"].includes(method),
+          [
+            "zen/thread/read",
+            "zen/thread/resume",
+            "zen/thread/questions/list",
+          ].includes(method),
         ),
       );
     } finally {
@@ -7962,7 +7972,11 @@ test("tool destination opens and focuses the exact delivered message, not just i
     );
     assert.ok(
       calls.every((method) =>
-        ["zen/thread/read", "zen/thread/resume"].includes(method),
+        [
+          "zen/thread/read",
+          "zen/thread/resume",
+          "zen/thread/questions/list",
+        ].includes(method),
       ),
     );
   } finally {
