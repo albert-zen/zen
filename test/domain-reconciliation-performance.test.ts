@@ -415,3 +415,157 @@ test("absent reconciliation keeps the public void contract and initial publicati
     await rm(options.root, { recursive: true, force: true });
   }
 });
+
+test("cold append and recovery reuse their own verified Trace without retaining it", async (t) => {
+  const options = await setup();
+  let journal = new DomainThreadJournal(options);
+  try {
+    const original = facts(32);
+    await journal.create(original);
+    await journal.close();
+    journal = new DomainThreadJournal(options);
+    // The production Host reads a Thread before its first send. Such reads do
+    // not populate the journal's live append projection.
+    assert.deepEqual(await journal.read("t"), original);
+    await journal.readItemList("t");
+    let traceReads = 0;
+    const read = options.trace.read.bind(options.trace);
+    const mocked = t.mock.method(
+      options.trace,
+      "read",
+      (...args: Parameters<FileTraceStore["read"]>) => {
+        traceReads++;
+        return read(...args);
+      },
+    );
+    try {
+      await journal.assertRecoverySafe("t");
+      assert.equal(
+        traceReads,
+        1,
+        "cold admission validates one exact Trace observation",
+      );
+      await journal.assertRecoverySafe("t");
+      assert.equal(
+        traceReads,
+        2,
+        "the next admission must observe Trace again",
+      );
+      const first = await journal.append(nextUser("cold"));
+      assert.equal(
+        traceReads,
+        3,
+        "cold append reuses only its own reconciliation observation",
+      );
+      assert.equal(first.at(-1)?.id, "cold");
+      await journal.append(nextUser("warm"));
+      assert.equal(
+        traceReads,
+        4,
+        "warm append must still read the current source",
+      );
+    } finally {
+      mocked.mock.restore();
+    }
+    await journal.close();
+    journal = new DomainThreadJournal(options);
+    assert.deepEqual(await journal.read("t"), [
+      ...original,
+      nextUser("cold"),
+      nextUser("warm"),
+    ]);
+    await journal.assertRecoverySafe("t");
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("private append facts cannot be changed through caller or public read aliases", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    const original = facts(4);
+    await journal.create(original);
+    const input = nextUser("owned");
+    const exact = structuredClone(input);
+    await journal.append(input);
+    input.id = "caller-mutated";
+    const exposed = await journal.read("t");
+    assert.deepEqual(exposed.at(-1), exact);
+    exposed[0]!.id = "read-mutated";
+    await journal.append(nextUser("after"));
+    assert.deepEqual(await journal.read("t"), [
+      ...original,
+      exact,
+      nextUser("after"),
+    ]);
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("recovery never treats a warm projection as proof of missing original configuration", async () => {
+  const options = await setup();
+  const journal = new DomainThreadJournal(options);
+  try {
+    await journal.create(facts(4));
+    await journal.assertRecoverySafe("t");
+    const directory = path.join(options.trace.directory, "threads", "t");
+    for (const name of await fs.readdir(directory))
+      if (name.endsWith(".jsonl"))
+        await writeFile(path.join(directory, name), "");
+    await assert.rejects(
+      journal.assertRecoverySafe("t"),
+      /Original runtime configuration unavailable/,
+    );
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
+
+test("cold append preserves original fact sequence order while reusing decoded reconciliation", async () => {
+  const options = await setup();
+  let journal = new DomainThreadJournal(options);
+  try {
+    const original = facts(0);
+    await journal.create(original);
+    const later = nextUser("later");
+    const earlier = nextUser("earlier");
+    for (const [item, sequence] of [
+      [later, 2],
+      [earlier, 1],
+    ] as const)
+      await options.trace.record({
+        threadId: "t",
+        type: "runtime_item",
+        data: { item, sequence },
+      });
+    await journal.close();
+    journal = new DomainThreadJournal(options);
+    await journal.append(nextUser("after"));
+    assert.deepEqual(await journal.read("t"), [
+      ...original,
+      earlier,
+      later,
+      nextUser("after"),
+    ]);
+    await journal.close();
+    journal = new DomainThreadJournal(options);
+    assert.deepEqual(await journal.read("t"), [
+      ...original,
+      earlier,
+      later,
+      nextUser("after"),
+    ]);
+  } finally {
+    await journal.close();
+    await options.trace.flush();
+    await rm(options.root, { recursive: true, force: true });
+  }
+});
