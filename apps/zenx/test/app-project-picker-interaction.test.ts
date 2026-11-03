@@ -10528,7 +10528,7 @@ test("App usage preserves errors and unknown values without automatic retry or m
     assert.doesNotMatch(contextUsageLabel(), /0%/);
     assert.deepEqual(
       app.methods,
-      ["zen/thread/resume"],
+      ["zen/thread/resume", "zen/thread/questions/list"],
       "usage refresh never retries model, tool, or send mutations",
     );
   } finally {
@@ -10761,7 +10761,10 @@ for (const readySource of ["snapshot", "notification"] as const) {
         1,
         "native resume completed before readiness publication",
       );
-      assert.deepEqual(app.methods, ["zen/thread/resume"]);
+      assert.deepEqual(app.methods, [
+        "zen/thread/resume",
+        "zen/thread/questions/list",
+      ]);
       assert.equal(
         app.requests.length,
         0,
@@ -10782,7 +10785,7 @@ for (const readySource of ["snapshot", "notification"] as const) {
       assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
       assert.deepEqual(
         app.methods,
-        ["zen/thread/resume"],
+        ["zen/thread/resume", "zen/thread/questions/list"],
         "readiness does not repeat native hydration",
       );
     } finally {
