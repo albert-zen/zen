@@ -1403,7 +1403,54 @@ function profileReviewReasons(raw, secrets, configurations, allowedRoots) {
       reasons.add("non-fixture-user-path");
   return [...reasons];
 }
-async function reviewAndPublishProfile(rawPath) {
+function canReviewCompletedFirstTrace(capture) {
+  const profile = capture?.profile,
+    first = capture?.samples?.[0];
+  const ipc = first?.ipc?.[0],
+    identity = first?.canonicalEventVerification;
+  if (
+    profile?.schemaVersion !== 3 ||
+    profile.traceSampleLimit !== 1 ||
+    profile.firstSampleAttributionComplete !== true ||
+    profile.traceStopped !== true ||
+    profile.deadlineExceeded === true ||
+    !Number.isFinite(profile.durationMs) ||
+    profile.durationMs < 0 ||
+    profile.durationMs > 120000 ||
+    first?.trusted !== true ||
+    first?.ipc?.length !== 1 ||
+    !identity
+  )
+    return false;
+  for (const value of [
+    ipc?.threadId,
+    ipc?.clientUserMessageId,
+    ipc?.receipt?.turnId,
+    first.messageId,
+  ])
+    if (typeof value !== "string" || value.length === 0) return false;
+  return Boolean(
+    identity.itemId === first.messageId &&
+    identity.clientId === ipc.clientUserMessageId &&
+    identity.turnId === ipc.receipt.turnId &&
+    first.notifications?.some(
+      (event) =>
+        event.threadId === ipc.threadId &&
+        event.itemType === "user_message" &&
+        event.itemId === first.messageId &&
+        event.clientId === ipc.clientUserMessageId &&
+        event.turnId === ipc.receipt.turnId,
+    ) &&
+    first.notifications.some(
+      (event) =>
+        event.threadId === ipc.threadId &&
+        event.turnId === ipc.receipt.turnId &&
+        (event.type === "turn_completed" ||
+          event.itemType === "turn_completed"),
+    ),
+  );
+}
+async function reviewAndPublishProfile(rawPath, { failedCase = false } = {}) {
   result.profile.reviewStage = "private-review";
   try {
     const secrets = [];
@@ -1468,6 +1515,12 @@ async function reviewAndPublishProfile(rawPath) {
       "Raw profile withheld: private review did not pass",
     );
     result.profile.reviewStage = "timeline-summary";
+    if (failedCase)
+      assert.equal(
+        canReviewCompletedFirstTrace(result),
+        true,
+        "Failed-case attribution requires the explicitly completed first sample",
+      );
     const rendererRoot =
       result.profile.schemaVersion === 3
         ? path.resolve(__dirname, "../out/renderer")
@@ -1495,6 +1548,12 @@ async function reviewAndPublishProfile(rawPath) {
         result.profile.traceSampleLimit ?? result.samples.length,
       ),
     );
+    if (failedCase) {
+      summary.captureOutcome = "case-failed";
+      summary.attributionScope = "completed-first-sample-only";
+      summary.fullCasePassed = false;
+      summary.storageVerification = "not-established-by-this-summary";
+    }
     summary.review = {
       passed: true,
       knownCredentialCount: secrets.length,
@@ -2089,6 +2148,8 @@ async function run() {
       );
       assert.ok(canonicalEvent, "Canonical native item event observed");
       assert.equal(canonicalEvent.clientId, sample.ipc[0].clientUserMessageId);
+      assert.equal(canonicalEvent.threadId, threadId);
+      assert.equal(canonicalEvent.turnId, sample.ipc[0].receipt.turnId);
       assert.ok(
         !sample.notifications.some(
           (n) =>
@@ -2105,6 +2166,8 @@ async function run() {
         turnId: sample.ipc[0].receipt.turnId,
       };
       sample.finalProjectionVerificationPending = true;
+      if (repetition === 0)
+        result.profile.firstSampleAttributionComplete = true;
       console.log(
         "SYNTHETIC_SEND_SAMPLE_JSON " +
           JSON.stringify({
@@ -2443,6 +2506,10 @@ void verifyPackagedRuntime()
         assert.notEqual(result.profile.deadlineExceeded, true);
         assert.ok(result.profile.durationMs <= 120000);
         if (result.ok) await reviewAndPublishProfile(rawPath);
+        else if (canReviewCompletedFirstTrace(result)) {
+          await reviewAndPublishProfile(rawPath, { failedCase: true });
+          result.profile.failedCaseFirstSampleProjected = true;
+        }
       } catch {
         result.ok = false;
         result.profile.traceError =

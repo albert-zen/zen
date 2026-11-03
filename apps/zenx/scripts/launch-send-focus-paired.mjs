@@ -566,6 +566,52 @@ async function captureLiveExportGuard(tokenFile, isClosed) {
   }
   throw new Error("Owned fixture credential unavailable before shutdown");
 }
+// A failed case may retain only an already-reviewed complete first-sample
+// projection. The whole case remains failed; raw trace is never a fallback.
+async function readReviewedFailedFirstTrace({
+  capture,
+  close,
+  guard,
+  privateConfig,
+  directory,
+}) {
+  const withheld = { status: "withheld", caseFailed: true };
+  try {
+    assert.ok(close && close.signal === null && [0, 1].includes(close.code));
+    assert.equal(capture?.profile?.firstSampleAttributionComplete, true);
+    assert.equal(capture.profile.traceStopped, true);
+    assert.equal(capture.profile.review?.passed, true);
+    assert.equal(capture.profile.traceSampleLimit, 1);
+    if (capture.ok !== true)
+      assert.equal(capture.profile.failedCaseFirstSampleProjected, true);
+    const serialized = await readFile(
+      path.join(directory, "owned-native-send-profile.summary.json"),
+      "utf8",
+    );
+    const summary = JSON.parse(serialized);
+    assert.equal(summary.diagnosticOnly, true);
+    assert.equal(summary.acceptance, false);
+    assert.equal(summary.review?.passed, true);
+    assert.equal(summary.tracedSampleCount, 1);
+    assert.equal(summary.samples?.length, 1);
+    if (capture.ok !== true) {
+      assert.equal(summary.captureOutcome, "case-failed");
+      assert.equal(summary.attributionScope, "completed-first-sample-only");
+      assert.equal(summary.fullCasePassed, false);
+    }
+    guard.scan(serialized, privateConfig);
+    return {
+      status: "reviewed",
+      caseFailed: true,
+      scope: "completed-first-sample-only",
+      storageVerification: "not-established-by-this-summary",
+      timeline: summary,
+    };
+  } catch {
+    return withheld;
+  }
+}
+
 function projectFailureNativeContinuity(sample) {
   try {
     return projectNativeContinuity(sample);
@@ -1134,6 +1180,20 @@ try {
         ),
       })),
   };
+  let privateConfig;
+  try {
+    privateConfig = await readFile(
+      path.join(profile, "host-profile.json"),
+      "utf8",
+    );
+  } catch {}
+  failure.firstSampleAttribution = await readReviewedFailedFirstTrace({
+    capture,
+    close: observedClose,
+    guard: exportGuard,
+    privateConfig,
+    directory,
+  });
   if (exportGuard) {
     const detail = {
       ...failure,
