@@ -289,6 +289,8 @@ export function projectSidebarResult(
     "applied",
     "status",
     "error",
+    "authorizedScopesTotal",
+    "authorizedScopesTruncated",
   ]);
   if (result.effectiveScope) output.scope = scope(result.effectiveScope);
   if (Array.isArray(result.authorizedScopes))

@@ -62,10 +62,13 @@ export function resolveSidebarScope(
     effectiveScope = { kind: "thread", id: threadId };
     defaultReason = "private-thread-no-unique-dedicated-room-binding";
   }
+  const authorizedScopes = choices.slice(0, 101);
   return {
     effectiveScope,
     defaultReason,
-    authorizedScopes: choices.slice(0, 101),
+    authorizedScopes,
+    authorizedScopesTotal: choices.length,
+    authorizedScopesTruncated: authorizedScopes.length < choices.length,
   };
 }
 export function bindSidebarResources(
