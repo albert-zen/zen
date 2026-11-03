@@ -389,21 +389,26 @@ test("refreshes failed-turn usage live without allowing stale reads to win", asy
       });
       await Promise.resolve();
     });
-    assert.equal(usageRequests.length, 3);
-    await act(async () => {
-      usageRequests[2]?.response.resolve(projectedUsage(9));
-      await Promise.resolve();
-    });
+    assert.equal(usageRequests.length, 2);
     const contextUsageText = (): string | null =>
       document
         .querySelector(".context-usage-trigger")
         ?.getAttribute("aria-label") ?? null;
-    assert.equal(
-      contextUsageText(),
-      "Open context details. Context 9% · 9 / 100 tokens\nThread cache hit rate unknown",
-    );
     await act(async () => {
       usageRequests[1]?.response.resolve(projectedUsage(4));
+      await Promise.resolve();
+    });
+    assert.equal(
+      usageRequests.length,
+      3,
+      "dirty demand starts after settlement",
+    );
+    assert.ok(
+      !contextUsageText()?.includes("4 / 100 tokens"),
+      "superseded usage cannot publish",
+    );
+    await act(async () => {
+      usageRequests[2]?.response.resolve(projectedUsage(9));
       await Promise.resolve();
     });
     assert.equal(

@@ -4529,7 +4529,7 @@ async function mountApp(
     onStatus?(listener: (status: AppServerHostStatus) => void): () => void;
     onPinnedThreadIds?(threadIds: readonly string[]): void;
     models?: ModelSummary[];
-    modelUsage?(): Promise<ModelUsageProjection>;
+    modelUsage?(threadId: string): Promise<ModelUsageProjection>;
     markWorkspaceUsed?(
       workspace: string,
     ): Promise<ReturnType<typeof publicSettings>>;
@@ -4667,7 +4667,7 @@ async function mountApp(
       forThread: async () => ({}),
     },
     modelUsage: {
-      forThread: async () =>
+      forThread: async (threadId: string) =>
         options.modelUsage === undefined
           ? {
               thread: { responseCount: 0, inputTokens: 0, outputTokens: 0 },
@@ -4679,7 +4679,7 @@ async function mountApp(
                 ratio: null,
               },
             }
-          : await options.modelUsage(),
+          : await options.modelUsage(threadId),
     },
     projects: {
       startProjectlessThread: async (
@@ -9884,6 +9884,772 @@ test("native streaming deltas update the real App without reloading or cloning i
     globalThis.structuredClone = clone;
   }
 });
+
+function usageProjection(inputTokens: number | null): ModelUsageProjection {
+  return {
+    thread: { responseCount: 1, inputTokens: 12, outputTokens: 3 },
+    turns: {},
+    context: {
+      inputTokens,
+      inputTokenSource: inputTokens === null ? null : "estimated",
+      contextWindow: inputTokens === null ? null : 100,
+      ratio: inputTokens === null ? null : inputTokens / 100,
+    },
+  };
+}
+
+function contextUsageLabel(): string {
+  return (
+    document
+      .querySelector(".context-usage-trigger")
+      ?.getAttribute("aria-label") ?? ""
+  );
+}
+
+test("App usage coalesces six native completion reads and drains the latest burst on long history", async (t) => {
+  const requests: ReturnType<typeof deferred<ModelUsageProjection>>[] = [];
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  const history: Thread = {
+    ...liveThread(),
+    turns: Array.from({ length: 40 }, (_, index) => ({
+      id: `history-${index}`,
+      status: "completed" as const,
+      itemsView: "full" as const,
+      items: [
+        {
+          type: "userMessage" as const,
+          id: `input-${index}`,
+          clientId: `client-${index}`,
+          content: [
+            {
+              type: "text" as const,
+              text: `Historical input ${index}`,
+              text_elements: [],
+            },
+          ],
+        },
+        {
+          type: "agentMessage" as const,
+          id: `answer-${index}`,
+          text: `Historical answer ${index}`,
+          phase: "final_answer" as const,
+          memoryCitation: null,
+        },
+      ],
+      error: null,
+      startedAt: index + 1,
+      completedAt: index + 2,
+      durationMs: 1,
+    })),
+  };
+  const admission = deferred<unknown>();
+  let clientId: string | undefined;
+  const harness = await mountThreadApp({
+    composerSendMode: "soft",
+    modelUsage: () => {
+      const request = deferred<ModelUsageProjection>();
+      requests.push(request);
+      return request.promise;
+    },
+    request: async (method, params) => {
+      if (method === "zen/thread/resume") return resumed(history);
+      if (method === "zen/turn/send") {
+        clientId = (params as { clientUserMessageId: string })
+          .clientUserMessageId;
+        return admission.promise;
+      }
+      throw new Error(method);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+  });
+  let watermark = 0;
+  const emit = (event: import("../../../src/app-server.js").AppServerEvent) =>
+    act(async () => {
+      notify?.("zen/thread/event", {
+        threadId: "thread-1",
+        processEpoch: "test-process-epoch",
+        watermark: ++watermark,
+        event,
+      });
+    });
+  try {
+    const composer = await selectedComposer();
+    await act(async () => requests[0]!.resolve(usageProjection(1)));
+    assert.match(contextUsageLabel(), /1 \/ 100 tokens/);
+    await setTextareaValue(composer, "Ordinary message");
+    await dispatchComposerKey(composer, { key: "Enter" });
+    await waitFor(() => clientId);
+    await act(async () => admission.resolve({ turnId: "ordinary-turn" }));
+    const common = {
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      createdAt: "2026-11-02T00:00:01Z",
+    };
+    const items: import("../../../src/item.js").CanonicalItem[] = [
+      {
+        ...common,
+        id: "ordinary-start",
+        type: "turn_started",
+        selection: {
+          providerProfileId: "fake",
+          modelId: "fake",
+          reasoningEffort: "medium",
+        },
+      },
+      {
+        ...common,
+        id: "ordinary-user",
+        type: "user_message",
+        clientId,
+        content: [{ type: "text", text: "Ordinary message" }],
+      },
+      {
+        ...common,
+        id: "ordinary-usage",
+        type: "model_usage",
+        modelResponseId: "ordinary-response",
+        inputTokens: 12,
+        outputTokens: 3,
+      },
+      {
+        ...common,
+        id: "ordinary-answer",
+        type: "agent_message",
+        text: "Ordinary answer",
+      },
+      {
+        ...common,
+        id: "ordinary-end",
+        type: "turn_completed",
+        status: "completed",
+      },
+    ];
+    await emit({ type: "item_completed", item: items[0]! });
+    await emit({
+      type: "turn_started",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+    });
+    for (const [role, text, sequence] of [
+      ["user", "Ordinary message", 161],
+      ["assistant", "Ordinary answer", 162],
+    ] as const) {
+      await emit({
+        type: "context_item_completed",
+        threadId: "thread-1",
+        item: {
+          ...common,
+          id: `semantic-${role}`,
+          kind: "message",
+          role,
+          source: {
+            kind: role === "user" ? "user_message" : "agent_message",
+            sequence,
+          },
+          content: { text, parts: [{ type: "text", text }] },
+        },
+      });
+    }
+    for (const item of items.slice(1))
+      await emit({ type: "item_completed", item });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /Ordinary message/,
+    );
+    assert.match(
+      document.querySelector(".agent-surface")!.textContent!,
+      /Ordinary answer/,
+    );
+    assert.equal(
+      requests.length,
+      2,
+      "six completion notifications share one in-flight read after the initial resume read",
+    );
+    await act(async () => requests[1]!.resolve(usageProjection(4)));
+    assert.equal(
+      requests.length,
+      3,
+      "one dirty follow-up reads after all six notifications",
+    );
+    assert.match(
+      contextUsageLabel(),
+      /1 \/ 100 tokens/,
+      "superseded read cannot publish",
+    );
+    await act(async () => requests[2]!.resolve(usageProjection(12)));
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+    t.diagnostic(
+      JSON.stringify({
+        historicalTurns: 40,
+        completionNotifications: 6,
+        completionUsageReads: requests.length - 1,
+      }),
+    );
+
+    // More events while the follow-up itself is pending must drain again, not
+    // freeze at an arbitrary two-read budget or run concurrent context builds.
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    await act(async () => requests[3]!.resolve(usageProjection(13)));
+    await emit({
+      type: "turn_completed",
+      threadId: "thread-1",
+      turnId: "ordinary-turn",
+      status: "completed",
+    });
+    assert.equal(requests.length, 5);
+    await act(async () => requests[4]!.resolve(usageProjection(14)));
+    assert.equal(requests.length, 6);
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+    await act(async () => requests[5]!.resolve(usageProjection(15)));
+    assert.match(contextUsageLabel(), /15 \/ 100 tokens/);
+  } finally {
+    await unmountApp(harness);
+  }
+});
+
+async function mountUsageApp(options: Parameters<typeof mountApp>[1] = {}) {
+  const requests: Array<{
+    threadId: string;
+    response: ReturnType<typeof deferred<ModelUsageProjection>>;
+  }> = [];
+  const methods: string[] = [];
+  let notify:
+    Parameters<Window["zenx"]["protocol"]["onNotification"]>[0] | undefined;
+  let status: ((value: AppServerHostStatus) => void) | undefined;
+  const harness = await mountThreadApp({
+    threads: async (archived) =>
+      archived
+        ? []
+        : [summary(false), summary(false, "thread-2", "Thread two")],
+    modelUsage: (threadId) => {
+      const response = deferred<ModelUsageProjection>();
+      requests.push({ threadId, response });
+      return response.promise;
+    },
+    request: async (method, params) => {
+      methods.push(method);
+      if (method === "zen/thread/resume")
+        return resumed({
+          ...liveThread(),
+          id: (params as { threadId: string }).threadId,
+        });
+      if (method === "thread/archive") return {};
+      throw new Error(method);
+    },
+    onNotification: (listener) => {
+      notify = listener;
+      return () => {
+        notify = undefined;
+      };
+    },
+    onStatus: (listener) => {
+      status = listener;
+      return () => {
+        status = undefined;
+      };
+    },
+    ...options,
+  });
+  const select = async (name = "Thread one") => {
+    const row = [
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-row"),
+    ].find((button) => button.textContent?.includes(name));
+    assert.ok(row, `Expected ${name} row`);
+    await act(async () => row.click());
+  };
+  const complete = async (threadId = "thread-1") =>
+    act(async () =>
+      notify?.("turn/completed", {
+        threadId,
+        turn: {
+          id: "completed-turn",
+          status: "completed",
+          items: [],
+          itemsView: "full",
+          error: null,
+          startedAt: 1,
+          completedAt: 2,
+          durationMs: 1,
+        },
+      }),
+    );
+  return {
+    harness,
+    requests,
+    methods,
+    select,
+    complete,
+    status: async (value: AppServerHostStatus) =>
+      act(async () => status?.(value)),
+    notify: async <
+      M extends
+        import("../src/protocol-client/index.js").ServerNotificationMethod,
+    >(
+      method: M,
+      params: import("../src/protocol-client/index.js").ServerNotificationParams[M],
+    ) => act(async () => notify?.(method, params)),
+    resolve: async (index: number, tokens: number | null) =>
+      act(async () =>
+        requests[index]!.response.resolve(usageProjection(tokens)),
+      ),
+  };
+}
+
+test("App usage keeps different Threads independent and drains only the latest returning owner", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.complete();
+    await app.complete();
+    await app.select("Thread two");
+    assert.deepEqual(
+      app.requests.map((request) => request.threadId),
+      ["thread-1", "thread-2"],
+    );
+    await app.resolve(1, 2);
+    await app.resolve(0, 99);
+    assert.equal(
+      app.requests.length,
+      2,
+      "leaving drops dirty demand rather than reading an unobserved Thread",
+    );
+    assert.match(contextUsageLabel(), /2 \/ 100 tokens/);
+
+    await app.select();
+    await app.complete();
+    await app.select("Thread two");
+    await app.select();
+    assert.equal(
+      app.requests.length,
+      4,
+      "returning owner shares the old in-flight slot, not its stale result",
+    );
+    await app.resolve(2, 98);
+    assert.equal(app.requests.length, 5);
+    assert.ok(!contextUsageLabel().includes("98 / 100 tokens"));
+    await app.resolve(4, 9);
+    await app.resolve(3, 97);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    assert.equal(app.requests.length, 5);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage retires disconnected reads without letting old callbacks remove the reconnect owner", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.complete();
+    await app.status({ type: "reconnecting", attempt: 1, delayMs: 0 });
+    await app.complete();
+    assert.equal(app.requests.length, 1);
+    await app.status({ type: "ready", reconnected: true });
+    assert.equal(
+      app.requests.length,
+      2,
+      "new connection does not wait for an old unresolved IPC",
+    );
+    await app.complete();
+    await app.resolve(0, 99);
+    assert.equal(
+      app.requests.length,
+      2,
+      "old finally neither drains nor removes the new owner",
+    );
+    assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    await app.resolve(1, 8);
+    assert.equal(app.requests.length, 3);
+    await app.resolve(2, 12);
+    assert.match(contextUsageLabel(), /12 \/ 100 tokens/);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage fences a late ready snapshot after a disconnect notification", async () => {
+  const initialStatus = deferred<AppServerHostStatus>();
+  const app = await mountUsageApp({ getStatus: () => initialStatus.promise });
+  try {
+    await app.status({ type: "ready", reconnected: false });
+    await app.select();
+    await app.status({ type: "reconnecting", attempt: 1, delayMs: 0 });
+    await act(async () =>
+      initialStatus.resolve({ type: "ready", reconnected: false }),
+    );
+    await app.complete();
+    await app.resolve(0, 99);
+    assert.equal(app.requests.length, 1);
+    assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    await app.status({ type: "ready", reconnected: true });
+    await app.resolve(1, 9);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+test("App usage preserves errors and unknown values without automatic retry or mutation", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.resolve(0, 12);
+    await app.complete();
+    await act(async () =>
+      app.requests[1]!.response.reject(new Error("usage unavailable")),
+    );
+    assert.equal(app.requests.length, 2, "clean failure is not retried");
+    assert.match(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /usage unavailable/,
+    );
+    assert.match(
+      contextUsageLabel(),
+      /12 \/ 100 tokens/,
+      "failure does not replace the last real value with zero",
+    );
+    await app.complete();
+    await app.complete();
+    await act(async () =>
+      app.requests[2]!.response.reject(new Error("superseded failure")),
+    );
+    assert.equal(
+      app.requests.length,
+      4,
+      "a real dirty invalidation still drains after failure",
+    );
+    assert.doesNotMatch(
+      document.querySelector('[role="alert"]')?.textContent ?? "",
+      /superseded failure/,
+    );
+    await app.resolve(3, null);
+    assert.equal(
+      contextUsageLabel(),
+      "",
+      "unknown context retains the existing unavailable indicator, never a fabricated zero",
+    );
+    assert.doesNotMatch(contextUsageLabel(), /0%/);
+    assert.deepEqual(
+      app.methods,
+      ["zen/thread/resume"],
+      "usage refresh never retries model, tool, or send mutations",
+    );
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+for (const retirement of ["new-thread", "archive", "unmount"] as const) {
+  test(`App usage does not drain dirty reads after ${retirement}`, async () => {
+    const app = await mountUsageApp();
+    let mounted = true;
+    try {
+      await app.select();
+      await app.complete();
+      if (retirement === "unmount") {
+        await act(async () => app.harness.root.unmount());
+        mounted = false;
+      } else if (retirement === "new-thread") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>(".new-thread-action")!
+            .click(),
+        );
+      } else {
+        await act(async () => threadMenuButton("Thread one").click());
+        const archive = await waitFor(() => exactButton("Archive"));
+        await act(async () => archive.click());
+        assert.ok(
+          document.querySelector(".thread-view") === null,
+          "archive leaves the old Thread owner",
+        );
+      }
+      await app.resolve(0, 99);
+      assert.equal(
+        app.requests.length,
+        1,
+        "retired demand cannot launch a follow-up",
+      );
+      assert.ok(!contextUsageLabel().includes("99 / 100 tokens"));
+    } finally {
+      if (mounted) await unmountApp(app.harness);
+      else {
+        Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: undefined });
+        app.harness.dom.window.close();
+      }
+    }
+  });
+}
+
+test("App usage coalesces model setting and catalog invalidations into the latest read", async () => {
+  const app = await mountUsageApp();
+  try {
+    await app.select();
+    await app.resolve(0, 1);
+    await app.complete();
+    await app.notify("zen/thread/event", {
+      threadId: "thread-1",
+      processEpoch: "test-process-epoch",
+      watermark: 1,
+      event: {
+        type: "thread_settings_updated",
+        threadId: "thread-1",
+        settings: { ...resumed(liveThread()).thread, modelId: "gpt-5.6-luna" },
+      },
+    });
+    assert.equal(app.requests.length, 2);
+    await app.resolve(1, 99);
+    assert.equal(app.requests.length, 3);
+    assert.match(contextUsageLabel(), /1 \/ 100 tokens/);
+    await app.resolve(2, 9);
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    await app.notify("thread/settings/updated", {
+      threadId: "thread-1",
+      threadSettings: {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "fake", reasoning_effort: "medium" },
+        },
+        cwd: "/work/zen",
+        effort: "medium",
+        model: "fake",
+        modelProvider: "fake",
+        personality: null,
+        sandboxPolicy: { type: "dangerFullAccess" },
+        serviceTier: null,
+        summary: null,
+      },
+    });
+    assert.equal(
+      app.requests.length,
+      4,
+      "legacy settings publication also refreshes current usage",
+    );
+    await app.notify("model/catalog/updated", {
+      processEpoch: "test-process-epoch",
+      revision: 3,
+    });
+    assert.equal(app.requests.length, 4);
+    await app.resolve(3, 99);
+    assert.equal(
+      app.requests.length,
+      5,
+      "catalog invalidation drains with current Host settings",
+    );
+    assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    await app.resolve(4, null);
+    assert.equal(
+      contextUsageLabel(),
+      "",
+      "unknown context retains the existing unavailable indicator, never a fabricated zero",
+    );
+  } finally {
+    await unmountApp(app.harness);
+  }
+});
+
+async function mountInitialUsageApp(options: Parameters<typeof mountApp>[1]) {
+  const { pluginUiRegistry } =
+    await import("../src/renderer/src/PluginProductPage.js");
+  const pluginId = "usage-navigation-fixture";
+  const route = `/plugins/${pluginId}/home`;
+  const dispose = pluginUiRegistry.registerTrusted(pluginId, {
+    overview: ({ sdk }) =>
+      createElement(
+        "button",
+        {
+          onClick: () => sdk.navigation.navigate("/threads/thread-1"),
+        },
+        "Open existing Thread",
+      ),
+  });
+  const snapshot: import("../src/main/capabilities/types.js").ZenXPluginSnapshot =
+    {
+      plugins: [
+        {
+          id: pluginId,
+          displayName: "Usage navigation",
+          enabled: true,
+          available: true,
+          lifecycle: "enabled",
+          contributionCount: 1,
+          version: "1",
+          source: "bundled",
+        },
+      ],
+      pages: [
+        {
+          key: `${pluginId}:home`,
+          pluginId,
+          id: "home",
+          title: "Usage navigation",
+          route,
+          surfaceId: "overview",
+        },
+      ],
+      sidebar: [
+        {
+          key: `${pluginId}:home`,
+          pluginId,
+          id: "home",
+          label: "Usage navigation",
+          icon: "plug",
+          pageId: "home",
+        },
+      ],
+      bundles: [
+        {
+          key: `${pluginId}:main`,
+          pluginId,
+          id: "main",
+          apiVersion: 1,
+          kind: "trusted",
+          entry: pluginId,
+        },
+      ],
+      surfaces: [
+        {
+          key: `${pluginId}:overview`,
+          pluginId,
+          id: "overview",
+          bundleId: "main",
+          exportName: "overview",
+        },
+      ],
+      subroutes: [],
+      settings: [],
+      panels: [],
+      commands: [],
+      menus: [],
+    };
+  let recovered = 0;
+  const app = await mountUsageApp({
+    ...options,
+    markWorkspaceUsed: async () => {
+      recovered++;
+      return publicSettings([]);
+    },
+    plugins: { get: async () => snapshot },
+  });
+  return {
+    ...app,
+    recovered: () => recovered,
+    open: async () => {
+      // Production plugin pages remain usable while the initial status IPC is
+      // pending. Their real SDK navigation enters App's normal native resume.
+      const page = await waitFor(() => exactButton("Usage navigation"));
+      await act(async () => page.click());
+      const open = await waitFor(() => exactButton("Open existing Thread"));
+      await act(async () => open.click());
+    },
+    unmount: async () => {
+      await unmountApp(app.harness);
+      dispose();
+    },
+  };
+}
+
+for (const readySource of ["snapshot", "notification"] as const) {
+  test(`App usage first ready ${readySource} reads an already recovered Thread without another resume`, async () => {
+    const initialStatus = deferred<AppServerHostStatus>();
+    const app = await mountInitialUsageApp({
+      getStatus: () => initialStatus.promise,
+    });
+    try {
+      await app.open();
+      assert.equal(
+        app.recovered(),
+        1,
+        "native resume completed before readiness publication",
+      );
+      assert.deepEqual(app.methods, ["zen/thread/resume"]);
+      assert.equal(
+        app.requests.length,
+        0,
+        "usage waits for observed readiness",
+      );
+      if (readySource === "snapshot")
+        await act(async () =>
+          initialStatus.resolve({ type: "ready", reconnected: false }),
+        );
+      else await app.status({ type: "ready", reconnected: false });
+      assert.ok(document.querySelector(".thread-view") !== null);
+      assert.equal(
+        app.requests.length,
+        1,
+        "first ready must not lose completed-resume usage demand",
+      );
+      await app.resolve(0, 9);
+      assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+      assert.deepEqual(
+        app.methods,
+        ["zen/thread/resume"],
+        "readiness does not repeat native hydration",
+      );
+    } finally {
+      await app.unmount();
+    }
+  });
+
+  test(`App usage first ready ${readySource} does not read before cold resume completes`, async () => {
+    const initialStatus = deferred<AppServerHostStatus>();
+    const recovery = deferred<ReturnType<typeof resumed>>();
+    let resumeCalls = 0;
+    const app = await mountInitialUsageApp({
+      getStatus: () => initialStatus.promise,
+      request: async (method) => {
+        assert.equal(method, "zen/thread/resume");
+        resumeCalls++;
+        return recovery.promise;
+      },
+    });
+    try {
+      await app.open();
+      if (readySource === "snapshot")
+        await act(async () =>
+          initialStatus.resolve({ type: "ready", reconnected: false }),
+        );
+      else await app.status({ type: "ready", reconnected: false });
+      assert.equal(
+        app.requests.length,
+        0,
+        "first ready must not create pre-recovery usage hydration",
+      );
+      await act(async () => recovery.resolve(resumed(liveThread())));
+      assert.equal(app.requests.length, 1);
+      assert.equal(resumeCalls, 1);
+      await app.resolve(0, 9);
+      assert.match(contextUsageLabel(), /9 \/ 100 tokens/);
+    } finally {
+      await app.unmount();
+    }
+  });
+}
 
 for (const burst of [false, true]) {
   test(`real App native text deltas reuse canonical ordering and historical metadata (${burst ? "batched" : "separate"})`, async (t) => {
