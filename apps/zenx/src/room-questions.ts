@@ -45,7 +45,7 @@ export interface RoomQuestionWriteInput {
   roomId: string;
   questionId: string;
   expectedRevision: number;
-  specification: UserQuestionSpecification;
+  specification: unknown;
 }
 export interface RoomQuestionWorkspaceReadOptions {
   afterQuestionId?: string;
@@ -166,7 +166,19 @@ export function canonicalRoomQuestion(value: unknown): RoomQuestion {
     };
   } else if (result.state === "answered" || result.state === "cancelled")
     throw Error("Resolved Room question has no Room receipt");
-  if (new TextEncoder().encode(JSON.stringify(result)).length > 65536)
-    throw Error("Room question resource exceeds 64 KiB");
+  if (new TextEncoder().encode(JSON.stringify(result)).length > 131072)
+    throw Error("Room question resource exceeds 128 KiB");
   return result;
+}
+
+export interface RoomQuestionResponseReadback {
+  question: RoomQuestion | null;
+  response: {
+    clientId: string;
+    status: "not-found" | "saved" | "conflict";
+    messageId?: string;
+    operationId?: string;
+  };
+  /** Existing Room delivery facts, never an inferred Thread admission. */
+  delivery?: import("./main/trigger-types.js").RoomDeliveryView;
 }

@@ -1,4 +1,12 @@
 import {
+  validateRoomQuestionPublication,
+  validateRoomQuestionPublicationReceipt,
+} from "../room-question-publication.js";
+import type {
+  RoomUserQuestionPublicationInput,
+  RoomUserQuestionPublicationReceipt,
+} from "../../../../src/user-question-tool.js";
+import {
   validateBoardToolRequest,
   type BoardToolRequest,
 } from "../board-host.js";
@@ -49,6 +57,7 @@ export type ZenXHostConfig = Omit<
   | "toolOutputSpool"
   | "codeRuntimeOptions"
   | "onToolPresentationWarning"
+  | "publishRoomQuestion"
 > & {
   /** Durable configuration revision loaded by this process at startup. */
   configurationRevision?: number;
@@ -77,6 +86,12 @@ export type ZenXSingleProviderHostConfig = ZenXHostConfig &
   Required<Pick<ZenXHostConfig, "model" | "provider">>;
 
 export type HostCommand =
+  | {
+      type: "room-question/publish-result";
+      requestId: string;
+      result?: RoomUserQuestionPublicationReceipt;
+      error?: string;
+    }
   | { type: "board-tool/request"; requestId: string; input: BoardToolRequest }
   | { type: "board-tool/cancel"; requestId: string }
   | { type: "board-tool/owner-result"; requestId: string; error?: string }
@@ -168,6 +183,12 @@ export interface CapabilityResultCommand {
 }
 
 export type HostEvent =
+  | {
+      type: "room-question/publish-request";
+      requestId: string;
+      input: RoomUserQuestionPublicationInput;
+    }
+  | { type: "room-question/publish-cancel"; requestId: string }
   | { type: "board-tool/check-owner"; requestId: string }
   | {
       type: "board-tool/result";
@@ -347,6 +368,18 @@ export function isHostCommand(value: unknown): value is HostCommand {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "room-question/publish-result") {
+    try {
+      if (typeof fleet.requestId !== "string") return false;
+      if (fleet.error !== undefined)
+        return typeof fleet.error === "string" && fleet.result === undefined;
+      validateRoomQuestionPublicationReceipt(fleet.result);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   if (fleet.type === "board-tool/cancel")
     return typeof fleet.requestId === "string";
   if (fleet.type === "board-tool/owner-result")
@@ -486,6 +519,17 @@ function isHostEventUnsafe(value: unknown): value is HostEvent {
     return false;
   }
   const fleet = value as Record<string, unknown>;
+  if (fleet.type === "room-question/publish-cancel")
+    return typeof fleet.requestId === "string";
+  if (fleet.type === "room-question/publish-request") {
+    try {
+      validateRoomQuestionPublication(fleet.input);
+      return typeof fleet.requestId === "string";
+    } catch {
+      return false;
+    }
+  }
+
   if (fleet.type === "board-tool/check-owner")
     return typeof fleet.requestId === "string";
   if (fleet.type === "board-tool/result")

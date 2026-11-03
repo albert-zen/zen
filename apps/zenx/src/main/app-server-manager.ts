@@ -1,3 +1,8 @@
+import type {
+  RoomUserQuestionPublicationInput,
+  RoomUserQuestionPublicationReceipt,
+} from "../../../../src/user-question-tool.js";
+import { validateRoomQuestionPublicationReceipt } from "../room-question-publication.js";
 import {
   validateBoardToolRequest,
   type BoardToolRequest,
@@ -723,6 +728,20 @@ export class AppServerManager {
     }
   }
 
+  #roomQuestionPublisher:
+    | ((
+        input: RoomUserQuestionPublicationInput,
+        admit: () => Promise<void>,
+      ) => Promise<RoomUserQuestionPublicationReceipt>)
+    | undefined;
+  setRoomQuestionPublisher(
+    publisher: (
+      input: RoomUserQuestionPublicationInput,
+      admit: () => Promise<void>,
+    ) => Promise<RoomUserQuestionPublicationReceipt>,
+  ): void {
+    this.#roomQuestionPublisher = publisher;
+  }
   #remoteRooms:
     | ((
         operation: "list" | "read" | "post" | "trigger",
@@ -1586,9 +1605,87 @@ export class AppServerManager {
   }
 
   #installCapabilityBridge(child: ChildProcess): void {
+    const roomPublications = new Map<string, AbortController>();
+    child.once("exit", () => {
+      for (const controller of roomPublications.values())
+        controller.abort(
+          new Error(
+            "Room question origin Host stopped; outcome may be unknown",
+          ),
+        );
+      roomPublications.clear();
+    });
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "room-question/publish-cancel") {
+        roomPublications
+          .get(hostEvent.requestId)
+          ?.abort(
+            new Error("Room question origin cancelled; outcome may be unknown"),
+          );
+        roomPublications.delete(hostEvent.requestId);
+        return;
+      }
+      if (hostEvent?.type === "room-question/publish-request") {
+        const controller = new AbortController();
+        const epoch = this.#processEpoch;
+        const publisher = this.#roomQuestionPublisher;
+        const admit = async () => {
+          controller.signal.throwIfAborted();
+          if (
+            this.#stopping ||
+            this.#roomQuestionPublisher !== publisher ||
+            this.#child !== child ||
+            !child.connected ||
+            this.#processEpoch !== epoch ||
+            this.status.type !== "ready"
+          )
+            throw new Error(
+              "Room question origin Host changed; outcome may be unknown",
+            );
+        };
+        if (roomPublications.has(hostEvent.requestId)) return;
+        if (roomPublications.size >= 32) {
+          child.send({
+            type: "room-question/publish-result",
+            requestId: hostEvent.requestId,
+            error: "Too many pending Room question publications",
+          } satisfies HostCommand);
+          return;
+        }
+        roomPublications.set(hostEvent.requestId, controller);
+        void (async () => {
+          try {
+            await admit();
+            if (!publisher)
+              throw new Error("Room question service unavailable");
+            const result = validateRoomQuestionPublicationReceipt(
+              await publisher(hostEvent.input, admit),
+            );
+            await admit();
+            if (result.roomId !== hostEvent.input.roomId)
+              throw new Error(
+                "Room question receipt target disagrees; outcome may be unknown",
+              );
+            child.send({
+              type: "room-question/publish-result",
+              requestId: hostEvent.requestId,
+              result,
+            } satisfies HostCommand);
+          } catch (error) {
+            if (this.#child === child && child.connected)
+              child.send({
+                type: "room-question/publish-result",
+                requestId: hostEvent.requestId,
+                error: asError(error).message,
+              } satisfies HostCommand);
+          } finally {
+            roomPublications.delete(hostEvent.requestId);
+          }
+        })();
+        return;
+      }
       if (hostEvent?.type === "board-tool/check-owner") {
         const pending = this.#pendingConfigurationRequests.get(
           hostEvent.requestId,

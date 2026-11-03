@@ -1,3 +1,4 @@
+import { parseUserQuestionSpecification } from "../../../../src/user-question.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
@@ -136,6 +137,7 @@ interface QuestionIndex {
   state: RoomQuestion["state"];
   origin: string;
   specificationHash: string;
+  publicationHash: string;
   createdAt: number;
 }
 interface RoomIndex {
@@ -353,6 +355,7 @@ export class AutomationTransactionStore {
   async findRoomQuestionByOrigin(
     roomId: string,
     origin: RoomQuestion["origin"],
+    specification?: unknown,
   ): Promise<RoomQuestion | null> {
     const room = this.#questionRoom(roomId);
     const id = room.questionOrigins.get(
@@ -361,6 +364,18 @@ export class AutomationTransactionStore {
         roomQuestionIdentity(origin.callItemId),
       ]),
     );
+    if (id && specification !== undefined) {
+      const hash = createHash("sha256")
+        .update(JSON.stringify(parseUserQuestionSpecification(specification)))
+        .digest("hex");
+      if (room.questions.get(id)?.publicationHash !== hash)
+        throw Object.assign(
+          Error(
+            "Room question publication identity belongs to different content",
+          ),
+          { code: "idempotency_conflict" },
+        );
+    }
     return id ? this.readRoomQuestion(roomId, id) : null;
   }
   async readRoomQuestions(
@@ -914,6 +929,7 @@ export class AutomationTransactionStore {
           state: question.state,
           origin: originKey,
           specificationHash,
+          publicationHash: previous?.publicationHash ?? specificationHash,
           createdAt: question.createdAt,
         });
         newQuestions.set(roomId, pending);
@@ -1127,6 +1143,11 @@ export class AutomationTransactionStore {
           specificationHash: createHash("sha256")
             .update(JSON.stringify(question.specification))
             .digest("hex"),
+          publicationHash:
+            previous?.publicationHash ??
+            createHash("sha256")
+              .update(JSON.stringify(question.specification))
+              .digest("hex"),
         });
         room.questionOrigins.set(origin, question.id);
         if (question.response)

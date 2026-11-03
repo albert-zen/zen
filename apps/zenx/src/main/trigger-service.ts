@@ -1,3 +1,18 @@
+import {
+  canonicalRoomQuestion,
+  roomQuestionIdentity,
+  roomQuestionRevision,
+  type RoomQuestion,
+  type RoomQuestionResponseInput,
+  type RoomQuestionResponseReadback,
+  type RoomQuestionWorkspaceReadOptions,
+  type RoomQuestionWriteInput,
+} from "../room-questions.js";
+import {
+  normalizeUserQuestionReply,
+  parseUserQuestionSpecification,
+  renderUserQuestionAnswer,
+} from "../../../../src/user-question.js";
 import type {
   AutomationRoomEvent,
   AutomationRoomSnapshot,
@@ -141,7 +156,16 @@ export interface ZenXTriggerStorePort {
     | "readRoomMessage"
     | "hasRoomOrigin"
     | "roomMessageReadProjection"
-  >;
+  > &
+    Partial<
+      Pick<
+        AutomationTransactionStore,
+        | "readRoomQuestions"
+        | "readRoomQuestion"
+        | "findRoomQuestionByOrigin"
+        | "roomQuestionSummary"
+      >
+    >;
 }
 
 export interface ZenXRoomHistoryPage {
@@ -1693,6 +1717,253 @@ export class ZenXTriggerService {
     });
   }
 
+  #questionHistory() {
+    const history = this.#store.roomHistory;
+    if (
+      !history?.readRoomQuestions ||
+      !history.readRoomQuestion ||
+      !history.findRoomQuestionByOrigin ||
+      !history.roomQuestionSummary
+    )
+      throw Error("Room question workspace persistence is unavailable");
+    return history as typeof history &
+      Required<
+        Pick<
+          AutomationTransactionStore,
+          | "readRoomQuestions"
+          | "readRoomQuestion"
+          | "findRoomQuestionByOrigin"
+          | "roomQuestionSummary"
+        >
+      >;
+  }
+  #questionOwner(roomId: string, snapshot = this.#snapshot) {
+    const room = snapshot.rooms.find(
+      (value) => value.id === roomQuestionIdentity(roomId),
+    );
+    if (!room) throw Error("Room question workspace is unavailable");
+    return room;
+  }
+  #questionWriter(roomId: string, threadId: string, snapshot = this.#snapshot) {
+    const room = this.#questionOwner(roomId, snapshot);
+    if (
+      !room.members.some(
+        (member) => member.threadId === roomQuestionIdentity(threadId),
+      )
+    )
+      throw Error("Question publisher is not a current Room workspace member");
+    return room;
+  }
+  roomQuestionSummary(roomId: string) {
+    this.#questionOwner(roomId);
+    return this.#questionHistory().roomQuestionSummary(roomId);
+  }
+  async roomQuestions(
+    roomId: string,
+    options: RoomQuestionWorkspaceReadOptions = {},
+  ) {
+    this.#questionOwner(roomId);
+    const value = await this.#questionHistory().readRoomQuestions(
+      roomId,
+      options,
+    );
+    this.#questionOwner(roomId);
+    return value;
+  }
+  async roomQuestionsAsMember(
+    roomId: string,
+    callerThreadId: string,
+    options: RoomQuestionWorkspaceReadOptions,
+    admit: () => Promise<void>,
+  ) {
+    this.#questionWriter(roomId, callerThreadId);
+    const value = await this.#questionHistory().readRoomQuestions(
+      roomId,
+      options,
+    );
+    await admit();
+    this.#questionWriter(roomId, callerThreadId);
+    return value;
+  }
+  async readRoomQuestion(roomId: string, questionId: string) {
+    this.#questionOwner(roomId);
+    const value = await this.#questionHistory().readRoomQuestion(
+      roomId,
+      questionId,
+    );
+    this.#questionOwner(roomId);
+    return value;
+  }
+  async publishRoomQuestion(
+    roomId: string,
+    origin: RoomQuestion["origin"],
+    specification: unknown,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestion> {
+    roomId = roomQuestionIdentity(roomId);
+    origin = {
+      threadId: roomQuestionIdentity(origin.threadId),
+      callItemId: roomQuestionIdentity(origin.callItemId),
+    };
+    const content = parseUserQuestionSpecification(specification);
+    const generation = this.#runningGeneration();
+    return this.#mutate(generation, async (snapshot, events) => {
+      this.#questionWriter(roomId, origin.threadId, snapshot);
+      const previous = await this.#questionHistory().findRoomQuestionByOrigin(
+        roomId,
+        origin,
+        content,
+      );
+      await admit();
+      this.#questionWriter(roomId, origin.threadId, snapshot);
+      if (previous) return previous;
+      const now = this.#now();
+      const question = canonicalRoomQuestion({
+        roomId,
+        id: randomUUID(),
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        origin,
+        specification: content,
+        state: "open",
+      });
+      events.push({ type: "question", question });
+      return structuredClone(question);
+    });
+  }
+  async updateRoomQuestion(
+    input: RoomQuestionWriteInput,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestion> {
+    const draft = structuredClone(input);
+    const specification = parseUserQuestionSpecification(draft.specification);
+    const expected = roomQuestionRevision(draft.expectedRevision);
+    const generation = this.#runningGeneration();
+    return this.#mutate(generation, async (snapshot, events) => {
+      this.#questionWriter(draft.roomId, callerThreadId, snapshot);
+      const previous = await this.#questionHistory().readRoomQuestion(
+        draft.roomId,
+        draft.questionId,
+      );
+      if (
+        !previous ||
+        previous.state !== "open" ||
+        previous.revision !== expected
+      )
+        throw Object.assign(
+          Error("Room question changed; read before editing"),
+          { code: "room_question_conflict" },
+        );
+      await admit();
+      this.#questionWriter(draft.roomId, callerThreadId, snapshot);
+      const question = canonicalRoomQuestion({
+        ...previous,
+        revision: previous.revision + 1,
+        updatedAt: this.#now(),
+        specification,
+      });
+      events.push({ type: "question", question });
+      return structuredClone(question);
+    });
+  }
+  async withdrawRoomQuestion(
+    input: Pick<
+      RoomQuestionWriteInput,
+      "roomId" | "questionId" | "expectedRevision"
+    >,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestion> {
+    const draft = structuredClone(input);
+    const expected = roomQuestionRevision(draft.expectedRevision);
+    const generation = this.#runningGeneration();
+    return this.#mutate(generation, async (snapshot, events) => {
+      this.#questionWriter(draft.roomId, callerThreadId, snapshot);
+      const previous = await this.#questionHistory().readRoomQuestion(
+        draft.roomId,
+        draft.questionId,
+      );
+      if (
+        !previous ||
+        previous.state !== "open" ||
+        previous.revision !== expected
+      )
+        throw Object.assign(
+          Error("Room question changed; read before withdrawing"),
+          { code: "room_question_conflict" },
+        );
+      await admit();
+      this.#questionWriter(draft.roomId, callerThreadId, snapshot);
+      const question = canonicalRoomQuestion({
+        ...previous,
+        revision: previous.revision + 1,
+        updatedAt: this.#now(),
+        state: "withdrawn",
+      });
+      events.push({ type: "question", question });
+      return structuredClone(question);
+    });
+  }
+  async readRoomQuestionResponse(
+    roomId: string,
+    questionId: string,
+    clientId: string,
+  ): Promise<RoomQuestionResponseReadback> {
+    clientId = roomQuestionIdentity(clientId);
+    const question = await this.readRoomQuestion(roomId, questionId);
+    const response = question?.response;
+    if (!response)
+      return { question, response: { clientId, status: "not-found" } };
+    if (response.clientId !== clientId)
+      return { question, response: { clientId, status: "conflict" } };
+    let delivery: RoomDeliveryView | undefined;
+    try {
+      delivery = this.roomOperation(roomId, response.operationId);
+    } catch {
+      /* Retained Room fact is not proof of a retained delivery receipt. */
+    }
+    return {
+      question,
+      response: {
+        clientId,
+        status: "saved",
+        messageId: response.messageId,
+        operationId: response.operationId,
+      },
+      ...(delivery ? { delivery } : {}),
+    };
+  }
+  async respondRoomQuestion(
+    input: RoomQuestionResponseInput,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestionResponseReadback> {
+    const captured = structuredClone(input);
+    roomQuestionIdentity(captured.roomId);
+    roomQuestionIdentity(captured.questionId);
+    roomQuestionIdentity(captured.clientId);
+    roomQuestionRevision(captured.expectedRevision);
+    const room = this.#questionOwner(captured.roomId);
+    const operationId = `${room.operationEpoch ?? "legacy"}:${randomUUID()}`;
+    await this.#postRoomMessage(
+      captured.roomId,
+      "You",
+      "Room workspace question response",
+      "human",
+      null,
+      null,
+      operationId,
+      undefined,
+      { input: captured, admit },
+    );
+    return this.readRoomQuestionResponse(
+      captured.roomId,
+      captured.questionId,
+      captured.clientId,
+    );
+  }
+
   assistantWorkspace(roomId: string): AssistantWorkspace {
     const room = this.#snapshot.rooms.find(
       (candidate) => candidate.id === required(roomId, "room", MAX_ID_BYTES),
@@ -2348,6 +2619,10 @@ export class ZenXTriggerService {
     originTurnId: string | null,
     operationId?: string,
     replyToMessageId?: string,
+    workspaceQuestion?: {
+      input: RoomQuestionResponseInput;
+      admit: () => Promise<void>;
+    },
   ): Promise<RoomSendOperation | undefined> {
     const generation = this.#runningGeneration();
     const normalizedRoomId = required(roomId, "room", MAX_ID_BYTES);
@@ -2356,7 +2631,7 @@ export class ZenXTriggerService {
       "author",
       MAX_MESSAGE_AUTHOR_BYTES,
     );
-    const normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
+    let normalizedText = required(text, "message", MAX_MESSAGE_TEXT_BYTES);
     const committed = await this.#mutate(
       generation,
       async (snapshot, roomEvents) => {
@@ -2364,6 +2639,100 @@ export class ZenXTriggerService {
           (entry) => entry.id === normalizedRoomId,
         );
         if (room === undefined) throw new Error("Room was not found");
+        let answeredQuestion: RoomQuestion | undefined;
+        if (workspaceQuestion) {
+          const input = workspaceQuestion.input;
+          const question = await this.#questionHistory().readRoomQuestion(
+            room.id,
+            input.questionId,
+          );
+          if (!question) throw Error("Room question was not found");
+          if (
+            question.response?.clientId !== input.clientId &&
+            (question.state !== "open" ||
+              question.revision !== input.expectedRevision)
+          )
+            throw Object.assign(
+              Error("Room question changed; review before responding"),
+              { code: "room_question_conflict" },
+            );
+          const reply = normalizeUserQuestionReply(question.specification, {
+            version: 1,
+            request: question.origin,
+            outcome: input.outcome,
+            ...(input.answers === undefined ? {} : { answers: input.answers }),
+          });
+          if (question.response?.clientId === input.clientId) {
+            const prior = question.response;
+            if (
+              prior.questionRevision !== input.expectedRevision ||
+              prior.outcome !== reply.outcome ||
+              JSON.stringify(prior.answers) !==
+                JSON.stringify(
+                  reply.outcome === "answer" ? reply.answers : undefined,
+                )
+            )
+              throw Object.assign(
+                Error(
+                  "Room question response identity belongs to different input",
+                ),
+                { code: "idempotency_conflict" },
+              );
+            await workspaceQuestion.admit();
+            return {
+              wakeups: [],
+              operation: structuredClone(
+                room.operations?.find(
+                  (operation) => operation.id === prior.operationId,
+                ),
+              ),
+            };
+          }
+          const body =
+            reply.outcome === "answer"
+              ? renderUserQuestionAnswer(question.specification, reply.answers)
+              : "I chose not to answer this question.";
+          normalizedText = `Reply to Room question ${question.id}:\n${body}`;
+          if (utf8Bytes(normalizedText) > MAX_MESSAGE_TEXT_BYTES)
+            normalizedText = `Reply to Room question ${question.id} was saved in the workspace information panel. Read that Room question for the full answer.`;
+          const operations = (room.operations ??= []);
+          while (operations.length >= MAX_ROOM_OPERATIONS) {
+            const index = operations.findIndex(
+              (operation) => operation.acknowledged,
+            );
+            if (index < 0) break;
+            operations.splice(index, 1);
+            room.operationEpoch = randomUUID();
+          }
+          if (operations.length >= MAX_ROOM_OPERATIONS)
+            throw Error(
+              "Unresolved Room operation limit reached; review pending sends",
+            );
+          operations.push({
+            id: operationId!,
+            text: normalizedText,
+            messageId: null,
+            createdAt: this.#now(),
+            acknowledged: false,
+            mentions: [],
+          });
+          answeredQuestion = canonicalRoomQuestion({
+            ...question,
+            revision: question.revision + 1,
+            updatedAt: this.#now(),
+            state: reply.outcome === "answer" ? "answered" : "cancelled",
+            response: {
+              clientId: input.clientId,
+              questionRevision: question.revision,
+              outcome: reply.outcome,
+              ...(reply.outcome === "answer" ? { answers: reply.answers } : {}),
+              messageId: "pending-room-message",
+              operationId: operationId!,
+              receivedAt: this.#now(),
+            },
+          });
+        }
+
         const operation =
           operationId === undefined
             ? undefined
@@ -2466,6 +2835,15 @@ export class ZenXTriggerService {
           }
         }
         if (operation) operation.messageId = value.id;
+        if (answeredQuestion) {
+          answeredQuestion.response!.messageId = value.id;
+          roomEvents.push({
+            type: "question",
+            question: canonicalRoomQuestion(answeredQuestion),
+          });
+          await workspaceQuestion!.admit();
+        }
+
         return {
           wakeups,
           operation:

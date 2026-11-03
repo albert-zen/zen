@@ -1,3 +1,4 @@
+import { createRoomQuestionPublisher } from "./room-question-publisher.js";
 import { browserObservationSubscribeReply } from "../preload/browser-observation-ipc.js";
 import { BoardHostService } from "./board-host-service.js";
 import { ZenXBoardCapabilityPackage } from "./capabilities/board-package.js";
@@ -642,6 +643,9 @@ async function bootstrapZenX(): Promise<void> {
   const operationalDiagnostics = (mainWindowDiagnostics ??=
     new OperationalDiagnosticLog(userDataDirectory));
   const observeAppServer = (manager: AppServerManager) => {
+    manager.setRoomQuestionPublisher(
+      createRoomQuestionPublisher(manager, () => automationService),
+    );
     manager.setRemoteRoomsHandler(
       createFleetRoomsHandler(manager, () => automationService),
     );

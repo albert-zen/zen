@@ -1,11 +1,46 @@
 import type { ToolInvocation, ToolRuntime } from "./tool.js";
+import type { UserQuestionSpecification } from "./user-question.js";
 import {
   ASK_USER_QUESTION_NAME,
   USER_QUESTION_PUBLICATION_KIND,
   parseUserQuestionSpecification,
 } from "./user-question.js";
 
+export interface RoomUserQuestionPublicationInput {
+  roomId: string;
+  origin: { threadId: string; callItemId: string };
+  specification: UserQuestionSpecification;
+}
+export interface RoomUserQuestionPublicationReceipt {
+  roomId: string;
+  questionId: string;
+  revision: number;
+}
+export type RoomUserQuestionPublisher = (
+  input: RoomUserQuestionPublicationInput,
+  signal: AbortSignal,
+) => Promise<RoomUserQuestionPublicationReceipt>;
+
 export class AskUserQuestionToolRuntime implements ToolRuntime {
+  constructor(readonly publishRoomQuestion?: RoomUserQuestionPublisher) {
+    if (publishRoomQuestion) {
+      this.specification.description = this.specification.description.replace(
+        "Questions are immutable: use a new call for a new request.",
+        "Thread questions are immutable: use a new call for a new request. Open Room resources can be revised or withdrawn through the Room tools using their current revision.",
+      );
+      this.specification.description +=
+        " To publish an independent Room workspace question, explicitly supply a Room ID discovered through the Room tools. Omit roomId to ask in this Thread. Room answers arrive as ordinary Room messages under that Room's delivery policy. Never infer a Room from membership or silently fall back to a Thread.";
+      Object.assign(this.specification.inputSchema.properties, {
+        roomId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description:
+            "Explicit target Room ID. The caller must be a current member. The Room owns the question independently of the originating Thread.",
+        },
+      });
+    }
+  }
   readonly name = ASK_USER_QUESTION_NAME;
   readonly enforcesSandbox = true;
   readonly executionMode = "parallel_safe" as const;
@@ -69,7 +104,43 @@ export class AskUserQuestionToolRuntime implements ToolRuntime {
       !invocation.canonicalToolCallId
     )
       throw new Error("ask_user_question requires a direct native model call");
-    parseUserQuestionSpecification(invocation.arguments);
+    const { roomId, ...specificationInput } = invocation.arguments;
+    const specification = parseUserQuestionSpecification(specificationInput);
+    if (roomId !== undefined) {
+      if (
+        typeof roomId !== "string" ||
+        !roomId ||
+        roomId.trim() !== roomId ||
+        roomId.length > 512 ||
+        /[\u0000-\u001f\u007f]/u.test(roomId)
+      )
+        throw new Error("Exact bounded Room ID required");
+      if (!this.publishRoomQuestion)
+        throw new Error(
+          "Room question publication is unavailable on this Host",
+        );
+      const receipt = await this.publishRoomQuestion(
+        {
+          roomId,
+          origin: {
+            threadId: invocation.threadId,
+            callItemId: invocation.canonicalToolCallId,
+          },
+          specification,
+        },
+        invocation.signal,
+      );
+      // The Room service owns this receipt. It is deliberately not the native
+      // Thread publication marker and never enters the Thread question index.
+      return {
+        exitCode: 0,
+        output: JSON.stringify({
+          kind: "zen.room-question.published",
+          version: 1,
+          ...receipt,
+        }),
+      };
+    }
     return {
       exitCode: 0,
       output: JSON.stringify({
