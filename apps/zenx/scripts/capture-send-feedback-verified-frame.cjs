@@ -274,7 +274,7 @@ async function inspectMountedTranscript(
         key:row.closest('[data-transcript-row-key]')?.dataset.transcriptRowKey??null};
     });
     if(virtual)rows.sort((a,b)=>a.top-b.top);
-    const c=content.getBoundingClientRect(), footer=content.querySelector('.virtual-transcript-footer'), f=postTiming?footer?.getBoundingClientRect():null, composer=postTiming?document.querySelector('.bottom-zone')?.getBoundingClientRect():null;
+    const c=content.getBoundingClientRect(), footer=content.querySelector('.virtual-transcript-footer'), f=footer?.getBoundingClientRect(), composer=postTiming?document.querySelector('.bottom-zone')?.getBoundingClientRect():null;
     const ordered=Array.from(scroller.querySelectorAll('section.turn'));
     const last=virtual?ordered.find(row=>row.querySelector('article.user-row[data-sent-message-id]')?.dataset.sentMessageId===rows.at(-1)?.userId):ordered.at(-1);
     const lastRect=postTiming?(virtual?rows.at(-1):last?.getBoundingClientRect()):null;
@@ -376,18 +376,72 @@ async function inspectMountedTranscript(
     "Actual transcript contains mounted Turn rows",
   );
   assert.equal(new Set(indices).size, indices.length);
-  assert.ok(
-    indices.every((index, i) => i === 0 || index === indices[i - 1] + 1),
-    "Geometry-ordered mounted rows preserve contiguous canonical order",
+  const canonicalContiguous = indices.every(
+    (index, i) => i === 0 || index === indices[i - 1] + 1,
   );
   if (snapshot.virtual) {
+    // Legend may retain bounded rows outside its visible buffer. Those rows
+    // must remain ordered/owned, but need not fill the offscreen interval.
+    assert.ok(
+      indices.every((index, i) => i === 0 || index > indices[i - 1]),
+      "Geometry-ordered mounted rows preserve canonical order",
+    );
+    assert.ok(
+      visibleIndices.length > 0,
+      "Real viewport contains a canonical row",
+    );
+    assert.ok(
+      visibleIndices.every(
+        (index, i) => i === 0 || index === visibleIndices[i - 1] + 1,
+      ),
+      "Visible rows preserve contiguous canonical order",
+    );
+    const visible = snapshot.rows.filter((row) => row.visible === true);
+    const maxGap = snapshot.rowGapPx + 1.5;
+    assert.ok(Number.isFinite(maxGap) && maxGap >= 0);
+    assert.ok(
+      visible.every(
+        (row, i) =>
+          i === 0 ||
+          (row.top - visible[i - 1].bottom >= -1.5 &&
+            row.top - visible[i - 1].bottom <= maxGap),
+      ),
+      "Visible canonical rows have no unexplained physical gap or overlap",
+    );
+    assert.ok(
+      visibleIndices[0] === 0 ||
+        visible[0].top <= snapshot.viewport.top + maxGap,
+      "Visible canonical coverage reaches the viewport leading edge",
+    );
+    const footerCanEndCoverage =
+      visibleIndices.at(-1) === canonicalTurns.length - 1 &&
+      Number.isFinite(snapshot.spacing.footerTop) &&
+      snapshot.spacing.footerTop < snapshot.viewport.bottom;
+    if (footerCanEndCoverage)
+      assert.ok(
+        snapshot.spacing.footerTop >= visible.at(-1).bottom - 1.5,
+        "Actual footer cannot precede the final visible canonical row",
+      );
+    const trailingEdge = footerCanEndCoverage
+      ? snapshot.spacing.footerTop
+      : snapshot.viewport.bottom;
+    assert.ok(
+      visible.at(-1).bottom >= trailingEdge - maxGap,
+      "Visible canonical coverage reaches the viewport or actual footer",
+    );
     assert.ok(
       snapshot.turnBlocks < 200,
       "Legend keeps mounted DOM bounded, not a fixed tail page",
     );
     assert.equal(snapshot.virtualRows, snapshot.turnBlocks);
     assert.equal(snapshot.contentDisplay, "block");
-  } else assert.equal(snapshot.turnBlocks, canonicalTurns.length);
+  } else {
+    assert.ok(
+      canonicalContiguous,
+      "Full-DOM mounted rows preserve contiguous canonical order",
+    );
+    assert.equal(snapshot.turnBlocks, canonicalTurns.length);
+  }
   delete snapshot.rows;
   return {
     ...snapshot,
@@ -397,17 +451,21 @@ async function inspectMountedTranscript(
       rendererRowRectReads: snapshot.virtual ? indices.length : 0,
       rendererContentRectReads: 1,
       rendererViewportRectReads: 1,
+      rendererFooterRectReads: snapshot.virtual ? 1 : 0,
       rendererPostTimingSpacingRectReads:
-        stage === "before"
-          ? 0
-          : (snapshot.virtual ? 0 : 1) + (snapshot.virtual ? 1 : 0) + 1,
+        stage === "before" ? 0 : (snapshot.virtual ? 0 : 1) + 1,
       withinSendTiming: false,
     },
     canonicalMembers: indices.length,
     uniqueCanonicalIndices: indices.length,
     firstCanonicalIndex: indices[0],
     lastCanonicalIndex: indices.at(-1),
-    canonicalContiguous: true,
+    canonicalContiguous,
+    viewportCanonicalContiguous: snapshot.virtual
+      ? visibleIndices.every(
+          (index, i) => i === 0 || index === visibleIndices[i - 1] + 1,
+        )
+      : null,
     exactCanonicalSuffix: indices.at(-1) === canonicalTurns.length - 1,
   };
 }
