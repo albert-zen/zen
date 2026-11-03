@@ -53,7 +53,7 @@ test("idle AX work has an explicit completion-based 250ms cooldown", () => {
   assert.equal(cooldown, 0.25);
   assert.match(
     swiftFunction("sample"),
-    /if !owns\(checkTitle: checkTitle\) \{ drift = true \}/,
+    /if !owns\(checkTitle: checkTitle\) \{ latchDrift\(ownershipFailure\) \}/,
   );
   assert.match(
     swiftFunction("sample"),
@@ -131,7 +131,7 @@ test("sampling never clears drift and historical activation owner latches an exc
   assert.doesNotMatch(swiftFunction("sampleIdle"), /drift = false/);
   assert.match(
     native,
-    /notification\.userInfo\?\[NSWorkspace\.applicationUserInfoKey\].*activated\.processIdentifier != expectedPid \{ drift = true \}/,
+    /notification\.userInfo\?\[NSWorkspace\.applicationUserInfoKey\].*activated\.processIdentifier != expectedPid \{ latchDrift\("application-activated", activated\.processIdentifier\) \}/,
   );
 });
 
@@ -148,7 +148,7 @@ test("activation callbacks cannot revive or contaminate a retired guard epoch", 
       reset,
     )?.[1];
   const ownerExpression =
-    /(activated\.processIdentifier != expectedPid) \{ drift = true \}/.exec(
+    /(activated\.processIdentifier != expectedPid) \{ latchDrift\("application-activated", activated\.processIdentifier\) \}/.exec(
       reset,
     )?.[1];
   assert(epochExpression && ownerExpression);
@@ -283,7 +283,7 @@ test("startup baseline follows normal setup and precedes the first provider work
   const { ast, statements } = startupStatements();
   const text = statements.map((statement) => statement.getText(ast));
   const guard = text.findIndex((value) =>
-    value.startsWith('await native.call("guard",'),
+    value.startsWith("const startupGuard ="),
   );
   const baseline = text.findIndex((value) =>
     value.startsWith("const beforeOpen ="),
@@ -323,6 +323,7 @@ async function validateActualStartup(beforeOpen, afterOpen) {
     browserRpc: { send: async () => ({ windowId: 7 }) },
     userRpc: { evaluate: async () => afterOpen },
     agentRpc: { evaluate: async () => ({ visibility: "hidden" }) },
+    recordNative: (state) => state,
     native: {
       call: async (method) => {
         assert.equal(method, "snapshot");
@@ -395,6 +396,11 @@ let idleTitleCooldown = ${cooldown}
 var nextIdleTitleSampleAt = 0.0
 var titleSamples = 0
 var guardEpoch = 0
+var guardStartedAt = 0.0
+var firstDrift: [String:Any]? = nil
+var ownershipFailure = "none"
+var axFocusedWindowStatus: Int32 = 0
+var axTitleStatus: Int32 = 0
 protocol NSObjectProtocol {}
 class Observer: NSObjectProtocol {}
 enum Queue { case main }
@@ -425,6 +431,7 @@ func currentPid() -> pid_t { activePid }
 func AXIsProcessTrusted() -> Bool { true }
 func titleFor(_ pid: pid_t) -> String { starts.append(clock); clock += cost; completions.append(clock); titleCalls += 1; return title }
 ${swiftFunction("owns")}
+${swiftFunction("latchDrift")}
 ${swiftFunction("sample")}
 ${swiftFunction("sampleIdle")}
 ${swiftFunction("resetGuard")}
@@ -438,9 +445,11 @@ precondition(titleCalls == before)
 activePid = 8
 sampleIdle()
 precondition(drift)
+let firstCause = firstDrift!["reason"] as! String
+precondition(firstCause == "foreground-pid-changed")
 activePid = 7
 sampleIdle()
-precondition(drift)
+precondition(drift && firstDrift!["reason"] as! String == firstCause)
 drift = false
 title = "other window"
 precondition(!owns())
@@ -495,3 +504,150 @@ print("actual Swift sampler contract passed")
     }
   },
 );
+
+function actualBaselineValidator() {
+  const ast = ts.createSourceFile(
+    "fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const fn = ast.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "assertNativeFixtureBaseline",
+  );
+  assert(fn);
+  const executable = ts.transpileModule(
+    fn.getText(ast).replace("export ", ""),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  return runInNewContext(`${executable}; assertNativeFixtureBaseline`, {
+    assert,
+  });
+}
+
+test("actual native baseline rejects a guard already dirty before any provider work", () => {
+  const validate = actualBaselineValidator();
+  const expected = { pid: 7, hwnd: undefined };
+  validate({ ...expected, drift: false }, expected);
+  assert.throws(
+    () => validate({ ...expected, drift: true }, expected),
+    /already dirty before provider startup/,
+  );
+  assert.throws(
+    () => validate({ ...expected, pid: 8, drift: false }, expected),
+    /baseline PID changed/,
+  );
+  assert.throws(
+    () => validate({ pid: 7, hwnd: "other", drift: false }, expected),
+    /baseline HWND changed/,
+  );
+  const { ast, statements } = startupStatements();
+  const text = statements.map((statement) => statement.getText(ast));
+  const armed = text.findIndex((value) =>
+    value.startsWith("const startupGuard ="),
+  );
+  const checked = text.findIndex((value) =>
+    value.startsWith("assertNativeFixtureBaseline(startupGuard"),
+  );
+  const provider = text.findIndex((value) =>
+    value.startsWith("connection = await connectUserBrowserCdp("),
+  );
+  assert(armed >= 0 && checked > armed && provider > checked);
+  assert.equal(
+    text
+      .slice(checked + 1, provider)
+      .some((value) => /native.call\("(?:clear|guard)"/.test(value)),
+    false,
+  );
+});
+
+test("native first-drift evidence separates AX read failure, title mismatch and real activation without weakening latches", () => {
+  assert.match(swiftFunction("owns"), /foreground-pid-changed/);
+  assert.match(swiftFunction("owns"), /ax-focused-window-unavailable/);
+  assert.match(swiftFunction("owns"), /ax-title-unavailable/);
+  assert.match(swiftFunction("owns"), /focused-window-title-mismatch/);
+  const latch = swiftFunction("latchDrift");
+  assert.match(latch, /if firstDrift == nil/);
+  assert.match(latch, /drift = true/);
+  assert.doesNotMatch(latch, /expectedTitle|titleFor|drift = false/);
+  assert.match(swiftFunction("state"), /result\["firstDrift"\] = firstDrift/);
+});
+
+async function actualFailureReport({ failWrite = false } = {}) {
+  const ast = ts.createSourceFile(
+    "fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const main = ast.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "main",
+  );
+  const block = main.body.statements.find(ts.isTryStatement).catchClause.block;
+  const executable = ts.transpileModule(
+    `async function report(error) ${block.getText(ast)}`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const original = new Error("Synthetic native foreground failure");
+  const writes = [];
+  let observed;
+  try {
+    await runInNewContext(`${executable}; report(error)`, {
+      error: original,
+      Error,
+      diagnosticOutcome: "running",
+      process: {
+        platform: "darwin",
+        env: { ZENX_PARALLEL_INPUT_ARTIFACT_DIR: "/synthetic-artifacts" },
+      },
+      reports: [],
+      nativeCheckpoints: [
+        {
+          phase: "startup-native-guard",
+          state: {
+            pid: 7,
+            drift: true,
+            firstDrift: { reason: "ax-title-unavailable" },
+          },
+        },
+      ],
+      phase: "startup-native-guard",
+      transportDiagnostics: [],
+      transportDropped: 0,
+      browser: undefined,
+      browserError: "",
+      console: { error() {} },
+      mkdir: async () => {},
+      path,
+      writeFile: async (file, data) => {
+        writes.push({ file, data });
+        if (failWrite) throw Error("Synthetic unavailable artifact directory");
+      },
+    });
+  } catch (error) {
+    observed = error;
+  }
+  assert.equal(
+    observed,
+    original,
+    "reporting cannot replace the original failure",
+  );
+  assert.equal(writes.length, 1);
+  assert.equal(
+    writes[0].file,
+    "/synthetic-artifacts/browser-parallel-input.json",
+  );
+  return JSON.parse(writes[0].data);
+}
+
+test("actual failure path retains native first-cause evidence as artifact and preserves original errors", async () => {
+  const report = await actualFailureReport();
+  assert.equal(report.status, "failed");
+  assert.equal(
+    report.nativeCheckpoints[0].state.firstDrift.reason,
+    "ax-title-unavailable",
+  );
+  await actualFailureReport({ failWrite: true });
+});
