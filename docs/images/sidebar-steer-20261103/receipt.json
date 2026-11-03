@@ -1,9 +1,9 @@
 {
   "synthetic": true,
-  "head": "01d937c745e264d18fbcfa8203b0bb6c17701abf",
-  "sourceCommit": "2fc84b487f990e62629ca64aa90fdaa2f1e1b143",
-  "tree": "ba532c1f9e3d83fe0d562e9f1ad0caaa3c2d0468",
-  "run": "https://github.com/albert-zen/zen/actions/runs/41642613873",
+  "head": "b79f72c790d3fc5a0be55310cb3f4519cfd95dee",
+  "sourceCommit": "2a9989d9fec236fbc8ebe9145e07412d8d1d20ba",
+  "tree": "3f72e8ba8e488aec74d97c2da9bf88315aef90e6",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41646459860",
   "scope": "Disposable production Electron App and Host with synthetic files, conversations and fake-provider data only. OS sidebar input uses unchanged production native helper/transport, not a full Computer facade authorization/capture admission E2E. Tested fullscreen File resource shared heading, not Subagents-specific content. Steer images are isolated production-component previews, 390x900 and 1440x900, with DOM details expansion and no Host recall invocation.",
   "sidebarOsInput": {
     "status": "passed",
@@ -14,7 +14,7 @@
     {
       "label": "Expand sidebar using actual bound macOS pointer",
       "receipt": {
-        "pid": 3327,
+        "pid": 11861,
         "windowId": 24,
         "posted": {
           "dispatch": "posted",
@@ -26,7 +26,7 @@
     {
       "label": "Expand sidebar using actual bound macOS pointer",
       "receipt": {
-        "pid": 3327,
+        "pid": 11861,
         "windowId": 24,
         "posted": {
           "dispatch": "posted",
@@ -152,9 +152,9 @@
   "screenshotHashes": {
     "pending-settled.png": "64e9f98f8af48ad937f235a1ae7cf5f8dffc455a1e2b4e85446f7a9f40a9b890",
     "steer-narrow.png": "597ae3754f27e23bdf073f89f6065654b325127d316bec30f087b26b49f0e205",
-    "04-maximized-main-dock.png": "ab8857e4c9ea716d26621f3a26dc601a05a3b7ee328fadb2cfebe981a65599f3",
+    "04-maximized-main-dock.png": "e51864e229db20816d44ffbeae0dfee081704d764006532efaff31d585d6aa75",
     "steer-wide-dark.png": "d55c2a64fc52a7c9fd68b90e4c3dd97582e97c4ca3126dd06bef4704ba4fad93",
-    "steer-wide-light.png": "d21d8a215f8fb05691a4909db1a33c6f06b9bba4e68d200fcfd73bf5ba33ecf9",
-    "15-macos-system-sidebar-click.png": "1298f63fed394da78eceaa31d9542305fb2910481ba5159c7b9c4dd36e678d84"
+    "steer-wide-light.png": "d31c93a05635e31e8ea9a1228885e1fb6cbf452b5fcad43bdb80f3c943967da6",
+    "15-macos-system-sidebar-click.png": "b1cb3a70e52872c49568d477b206af5fff947bf44948c88656b35dd11f5ada61"
   }
 }

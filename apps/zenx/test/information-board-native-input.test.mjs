@@ -225,7 +225,7 @@ test("synthetic click cannot acknowledge native delivery or trigger an input ret
   const f = await clickFixture({ trusted: false });
   await assert.rejects(
     f.click("button", "Hide one widget"),
-    /trusted native click delivered/,
+    /trusted Chromium click delivered/,
   );
   assert.deepEqual(f.events, ["mouseDown", "mouseUp", "DOM click delivered"]);
   assert.deepEqual(f.result.steps, []);
