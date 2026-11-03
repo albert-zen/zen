@@ -48,12 +48,20 @@ export function prepareLegendList({
     throw new Error(
       `Unexpected LegendList web source ${before}; expected pinned 3.3.5. No patch applied.`,
     );
-  const args = ["--directory=" + localPath, "--whitespace=nowarn", patchPath];
+  // Git may check out the patch with CRLF, but npm's pinned ESM bytes use LF.
+  // Normalize only the patch in memory; keep both installed-blob checks exact.
+  const patch = readFileSync(patchPath, "utf8").replace(/\r\n/g, "\n");
+  const args = ["--directory=" + localPath, "--whitespace=nowarn", "-"];
   execFileSync("git", ["apply", "--check", ...args], {
     cwd: root,
     stdio: "pipe",
+    input: patch,
   });
-  execFileSync("git", ["apply", ...args], { cwd: root, stdio: "pipe" });
+  execFileSync("git", ["apply", ...args], {
+    cwd: root,
+    stdio: "pipe",
+    input: patch,
+  });
   if (blobHash(readFileSync(modulePath)) !== patchedBlob)
     throw new Error(
       "LegendList patch result does not match the exact reviewed web blob.",

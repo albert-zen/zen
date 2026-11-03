@@ -25,6 +25,10 @@ const modulePath = fileURLToPath(import.meta.resolve("@legendapp/list/react"));
 const patchPath = fileURLToPath(
   new URL("../patches/legend-list-3.3.5-react.patch", import.meta.url),
 );
+const scriptPath = fileURLToPath(
+  new URL("../scripts/prepare-legend-list.mjs", import.meta.url),
+);
+const patch = readFileSync(patchPath, "utf8").replace(/\r\n/g, "\n");
 const scratch = resolve(root, ".test-tmp");
 mkdirSync(scratch, { recursive: true });
 function fixture(run) {
@@ -36,13 +40,8 @@ function fixture(run) {
   if (blobHash(readFileSync(module)) === patchedBlob)
     execFileSync(
       "git",
-      [
-        "apply",
-        "--reverse",
-        "--directory=node_modules/@legendapp/list",
-        patchPath,
-      ],
-      { cwd: directory },
+      ["apply", "--reverse", "--directory=node_modules/@legendapp/list", "-"],
+      { cwd: directory, input: patch },
     );
   assert.equal(blobHash(readFileSync(module)), originalBlob);
   try {
@@ -63,6 +62,53 @@ test("exact web-only patch applies once and produces the reviewed T3-plus-Zen bl
       "already patched",
     );
   }));
+for (const autocrlf of [false, true]) {
+  test(`preparer CLI accepts a core.autocrlf=${autocrlf} patch checkout without changing reviewed bytes`, () =>
+    fixture((directory, module) => {
+      const localScript = resolve(
+        directory,
+        "apps/zenx/scripts/prepare-legend-list.mjs",
+      );
+      const localPatch = resolve(
+        directory,
+        "apps/zenx/patches/legend-list-3.3.5-react.patch",
+      );
+      mkdirSync(dirname(localScript), { recursive: true });
+      mkdirSync(dirname(localPatch), { recursive: true });
+      copyFileSync(scriptPath, localScript);
+      copyFileSync(
+        resolve(dirname(modulePath), "package.json"),
+        resolve(dirname(module), "package.json"),
+      );
+      writeFileSync(localPatch, patch);
+      execFileSync("git", ["-c", "core.autocrlf=false", "add", localPatch], {
+        cwd: directory,
+      });
+      rmSync(localPatch);
+      execFileSync(
+        "git",
+        ["-c", `core.autocrlf=${autocrlf}`, "checkout", "--", localPatch],
+        { cwd: directory },
+      );
+      const checkedOutPatch = readFileSync(localPatch);
+      assert.equal(
+        checkedOutPatch.toString(),
+        autocrlf ? patch.replace(/\n/g, "\r\n") : patch,
+      );
+      assert.equal(blobHash(readFileSync(module)), originalBlob);
+      for (const expected of ["patched", "already patched"]) {
+        assert.equal(
+          execFileSync(process.execPath, [localScript], {
+            cwd: directory,
+            encoding: "utf8",
+          }).trim(),
+          `LegendList web: ${expected}`,
+        );
+        assert.equal(blobHash(readFileSync(module)), patchedBlob);
+        assert.deepEqual(readFileSync(localPatch), checkedOutPatch);
+      }
+    }));
+}
 test("unknown package bytes are rejected without a write", () =>
   fixture((directory, module) => {
     writeFileSync(module, "unexpected source");
@@ -72,6 +118,26 @@ test("unknown package bytes are rejected without a write", () =>
     );
     assert.equal(readFileSync(module, "utf8"), "unexpected source");
   }));
+test("CRLF installed source is rejected rather than normalized", () =>
+  fixture((directory, module) => {
+    const source = readFileSync(module, "utf8").replace(/\n/g, "\r\n");
+    writeFileSync(module, source);
+    assert.throws(
+      () => prepareLegendList({ root: directory, modulePath: module }),
+      /Unexpected LegendList web source/,
+    );
+    assert.equal(readFileSync(module, "utf8"), source);
+  }));
+test("a real dependency outside the requested checkout is rejected without a write", () =>
+  fixture((directory, module) => {
+    const otherCheckout = resolve(directory, "other-checkout");
+    mkdirSync(otherCheckout);
+    assert.throws(
+      () => prepareLegendList({ root: otherCheckout, modulePath: module }),
+      /outside this checkout/,
+    );
+    assert.equal(blobHash(readFileSync(module)), originalBlob);
+  }));
 test("an external/shared dependency symlink is rejected before mutation", () =>
   fixture((directory, module) => {
     const external = resolve(directory, "shared-package/react.mjs");
@@ -79,6 +145,19 @@ test("an external/shared dependency symlink is rejected before mutation", () =>
     copyFileSync(module, external);
     rmSync(module);
     symlinkSync(external, module);
+    assert.throws(
+      () => prepareLegendList({ root: directory, modulePath: module }),
+      /symlinked\/shared/,
+    );
+    assert.equal(blobHash(readFileSync(external)), originalBlob);
+  }));
+test("a symlinked package directory is rejected before mutation", () =>
+  fixture((directory, module) => {
+    const external = resolve(directory, "shared-package/react.mjs");
+    mkdirSync(dirname(external), { recursive: true });
+    copyFileSync(module, external);
+    rmSync(dirname(module), { recursive: true });
+    symlinkSync(dirname(external), dirname(module), "junction");
     assert.throws(
       () => prepareLegendList({ root: directory, modulePath: module }),
       /symlinked\/shared/,
