@@ -28,6 +28,14 @@ export class FileItemListStore {
   readonly #directory: string;
   readonly #phase:
     ((phase: PublicationPhase) => void | Promise<void>) | undefined;
+  #verifiedAppend:
+    | {
+        threadId: string;
+        bytes: Buffer;
+        items: ContextItem[];
+        ids: Set<string>;
+      }
+    | undefined;
   #chain: Promise<unknown> = Promise.resolve();
   constructor(
     directory: string,
@@ -183,6 +191,7 @@ export class FileItemListStore {
         const operation = action().catch((error: unknown) => {
           active = false;
           retained = undefined;
+          this.#verifiedAppend = undefined;
           failure = { error };
           throw error;
         });
@@ -199,12 +208,20 @@ export class FileItemListStore {
       const load = async () => {
         if (retained === undefined) {
           const bytes = await this.#bytes(threadId);
-          const decoded = this.#decode(threadId, bytes);
-          retained = {
-            bytes,
-            items: freezeSnapshot(decoded.items),
-            ids: decoded.ids,
-          };
+          const known = this.#verifiedAppend;
+          if (known?.threadId === threadId && bytes.equals(known.bytes)) {
+            retained = { bytes, items: known.items, ids: known.ids };
+          } else {
+            const decoded = this.#decode(threadId, bytes);
+            retained = {
+              bytes,
+              items: freezeSnapshot(decoded.items),
+              ids: decoded.ids,
+            };
+          }
+          // The owned file is still read in full for every operation. Only exact
+          // byte equality can reuse a private immutable decoded prefix.
+          this.#verifiedAppend = { threadId, ...retained };
         }
         return retained;
       };
@@ -246,6 +263,7 @@ export class FileItemListStore {
             }
             for (const id of addedIds) prior.ids.add(id);
             retained = { bytes, items: combined, ids: prior.ids };
+            this.#verifiedAppend = { threadId, ...retained };
           });
         },
       };
@@ -256,6 +274,9 @@ export class FileItemListStore {
         await pending;
         if (failure !== undefined) throw failure.error;
         return result;
+      } catch (error) {
+        this.#verifiedAppend = undefined;
+        throw error;
       } finally {
         active = false;
         await pending;

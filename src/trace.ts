@@ -118,6 +118,17 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
   readonly #next = new Map<string, number>();
   readonly #artifactQueues = new Map<string, Promise<unknown>>();
   readonly #segments = new Map<string, string>();
+  // A single recently read Thread, not a read-authority or lifecycle cache.
+  // Reuse requires reading all current owned bytes and exact prefix equality.
+  #verifiedRead:
+    | {
+        threadId: string;
+        segments: Map<
+          string,
+          { bytes: Buffer; records: readonly TraceRecord[]; lines: number }
+        >;
+      }
+    | undefined;
   readonly #initializedDirectories = new Map<
     string,
     readonly { dev: number; ino: number }[]
@@ -673,6 +684,8 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         .filter((name) => name.endsWith(".jsonl"))
         .sort();
     } catch (error) {
+      if (this.#verifiedRead?.threadId === threadId)
+        this.#verifiedRead = undefined;
       if (isCode(error, "ENOENT"))
         return { records, issues, completeness: "complete" };
       return {
@@ -681,6 +694,19 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         completeness: "unavailable",
       };
     }
+    const verified =
+      this.#verifiedRead?.threadId === threadId
+        ? this.#verifiedRead
+        : {
+            threadId,
+            segments: new Map<
+              string,
+              { bytes: Buffer; records: readonly TraceRecord[]; lines: number }
+            >(),
+          };
+    this.#verifiedRead = verified;
+    for (const name of verified.segments.keys())
+      if (!segments.includes(name)) verified.segments.delete(name);
     for (const segment of segments) {
       let bytes: Buffer;
       try {
@@ -690,6 +716,7 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         );
         await this.#assertDirectories("threads", threadId);
       } catch (error) {
+        verified.segments.delete(segment);
         issues.push({
           kind: "read_failure",
           message: describe(error),
@@ -697,12 +724,24 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         });
         continue;
       }
-      let offset = 0,
-        line = 0;
+      const prior = verified.segments.get(segment);
+      const samePrefix =
+        prior !== undefined &&
+        prior.bytes.length <= bytes.length &&
+        bytes.subarray(0, prior.bytes.length).equals(prior.bytes);
+      // Each caller gets detached values; mutating a result cannot poison the
+      // validated prefix. No timestamp, size or hash-only shortcut proves it.
+      const segmentRecords: TraceRecord[] = samePrefix
+        ? structuredClone([...prior.records])
+        : [];
+      let offset = samePrefix ? prior.bytes.length : 0,
+        line = samePrefix ? prior.lines : 0;
+      let invalid = false;
       while (offset < bytes.length) {
         line++;
         const end = bytes.indexOf(10, offset);
         if (end < 0) {
+          invalid = true;
           issues.push({
             kind: "partial_frame",
             message: `Uncommitted trailing bytes (${bytes.length - offset}) preserved`,
@@ -723,8 +762,9 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
             frame.sha256 !== digest(JSON.stringify(frame.record))
           )
             throw new Error("Trace frame identity or checksum mismatch");
-          records.push(frame.record);
+          segmentRecords.push(frame.record);
         } catch (error) {
+          invalid = true;
           issues.push({
             kind: "invalid_frame",
             message: describe(error),
@@ -734,6 +774,19 @@ export class FileTraceStore implements RuntimeTrace, TraceReader {
         }
         offset = end + 1;
       }
+      for (const record of segmentRecords) records.push(record);
+      if (invalid) verified.segments.delete(segment);
+      else if (!samePrefix || prior.bytes.length !== bytes.length)
+        verified.segments.set(segment, {
+          bytes,
+          records: samePrefix
+            ? [
+                ...prior.records,
+                ...structuredClone(segmentRecords.slice(prior.records.length)),
+              ]
+            : structuredClone(segmentRecords),
+          lines: line,
+        });
     }
     records.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
     const seen = new Set<string>();

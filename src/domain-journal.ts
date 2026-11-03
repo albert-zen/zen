@@ -550,10 +550,10 @@ export class DomainThreadJournal implements ThreadJournal {
       .map((entry) => entry.item);
   }
   async assertRecoverySafe(threadId: string): Promise<void> {
-    const verify = async () => {
+    const verify = async (snapshot?: ItemListAppendSnapshot) => {
       const compiled =
         this.#owner !== undefined && !this.#uncertain.has(threadId)
-          ? await this.#reconcileCompilation(threadId)
+          ? await this.#reconcileCompilation(threadId, snapshot)
           : undefined;
       if (this.#uncertain.has(threadId))
         throw new ThreadJournalAppendOutcomeUnknownError(
@@ -584,7 +584,12 @@ export class DomainThreadJournal implements ThreadJournal {
           "Original runtime configuration unavailable; cannot dispatch",
         );
     };
-    if (this.#owner !== undefined) await this.#operation(threadId, verify);
+    if (this.#owner !== undefined)
+      await this.#operation(threadId, async () => {
+        if (await this.#items.exists(threadId))
+          await this.#items.withAppendSnapshot(threadId, verify);
+        else await verify();
+      });
     else await verify();
   }
   async listThreadIds(): Promise<string[]> {
