@@ -100,6 +100,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
   });
   let current: ZenXPluginSnapshot = { ...snapshot, information: [] };
   let threadId = "fixture";
+  let revealSignal = 0;
   localStorage.setItem("zenx.information.pin.thread:fixture", "fixture:info");
   function Harness() {
     const theme = useAppearance();
@@ -108,6 +109,7 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       registry,
       resourcePanelWidth: 480,
       owner: { kind: "thread", threadId },
+      revealSignal,
       theme,
       navigate() {},
       executeCommand: async () => null,
@@ -330,6 +332,24 @@ test("Board uses one headerless toggle, measures Browser coexistence and retires
       document.querySelector(".information-popover") === null,
       "owner changes close presentation without auto-opening the next owner",
     );
+    threadId = "fixture";
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "returning to an owner restores the visibility it was left with",
+    );
+    threadId = "another-owner";
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover") === null,
+      "an owner that was never opened still starts closed",
+    );
+    revealSignal = 1;
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.ok(
+      document.querySelector(".information-popover"),
+      "a foreground attention signal reveals the current owner's surface",
+    );
     await click(".information-toolbar button");
     current = { ...snapshot, information: [] };
     await act(async () => root.render(React.createElement(Harness)));
@@ -380,4 +400,94 @@ test("information reserves its slot, uses neutral pressed state and keeps primar
   assert.match(app, /const appearance = useAppearance\(\)/);
   assert.match(app, /theme=\{appearance\}/);
   assert.doesNotMatch(app, /document\.documentElement\.dataset\.theme/);
+});
+
+test("native-only information remembers Thread and Room visibility across remounts, reveals once, and keeps focus", async () => {
+  const dom = new JSDOM(
+    '<button id="outside">Composer</button><main class="workspace"><div id="root"></div></main>',
+    { url: "https://zenx.local" },
+  );
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    localStorage: dom.window.localStorage,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const root = createRoot(document.getElementById("root")!);
+  const outside = document.getElementById("outside")!;
+  const render = (
+    owner:
+      { kind: "thread"; threadId: string } | { kind: "room"; roomId: string },
+    signal = 0,
+  ) =>
+    act(async () =>
+      root.render(
+        React.createElement(PluginInformationHost, {
+          key: JSON.stringify(owner),
+          owner,
+          snapshot: { ...snapshot, information: [] },
+          registry: createPluginUiRegistry(),
+          theme: "light",
+          managedBoard: true,
+          contextContent: React.createElement("button", {}, "Native question"),
+          revealSignal: signal,
+          navigate() {},
+          executeCommand: async () => null,
+          readHandle: async () => null,
+        }),
+      ),
+    );
+  const expanded = () =>
+    document
+      .querySelector(".information-toolbar button")
+      ?.getAttribute("aria-expanded");
+  const toggle = () =>
+    act(async () =>
+      document
+        .querySelector<HTMLButtonElement>(".information-toolbar button")!
+        .click(),
+    );
+  try {
+    await render({ kind: "thread", threadId: "memory-thread" });
+    assert.equal(expanded(), "false");
+    outside.focus();
+    await render({ kind: "thread", threadId: "memory-thread" }, 1);
+    assert.equal(
+      expanded(),
+      "true",
+      "attention opens native content even without plugin contributions",
+    );
+    assert.ok(
+      document.activeElement === outside,
+      "automatic reveal never takes focus",
+    );
+    await render({ kind: "room", roomId: "memory-room" });
+    assert.equal(expanded(), "false", "Room does not inherit Thread state");
+    await toggle();
+    await render({ kind: "thread", threadId: "memory-thread" }, 1);
+    assert.equal(
+      expanded(),
+      "true",
+      "Thread visibility survives keyed remount",
+    );
+    await toggle();
+    await render({ kind: "room", roomId: "memory-room" });
+    assert.equal(expanded(), "true", "Room retains its independent visibility");
+    await render({ kind: "thread", threadId: "memory-thread" }, 1);
+    assert.equal(
+      expanded(),
+      "false",
+      "old attention does not undo explicit dismissal",
+    );
+    outside.focus();
+    await render({ kind: "thread", threadId: "memory-thread" }, 2);
+    assert.equal(expanded(), "true", "a later question can reveal again");
+    assert.ok(
+      document.activeElement === outside,
+      "later attention also keeps focus",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
 });

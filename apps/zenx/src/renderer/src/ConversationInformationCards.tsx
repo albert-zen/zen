@@ -4,6 +4,7 @@ import React, {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,9 +18,11 @@ import {
 import {
   sidebarTriggerAdmissionId,
   useSidebarTriggers,
+  type SidebarTrigger,
 } from "./sidebar-thread-information.js";
 import { triggerSourceRoute } from "./message-source-navigation.js";
 import { Icon } from "./icons.js";
+import { localErrorDetail } from "../../local-error-detail.js";
 import type { InformationType } from "../../information-layout.js";
 
 type ConversationInformationProps = {
@@ -56,7 +59,7 @@ export function ConversationInformationCards(
   );
 }
 
-/** Read-only projections; canonical summary/admission/attention changes still render. */
+/** Bounded projections with explicit native trigger controls; canonical summary/admission/attention changes still render. */
 function ConversationInformationContent({
   threadId,
   threads,
@@ -92,6 +95,61 @@ function ConversationInformationContent({
   const subagents = snapshot.panels.find(
     (panel) => panel.pluginId === "zenx-subagents",
   );
+  const [busyTrigger, setBusyTrigger] = useState<string | null>(null);
+  const [triggerError, setTriggerError] = useState<string | null>(null);
+  const busy = useRef(false);
+  const current = useRef<{
+    threadId: string;
+    admissionId: string | null;
+    triggers: readonly SidebarTrigger[];
+  } | null>(null);
+  useLayoutEffect(() => {
+    current.current = { threadId, admissionId, triggers };
+    return () => {
+      current.current = null;
+    };
+  });
+  const setTriggerActive = async (trigger: SidebarTrigger, next: boolean) => {
+    const owner = current.current;
+    if (
+      busy.current ||
+      !owner ||
+      owner.threadId !== threadId ||
+      owner.admissionId !== admissionId ||
+      !admissionId ||
+      !owner.triggers.includes(trigger) ||
+      (next && trigger.definitionRevision === undefined)
+    )
+      return;
+    busy.current = true;
+    setBusyTrigger(trigger.id);
+    setTriggerError(null);
+    try {
+      await window.zenx.plugins.executeCommand(
+        "zenx-triggers",
+        next ? "resume" : "cancel",
+        next
+          ? {
+              triggerId: trigger.id,
+              expectedRevision: trigger.definitionRevision,
+            }
+          : { triggerId: trigger.id },
+      );
+      await refresh(true);
+    } catch (error) {
+      if (
+        current.current?.threadId === threadId &&
+        current.current?.admissionId === admissionId
+      )
+        setTriggerError(localErrorDetail(error));
+      // Reconcile a stale revision or a concurrent edit instead of leaving a
+      // switch that no longer matches the Host definition.
+      await refresh(true);
+    } finally {
+      busy.current = false;
+      setBusyTrigger(null);
+    }
+  };
   return (
     <div className="conversation-information-cards">
       {attention}
@@ -107,15 +165,13 @@ function ConversationInformationContent({
                 {t("threadTriggers")}
               </h3>
             )}
-            {admissionId ? (
+            {state.status === "error" && admissionId ? (
               <button
                 type="button"
-                className="icon-button"
-                aria-label={t("refresh")}
-                title={t("refresh")}
+                className="quiet-button"
                 onClick={() => void refresh(true)}
               >
-                <Icon name="reload" size={14} />
+                {t("retry")}
               </button>
             ) : null}
           </header>
@@ -129,12 +185,28 @@ function ConversationInformationContent({
             <ul className="information-trigger-list">
               {triggers.map((trigger) => (
                 <li key={trigger.id}>
-                  <span>
+                  <span className="information-trigger-main">
                     <strong title={trigger.label ?? trigger.id}>
                       {trigger.label ?? trigger.id}
                     </strong>
                     <small>{t(trigger.active ? "enabled" : "paused")}</small>
                   </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={trigger.active}
+                    aria-busy={busyTrigger === trigger.id}
+                    aria-label={`${t(trigger.active ? "pauseTrigger" : "enableTrigger")} · ${trigger.label ?? trigger.id}`}
+                    className="plugin-switch"
+                    disabled={
+                      busyTrigger !== null ||
+                      (!trigger.active &&
+                        trigger.definitionRevision === undefined)
+                    }
+                    onClick={() =>
+                      void setTriggerActive(trigger, !trigger.active)
+                    }
+                  />
                   <button
                     type="button"
                     className="icon-button"
@@ -150,6 +222,12 @@ function ConversationInformationContent({
           ) : (
             <p>{t("informationNoTriggers")}</p>
           )}
+          {triggerError ? (
+            <details className="information-trigger-error" role="alert">
+              <summary>{t("triggerToggleFailed")}</summary>
+              <pre>{triggerError}</pre>
+            </details>
+          ) : null}
         </section>
       ) : null}
       {show("lineage") && subagents ? (

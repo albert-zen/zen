@@ -2050,6 +2050,41 @@ function AppContent() {
   const selectedRoom = roomConversations.rooms.find(
     (room) => room.id === selectedRoomId,
   );
+  const informationOwnerKey = selectedRoomId
+    ? `room:${selectedRoomId}`
+    : selectedThreadId
+      ? `thread:${selectedThreadId}`
+      : "";
+  const [informationReveal, setInformationReveal] = useState<{
+    key: string;
+    token: number;
+  }>({ key: "", token: 0 });
+
+  // Keep foreground attention subscribed while its panel is hidden. The initial
+  // read establishes a baseline; navigation itself does not reopen old questions.
+  useEffect(() => {
+    if (!selectedThreadId || selectedRoomId || page !== "agent") return;
+    const baseline = userQuestionStore.get(selectedThreadId);
+    let known = new Set(baseline.ids);
+    let loaded = baseline.loaded;
+    const unsubscribe = userQuestionStore.subscribe(() => {
+      const next = userQuestionStore.get(selectedThreadId);
+      if (!next.loaded) return;
+      const added = loaded && next.ids.some((id) => !known.has(id));
+      known = new Set(next.ids);
+      loaded = true;
+      if (added)
+        setInformationReveal((current) => ({
+          key: `thread:${selectedThreadId}`,
+          token: current.token + 1,
+        }));
+    });
+    const unmount = userQuestionStore.mount(selectedThreadId);
+    return () => {
+      unsubscribe();
+      unmount();
+    };
+  }, [selectedThreadId, selectedRoomId, page, userQuestionStore]);
   const [roomHeaderTarget, setRoomHeaderTarget] =
     useState<HTMLDivElement | null>(null);
   const roomPanel = roomQuery.get("panel");
@@ -4653,6 +4688,11 @@ function AppContent() {
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
                 managedBoard
+                revealSignal={
+                  informationReveal.key === informationOwnerKey
+                    ? informationReveal.token
+                    : 0
+                }
                 contextContent={
                   selectedRoomId || selectedThreadId ? (
                     <EditableInformationPanel

@@ -360,3 +360,12 @@
     min-height: 44px;
   }
 }
+
+/* The information panel is a single narrow column: one command is one line,
+   and the full text stays in the row's title. Ended sessions are not listed. */
+.conversation-information-section .background-shell-list code {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}

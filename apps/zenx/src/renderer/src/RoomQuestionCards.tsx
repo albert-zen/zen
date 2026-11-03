@@ -226,7 +226,11 @@ function RoomQuestionCard({
             {q.options?.map((option) => {
               const selected = answer?.optionIds.includes(option.id) ?? false;
               return (
-                <label className="user-question-option" key={option.id}>
+                <label
+                  className="user-question-option"
+                  data-selected={selected ? "true" : undefined}
+                  key={option.id}
+                >
                   <input
                     type={q.multiSelect ? "checkbox" : "radio"}
                     name={JSON.stringify([question.roomId, question.id, q.id])}
@@ -241,7 +245,13 @@ function RoomQuestionCard({
                       })
                     }
                   />
-                  <span>
+                  <span
+                    className="user-question-option-mark"
+                    aria-hidden="true"
+                  >
+                    {selected ? <Icon name="check" size={12} /> : null}
+                  </span>
+                  <span className="user-question-option-copy">
                     <strong>{option.label}</strong>
                     {option.description ? (
                       <small>{option.description}</small>
@@ -253,7 +263,7 @@ function RoomQuestionCard({
             <label className="user-question-text">
               <span>{t("questionFreeText")}</span>
               <textarea
-                rows={2}
+                rows={1}
                 maxLength={8192}
                 value={answer?.text ?? ""}
                 onChange={(event) =>
