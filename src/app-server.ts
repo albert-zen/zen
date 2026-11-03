@@ -6225,6 +6225,8 @@ export class ZenAppServer {
       messages: sourceMessages,
       summaryInstruction: options.contextCompaction.summaryInstruction,
       inputTokenBudget: options.selection.model.contextWindow,
+      supportsImageDetailOriginal:
+        options.selection.model.supportsImageDetailOriginal === true,
       signal: options.signal,
       stream: (messages) =>
         this.#streamCompactionInput(
@@ -7751,6 +7753,7 @@ async function generateContextCompactionSummary(options: {
   messages: ModelMessage[];
   summaryInstruction: string;
   inputTokenBudget: number | null;
+  supportsImageDetailOriginal: boolean;
   signal: AbortSignal;
   stream(
     messages: ModelMessage[],
@@ -7769,6 +7772,7 @@ async function generateContextCompactionSummary(options: {
     options.messages,
     options.summaryInstruction,
     options.inputTokenBudget,
+    options.supportsImageDetailOriginal,
   );
   const summaries: string[] = [];
   let inputTokens = 0;
@@ -7838,7 +7842,21 @@ function contextCompactionSummaryChunks(
   messages: readonly ModelMessage[],
   summaryInstruction: string,
   inputTokenBudget: number,
+  supportsImageDetailOriginal: boolean,
 ): ModelMessage[][] {
+  // Estimate the exact image profile that the frozen auxiliary sample will
+  // materialize. Raw attachment dimensions can needlessly turn an image into
+  // a JSON excerpt before that preparation ever runs.
+  const imageDimensions = (part: import("./item.js").ImageUserInputPart) =>
+    preparedImageDimensions(
+      part.attachment.width!,
+      part.attachment.height!,
+      part.detail === "original" && supportsImageDetailOriginal
+        ? "original"
+        : "high",
+    );
+  const estimate = (group: readonly ModelMessage[]) =>
+    estimateModelMessageInputTokens(group, imageDimensions);
   const instructionTokens = estimateModelMessageInputTokens([
     { role: "user", text: summaryInstruction },
   ]);
@@ -7851,16 +7869,13 @@ function contextCompactionSummaryChunks(
   }
 
   const groups = summaryMessageGroups(messages).flatMap((group) =>
-    fitSummaryMessageGroup(group, sourceTokenBudget),
+    fitSummaryMessageGroup(group, sourceTokenBudget, estimate),
   );
   const chunks: ModelMessage[][] = [];
   let current: ModelMessage[] = [];
   for (const group of groups) {
     const candidate = [...current, ...group];
-    if (
-      current.length > 0 &&
-      estimateModelMessageInputTokens(candidate) > sourceTokenBudget
-    ) {
+    if (current.length > 0 && estimate(candidate) > sourceTokenBudget) {
       chunks.push(current);
       current = [...group];
     } else {
@@ -7901,8 +7916,9 @@ function summaryMessageGroups(
 function fitSummaryMessageGroup(
   group: readonly ModelMessage[],
   tokenBudget: number,
+  estimate: (group: readonly ModelMessage[]) => number,
 ): ModelMessage[][] {
-  if (estimateModelMessageInputTokens(group) <= tokenBudget) {
+  if (estimate(group) <= tokenBudget) {
     return [[...group]];
   }
   const source = JSON.stringify(group);

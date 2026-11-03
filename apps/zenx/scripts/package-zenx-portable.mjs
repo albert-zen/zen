@@ -816,6 +816,8 @@ export async function publishPackagedArtifact(
 
 export async function stagePackage(options) {
   await stageStorageWriter(options.rootDirectory, options.appDirectory);
+  // Both entry points import shared Host chunks with an external native codec.
+  await stageImageCodec(options.rootDirectory, options.appDirectory);
   const sdkManifest = await realpath(
     path.join(
       options.rootDirectory,
@@ -852,7 +854,6 @@ export async function stagePackage(options) {
       : path.join(options.appDirectory, "main");
   if (options.target === "app") {
     await stageShellPty(options.rootDirectory, options.appDirectory);
-    await stageImageCodec(options.rootDirectory, options.appDirectory);
     const licenseDirectory = path.join(options.appDirectory, "licenses");
     await mkdir(licenseDirectory, { recursive: true });
     for (const name of ["xterm", "addon-fit"])
@@ -1213,7 +1214,7 @@ export function packageManifest(target, zenxPackage) {
         private: true,
         type: "module",
         main: "main/packaged-provider-smoke.js",
-        dependencies: { "fs-native-extensions": "1.4.5" },
+        dependencies: { sharp: "0.35.5", "fs-native-extensions": "1.4.5" },
       };
 }
 

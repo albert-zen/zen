@@ -166,9 +166,11 @@ export function projectModelUsage(
 
 export function estimateModelMessageInputTokens(
   messages: readonly ModelMessage[],
+  imageDimensions?: ImageDimensionEstimate,
 ): number {
   return messages.reduce(
-    (total, message) => add(total, estimateModelMessage(message)),
+    (total, message) =>
+      add(total, estimateModelMessage(message, imageDimensions)),
     0,
   );
 }

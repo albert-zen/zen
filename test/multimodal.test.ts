@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import test from "node:test";
 
 import { png1x1 } from "./fixtures.js";
@@ -816,6 +817,76 @@ test("retained AttachmentRefs survive compaction projection and restart", async 
   }
 });
 
+test("compaction budgets the frozen prepared image rather than excerpting its raw ref", async () => {
+  for (const [detail, supportsOriginal, sourceWidth, expectedWidth] of [
+    [undefined, undefined, 4096, 1600],
+    ["original", true, 2600, 2600],
+    ["original", false, 4096, 1600],
+    ["original", null, 4096, 1600],
+  ] as const) {
+    const attachments = new InMemoryAttachmentStore();
+    const requests: ModelMessage[][] = [];
+    const model: ModelAdapter = {
+      provider: "image-provider",
+      async *stream(request): AsyncIterable<ModelEvent> {
+        requests.push(structuredClone(request.messages));
+        yield { type: "text_delta", delta: "summary or answer" };
+      },
+    };
+    const server = createServer({
+      journal: new InMemoryThreadJournal(),
+      attachments,
+      model,
+      contextWindow: 10_000,
+      ...(supportsOriginal === undefined
+        ? {}
+        : { supportsImageDetailOriginal: supportsOriginal }),
+    });
+    const original = await attachments.importBytes(
+      await sharp({
+        create: {
+          width: sourceWidth,
+          height: sourceWidth,
+          channels: 3,
+          background: "blue",
+        },
+      })
+        .png()
+        .toBuffer(),
+    );
+    const thread = await server.startThread();
+    await (
+      await server.startTurn(thread.id, [
+        { type: "image", attachment: original, ...(detail ? { detail } : {}) },
+      ])
+    ).done;
+    const terminal = (await server.readThread(thread.id)).items.findLast(
+      (item) => item.type === "turn_completed",
+    );
+    assert.equal(
+      terminal?.type === "turn_completed" ? terminal.status : undefined,
+      "completed",
+      `First Turn did not complete for ${String(detail)}/${String(supportsOriginal)}`,
+    );
+    await server.compactThread(thread.id, { includeOriginalReference: false });
+    const summary = requests[1]!;
+    const images = summary.flatMap((message) =>
+      message.role === "user" && "content" in message
+        ? message.content.filter((part) => part.type === "image")
+        : message.role === "tool"
+          ? (message.modelContent ?? []).filter((part) => part.type === "image")
+          : [],
+    );
+    assert.equal(images.length, 1);
+    assert.equal(images[0]!.attachment.width, expectedWidth);
+    assert.equal(JSON.stringify(summary).includes("[excerpt]"), false);
+    assert.deepEqual(
+      [original.width, original.height],
+      [sourceWidth, sourceWidth],
+    );
+  }
+});
+
 function createServer(options: {
   journal: ThreadJournal;
   attachments: AttachmentStore;
@@ -823,6 +894,8 @@ function createServer(options: {
   inputModalities?: readonly "text"[] | null;
   cwd?: string;
   extraTools?: readonly ToolRuntime[];
+  contextWindow?: number;
+  supportsImageDetailOriginal?: boolean | null;
 }): ZenAppServer {
   const model = options.model ?? echoModel();
   const catalog = new StaticModelCatalog([
@@ -831,7 +904,10 @@ function createServer(options: {
       isDefault: true,
       supportedReasoningEfforts: ["medium"],
       defaultReasoningEffort: "medium",
-      contextWindow: 32_768,
+      contextWindow: options.contextWindow ?? 32_768,
+      ...(options.supportsImageDetailOriginal === undefined
+        ? {}
+        : { supportsImageDetailOriginal: options.supportsImageDetailOriginal }),
       inputModalities:
         options.inputModalities === undefined
           ? ["text", "image"]

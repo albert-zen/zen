@@ -1048,6 +1048,71 @@ test("stages only the provider smoke through the same digest path", async () => 
   }
 });
 
+test("detached provider smoke resolves its external image codec through ESM and CJS without NODE_PATH", async () => {
+  const fixture = await createFixture();
+  const appDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "zenx-detached-image-smoke-"),
+  );
+  try {
+    const chunks = path.join(fixture.outDirectory, "main", "chunks");
+    await mkdir(chunks, { recursive: true });
+    await writeFile(
+      path.join(chunks, "app-server-image.js"),
+      `
+      import sharp from "sharp";
+      import { createRequire } from "node:module";
+      const require = createRequire(import.meta.url);
+      const cjsSharp = require("sharp");
+      export async function verify() {
+        const input = await sharp({ create: { width: 10, height: 10, channels: 3, background: "blue" } }).png().toBuffer();
+        const output = await sharp(input).resize(3, 2).png().toBuffer();
+        const metadata = await cjsSharp(output).metadata();
+        if (sharp.versions.sharp !== "0.35.5" || cjsSharp.versions.sharp !== "0.35.5" || metadata.width !== 3 || metadata.height !== 2) throw new Error("detached smoke codec mismatch");
+        console.log("DETACHED_IMAGE_CODEC_OK");
+      }
+    `,
+    );
+    await writeFile(
+      path.join(fixture.outDirectory, "main", "packaged-provider-smoke.js"),
+      'import { verify } from "./chunks/app-server-image.js"; await verify();',
+    );
+    await stagePackage({
+      target: "smoke",
+      outDirectory: fixture.outDirectory,
+      rootDirectory: fixture.rootDirectory,
+      appDirectory,
+      manifestSha256: "synthetic-image-smoke",
+    });
+    const manifest = packageManifest("smoke", {
+      version: "0.1.0",
+      dependencies: {},
+    });
+    await writeFile(
+      path.join(appDirectory, "package.json"),
+      JSON.stringify(manifest),
+    );
+    await rm(fixture.directory, { recursive: true, force: true });
+    const { stdout } = await run(
+      process.execPath,
+      [path.join(appDirectory, manifest.main)],
+      {
+        cwd: appDirectory,
+        env: {
+          PATH: process.env.PATH,
+          HOME: appDirectory,
+          TMPDIR: appDirectory,
+          NODE_PATH: "",
+        },
+      },
+    );
+    assert.match(stdout, /DETACHED_IMAGE_CODEC_OK/u);
+    assert.equal(manifest.dependencies.sharp, "0.35.5");
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+    await rm(appDirectory, { recursive: true, force: true });
+  }
+});
+
 test("publishes a complete run artifact without exposing its staging path", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zenx-publish-test-"));
   try {
@@ -1660,6 +1725,11 @@ test("Shell packaging retains platform native resources including Windows ConPTY
 async function writeStorageWriterFixture(rootDirectory) {
   const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
   await stageStorageWriter(realRoot, rootDirectory);
+  await symlink(
+    await realpath(path.join(realRoot, "node_modules", "sharp")),
+    path.join(rootDirectory, "node_modules", "sharp"),
+    "dir",
+  );
   await cp(
     path.join(realRoot, "package-lock.json"),
     path.join(rootDirectory, "package-lock.json"),
@@ -1677,12 +1747,6 @@ async function writeStorageWriterFixture(rootDirectory) {
 
 async function writePtyFixture(rootDirectory) {
   await writeStorageWriterFixture(rootDirectory);
-  const realRoot = fileURLToPath(new URL("../../../", import.meta.url));
-  await symlink(
-    await realpath(path.join(realRoot, "node_modules", "sharp")),
-    path.join(rootDirectory, "node_modules", "sharp"),
-    "dir",
-  );
   for (const name of ["xterm", "addon-fit"]) {
     const directory = path.join(rootDirectory, "node_modules", "@xterm", name);
     await mkdir(directory, { recursive: true });
