@@ -207,7 +207,9 @@ export async function prepareSampleImages(options: {
           {
             type: "image",
             attachment: prepared,
-            ...(detail === "original" ? { detail } : {}),
+            ...(part.detail === undefined || unavailableOriginal
+              ? {}
+              : { detail }),
           },
         ];
         result.push({

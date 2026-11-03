@@ -7492,7 +7492,11 @@ function remapForkContext(
       const value = metadata[key];
       if (typeof value === "string") metadata[key] = remap(value);
     }
-    const preparation = metadata.imagePreparation;
+    // copied is a structured clone; narrow this one writable address rather
+    // than treating a readonly JsonValue array as preparation metadata.
+    const preparation = metadata.imagePreparation as
+      | { occurrence?: Record<string, import("./item.js").JsonValue> }
+      | undefined;
     if (
       preparation !== null &&
       typeof preparation === "object" &&
