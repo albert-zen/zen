@@ -44,7 +44,7 @@ isolated Linux / Node 24.22.1 dependency tree. Cache/temp paths were relocated t
 the writable workspace; no lifecycle scripts or source were bypassed. The fresh
 installed ESM blob matched the then-current upstream-only target and preparation
 was idempotent. The later Zen selection guard has separate deterministic hook and
-patch-application tests; it is not covered by that earlier native acceptance.
+patch-application tests; it is not covered by that earlier installation check.
 The preparer refuses symlinked/external dependencies rather than modifying a
 shared tree.
 The adapter uses supported web types and `getScrollableNode`/`getState`/scroll APIs,
