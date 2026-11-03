@@ -52,12 +52,14 @@ export function prepareLegendList({
   // Normalize only the patch in memory; keep both installed-blob checks exact.
   const patch = readFileSync(patchPath, "utf8").replace(/\r\n/g, "\n");
   const args = ["--directory=" + localPath, "--whitespace=nowarn", "-"];
-  execFileSync("git", ["apply", "--check", ...args], {
+  // Disable output conversion for these commands without changing Git config.
+  const gitArgs = ["-c", "core.autocrlf=false", "apply"];
+  execFileSync("git", [...gitArgs, "--check", ...args], {
     cwd: root,
     stdio: "pipe",
     input: patch,
   });
-  execFileSync("git", ["apply", ...args], {
+  execFileSync("git", [...gitArgs, ...args], {
     cwd: root,
     stdio: "pipe",
     input: patch,

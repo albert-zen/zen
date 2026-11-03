@@ -40,7 +40,14 @@ function fixture(run) {
   if (blobHash(readFileSync(module)) === patchedBlob)
     execFileSync(
       "git",
-      ["apply", "--reverse", "--directory=node_modules/@legendapp/list", "-"],
+      [
+        "-c",
+        "core.autocrlf=false",
+        "apply",
+        "--reverse",
+        "--directory=node_modules/@legendapp/list",
+        "-",
+      ],
       { cwd: directory, input: patch },
     );
   assert.equal(blobHash(readFileSync(module)), originalBlob);
@@ -63,7 +70,7 @@ test("exact web-only patch applies once and produces the reviewed T3-plus-Zen bl
     );
   }));
 for (const autocrlf of [false, true]) {
-  test(`preparer CLI accepts a core.autocrlf=${autocrlf} patch checkout without changing reviewed bytes`, () =>
+  test(`preparer CLI preserves reviewed bytes with persistent core.autocrlf=${autocrlf}`, () =>
     fixture((directory, module) => {
       const localScript = resolve(
         directory,
@@ -84,18 +91,23 @@ for (const autocrlf of [false, true]) {
       execFileSync("git", ["-c", "core.autocrlf=false", "add", localPatch], {
         cwd: directory,
       });
+      execFileSync("git", ["config", "core.autocrlf", String(autocrlf)], {
+        cwd: directory,
+      });
       rmSync(localPatch);
-      execFileSync(
-        "git",
-        ["-c", `core.autocrlf=${autocrlf}`, "checkout", "--", localPatch],
-        { cwd: directory },
-      );
+      execFileSync("git", ["checkout", "--", localPatch], { cwd: directory });
       const checkedOutPatch = readFileSync(localPatch);
       assert.equal(
         checkedOutPatch.toString(),
         autocrlf ? patch.replace(/\n/g, "\r\n") : patch,
       );
       assert.equal(blobHash(readFileSync(module)), originalBlob);
+      const beforeConfig = execFileSync(
+        "git",
+        ["config", "--get", "core.autocrlf"],
+        { cwd: directory, encoding: "utf8" },
+      ).trim();
+      assert.equal(beforeConfig, String(autocrlf));
       for (const expected of ["patched", "already patched"]) {
         assert.equal(
           execFileSync(process.execPath, [localScript], {
@@ -106,6 +118,13 @@ for (const autocrlf of [false, true]) {
         );
         assert.equal(blobHash(readFileSync(module)), patchedBlob);
         assert.deepEqual(readFileSync(localPatch), checkedOutPatch);
+        assert.equal(
+          execFileSync("git", ["config", "--get", "core.autocrlf"], {
+            cwd: directory,
+            encoding: "utf8",
+          }).trim(),
+          beforeConfig,
+        );
       }
     }));
 }
