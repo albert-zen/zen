@@ -4624,6 +4624,7 @@ function AppContent() {
                 contextContent={
                   selectedRoomId || selectedThreadId ? (
                     <EditableInformationPanel
+                      roomMembers={selectedRoom?.members}
                       owner={
                         selectedRoomId
                           ? { kind: "room", roomId: selectedRoomId }

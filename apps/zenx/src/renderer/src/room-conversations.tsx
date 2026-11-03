@@ -24,6 +24,12 @@ export interface RoomConversation {
   lastMessage?: { id: string; createdAt: number; kind: string };
   lastAgentMessage?: { id: string; createdAt: number };
   unreadCount?: number;
+  /** Same Room journal projection used by the workspace question cards. */
+  questionSummary?: {
+    revision: number;
+    openCount: number;
+    totalQuestions: number;
+  };
 }
 
 export interface RoomConversationState {
@@ -61,6 +67,7 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
   });
   const inFlight = useRef<Promise<void> | null>(null);
   const refreshCurrent = useRef<(() => Promise<void>) | null>(null);
+  const invalidateCurrent = useRef<(() => void) | null>(null);
   const refresh = useCallback(
     () => refreshCurrent.current?.() ?? Promise.resolve(),
     [],
@@ -71,9 +78,11 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
     let readCursorSupported = false;
     let timer: number | undefined;
     let pending: Promise<void> | null = null;
+    let dirty = false;
     setState({ rooms: [], error: null, loading: enabled, revision });
     if (!enabled) {
       refreshCurrent.current = null;
+      invalidateCurrent.current = null;
       return () => {
         active = false;
       };
@@ -116,7 +125,10 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
         .finally(() => {
           if (inFlight.current === operation) inFlight.current = null;
           pending = null;
-          if (active)
+          if (active && dirty) {
+            dirty = false;
+            void load();
+          } else if (active)
             timer = window.setTimeout(() => void load(), POLL_DELAY_MS);
         });
       pending = operation;
@@ -124,17 +136,32 @@ export function useRoomConversations(enabled: boolean, revision?: unknown) {
       return operation;
     };
     refreshCurrent.current = load;
+    const invalidate = () => {
+      if (!active) return;
+      if (pending) dirty = true;
+      else void load();
+    };
+    invalidateCurrent.current = invalidate;
     void load();
     return () => {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
       if (refreshCurrent.current === load) refreshCurrent.current = null;
+      if (invalidateCurrent.current === invalidate)
+        invalidateCurrent.current = null;
     };
   }, [enabled, revision]);
 
   useEffect(() => {
     void refresh();
   }, [readPreference.rooms, refresh]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    return window.zenx.roomQuestions?.onChanged(() =>
+      invalidateCurrent.current?.(),
+    );
+  }, [enabled]);
 
   // Admission changes hide the old projection during the render itself,
   // before effect cleanup has had a chance to run.
@@ -238,12 +265,33 @@ function navigationRoom(value: unknown): RoomConversation {
   const messages = Array.isArray(room.messages) ? room.messages : [];
   const latest = record(messages.at(-1));
   const preview = typeof latest?.text === "string" ? latest.text : null;
+  let questionSummary: RoomConversation["questionSummary"];
+  if (room.questionSummary !== undefined) {
+    const value = record(room.questionSummary);
+    if (
+      !value ||
+      ![value.revision, value.openCount, value.totalQuestions].every(
+        (count) =>
+          typeof count === "number" &&
+          Number.isSafeInteger(count) &&
+          count >= 0,
+      ) ||
+      Number(value.openCount) > Number(value.totalQuestions)
+    )
+      throw new Error("Invalid Room question summary");
+    questionSummary = {
+      revision: Number(value.revision),
+      openCount: Number(value.openCount),
+      totalQuestions: Number(value.totalQuestions),
+    };
+  }
   return {
     id: room.id,
     name: room.name,
     ...(assistant ? { assistant } : {}),
     members,
     memberCount: members.length,
+    ...(questionSummary ? { questionSummary } : {}),
     ...(lastMessage &&
     text(lastMessage.id, 512) &&
     typeof lastMessage.createdAt === "number" &&
@@ -488,6 +536,7 @@ function ConversationRow({
       <button
         type="button"
         className="room-conversation-row"
+        data-room-id={room.id}
         aria-label={`Open ${group.displayKind} ${room.name}`}
         aria-current={selected ? "page" : undefined}
         title={
@@ -507,6 +556,20 @@ function ConversationRow({
                 : i18n.t("panels:memberCount", { count: room.memberCount }))}
           </small>
         </span>
+        {room.questionSummary && room.questionSummary.openCount > 0 ? (
+          <span
+            className="thread-asking-badge room-asking-badge"
+            aria-label={i18n.t("shell:threadAskingCount", {
+              count: room.questionSummary.openCount,
+            })}
+            title={i18n.t("shell:threadAskingCount", {
+              count: room.questionSummary.openCount,
+            })}
+            data-question-revision={room.questionSummary.revision}
+          >
+            {i18n.t("shell:threadAsking")}
+          </span>
+        ) : null}
         {room.unreadCount !== undefined && room.unreadCount > 0 ? (
           <span
             className="room-unread-count"

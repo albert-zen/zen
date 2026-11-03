@@ -1510,6 +1510,8 @@ test("App observes a terminal event transferred in a valid resume response", asy
 });
 
 interface MountOptions {
+  information?: Window["zenx"]["information"];
+  roomQuestions?: Window["zenx"]["roomQuestions"];
   shellPanel?: import("../src/shell-panel.js").ShellPanelBridge;
   sidebarApi?: ThreadSidebarApi;
   titles?: typeof window.zenx.titles;
@@ -1560,6 +1562,8 @@ async function mountApp(options: MountOptions) {
     detachEvent: { value: () => undefined },
   });
   const zenx = {
+    information: options.information,
+    roomQuestions: options.roomQuestions,
     shellPanel: options.shellPanel,
     workspaceFiles: {
       applications: async () => ({ platform: "linux", applications: {} }),
@@ -3413,3 +3417,287 @@ for (const closeAfterClick of [true, false])
       await harness.unmount();
     }
   });
+
+test("full App Room workspace questions and Asking share one journal despite private questions, removed authors, answer, cancel and withdraw", async () => {
+  const { roomWorkspaceQuestionFixture } =
+    await import("./room-workspace-question-fixture.js");
+  const { i18n } = await import("../src/renderer/src/i18n.js");
+  await i18n.changeLanguage("en");
+  const f = await roomWorkspaceQuestionFixture();
+  const first = await f.publish("member-a"),
+    second = await f.publish("member-b"),
+    foreign = await f.publish("member-a", f.other.id),
+    pawQuestion = await f.publish("member-a", f.paw.id);
+  const owner = { kind: "room" as const, id: f.room.id };
+  const initial = await f.information.read(owner, () => {});
+  await f.information.update(
+    {
+      owner,
+      expectedRevision: initial.revision,
+      basis: initial.basis,
+      operations: initial.layout.widgets.map((widget) => ({
+        op: "set" as const,
+        id: widget.id,
+        visible: false,
+      })),
+    },
+    () => {},
+  );
+  const dispose = pluginUiRegistry.registerTrusted(
+    "room-question-workspace-test",
+    { overview: ({ sdk }) => createElement(RoomsPage, { sdk }) },
+  );
+  const snapshot = {
+    plugins: [
+      {
+        id: "zenx-rooms",
+        displayName: "Rooms",
+        enabled: true,
+        available: true,
+        lifecycle: "enabled",
+        contributionCount: 1,
+        version: "1",
+        source: "bundled",
+      },
+    ],
+    pages: [
+      {
+        key: "zenx-rooms:rooms",
+        pluginId: "zenx-rooms",
+        id: "rooms",
+        title: "Rooms",
+        route: "/plugins/zenx-rooms/rooms",
+        surfaceId: "overview",
+      },
+    ],
+    bundles: [
+      {
+        key: "zenx-rooms:main",
+        pluginId: "zenx-rooms",
+        id: "main",
+        apiVersion: 1,
+        kind: "trusted",
+        entry: "room-question-workspace-test",
+      },
+    ],
+    surfaces: [
+      {
+        key: "zenx-rooms:overview",
+        pluginId: "zenx-rooms",
+        id: "overview",
+        bundleId: "main",
+        exportName: "overview",
+      },
+    ],
+    sidebar: [],
+    subroutes: [],
+    settings: [],
+    panels: [],
+    commands: [],
+    menus: [],
+  } as ZenXPluginSnapshot;
+  let privateQuestionReads = 0;
+  const harness = await mountApp({
+    pluginSnapshot: snapshot,
+    roomQuestions: f.api,
+    information: {
+      read: (id) => f.information.read(id, () => {}),
+      update: (input) => f.information.update(input, () => {}),
+    },
+    sidebarApi: {
+      read: (id) => f.information.readSidebar(id, () => {}),
+      update: (input) => f.information.updateSidebar(input, () => {}),
+      onChanged: (listener) => f.sidebar.onChanged(listener),
+    },
+    threads: async (archived) =>
+      archived
+        ? []
+        : [
+            {
+              ...summary("member-a", "Private A"),
+              userQuestionSummary: { openCount: 11 },
+            },
+            {
+              ...summary("member-b", "Private B"),
+              userQuestionSummary: { openCount: 7 },
+            },
+          ],
+    request: async (method) => {
+      if (method.includes("questions")) privateQuestionReads++;
+      throw Error(
+        "No member Thread question read is authorized by this Room fixture: " +
+          method,
+      );
+    },
+    executeCommand: async (plugin, command) => {
+      assert.equal(plugin, "zenx-rooms");
+      if (command === "list") return { rooms: f.listRooms(), nextCursor: null };
+      throw Error("No Room mutation through UI fixture: " + command);
+    },
+  });
+  const card = (id: string) =>
+    document.querySelector<HTMLElement>(`[data-room-question-id="${id}"]`);
+  const badge = () =>
+    document.querySelector(`[data-room-id="${f.room.id}"] .room-asking-badge`);
+  try {
+    const open = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(
+        `[data-room-id="${f.room.id}"]`,
+      ),
+    );
+    await act(async () => open.click());
+    const toggle = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(".information-toolbar button"),
+    );
+    await act(async () => toggle.click());
+    await waitFor(() => card(first.id));
+    await waitFor(() => card(second.id));
+    assert.equal(
+      card(foreign.id),
+      null,
+      "another Room's question never appears",
+    );
+    assert.equal(
+      document.querySelectorAll(".information-widget-body").length,
+      0,
+      "questions remain when every customizable widget is hidden",
+    );
+    assert.match(badge()!.getAttribute("aria-label")!, /2/);
+    assert.equal(
+      document
+        .querySelector(".room-question-attention")!
+        .getAttribute("data-question-revision"),
+      badge()!.getAttribute("data-question-revision"),
+      "card and badge consume the same Room journal revision",
+    );
+    const editRoomDraft = async (id: string, value: string) => {
+      const input = card(id)!.querySelector("textarea")!;
+      const key = Object.keys(input).find((name) =>
+        name.startsWith("__reactProps$"),
+      )!;
+      await act(async () =>
+        (
+          input as unknown as Record<
+            string,
+            { onChange(event: { target: { value: string } }): void }
+          >
+        )[key]!.onChange({ target: { value } }),
+      );
+    };
+    await editRoomDraft(first.id, "Keep Room A draft");
+    await editRoomDraft(second.id, "Independent second draft");
+    await act(async () => toggle.click());
+    await act(async () => toggle.click());
+    await waitFor(() => card(first.id));
+    assert.equal(
+      card(first.id)!.querySelector("textarea")!.value,
+      "Keep Room A draft",
+    );
+    assert.equal(
+      card(second.id)!.querySelector("textarea")!.value,
+      "Independent second draft",
+    );
+    await act(async () => {
+      await f.service.removeRoomMember(f.room.id, "member-a");
+      f.notify();
+    });
+    await waitFor(() => card(first.id)?.textContent?.includes("former member"));
+    await act(async () =>
+      card(first.id)!
+        .querySelector<HTMLInputElement>('input[type="radio"]')!
+        .click(),
+    );
+    await act(async () =>
+      card(first.id)!
+        .querySelector<HTMLButtonElement>(".primary-button")!
+        .click(),
+    );
+    await waitFor(() => !card(first.id));
+    await waitFor(() => badge()?.getAttribute("aria-label")?.includes("1"));
+    assert.equal(f.service.roomQuestionSummary(f.room.id).openCount, 1);
+    await act(async () =>
+      card(second.id)!
+        .querySelector<HTMLButtonElement>(
+          ".user-question-actions .quiet-button",
+        )!
+        .click(),
+    );
+    await waitFor(() => !badge());
+    assert.equal(f.service.roomQuestionSummary(f.room.id).openCount, 0);
+    let third!: import("../src/room-questions.js").RoomQuestion;
+    await act(async () => {
+      third = await f.publish("member-b");
+    });
+    await waitFor(() => card(third.id));
+    await waitFor(() => badge());
+    await act(async () => {
+      await f.service.withdrawRoomQuestion(
+        {
+          roomId: f.room.id,
+          questionId: third.id,
+          expectedRevision: third.revision,
+        },
+        "member-b",
+        async () => {},
+      );
+      f.notify();
+    });
+    await waitFor(() => !card(third.id));
+    await waitFor(() => !badge());
+    assert.equal(f.service.roomQuestionSummary(f.other.id).openCount, 1);
+    assert.equal(
+      privateQuestionReads,
+      0,
+      "Room cards never query participants' private Thread questions",
+    );
+    const closed = await f.service.roomQuestions(f.room.id, {
+      includeClosed: true,
+    });
+    assert.deepEqual(
+      closed.questions.map((q) => q.state),
+      ["answered", "cancelled", "withdrawn"],
+    );
+    const pawRow = await waitFor(() =>
+      document.querySelector<HTMLButtonElement>(`[data-room-id="${f.paw.id}"]`),
+    );
+    assert.match(
+      pawRow.querySelector(".room-asking-badge")!.getAttribute("aria-label")!,
+      /1/,
+    );
+    await act(async () => pawRow.click());
+    if (!document.querySelector(`[data-owner="room:${f.paw.id}"]`)) {
+      const pawToggle = await waitFor(() =>
+        document.querySelector<HTMLButtonElement>(
+          ".information-toolbar button",
+        ),
+      );
+      await act(async () => pawToggle.click());
+    }
+    await waitFor(() => card(pawQuestion.id));
+    assert.equal(card(foreign.id), null);
+    assert.equal(card(first.id), null);
+    await act(async () =>
+      card(pawQuestion.id)!
+        .querySelector<HTMLButtonElement>(
+          ".user-question-actions .quiet-button",
+        )!
+        .click(),
+    );
+    await waitFor(
+      () =>
+        !document.querySelector(
+          `[data-room-id="${f.paw.id}"] .room-asking-badge`,
+        ),
+    );
+    assert.equal(f.service.roomQuestionSummary(f.paw.id).openCount, 0);
+    assert.equal(
+      privateQuestionReads,
+      0,
+      "PAW has its own question workspace even with one shared member",
+    );
+  } finally {
+    await harness.unmount();
+    dispose();
+    await f.close();
+  }
+});

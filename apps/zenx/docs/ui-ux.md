@@ -1063,7 +1063,17 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
 
-### Native question cards and Asking attention
+### Room workspace questions and Asking attention
+
+The Room information panel is an independent workspace resource, not a view of its participant Threads' private panels or questions. PAW follows the same Room ownership even when it has one member. A member Thread is an admitted actor and publication provenance, never the resource address. Removing the author does not delete, move or hide an existing Room question; a current member can revise or withdraw it through the existing Room tools.
+
+Room question cards read only the Room journal workspace. The Room/PAW sidebar Asking capsule reads that same journal's `questionSummary.openCount` and revision from the existing Rooms list projection. Any open Room request keeps Asking visible, independently of selected member, selected Thread, model activity, hidden widgets or private Thread question counts. Answering, cancelling or withdrawing one request removes the capsule only when no other Room request remains open. Private Thread questions are not automatically imported, including into a single-member PAW.
+
+Room cards occupy a separate attention slot above the customizable widgets and cannot be hidden or removed by layout controls. Authored options start unselected and free text is independent per `(Room, question)` in the current window. Closing/reopening or changing workspace retains unsent drafts; application reload need not. Background publication never changes workspace or keyboard focus. Author labels are provenance only and distinguish a former/unavailable author without denying access to the Room resource.
+
+Human answers and cancellations use the exact Room/question revision and immutable response client ID. A saved receipt confirms the Room resource and ordinary Room message/operation transaction, not Thread admission or model consumption. Existing Room addressing/PAW delivery decides whether and where the message is delivered. Conflicts retain the local draft for explicit current-version review. Unknown outcomes keep their original payload and expose exact readback, never an automatic write retry; a reviewed explicit reapply reuses the same client ID. Current document and Room service checks, not presentation controls, fence writes.
+
+### Thread question cards and Asking attention
 
 Native accepted questions appear in the existing information panel attention slot,
 with independent `(Thread, call Item)` drafts, authored options, always-available
