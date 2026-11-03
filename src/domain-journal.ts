@@ -292,7 +292,7 @@ export class DomainThreadJournal implements ThreadJournal {
           item.threadId,
           snapshot,
         );
-        const previous = await this.#read(item.threadId);
+        const previous = await this.#read(item.threadId, compiled?.trace);
         if (previous.some((i) => i.id === item.id))
           throw new Error(
             "Duplicate canonical Item identity; reconcile instead of retrying",
@@ -494,16 +494,21 @@ export class DomainThreadJournal implements ThreadJournal {
       await this.migrate(threadId);
     return this.#read(threadId);
   }
-  async #read(threadId: string): Promise<CanonicalItem[]> {
+  async #read(
+    threadId: string,
+    verifiedTrace?: Awaited<ReturnType<TraceReader["read"]>>,
+  ): Promise<CanonicalItem[]> {
     const live = this.#live.get(threadId);
     if (live !== undefined) return structuredClone(live);
     if (!(await this.#items.exists(threadId))) {
       const source = await this.#legacy(threadId);
       return source?.items ?? [];
     }
-    const observed = await this.trace.read(threadId, {
-      verifyArtifacts: false,
-    });
+    const observed =
+      verifiedTrace ??
+      (await this.trace.read(threadId, {
+        verifyArtifacts: false,
+      }));
     const combined = new Map<
       string,
       { sequence: number; item: CanonicalItem }
@@ -529,29 +534,41 @@ export class DomainThreadJournal implements ThreadJournal {
       .map((entry) => entry.item);
   }
   async assertRecoverySafe(threadId: string): Promise<void> {
-    if (this.#owner !== undefined && !this.#uncertain.has(threadId))
-      await this.reconcileCompilation(threadId);
-    if (this.#uncertain.has(threadId))
-      throw new ThreadJournalAppendOutcomeUnknownError(
-        "Control fact outcome unknown",
-      );
-    const trace = await this.trace.read(threadId, { verifyArtifacts: false });
-    if (
-      trace.issues.some((issue) =>
-        ["read_failure", "partial_frame", "invalid_frame"].includes(issue.kind),
+    const verify = async () => {
+      const compiled =
+        this.#owner !== undefined && !this.#uncertain.has(threadId)
+          ? await this.#reconcileCompilation(threadId)
+          : undefined;
+      if (this.#uncertain.has(threadId))
+        throw new ThreadJournalAppendOutcomeUnknownError(
+          "Control fact outcome unknown",
+        );
+      // Reuse only this serialized reconciliation's exact source observation.
+      // A later admission reads current bytes again, including damage or gaps.
+      const trace =
+        compiled?.trace ??
+        (await this.trace.read(threadId, { verifyArtifacts: false }));
+      if (
+        trace.issues.some((issue) =>
+          ["read_failure", "partial_frame", "invalid_frame"].includes(
+            issue.kind,
+          ),
+        )
       )
-    )
-      throw new Error(
-        "Runtime log integrity incomplete; dispatch requires explicit reconciliation",
-      );
-    const known = await this.#read(threadId);
-    if (
-      (await this.#items.exists(threadId)) &&
-      !known.some((i) => i.type === "thread_metadata")
-    )
-      throw new Error(
-        "Original runtime configuration unavailable; cannot dispatch",
-      );
+        throw new Error(
+          "Runtime log integrity incomplete; dispatch requires explicit reconciliation",
+        );
+      const known = await this.#read(threadId, trace);
+      if (
+        (await this.#items.exists(threadId)) &&
+        !known.some((i) => i.type === "thread_metadata")
+      )
+        throw new Error(
+          "Original runtime configuration unavailable; cannot dispatch",
+        );
+    };
+    if (this.#owner !== undefined) await this.#operation(threadId, verify);
+    else await verify();
   }
   async listThreadIds(): Promise<string[]> {
     let legacy: string[] = [];
