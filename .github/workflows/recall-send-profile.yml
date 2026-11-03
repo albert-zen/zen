@@ -1,5 +1,6 @@
 name: Packaged send first-gap attribution (diagnostic only)
-# One approved packaged 5000-turn fixture and three send samples; never rerun.
+# Fixed packaged 5000-turn fixture and three send samples; preserve every attempt.
+# Resume after correcting the post-shutdown export guard (2026-11-03).
 on:
   push:
     branches: [diagnostic/packaged-send-first-gap-20261102]
