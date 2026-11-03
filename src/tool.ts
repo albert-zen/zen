@@ -91,6 +91,8 @@ export interface ToolInvocation {
   trustedPluginUi?: true;
   /** Runtime-owned canonical tool_call Item identity, independent of provider call IDs. */
   canonicalToolCallId?: string;
+  /** Immutable source sequence of that committed semantic call, not an array index. */
+  canonicalToolCallSequence?: number;
   name: string;
   arguments: Record<string, unknown>;
   cwd: string;

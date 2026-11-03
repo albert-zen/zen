@@ -11,6 +11,7 @@ import {
   parseUserQuestionSpecification,
   normalizeUserQuestionReply,
   renderUserQuestionReply,
+  matchesUserQuestionReplyBody,
   renderUserQuestionAnswer,
 } from "../src/user-question.js";
 import {
@@ -94,8 +95,8 @@ test("explicit templates keep their exact prior bytes and invalid explicit templ
     specification,
   );
   assert.equal(
-    renderUserQuestionReply(specification, reply),
-    "Reply to question call-a:\nScope: Small",
+    renderUserQuestionReply(specification, reply, "q7"),
+    "Reply to question scope (q7):\nScope: Small",
   );
   for (const answerTemplate of [null, "", "{{scope}} {{scope}}", "{{missing}}"])
     assert.throws(() =>
@@ -578,4 +579,59 @@ test("real DomainJournal missing-call compilation repair keeps result-before-cal
     await host.closeHostResources();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("reply keys preserve authored order and a separate compact request identity", () => {
+  const spec = parseUserQuestionSpecification({
+    questions: [
+      { id: "scope", prompt: "Which scope?" },
+      { id: "note", prompt: "Any note?" },
+    ],
+  });
+  const answer = {
+    ...reply,
+    answers: [
+      { questionId: "note", optionIds: [], text: "later" },
+      { questionId: "scope", optionIds: [], text: "small" },
+    ],
+  };
+  assert.equal(
+    renderUserQuestionReply(spec, answer, "q8"),
+    "Reply to questions scope, note (q8):\nscope: small\n\nnote: later",
+  );
+  assert.equal(
+    renderUserQuestionReply(
+      spec,
+      { version: 1, request: reply.request, outcome: "cancel" },
+      "q8",
+    ),
+    "I chose not to answer questions scope, note (q8).",
+  );
+  for (const text of [
+    "Reply to question call-a:\nScope: Small",
+    "Reply to question scope:\nScope: Small",
+    "Reply to question scope (q7):\nScope: Small",
+  ])
+    assert.equal(
+      matchesUserQuestionReplyBody(specification, reply, text, "q7"),
+      true,
+    );
+  assert.equal(
+    matchesUserQuestionReplyBody(
+      specification,
+      reply,
+      "Reply to question scope (q8):\nScope: Small",
+      "q7",
+    ),
+    false,
+  );
+  assert.equal(
+    matchesUserQuestionReplyBody(
+      specification,
+      reply,
+      "Reply to question scope:\nScope: Large",
+      "q7",
+    ),
+    false,
+  );
 });

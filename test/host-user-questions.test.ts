@@ -9,6 +9,11 @@ import {
 } from "../apps/cli/src/host.js";
 import { ToolEnvironment } from "../src/tool.js";
 import { AskUserQuestionToolRuntime } from "../src/user-question-tool.js";
+import { decodeCanonicalItem } from "../src/item.js";
+import { DomainThreadJournal } from "../src/domain-journal.js";
+import { FileTraceStore } from "../src/trace.js";
+import { InMemoryThreadMetadataStore } from "../src/thread-metadata.js";
+import { compileItemList } from "../src/item-list.js";
 import { ASK_USER_QUESTION_NAME } from "../src/user-question.js";
 import { NativeConnection } from "../src/protocol/native/connection.js";
 import { NativeRecoveryProjection } from "../src/protocol/native/recovery.js";
@@ -226,7 +231,7 @@ test("default-on asynchronous Ask survives completed independent work and Host r
     assert.ok(answerInput.kind === "message");
     assert.deepEqual(answerInput.content.parts.at(-1), {
       type: "text",
-      text: `Reply to question ${question.request.callItemId}:\nscope: Small, answered later`,
+      text: `Reply to question scope (${question.requestRef}):\nscope: Small, answered later`,
     });
     const answered = await host.readThreadSummary(thread.id);
     assert.equal(
@@ -334,5 +339,259 @@ test("disabling publication after reload preserves native list/read/respond for 
     projection?.close();
     await host.closeHostResources();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("real Host keeps duplicate question keys distinct across out-of-order replies and replay", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "zen-question-short-refs-"),
+  );
+  const base = options(directory);
+  let host = createHostedAppServer(base);
+  try {
+    const thread = await host.startThread();
+    for (const prompt of ["Which project scope?", "Which deployment scope?"])
+      await (
+        await host.startTurn(
+          thread.id,
+          `!tool ${ASK_USER_QUESTION_NAME} ${JSON.stringify({ questions: [{ id: "scope", prompt }] })}`,
+        )
+      ).done;
+    const questions = (await host.listUserQuestions(thread.id)).questions;
+    assert.equal(questions.length, 2);
+    const before = await host.readThread(thread.id);
+    const refs = questions.map((question) => {
+      const call = before.itemList!.find(
+        (item) => item.id === question.request.callItemId,
+      )!;
+      const result = before.itemList!.find(
+        (item) => item.id === question.resultItemId,
+      )!;
+      assert.ok(result.kind === "tool_result");
+      const envelope = JSON.parse(
+        result.content.text.slice(Number(result.source.metadata?.bodyStart)),
+      );
+      assert.equal(envelope.requestRef, `q${call.source.sequence}`);
+      return envelope.requestRef as string;
+    });
+    assert.notEqual(refs[0], refs[1]);
+    await host.closeHostResources();
+    host = createHostedAppServer(base);
+    // The later question is cancelled first; both prompts deliberately reuse scope.
+    for (const index of [1, 0]) {
+      const result = await host.respondToUserQuestion(thread.id, {
+        questionCallItemId: questions[index]!.request.callItemId,
+        clientId: `cancel-${index}`,
+        outcome: "cancel",
+      });
+      await result.turn.done;
+    }
+    const answered = await host.readThread(thread.id);
+    const expected = [1, 0].map(
+      (index) => `I chose not to answer question scope (${refs[index]}).`,
+    );
+    const bodies = answered.itemList!.flatMap((item) =>
+      item.kind === "message" && item.source.metadata?.questionReply
+        ? [item.content.parts.at(-1)]
+        : [],
+    );
+    assert.deepEqual(
+      bodies,
+      expected.map((text) => ({ type: "text", text })),
+    );
+    const modelMessages = compileItemList(answered.itemList!).messages;
+    for (const text of expected)
+      assert.ok(
+        modelMessages.some(
+          (message) =>
+            message.role === "user" &&
+            "content" in message &&
+            message.content.some(
+              (part) => part.type === "text" && part.text === text,
+            ),
+        ),
+      );
+    for (const question of questions)
+      assert.equal(
+        JSON.stringify(
+          modelMessages.filter((message) => message.role === "user"),
+        ).includes(question.request.callItemId),
+        false,
+      );
+    await host.closeHostResources();
+    host = createHostedAppServer(base);
+    for (const index of [1, 0]) {
+      const read = await host.readUserQuestion(
+        thread.id,
+        questions[index]!.request.callItemId,
+        `cancel-${index}`,
+      );
+      assert.equal(read.question?.state, "cancelled");
+      assert.equal(read.response.status, "claimed");
+      const retry = await host.respondToUserQuestion(thread.id, {
+        questionCallItemId: questions[index]!.request.callItemId,
+        clientId: `cancel-${index}`,
+        outcome: "cancel",
+      });
+      await retry.turn.done;
+    }
+    const replayed = await host.readThread(thread.id);
+    assert.deepEqual(
+      replayed.itemList,
+      answered.itemList,
+      "replay and exact retries never rewrite semantic bytes",
+    );
+    const fork = await host.forkThread({
+      sourceThreadId: thread.id,
+      through: { type: "latest-complete" },
+      workspace: { type: "same-directory" },
+    });
+    assert.deepEqual(
+      fork.userQuestions,
+      [],
+      "a fork never inherits native response authority",
+    );
+    await (
+      await host.startTurn(fork.id, ask)
+    ).done;
+    const forkQuestion = (await host.listUserQuestions(fork.id)).questions[0]!;
+    assert.ok(forkQuestion.requestRef);
+    assert.equal(
+      refs.includes(forkQuestion.requestRef),
+      false,
+      "new fork calls follow the copied source-sequence prefix without reusing a ref",
+    );
+    const forkSnapshot = await host.readThread(fork.id);
+    const forkCall = forkSnapshot.itemList!.find(
+      (item) => item.id === forkQuestion.request.callItemId,
+    )!;
+    assert.equal(forkQuestion.requestRef, `q${forkCall.source.sequence}`);
+    const forkReply = await host.respondToUserQuestion(fork.id, {
+      questionCallItemId: forkQuestion.request.callItemId,
+      clientId: "fork-cancel",
+      outcome: "cancel",
+    });
+    await forkReply.turn.done;
+    assert.equal(
+      (
+        await host.readUserQuestion(
+          fork.id,
+          forkQuestion.request.callItemId,
+          "fork-cancel",
+        )
+      ).response.status,
+      "claimed",
+    );
+  } finally {
+    await host.closeHostResources();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cold Host accepts original and key-only reply bytes without reopening or rewriting completed requests", async () => {
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "zen-question-legacy-replies-"),
+  );
+  let host = createHostedAppServer(options(path.join(root, "source")));
+  try {
+    const thread = await host.startThread();
+    for (let i = 0; i < 2; i++)
+      await (
+        await host.startTurn(thread.id, ask)
+      ).done;
+    const questions = (await host.listUserQuestions(thread.id)).questions;
+    for (const i of [0, 1])
+      await (
+        await host.respondToUserQuestion(thread.id, {
+          questionCallItemId: questions[i]!.request.callItemId,
+          clientId: `legacy-${i}`,
+          ...(i === 0
+            ? {
+                outcome: "answer" as const,
+                answers: [
+                  { questionId: "scope", optionIds: [], text: "Small" },
+                ],
+              }
+            : { outcome: "cancel" as const }),
+        })
+      ).turn.done;
+    const original = await host.readThread(thread.id);
+    await host.closeHostResources();
+    for (const format of ["original", "key-only"] as const) {
+      const directory = path.join(root, format);
+      const facts = original.items.map((item) => {
+        if (item.type === "tool_result") {
+          try {
+            const envelope = JSON.parse(item.output);
+            if (envelope.kind === "zen.user-question.published") {
+              delete envelope.requestRef;
+              envelope.version = 1;
+              return { ...item, output: JSON.stringify(envelope) };
+            }
+          } catch {
+            /* Not a publication receipt. */
+          }
+        }
+        if (item.type === "user_message" && item.questionReply) {
+          const subject = `question ${format === "original" ? item.questionReply.request.callItemId : "scope"}`;
+          const body =
+            item.questionReply.outcome === "cancel"
+              ? `I chose not to answer ${subject}.`
+              : `Reply to ${subject}:\nScope: Small`;
+          const legacy: Record<string, unknown> = {
+            ...item,
+            content: [{ type: "text" as const, text: body }],
+          };
+          delete legacy.text;
+          return decodeCanonicalItem(legacy);
+        }
+        return item;
+      });
+      // Seed a separate synthetic pre-upgrade journal. No existing history is modified.
+      const journal = new DomainThreadJournal({
+        directory: path.join(directory, "threads"),
+        trace: new FileTraceStore(path.join(directory, "trace")),
+        metadata: new InMemoryThreadMetadataStore(),
+      });
+      await journal.create(facts);
+      await journal.close();
+      host = createHostedAppServer(options(directory));
+      const before = await host.readThread(thread.id);
+      for (const i of [0, 1]) {
+        const read = await host.readUserQuestion(
+          thread.id,
+          questions[i]!.request.callItemId,
+          `legacy-${i}`,
+        );
+        assert.equal(
+          read.question?.state,
+          i === 0 ? "answered" : "cancelled",
+          format,
+        );
+        assert.equal(read.response.status, "claimed", format);
+        const response = await host.respondToUserQuestion(thread.id, {
+          questionCallItemId: questions[i]!.request.callItemId,
+          clientId: `legacy-${i}`,
+          ...(i === 0
+            ? {
+                outcome: "answer" as const,
+                answers: [
+                  { questionId: "scope", optionIds: [], text: "Small" },
+                ],
+              }
+            : { outcome: "cancel" as const }),
+        });
+        await response.turn.done;
+      }
+      assert.deepEqual(
+        (await host.readThread(thread.id)).itemList,
+        before.itemList,
+        `${format} retries retain exact historical bodies`,
+      );
+      await host.closeHostResources();
+    }
+  } finally {
+    await host.closeHostResources();
+    await rm(root, { recursive: true, force: true });
   }
 });
