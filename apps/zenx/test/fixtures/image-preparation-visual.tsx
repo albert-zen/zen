@@ -118,8 +118,79 @@ const unavailable = {
     metadata: { onlySampleId: "later-unavailable", omittedMedia: [] },
   },
 } as ContextItem;
+function codecUnavailable(
+  id: string,
+  sequence: number,
+  sampleId: string,
+  itemId: string,
+  reason: "image_decode_failed" | "image_processing_failed",
+): ContextItem {
+  const prepared = notice(id, sequence, sampleId, itemId, false);
+  return {
+    ...prepared,
+    source: {
+      ...prepared.source,
+      metadata: {
+        ...prepared.source.metadata,
+        imagePreparation: {
+          ...(prepared.source.metadata?.imagePreparation as Record<
+            string,
+            unknown
+          >),
+          outcome: "unavailable",
+          reason,
+        },
+      },
+    },
+    content: {
+      text: "Synthetic safe model-only unavailable notice.",
+      parts: [
+        { type: "text", text: "Synthetic safe model-only unavailable notice." },
+      ],
+    },
+  } as ContextItem;
+}
 const scenarios: Record<string, readonly ContextItem[]> = {
   Current: current,
+  "Codec unavailable": [
+    input("input-codec", 0),
+    codecUnavailable(
+      "notice-codec",
+      1,
+      "codec",
+      "input-codec",
+      "image_decode_failed",
+    ),
+  ],
+  "Mixed outcome": [
+    input("input-first", 0),
+    notice("notice-first", 1, "mixed", "input-first", null),
+    input("input-codec", 2),
+    codecUnavailable(
+      "notice-codec",
+      3,
+      "mixed",
+      "input-codec",
+      "image_processing_failed",
+    ),
+  ],
+  "Codec cold selected": [
+    input("input-codec", 0),
+    codecUnavailable(
+      "notice-codec",
+      1,
+      "codec",
+      "input-codec",
+      "image_decode_failed",
+    ),
+    {
+      ...selection,
+      content: {
+        ...selection.content,
+        retainedItemIds: ["input-codec", "notice-codec"],
+      },
+    } as ContextItem,
+  ],
   Compacted: [...current, selection],
   "Later unavailable": [...current, unavailable],
   "Retained only": [

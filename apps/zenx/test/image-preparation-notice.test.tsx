@@ -119,3 +119,78 @@ test("mixed unknown and unsupported original-detail fallbacks both render", () =
   assert.match(html, /support is unknown/);
   assert.match(html, /unsupported by this model/);
 });
+
+test("unavailable-only notice says no pixels sent and never claims high fallback", () => {
+  const unavailable = {
+    ...item,
+    source: {
+      ...item.source,
+      metadata: {
+        ...item.source.metadata,
+        imagePreparation: {
+          ...(item.source.metadata?.imagePreparation as Record<
+            string,
+            unknown
+          >),
+          outcome: "unavailable",
+          reason: "image_decode_failed",
+        },
+      },
+    },
+    content: {
+      text: "private path /secret/image.png",
+      parts: [{ type: "text", text: "private path /secret/image.png" }],
+    },
+  } as ContextItem;
+  const html = renderToStaticMarkup(
+    createElement(ImagePreparationNotice, { items: [input, unavailable] }),
+  );
+  assert.match(html, /Image unavailable to model \(1\)/);
+  assert.match(html, /No image pixels were sent/);
+  assert.match(html, /could not decode image/);
+  assert.doesNotMatch(
+    html,
+    /high-detail view|Model image view adjusted|\/secret\/image.png|private-hash/,
+  );
+});
+
+test("mixed notice counts prepared and unavailable separately", () => {
+  const secondInput = { ...input, id: "second" } as ContextItem;
+  const unavailable = {
+    ...item,
+    id: "unavailable",
+    source: {
+      ...item.source,
+      metadata: {
+        ...item.source.metadata,
+        imagePreparation: {
+          ...(item.source.metadata?.imagePreparation as Record<
+            string,
+            unknown
+          >),
+          occurrence: {
+            itemId: "second",
+            field: "parts",
+            partIndex: 0,
+            sha256: original.sha256,
+          },
+          outcome: "unavailable",
+          reason: "image_processing_failed",
+        },
+      },
+    },
+    content: {
+      text: "private notice",
+      parts: [{ type: "text", text: "private notice" }],
+    },
+  } as ContextItem;
+  const html = renderToStaticMarkup(
+    createElement(ImagePreparationNotice, {
+      items: [input, item, secondInput, unavailable],
+    }),
+  );
+  assert.match(html, /1 prepared, 1 unavailable/);
+  assert.match(html, /could not prepare image/);
+  assert.match(html, /bounded high-detail view was used/);
+  assert.doesNotMatch(html, /private notice/);
+});

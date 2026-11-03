@@ -1,6 +1,7 @@
 import { preserveImageExif } from "./image-metadata.js";
 import sharp from "sharp";
 import {
+  AttachmentStoreError,
   type AttachmentRef,
   type AttachmentStore,
   MAX_IMAGE_PIXELS,
@@ -21,7 +22,7 @@ export class ImagePreparationError extends Error {
   readonly retryable = false;
   constructor(cause: unknown) {
     super(
-      `Image input preparation failed: ${cause instanceof Error ? cause.message : String(cause)}. The original attachment is preserved.`,
+      `Image input preparation failed before model dispatch (${cause instanceof AttachmentStoreError ? cause.code : "preparation_error"}).`,
       { cause },
     );
     this.name = "ImagePreparationError";
@@ -55,11 +56,45 @@ export function preparedImageDimensions(
   ];
 }
 
+export type ImageUnavailableReason =
+  "image_decode_failed" | "image_processing_failed";
+
+/** Only errors from an in-memory codec operation receive this safe category. */
+class ImageCodecFailure extends Error {
+  constructor(
+    readonly reason: ImageUnavailableReason,
+    cause: unknown,
+  ) {
+    super(reason, { cause });
+    this.name = "ImageCodecFailure";
+  }
+}
+async function imageCodec<T>(
+  reason: ImageUnavailableReason,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (cause) {
+    throw new ImageCodecFailure(reason, cause);
+  }
+}
+
 /** No file/network access here: only immutable, already-admitted attachments. */
 export async function prepareImageAttachment(
   original: AttachmentRef,
   attachments: Pick<AttachmentStore, "read" | "importBytes">,
   detail: "high" | "original" = "high",
+): Promise<AttachmentRef> {
+  const bytes = await attachments.read(original);
+  return await prepareImageBytes(original, bytes, attachments, detail);
+}
+
+async function prepareImageBytes(
+  original: AttachmentRef,
+  bytes: Uint8Array,
+  attachments: Pick<AttachmentStore, "importBytes">,
+  detail: "high" | "original",
 ): Promise<AttachmentRef> {
   if (original.width === undefined || original.height === undefined)
     throw new Error("Image preparation requires image dimensions");
@@ -68,49 +103,56 @@ export async function prepareImageAttachment(
     original.height,
     detail,
   );
-  const bytes = await attachments.read(original);
   if (
     width === original.width &&
     height === original.height &&
     original.mediaType !== "image/gif"
   ) {
-    // Codex validates decodability even when preserving the original encoding.
-    await sharp(bytes, { limitInputPixels: MAX_IMAGE_PIXELS, animated: false })
-      .raw()
-      .toBuffer();
+    await imageCodec("image_decode_failed", () =>
+      sharp(bytes, { limitInputPixels: MAX_IMAGE_PIXELS, animated: false })
+        .raw()
+        .toBuffer(),
+    );
     return original;
   }
-  const metadata = await sharp(bytes, {
-    limitInputPixels: MAX_IMAGE_PIXELS,
-    animated: false,
-  }).metadata();
-  let image = sharp(bytes, {
-    limitInputPixels: MAX_IMAGE_PIXELS,
-    animated: false,
-  })
-    .resize(width, height, {
-      fit: "fill",
-      kernel: sharp.kernel.linear,
-      withoutEnlargement: true,
+  const metadata = await imageCodec("image_decode_failed", () =>
+    sharp(bytes, {
+      limitInputPixels: MAX_IMAGE_PIXELS,
+      animated: false,
+    }).metadata(),
+  );
+  const encoded = await imageCodec("image_processing_failed", async () => {
+    let image = sharp(bytes, {
+      limitInputPixels: MAX_IMAGE_PIXELS,
+      animated: false,
     })
-    .keepExif();
-  // Codex copies only an RGB ICC profile. A retained CMYK/YCCK profile
-  // would mislabel RGB re-encoded pixels after decoder conversion.
-  if (metadata.icc?.subarray(16, 20).toString("ascii") === "RGB ")
-    image = image.keepIccProfile();
-  image =
-    original.mediaType === "image/jpeg"
-      ? image.jpeg({ quality: 85 })
-      : original.mediaType === "image/webp"
-        ? image.webp({ lossless: true })
-        : image.png();
-  const encoded = await image.toBuffer();
-  const prepared =
-    original.mediaType === "image/gif"
-      ? encoded
-      : preserveImageExif(bytes, encoded, original.mediaType);
-  return await attachments.importBytes(prepared);
+      .resize(width, height, {
+        fit: "fill",
+        kernel: sharp.kernel.linear,
+        withoutEnlargement: true,
+      })
+      .keepExif();
+    if (metadata.icc?.subarray(16, 20).toString("ascii") === "RGB ")
+      image = image.keepIccProfile();
+    image =
+      original.mediaType === "image/jpeg"
+        ? image.jpeg({ quality: 85 })
+        : original.mediaType === "image/webp"
+          ? image.webp({ lossless: true })
+          : image.png();
+    const output = await image.toBuffer();
+    return original.mediaType === "image/gif"
+      ? output
+      : preserveImageExif(bytes, output, original.mediaType);
+  });
+  // Store admission, identity and durability errors are deliberately outside the
+  // codec boundary. They must never be disguised as unavailable image pixels.
+  return await attachments.importBytes(encoded);
 }
+
+type PreparedView =
+  | { outcome: "prepared"; attachment: AttachmentRef }
+  | { outcome: "unavailable"; reason: ImageUnavailableReason };
 
 /** Materialize an immutable, sample-scoped overlay; the compiler alone places it. */
 export async function prepareSampleImages(options: {
@@ -133,7 +175,7 @@ export async function prepareSampleImages(options: {
       return [];
     const compiled = compileItemList(options.itemList, options);
     const result: ContextItem[] = [];
-    const preparedByHash = new Map<string, AttachmentRef>();
+    const preparedByHash = new Map<string, PreparedView>();
     const seen = new Set<string>();
     for (const message of compiled.messages) {
       const content =
@@ -158,20 +200,28 @@ export async function prepareSampleImages(options: {
           requestedDetail === "original" &&
           options.supportsImageDetailOriginal !== true;
         const detail = unavailableOriginal ? "high" : requestedDetail;
+        // Verify the original even on a derived-cache hit. A missing/corrupt
+        // source is a storage/identity failure, not a codec placeholder.
+        const bytes = await options.attachments.read(original);
         const cacheKey = `${original.sha256}:${detail}`;
-        let prepared = preparedByHash.get(cacheKey);
-        if (prepared === undefined) {
-          const profile =
-            detail === "original"
-              ? "codex-original-v1"
-              : IMAGE_PREPARATION_PROFILE;
+        const profile =
+          detail === "original"
+            ? "codex-original-v1"
+            : IMAGE_PREPARATION_PROFILE;
+        let view = preparedByHash.get(cacheKey);
+        if (view === undefined) {
           const cached = options.itemList.findLast((item) => {
             const metadata = item.source.metadata?.imagePreparation as
-              | { profile?: string; occurrence?: { sha256?: string } }
+              | {
+                  profile?: string;
+                  outcome?: string;
+                  occurrence?: { sha256?: string };
+                }
               | undefined;
             return (
               item.source.kind === "image_preparation" &&
               metadata?.profile === profile &&
+              metadata.outcome !== "unavailable" &&
               metadata.occurrence?.sha256 === original.sha256
             );
           });
@@ -179,39 +229,62 @@ export async function prepareSampleImages(options: {
             cached?.kind === "message" ? cached.content.parts[1] : undefined;
           if (cachedImage?.type === "image") {
             await options.attachments.read(cachedImage.attachment);
-            prepared = cachedImage.attachment;
+            view = { outcome: "prepared", attachment: cachedImage.attachment };
+          } else {
+            try {
+              view = {
+                outcome: "prepared",
+                attachment: await prepareImageBytes(
+                  original,
+                  bytes,
+                  options.attachments,
+                  detail,
+                ),
+              };
+            } catch (error) {
+              if (!(error instanceof ImageCodecFailure)) throw error;
+              view = { outcome: "unavailable", reason: error.reason };
+            }
           }
-          prepared ??= await prepareImageAttachment(
-            original,
-            options.attachments,
-            detail,
-          );
-          preparedByHash.set(cacheKey, prepared);
+          preparedByHash.set(cacheKey, view);
         }
         if (
-          prepared.sha256 === original.sha256 &&
+          view.outcome === "prepared" &&
+          view.attachment.sha256 === original.sha256 &&
           detail !== "original" &&
           !unavailableOriginal
         )
           continue;
-        const profile =
-          detail === "original"
-            ? "codex-original-v1"
-            : IMAGE_PREPARATION_PROFILE;
-        const detailNotice = unavailableOriginal
-          ? `Original image detail ${options.supportsImageDetailOriginal === false ? "is unsupported" : "capability is unknown"} for the selected provider/model; using a bounded HIGH view. `
-          : "";
-        const notice = `[${detailNotice}Image input prepared with ${profile}: ${original.width}x${original.height} ${original.mediaType}, ${original.byteLength} bytes -> ${prepared.width}x${prepared.height} ${prepared.mediaType}, ${prepared.byteLength} bytes. This sample sees the prepared view. The original attachment is preserved; request higher detail with view_image({"attachment":${JSON.stringify(original)},"detail":"original"}) only when this provider/model explicitly supports it (still bounded to 6000-edge/10000-patch). Provider image byte/count limits are not inferred by this profile.]`;
-        const parts: UserInputPart[] = [
-          { type: "text", text: notice },
-          {
-            type: "image",
-            attachment: prepared,
-            ...(part.detail === undefined || unavailableOriginal
-              ? {}
-              : { detail }),
-          },
-        ];
+        const receipt = {
+          type: original.type,
+          sha256: original.sha256,
+          mediaType: original.mediaType,
+          byteLength: original.byteLength,
+          width: original.width,
+          height: original.height,
+        };
+        let notice: string;
+        let parts: UserInputPart[];
+        if (view.outcome === "unavailable") {
+          notice = `[Image input unavailable (${view.reason}). No image pixels from this occurrence were sent in this sample. The original attachment is unchanged and remains referenced: ${JSON.stringify(receipt)}.]`;
+          parts = [{ type: "text", text: notice }];
+        } else {
+          const prepared = view.attachment;
+          const detailNotice = unavailableOriginal
+            ? `Original image detail ${options.supportsImageDetailOriginal === false ? "is unsupported" : "capability is unknown"} for the selected provider/model; using a bounded HIGH view. `
+            : "";
+          notice = `[${detailNotice}Image input prepared with ${profile}: ${original.width}x${original.height} ${original.mediaType}, ${original.byteLength} bytes -> ${prepared.width}x${prepared.height} ${prepared.mediaType}, ${prepared.byteLength} bytes. This sample sees the prepared view. The original attachment is preserved; request higher detail with view_image({"attachment":${JSON.stringify(receipt)},"detail":"original"}) only when this provider/model explicitly supports it (still bounded to 6000-edge/10000-patch). Provider image byte/count limits are not inferred by this profile.]`;
+          parts = [
+            { type: "text", text: notice },
+            {
+              type: "image",
+              attachment: prepared,
+              ...(part.detail === undefined || unavailableOriginal
+                ? {}
+                : { detail }),
+            },
+          ];
+        }
         result.push({
           id: options.id(),
           threadId: options.threadId,
@@ -230,8 +303,12 @@ export async function prepareSampleImages(options: {
               selection: { ...options.selection },
               imagePreparation: {
                 profile,
+                outcome: view.outcome,
+                ...(view.outcome === "unavailable"
+                  ? { reason: view.reason }
+                  : {}),
                 requestedDetail,
-                originalAttachment: original as unknown as JsonValue,
+                originalAttachment: receipt as unknown as JsonValue,
                 supportsImageDetailOriginal:
                   options.supportsImageDetailOriginal ?? null,
                 occurrence: occurrence as unknown as JsonValue,

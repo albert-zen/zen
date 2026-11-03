@@ -320,9 +320,8 @@ test("re-encoding never labels RGB output with a source CMYK ICC profile", async
   assert.deepEqual(Buffer.from(await store.read(original)), bytes);
 });
 
-test("a CRC-valid but undecodable small image is an explicit non-retryable preparation failure", async () => {
-  const { prepareSampleImages, ImagePreparationError } =
-    await import("../src/image-preparation.js");
+test("a CRC-valid but undecodable small image receives a safe sample-scoped unavailable notice", async () => {
+  const { prepareSampleImages } = await import("../src/image-preparation.js");
   const store = new InMemoryAttachmentStore();
   const bytes = Buffer.from(
     await sharp({
@@ -355,24 +354,20 @@ test("a CRC-valid but undecodable small image is an explicit non-retryable prepa
     source: { kind: "user_message", sequence: 0 },
     content: { text: "", parts: [{ type: "image", attachment: original }] },
   };
-  await assert.rejects(
-    prepareSampleImages({
-      threadId: "thread",
-      sampleId: "corrupt-sample",
-      itemList: [item],
-      selection: { providerProfileId: "provider", modelId: "model" },
-      inputModalities: ["text", "image"],
-      attachments: store,
-      id: () => "overlay",
-      now: () => item.createdAt,
-    }),
-    (error: unknown) => {
-      assert(error instanceof ImagePreparationError);
-      assert.equal(error.modelRecoveryBlocked, true);
-      assert.match(error.message, /original attachment is preserved/u);
-      return true;
-    },
-  );
+  const overlays = await prepareSampleImages({
+    threadId: "thread",
+    sampleId: "corrupt-sample",
+    itemList: [item],
+    selection: { providerProfileId: "provider", modelId: "model" },
+    inputModalities: ["text", "image"],
+    attachments: store,
+    id: () => "overlay",
+    now: () => item.createdAt,
+  });
+  assert.equal(overlays.length, 1);
+  assert(overlays[0]?.kind === "message");
+  assert.match(overlays[0].content.text, /image_decode_failed/u);
+  assert.equal(overlays[0].content.parts.length, 1);
   assert.deepEqual(Buffer.from(await store.read(original)), bytes);
 });
 

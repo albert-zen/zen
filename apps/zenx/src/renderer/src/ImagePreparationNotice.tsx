@@ -11,20 +11,32 @@ export function ImagePreparationNotice({
   const { t } = useTranslation("shell");
   const projection = projectImagePreparation(items);
   if (projection === null) return null;
+  const preparedCount = projection.images.filter(
+    (image) => image.outcome === "prepared",
+  ).length;
+  const unavailableCount = projection.images.length - preparedCount;
+  const titleKey =
+    unavailableCount === 0
+      ? "imagePreparationTitle"
+      : preparedCount === 0
+        ? "imagePreparationUnavailableTitle"
+        : "imagePreparationMixedTitle";
+  const title = t(titleKey, { count: preparedCount, unavailableCount });
   const fallbacks = new Set(
     projection.images.map((image) => image.originalDetailFallback),
   );
   return (
-    <aside
-      className="image-preparation-notice"
-      aria-label={t("imagePreparationTitle", {
-        count: projection.images.length,
-      })}
-    >
-      <strong>
-        {t("imagePreparationTitle", { count: projection.images.length })}
-      </strong>
-      <span>{t("imagePreparationPreserved")}</span>
+    <aside className="image-preparation-notice" aria-label={title}>
+      <strong>{title}</strong>
+      <span>
+        {t(
+          unavailableCount === 0
+            ? "imagePreparationPreserved"
+            : preparedCount === 0
+              ? "imagePreparationUnavailablePreserved"
+              : "imagePreparationMixedPreserved",
+        )}
+      </span>
       {fallbacks.has("unsupported") && (
         <span className="image-preparation-fallback">
           {t("imagePreparationFallbackUnsupported")}
@@ -40,14 +52,29 @@ export function ImagePreparationNotice({
         <ul>
           {projection.images.map((image, index) => (
             <li key={index}>
-              {t("imagePreparationDimensions", {
-                number: index + 1,
-                originalWidth: image.original.width,
-                originalHeight: image.original.height,
-                preparedWidth: image.prepared.width,
-                preparedHeight: image.prepared.height,
-                profile: image.profile,
-              })}
+              {image.outcome === "unavailable"
+                ? t(
+                    image.reason === "image_decode_failed"
+                      ? image.original === null
+                        ? "imagePreparationUnavailableDecodeNoDimensions"
+                        : "imagePreparationUnavailableDecode"
+                      : image.original === null
+                        ? "imagePreparationUnavailableProcessingNoDimensions"
+                        : "imagePreparationUnavailableProcessing",
+                    {
+                      number: index + 1,
+                      originalWidth: image.original?.width,
+                      originalHeight: image.original?.height,
+                    },
+                  )
+                : t("imagePreparationDimensions", {
+                    number: index + 1,
+                    originalWidth: image.original!.width,
+                    originalHeight: image.original!.height,
+                    preparedWidth: image.prepared!.width,
+                    preparedHeight: image.prepared!.height,
+                    profile: image.profile,
+                  })}
             </li>
           ))}
         </ul>

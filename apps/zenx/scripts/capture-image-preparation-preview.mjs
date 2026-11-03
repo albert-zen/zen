@@ -117,6 +117,11 @@ try {
     }
     throw Error(`Condition timed out: ${expression}`);
   };
+  const waitExpandedNotice = async (visibleText) => {
+    await wait(
+      `(() => { const notice=document.querySelector('.image-preparation-notice'), details=notice?.querySelector('details'), row=details?.querySelector('li'); return details?.open && row?.getClientRects().length > 0 && notice.innerText.includes(${JSON.stringify(visibleText)}); })()`,
+    );
+  };
   const click = async (selector) => {
     const p = await evaluate(
       `(() => { const e=${selector}; const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`,
@@ -191,6 +196,8 @@ try {
     await wait(
       "document.querySelector('.image-preparation-notice details').open",
     );
+    await waitExpandedNotice("4000 × 3000 → 1600 × 1200");
+    await waitExpandedNotice("2400 × 1800 → 1536 × 1152");
     const expanded = await snapshot();
     assert.match(expanded.notice, /4000 × 3000 → 1600 × 1200/);
     assert.match(expanded.notice, /2400 × 1800 → 1536 × 1152/);
@@ -205,6 +212,7 @@ try {
     await wait(
       "document.querySelector('.image-preparation-notice details').open",
     );
+    await waitExpandedNotice("4000 × 3000 → 1600 × 1200");
     const keyboard = await snapshot();
     assert.equal(keyboard.summaryFocused, true);
     await screenshot(`${scene}-keyboard.png`);
@@ -234,6 +242,65 @@ try {
       retained.notice,
       /unsupported by this model|当前模型不支持/,
     );
+    const codecOutcomes = [];
+    for (const label of [
+      "Codec unavailable",
+      "Mixed outcome",
+      "Codec cold selected",
+    ]) {
+      await click(
+        `[...document.querySelectorAll('header button')].find(e=>e.textContent===${JSON.stringify(label)})`,
+      );
+      await wait(
+        `document.querySelector('header [role=status]')?.textContent===${JSON.stringify(`Synthetic snapshot: ${label}`)}&&!!document.querySelector('.image-preparation-notice')`,
+      );
+      if (!(await snapshot()).open)
+        await click(
+          "document.querySelector('.image-preparation-notice summary')",
+        );
+      await wait(
+        "document.querySelector('.image-preparation-notice details').open",
+      );
+      await waitExpandedNotice(
+        label === "Mixed outcome"
+          ? "4000 × 3000 → 1600 × 1200"
+          : lang === "en"
+            ? "could not decode image"
+            : "图片解码失败",
+      );
+      if (label === "Mixed outcome")
+        await waitExpandedNotice(
+          lang === "en" ? "could not prepare image" : "图片处理失败",
+        );
+      const outcome = await snapshot();
+      assert.equal(outcome.noticeCount, 1);
+      assert.equal(outcome.overflow, false);
+      assert.doesNotMatch(outcome.notice, /model-only|synthetic-original/);
+      if (label === "Mixed outcome") {
+        assert.match(
+          outcome.notice,
+          lang === "en"
+            ? /1 prepared, 1 unavailable/
+            : /已处理 1 张，无法查看 1 张/,
+        );
+        assert.match(outcome.notice, /4000 × 3000 → 1600 × 1200/);
+      } else {
+        assert.match(
+          outcome.notice,
+          lang === "en"
+            ? /Image unavailable to model \(1\)/
+            : /模型无法查看图片（1 张）/,
+        );
+        assert.doesNotMatch(
+          outcome.notice,
+          /high-detail view was used|高细节视图| → /,
+        );
+      }
+      await screenshot(
+        `${scene}-${label.toLowerCase().replaceAll(" ", "-")}.png`,
+      );
+      codecOutcomes.push({ label, ...outcome });
+    }
     cases.push({
       lang,
       theme,
@@ -244,6 +311,7 @@ try {
       keyboard,
       removals,
       retained,
+      codecOutcomes,
     });
   }
   assert.deepEqual(errors, []);

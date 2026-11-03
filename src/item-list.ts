@@ -530,6 +530,8 @@ export function decodeContextItem(value: unknown): ContextItem {
         "supportsImageDetailOriginal",
         "originalAttachment",
         "requestedDetail",
+        "outcome",
+        "reason",
       ],
       "imagePreparation",
     );
@@ -580,28 +582,68 @@ export function decodeContextItem(value: unknown): ContextItem {
       )
         throw Error("Prepared view original does not match its occurrence");
     }
-    const overlay = content.parts as UserInput;
-    if (
-      overlay.length !== 2 ||
-      overlay[0]?.type !== "text" ||
-      overlay[1]?.type !== "image" ||
-      overlay[0].text !== content.text
-    )
-      throw Error("Image preparation requires one persisted notice and image");
-    const ref = overlay[1].attachment;
+    const outcome = preparation.outcome ?? "prepared";
+    if (outcome !== "prepared" && outcome !== "unavailable")
+      throw Error("Unknown image preparation outcome");
     const originalDetail = preparation.profile === "codex-original-v1";
     if (originalDetail && preparation.supportsImageDetailOriginal !== true)
       throw Error("Original image profile requires explicit frozen capability");
-    if (originalDetail && overlay[1].detail !== "original")
-      throw Error("Original profile requires original image detail");
-    if (
-      ref.width === undefined ||
-      ref.height === undefined ||
-      Math.max(ref.width, ref.height) > (originalDetail ? 6000 : 2048) ||
-      Math.ceil(ref.width / 32) * Math.ceil(ref.height / 32) >
-        (originalDetail ? 10000 : 2500)
-    )
-      throw Error("Prepared image exceeds its profile");
+    const overlay = content.parts as UserInput;
+    if (outcome === "unavailable") {
+      if (
+        preparation.originalAttachment === undefined ||
+        preparation.requestedDetail === undefined ||
+        preparation.supportsImageDetailOriginal === undefined
+      )
+        throw Error(
+          "Unavailable image requires its original and frozen preparation choice",
+        );
+      if (
+        originalDetail !==
+        (preparation.requestedDetail === "original" &&
+          preparation.supportsImageDetailOriginal === true)
+      )
+        throw Error(
+          "Unavailable image profile does not match its frozen detail capability",
+        );
+      if (
+        preparation.reason !== "image_decode_failed" &&
+        preparation.reason !== "image_processing_failed"
+      )
+        throw Error("Unknown unavailable image reason");
+      if (
+        overlay.length !== 1 ||
+        overlay[0]?.type !== "text" ||
+        overlay[0].text !== content.text
+      )
+        throw Error(
+          "Unavailable image requires one persisted text notice and no pixels",
+        );
+      string(content.text, "unavailable image notice", false);
+    } else {
+      if (preparation.reason !== undefined)
+        throw Error("Prepared image cannot carry an unavailable reason");
+      if (
+        overlay.length !== 2 ||
+        overlay[0]?.type !== "text" ||
+        overlay[1]?.type !== "image" ||
+        overlay[0].text !== content.text
+      )
+        throw Error(
+          "Image preparation requires one persisted notice and image",
+        );
+      const ref = overlay[1].attachment;
+      if (originalDetail && overlay[1].detail !== "original")
+        throw Error("Original profile requires original image detail");
+      if (
+        ref.width === undefined ||
+        ref.height === undefined ||
+        Math.max(ref.width, ref.height) > (originalDetail ? 6000 : 2048) ||
+        Math.ceil(ref.width / 32) * Math.ceil(ref.height / 32) >
+          (originalDetail ? 10000 : 2500)
+      )
+        throw Error("Prepared image exceeds its profile");
+    }
   } else if (
     source.metadata !== undefined &&
     "imagePreparation" in (source.metadata as object)

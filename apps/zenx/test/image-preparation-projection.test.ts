@@ -10,6 +10,7 @@ function notice(
     requestedDetail?: "high" | "original";
     supports?: boolean | null;
     original?: boolean;
+    unavailable?: "image_decode_failed" | "image_processing_failed";
   } = {},
 ): ContextItem {
   const original = {
@@ -41,6 +42,9 @@ function notice(
         selection: { providerProfileId: "provider", modelId: "model" },
         imagePreparation: {
           profile: "codex-high-v1",
+          ...(options.unavailable
+            ? { outcome: "unavailable", reason: options.unavailable }
+            : {}),
           requestedDetail: options.requestedDetail ?? "high",
           supportsImageDetailOriginal: options.supports ?? null,
           occurrence: {
@@ -57,10 +61,12 @@ function notice(
     },
     content: {
       text: "model notice",
-      parts: [
-        { type: "text", text: "model notice" },
-        { type: "image", attachment: prepared },
-      ],
+      parts: options.unavailable
+        ? [{ type: "text", text: "model notice" }]
+        : [
+            { type: "text", text: "model notice" },
+            { type: "image", attachment: prepared },
+          ],
     },
   } as ContextItem;
 }
@@ -226,4 +232,102 @@ test("compaction retained IDs and exclusions control occurrence eligibility", ()
     projectImagePreparation([input("first"), notice("s", "first"), excluded]),
     null,
   );
+});
+
+test("unavailable images are retained without prepared pixels or fallback claims", () => {
+  const images = projectImagePreparation([
+    input("first"),
+    notice("s", "first", {
+      requestedDetail: "original",
+      supports: false,
+      unavailable: "image_decode_failed",
+    }),
+    input("second"),
+    notice("s", "second", { unavailable: "image_processing_failed" }),
+    input("third"),
+    notice("s", "third"),
+  ])?.images;
+  assert.deepEqual(
+    images?.map((image) => image.outcome),
+    ["unavailable", "unavailable", "prepared"],
+  );
+  assert.equal(images?.[0]?.prepared, null);
+  assert.equal(images?.[0]?.originalDetailFallback, null);
+  assert.equal(images?.[1]?.reason, "image_processing_failed");
+  assert.equal(images?.[2]?.prepared?.width, 1600);
+});
+
+test("unavailable image respects cold sample, selection, and occurrence fences", () => {
+  const first = notice("s", "first", { unavailable: "image_decode_failed" });
+  assert.equal(
+    projectImagePreparation([input("first"), first, first])?.images.length,
+    1,
+  );
+  assert.equal(
+    projectImagePreparation([input("first"), first, unavailable("later")]),
+    null,
+  );
+  assert.equal(
+    projectImagePreparation([input("first"), first, selection()]),
+    null,
+  );
+  const invalid = {
+    ...first,
+    content: {
+      ...first.content,
+      parts: [
+        ...first.content.parts,
+        { type: "image", attachment: { type: "attachment", sha256: "bad" } },
+      ],
+    },
+  } as ContextItem;
+  assert.equal(projectImagePreparation([input("first"), invalid]), null);
+});
+
+test("unavailable image can lack dimensions but must bind the original hash", () => {
+  const damaged = notice("s", "first", { unavailable: "image_decode_failed" });
+  const detail = damaged.source.metadata?.imagePreparation as Record<
+    string,
+    unknown
+  >;
+  const withoutDimensions = {
+    ...damaged,
+    source: {
+      ...damaged.source,
+      metadata: {
+        ...damaged.source.metadata,
+        imagePreparation: {
+          ...detail,
+          originalAttachment: {
+            type: "attachment",
+            sha256: "original",
+            mediaType: "image/png",
+            byteLength: 100,
+          },
+        },
+      },
+    },
+  } as ContextItem;
+  assert.equal(
+    projectImagePreparation([input("first"), withoutDimensions])?.images[0]
+      ?.original,
+    null,
+  );
+  const wrongHash = {
+    ...withoutDimensions,
+    source: {
+      ...withoutDimensions.source,
+      metadata: {
+        ...withoutDimensions.source.metadata,
+        imagePreparation: {
+          ...(withoutDimensions.source.metadata?.imagePreparation as Record<
+            string,
+            unknown
+          >),
+          originalAttachment: { type: "attachment", sha256: "wrong" },
+        },
+      },
+    },
+  } as ContextItem;
+  assert.equal(projectImagePreparation([input("first"), wrongHash]), null);
 });
