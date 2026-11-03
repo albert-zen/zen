@@ -1,3 +1,4 @@
+import { normalizeBoardInstanceKey } from "../../../../../packages/zenx-board-plugin/src/board.js";
 import type { ModelTool } from "../../../../../src/model.js";
 import type { ToolExecutionResult } from "../../../../../src/tool.js";
 import {
@@ -21,7 +22,7 @@ import {
 export const isBoardModelTool = (name: string) =>
   name === "zenx_board_put" || name === "zenx_board_read";
 
-export const boardModelDocument = `Compose conversation-owned information Boards with short authored document/block/event IDs. Owner defaults to { kind: 'thread' } for the calling Thread; Room ownership uses { kind: 'room', room: <scoped Room ref> } and still requires current membership. read returns an immutable snapshot, including a known absent default Board. To replace existing content, request view: 'document' and inspect the complete authored content (including any output spool), then put({snapshot, document}). A compact or conflict snapshot cannot authorize replacement of unseen body content. Omitted document.owner is supplied by the snapshot; an explicit owner must match it exactly. put preserves user field values and does not execute actions. Conflict applied:false requires a fresh complete read and deliberate reconsideration, never automatic retry. An uncertain result must be checked by reading the same owner; do not repeat the write or bypass an unavailable/fenced Host. A snapshot records the requested view and version, not proof that the model has understood it.
+export const boardModelDocument = `Compose conversation-owned information Boards with short authored document/block/event IDs. Use read({instanceKey}) for an independent Board document; omitted instanceKey or 'default' selects the legacy default. Document.id is authored content, not a storage address. put derives the exact address from its immutable snapshot and cannot retarget another document. Owner defaults to { kind: 'thread' } for the calling Thread; Room ownership uses { kind: 'room', room: <scoped Room ref> } and still requires current membership. read returns an immutable snapshot, including a known absent Board at the requested address. To replace existing content, request view: 'document' and inspect the complete authored content (including any output spool), then put({snapshot, document}). A compact or conflict snapshot cannot authorize replacement of unseen body content. Omitted document.owner is supplied by the snapshot; an explicit owner must match it exactly. put preserves user field values and does not execute actions. Conflict applied:false requires a fresh complete read and deliberate reconsideration, never automatic retry. An uncertain result must be checked by reading the same owner and instanceKey; do not repeat the write or bypass an unavailable/fenced Host. A snapshot records the requested view and version, not proof that the model has understood it.
 
 Templates compose freely with isolated custom HTML/CSS/JS. Every block has id and kind: note needs text, optional title; metric needs title/value (string), optional detail; progress needs title/value (number), optional positive max; field needs label/field, optional input (text default, textarea, select, checkbox), options and placeholder; action needs label/event (declared event ID), optional emphasis. For a form/question, pair fields with an explicit action, for example blocks: [{ id: 'question', kind: 'field', label: 'Choose a scope', field: 'choice', input: 'select', options: ['Small', 'Full'] }, { id: 'answerButton', kind: 'action', label: 'Send answer', event: 'answer', emphasis: true }], initialValues: { choice: 'Small' }, events: [{ id: 'answer', label: 'Send answer', actions: [{ kind: 'submit', text: 'My choice: {{choice}}' }] }]. Fields are draft data, never approval.
 
@@ -31,6 +32,14 @@ Custom HTML receives window.zenxPluginUi. Read zenxPluginUi.context.board and ze
 
 For asynchronous interaction chains, begin inside the user handler and use only the callback's scoped SDK: await zenxPluginUi.interaction.run(async (sdk) => { const result = await sdk.commands.execute('event', { eventId: 'answer' }); if (result.error) throw new Error(result.error); await sdk.navigation.navigate('https://example.test/result'); }). This retains the witnessed gesture across script awaits longer than the direct five-second window, for at most five minutes and only the same mounted document revision and owner; the scope ends when the callback finishes. It does not grant approval, bypass existing permissions, schedule background work or authorize a replacement document. Local, submit, script and conditional events require explicit user interaction, never merely read/put. No automatic retry of errors or unknown outcomes.`;
 
+const instanceKeySchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+  description:
+    "Independent document address, not document.id; omitted or default selects the legacy default. Reserved prototype names are not allowed.",
+};
 const ownerSchema = {
   anyOf: [
     {
@@ -218,13 +227,14 @@ export function boardModelDefinition<T extends ModelTool>(source: T): T {
   tool.description =
     source.name === "zenx_board_read"
       ? "Read compact semantic Board state by default, or view:'document' for the complete authored body and current drafts. Returns an immutable owner/version snapshot, including absence. Existing content can be replaced only from a complete-document snapshot; inspect any full-content spool. Drafts/snapshots are not approval; live ownership still applies."
-      : "Replace the default Board body against its exact immutable snapshot from a complete document read or known absence. Omitted document.owner follows the snapshot; explicit owner must match. Preserve latest user drafts; execute no events. applied:false is a conflict requiring a fresh full read and reconsideration, never automatic retry. Check unknown outcomes by read only. Browser navigation uses exact tab refs, never native IDs.";
+      : "Replace exactly the Board document addressed by its exact immutable snapshot from a complete document read or known absence. Omitted document.owner follows the snapshot; explicit owner must match. Preserve latest user drafts; execute no events. applied:false is a conflict requiring a fresh full read and reconsideration, never automatic retry. Check unknown outcomes by read only. Browser navigation uses exact tab refs, never native IDs.";
   tool.inputSchema =
     source.name === "zenx_board_read"
       ? {
           type: "object",
           properties: {
             owner: ownerSchema,
+            instanceKey: instanceKeySchema,
             view: { enum: ["semantic", "document"] },
           },
           additionalProperties: false,
@@ -344,7 +354,8 @@ export function decodeBoardArguments(
 ): Record<string, unknown> {
   const args = structuredClone(input);
   if (name === "zenx_board_read") {
-    only(args, ["owner", "view"]);
+    only(args, ["owner", "view", "instanceKey"]);
+    normalizeBoardInstanceKey(args.instanceKey);
     if (
       args.view !== undefined &&
       !["semantic", "document"].includes(String(args.view))
@@ -357,6 +368,9 @@ export function decodeBoardArguments(
     refs.resolve(args.snapshot, "board", "content-snapshot", epoch),
   );
   const owner = object(baseline.owner);
+  if (typeof baseline.address !== "string")
+    throw Error("Board snapshot has an invalid document address");
+  const instanceKey = normalizeBoardInstanceKey(baseline.address);
   only(
     owner,
     owner.kind === "room"
@@ -364,7 +378,6 @@ export function decodeBoardArguments(
       : ["kind", "threadId"],
   );
   if (
-    baseline.address !== "default" ||
     owner.threadId !== refs.ownerThreadId ||
     (owner.kind !== "thread" && owner.kind !== "room") ||
     (owner.kind === "room" && typeof owner.roomId !== "string") ||
@@ -382,6 +395,7 @@ export function decodeBoardArguments(
     throw Error("Board document owner does not match its immutable snapshot");
   document.owner = structuredClone(owner);
   args.expectedRevision = baseline.revision;
+  if (instanceKey !== "default") args.instanceKey = instanceKey;
   delete args.snapshot;
   const targets = new Map<string, BrowserModelRoute>();
   mapActions(document, (value) => {
@@ -439,6 +453,11 @@ export function projectBoardResult(
   if (output.owner !== undefined) output.owner = projectOwner(output.owner);
   const document = record(output.document);
   if (contentSnapshot) {
+    const instanceKey = normalizeBoardInstanceKey(contentSnapshot.instanceKey);
+    if (normalizeBoardInstanceKey(output.instanceKey) !== instanceKey)
+      throw Error(
+        "Board returned mismatched document address and content snapshot",
+      );
     const owner = object(contentSnapshot.owner);
     if (
       !Number.isSafeInteger(contentSnapshot.revision) ||
@@ -457,7 +476,7 @@ export function projectBoardResult(
         "content-snapshot",
         asJson({
           owner,
-          address: "default",
+          address: instanceKey,
           revision: contentSnapshot.revision,
           completeDocument: contentSnapshot.completeDocument,
         }),

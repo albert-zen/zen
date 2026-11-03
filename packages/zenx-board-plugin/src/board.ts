@@ -63,6 +63,8 @@ export interface BoardDocument {
   html?: string;
 }
 export interface BoardSnapshot {
+  /** Independent product document address; omitted means the legacy default. */
+  instanceKey?: string;
   document: BoardDocument;
   revision: number;
   draftRevision: number;
@@ -82,4 +84,26 @@ export function boardOwnerKey(owner: BoardOwner): string {
   return owner.kind === "thread"
     ? `thread:${owner.threadId}`
     : `room:${owner.roomId}`;
+}
+
+/** Addressing is separate from authored BoardDocument.id and execution ownership. */
+export function normalizeBoardInstanceKey(value: unknown = "default"): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(value) ||
+    ["__proto__", "constructor", "prototype"].includes(value)
+  )
+    throw new Error("Invalid Board instanceKey");
+  return value;
+}
+
+export function boardDocumentKey(
+  owner: BoardOwner,
+  instanceKey?: string,
+): string {
+  const address = normalizeBoardInstanceKey(instanceKey);
+  // Do not migrate or shadow the pre-existing default owner's storage address.
+  return address === "default"
+    ? boardOwnerKey(owner)
+    : `document:${JSON.stringify([boardOwnerKey(owner), address])}`;
 }

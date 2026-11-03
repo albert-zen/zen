@@ -1,4 +1,12 @@
 import type { ZenXPluginManifestV2 } from "@zenx/plugin-sdk";
+const instanceKeySchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$",
+  description:
+    "Independent Board address, separate from document.id and execution owner; omitted/default preserves the legacy Board.",
+} as const;
 export const boardManifest = {
   schemaVersion: 2,
   id: "zenx-board",
@@ -15,7 +23,7 @@ export const boardManifest = {
   },
   storageVersion: 1,
   mainDocument:
-    "Read and compose the current conversation information Board. Use short document/block/event IDs; these are not separate storage addresses. read returns an exact contentSnapshot, including revision 0 for absence without creating state. Read view:document for the complete authored body before replacing it. Native put requires expectedRevision from that read; model callers use the opaque snapshot supplied by the model facade. put compares body revision inside the existing serial owner checks, preserves latest user field values, and returns applied:false on conflict without writing or cancelling an existing interaction. Conflicts require a fresh complete read and deliberate reconsideration; unknown outcomes are checked by reading the same owner, never automatic retry or bypassing a storage fence. User draft values are unsent, never approval. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
+    "Read and compose conversation information Boards. Optional instanceKey addresses independent documents; omitted or default selects the legacy Board at its unchanged storage address. Use short document/block/event IDs; these are authored content, not storage addresses. Removing an information-panel placement never deletes its Board body. read returns an exact contentSnapshot, including revision 0 for absence without creating state. Read view:document for the complete authored body before replacing it. Native put requires expectedRevision from that read; model callers use the opaque snapshot supplied by the model facade. put compares body revision inside the existing serial owner checks, preserves latest user field values, and returns applied:false on conflict without writing or cancelling an existing interaction. Conflicts require a fresh complete read and deliberate reconsideration; unknown outcomes are checked by reading the same owner and instanceKey, never automatic retry or bypassing a storage fence. User draft values are unsent, never approval. Templates (notes, metrics, progress, fields, actions) compose freely with custom isolated HTML/CSS/JS. UI events alone may deliver assembled text or execute scripts; model tools cannot invoke human events. Submit text interpolates {{field}}. Scripts use only {{valuesBase64}} (base64 JSON of fields) so user input is not shell code. if conditions may inspect result.exitCode/result.output after a script. Owner defaults to the calling Thread; explicit Room owner must use that exact member Thread. No model message is sent merely by updating or reading a Board.",
   provider: {
     id: "zenx-board",
     platforms: ["*"],
@@ -35,10 +43,11 @@ export const boardManifest = {
     {
       name: "zenx_board_put",
       description:
-        "Replace the default Board body only when expectedRevision matches the observed contentSnapshot revision. Preserve latest user draft values and pin state. A conflict returns applied:false with current semantic state and performs no write or interaction cancellation; read the complete document before reconsidering. Unknown outcomes must be checked by read, never retried automatically. No model delivery or execution occurs.",
+        "Replace exactly the addressed Board body only when expectedRevision matches the observed contentSnapshot revision. Preserve latest user draft values and pin state. A conflict returns applied:false with current semantic state and performs no write or interaction cancellation; read the complete document before reconsidering. Unknown outcomes must be checked by read, never retried automatically. No model delivery or execution occurs.",
       inputSchema: {
         type: "object",
         properties: {
+          instanceKey: instanceKeySchema,
           expectedRevision: {
             type: "integer",
             minimum: 0,
@@ -62,6 +71,7 @@ export const boardManifest = {
       inputSchema: {
         type: "object",
         properties: {
+          instanceKey: instanceKeySchema,
           owner: {
             type: "object",
           },

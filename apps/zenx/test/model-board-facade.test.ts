@@ -819,7 +819,7 @@ test("model snapshot inputs cannot substitute owner, address, revision, incomple
     "content-snapshot",
     {
       owner: { kind: "thread", threadId: caller },
-      address: "another-document",
+      address: "invalid/document/address",
       revision: 0,
       completeDocument: true,
     },
