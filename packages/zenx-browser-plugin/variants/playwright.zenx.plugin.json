@@ -445,6 +445,26 @@
       ]
     },
     {
+      "name": "browser_input_reset",
+      "description": "Report whether one explicit tab withholds new site input, and make at most one controlled release attempt: the unacknowledged key-up for the key whose press outcome was unknown. Repeats no page action, sends no new input and never retries automatically. Reads and programmatic actions stay available whether or not the release succeeds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "tabId"],
+        "additionalProperties": false
+      },
+      "permissions": ["browser.tabs.read"],
+      "interactionMode": "isolated",
+      "capabilities": ["playwright_cli", "headless", "browser_context"]
+    },
+    {
       "name": "browser_extensions",
       "description": "List extensions actually implemented by this tab's provider; unsupported backends never fall back.",
       "inputSchema": {
