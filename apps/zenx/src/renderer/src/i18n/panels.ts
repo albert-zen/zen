@@ -498,6 +498,9 @@ export const en = {
   triggerDefinitions: "Trigger definitions",
   enabled: "Enabled",
   paused: "Paused",
+  enableTrigger: "Enable trigger",
+  pauseTrigger: "Pause trigger",
+  triggerToggleFailed: "Could not change this trigger. Check its status and try again.",
   instructions: "Instructions",
   noRunsYet: "No runs yet",
   programStepsRequireTheAdvancedApiEditing:
@@ -1529,6 +1532,9 @@ export const zhCN = {
   triggerDefinitions: "触发器定义",
   enabled: "已启用",
   paused: "已暂停",
+  enableTrigger: "启用触发器",
+  pauseTrigger: "暂停触发器",
+  triggerToggleFailed: "没能改变这个触发器的状态，请检查后重试。",
   instructions: "指令",
   noRunsYet: "尚无运行记录",
   programStepsRequireTheAdvancedApiEditing:

@@ -11976,6 +11976,17 @@ button:disabled {
   gap: 3px;
   min-width: 0;
 }
+.information-trigger-list .information-trigger-main {
+  flex: 1 1 auto;
+}
+.information-trigger-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.information-trigger-list .plugin-switch {
+  width: 44px;
+}
 .information-trigger-list strong {
   overflow: hidden;
   text-overflow: ellipsis;

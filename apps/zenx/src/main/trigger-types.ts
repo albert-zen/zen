@@ -87,6 +87,8 @@ export interface TriggerSidebarSnapshot {
     kind: TriggerKind;
     label: string;
     active: boolean;
+    /** Definition revision required by an explicit resume; never scheduling authority. */
+    definitionRevision?: number;
     timer?: { nextRunAt: number };
     sourceError?: "Source observation unavailable";
   }>;

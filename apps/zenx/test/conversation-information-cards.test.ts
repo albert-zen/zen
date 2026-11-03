@@ -24,9 +24,13 @@ test("information reads bounded current-owner facts and edits the exact trigger 
   Object.assign(dom.window, {
     zenx: {
       plugins: {
-        executeCommand: async (plugin: string, command: string) => {
-          calls.push([plugin, command]);
-          assert.equal(command, "sidebar-facts");
+        executeCommand: async (
+          plugin: string,
+          command: string,
+          input?: unknown,
+        ) => {
+          calls.push([plugin, command, input]);
+          if (command !== "sidebar-facts") return {};
           return {
             triggers: [
               {
@@ -42,6 +46,7 @@ test("information reads bounded current-owner facts and edits the exact trigger 
                 kind: "timer",
                 active: false,
                 label: "Paused check",
+                definitionRevision: 7,
               },
               {
                 id: "foreign",
@@ -111,8 +116,24 @@ test("information reads bounded current-owner facts and edits the exact trigger 
       "/plugins/zenx-triggers/triggers?triggerId=exact%2Fid",
     ]);
     assert.deepEqual(calls.filter(Array.isArray), [
-      ["zenx-triggers", "sidebar-facts"],
+      ["zenx-triggers", "sidebar-facts", undefined],
     ]);
+    const resume = document.querySelector<HTMLButtonElement>(
+      '[aria-label="Enable trigger · Paused check"]',
+    )!;
+    assert.equal(resume.getAttribute("aria-checked"), "false");
+    await act(async () => resume.click());
+    assert.deepEqual(
+      calls.filter((call) => Array.isArray(call) && call[1] === "resume"),
+      [
+        [
+          "zenx-triggers",
+          "resume",
+          { triggerId: "paused", expectedRevision: 7 },
+        ],
+      ],
+      "resume carries the exact definition revision read with these facts",
+    );
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
