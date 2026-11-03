@@ -20,6 +20,7 @@ import type { ThreadMetadataStore } from "./thread-metadata.js";
 import type {
   RuntimeTrace,
   TraceReader,
+  TraceReadSnapshot,
   TraceReceipt,
   TraceEvent,
 } from "./trace.js";
@@ -375,7 +376,7 @@ export class DomainThreadJournal implements ThreadJournal {
     | {
         contexts: readonly ContextItem[];
         originals: CanonicalItem[];
-        trace: Awaited<ReturnType<TraceReader["read"]>>;
+        trace: TraceReadSnapshot;
       }
     | undefined
   > {
@@ -383,9 +384,9 @@ export class DomainThreadJournal implements ThreadJournal {
       throw new ThreadJournalAppendOutcomeUnknownError(
         "Source fact durability unknown",
       );
-    const observed = await this.trace.read(threadId, {
+    const observed = await (this.trace.readSnapshot?.(threadId, {
       verifyArtifacts: false,
-    });
+    }) ?? this.trace.read(threadId, { verifyArtifacts: false }));
     if (
       observed.issues.some((issue) =>
         ["read_failure", "partial_frame", "invalid_frame"].includes(issue.kind),
@@ -513,7 +514,7 @@ export class DomainThreadJournal implements ThreadJournal {
   }
   async #read(
     threadId: string,
-    verifiedTrace?: Awaited<ReturnType<TraceReader["read"]>>,
+    verifiedTrace?: TraceReadSnapshot,
   ): Promise<CanonicalItem[]> {
     const live = this.#live.get(threadId);
     if (live !== undefined) return structuredClone(live);
