@@ -1885,37 +1885,52 @@ test("native startup opt-in is executable inside the real diagnostic expression 
   }
 });
 
-test("native Find replacement waits for the queued Select All before insertText", async () => {
-  const start = source.indexOf('  nativeKey("A", ["meta"]);');
-  const end = source.indexOf("  await until(async () => {", start);
-  assert.ok(start > 0 && end > start);
+test("native Find replacement observes native responder selection before insertText", async () => {
+  const insert = source.indexOf(
+    '  await window.webContents.insertText("Synthetic user ");',
+  );
+  const start = Math.max(
+    source.lastIndexOf('  nativeKey("A", ["meta"]);', insert),
+    source.lastIndexOf(
+      '  Menu.sendActionToFirstResponder("selectAll:");',
+      insert,
+    ),
+  );
+  assert.ok(start > 0 && insert > start);
+  const end = source.indexOf("\n", insert);
   const replace = new (Object.getPrototypeOf(async function () {}).constructor)(
     "nativeKey",
+    "Menu",
     "window",
     "until",
     "evaluate",
     source.slice(start, end),
   );
-  let selected = false;
-  let inserted = false;
-  let awaitedSelection = false;
+  let selected = false,
+    inserted = false,
+    awaitedSelection = false;
   await replace(
-    () =>
-      queueMicrotask(() => {
-        selected = true;
-      }),
+    () => {}, // macOS DOM key injection does not execute Cocoa editing actions.
+    {
+      sendActionToFirstResponder(action) {
+        assert.equal(action, "selectAll:");
+        queueMicrotask(() => {
+          selected = true;
+        });
+      },
+    },
     {
       webContents: {
         async insertText(value) {
           assert.equal(
             selected,
             true,
-            "insertion must not race queued native Cmd-A",
+            "only the native responder action establishes input selection",
           );
           assert.equal(
             awaitedSelection,
             true,
-            "the actual input selection must be observed",
+            "observe the actual input selection before insertion",
           );
           assert.equal(value, "Synthetic user ");
           inserted = true;

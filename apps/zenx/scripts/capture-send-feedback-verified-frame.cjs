@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
+  Menu,
   session,
   ipcMain,
   contentTracing,
@@ -2481,13 +2482,16 @@ async function run() {
   assert.deepEqual(oldHistory.counts, [1, 1]);
   assert.ok(oldHistory.mountedRows < 200);
   await screenshot("virtual-find-old-history.png");
-  nativeKey("A", ["meta"]);
+  // macOS sendInputEvent reaches DOM but skips native Cocoa editing actions
+  // (Electron issue6338). Exercise the actual native Edit responder instead.
+  assert.equal(window.isFocused() && window.webContents.isFocused(), true);
+  Menu.sendActionToFirstResponder("selectAll:");
   await until(
     async () =>
       evaluate(
         "(()=>{const input=document.querySelector('.virtual-transcript-find input');return document.activeElement===input&&input.value==='Synthetic user 42.'&&input.selectionStart===0&&input.selectionEnd===input.value.length})()",
       ),
-    "native Cmd-A selects the actual Find input before replacement",
+    "native Edit Select All selects the actual Find input before replacement",
   );
   await window.webContents.insertText("Synthetic user ");
   await until(async () => {
@@ -2514,6 +2518,9 @@ async function run() {
     wrappedTail,
     totalMatches: 5000,
     nativeKeyboard: true,
+    keyboardScope:
+      "Electron DOM input for custom Find navigation, not OS accelerator acceptance",
+    queryReplacement: "macos-native-first-responder-selectAll",
     afterTiming: true,
   };
   await screenshot("virtual-find-wrapped-tail.png");
