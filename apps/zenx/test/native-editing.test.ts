@@ -85,6 +85,7 @@ function fixture(platform: NodeJS.Platform = "darwin") {
   const lastRequest = () =>
     traffic.filter((x) => x[0] === ipcChannels.nativeEditingPrepare).at(-1)!;
   return {
+    ipc,
     service,
     sender,
     frame,
@@ -331,7 +332,7 @@ test("preload rejects stale registration requests and late completion after re-r
   second();
 });
 
-test("preload focus eligibility leaves input, CodeMirror, terminal and embedded accelerators native", async () => {
+test("preload keeps menu registration stable while editor keyboard selection stays local", async () => {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM(
     '<body tabindex="0"><input><textarea></textarea><div class="cm-editor" tabindex="0"></div><div class="xterm" tabindex="0"></div><div contenteditable="plaintext-only" tabindex="0"></div><iframe></iframe></body>',
@@ -351,8 +352,8 @@ test("preload focus eligibility leaves input, CodeMirror, terminal and embedded 
     element.focus();
     assert.equal(
       sent.at(-1)?.[2],
-      false,
-      `${element.tagName} keeps native route`,
+      true,
+      `${element.tagName} keeps the menu request responder registered`,
     );
     dom.window.document.body.focus();
     assert.equal(sent.at(-1)?.[2], true);
@@ -554,4 +555,46 @@ test("main safely retires a request when its captured frame cannot receive IPC",
   assert.equal(f.selected(), 0);
   assert.equal(f.timers.size, 0);
   assert.doesNotThrow(() => f.service.close());
+});
+
+test("first macOS editor menu intent survives an unprocessed focus registration message", async () => {
+  const { JSDOM } = await import("jsdom");
+  const dom = new JSDOM("<body><textarea></textarea></body>");
+  const f = fixture();
+  const renderer = new EventEmitter();
+  const delayed: unknown[][] = [];
+  const ipc = Object.assign(renderer, {
+    send(channel: string, ...args: unknown[]) {
+      if (channel === ipcChannels.nativeEditingRegister && args[1] === false)
+        delayed.push([channel, ...args]);
+      else f.ipc.emit(channel, f.event, ...args);
+    },
+  });
+  f.frame.send = (...args: unknown[]) => {
+    renderer.emit(args[0] as string, {}, ...args.slice(1));
+    return f.traffic.push(args);
+  };
+  const api = createNativeEditingApi(
+    ipc,
+    () => "focused-menu",
+    dom.window.document,
+    "darwin",
+  );
+  const off = api.onPrepareSelectAll(
+    () => dom.window.document.activeElement?.tagName !== "TEXTAREA",
+  );
+  assert.equal(f.service.available(), true);
+  dom.window.document.querySelector("textarea")!.focus();
+  // Model an OS menu event overtaking the focus-related renderer→main packet.
+  // The still-installed custom menu must not swallow this first editor action.
+  f.service.selectAll();
+  assert.equal(
+    f.selected(),
+    1,
+    "first editor menu action must reach native responder exactly once",
+  );
+  assert.equal(f.timers.size, 0, "no unanswered preparation request remains");
+  off();
+  f.service.close();
+  dom.window.close();
 });

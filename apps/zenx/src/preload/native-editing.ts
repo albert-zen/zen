@@ -46,14 +46,12 @@ export function createNativeEditingApi(
   };
   const updateRegistration = () => {
     if (!token) return;
-    const enabled =
-      preparers.size > 0 && !nativeEditingUsesLocalSelection(document);
+    const enabled = preparers.size > 0;
     if (registered === enabled) return;
     if (!enabled) cancel();
     registered = enabled;
     ipc.send(ipcChannels.nativeEditingRegister, token, enabled);
   };
-  const focusOut = () => queueMicrotask(updateRegistration);
   const rotateRegistration = () => {
     cancel();
     if (registered) ipc.send(ipcChannels.nativeEditingRegister, token, false);
@@ -147,8 +145,6 @@ export function createNativeEditingApi(
         ipc.on(ipcChannels.nativeEditingPrepare, prepare);
         ipc.on(ipcChannels.nativeEditingCompleted, completed);
         document?.addEventListener("keydown", keydown, true);
-        document?.addEventListener("focusin", updateRegistration, true);
-        document?.addEventListener("focusout", focusOut, true);
       }
       rotateRegistration();
       let active = true;
@@ -166,8 +162,6 @@ export function createNativeEditingApi(
         registered = false;
         token = undefined;
         document?.removeEventListener("keydown", keydown, true);
-        document?.removeEventListener("focusin", updateRegistration, true);
-        document?.removeEventListener("focusout", focusOut, true);
         ipc.removeListener(ipcChannels.nativeEditingPrepare, prepare);
         ipc.removeListener(ipcChannels.nativeEditingCompleted, completed);
       };
