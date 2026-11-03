@@ -11570,3 +11570,136 @@ test("real App draft, Send and ACK never measure the closed information trigger"
     await unmountApp(harness);
   }
 });
+
+for (const mode of ["dock", "popover"] as const) {
+  test(`real App ${mode} pending Send keeps historical rows in one stable grid`, async () => {
+    const admission = deferred<unknown>();
+    const priorResizeObserver = globalThis.ResizeObserver;
+    const measurements = new Set<{ target: Element; deliver(): void }>();
+    globalThis.ResizeObserver = class {
+      constructor(readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        measurements.add({
+          target,
+          deliver: () => this.callback([], this as unknown as ResizeObserver),
+        });
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    let harness: AppHarness | undefined;
+    try {
+      harness = await mountThreadApp({
+        plugins: {
+          get: async () => ({
+            ...workspaceLauncherSnapshot,
+            plugins: [],
+            panels: [],
+            information: [],
+            commands: [],
+          }),
+        },
+        request: async (method) => {
+          if (method === "zen/thread/resume")
+            return resumed(derivedScanHistory());
+          if (method === "zen/turn/send") return admission.promise;
+          throw new Error(`Unexpected ${method}`);
+        },
+      });
+      const composer = await selectedComposer();
+      const workspace = document.querySelector<HTMLElement>(".workspace")!;
+      workspace.getBoundingClientRect = () =>
+        ({ top: 44, width: mode === "dock" ? 1600 : 856 }) as DOMRect;
+      await act(async () => {
+        for (const measurement of measurements) {
+          if (measurement.target === workspace) measurement.deliver();
+        }
+      });
+      const information = document.querySelector<HTMLButtonElement>(
+        ".information-toolbar button",
+      )!;
+      await act(async () => information.click());
+      assert.equal(
+        Boolean(document.querySelector(`.information-${mode}`)),
+        true,
+        "exercise the measured information layout rather than infer its mode",
+      );
+      await act(async () => information.click());
+      const inner = document.querySelector<HTMLElement>(".messages-inner")!;
+      const history = inner.querySelector<HTMLElement>(
+        ":scope > .transcript-history",
+      );
+      assert.equal(
+        Boolean(history),
+        true,
+        "history has one separate grid owner",
+      );
+      const rows = Array.from(history!.children);
+      assert.equal(rows.length, 40);
+      assert.equal(
+        rows.every((row) => row.matches(".turn")),
+        true,
+      );
+      assert.equal(inner.querySelectorAll(":scope > .turn").length, 0);
+      const firstUser = rows[0]!.querySelector(".user-bubble");
+      assert.equal(Boolean(firstUser), true);
+      await setTextareaValue(composer, "Synthetic isolated pending input");
+      await act(async () =>
+        document
+          .querySelector<HTMLButtonElement>(
+            ".composer-send-control > button.action-orb.send",
+          )!
+          .click(),
+      );
+      const pending = inner.querySelector<HTMLElement>(
+        '[data-send-state="sending"]',
+      );
+      assert.equal(Boolean(pending), true);
+      assert.equal(pending!.parentElement === inner, true);
+      assert.equal(composer.value, "");
+      assert.equal(
+        inner.querySelector(":scope > .transcript-history") === history,
+        true,
+      );
+      assert.equal(
+        rows.every((row, index) => history!.children[index] === row),
+        true,
+      );
+      assert.equal(rows[0]!.querySelector(".user-bubble") === firstUser, true);
+      await act(async () => admission.resolve({ turnId: "next-turn" }));
+      assert.equal(
+        Boolean(inner.querySelector('[data-send-state="admitted"]')),
+        true,
+      );
+      assert.equal(
+        inner.querySelector(":scope > .transcript-history") === history,
+        true,
+      );
+      assert.equal(
+        rows.every((row, index) => history!.children[index] === row),
+        true,
+      );
+    } finally {
+      admission.resolve({});
+      try {
+        if (harness) await unmountApp(harness);
+      } finally {
+        globalThis.ResizeObserver = priorResizeObserver;
+      }
+    }
+  });
+}
+
+test("historical grid inherits the transcript's responsive 24px and narrow 20px gap", async () => {
+  const css = await readFile(
+    new URL("../src/renderer/src/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /\.messages-inner\s*\{[^}]*gap:\s*24px;/);
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.messages-inner\s*\{\s*gap:\s*20px;/,
+  );
+  const historyRule = css.match(/\.transcript-history\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(historyRule, /gap:\s*inherit;/);
+});
