@@ -12596,3 +12596,29 @@ button:disabled {
 .room-asking-badge {
   flex: 0 0 auto;
 }
+
+/* WIP virtual viewport: no outer .messages padding or inherited history grid. */
+.experimental-transcript-viewport .virtual-transcript-row,
+.experimental-transcript-viewport .virtual-transcript-header,
+.experimental-transcript-viewport .virtual-transcript-footer {
+  width: calc(100% - var(--conversation-gutter) * 2);
+  max-width: var(--conversation-width);
+  min-width: 0;
+  margin: 0 auto;
+}
+.virtual-transcript-row {
+  padding-bottom: 24px;
+}
+.virtual-transcript-header {
+  padding-top: 28px;
+}
+.virtual-transcript-footer {
+  display: grid;
+  gap: 24px;
+  padding-bottom: max(38px, calc(var(--bottom-zone-height, 0px) + 24px));
+}
+.virtual-transcript-warning {
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding-bottom: 16px;
+}

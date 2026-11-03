@@ -1,3 +1,7 @@
+import {
+  TranscriptViewport,
+  type VirtualTranscriptHandle,
+} from "./ExperimentalTranscriptViewport.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
@@ -847,6 +851,17 @@ function ThreadViewContent({
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
+  const [virtualTranscript] = useState(() => {
+    try {
+      return (
+        window.sessionStorage.getItem("zenx.experimental.virtualTranscript") ===
+        "1"
+      );
+    } catch {
+      return false;
+    }
+  });
   const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -1073,6 +1088,7 @@ function ThreadViewContent({
     if (!scroll) return;
     const saved = readingState.scroll;
     shouldFollowRef.current = saved?.following ?? true;
+    if (virtualTranscript) return;
     scroll.scrollTop =
       saved?.following === false ? saved.top : scroll.scrollHeight;
     observedScrollTop.current = scroll.scrollTop;
@@ -1080,7 +1096,7 @@ function ThreadViewContent({
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
     );
     saveReadingPosition();
-  }, [readingState, saveReadingPosition]);
+  }, [readingState, saveReadingPosition, virtualTranscript]);
 
   useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
 
@@ -1113,6 +1129,7 @@ function ThreadViewContent({
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
+    if (virtualTranscript) return;
     if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       // Layout can settle after completion (Markdown, images, canonical fold).
@@ -1126,7 +1143,7 @@ function ThreadViewContent({
     observer.observe(scroll);
     if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
-  }, [followBottom, pauseFollowing]);
+  }, [followBottom, pauseFollowing, virtualTranscript]);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -1607,74 +1624,112 @@ function ThreadViewContent({
         );
       }}
     >
-      <div
-        className="messages"
-        style={{ overflowAnchor: atLive ? "none" : undefined }}
-        ref={scrollRef}
-        onWheel={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          if (event.deltaY < 0) pauseFollowing();
-          else if (
-            event.deltaY > 0 &&
-            event.currentTarget.scrollHeight -
-              event.currentTarget.scrollTop -
-              event.currentTarget.clientHeight <=
-              1 &&
-            !transcriptHasSelection(event.currentTarget)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          }
-        }}
-        onPointerDownCapture={(event) => {
-          if (!isNestedTranscriptScroll(event.target, event.currentTarget))
-            pauseFollowing();
-        }}
-        onFocusCapture={pauseFollowing}
-        onKeyDownCapture={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          const downward =
-            ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
-            !(event.key === " " && event.shiftKey);
-          const upward =
-            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
-            (event.key === " " && event.shiftKey);
-          if (!downward && !upward) return;
-          const target = event.currentTarget;
-          if (
-            downward &&
-            target.scrollHeight - target.scrollTop - target.clientHeight <= 1 &&
-            !transcriptHasSelection(target)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          } else pauseFollowing();
-        }}
-        onScroll={(event) => {
-          const target = event.currentTarget;
-          const top = target.scrollTop;
-          const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
-          // Native/programmatic scroll delivery can lag behind content growth.
-          // A changed range alone is not reader movement. Explicitly reaching
-          // the bottom restores follow intent; upward reading releases it.
-          if (transcriptHasSelection(target)) pauseFollowing();
-          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
-            // Content shrinking can clamp the native offset to the new floor.
-            // That is layout, not an upward gesture or a new follow request.
-            const clamped = atBottom && observedScrollTop.current > top;
-            if (!clamped)
-              shouldFollowRef.current =
-                top > observedScrollTop.current && atBottom;
-          }
-          observedScrollTop.current = top;
-          setAtLive(atBottom);
-          saveReadingPosition();
-        }}
-      >
-        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          <ThreadImagesContext.Provider value={imageContext}>
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        <ThreadImagesContext.Provider value={imageContext}>
+          <TranscriptViewport
+            key={thread?.id ?? composerId}
+            experimental={virtualTranscript && transcriptRows.length > 0}
+            viewport={scrollRef}
+            controller={virtualViewport}
+            position={readingState}
+            rows={transcriptRows.map((row, index) => ({
+              key: JSON.stringify([
+                displayedThread?.id,
+                row.type,
+                row.type === "turn" ? row.turn.id : row.compaction.item.id,
+              ]),
+              content: renderedTranscriptRows[index],
+            }))}
+            header={
+              <ImportedThreadNotice
+                items={displayedThread?.canonicalItems ?? []}
+              />
+            }
+            footer={
+              <>
+                {composer.pendingSends && (
+                  <PendingSendRows
+                    key={thread?.id ?? composerId}
+                    messages={composer.pendingSends}
+                    onRecover={onRecoverPendingSend}
+                    onDismiss={onDismissPendingSend}
+                    onCheck={onCheckPendingSends}
+                  />
+                )}
+                {composer.compaction?.status === "pending" ? (
+                  <ContextCompactionProgress state={composer.compaction} />
+                ) : null}
+              </>
+            }
+            onContentSettled={followBottom}
+            className="messages"
+            style={{ overflowAnchor: atLive ? "none" : undefined }}
+            onWheel={(event) => {
+              if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                return;
+              if (event.deltaY < 0) pauseFollowing();
+              else if (
+                event.deltaY > 0 &&
+                event.currentTarget.scrollHeight -
+                  event.currentTarget.scrollTop -
+                  event.currentTarget.clientHeight <=
+                  1 &&
+                !transcriptHasSelection(event.currentTarget)
+              ) {
+                shouldFollowRef.current = true;
+                followBottom();
+              }
+            }}
+            onPointerDownCapture={(event) => {
+              if (!isNestedTranscriptScroll(event.target, event.currentTarget))
+                pauseFollowing();
+            }}
+            onFocusCapture={pauseFollowing}
+            onKeyDownCapture={(event) => {
+              if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                return;
+              const downward =
+                ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
+                !(event.key === " " && event.shiftKey);
+              const upward =
+                ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+                (event.key === " " && event.shiftKey);
+              if (!downward && !upward) return;
+              const target = event.currentTarget;
+              if (
+                downward &&
+                target.scrollHeight - target.scrollTop - target.clientHeight <=
+                  1 &&
+                !transcriptHasSelection(target)
+              ) {
+                shouldFollowRef.current = true;
+                followBottom();
+              } else pauseFollowing();
+            }}
+            onViewportScroll={(target, layoutCorrection) => {
+              const top = target.scrollTop;
+              const atBottom =
+                target.scrollHeight - top - target.clientHeight <= 1;
+              // Native/programmatic scroll delivery can lag behind content growth.
+              // A changed range alone is not reader movement. Explicitly reaching
+              // the bottom restores follow intent; upward reading releases it.
+              if (transcriptHasSelection(target)) pauseFollowing();
+              else if (
+                !layoutCorrection &&
+                Math.abs(top - observedScrollTop.current) > 0.5
+              ) {
+                // Content shrinking can clamp the native offset to the new floor.
+                // That is layout, not an upward gesture or a new follow request.
+                const clamped = atBottom && observedScrollTop.current > top;
+                if (!clamped)
+                  shouldFollowRef.current =
+                    top > observedScrollTop.current && atBottom;
+              }
+              observedScrollTop.current = top;
+              setAtLive(atBottom);
+              saveReadingPosition();
+            }}
+          >
             <div className="messages-inner">
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
@@ -1704,9 +1759,9 @@ function ThreadViewContent({
                 <ContextCompactionProgress state={composer.compaction} />
               ) : null}
             </div>
-          </ThreadImagesContext.Provider>
-        </MessageLinkContext.Provider>
-      </div>
+          </TranscriptViewport>
+        </ThreadImagesContext.Provider>
+      </MessageLinkContext.Provider>
 
       <MessageSelectionActions
         viewport={scrollRef}

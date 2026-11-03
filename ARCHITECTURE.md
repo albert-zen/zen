@@ -1758,3 +1758,5 @@ remote-tool recall or automatic cross-window exactly-once insertion. Acceptance 
 combined source version; historical branch checks do not accept an integration.
 
 Room Boards are existing workspace product resources addressed only by roomId and instanceKey; current member Thread identity is execution/admission context, never persisted Board ownership. Trusted human reads/drafts validate the live workspace, while Agent access and execution retain their exact live member and existing tool permissions.
+
+An opt-in WIP virtual transcript viewport may mount only the visible canonical turn rows and temporarily retain focused/selected/target rows; its keyed scroll anchor is disposable renderer reading state, with no paging gate, second history, or new execution authority.
