@@ -17,8 +17,10 @@ path. The virtual path displays an explicit experimental warning.
   explicitly warned about, not replaced with manual paging or claimed equivalent.
 - Exact message-target navigation now resolves a canonical turn key and materializes
   it before focusing/consuming the target. Reader input, newer requests and unmount
-  cancel the pending reveal. Same-thread inline quote source jumps still use a
-  mounted-DOM lookup and remain an explicit production blocker.
+  cancel the pending reveal. Same-thread inline quote source jumps now materialize
+  an exact canonical source row synchronously, then settle through the same reveal
+  ownership fence. Main/sent boolean and queued HTMLElement-or-null contracts are
+  unchanged; unknown/wrong-thread sources keep the existing explicit fallback.
 - Focus and selection rows are protected with public alwaysRender pins before
   scroll recycling. Native cross-row selection, active media, keyboard traversal,
   and chronological screen-reader behavior still require real-app acceptance.
@@ -96,3 +98,36 @@ is the stable app-owned total-content box supplied through Legend's supported
 `contentContainerClassName`. It has min-height:100% rather than fixed viewport
 height, and contains the header, totalSize-height row region and pending footer.
 No additional scroll owner or measurement probe is needed.
+
+## Inline source navigation checks
+
+Canonical source identity is resolved only on explicit navigation from the full
+canonical quote projection into its represented Turn/Item. Tool-result aliases
+resolve to the same rendered tool detail; only necessary Turn/Trace/Item
+choices are opened. Final-answer and top-level input sources do not unnecessarily
+expand completed history. Public `alwaysRender` plus a closed-stable `dataVersion`
+pin signature allows one distant row to materialize synchronously; no private API,
+fake source element, Promise return widening or all-history mount is used.
+`captureReveal()` provides request-scoped cancellation so stale Find cleanup
+cannot cancel a newer source action. Both jump entry points protect an existing
+selection before a delayed selectionchange can arrive.
+
+Controlled-layout tests exercise actual ThreadView composer, sent-message and
+queued-editor sources in initially unmounted history, queue/main draft retention,
+missing/wrong-thread fallbacks, delayed queue-focus cancellation, and nested tool
+result disclosure. The existing quote/queue regression tests are retained. These
+checks do not replace native reading, focus, accessibility or screenshot acceptance.
+
+The initial whole-ThreadView synthetic layout used an incompatible hardcoded
+scroll height and unclamped JSDOM scrollTop and ended with SIGKILL. It was not an
+assertion-only failure. The corrected test derives its height from the actual
+Legend totalSize region plus its controlled header/footer sizes and clamps offsets
+like a native scroll node. A test-only callback budget retains recent offsets and
+a bounded failure stack instead of permitting another runaway retry. Passing this
+controlled layout is not proof that native layout cannot have a loop.
+
+At this inline-source checkpoint, 88 focused tests pass (8 preparation/layout and
+80 component/reading/quote/queue tests), and renderer TypeScript checking passes.
+The non-vendor source diff is whitespace-clean; the copied patch exception above
+is unchanged. No packaged/native execution was added by this source-verification
+stage.
