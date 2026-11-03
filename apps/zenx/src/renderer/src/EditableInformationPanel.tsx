@@ -38,6 +38,7 @@ export interface InformationReceipt {
 type Props = {
   owner: BoardConversation;
   threads: readonly NativeThreadSummary[];
+  roomMembers?: readonly { threadId: string; name?: string }[];
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
   theme: "light" | "dark";
@@ -87,6 +88,7 @@ export function EditableInformationPanel(props: Props) {
 function InformationPanel({
   owner,
   threads,
+  roomMembers,
   snapshot,
   registry,
   theme,
@@ -324,6 +326,9 @@ function InformationPanel({
             owner,
             admissionId,
             instanceKey: widget.config.instanceKey,
+            ...(owner.kind === "room"
+              ? { members: roomMembers ?? receipt?.members ?? [] }
+              : {}),
           }}
           theme={theme}
           navigate={navigate}
@@ -736,5 +741,6 @@ const MemoizedInformationPanel = memo(
     before.registry === after.registry &&
     before.theme === after.theme &&
     before.navigate === after.navigate &&
-    before.attention === after.attention,
+    before.attention === after.attention &&
+    before.roomMembers === after.roomMembers,
 );

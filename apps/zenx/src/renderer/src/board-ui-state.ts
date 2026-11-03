@@ -168,7 +168,11 @@ export class BoardUiSession {
     })();
     return this.#saving;
   }
-  async run(eventId: string, values?: BoardValues): Promise<BoardEventResult> {
+  async run(
+    eventId: string,
+    values?: BoardValues,
+    execution?: { executionThreadId?: string; assertCurrent?(): void },
+  ): Promise<BoardEventResult> {
     if (this.busy) throw new Error("A Board action is already running");
     const clicked = this.snapshot;
     if (!clicked) throw new Error("No Board exists");
@@ -177,7 +181,9 @@ export class BoardUiSession {
     this.#clearError();
     this.#emit();
     try {
+      execution?.assertCurrent?.();
       await this.flush();
+      execution?.assertCurrent?.();
       if (
         !this.snapshot ||
         this.snapshot.revision !== clicked.revision ||
@@ -196,6 +202,9 @@ export class BoardUiSession {
           owner: current.document.owner,
           eventId,
           values,
+          ...(execution?.executionThreadId === undefined
+            ? {}
+            : { executionThreadId: execution.executionThreadId }),
           revision: current.revision,
           draftRevision: current.draftRevision,
         }),

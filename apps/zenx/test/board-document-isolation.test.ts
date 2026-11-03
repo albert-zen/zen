@@ -15,6 +15,7 @@ import type {
   BoardDocument,
   BoardOwner,
 } from "../../../packages/zenx-board-plugin/src/board.js";
+import { boardDocumentKey } from "../../../packages/zenx-board-plugin/src/board.js";
 
 const thread: BoardOwner = { kind: "thread", threadId: "synthetic-thread" };
 const room: BoardOwner = {
@@ -60,6 +61,7 @@ function fixture() {
     },
   };
   const service = new ZenXBoardCapabilityPackage({
+    readResourceOwner: async (value) => value,
     readOwner: async (owner) => owner,
     deliver: async () => ({ status: "accepted" }),
     execute: async () => ({ exitCode: 0, output: "synthetic" }),
@@ -217,7 +219,72 @@ test("same instanceKey is isolated across Thread and Room owners and cannot cros
   );
 });
 
-test("Room UI resolves each document's own execution member and rejects stale membership", async () => {
+test("editing one resource preserves unrelated legacy Room metadata exactly", async () => {
+  const f = fixture();
+  const foreign = {
+    ...room,
+    roomId: "unrelated-room",
+    threadId: "unrelated-member",
+  };
+  const key = boardDocumentKey(foreign, first);
+  const saved = {
+    instanceKey: first,
+    document: document(foreign, "Unrelated body"),
+    revision: 7,
+    draftRevision: 3,
+    values: { choice: "private draft" },
+    pinned: true,
+  };
+  await f.storage.set({ boards: { [key]: saved } });
+  await f.put(undefined, thread, "Only this Thread is edited");
+  assert.deepEqual(
+    ((await f.storage.get()) as any).boards[key],
+    saved,
+    "Targeted mutations do not migrate another Room or independent document",
+  );
+});
+
+test("legacy Room creator metadata is decoded without rewriting product state", async () => {
+  const f = fixture();
+  const key = boardDocumentKey(room, first);
+  await f.storage.set({
+    boards: {
+      [key]: {
+        instanceKey: first,
+        document: document(room, "Legacy workspace body"),
+        revision: 7,
+        draftRevision: 3,
+        values: { choice: "unsent" },
+        pinned: true,
+      },
+    },
+  });
+  const writes = f.writes();
+  const other = { ...room, threadId: "other-thread" };
+  const result = await f.invoke(
+    "zenx_board_read",
+    { owner: other, view: "document", instanceKey: first },
+    false,
+    other.threadId,
+  );
+  assert.deepEqual(result.document.owner, {
+    kind: "room",
+    roomId: room.roomId,
+  });
+  assert.equal(result.revision, 7);
+  assert.equal(result.draftRevision, 3);
+  assert.equal(result.values.choice, "unsent");
+  assert.equal(result.pinned, true);
+  assert.equal(f.writes(), writes);
+  const persisted = (await f.storage.get()) as any;
+  assert.equal(
+    persisted.boards[key].document.owner.threadId,
+    room.threadId,
+    "Pure reads do not migrate or re-author the legacy resource",
+  );
+});
+
+test("Room resource UI is independent of author membership and execution is explicitly admitted", async () => {
   const f = fixture();
   const other = { ...room, threadId: "other-thread" };
   await f.put(first, room, "First member");
@@ -231,31 +298,90 @@ test("Room UI resolves each document's own execution member and rejects stale me
     false,
     other.threadId,
   );
-  const seen: BoardOwner[] = [];
-  let removed = false;
+  const roomOnly = { kind: "room" as const, roomId: room.roomId };
+  let memberRemoved = false;
+  let workspaceRemoved = false;
   f.service.host.readOwner = async (owner) => {
-    seen.push(owner);
-    if (removed) throw Error("Synthetic member removed");
+    if (memberRemoved) throw Error("Synthetic member removed");
     return owner;
   };
-  const roomOnly = { kind: "room", roomId: room.roomId };
+  f.service.host.readResourceOwner = async (owner) => {
+    if (workspaceRemoved) throw Error("Synthetic workspace removed");
+    assert.deepEqual(owner, roomOnly);
+    return owner;
+  };
   const value = await f.ui(second, "read", {}, roomOnly);
-  assert.equal(value.document.owner.threadId, other.threadId);
-  assert.ok(
-    seen.length > 0 && seen.every((owner) => owner.threadId === other.threadId),
+  assert.deepEqual(value.document.owner, roomOnly);
+  assert.equal((await f.read(second, room)).document.title, "Second member");
+  let executor: BoardOwner | undefined;
+  f.service.host.execute = async (owner) => {
+    executor = owner;
+    return { exitCode: 0, output: "synthetic" };
+  };
+  await assert.rejects(
+    f.invoke(
+      "zenx_board_ui",
+      {
+        instanceKey: second,
+        operation: "event",
+        owner: other,
+        eventId: "run",
+        revision: 1,
+        draftRevision: 0,
+      },
+      true,
+    ),
+    /explicit current Room member/,
+    "Legacy creator metadata cannot select the executor of a stale UI click",
   );
-  await assert.rejects(f.read(second, room), /different execution member/);
-  removed = true;
-  await assert.rejects(f.ui(second, "read", {}, roomOnly), /member removed/);
   await assert.rejects(
     f.ui(
-      first,
-      "draft",
-      { values: { choice: "revoked" }, expectedDraftRevision: 0 },
-      room,
+      second,
+      "event",
+      { eventId: "run", revision: 1, draftRevision: 0 },
+      roomOnly,
+    ),
+    /explicit current Room member/,
+  );
+  await f.ui(
+    second,
+    "event",
+    {
+      eventId: "run",
+      revision: 1,
+      draftRevision: 0,
+      executionThreadId: other.threadId,
+    },
+    roomOnly,
+  );
+  assert.deepEqual(executor, other);
+  memberRemoved = true;
+  assert.deepEqual(
+    (await f.ui(second, "read", {}, roomOnly)).document.owner,
+    roomOnly,
+  );
+  await f.ui(
+    second,
+    "draft",
+    { values: { choice: "workspace draft" }, expectedDraftRevision: 0 },
+    roomOnly,
+  );
+  await assert.rejects(
+    f.ui(
+      second,
+      "event",
+      {
+        eventId: "run",
+        revision: 1,
+        draftRevision: 1,
+        executionThreadId: other.threadId,
+      },
+      roomOnly,
     ),
     /member removed/,
   );
+  workspaceRemoved = true;
+  await assert.rejects(f.ui(second, "read", {}, roomOnly), /workspace removed/);
 });
 
 test("invalid document addresses fail before reading owner or product storage", async () => {
@@ -332,14 +458,14 @@ test("independent actions do not lock or cancel sibling documents; same-document
   assert.equal((await f.read(second)).values.choice, "event");
 });
 
-test("Room UI checks live membership again after a delayed storage read", async () => {
+test("Room UI checks live workspace again after a delayed storage read", async () => {
   const f = fixture();
   await f.put(first, room);
   const entered = gate();
   const blocked = gate();
   let removed = false;
-  f.service.host.readOwner = async (owner) => {
-    if (removed) throw Error("Synthetic member removed");
+  f.service.host.readResourceOwner = async (owner) => {
+    if (removed) throw Error("Synthetic workspace removed");
     return owner;
   };
   f.service.start({
@@ -361,7 +487,7 @@ test("Room UI checks live membership again after a delayed storage read", async 
   await entered.promise;
   removed = true;
   blocked.release();
-  await assert.rejects(draft, /member removed/);
+  await assert.rejects(draft, /workspace removed/);
   assert.equal(f.writes(), 1);
 });
 

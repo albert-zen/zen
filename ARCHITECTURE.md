@@ -1755,3 +1755,5 @@ The same-thread canonical receipt also invalidates the older queue projection.
 This implementation does not add Room, Host/Agent or cross-author recall,
 remote-tool recall or automatic cross-window exactly-once insertion. Acceptance evidence is recorded separately against the exact
 combined source version; historical branch checks do not accept an integration.
+
+Room Boards are existing workspace product resources addressed only by roomId and instanceKey; current member Thread identity is execution/admission context, never persisted Board ownership. Trusted human reads/drafts validate the live workspace, while Agent access and execution retain their exact live member and existing tool permissions.

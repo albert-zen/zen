@@ -4633,6 +4633,7 @@ function AppContent() {
                         !selectedRoomId ? questionAttention : undefined
                       }
                       threads={informationThreads}
+                      roomMembers={selectedRoom?.members}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}
                       theme={appearance}

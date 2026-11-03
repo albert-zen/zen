@@ -2,6 +2,17 @@
 export type BoardOwner =
   | { kind: "thread"; threadId: string }
   | { kind: "room"; roomId: string; threadId: string };
+/** Persisted resource identity. A Room's execution member is not its owner. */
+export type BoardResourceOwner =
+  { kind: "thread"; threadId: string } | { kind: "room"; roomId: string };
+
+export function boardResourceOwner(
+  owner: BoardResourceOwner,
+): BoardResourceOwner {
+  return owner.kind === "room"
+    ? { kind: "room", roomId: owner.roomId }
+    : { kind: "thread", threadId: owner.threadId };
+}
 export type BoardValue = string | number | boolean | null;
 export type BoardValues = Record<string, BoardValue>;
 export type BoardBlock =
@@ -54,7 +65,7 @@ export interface BoardDocument {
   id: string;
   title: string;
   summary: string;
-  owner: BoardOwner;
+  owner: BoardResourceOwner;
   /** Convenience templates compose freely; custom HTML is not restricted to them. */
   blocks: BoardBlock[];
   events: BoardEvent[];
@@ -80,7 +91,7 @@ export interface BoardEventResult {
   /** Owner-readable transient local diagnostic; never stored or model-projected. */
   errorDetail?: string;
 }
-export function boardOwnerKey(owner: BoardOwner): string {
+export function boardOwnerKey(owner: BoardResourceOwner): string {
   return owner.kind === "thread"
     ? `thread:${owner.threadId}`
     : `room:${owner.roomId}`;
@@ -98,7 +109,7 @@ export function normalizeBoardInstanceKey(value: unknown = "default"): string {
 }
 
 export function boardDocumentKey(
-  owner: BoardOwner,
+  owner: BoardResourceOwner,
   instanceKey?: string,
 ): string {
   const address = normalizeBoardInstanceKey(instanceKey);

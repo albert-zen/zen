@@ -920,7 +920,6 @@ test("real Thread and Room snapshots retain separate default addresses and Room 
   assert.deepEqual(state.boards[`room:${roomId}`].document.owner, {
     kind: "room",
     roomId,
-    threadId: caller,
   });
   const full = JSON.parse(
     (
