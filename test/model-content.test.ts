@@ -475,3 +475,124 @@ test("failure items project a bounded first line into model context", () => {
   assert(projected.role === "assistant" && "text" in projected);
   assert.match(projected.text, /\(diagnostic diag-123\)\]$/u);
 });
+
+test("code image conversion preserves validated detail on refs and explicit bytes without treating it as capability", async () => {
+  const store = new InMemoryAttachmentStore();
+  const attachment = await store.importBytes(png1x1());
+  const item = userItem([{ type: "image", attachment }]);
+  const data = Buffer.from(png1x1()).toString("base64");
+  for (const detail of ["high", "original"] as const) {
+    for (const value of [
+      { type: "image", attachment, detail },
+      { ...attachment, detail },
+      { type: "image", data, mimeType: "image/png", detail },
+      { image_url: `data:image/png;base64,${data}`, detail },
+    ]) {
+      const converted = await resolveCodeMedia("image", value, store, [item]);
+      assert.deepEqual(converted, [{ type: "image", attachment, detail }]);
+    }
+  }
+  const both = await createMediaOutputConverter(store)(
+    [
+      { type: "image", value: { type: "image", attachment, detail: "high" } },
+      {
+        type: "image",
+        value: { type: "image", attachment, detail: "original" },
+      },
+    ],
+    [item],
+  );
+  assert.deepEqual(
+    both.map((part) => (part.type === "image" ? part.detail : undefined)),
+    ["high", "original"],
+  );
+  let reads = 0;
+  const counted = {
+    ...store,
+    importBytes: store.importBytes.bind(store),
+    importLocalImage: store.importLocalImage.bind(store),
+    read: async (ref: import("../src/attachment.js").AttachmentRef) => {
+      reads++;
+      return await store.read(ref);
+    },
+  };
+  for (const detail of ["low", "auto", null, 1, true])
+    await assert.rejects(
+      resolveCodeMedia(
+        "image",
+        { type: "image", attachment, detail },
+        counted,
+        [item],
+      ),
+      /detail/u,
+    );
+  assert.equal(reads, 0, "invalid detail is rejected before image IO");
+});
+
+test("nested lifting distinguishes requested HIGH and ORIGINAL views of one immutable attachment", async () => {
+  const store = new InMemoryAttachmentStore();
+  const attachment = await store.importBytes(png1x1());
+  const base = {
+    threadId: "thread",
+    turnId: "turn",
+    createdAt: "2026-11-03T00:00:00Z",
+  };
+  const items: CanonicalItem[] = [
+    {
+      ...base,
+      id: "outer-call",
+      type: "tool_call",
+      callId: "outer",
+      name: "run_code",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child-call",
+      type: "tool_call",
+      callId: "child",
+      parentCallId: "outer",
+      name: "view_image",
+      arguments: {},
+    },
+    {
+      ...base,
+      id: "child-result",
+      type: "tool_result",
+      callId: "child",
+      output: "original view",
+      exitCode: 0,
+      modelContent: [{ type: "image", attachment, detail: "original" }],
+    },
+    {
+      ...base,
+      id: "outer-result",
+      type: "tool_result",
+      callId: "outer",
+      output: "high view",
+      exitCode: 0,
+      modelContent: [{ type: "image", attachment, detail: "high" }],
+    },
+  ];
+  const before = JSON.stringify(items);
+  const { contextItemsFromLegacy, compileItemList } =
+    await import("../src/item-list.js");
+  const contexts: import("../src/item-list.js").ContextItem[] = [];
+  for (const [index, item] of items.entries())
+    contexts.push(
+      ...contextItemsFromLegacy(item, items.slice(0, index), index, contexts),
+    );
+  for (const messages of [
+    compileModelMessages(items),
+    compileItemList(contexts).messages,
+  ]) {
+    const details = messages
+      .flatMap((message) =>
+        message.role === "tool" ? (message.modelContent ?? []) : [],
+      )
+      .filter((part) => part.type === "image")
+      .map((part) => part.detail);
+    assert.deepEqual(details, ["high", "original"]);
+  }
+  assert.equal(JSON.stringify(items), before);
+});

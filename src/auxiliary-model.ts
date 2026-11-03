@@ -1,3 +1,5 @@
+import type { AttachmentStore } from "./attachment.js";
+import { prepareSampleImages } from "./image-preparation.js";
 import { randomUUID } from "node:crypto";
 import { textFromUserInput, type JsonValue } from "./item.js";
 import {
@@ -14,10 +16,13 @@ import {
   type ModelRequest,
   type ModelTool,
 } from "./model.js";
+import { estimateModelMessageInputTokens } from "./model-usage.js";
 import { observeModelWithTrace } from "./trace-model.js";
 import type { RuntimeTrace } from "./trace.js";
 
 export interface AuxiliaryModelOptions {
+  attachments?: Pick<AttachmentStore, "read" | "importBytes">;
+  supportsImageDetailOriginal?: boolean | null;
   adapter: ModelAdapter;
   trace: RuntimeTrace;
   itemListStore: Pick<FileItemListStore, "create">;
@@ -30,6 +35,8 @@ export interface AuxiliaryModelOptions {
   reasoningEffort: string | null;
   signal: AbortSignal;
   maxOutputTokens?: number;
+  /** Frozen model window, checked against the durable compiled compaction input. */
+  contextWindow?: number | null;
   assertDispatchAllowed?: () => void;
   configuration?: Record<string, unknown>;
   selection?: { providerProfileId: string; modelId: string };
@@ -62,9 +69,11 @@ export function streamAuxiliaryModel(
     model: options.model,
     reasoningEffort: options.reasoningEffort,
     maxOutputTokens: options.maxOutputTokens,
+    contextWindow: options.contextWindow,
     configuration: options.configuration,
     selection: options.selection,
     inputModalities: options.inputModalities,
+    supportsImageDetailOriginal: options.supportsImageDetailOriginal,
   });
   const ownerId = `auxiliary-${randomUUID()}`;
   const sampleId = randomUUID();
@@ -81,6 +90,24 @@ export function streamAuxiliaryModel(
     frozen.selection,
   );
   return (async function* () {
+    if (options.attachments !== undefined)
+      items.push(
+        ...(await prepareSampleImages({
+          threadId: ownerId,
+          sampleId,
+          itemList: items,
+          selection: frozen.selection ?? {
+            providerProfileId: adapter.provider,
+            modelId: frozen.model,
+          },
+          inputModalities: frozen.inputModalities ?? null,
+          supportsImageDetailOriginal:
+            frozen.supportsImageDetailOriginal ?? null,
+          attachments: options.attachments,
+          id: randomUUID,
+          now: () => new Date().toISOString(),
+        })),
+      );
     for (const item of items) {
       const receipt = await trace.record({
         threadId: ownerId,
@@ -103,6 +130,14 @@ export function streamAuxiliaryModel(
         ? {}
         : { inputModalities: frozen.inputModalities }),
     });
+    if (
+      frozen.purpose === "compaction" &&
+      frozen.contextWindow !== undefined &&
+      (frozen.contextWindow === null ||
+        estimateModelMessageInputTokens(compiled.messages) >
+          frozen.contextWindow)
+    )
+      throw new CompactionBudgetExceededError();
     await onPrepared?.({
       ownerId,
       sampleId,
@@ -240,4 +275,12 @@ export function materializeAuxiliaryInputs(
     content: { tools: [...tools] },
   });
   return items.map(decodeContextItem);
+}
+
+export class CompactionBudgetExceededError extends Error {
+  readonly code = "compaction_budget_exceeded";
+  constructor() {
+    super("Prepared context compaction request exceeds the model window");
+    this.name = "CompactionBudgetExceededError";
+  }
 }
