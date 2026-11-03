@@ -1,3 +1,5 @@
+import type { RoomUserQuestionPublisher } from "../../../../src/user-question-tool.js";
+import { validateRoomQuestionPublicationReceipt } from "../room-question-publication.js";
 import { UserMcpChildBridge } from "./user-mcp-child-bridge.js";
 import { isUserMcpHostCommand } from "./user-mcp-messages.js";
 import { localErrorDetail } from "../local-error-detail.js";
@@ -30,6 +32,55 @@ import { projectThreadAttachments } from "./image-attachments.js";
 import { ToolOutputSpool } from "../../../../src/tool-output-spool.js";
 
 let fleetHost: FleetHostService | undefined;
+const roomQuestionPublications = new Map<
+  string,
+  {
+    resolve: (result: Awaited<ReturnType<RoomUserQuestionPublisher>>) => void;
+    reject: (error: Error) => void;
+  }
+>();
+const publishRoomQuestion: RoomUserQuestionPublisher = async (
+  input,
+  signal,
+) => {
+  signal.throwIfAborted();
+  if (roomQuestionPublications.size >= 32)
+    throw new Error("Too many Room question publications");
+  return await new Promise((resolve, reject) => {
+    const requestId = randomUUID();
+    const unknown = () => {
+      send({ type: "room-question/publish-cancel", requestId });
+      done(
+        new Error(
+          "Room question publication outcome is unknown; read the original Room resource and do not replay",
+        ),
+      );
+    };
+    const timer = setTimeout(unknown, 15000);
+    const done = (
+      error?: Error,
+      result?: Awaited<ReturnType<RoomUserQuestionPublisher>>,
+    ) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", unknown);
+      roomQuestionPublications.delete(requestId);
+      if (error) reject(error);
+      else if (result?.roomId !== input.roomId)
+        reject(
+          new Error(
+            "Room question receipt target disagrees; outcome may be unknown",
+          ),
+        );
+      else resolve(result);
+    };
+    roomQuestionPublications.set(requestId, {
+      resolve: (result) => done(undefined, result),
+      reject: (error) => done(error),
+    });
+    signal.addEventListener("abort", unknown, { once: true });
+    send({ type: "room-question/publish-request", requestId, input });
+  });
+};
 const boardActions = new Map<
   string,
   {
@@ -86,6 +137,13 @@ process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
 
 async function handleCommand(command: HostCommand): Promise<void> {
+  if (command.type === "room-question/publish-result") {
+    const pending = roomQuestionPublications.get(command.requestId);
+    if (command.error !== undefined) pending?.reject(new Error(command.error));
+    else
+      pending?.resolve(validateRoomQuestionPublicationReceipt(command.result));
+    return;
+  }
   if (isUserMcpHostCommand(command)) {
     userMcpBridge?.receive(command);
     return;
@@ -578,6 +636,7 @@ async function handleCommand(command: HostCommand): Promise<void> {
   closeToolComposition = toolComposition.close;
   appServer = createHostedAppServer({
     ...command.config,
+    publishRoomQuestion,
     toolEnvironment: toolComposition.toolEnvironment,
     toolDefinitionProjection: toolComposition.toolDefinitionProjection,
     toolOutputSpool,
@@ -620,6 +679,15 @@ async function shutdown(): Promise<void> {
   userMcpBridge?.close();
   for (const action of boardActions.values())
     action.controller.abort(new Error("Board Host is closing"));
+  for (const [requestId, request] of roomQuestionPublications) {
+    send({ type: "room-question/publish-cancel", requestId });
+    request.reject(
+      new Error(
+        "Room question Host is closing; publication outcome may be unknown",
+      ),
+    );
+  }
+  roomQuestionPublications.clear();
   const failures: unknown[] = [];
   const cleanup = async (operation: () => unknown | Promise<unknown>) => {
     try {

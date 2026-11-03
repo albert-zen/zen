@@ -171,12 +171,22 @@ for (const file of [
   ...(await readdir(path.join(root, "out/renderer"), { recursive: true }))
     .filter((f) => /\.(html|js|css)$/.test(f))
     .map((f) => "out/renderer/" + f),
-  "out/main/index.js",
+  ...(await readdir(path.join(root, "out/main"), { recursive: true }))
+    .filter((file) => /\.(?:js|cjs|mjs)$/.test(file))
+    .map((file) => "out/main/" + file),
   "out/preload/index.cjs",
   "src/renderer/src/App.tsx",
   "src/renderer/src/plugin-information-host.tsx",
   "src/renderer/src/ConversationInformationCards.tsx",
   "src/renderer/src/EditableInformationPanel.tsx",
+  "src/renderer/src/RoomQuestionCards.tsx",
+  "src/renderer/src/room-question-state.ts",
+  "src/renderer/src/room-conversations.tsx",
+  "src/main/app-server-host.ts",
+  "src/main/native-room-question-service.ts",
+  "src/main/room-question-publisher.ts",
+  "src/native-room-questions.ts",
+  "src/room-questions.ts",
   "src/main/native-information-service.ts",
   "src/main/native-information-document.ts",
   "src/native-information.ts",
@@ -186,6 +196,11 @@ for (const file of [
   "scripts/seed-information-layout-acceptance.mjs",
   "scripts/capture-information-board.cjs",
   "scripts/launch-information-board-acceptance.mjs",
+  "../../src/app-server.ts",
+  "../../src/user-question-tool.ts",
+  "../../dist/src/app-server.js",
+  "../../dist/src/user-question-tool.js",
+  "../../dist/apps/cli/src/host.js",
 ])
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
@@ -199,7 +214,7 @@ await writeFile(
       hashes,
       synthetic: true,
       scope:
-        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal. Private fake provider only; default-on async question genuinely published by a seed Host and retained through its shutdown before Desktop starts; Board documents authored through actual runtime model tools. No injected UI, no user data, no user device.",
+        "Full production Electron App, preload, child Host, native input, production DomainThreadJournal and Room journal. Private fake provider only; default-on Thread question genuinely published by a seed Host and retained through shutdown before Desktop starts; independent Room/PAW questions published through real Host model calls, with same-journal Asking and explicit model snapshot withdrawal. Board documents authored through actual runtime model tools. No injected UI, no user data, no user device.",
     },
     null,
     2,

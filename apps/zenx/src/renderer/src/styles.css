@@ -12479,7 +12479,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 .information-error {
-  color: var(--color-danger, var(--color-text-primary)) !important;
+  color: var(--color-status-danger) !important;
 }
 .information-attention {
   padding-block: 8px;
@@ -12564,8 +12564,14 @@ button:disabled {
 }
 .user-question-actions button,
 .user-question-attention > button,
-.user-question-attention > header button {
+.user-question-attention > header button,
+.room-question-attention > button,
+.room-question-attention > header button,
+.room-question-review {
   min-height: 44px;
+}
+.room-question-attention > header button {
+  min-width: 44px;
 }
 .user-question-error {
   overflow-wrap: anywhere;
@@ -12576,4 +12582,12 @@ button:disabled {
   max-height: 180px;
   overflow: auto;
   font-size: 12px;
+}
+
+.room-question-origin {
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.room-asking-badge {
+  flex: 0 0 auto;
 }

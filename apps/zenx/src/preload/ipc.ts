@@ -1,4 +1,6 @@
 export const ipcChannels = {
+  roomQuestionsRequest: "zenx:room-questions:request",
+  roomQuestionsChanged: "zenx:room-questions:changed",
   informationRead: "zenx:information:read",
   informationUpdate: "zenx:information:update",
   threadSidebarRead: "zenx:thread-sidebar:read",

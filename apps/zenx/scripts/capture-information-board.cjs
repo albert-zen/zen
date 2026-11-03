@@ -638,7 +638,7 @@ async function run() {
     "actual app light appearance for Room acceptance",
   );
   const nativeRoom = await evaluate(
-    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native Room',members:[{name:'Synthetic source',threadId:'information-main'}]})",
+    "window.zenx.plugins.executeCommand('zenx-rooms','create',{name:'Synthetic native Room',members:[{name:'Synthetic source',threadId:'information-main'},{name:'Synthetic reviewer',threadId:'information-child'}]})",
   );
   const nativePaw = await evaluate(
     "window.zenx.plugins.executeCommand('zenx-rooms','create-assistant',{name:'Synthetic native PAW',memberName:'Synthetic PAW member',operationId:'information-acceptance-paw',target:{kind:'existing',threadId:'information-other'}})",
@@ -651,13 +651,25 @@ async function run() {
   );
   const openRoom = async (room, title) => {
     await click(
-      `.room-conversation-row[title=${JSON.stringify(room.name)}]`,
+      `.room-conversation-row[data-room-id=${JSON.stringify(room.id)}]`,
       title,
     );
-    await click(
-      ".information-toolbar button",
-      "Open information owned by " + room.name,
+    await until(
+      () =>
+        evaluate(
+          `${query(`.room-conversation-row[data-room-id=${JSON.stringify(room.id)}]`)}?.getAttribute('aria-current')==='page'`,
+        ),
+      "actual Room navigation committed before toggling information",
     );
+    if (
+      !(await evaluate(
+        `document.querySelector('.editable-information-panel')?.dataset.owner===${JSON.stringify("room:" + room.id)}`,
+      ))
+    )
+      await click(
+        ".information-toolbar button",
+        "Open information owned by " + room.name,
+      );
     await until(
       () =>
         evaluate(
@@ -702,10 +714,188 @@ async function run() {
     "actual member-owned Trigger facts",
   );
   await screenshot("12-native-room-member-layout.png");
+  await click(
+    '[aria-label="Customize information"]',
+    "Leave Room layout settings before answering workspace questions",
+  );
+  const roomQuestions = (room, options) =>
+    evaluate(
+      `window.zenx.roomQuestions.request(${JSON.stringify({ method: "list", roomId: room.id, ...(options ? { options } : {}) })})`,
+    );
+  const roomBadge = (room) =>
+    `.room-conversation-row[data-room-id=${JSON.stringify(room.id)}] .room-asking-badge`;
+  const roomCard = (question) =>
+    `[data-room-question-id=${JSON.stringify(question.id)}]`;
+  let questionPublicationSequence = 0;
+  const publishQuestion = async (threadId, prompt, room) => {
+    await until(
+      () =>
+        evaluate(
+          `window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId===${JSON.stringify(threadId)})?.status==='idle')`,
+        ),
+      "publication actor's existing Turn completed",
+    );
+    await evaluate(
+      `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId, clientUserMessageId: "native-question-" + ++questionPublicationSequence, input: [{ type: "text", text: "!tool ask_user_question " + JSON.stringify({ ...(room ? { roomId: room.id } : {}), questions: [{ id: "review", prompt, options: [{ id: "yes", label: "Yes" }] }] }) }] })})`,
+    );
+    if (room) {
+      await until(
+        () =>
+          evaluate(
+            `document.querySelector('.room-question-attention')?.textContent.includes(${JSON.stringify(prompt)})`,
+          ),
+        "real Host Room publication appears without selecting its member",
+      );
+      const page = await roomQuestions(room);
+      const question = page.questions.find((question) =>
+        question.specification.questions.some(
+          (value) => value.prompt === prompt,
+        ),
+      );
+      assert.ok(question, "actual Room journal publication readback");
+      return question;
+    }
+    await until(
+      () =>
+        evaluate(
+          `window.zenx.threads.list().then(rows=>(rows.find(row=>row.threadId===${JSON.stringify(threadId)})?.userQuestionSummary?.openCount??0)>0)`,
+        ),
+      "private Thread publication exists independently",
+    );
+  };
+  assert.equal(
+    (await roomQuestions(nativeRoom)).openCount,
+    0,
+    "existing private member question is not a Room question",
+  );
+  assert.equal(
+    await evaluate(`Boolean(${query(roomBadge(nativeRoom))})`),
+    false,
+  );
+  const roomFirst = await publishQuestion(
+    "information-main",
+    "Synthetic Room question from first member",
+    nativeRoom,
+  );
+  const roomSecond = await publishQuestion(
+    "information-child",
+    "Synthetic Room question from another member",
+    nativeRoom,
+  );
+  assert.equal((await roomQuestions(nativeRoom)).openCount, 2);
+  await until(
+    () =>
+      evaluate(
+        `${query(roomBadge(nativeRoom))}?.getAttribute('aria-label').includes('2')`,
+      ),
+    "Room Asking counts its two journal requests only",
+  );
+  await click(
+    '[aria-label="Customize information"]',
+    "Hide all customizable Room widgets",
+  );
+  const visibleRoomWidgets = await evaluate(
+    "document.querySelectorAll('.information-widget[data-visible=true]').length",
+  );
+  for (let index = 0; index < visibleRoomWidgets; index++) {
+    await click(
+      '.information-widget[data-visible="true"] .information-widget-actions button:nth-child(3)',
+      "Hide Room widget " + index,
+    );
+    await settledLayout();
+  }
+  await click(
+    '[aria-label="Customize information"]',
+    "Keep Room questions outside hidden widgets",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelectorAll('.information-widget-body').length",
+    ),
+    0,
+  );
+  assert.equal(
+    await evaluate("document.querySelectorAll('.room-question-card').length"),
+    2,
+  );
+  await screenshot("12a-native-room-workspace-two-questions.png");
+  await evaluate(
+    `window.zenx.plugins.executeCommand('zenx-rooms','remove-member',{roomId:${JSON.stringify(nativeRoom.id)},threadId:'information-main'})`,
+  );
+  await until(
+    () => evaluate(`Boolean(${query(roomCard(roomFirst))})`),
+    "author removal retains the Room resource",
+  );
+  await click(
+    roomCard(roomFirst) + ' input[type="radio"]',
+    "Choose answer for the Room-owned question",
+  );
+  await click(
+    roomCard(roomFirst) + " .primary-button",
+    "Save Room answer without choosing a member",
+  );
+  await until(
+    async () => (await roomQuestions(nativeRoom)).openCount === 1,
+    "one Room question remains open after answer",
+  );
+  await until(
+    () =>
+      evaluate(
+        `${query(roomBadge(nativeRoom))}?.getAttribute('aria-label').includes('1')`,
+      ),
+    "Asking remains for the other Room request",
+  );
+  await screenshot("12b-native-room-partial-answer-asking-remains.png");
+  await click(
+    roomCard(roomSecond) + " .user-question-actions .quiet-button",
+    "Cancel the remaining Room request explicitly",
+  );
+  await until(
+    async () => (await roomQuestions(nativeRoom)).openCount === 0,
+    "all Room requests resolved",
+  );
+  await until(
+    () => evaluate(`!${query(roomBadge(nativeRoom))}`),
+    "Room Asking disappears only after its last open question",
+  );
+  const withdrawQuestion = await publishQuestion(
+    "information-child",
+    "Synthetic Room request for explicit model withdrawal",
+    nativeRoom,
+  );
+  const withdrawProgram = `const decode=r=>{if(r.exitCode!==0)throw Error(r.output||'Tool failed');return r.structuredContent??JSON.parse(r.output)};let room;for(let cursor=0;;){const page=decode(await tools.zenx_rooms_list({cursor}));room=page.rooms.find(value=>value.name==='Synthetic native Room');if(room||page.nextCursor==null)break;cursor=page.nextCursor;}if(!room)throw Error('Room not found');const page=decode(await tools.zenx_rooms_questions({room:room.ref}));const q=page.questions.find(value=>value.specification.questions.some(value=>value.prompt==='Synthetic Room request for explicit model withdrawal'));if(!q)throw Error('Question not found');const result=decode(await tools.zenx_rooms_withdraw_question({question:q.ref}));if(result.state!=='withdrawn')throw Error('Withdrawal not confirmed');text('Synthetic Room question explicitly withdrawn');`;
+  await until(
+    () =>
+      evaluate(
+        "window.zenx.threads.list().then(rows=>rows.find(row=>row.threadId==='information-child')?.status==='idle')",
+      ),
+    "publication Turn finished before the separate explicit withdrawal",
+  );
+  await evaluate(
+    `window.zenx.protocol.request('turn/start',${JSON.stringify({ threadId: "information-child", clientUserMessageId: "native-room-question-withdraw", input: [{ type: "text", text: "!tool run_code " + JSON.stringify({ code: withdrawProgram }) }] })})`,
+  );
+  await until(
+    async () =>
+      (await roomQuestions(nativeRoom, { includeClosed: true })).questions.find(
+        (question) => question.id === withdrawQuestion.id,
+      )?.state === "withdrawn",
+    "actual model Room snapshot withdrawal persisted",
+  );
+  await until(
+    () => evaluate(`!${query(roomBadge(nativeRoom))}`),
+    "withdrawal updates the same Room Asking projection",
+  );
+  await screenshot("12c-native-room-resolved-and-withdrawn.png");
   result.cases.push({
     name: "native-ordinary-room",
     owner: ordinaryLayout.owner,
     memberBound: true,
+    independentWorkspaceQuestions: true,
+    privateThreadQuestionsExcluded: true,
+    removedAuthorQuestionRetained: true,
+    partialAnswerKeepsAsking: true,
+    lastCancelClearsAsking: true,
+    actualModelSnapshotWithdrawal: true,
   });
   await openRoom(nativePaw, "Select PAW's actual Room in Sidebar");
   const pawLayout = await evaluate(
@@ -721,11 +911,48 @@ async function run() {
       ),
   );
   await screenshot("13-native-paw-actual-room.png");
+  await publishQuestion(
+    "information-other",
+    "Synthetic private PAW Thread question only",
+  );
+  assert.equal(
+    (await roomQuestions(nativePaw)).openCount,
+    0,
+    "single-member PAW does not aggregate private Thread questions",
+  );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('.information-content')?.textContent.includes('Synthetic private PAW Thread question only')",
+    ),
+    false,
+    "PAW information does not display the member's private question",
+  );
+  const pawQuestion = await publishQuestion(
+    "information-other",
+    "Synthetic independent PAW workspace question",
+    nativePaw,
+  );
+  await until(
+    () => evaluate(`Boolean(${query(roomBadge(nativePaw))})`),
+    "PAW Asking follows its own Room question",
+  );
+  await screenshot("13a-native-independent-paw-question.png");
+  await click(
+    roomCard(pawQuestion) + " .user-question-actions .quiet-button",
+    "Cancel PAW Room request without changing its private Thread question",
+  );
+  await until(
+    () => evaluate(`!${query(roomBadge(nativePaw))}`),
+    "PAW workspace Asking clears independently",
+  );
+  await screenshot("13b-native-paw-room-resolved-private-thread-pending.png");
   result.cases.push({
     name: "native-paw-room",
     owner: pawLayout.owner,
     actualAssistant: "information-other",
     thirdOwner: false,
+    privateThreadQuestionExcluded: true,
+    independentRoomQuestionCancelled: true,
   });
   await openRoom(emptyRoom, "Select actual empty Room in Sidebar");
   await click(

@@ -32,6 +32,7 @@ export function createZenXRoomsProfileLoader(
       trustedUi: boolean;
       threadId: string | undefined;
       active: boolean;
+      signal: AbortSignal;
     }>();
     const call = () => {
       const context = scope.getStore();
@@ -40,6 +41,18 @@ export function createZenXRoomsProfileLoader(
     };
     const requireUi = () => {
       if (!call().trustedUi) throw new Error("Trusted Room UI required");
+    };
+    const questionAdmit = async () => {
+      call().signal.throwIfAborted();
+    };
+    const questionWriter = () => {
+      const context = call();
+      context.signal.throwIfAborted();
+      if (context.trustedUi || !context.threadId)
+        throw Error(
+          "Room question writes require the actual model member invocation",
+        );
+      return context.threadId;
     };
     const port = {
       startPlugin: (
@@ -68,6 +81,42 @@ export function createZenXRoomsProfileLoader(
         call();
         return domain.wakeupsEnabled();
       },
+      roomQuestionSummary: (id: string) => {
+        const context = call();
+        if (typeof domain.roomQuestionSummary !== "function") return undefined;
+        if (
+          !context.trustedUi &&
+          !domain
+            .snapshot()
+            .rooms.find((room) => room.id === id)
+            ?.members.some((member) => member.threadId === context.threadId)
+        )
+          return undefined;
+        return domain.roomQuestionSummary(id);
+      },
+      roomQuestions: (
+        id: string,
+        options: Parameters<typeof domain.roomQuestions>[1],
+      ) => {
+        requireUi();
+        return domain.roomQuestions(id, options);
+      },
+      modelReadRoomQuestions: (
+        id: string,
+        options: Parameters<typeof domain.roomQuestions>[1],
+      ) =>
+        domain.roomQuestionsAsMember(
+          id,
+          questionWriter(),
+          options ?? {},
+          questionAdmit,
+        ),
+      modelUpdateRoomQuestion: (
+        input: Parameters<typeof domain.updateRoomQuestion>[0],
+      ) => domain.updateRoomQuestion(input, questionWriter(), questionAdmit),
+      modelWithdrawRoomQuestion: (
+        input: Parameters<typeof domain.withdrawRoomQuestion>[0],
+      ) => domain.withdrawRoomQuestion(input, questionWriter(), questionAdmit),
       assistantWorkspace: (id: string) => {
         call();
         return domain.assistantWorkspace(id);
@@ -216,6 +265,7 @@ export function createZenXRoomsProfileLoader(
           trustedUi: invocation.trustedPluginUi === true,
           threadId: invocation.threadId,
           active: true,
+          signal: invocation.signal,
         };
         try {
           if (!context.trustedUi && "input" in invocation.arguments)

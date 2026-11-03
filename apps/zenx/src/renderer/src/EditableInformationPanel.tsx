@@ -26,6 +26,7 @@ import {
 } from "./plugin-ui-host.js";
 import type { BoardConversation } from "./board-ui-state.js";
 import { Icon } from "./icons.js";
+import { RoomQuestionCards } from "./RoomQuestionCards.js";
 
 export interface InformationReceipt {
   owner: SidebarOwner;
@@ -38,13 +39,13 @@ export interface InformationReceipt {
 type Props = {
   owner: BoardConversation;
   threads: readonly NativeThreadSummary[];
-  roomMembers?: readonly { threadId: string; name?: string }[];
   snapshot: ZenXPluginSnapshot;
   registry: PluginUiRegistry;
   theme: "light" | "dark";
   navigate(route: string): void;
   /** Asking is never a layout widget and cannot be hidden or removed here. */
   attention?: ReactNode;
+  roomMembers?: readonly { threadId: string; name?: string }[];
 };
 type Pending = {
   operations: NativeInformationEdit[];
@@ -88,12 +89,12 @@ export function EditableInformationPanel(props: Props) {
 function InformationPanel({
   owner,
   threads,
-  roomMembers,
   snapshot,
   registry,
   theme,
   navigate,
   attention,
+  roomMembers,
 }: Props) {
   const { t } = useTranslation("panels");
   const ownerId = owner.kind === "thread" ? owner.threadId : owner.roomId;
@@ -115,6 +116,9 @@ function InformationPanel({
   const [boardAddress, setBoardAddress] = useState("");
   const [dragging, setDragging] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const rosterFingerprint = JSON.stringify([ownerKey, roomMembers]);
+  const previousRoster = useRef(rosterFingerprint);
+  const rosterRefreshPending = useRef(false);
   const readSequence = useRef(0);
   const mounted = useRef(true);
   useEffect(
@@ -187,6 +191,12 @@ function InformationPanel({
       )
         void refresh();
     });
+    const endRoomQuestions =
+      owner.kind === "room"
+        ? window.zenx.roomQuestions?.onChanged((roomId) => {
+            if (roomId === ownerId && !inFlight.current) void refresh();
+          })
+        : undefined;
     const focus = () => {
       if (!inFlight.current) void refresh();
     };
@@ -201,10 +211,18 @@ function InformationPanel({
     return () => {
       ++readSequence.current;
       unsubscribe?.();
+      endRoomQuestions?.();
       window.removeEventListener("focus", focus);
       window.removeEventListener(editChanged, edit);
     };
   }, [ownerKey, refresh]);
+  useEffect(() => {
+    if (previousRoster.current === rosterFingerprint) return;
+    previousRoster.current = rosterFingerprint;
+    if (owner.kind !== "room" || roomMembers === undefined) return;
+    if (inFlight.current) rosterRefreshPending.current = true;
+    else void refresh();
+  }, [rosterFingerprint, owner.kind, roomMembers, refresh]);
   const update = async (
     operations: NativeInformationEdit[],
     resourceThreadId = member,
@@ -249,6 +267,10 @@ function InformationPanel({
     } finally {
       inFlight.current = false;
       if (mounted.current && currentOwner.current === key) setBusy(false);
+      if (rosterRefreshPending.current && currentOwner.current === key) {
+        rosterRefreshPending.current = false;
+        void refresh();
+      }
     }
   };
   const title = (widget: InformationWidget) => t(titleKeys[widget.type]);
@@ -357,6 +379,16 @@ function InformationPanel({
     <div className="editable-information-panel" data-owner={ownerKey}>
       {attention ? (
         <div className="information-attention">{attention}</div>
+      ) : null}
+      {owner.kind === "room" && window.zenx.roomQuestions ? (
+        <div className="information-attention">
+          <RoomQuestionCards
+            key={ownerId}
+            roomId={ownerId}
+            members={roomMembers ?? receipt?.members ?? []}
+            threads={threads}
+          />
+        </div>
       ) : null}
       <div className="information-settings-toolbar">
         <span>{t("informationComponents")}</span>

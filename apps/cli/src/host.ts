@@ -58,7 +58,10 @@ import {
   type ThreadSummaryProjection,
 } from "../../../src/thread-summary.js";
 import { ShellToolRuntime, ToolEnvironment } from "../../../src/tool.js";
-import { AskUserQuestionToolRuntime } from "../../../src/user-question-tool.js";
+import {
+  AskUserQuestionToolRuntime,
+  type RoomUserQuestionPublisher,
+} from "../../../src/user-question-tool.js";
 import { ASK_USER_QUESTION_NAME } from "../../../src/user-question.js";
 import {
   ToolOutputSpool,
@@ -129,6 +132,8 @@ export interface ZenHostOptions {
   toolPresentation?: ToolPresentation;
   /** Ordinary question publication defaults on; explicit false is a Host embedding opt-out. Changes require restart. */
   experimentalUserQuestions?: boolean;
+  /** Host-local explicit Room publication route; omitted targets stay Thread-owned. */
+  publishRoomQuestion?: RoomUserQuestionPublisher;
   /** Application-owned pinned resource; changes take effect at next Host launch. */
   experimentalRtk?: { executable: string; sha256: string };
   /** Host-owned containment limits and exact packaged Worker entry. */
@@ -287,10 +292,13 @@ export function createHostedAppServer(
       id: "apply-patch",
     });
     if (options.experimentalUserQuestions !== false)
-      toolEnvironment.registerRuntime(new AskUserQuestionToolRuntime(), {
-        kind: "builtin",
-        id: "user-question",
-      });
+      toolEnvironment.registerRuntime(
+        new AskUserQuestionToolRuntime(options.publishRoomQuestion),
+        {
+          kind: "builtin",
+          id: "user-question",
+        },
+      );
     toolEnvironment.registerRuntime(
       new ViewImageToolRuntime({ attachments, journal }),
       { kind: "builtin", id: "view-image" },

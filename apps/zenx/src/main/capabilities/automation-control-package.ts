@@ -1,3 +1,9 @@
+import type {
+  RoomQuestionWorkspace,
+  RoomQuestionWorkspaceReadOptions,
+  RoomQuestionWriteInput,
+  RoomQuestion,
+} from "../../room-questions.js";
 import { assertPawRenameScope } from "../room-identity.js";
 import type { ToolInvocation } from "../../../../../src/tool.js";
 import type { ThreadCandidate } from "../thread-target.js";
@@ -75,6 +81,29 @@ export interface ZenXAutomationControlPort {
   }>;
   snapshot(): TriggerSnapshot;
   sidebarFacts?(): TriggerSidebarSnapshot;
+  roomQuestionSummary?(
+    roomId: string,
+  ):
+    { revision: number; openCount: number; totalQuestions: number } | undefined;
+  roomQuestionsAsMember?(
+    roomId: string,
+    callerThreadId: string,
+    options: RoomQuestionWorkspaceReadOptions,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestionWorkspace>;
+  updateRoomQuestion?(
+    input: RoomQuestionWriteInput,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestion>;
+  withdrawRoomQuestion?(
+    input: Pick<
+      RoomQuestionWriteInput,
+      "roomId" | "questionId" | "expectedRevision"
+    >,
+    callerThreadId: string,
+    admit: () => Promise<void>,
+  ): Promise<RoomQuestion>;
   assistantWorkspace?(roomId: string): AssistantWorkspace;
   updateAssistantWorkspace?(
     input: UpdateAssistantWorkspaceInput,
@@ -261,6 +290,7 @@ const manifest: ZenXPluginManifestV2 = {
     },
   ],
   tools: [
+    ...roomQuestionTools(),
     tool(
       "zenx_triggers_threads",
       "Discover readable Thread targets for notification setup.",
@@ -517,8 +547,122 @@ export class ZenXAutomationControlCapabilityPackage implements ZenXCapabilityPac
         return { emitted: true };
       case "zenx_rooms_list":
         return {
-          rooms: this.#port.snapshot().rooms.map(readSafeRoom),
+          rooms: this.#port.snapshot().rooms.map((room) => {
+            const canRead =
+              uiInput !== null ||
+              room.members.some(
+                (member) => member.threadId === invocation.threadId,
+              );
+            const questionSummary = canRead
+              ? this.#port.roomQuestionSummary?.(room.id)
+              : undefined;
+            return {
+              ...readSafeRoom(room),
+              ...(questionSummary === undefined ? {} : { questionSummary }),
+            };
+          }),
         };
+      case "zenx_rooms_questions": {
+        if (
+          !invocation.threadId ||
+          uiInput !== null ||
+          !this.#port.roomQuestionsAsMember
+        )
+          throw Error("Room question model invocation is unavailable");
+        if (
+          Object.keys(args).some(
+            (key) =>
+              ![
+                "roomId",
+                "afterQuestionId",
+                "expectedWorkspaceRevision",
+                "includeClosed",
+                "limit",
+              ].includes(key),
+          )
+        )
+          throw Error("Unknown Room question field");
+        const limit = args.limit === undefined ? 4 : Number(args.limit);
+        if (
+          !Number.isSafeInteger(limit) ||
+          limit < 1 ||
+          limit > 4 ||
+          (args.includeClosed !== undefined &&
+            typeof args.includeClosed !== "boolean")
+        )
+          throw Error("Invalid Room question page");
+        return this.#port.roomQuestionsAsMember(
+          string(args, "roomId", MAX_ID_BYTES),
+          invocation.threadId,
+          {
+            limit,
+            ...(args.afterQuestionId === undefined
+              ? {}
+              : {
+                  afterQuestionId: string(
+                    args,
+                    "afterQuestionId",
+                    MAX_ID_BYTES,
+                  ),
+                }),
+            ...(args.expectedWorkspaceRevision === undefined
+              ? {}
+              : {
+                  expectedWorkspaceRevision: Number(
+                    args.expectedWorkspaceRevision,
+                  ),
+                }),
+            ...(args.includeClosed === undefined
+              ? {}
+              : { includeClosed: args.includeClosed as boolean }),
+          },
+          async () => invocation.signal.throwIfAborted(),
+        );
+      }
+      case "zenx_rooms_update_question":
+      case "zenx_rooms_withdraw_question": {
+        if (!invocation.threadId || uiInput !== null)
+          throw Error("Room question writes require the actual model member");
+        const update = name === "zenx_rooms_update_question";
+        if (
+          Object.keys(args).some(
+            (key) =>
+              ![
+                "roomId",
+                "questionId",
+                "expectedRevision",
+                ...(update ? ["specification"] : []),
+              ].includes(key),
+          )
+        )
+          throw Error("Unknown Room question field");
+        const input = {
+          roomId: string(args, "roomId", MAX_ID_BYTES),
+          questionId: string(args, "questionId", MAX_ID_BYTES),
+          expectedRevision: Number(args.expectedRevision),
+        };
+        if (
+          !Number.isSafeInteger(input.expectedRevision) ||
+          input.expectedRevision < 1
+        )
+          throw Error("Invalid Room question revision");
+        if (update) {
+          if (!this.#port.updateRoomQuestion)
+            throw Error("Room question workspace service unavailable");
+          return this.#port.updateRoomQuestion(
+            { ...input, specification: args.specification },
+            invocation.threadId,
+            async () => invocation.signal.throwIfAborted(),
+          );
+        }
+        if (!this.#port.withdrawRoomQuestion)
+          throw Error("Room question workspace service unavailable");
+        return this.#port.withdrawRoomQuestion(
+          input,
+          invocation.threadId,
+          async () => invocation.signal.throwIfAborted(),
+        );
+      }
       case "zenx_rooms_create":
         return await this.#port.createRoom({
           name: string(args, "name", MAX_ROOM_NAME_BYTES),
@@ -955,7 +1099,7 @@ function readSafeHistory(entry: TriggerSnapshot["history"][number]): unknown {
   };
 }
 
-function readSafeRoom(room: ZenXRoom): unknown {
+function readSafeRoom(room: ZenXRoom) {
   return {
     id: room.id,
     name: room.name,
@@ -1271,4 +1415,49 @@ function integer(args: Record<string, unknown>, key: string): number {
   if (!Number.isSafeInteger(value))
     throw new Error(`${key} must be an integer`);
   return value;
+}
+
+function roomQuestionTools() {
+  const identity = { type: "string", minLength: 1, maxLength: 512 };
+  const base = {
+    roomId: identity,
+    questionId: identity,
+    expectedRevision: { type: "integer", minimum: 1 },
+  };
+  return [
+    {
+      ...tool(
+        "zenx_rooms_questions",
+        "Read Room-owned workspace questions, not member Thread questions. Publish with ask_user_question.roomId.",
+        {
+          roomId: identity,
+          afterQuestionId: identity,
+          expectedWorkspaceRevision: { type: "integer", minimum: 0 },
+          includeClosed: { type: "boolean" },
+          limit: { type: "integer", minimum: 1, maximum: 4 },
+        },
+        ["roomId"],
+        false,
+      ),
+      maxOutputBytes: 1024 * 1024,
+    },
+    {
+      ...tool(
+        "zenx_rooms_update_question",
+        "Revise an open Room workspace question using its exact current revision; current members only.",
+        { ...base, specification: { type: "object" } },
+        ["roomId", "questionId", "expectedRevision", "specification"],
+      ),
+      maxOutputBytes: 1024 * 1024,
+    },
+    {
+      ...tool(
+        "zenx_rooms_withdraw_question",
+        "Explicitly withdraw an open Room workspace question with its exact current revision; current members only.",
+        base,
+        ["roomId", "questionId", "expectedRevision"],
+      ),
+      maxOutputBytes: 1024 * 1024,
+    },
+  ];
 }

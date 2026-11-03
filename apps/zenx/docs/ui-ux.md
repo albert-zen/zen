@@ -458,7 +458,8 @@ ThreadView
 
 - Thread 顶栏只有一个工作区入口；文件、Terminal、共享浏览器页面、Computer 与已注册插件 panel 都是平级内容 Tab。加号提供类型选择，不增加 Browser / Files 分类层或旧 Workspace 抽屉；即使 Browser 插件未启用，文件与人工内置浏览器仍可用。
 - 默认 Browser 工具与用户共用内置真实页面，页面直接作为顶层 Tab。外部 provider 的每个目标在同一 tab strip 中以“外部 · 只读”页面展示，固定其 backend/connection/session/observer 身份；CDP 展示观察画面，isolated Playwright 展示最近一次 inspect 截图。不再单设 Agent Browser / Attached browser 入口。观察面隐藏时停止订阅，不通过展示触发 inspect 或改变模型 observationId。Computer 按明确窗口目标持续观察，隐藏或 provider 停用、替换后停止；不支持该能力时明确显示状态。
-- 内置 Browser 仅在对应 Tab 图标上标记精确页面的 Agent 检查或已派发操作，不增加顶部活动文字行或动态边缘；可访问名称与 tooltip 区分检查和操作。权限开关只表示后续 Agent 操作是否获准，不把它当作正在执行的证据。人类已接管与已派发操作仍未结束的安全提示保留在现有权限开关的 tooltip 与可访问描述中，不新增文字行或改变原生页面几何；操作真实结算后才撤除图标活动标记。外部 Browser 与 Computer 只读观察不自动选择、打开或切换目标；Computer 面板的活动只来自人类已选的当前 Host 精确目标与未结算调用，未选择目标不能声称该窗口闲置。后台指定窗口、前台操作、等待人类和未知模式分别说明，截图流失败不等于调用结束，旧工具历史不能推断当前活动。
+- Browser 操作会在统一的工作区 Tab 栏自动展示精确目标的临时预览，必要时打开右栏并选中该页面，自动展示本身不转移键盘或系统焦点。内置页面复用现有真实 Tab，外部页面仍为只读观察；预览不进入持久 Tab 顺序，Turn 结束后短暂显示结果再撤去。发现页面本身不自动打开预览；人类关闭或切走后，同一次操作不重新打开，新操作仍可展示。
+- 内置 Browser 的活动标记只位于对应 Tab 图标上，表示精确页面的 Agent 检查或已派发操作，不增加顶部活动文字行或动态边缘；可访问名称与 tooltip 区分检查和操作。权限开关只表示后续 Agent 操作是否获准，不把它当作正在执行的证据。人类已接管与已派发操作仍未结束的安全提示保留在现有权限开关的 tooltip 与可访问描述中，不新增文字行或改变原生页面几何；操作真实结算后才撤除图标活动标记。外部 Browser 与 Computer 的观察画面不转发人类点击或键盘输入，也不授予 Agent 新的执行权限。Computer 仍由人类明确选择观察目标，不随 Agent 活动自动打开或切换；Computer 面板的活动只来自人类已选的当前 Host 精确目标与未结算调用，未选择目标不能声称该窗口闲置。后台指定窗口、前台操作、等待人类和未知模式分别说明，截图流失败不等于调用结束，旧工具历史不能推断当前活动。
 - 内置浏览器的空白页（精确 `about:blank`）跟随 App 明确的浅/深外观，而不是系统外观；仅空白文档设置背景与 color-scheme，实际网站保留自身样式与系统媒体查询，不通过全局 nativeTheme 或覆盖层伪装。导航到外站前后的异步外观更新不得污染外站。
 - Browser 与 Computer 的 Agent 指针是短时的语义动作位置提示，系统鼠标和键盘焦点不用于制作动效。Browser 的共享页面、独立 Electron 和连接 Chrome 展示已执行 click/type/select 的目标；macOS bundled Computer 在有准确窗口几何的实时预览中展示 press/set_value 目标。无几何、过期、窗口尺寸变化或切换目标时不画猜测位置；Playwright、Windows 与 Peekaboo 尚不提供轨迹。减少动态效果时保留静态目标提示，取消移动效果；轨迹不拦截输入，也不是操作完成的权威凭据。全局桌面输入仍走现有显式前台接管设置，不能承诺任意原生应用完全后台运行。
 - macOS 同行标题栏的 traffic lights 与左侧栏开关拥有独立、共享的 leading 安全区；右栏展开、左侧栏收起或布局动画不能让工作区 Tab、滚动轨道和拖动命中区侵入。安全区约束整个 Tab 容器，不依赖首个 Tab 的名称或顺序；窄屏仍沿用独立标题行。
@@ -1063,7 +1064,17 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
 
-### Native question cards and Asking attention
+### Room workspace questions and Asking attention
+
+The Room information panel is an independent workspace resource, not a view of its participant Threads' private panels or questions. PAW follows the same Room ownership even when it has one member. A member Thread is an admitted actor and publication provenance, never the resource address. Removing the author does not delete, move or hide an existing Room question; a current member can revise or withdraw it through the existing Room tools.
+
+Room question cards read only the Room journal workspace. The Room/PAW sidebar Asking capsule reads that same journal's `questionSummary.openCount` and revision from the existing Rooms list projection. Any open Room request keeps Asking visible, independently of selected member, selected Thread, model activity, hidden widgets or private Thread question counts. Answering, cancelling or withdrawing one request removes the capsule only when no other Room request remains open. Private Thread questions are not automatically imported, including into a single-member PAW.
+
+Room cards occupy a separate attention slot above the customizable widgets and cannot be hidden or removed by layout controls. Authored options start unselected and free text is independent per `(Room, question)` in the current window. Closing/reopening or changing workspace retains unsent drafts; application reload need not. Background publication never changes workspace or keyboard focus. Author labels are provenance only and distinguish a former/unavailable author without denying access to the Room resource.
+
+Human answers and cancellations use the exact Room/question revision and immutable response client ID. A saved receipt confirms the Room resource and ordinary Room message/operation transaction, not Thread admission or model consumption. Existing Room addressing/PAW delivery decides whether and where the message is delivered. Conflicts retain the local draft for explicit current-version review. Unknown outcomes keep their original payload and expose exact readback, never an automatic write retry; a reviewed explicit reapply reuses the same client ID. Current document and Room service checks, not presentation controls, fence writes.
+
+### Thread question cards and Asking attention
 
 Native accepted questions appear in the existing information panel attention slot,
 with independent `(Thread, call Item)` drafts, authored options, always-available
