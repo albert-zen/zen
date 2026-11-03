@@ -49,6 +49,8 @@ type Reply = {
   status?: string;
   scope: { kind: string; ref: string };
   authorizedScopes: Array<{ kind: string; ref: string }>;
+  authorizedScopesTotal: number;
+  authorizedScopesTruncated: boolean;
   information: {
     availability: string;
     content: string;
@@ -366,6 +368,66 @@ test("private/PAW/ordinary Room scopes remain distinct and ambiguous PAWs do not
       .scope(caller)
       .bind("rooms", "room", { id: "not-a-member" });
     await assert.rejects(f.read({ scope }), /currently belong/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("scope completeness reaches model reads, writes, conflicts and ambiguous choices", async () => {
+  const f = await fixture();
+  try {
+    const rooms: SidebarRoom[] = Array.from({ length: 101 }, (_, index) => ({
+      id: `RAW-room-${index}`,
+      name: `Synthetic Room ${index}`,
+      members: [{ threadId: caller }],
+    }));
+    const unrelated = {
+      id: "RAW-unrelated",
+      name: "Unrelated private Room",
+      members: [{ threadId: other }],
+    };
+    const assertScopes = (reply: Reply, total: number, length: number) => {
+      assert.equal(reply.authorizedScopesTotal, total);
+      assert.equal(reply.authorizedScopes.length, length);
+      assert.equal(reply.authorizedScopesTruncated, length < total);
+      assert.ok(!JSON.stringify(reply).includes(unrelated.name));
+      assert.ok(!JSON.stringify(reply).includes("RAW-"));
+    };
+    for (const count of [0, 100, 101]) {
+      f.setRooms([...rooms.slice(0, count), unrelated]);
+      assertScopes(await f.read(), count + 1, Math.min(count + 1, 101));
+    }
+    const lastRoomRef = f.references
+      .scope(caller)
+      .bind("rooms", "room", { id: rooms.at(-1)!.id });
+    const last = await f.read({ scope: lastRoomRef });
+    assert.equal(last.scope.kind, "room");
+    assertScopes(last, 102, 101);
+    const updated = await f.edit(last.snapshot, [{ op: "add", type: "board" }]);
+    assert.equal(updated.applied, true);
+    assertScopes(updated, 102, 101);
+    const conflict = await f.edit(last.snapshot, [
+      { op: "add", type: "board" },
+    ]);
+    assert.equal(conflict.applied, false);
+    assertScopes(conflict, 102, 101);
+    const unrelatedRef = f.references
+      .scope(caller)
+      .bind("rooms", "room", { id: unrelated.id });
+    await assert.rejects(f.read({ scope: unrelatedRef }), /currently belong/);
+    f.setRooms(rooms.slice(0, -1));
+    await assert.rejects(f.read({ scope: lastRoomRef }), /currently belong/);
+    f.setRooms([
+      ...rooms.map((entry, index) => ({
+        ...entry,
+        ...(index < 2 ? { assistant: { threadId: caller } } : {}),
+      })),
+      unrelated,
+    ]);
+    const ambiguous = await f.read();
+    assert.equal(ambiguous.status, "ambiguous");
+    // Preserve the existing complete ambiguity list rather than adding a cap.
+    assertScopes(ambiguous, 102, 102);
   } finally {
     await f.close();
   }
