@@ -11588,6 +11588,8 @@ for (const mode of ["dock", "popover"] as const) {
       disconnect() {}
     } as unknown as typeof ResizeObserver;
     let harness: AppHarness | undefined;
+    let directMutations: MutationObserver | undefined;
+    const directRecords: MutationRecord[] = [];
     try {
       harness = await mountThreadApp({
         plugins: {
@@ -11626,6 +11628,32 @@ for (const mode of ["dock", "popover"] as const) {
       );
       await act(async () => information.click());
       const inner = document.querySelector<HTMLElement>(".messages-inner")!;
+      const pendingHost = inner.querySelector<HTMLElement>(
+        ":scope > .pending-send-host",
+      );
+      assert.equal(
+        Boolean(pendingHost),
+        true,
+        "empty pending host exists before input",
+      );
+      assert.equal(pendingHost!.children.length, 0);
+      directMutations = new window.MutationObserver((records) =>
+        directRecords.push(...records),
+      );
+      directMutations.observe(inner, { childList: true });
+      const probe = document.createComment(
+        "Synthetic observer sensitivity check",
+      );
+      inner.append(probe);
+      await act(async () => {});
+      assert.equal(
+        directRecords.length + directMutations.takeRecords().length,
+        1,
+      );
+      probe.remove();
+      await act(async () => {});
+      directRecords.length = 0;
+      directMutations.takeRecords();
       const history = inner.querySelector<HTMLElement>(
         ":scope > .transcript-history",
       );
@@ -11655,7 +11683,18 @@ for (const mode of ["dock", "popover"] as const) {
         '[data-send-state="sending"]',
       );
       assert.equal(Boolean(pending), true);
-      assert.equal(pending!.parentElement === inner, true);
+      assert.equal(pending!.parentElement === pendingHost, true);
+      assert.equal(pendingHost!.parentElement === inner, true);
+      assert.equal(history!.contains(pending), false);
+      assert.equal(
+        inner.querySelector(":scope > .pending-send-host") === pendingHost,
+        true,
+      );
+      assert.equal(
+        directRecords.length + directMutations.takeRecords().length,
+        0,
+        "Send does not mutate the history-containing parent's child list",
+      );
       assert.equal(composer.value, "");
       assert.equal(
         inner.querySelector(":scope > .transcript-history") === history,
@@ -11667,6 +11706,15 @@ for (const mode of ["dock", "popover"] as const) {
       );
       assert.equal(rows[0]!.querySelector(".user-bubble") === firstUser, true);
       await act(async () => admission.resolve({ turnId: "next-turn" }));
+      assert.equal(
+        inner.querySelector(":scope > .pending-send-host") === pendingHost,
+        true,
+      );
+      assert.equal(
+        directRecords.length + directMutations.takeRecords().length,
+        0,
+      );
+      directMutations.disconnect();
       assert.equal(
         Boolean(inner.querySelector('[data-send-state="admitted"]')),
         true,
@@ -11680,6 +11728,7 @@ for (const mode of ["dock", "popover"] as const) {
         true,
       );
     } finally {
+      directMutations?.disconnect();
       admission.resolve({});
       try {
         if (harness) await unmountApp(harness);
@@ -11702,4 +11751,11 @@ test("historical grid inherits the transcript's responsive 24px and narrow 20px 
   );
   const historyRule = css.match(/\.transcript-history\s*\{[^}]*\}/)?.[0] ?? "";
   assert.match(historyRule, /gap:\s*inherit;/);
+  const pendingHostRule =
+    css.match(/\.pending-send-host\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(
+    pendingHostRule,
+    /display:\s*contents;/,
+    "empty pending host contributes no grid box or extra gap",
+  );
 });
