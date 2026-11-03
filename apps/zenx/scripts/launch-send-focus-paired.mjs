@@ -63,8 +63,8 @@ const snapshots = {
     tree: "406b7116f3ece53770f7064ff59f818d365232f5",
   },
   candidate: {
-    commit: "5a95427e636f97f4fc02c6b1425bfa008a41194a",
-    tree: "f2d83a1a54d566c2549593753caa7620e8bd2c07",
+    commit: "04d98bfa949357d20befc313450bec2f86ed28e8",
+    tree: "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -712,6 +712,16 @@ try {
     sourceLabel === "baseline" ? null : 24,
   );
   const samples = result.samples.map((sample, index) => {
+    for (const name of [
+      "own.value.set",
+      "prototype.defaultValue.set",
+      "prototype.selectionStart.get",
+      "prototype.selectionEnd.get",
+    ])
+      assert.ok(
+        sample.geometryProbes.textareaAccessorWrappers.includes(name),
+        "Required real textarea accessor coverage: " + name,
+      );
     const timings = Object.fromEntries(
       timingFields.map((key) => {
         const value = sample[key];
@@ -778,6 +788,7 @@ try {
     rendered: result.before.rendered,
     readerBeforeSend: result.readerBeforeSend,
     pausedReaderResize: result.pausedReaderResize,
+    responsiveHistoryLayout: result.responsiveHistoryLayout,
     rendererSourceBundles,
     geometryProbeScope:
       "instrumented click-to-first-pending-observer getter wall times; not additive, not CPU, not performance acceptance",
@@ -832,7 +843,7 @@ try {
     "REVIEWED_NATIVE_AB_OBSERVATION_NOT_ACCEPTANCE " + JSON.stringify(summary),
   );
   for (const name of (await readdir(directory)).filter((name) =>
-    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing)\.png$/.test(
+    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing|paused-reader-after-native-resize|responsive-history-(?:390|640|641))\.png$/.test(
       name,
     ),
   ))
@@ -869,6 +880,9 @@ try {
     },
     informationPresentation: capture?.informationPresentation,
     readerBeforeSend: capture?.readerBeforeSend,
+    rendered: capture?.before?.rendered,
+    pausedReaderResize: capture?.pausedReaderResize,
+    responsiveHistoryLayout: capture?.responsiveHistoryLayout,
     observedSamples: (capture?.samples ?? [])
       .slice(0, 3)
       .map((sample, index) => ({

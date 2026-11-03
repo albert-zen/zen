@@ -15,7 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5a95427e636f97f4fc02c6b1425bfa008a41194a
+          ref: ece4b9015f2bb20c664058cc3d7d2a2bb38fd900
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 04d98bfa949357d20befc313450bec2f86ed28e8
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -27,26 +32,26 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build exact candidate source once
+      - name: Build exact current baseline and candidate
         timeout-minutes: 16
         run: |
-          for source in candidate; do
+          for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: candidate
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
-      - name: Native 1280 candidate, attribute existing Selection getter reads
+      - name: Native current source pair with responsive and accessor checks
         timeout-minutes: 20
         run: |
           failed=0
-          for case in control-candidate; do
+          for case in control-baseline control-candidate; do
             case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
             case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
             mkdir -p "results/$case"
@@ -63,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-selection-readers-5000
+          name: native-send-responsive-accessors-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

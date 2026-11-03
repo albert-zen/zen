@@ -20,6 +20,7 @@ assert.ok(observer.startsWith("function installObservation("));
 function fixture({
   layoutObservation = false,
   intersectionObservation = false,
+  cachedOwnValue = false,
 } = {}) {
   const dom = new JSDOM(
     '<main class="thread-view"><div class="messages"><div class="messages-inner"></div></div><div class="bottom-zone"><textarea id="thread-composer"></textarea><div class="composer-send-control"><button class="action-orb send">Send</button></div></div></main>',
@@ -122,6 +123,16 @@ function fixture({
     now += Number(this.dataset.cost ?? 0);
     return this.dataset.offscreen ? { ...rect, top: 2000, bottom: 2040 } : rect;
   };
+  if (cachedOwnValue)
+    Object.defineProperty(
+      d.querySelector("#thread-composer"),
+      "value",
+      Object.getOwnPropertyDescriptor(w.HTMLTextAreaElement.prototype, "value"),
+    );
+  const originalOwnValueDescriptor = Object.getOwnPropertyDescriptor(
+    d.querySelector("#thread-composer"),
+    "value",
+  );
   d.querySelector("#thread-composer").value = "synthetic-nonce";
   w.eval(observer + '; installObservation("synthetic-nonce", "thread-A");');
   if (layoutObservation)
@@ -153,6 +164,7 @@ function fixture({
     w,
     row,
     record: w.__sendLatency,
+    originalOwnValueDescriptor,
     geometryReads: () => geometryReads,
     resize(height) {
       layoutObserver.deliver(d.querySelector(".messages-inner"), height);
@@ -517,7 +529,9 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes("for case in control-candidate; do"));
+  assert.ok(
+    workflow.includes("for case in control-baseline control-candidate; do"),
+  );
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
@@ -531,9 +545,9 @@ test("historical grid comparison keeps exact sources and reader regression outsi
   );
   for (const identity of [
     "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
-    "5a95427e636f97f4fc02c6b1425bfa008a41194a",
+    "04d98bfa949357d20befc313450bec2f86ed28e8",
     "406b7116f3ece53770f7064ff59f818d365232f5",
-    "f2d83a1a54d566c2549593753caa7620e8bd2c07",
+    "c1d9ff09057948d9159c95c8cd4ae76a1b376bea",
   ])
     assert.ok(launch.includes(identity));
   for (const contract of [
@@ -585,4 +599,71 @@ test("Selection getter probes preserve values and restore native descriptors", a
     Object.getOwnPropertyDescriptor(owner, "isCollapsed").get,
     wrapped,
   );
+});
+
+test("responsive checks stay after timing and assert real gap, bounds and reachability", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  assert.ok(
+    source.indexOf("result.responsiveHistoryLayout = []") >
+      source.indexOf(
+        "await stopOwnedTrace();",
+        source.indexOf("result.samples = []"),
+      ),
+  );
+  assert.ok(
+    source.includes(
+      "real historical Turn geometry follows responsive parent gap",
+    ),
+  );
+  assert.ok(source.includes("responsive primary action remains reachable"));
+  assert.ok(
+    source.includes(
+      "responsive full App has no page-level horizontal overflow",
+    ),
+  );
+  assert.ok(launch.includes("responsive-history-(?:390|640|641)"));
+});
+
+test("cached own textarea setter is observed without changing its getter or restoration", async () => {
+  const f = fixture({ cachedOwnValue: true });
+  const editor = f.d.querySelector("#thread-composer");
+  try {
+    assert.equal(
+      Object.getOwnPropertyDescriptor(editor, "value").get,
+      f.originalOwnValueDescriptor.get,
+    );
+    assert.deepEqual(
+      Array.from(f.record.geometryProbes.textareaAccessorWrappers),
+      [
+        "own.value.set",
+        "prototype.defaultValue.set",
+        "prototype.selectionStart.get",
+        "prototype.selectionEnd.get",
+      ],
+    );
+    editor.defaultValue = "";
+    void editor.selectionStart;
+    void editor.selectionEnd;
+    const counts = f.record.geometryProbes.counts;
+    assert.equal(counts["set.value:composer-editor"].calls, 1);
+    assert.equal(counts["set.defaultValue:composer-editor"].calls, 1);
+    assert.ok(counts["get.selectionStart:composer-editor"].calls >= 1);
+    assert.ok(counts["get.selectionEnd:composer-editor"].calls >= 1);
+    await f.row("pending");
+    editor.value = "private-later-draft";
+    assert.equal(editor.value, "private-later-draft");
+    assert.equal(counts["set.value:composer-editor"].calls, 1);
+    assert.equal(
+      JSON.stringify(f.record.geometryProbes).includes("private-later-draft"),
+      false,
+    );
+  } finally {
+    f.close();
+  }
+  const restored = Object.getOwnPropertyDescriptor(editor, "value");
+  assert.equal(restored.get, f.originalOwnValueDescriptor.get);
+  assert.equal(restored.set, f.originalOwnValueDescriptor.set);
 });

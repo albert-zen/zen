@@ -418,6 +418,44 @@ function installObservation(nonce, threadId, profileIndex = 0) {
         );
       }
     };
+  record.geometryProbes.textareaAccessorWrappers = [];
+  const mountedEditor = editor();
+  if (mountedEditor instanceof HTMLTextAreaElement) {
+    // React caches the native prototype setter at mount and calls it through
+    // this own accessor. Keep its getter and tracker closure unchanged.
+    const descriptor = Object.getOwnPropertyDescriptor(mountedEditor, "value");
+    if (descriptor?.configurable && descriptor.set) {
+      const set = wrapCall("set.value", descriptor.set);
+      Object.defineProperty(mountedEditor, "value", { ...descriptor, set });
+      record.geometryProbes.textareaAccessorWrappers.push("own.value.set");
+      restoreGeometry.push(() => {
+        // Do not resurrect an accessor React removed or overwrite a new owner.
+        if (
+          Object.getOwnPropertyDescriptor(mountedEditor, "value")?.set === set
+        )
+          Object.defineProperty(mountedEditor, "value", descriptor);
+      });
+    }
+  }
+  for (const [name, part] of [
+    ["defaultValue", "set"],
+    ["selectionStart", "get"],
+    ["selectionEnd", "get"],
+  ]) {
+    const owner = HTMLTextAreaElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    if (!descriptor?.configurable || typeof descriptor[part] !== "function")
+      continue;
+    const wrapped = wrapCall(part + "." + name, descriptor[part]);
+    Object.defineProperty(owner, name, { ...descriptor, [part]: wrapped });
+    record.geometryProbes.textareaAccessorWrappers.push(
+      "prototype." + name + "." + part,
+    );
+    restoreGeometry.push(() => {
+      if (Object.getOwnPropertyDescriptor(owner, name)?.[part] === wrapped)
+        Object.defineProperty(owner, name, descriptor);
+    });
+  }
   for (const [owner, name] of [
     [Element.prototype, "getBoundingClientRect"],
     [Element.prototype, "getClientRects"],
@@ -1715,6 +1753,52 @@ async function run() {
     "native resize must not restore live following",
   );
   await screenshot("paused-reader-after-native-resize.png");
+  result.responsiveHistoryLayout = [];
+  for (const [width, height, expectedGap] of [
+    [641, 657, 24],
+    [640, 657, 20],
+    [390, 600, 20],
+  ]) {
+    window.setBounds({ ...window.getBounds(), width, height });
+    await until(
+      async () =>
+        await evaluate(`innerWidth===${width}&&innerHeight===${height}`),
+      "actual responsive fixture window size",
+    );
+    await pause(300);
+    const geometry = await evaluate(`(()=>{
+      const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history')??inner, turns=history.querySelectorAll(':scope > section.turn');
+      const first=turns[0].getBoundingClientRect(), second=turns[1].getBoundingClientRect(), editor=document.querySelector('#thread-composer'), input=editor.getBoundingClientRect(), action=document.querySelector('.composer-send-control > .action-orb'), orb=action.getBoundingClientRect();
+      return {innerWidth,innerHeight,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:parseFloat(getComputedStyle(history).rowGap),turnGapPx:second.top-first.bottom,turnCount:turns.length,overflow:document.documentElement.scrollWidth>innerWidth,editorBounds:{left:input.left,right:input.right,top:input.top,bottom:input.bottom},actionBounds:{left:orb.left,right:orb.right,top:orb.top,bottom:orb.bottom},actionUnobscured:action.contains(document.elementFromPoint(orb.left+orb.width/2,orb.top+orb.height/2))};
+    })()`);
+    result.responsiveHistoryLayout.push(geometry);
+    assert.equal(geometry.outerGapPx, expectedGap);
+    assert.equal(geometry.historyGapPx, expectedGap);
+    assert.ok(
+      Math.abs(geometry.turnGapPx - expectedGap) <= 0.1,
+      "real historical Turn geometry follows responsive parent gap",
+    );
+    assert.equal(geometry.turnCount, manifest.completedTurnCount + 3);
+    assert.equal(
+      geometry.overflow,
+      false,
+      "responsive full App has no page-level horizontal overflow",
+    );
+    for (const box of [geometry.editorBounds, geometry.actionBounds])
+      assert.ok(
+        box.left >= 0 &&
+          box.right <= width &&
+          box.top >= 0 &&
+          box.bottom <= height,
+        "responsive Composer controls remain inside viewport",
+      );
+    assert.equal(
+      geometry.actionUnobscured,
+      true,
+      "responsive primary action remains reachable",
+    );
+    await screenshot(`responsive-history-${width}.png`);
+  }
   result.ok = true;
 }
 async function verifyPackagedRuntime() {
