@@ -1,0 +1,85 @@
+name: Packaged information-layout Send A/B (diagnostic only)
+on:
+  push:
+    branches: [diagnostic/send-information-layout-native-20261103]
+    paths:
+      - .github/workflows/send-information-layout-ab.yml
+      - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
+      - apps/zenx/scripts/launch-send-focus-paired.mjs
+permissions:
+  contents: read
+jobs:
+  paired-native-macos:
+    runs-on: macos-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bedc83f9ff0d6a1dd7b3705d90f7de175c632ed5
+          persist-credentials: false
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 6ef1897cb0804809143fa658e6de4a09982e710f
+          persist-credentials: false
+          path: candidate
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy identical existing passive drivers into both exact source checkouts
+        run: |
+          for source in baseline candidate; do
+            cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
+            cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
+            cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
+          done
+      - name: Build exact baseline once
+        working-directory: baseline
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Build exact candidate once
+        working-directory: candidate
+        timeout-minutes: 10
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Verify existing observer identity and post-geometry timing contracts
+        working-directory: baseline
+        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
+      - name: Native 1280 control and 1120 popover pairs, three sends per fresh profile
+        timeout-minutes: 48
+        run: |
+          failed=0
+          for case in control-baseline control-candidate narrow-baseline narrow-candidate; do
+            case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
+            case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
+            mkdir -p "results/$case"
+            echo "NATIVE_AB_CASE_BEGIN $case $source $width"
+            set +e
+            (cd "$source" && node apps/zenx/scripts/launch-send-feedback.mjs "../results/$case" 5000 "$source" "$case" "$width")
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "results/$case/launcher-exit-code.txt"
+            if [ "$status" -ne 0 ]; then failed=1; fi
+            echo "NATIVE_AB_CASE_END $case $source $width exit=$status"
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-send-information-layout-ab-5000
+          path: |
+            results/*/send-information-layout.summary.json
+            results/*/failure.json
+            results/*/lifecycle.json
+            results/*/*.png
+            results/*/launcher-exit-code.txt
+          if-no-files-found: error

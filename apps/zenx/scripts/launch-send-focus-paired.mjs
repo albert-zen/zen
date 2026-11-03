@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import {
   mkdtemp,
+  open,
   copyFile,
   mkdir,
   writeFile,
@@ -11,6 +12,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,12 +24,27 @@ import {
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.equal(process.platform, "darwin");
-const directory = path.resolve(process.argv[2]);
+const uploadDirectory = path.resolve(process.argv[2]);
 const version = "current";
 const count = Number(process.argv[3]);
-assert.ok([0, 1000, 5000].includes(count));
-const sourceLabel = process.argv[4] ?? "baseline";
-const pairCase = process.argv[5] ?? null;
+assert.equal(count, 5000);
+const sourceLabel = process.argv[4];
+const pairCase = process.argv[5];
+const viewportWidth = Number(process.argv[6]);
+assert.ok([1120, 1280].includes(viewportWidth));
+assert.ok(
+  [
+    "control-baseline",
+    "control-candidate",
+    "narrow-baseline",
+    "narrow-candidate",
+  ].includes(pairCase),
+);
+assert.equal(
+  pairCase,
+  (viewportWidth === 1120 ? "narrow" : "control") + "-" + sourceLabel,
+);
+assert.equal(process.argv[7], undefined);
 const hostSnapshot = () => ({
   platform: os.platform(),
   release: os.release(),
@@ -39,11 +56,19 @@ const hostSnapshot = () => ({
   totalMemoryBytes: os.totalmem(),
   uptimeSeconds: os.uptime(),
 });
-let hostBefore;
-const expected = {
-  baseline: "50ae16e1811a186fbf29fa6dfb721d8e328275a7",
-  cv: "a1ecd02aba5f699be72adb16885ddf2562ba3feb",
-}[sourceLabel];
+const hostBefore = hostSnapshot();
+const snapshots = {
+  baseline: {
+    commit: "bedc83f9ff0d6a1dd7b3705d90f7de175c632ed5",
+    tree: "382f413a2203a5fef660f7e78c9b8ca65aecb7c6",
+  },
+  candidate: {
+    commit: "6ef1897cb0804809143fa658e6de4a09982e710f",
+    tree: "7ecfbdcf365e3c6d57c925a0f88916be46a76ee3",
+  },
+};
+const snapshot = snapshots[sourceLabel];
+const expected = snapshot?.commit;
 assert.ok(
   expected,
   "Only independently identified source snapshots are allowed",
@@ -53,14 +78,27 @@ assert.equal(
   expected,
 );
 assert.equal(
+  execFileSync("git", ["rev-parse", "HEAD^{tree}"], {
+    encoding: "utf8",
+  }).trim(),
+  snapshot.tree,
+);
+assert.equal(
   execFileSync("git", ["diff", "--name-only", "HEAD"], {
     encoding: "utf8",
   }).trim(),
   "",
   "Tracked production checkout must be unchanged",
 );
-await mkdir(directory, { recursive: true });
+await mkdir(uploadDirectory, { recursive: true });
 const temporary = await mkdtemp(path.join(os.tmpdir(), "zenx-owned-full-app-"));
+const directory = path.join(temporary, "measurements");
+await mkdir(directory, { mode: 0o700 });
+const privateLog = await open(
+  path.join(temporary, "native-process.log"),
+  "wx",
+  0o600,
+);
 const profile = path.join(temporary, "profile"),
   data = path.join(temporary, "zen-data"),
   home = path.join(temporary, "home"),
@@ -123,6 +161,7 @@ for (const file of [
   "src/renderer/src/main.tsx",
   "src/renderer/src/App.tsx",
   "src/renderer/src/auxiliary-panel.tsx",
+  "src/renderer/src/plugin-information-host.tsx",
   "scripts/capture-send-feedback.cjs",
   "scripts/launch-send-feedback.mjs",
   "scripts/long-thread-domain-seed.mjs",
@@ -130,9 +169,36 @@ for (const file of [
   hashes[file] = createHash("sha256")
     .update(await readFile(path.join(root, file)))
     .digest("hex");
-// Reuse the normal signed portable packager. Only the private acceptance app's
+// Reuse the normal signed portable packager. Only the private diagnostic app's
 // entry is redirected to our observer; production main/preload/renderer stay intact.
 let stagedEntryHash;
+const stagedMainHashes = {};
+const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+function verifyMainPackaging(built, staged, manifestDigest) {
+  assert.match(manifestDigest, /^[a-f0-9]{64}$/);
+  assert.equal(
+    staged,
+    built.replaceAll(
+      "__ZENX_PACKAGED_PROVIDER_MANIFEST_SHA256__",
+      manifestDigest,
+    ),
+    "Only the normal provider-manifest substitution may change packaged main JavaScript",
+  );
+}
+const mainFiles = (
+  await readdir(path.join(root, "out/main"), { recursive: true })
+)
+  .filter((file) => file.endsWith(".js"))
+  .sort();
+const builtMainHashes = Object.fromEntries(
+  await Promise.all(
+    mainFiles.map(async (file) => [
+      file,
+      digest(await readFile(path.join(root, "out/main", file))),
+    ]),
+  ),
+);
+const builtMainBundleSha256 = digest(JSON.stringify(builtMainHashes));
 const previousSigningIdentity = process.env.ZENX_CODESIGN_IDENTITY;
 const previousSigningMode = process.env.ZENX_CODESIGN_MODE;
 let packaged;
@@ -144,6 +210,16 @@ try {
     artifactDirectory: path.join(temporary, "packaged-artifact"),
     prepareApp: async (appDirectory) => {
       const main = path.join(appDirectory, "out/main/index.js");
+      const stagedFiles = (
+        await readdir(path.join(appDirectory, "out/main"), { recursive: true })
+      )
+        .filter((file) => file.endsWith(".js"))
+        .sort();
+      assert.deepEqual(stagedFiles, mainFiles);
+      for (const file of mainFiles)
+        stagedMainHashes[file] = digest(
+          await readFile(path.join(appDirectory, "out/main", file)),
+        );
       stagedEntryHash = createHash("sha256")
         .update(await readFile(main))
         .digest("hex");
@@ -197,26 +273,57 @@ assert.equal(
   packagedHashes["app/scripts/capture-send-feedback.cjs"],
   hashes["scripts/capture-send-feedback.cjs"],
 );
-hostBefore = hostSnapshot();
+
+for (const file of mainFiles) {
+  const built = await readFile(path.join(root, "out/main", file), "utf8");
+  const shipped = await readFile(
+    path.join(resources, "app/out/main", file),
+    "utf8",
+  );
+  verifyMainPackaging(built, shipped, packaged.manifestDigest);
+  assert.equal(
+    digest(shipped),
+    stagedMainHashes[file],
+    "Signing must preserve staged main JavaScript",
+  );
+}
+const packagedMainFiles = (
+  await readdir(path.join(resources, "app/out/main"), { recursive: true })
+)
+  .filter((file) => file.endsWith(".js"))
+  .sort();
+assert.deepEqual(packagedMainFiles, mainFiles);
+const packagedMainBundleSha256 = digest(JSON.stringify(stagedMainHashes));
+for (const file of rendererFiles)
+  assert.equal(
+    digest(await readFile(path.join(resources, "app", file))),
+    hashes[file],
+    "Packaged renderer must equal the production build",
+  );
+const rendererBundleSha256 = digest(
+  JSON.stringify(
+    Object.fromEntries(rendererFiles.map((file) => [file, hashes[file]])),
+  ),
+);
+
 await writeFile(
   path.join(directory, "full-app-source.json"),
   JSON.stringify(
     {
       version,
       sourceCommit: expected,
+      sourceTree: snapshot.tree,
+      packagedHashes,
       comparisonRole:
         sourceLabel === "baseline"
-          ? "same-source-grid-without-history-cv"
-          : "same-source-grid-with-only-history-cv",
+          ? "unmodified-production-baseline"
+          : "isolated-" + sourceLabel + "-candidate",
       priorUserMessages: count,
       priorCompletedTurns: count,
-      mountedHistoricalMessages: count * 2,
+      visibleHistoricalMessages: count * 2,
       fixtureContextWindow: 100000000,
       platform: process.platform,
       hashes,
-      launchMode: "signed-private-packaged-bundle",
-      packagedHashes,
-      stagedProductionEntryUnchanged: true,
       scope:
         "Actual production App, native Send, private production DomainThreadJournal history. Fake model only, no compaction, only actual product local pending UI, no injected bubbles or fake receipt. Timing seed excluded.",
     },
@@ -260,10 +367,16 @@ if (process.platform === "win32") {
 }
 const child = spawn(
   packaged.executable,
-  [directory, version, temporary, `--user-data-dir=${profile}`],
+  [
+    directory,
+    version,
+    temporary,
+    String(viewportWidth),
+    `--user-data-dir=${profile}`,
+  ],
   {
     env: environment,
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", privateLog.fd, privateLog.fd],
     detached: process.platform === "darwin",
   },
 );
@@ -384,59 +497,148 @@ async function waitOwnedPosixGroup(child, timeoutMs) {
     throw error;
   }
 }
+// Capture only this owned fixture's live credential. Normal Host shutdown removes
+// its file; keep the exact value in this process only until the final export scan.
+async function captureLiveExportGuard(tokenFile, isClosed) {
+  let token;
+  while (!isClosed()) {
+    let handle;
+    try {
+      handle = await open(
+        tokenFile,
+        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+      );
+      const stat = await handle.stat();
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65)
+        throw new Error("Invalid owned fixture credential");
+      const value = await handle.readFile("utf8");
+      // The producer opens the file before writing. An empty/partial first read
+      // is not a credential and may be observed again while the child is live.
+      if (/^[a-f0-9]{64}\n?$/.test(value)) token = value.trim();
+    } catch (error) {
+      if (error?.code !== "ENOENT")
+        throw new Error("Owned fixture credential capture failed");
+    } finally {
+      await handle?.close();
+    }
+    if (token !== undefined) {
+      return {
+        scan(serialized, privateConfig) {
+          if (
+            token === undefined ||
+            typeof privateConfig !== "string" ||
+            privateConfig.length === 0
+          )
+            throw new Error("Final export guard unavailable");
+          const contains = (value) =>
+            serialized.includes(value) ||
+            serialized.includes(JSON.stringify(value).slice(1, -1));
+          assert(
+            !contains(token) && !contains(privateConfig),
+            "Final export contains private fixture data",
+          );
+          assert(
+            !/Bearer\s+[A-Za-z0-9._~+/=-]{12,}|\bsk-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|\/(?:Users|home)\//.test(
+              serialized,
+            ),
+            "Final export contains prohibited data",
+          );
+        },
+        clear() {
+          token = undefined;
+        },
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Owned fixture credential unavailable before shutdown");
+}
 let cleanupSafe = false;
 let observedClose;
+let exportGuard;
 child.once("close", (code, signal) => {
   observedClose = { code, signal };
 });
 try {
-  const code = await (
+  let ownedWaitSettled = false;
+  const ownedExit = (
     process.platform === "win32" ? waitOwnedWindowsTree : waitOwnedPosixGroup
   )(child, count === 5000 ? 600000 : 240000);
-  assert.equal(code, 0, "Owned full App diagnostic must pass");
+  void ownedExit.then(
+    () => {
+      ownedWaitSettled = true;
+    },
+    () => {
+      ownedWaitSettled = true;
+    },
+  );
+  // Both operations settle before lifecycle cleanup, even when capture fails.
+  const [exitStatus, guardStatus] = await Promise.allSettled([
+    ownedExit,
+    captureLiveExportGuard(
+      path.join(profile, "runtime/app-server.token"),
+      () => ownedWaitSettled,
+    ),
+  ]);
+  if (guardStatus.status === "fulfilled") exportGuard = guardStatus.value;
+  if (exitStatus.status === "rejected") throw exitStatus.reason;
+  if (guardStatus.status === "rejected") throw guardStatus.reason;
+  const code = exitStatus.value;
   const result = JSON.parse(
     await readFile(path.join(directory, "full-app-measurements.json"), "utf8"),
   );
+  assert.equal(code, 0, "Owned full App diagnostic must pass");
   assert.equal(result.ok, true);
   assert.equal(result.packagedRuntime?.isPackaged, true);
-  assert.equal(result.packagedRuntime.defaultApp, false);
-  assert.equal(result.packagedRuntime.productionEntrySha256, stagedEntryHash);
+  assert.equal(result.packagedRuntime?.defaultApp, false);
+  assert.equal(result.packagedRuntime?.productionEntrySha256, stagedEntryHash);
+  assert.equal(
+    result.packagedRuntime?.mainBundleSha256,
+    packagedMainBundleSha256,
+  );
+  assert.equal(
+    result.packagedRuntime?.preloadSha256,
+    hashes["out/preload/index.cjs"],
+  );
+  assert.equal(Object.keys(result.packagedRuntime.helperHashes).length, 4);
   for (const [file, hash] of Object.entries(
     result.packagedRuntime.helperHashes,
   ))
     assert.equal(hash, packagedHashes[file]);
-  assert.equal(Object.keys(result.packagedRuntime.helperHashes).length, 4);
   assert.equal(
     result.harnessVersion,
-    "native-feedback-v3-post-geometry-and-subsequent-frame",
+    "native-information-layout-ab-v1-not-acceptance",
   );
-  assert.equal(result.samples.length, 3);
-  assert.equal(result.postTimingLayout?.timingComplete, true);
-  assert.equal(result.postTimingLayout.history.display, "grid");
-  const visibility = result.postTimingContentVisibility;
-  assert.equal(visibility?.checkedRows, 1);
-  assert.equal(visibility.supported, true);
-  assert.equal(visibility.renderedIgnoringAuto, true);
-  assert.equal(visibility.eligible, sourceLabel === "cv");
-  assert.equal(visibility.renderedIncludingAuto, sourceLabel !== "cv");
+  assert.equal(result.acceptance, false);
+  assert.equal(result.viewportWidth, viewportWidth);
   assert.equal(
-    visibility.contentVisibility,
-    sourceLabel === "cv" ? "auto" : "visible",
+    result.informationPresentation.mode,
+    viewportWidth === 1120 ? "popover" : "dock",
   );
-  if (sourceLabel === "cv")
-    assert.equal(visibility.intrinsicBlockSize, "auto 240px");
-  assert.equal(result.postTimingLayout.newThread.display, "grid");
+  assert.equal(new Set(result.samples.map((s) => s.messageId)).size, 3);
+  assert.equal(
+    new Set(result.samples.map((s) => s.ipc[0].receipt.turnId)).size,
+    3,
+  );
+  assert.equal(
+    new Set(result.samples.map((s) => s.ipc[0].clientUserMessageId)).size,
+    3,
+  );
   for (const sample of result.samples) {
-    for (const field of [
+    assert.equal(sample.trusted, true);
+    assert.equal(sample.ipc.length, 1);
+    assert.equal(sample.feedbackClientId, sample.ipc[0].clientUserMessageId);
+    assert.deepEqual(sample.visibilityAtClick, {
+      state: "visible",
+      focused: true,
+    });
+    for (const key of [
       "clickToFeedbackGeometryCompleteMs",
       "clickToFeedbackSubsequentFrameMs",
       "clickToClearGeometryCompleteMs",
       "clickToClearSubsequentFrameMs",
     ])
-      assert.ok(
-        Number.isFinite(sample[field]) && sample[field] >= 0,
-        "Finite nonnegative post-geometry evidence required",
-      );
+      assert.ok(Number.isFinite(sample[key]) && sample[key] >= 0);
     assert.ok(
       sample.clickToFeedbackSubsequentFrameMs >=
         sample.clickToFeedbackGeometryCompleteMs,
@@ -445,8 +647,8 @@ try {
       sample.clickToClearSubsequentFrameMs >=
         sample.clickToClearGeometryCompleteMs,
     );
-    assert.equal(sample.feedbackClientId, sample.ipc[0].clientUserMessageId);
   }
+  assert.equal(result.samples.length, 3);
   assert.ok(
     result.samples.every(
       (s) =>
@@ -467,73 +669,189 @@ try {
     path.join(directory, "independent-storage-verification.json"),
     JSON.stringify(persisted, null, 2),
   );
-  console.log(
-    "SYNTHETIC_SEND_BASELINE_JSON " +
-      JSON.stringify({
-        sourceCommit: expected,
-        sourceLabel,
-        harnessVersion: result.harnessVersion,
-        historyReadPolicy: result.historyReadPolicy,
-        pairCase,
-        hostBefore,
-        hostAfter: hostSnapshot(),
-        appBefore: result.processResourcesBefore,
-        appAfter: result.processResourcesAfter,
-        priorUserMessages: count,
-        priorCompletedTurns: count,
-        mountedHistoricalMessages: count * 2,
-        rendered: result.before.rendered,
-        seed: result.seed,
-        samples: result.samples.map((s) => ({
-          firstVisibleFeedbackMs: s.firstVisibleFeedbackMs,
-          firstVisibleFeedbackKind: s.firstVisibleFeedbackKind,
-          clickToPendingDomMs: s.clickToPendingDomMs,
-          clickToPendingVisibleFrameMs: s.clickToPendingVisibleFrameMs,
-          pendingStateAtFrame: s.pendingStateAtFrame,
-          feedbackWithinTarget: s.feedbackWithinTarget,
-          clickToFeedbackGeometryCompleteMs:
-            s.clickToFeedbackGeometryCompleteMs,
-          clickToFeedbackSubsequentFrameMs: s.clickToFeedbackSubsequentFrameMs,
-          clickToClearGeometryCompleteMs: s.clickToClearGeometryCompleteMs,
-          clickToClearSubsequentFrameMs: s.clickToClearSubsequentFrameMs,
-          verifiedFeedbackWithinTarget: s.verifiedFeedbackWithinTarget,
-          verifiedClearWithinTarget: s.verifiedClearWithinTarget,
-          clickToBubbleDomMs: s.clickToBubbleDomMs,
-          clickToVisibleFrameMs: s.clickToVisibleFrameMs,
-          clickToClearFrameMs: s.clickToClearFrameMs,
-          ipcDurationMs: s.ipc[0].durationMs,
-          clickToCanonicalNotificationMs: s.clickToCanonicalNotificationMs,
-          instrumentation: s.instrumentation,
-          requestId: s.ipc[0].requestId,
-          messageId: s.messageId,
-        })),
-        persisted,
+  // Export only bounded source identity, numeric observations and fixture evidence.
+  const timingFields = [
+    "firstVisibleFeedbackMs",
+    "clickToPendingDomMs",
+    "clickToPendingVisibleFrameMs",
+    "clickToFeedbackGeometryCompleteMs",
+    "clickToFeedbackSubsequentFrameMs",
+    "clickToClearGeometryCompleteMs",
+    "clickToClearSubsequentFrameMs",
+    "clickToBubbleDomMs",
+    "clickToVisibleFrameMs",
+    "clickToClearFrameMs",
+    "clickToCanonicalNotificationMs",
+  ];
+  const samples = result.samples.map((sample, index) => {
+    const timings = Object.fromEntries(
+      timingFields.map((key) => {
+        const value = sample[key];
+        assert.ok(
+          value === null || (Number.isFinite(value) && value >= 0),
+          "Finite nonnegative timing or explicit null required: " + key,
+        );
+        return [key, value];
       }),
+    );
+    return {
+      index,
+      phase: index === 0 ? "first" : "warm",
+      firstVisibleFeedbackKind: sample.firstVisibleFeedbackKind,
+      ...timings,
+      ipcDurationMs: sample.ipc[0].durationMs,
+      feedbackWithinTarget: sample.feedbackWithinTarget,
+      verifiedFeedbackWithinTarget: sample.verifiedFeedbackWithinTarget,
+      verifiedClearWithinTarget: sample.verifiedClearWithinTarget,
+      visibilityAtClick: sample.visibilityAtClick,
+      instrumentation: sample.instrumentation,
+    };
+  });
+  const summary = {
+    schemaVersion: 1,
+    diagnosticOnly: true,
+    acceptance: false,
+    measurementContract: result.measurementContract,
+    sourceCommit: expected,
+    sourceTree: snapshot.tree,
+    sourceLabel,
+    pairCase,
+    viewportWidth,
+    priorCompletedTurns: count,
+    historicalMessages: count * 2,
+    hostBefore,
+    hostAfter: hostSnapshot(),
+    nativeWindow: result.nativeWindow,
+    informationPresentation: result.informationPresentation,
+    rendered: result.before.rendered,
+    samples,
+    packaged: {
+      isPackaged: true,
+      defaultApp: false,
+      signedBundleVerified: true,
+      builtEntrySha256: hashes["out/main/index.js"],
+      packagedEntrySha256: stagedEntryHash,
+      builtMainBundleSha256,
+      packagedMainBundleSha256,
+      rendererBundleSha256,
+      providerManifestSha256: packaged.manifestDigest,
+      providerManifestSubstitutionOnly: true,
+      preloadSha256: hashes["out/preload/index.cjs"],
+      helperSha256: [
+        "zenx-accessibility",
+        "zenx-bound-target",
+        "zenx-foreground-input",
+        "zenx-ocr",
+      ].map((name) => packagedHashes["native-helpers/" + name]),
+    },
+    hashes: {
+      capture: hashes["scripts/capture-send-feedback.cjs"],
+      launcher: hashes["scripts/launch-send-feedback.mjs"],
+      seed: hashes["scripts/long-thread-domain-seed.mjs"],
+    },
+    independentStorage: {
+      independentReopen: persisted.independentReopen,
+      userMessages: persisted.userMessages,
+      matchedNewMessages: persisted.matchedNewMessages,
+      compactionAttempts: persisted.compactionAttempts,
+      compactionFacts: persisted.compactionFacts,
+      traceCompleteness: persisted.traceCompleteness,
+    },
+  };
+  // Final export permits only the pure summary, fixed metadata, numeric counts and checked hashes.
+  const privateConfig = await readFile(
+    path.join(profile, "host-profile.json"),
+    "utf8",
   );
-  cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
-  assert.ok(
-    result.samples.every(
-      (s) =>
-        s.feedbackWithinTarget &&
-        s.clickToClearFrameMs <= 200 &&
-        s.verifiedFeedbackWithinTarget &&
-        s.verifiedClearWithinTarget,
+  const serialized = JSON.stringify(summary, null, 2);
+  exportGuard.scan(serialized, privateConfig);
+  await writeFile(
+    path.join(uploadDirectory, "send-information-layout.summary.json"),
+    JSON.stringify(summary, null, 2),
+    { flag: "wx" },
+  );
+  console.log(
+    "REVIEWED_NATIVE_AB_OBSERVATION_NOT_ACCEPTANCE " + JSON.stringify(summary),
+  );
+  for (const name of (await readdir(directory)).filter((name) =>
+    /^(?:messages-\d+-sample-[0-2]-(?:before|after)|information-presentation-before-timing)\.png$/.test(
+      name,
     ),
-    "Every sample must meet unchanged 200ms feedback and input-clear limits for both legacy fields and stricter post-geometry subsequent-frame evidence; no threshold relaxation",
-  );
-} finally {
+  ))
+    await copyFile(
+      path.join(directory, name),
+      path.join(uploadDirectory, name),
+      fsConstants.COPYFILE_EXCL,
+    );
+  cleanupSafe = true; // Successful production before-quit awaits stopZenXHost.
+} catch (error) {
+  let capture;
   try {
-    const report = JSON.parse(
+    capture = JSON.parse(
       await readFile(
         path.join(directory, "full-app-measurements.json"),
         "utf8",
       ),
     );
-    if (!report.ok)
-      console.error("SYNTHETIC_SEND_FAILURE_JSON " + JSON.stringify(report));
   } catch {}
+  const failure = {
+    diagnosticOnly: true,
+    acceptance: false,
+    sourceCommit: expected,
+    sourceTree: snapshot.tree,
+    pairCase,
+    viewportWidth,
+    stage:
+      capture?.waitingFor ?? capture?.pendingOperation ?? "launcher validation",
+    reason: "native-capture-or-validation-failed",
+    observedSamples: (capture?.samples ?? [])
+      .slice(0, 3)
+      .map((sample, index) => ({
+        index,
+        timings: Object.fromEntries(
+          [
+            "firstVisibleFeedbackMs",
+            "clickToPendingDomMs",
+            "clickToFeedbackGeometryCompleteMs",
+            "clickToFeedbackSubsequentFrameMs",
+            "clickToClearFrameMs",
+            "clickToCanonicalNotificationMs",
+          ]
+            .filter((key) => Number.isFinite(sample[key]))
+            .map((key) => [key, sample[key]]),
+        ),
+      })),
+  };
+  if (exportGuard) {
+    const detail = {
+      ...failure,
+      message: String(error.message).slice(0, 1000),
+      captureError:
+        typeof capture?.error === "string"
+          ? capture.error.slice(0, 2000)
+          : undefined,
+    };
+    try {
+      exportGuard.scan(
+        JSON.stringify(detail),
+        await readFile(path.join(profile, "host-profile.json"), "utf8"),
+      );
+      Object.assign(failure, detail);
+    } catch {}
+  }
   await writeFile(
-    path.join(directory, "full-app-lifecycle.json"),
+    path.join(uploadDirectory, "failure.json"),
+    JSON.stringify(failure, null, 2),
+    { flag: "wx" },
+  );
+  console.error("NATIVE_AB_CASE_FAILED " + JSON.stringify(failure));
+  process.exitCode = 1;
+} finally {
+  exportGuard?.clear();
+  exportGuard = undefined;
+  await privateLog.close();
+  await writeFile(
+    path.join(uploadDirectory, "lifecycle.json"),
     JSON.stringify(
       {
         childCloseObserved: observedClose !== undefined,

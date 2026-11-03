@@ -20,6 +20,8 @@ assert.notEqual(
   "Default Electron script mode is not representative",
 );
 const [directory, version, temporary] = process.argv.slice(1, 4);
+const viewportWidth = Number(process.argv[4]);
+assert.ok([1120, 1280].includes(viewportWidth));
 assert.ok(directory && temporary && ["before", "current"].includes(version));
 app.setPath("userData", path.join(temporary, "profile"));
 app.setPath("home", path.join(temporary, "home"));
@@ -28,8 +30,10 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-feedback-v3-post-geometry-and-subsequent-frame",
+  harnessVersion: "native-information-layout-ab-v1-not-acceptance",
   version,
+  acceptance: false,
+  viewportWidth,
   platform: process.platform,
   electron: process.versions.electron,
   scope:
@@ -231,6 +235,10 @@ function installObservation(nonce, threadId) {
   const record = {
     clockDomain: "renderer",
     nonce,
+    visibilityAtInstall: {
+      state: document.visibilityState,
+      focused: document.hasFocus(),
+    },
     frames: [],
     notifications: [],
     instrumentation: {
@@ -263,6 +271,10 @@ function installObservation(nonce, threadId) {
     record.trusted = event.isTrusted;
     record.disabledAtClick = button.disabled;
     record.draftAtClick = value();
+    record.visibilityAtClick = {
+      state: document.visibilityState,
+      focused: document.hasFocus(),
+    };
   };
   document.addEventListener("click", capture, true);
   const findBubble = (root) => {
@@ -558,7 +570,7 @@ async function run() {
     contextIsolation: preferences.contextIsolation,
     nodeIntegration: preferences.nodeIntegration,
   };
-  window.setSize(1280, 820);
+  window.setSize(viewportWidth, 820);
   window.show();
   window.focus();
   result.nativeWindow = {
@@ -657,6 +669,56 @@ async function run() {
       "({userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length})",
     ),
   };
+  const informationTrigger =
+    "document.querySelector('.information-toolbar button')";
+  await until(
+    async () => await evaluate(`Boolean(${informationTrigger})`),
+    "real information toggle",
+  );
+  assert.equal(
+    await evaluate(`${informationTrigger}.getAttribute('aria-expanded')`),
+    "false",
+  );
+  await click(
+    informationTrigger,
+    "Preparation: open actual information presentation",
+  );
+  await until(
+    async () =>
+      await evaluate(
+        "Boolean(document.querySelector('.information-dock, .information-popover'))",
+      ),
+    "actual information presentation mounted",
+  );
+  result.informationPresentation = await evaluate(`(()=>{
+    const dock=document.querySelector('.information-dock'), popup=document.querySelector('.information-popover');
+    if(Boolean(dock)===Boolean(popup))throw Error('Exactly one actual information presentation required');
+    const workspace=document.querySelector('.workspace'), panel=workspace.querySelector(':scope > .auxiliary-panel');
+    const rect=workspace.getBoundingClientRect(), resourceOpen=panel?.dataset.open==='true';
+    const primaryActive=resourceOpen&&panel?.dataset.primaryActive==='true';
+    const resourceWidth=resourceOpen&&!primaryActive?parseFloat(getComputedStyle(workspace).getPropertyValue('--workspace-panel-width'))||0:0;
+    return {mode:dock?'dock':'popover',innerWidth,innerHeight,workspaceWidth:rect.width,resourceWidth,
+      resourceOpen,primaryActive,expanded:panel?.dataset.expanded==='true',
+      visible:document.visibilityState==='visible',focused:document.hasFocus()};
+  })()`);
+  assert.equal(
+    result.informationPresentation.mode,
+    viewportWidth === 1120 ? "popover" : "dock",
+    "Actual DOM must establish the intended candidate/control path",
+  );
+  await screenshot("information-presentation-before-timing.png");
+  await click(
+    informationTrigger,
+    "Preparation: close actual information presentation",
+  );
+  await until(
+    async () =>
+      await evaluate(
+        `${informationTrigger}.getAttribute('aria-expanded')==='false'&&!document.querySelector('.information-dock, .information-popover')`,
+      ),
+    "information presentation closed before timing",
+  );
+  result.informationPresentation.closedBeforeTiming = true;
   await pause(500);
   result.processResourcesBefore = app
     .getAppMetrics()
@@ -705,6 +767,13 @@ async function run() {
           "Boolean(document.querySelector('.composer-send-control > button.action-orb.send:not(:disabled)'))",
         ),
       "actual Send enabled",
+    );
+    assert.equal(
+      await evaluate(
+        "document.querySelector('.information-toolbar button')?.getAttribute('aria-expanded')==='false'&&!document.querySelector('.information-dock, .information-popover')",
+      ),
+      true,
+      "Information stays closed in each sample",
     );
     await evaluate(
       "(" +
@@ -761,6 +830,10 @@ async function run() {
       const sample = await evaluate("window.__sendLatency.stop()");
       result.samples.push(sample);
       assert.equal(sample.trusted, true);
+      assert.deepEqual(sample.visibilityAtClick, {
+        state: "visible",
+        focused: true,
+      });
       assert.equal(sample.disabledAtClick, false);
       assert.equal(sample.draftAtClick, nonce);
       sample.clickToBubbleDomMs = sample.bubbleDomMs - sample.clickMs;
@@ -925,68 +998,7 @@ async function run() {
     ),
     "No compaction anywhere in observed baseline lifecycle",
   );
-  await capturePostTimingLayout();
   result.ok = true;
-}
-// Runs only after all three timed sends and final canonical verification.
-async function capturePostTimingLayout() {
-  const settle = () =>
-    evaluate(
-      "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
-    );
-  await settle();
-  // Probe only the first known fixture Turn, after every timing sample. The
-  // optional check tests skipped ancestors without scrolling/revealing them.
-  result.postTimingContentVisibility = await evaluate(
-    "(()=>{const first=document.querySelector('.messages-inner')?.firstElementChild,probe=first?.querySelector(':scope > .user-row');if(!first?.matches('.turn')||!probe)throw Error('First historical fixture input required');const style=getComputedStyle(first),supported=typeof probe.checkVisibility==='function';return {checkedRows:1,supported,eligible:first.dataset.historyLayout==='auto',contentVisibility:style.contentVisibility,intrinsicBlockSize:style.containIntrinsicBlockSize,renderedIgnoringAuto:supported?probe.checkVisibility():null,renderedIncludingAuto:supported?probe.checkVisibility({contentVisibilityAuto:true}):null}})()",
-  );
-  const history = await evaluate(
-    "(()=>{const root=document.querySelector('.messages-inner'),last=root?.lastElementChild,prior=last?.previousElementSibling;const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,width:r.width,height:r.height}};if(!root||!last?.matches('.turn')||!prior?.matches('.turn'))throw Error('Actual canonical tail Turns required');return {display:getComputedStyle(root).display,gap:parseFloat(getComputedStyle(root).rowGap),width:root.getBoundingClientRect().width,rows:[prior,last].map(e=>({rect:rect(e),display:getComputedStyle(e).display,marginTop:parseFloat(getComputedStyle(e).marginTop)||0,marginBottom:parseFloat(getComputedStyle(e).marginBottom)||0}))}})()",
-  );
-  assert.equal(history.gap, 24);
-  assert.ok(
-    history.rows.every(
-      (row) =>
-        row.display === "grid" && Math.abs(row.rect.width - history.width) < 1,
-    ),
-  );
-  const [prior, last] = history.rows;
-  assert.ok(
-    Math.abs(
-      last.rect.top -
-        prior.rect.top -
-        prior.rect.height -
-        history.gap -
-        prior.marginBottom -
-        last.marginTop,
-    ) < 1,
-    "Visible tail spacing preserves grid gap and existing margins",
-  );
-  await screenshot("messages-post-timing-history.png");
-  await click(
-    "document.querySelector('.new-thread-action:not(:disabled)')",
-    "Post-timing: open actual new Thread draft",
-  );
-  await until(
-    async () =>
-      await evaluate(
-        "Boolean(document.querySelector('.new-thread-draft-surface .new-thread-draft-empty'))",
-      ),
-    "actual new Thread draft after timing",
-  );
-  await settle();
-  const newThread = await evaluate(
-    "(()=>{const root=document.querySelector('.new-thread-draft-surface .messages-inner'),empty=root?.querySelector('.new-thread-draft-empty');if(!root||!empty)throw Error('Actual new Thread empty view required');return {display:getComputedStyle(root).display,innerHeight:root.getBoundingClientRect().height,emptyHeight:empty.getBoundingClientRect().height,emptyWidth:empty.getBoundingClientRect().width,draft:document.querySelector('#thread-composer')?.value}})()",
-  );
-  assert.equal(newThread.display, "grid");
-  assert.ok(
-    newThread.emptyHeight > 0 &&
-      newThread.emptyWidth > 0 &&
-      Math.abs(newThread.emptyHeight - newThread.innerHeight) < 1,
-  );
-  assert.equal(newThread.draft, "");
-  await screenshot("messages-post-timing-new-thread.png");
-  result.postTimingLayout = { timingComplete: true, history, newThread };
 }
 async function verifyPackagedRuntime() {
   const helperHashes = {};
@@ -996,20 +1008,36 @@ async function verifyPackagedRuntime() {
     "zenx-foreground-input",
     "zenx-ocr",
   ]) {
-    const relative = `native-helpers/${name}`;
-    const file = path.join(process.resourcesPath, relative);
+    const relative = `native-helpers/${name}`,
+      file = path.join(process.resourcesPath, relative);
     const stat = await fs.lstat(file);
     assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.mode & 0o111);
     helperHashes[relative] = createHash("sha256")
       .update(await fs.readFile(file))
       .digest("hex");
   }
+  const mainDirectory = path.resolve(__dirname, "../out/main");
+  const mainHashes = {};
+  for (const file of (await fs.readdir(mainDirectory, { recursive: true }))
+    .filter((file) => file.endsWith(".js"))
+    .sort())
+    mainHashes[file] = createHash("sha256")
+      .update(await fs.readFile(path.join(mainDirectory, file)))
+      .digest("hex");
   result.packagedRuntime = {
+    mainBundleSha256: createHash("sha256")
+      .update(JSON.stringify(mainHashes))
+      .digest("hex"),
     isPackaged: app.isPackaged,
     defaultApp: process.defaultApp === true,
     helperHashes,
     productionEntrySha256: createHash("sha256")
       .update(await fs.readFile(path.join(__dirname, "../out/main/index.js")))
+      .digest("hex"),
+    preloadSha256: createHash("sha256")
+      .update(
+        await fs.readFile(path.join(__dirname, "../out/preload/index.cjs")),
+      )
       .digest("hex"),
   };
 }
