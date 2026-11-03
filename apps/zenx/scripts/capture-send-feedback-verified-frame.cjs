@@ -1814,9 +1814,14 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
   result.nativeSelectAllQuality.menuToSelectionMs =
     performance.now() - menuStarted;
   assert.equal(result.nativeSelectAllQuality.readerAnchorPreserved, true);
+  // Snapshot only the owned empty composer intersected by native page Selection.
+  // Placeholder text and node identities remain private to this renderer.
   assert.equal(
     await evaluate(
-      `(()=>{const b=window.__nativeSelectAllQuality,s=getSelection();b.text=s.toString();b.anchorNode=s.anchorNode;b.focusNode=s.focusNode;b.anchorOffset=s.anchorOffset;b.focusOffset=s.focusOffset;return b.text.length>0})()`,
+      `(()=>{const b=window.__nativeSelectAllQuality,s=getSelection(),e=document.querySelector('#thread-composer');b.text=s.toString();b.anchorNode=s.anchorNode;b.focusNode=s.focusNode;b.anchorOffset=s.anchorOffset;b.focusOffset=s.focusOffset;
+      const node=e instanceof HTMLTextAreaElement?e:null,length=node?.placeholder.length??0,bounded=length>0&&length<=128,intersects=Boolean(node?.isConnected&&s.rangeCount===1&&s.getRangeAt(0).intersectsNode(node));
+      b.copyComposer={node,placeholder:bounded?node.placeholder:'',length,intersects,eligible:Boolean(bounded&&intersects&&node.value.length===0&&node.matches(':placeholder-shown')&&node.getClientRects().length>0&&getComputedStyle(node).visibility==='visible')};
+      return b.text.length>0})()`,
     ),
     true,
   );
@@ -1845,7 +1850,10 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
       const b=window.__nativeSelectAllQuality,s=getSelection(),copied=${JSON.stringify(copied)};
       const lf=text=>text.replace(/\\r\\n?/g,'\\n'),nbsp=text=>text.replace(/\\u00a0/g,' '),collapsed=text=>text.replace(/\\s+/g,' '),nonWhitespace=text=>text.replace(/\\s/g,'');
       const counts=(text,prefix)=>Object.fromEntries([['UTF16Length',text.length],['CRCount',text.split('\\r').length-1],['LFCount',text.split('\\n').length-1],['NBSPCount',text.split('\\u00a0').length-1],['TABCount',text.split('\\t').length-1]].map(([key,value])=>[prefix+key,value]));
-      return {...counts(b.text,'selected'),...counts(copied,'copied'),clipboardEqualAfterLF:lf(copied)===lf(b.text),clipboardEqualAfterEdgeTrim:copied.trim()===b.text.trim(),clipboardEqualAfterNBSP:nbsp(copied)===nbsp(b.text),clipboardEqualAfterLFAndNBSP:lf(nbsp(copied))===lf(nbsp(b.text)),clipboardEqualAfterCollapsedWhitespace:collapsed(copied)===collapsed(b.text),clipboardEqualNonWhitespace:nonWhitespace(copied)===nonWhitespace(b.text),clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
+      const c=b.copyComposer??{node:null,placeholder:'',length:0,intersects:false,eligible:false},e=document.querySelector('#thread-composer'),p=c.placeholder,token=p+'\\n';
+      const stable=Boolean(c.node&&e===c.node&&e.isConnected&&e.placeholder===p&&e.value.length===0&&e.matches(':placeholder-shown')),at=p?copied.indexOf(p):-1;
+      const exact=Boolean(c.eligible&&stable&&p&&!b.text.includes(p)&&at>=0&&copied.indexOf(p,at+1)<0&&copied.length-b.text.length===token.length&&copied.slice(at,at+token.length)===token&&copied.slice(0,at)+copied.slice(at+token.length)===b.text);
+      return {...counts(b.text,'selected'),...counts(copied,'copied'),copyComposerEligible:c.eligible,copySelectionIntersectsComposer:c.intersects,copyComposerSnapshotStable:stable,copyPlaceholderUTF16Length:c.length,clipboardAddsOnlyComposerPlaceholderLF:exact,clipboardPlaceholderInsertionAtStart:exact&&at===0,clipboardPlaceholderInsertionAtEnd:exact&&at+token.length===copied.length,clipboardPlaceholderInsertionAfterCanonicalMessages:exact&&b.orderedMessages(copied.slice(0,at))===10006,clipboardEqualAfterLF:lf(copied)===lf(b.text),clipboardEqualAfterEdgeTrim:copied.trim()===b.text.trim(),clipboardEqualAfterNBSP:nbsp(copied)===nbsp(b.text),clipboardEqualAfterLFAndNBSP:lf(nbsp(copied))===lf(nbsp(b.text)),clipboardEqualAfterCollapsedWhitespace:collapsed(copied)===collapsed(b.text),clipboardEqualNonWhitespace:nonWhitespace(copied)===nonWhitespace(b.text),clipboardMatchesSelection:copied===b.text,copiedMarkerCount:b.orderedMarkers(copied),copiedMessageCount:b.orderedMessages(copied),fullLastAssistantCopied:b.lastAssistant(copied),selectionSurvivesCopy:!s.isCollapsed&&s.toString()===b.text&&s.anchorNode===b.anchorNode&&s.focusNode===b.focusNode&&s.anchorOffset===b.anchorOffset&&s.focusOffset===b.focusOffset&&b.anchorNode.isConnected&&b.focusNode.isConnected};
     })()`);
     Object.assign(result.nativeSelectAllQuality, copy);
     // Endpoint/body failures remain immediate. Raw equality is sticky at final acceptance.

@@ -1993,6 +1993,14 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       copiedTABCount: 2,
       clipboardEqualAfterLF: "NEVER_EXPORT",
       clipboardEqualAfterNBSP: false,
+      copyComposerEligible: "NEVER_EXPORT",
+      copySelectionIntersectsComposer: true,
+      copyComposerSnapshotStable: { private: "NEVER_EXPORT" },
+      copyPlaceholderUTF16Length: Infinity,
+      clipboardAddsOnlyComposerPlaceholderLF: false,
+      clipboardPlaceholderInsertionAtStart: "NEVER_EXPORT",
+      clipboardPlaceholderInsertionAtEnd: true,
+      clipboardPlaceholderInsertionAfterCanonicalMessages: "NEVER_EXPORT",
       selectedMessageCount: Infinity,
       copiedMessageCount: 10006,
       canonicalMessageOrder: "NEVER_EXPORT",
@@ -2031,6 +2039,17 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.equal(result.selectAll.copiedTABCount, 2);
   assert.equal(result.selectAll.clipboardEqualAfterLF, null);
   assert.equal(result.selectAll.clipboardEqualAfterNBSP, false);
+  assert.equal(result.selectAll.copyComposerEligible, null);
+  assert.equal(result.selectAll.copySelectionIntersectsComposer, true);
+  assert.equal(result.selectAll.copyComposerSnapshotStable, null);
+  assert.equal(result.selectAll.copyPlaceholderUTF16Length, null);
+  assert.equal(result.selectAll.clipboardAddsOnlyComposerPlaceholderLF, false);
+  assert.equal(result.selectAll.clipboardPlaceholderInsertionAtStart, null);
+  assert.equal(result.selectAll.clipboardPlaceholderInsertionAtEnd, true);
+  assert.equal(
+    result.selectAll.clipboardPlaceholderInsertionAfterCanonicalMessages,
+    null,
+  );
   assert.equal(result.selectAll.selectedMessageCount, null);
   assert.equal(result.selectAll.copiedMessageCount, 10006);
   assert.equal(result.selectAll.canonicalMessageOrder, null);
@@ -2149,6 +2168,10 @@ async function nativeSelectAllFixture(fault, sharedDom) {
     '<main class="thread-view"><div class="messages experimental-transcript-viewport"></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea></main>';
   const scroller = d.querySelector(".messages"),
     editor = d.querySelector("textarea");
+  if (fault === "copy-placeholder-variant") {
+    editor.placeholder = "Ask ZenX anything…";
+    editor.getClientRects = () => [{ width: 100, height: 20 }];
+  }
   w.requestAnimationFrame = (callback) => queueMicrotask(() => callback(1));
   scroller.getBoundingClientRect = () => ({ top: 20, bottom: 620 });
   const samples = Array.from({ length: 3 }, (_, i) => ({
@@ -2259,6 +2282,8 @@ async function nativeSelectAllFixture(fault, sharedDom) {
       if (fault !== "no-native-selection") {
         const range = d.createRange();
         range.selectNodeContents(scroller);
+        if (fault === "copy-placeholder-variant")
+          range.selectNodeContents(d.body);
         if (fault === "truncated-final-assistant") {
           const lastUser = scroller.querySelector(
             '[data-sent-message-id="owned-5002"]',
@@ -2302,6 +2327,8 @@ async function nativeSelectAllFixture(fault, sharedDom) {
           clipboardText = clipboardText.replace(turns.at(-1).items[1].text, "");
         if (fault === "copy-lf-variant") clipboardText = "\r\n" + clipboardText;
         if (fault === "copy-nbsp-variant") clipboardText += "\u00a0";
+        if (fault === "copy-placeholder-variant")
+          clipboardText += editor.placeholder + "\n";
         if (fault === "copy-endpoint-mutation") {
           const selection = w.getSelection(),
             before = w.__nativeSelectAllQuality,
@@ -2433,7 +2460,20 @@ test("full native Select All diagnostic executes every shipped evaluate expressi
   for (const field of ["menuToSelectionMs", "clearToRestoreMs"])
     assert.ok(Number.isFinite(quality[field]) && quality[field] >= 0);
   for (const [name, value] of Object.entries(quality))
-    if (typeof value === "boolean") assert.equal(value, true, name);
+    if (typeof value === "boolean")
+      assert.equal(
+        value,
+        ![
+          "copyComposerEligible",
+          "copySelectionIntersectsComposer",
+          "copyComposerSnapshotStable",
+          "clipboardAddsOnlyComposerPlaceholderLF",
+          "clipboardPlaceholderInsertionAtStart",
+          "clipboardPlaceholderInsertionAtEnd",
+          "clipboardPlaceholderInsertionAfterCanonicalMessages",
+        ].includes(name),
+        name,
+      );
   assert.ok(run.expressions.length >= 8);
   assert.equal(JSON.stringify(quality).includes("owned-"), false);
   assert.equal(JSON.stringify(quality).includes("Synthetic user"), false);
@@ -2607,6 +2647,150 @@ test("clipboard comparator executes the shipped wrapper with independent transfo
   } finally {
     w.close();
   }
+});
+
+test("owned composer placeholder attribution executes both shipped wrappers and rejects unrelated changes", async () => {
+  const expression = (marker) => {
+    const start = source.indexOf(marker),
+      literalStart = source.indexOf("`", start),
+      literalEnd = source.indexOf("`", literalStart + 1);
+    assert.ok(start >= 0 && literalEnd > literalStart);
+    return new Function(
+      "copied",
+      "return " + source.slice(literalStart, literalEnd + 1),
+    );
+  };
+  const snapshot = expression("// Snapshot only the owned empty composer"),
+    copy = expression("const copy = await evaluate("),
+    dom = new JSDOM("", { runScripts: "outside-only" }),
+    w = dom.window,
+    evaluate = wrappedDiagnosticEvaluator(w),
+    placeholder = "Ask ZenX anything…",
+    token = placeholder + "\n";
+  w.requestAnimationFrame = (callback) => queueMicrotask(callback);
+  const compare = async (selected, copied, options = {}) => {
+    w.document.body.innerHTML =
+      '<div id="owned"><p></p><textarea id="thread-composer"></textarea></div>';
+    const root = w.document.querySelector("#owned"),
+      paragraph = root.querySelector("p"),
+      editor = root.querySelector("textarea");
+    paragraph.textContent = selected;
+    editor.placeholder = options.placeholder ?? placeholder;
+    editor.value = options.value ?? "";
+    editor.getClientRects = () =>
+      options.hidden ? [] : [{ width: 100, height: 20 }];
+    if (options.invisible) editor.style.visibility = "hidden";
+    const range = w.document.createRange();
+    range.selectNodeContents(options.excludeComposer ? paragraph : root);
+    const selection = w.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    w.__nativeSelectAllQuality = {
+      orderedMarkers: () => 0,
+      orderedMessages: (text) => (text === selected ? 10006 : 0),
+      lastAssistant: () => false,
+    };
+    assert.equal(await evaluate(snapshot()), true);
+    if (options.changedPlaceholder) editor.placeholder = "Changed owned label";
+    if (options.changedValue) editor.value = "Owned draft";
+    if (options.replacedComposer) editor.replaceWith(editor.cloneNode());
+    return evaluate(copy(copied));
+  };
+  try {
+    for (const [name, selected, copied, expected] of [
+      ["head", "A\nB", token + "A\nB", true],
+      ["middle", "A\nB", "A\n" + token + "B", true],
+      ["tail", "A\nB", "A\nB" + token, true],
+      ["other extra", "A\nB", "A\nBUnknown extraneous\n", false],
+      ["lost body", "A\nB", "A\n" + token, false],
+      ["reordered", "A\nB", "B\nA" + token, false],
+      ["duplicate placeholder", "A\nB", token + "A\nB" + token, false],
+      [
+        "label already selected",
+        "A\n" + placeholder,
+        "A\n" + placeholder + token,
+        false,
+      ],
+      ["wrong newline", "A\nB", "A\nB" + placeholder + "\r", false],
+      ["whitespace change", "A B", "A  B" + token, false],
+    ]) {
+      const result = await compare(selected, copied);
+      assert.equal(
+        result.clipboardAddsOnlyComposerPlaceholderLF,
+        expected,
+        name,
+      );
+      assert.equal(result.copyComposerEligible, true, name);
+      assert.equal(result.copySelectionIntersectsComposer, true, name);
+      assert.equal(result.copyComposerSnapshotStable, true, name);
+      assert.equal(result.copyPlaceholderUTF16Length, 18, name);
+      assert.equal(result.clipboardMatchesSelection, false, name);
+      assert.equal(result.selectionSurvivesCopy, true, name);
+      assert.equal(
+        result.clipboardPlaceholderInsertionAtStart,
+        name === "head",
+        name,
+      );
+      assert.equal(
+        result.clipboardPlaceholderInsertionAtEnd,
+        name === "tail",
+        name,
+      );
+      assert.equal(
+        result.clipboardPlaceholderInsertionAfterCanonicalMessages,
+        name === "tail",
+        name,
+      );
+      assert.ok(
+        Object.values(result).every(
+          (v) => typeof v === "boolean" || Number.isFinite(v),
+        ),
+      );
+      assert.equal(JSON.stringify(result).includes(placeholder), false);
+    }
+    for (const options of [
+      { value: "Owned draft" },
+      { hidden: true },
+      { invisible: true },
+      { excludeComposer: true },
+      { changedPlaceholder: true },
+      { changedValue: true },
+      { replacedComposer: true },
+      { placeholder: "" },
+      { placeholder: "P".repeat(129) },
+    ]) {
+      const p = options.placeholder ?? placeholder;
+      const result = await compare("A\nB", "A\nB" + p + "\n", options);
+      assert.equal(result.clipboardAddsOnlyComposerPlaceholderLF, false);
+    }
+    const limit = "P".repeat(128);
+    const bounded = await compare("A\nB", "A\nB" + limit + "\n", {
+      placeholder: limit,
+    });
+    assert.equal(bounded.copyPlaceholderUTF16Length, 128);
+    assert.equal(bounded.clipboardAddsOnlyComposerPlaceholderLF, true);
+  } finally {
+    w.close();
+  }
+});
+
+test("exact composer placeholder attribution cannot waive raw native clipboard failure", async () => {
+  const run = await nativeSelectAllFixture("copy-placeholder-variant"),
+    q = run.result.nativeSelectAllQuality;
+  assert.match(run.error?.message ?? "", /comparison diagnostics do not waive/);
+  assert.equal(q.clipboardAddsOnlyComposerPlaceholderLF, true);
+  assert.equal(q.copySelectionIntersectsComposer, true);
+  assert.equal(q.clipboardPlaceholderInsertionAtEnd, true);
+  assert.equal(q.clipboardPlaceholderInsertionAfterCanonicalMessages, true);
+  assert.equal(q.clipboardMatchesSelection, false);
+  assert.equal(q.copiedMessageCount, 10006);
+  assert.equal(q.fullLastAssistantCopied, true);
+  assert.equal(q.selectionSurvivesCopy, true);
+  assert.equal(
+    q.virtualRestored && q.restoredReaderAnchor && q.editableSelectionPreserved,
+    true,
+  );
+  assert.equal(run.cleared && run.clipboardCleared, true);
 });
 
 test("raw native clipboard mismatch remains a final failure after restoration and editable checks", async () => {
