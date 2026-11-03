@@ -1,7 +1,7 @@
-name: Packaged Send style readers and timeline (diagnostic)
+name: Packaged Send historical grid experiment (diagnostic)
 on:
   push:
-    branches: [diagnostic/send-layout-readers-20261103]
+    branches: [diagnostic/send-history-grid-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -15,9 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ca168feadf0dff50179c7c538e4bdb854b3a9296
+          ref: ece4b9015f2bb20c664058cc3d7d2a2bb38fd900
           persist-credentials: false
           path: baseline
+      - uses: actions/checkout@v4
+        with:
+          ref: 5a95427e636f97f4fc02c6b1425bfa008a41194a
+          persist-credentials: false
+          path: candidate
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -27,27 +32,26 @@ jobs:
           node-version: 22
       - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline; do
+          for source in baseline candidate; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build exact baseline once
-        working-directory: baseline
-        timeout-minutes: 10
+      - name: Build the two exact source checkouts
+        timeout-minutes: 16
         run: |
-          npm ci
-          npm run build
-          npm run build --workspace @zen/zenx
+          for source in baseline candidate; do
+            (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
+          done
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs
-      - name: Native 1280 dock source, three sends with bounded getter attribution
+      - name: Native 1280 matched historical grid pair, three sends each
         timeout-minutes: 20
         run: |
           failed=0
-          for case in control-baseline; do
+          for case in control-baseline control-candidate; do
             case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
             case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
             mkdir -p "results/$case"
@@ -64,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-style-readers-timeline-5000
+          name: native-send-history-grid-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json

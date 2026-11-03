@@ -1212,7 +1212,7 @@ async function run() {
     baselineKind:
       "existing selected idle Thread; initial production thread/read verified and warmed before timing",
     rendered: await evaluate(
-      "({userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length})",
+      "(()=>{const inner=document.querySelector('.messages-inner'), history=inner.querySelector(':scope > .transcript-history'); return {userRows:document.querySelectorAll('article.user-row').length,assistantRows:document.querySelectorAll('article.agent-copy').length,turnBlocks:document.querySelectorAll('section.turn').length,historyGroups:inner.querySelectorAll(':scope > .transcript-history').length,directTurns:inner.querySelectorAll(':scope > section.turn').length,groupTurns:history?.querySelectorAll(':scope > section.turn').length??0,outerGapPx:parseFloat(getComputedStyle(inner).rowGap),historyGapPx:history?parseFloat(getComputedStyle(history).rowGap):null}})()",
     ),
   };
   const informationTrigger =
@@ -1660,6 +1660,56 @@ async function run() {
     ),
     "No compaction anywhere in observed baseline lifecycle",
   );
+  const readerPoint = await evaluate(
+    `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
+  );
+  window.webContents.sendInputEvent({ type: "mouseMove", ...readerPoint });
+  window.webContents.sendInputEvent({
+    type: "mouseWheel",
+    ...readerPoint,
+    deltaX: 0,
+    deltaY: 360,
+    canScroll: true,
+    hasPreciseScrollingDeltas: true,
+  });
+  await until(
+    async () =>
+      await evaluate(
+        "(()=>{const s=document.querySelector('.messages');return s.scrollHeight-s.clientHeight-s.scrollTop>100&&Boolean(document.querySelector('.back-live'))})()",
+      ),
+    "native upward reading pauses following",
+  );
+  await pause(300);
+  const pausedBefore = await evaluate(
+    "(()=>{const s=document.querySelector('.messages');return {scrollTop:s.scrollTop,bottomDistance:s.scrollHeight-s.clientHeight-s.scrollTop}})()",
+  );
+  const oldBounds = window.getBounds();
+  window.setBounds({ ...oldBounds, height: oldBounds.height - 20 });
+  await pause(500);
+  const pausedAfter = await evaluate(
+    "(()=>{const s=document.querySelector('.messages');return {scrollTop:s.scrollTop,bottomDistance:s.scrollHeight-s.clientHeight-s.scrollTop,backToLive:Boolean(document.querySelector('.back-live'))}})()",
+  );
+  const resizedBounds = window.getBounds();
+  result.pausedReaderResize = {
+    before: pausedBefore,
+    after: pausedAfter,
+    beforeWindowHeight: oldBounds.height,
+    afterWindowHeight: resizedBounds.height,
+  };
+  assert.notEqual(
+    resizedBounds.height,
+    oldBounds.height,
+    "native resize must actually change window height",
+  );
+  assert.ok(
+    Math.abs(pausedAfter.scrollTop - pausedBefore.scrollTop) <= 2,
+    "native resize preserves paused reader offset",
+  );
+  assert.ok(
+    pausedAfter.bottomDistance > 100 && pausedAfter.backToLive,
+    "native resize must not restore live following",
+  );
+  await screenshot("paused-reader-after-native-resize.png");
   result.ok = true;
 }
 async function verifyPackagedRuntime() {

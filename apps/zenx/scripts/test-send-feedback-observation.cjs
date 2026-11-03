@@ -517,9 +517,43 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes("for case in control-baseline; do"));
+  assert.ok(
+    workflow.includes("for case in control-baseline control-candidate; do"),
+  );
   assert.equal(
     workflow.includes("owned-native-send-profile.private.json"),
     false,
   );
+});
+
+test("historical grid comparison keeps exact sources and reader regression outside timing", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  for (const identity of [
+    "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
+    "5a95427e636f97f4fc02c6b1425bfa008a41194a",
+    "406b7116f3ece53770f7064ff59f818d365232f5",
+    "f2d83a1a54d566c2549593753caa7620e8bd2c07",
+  ])
+    assert.ok(launch.includes(identity));
+  for (const contract of [
+    "historyGroups",
+    "directTurns",
+    "groupTurns",
+    "outerGapPx",
+    "historyGapPx",
+  ])
+    assert.ok(launch.includes("result.before.rendered." + contract));
+  const samples = source.indexOf("result.samples = []");
+  assert.ok(
+    source.indexOf("const readerPoint =") >
+      source.indexOf("await stopOwnedTrace();", samples),
+  );
+  assert.ok(
+    source.includes("native resize must actually change window height"),
+  );
+  assert.ok(source.includes("native resize preserves paused reader offset"));
+  assert.ok(source.includes("native resize must not restore live following"));
 });

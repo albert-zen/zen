@@ -59,12 +59,12 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "ca168feadf0dff50179c7c538e4bdb854b3a9296",
-    tree: "0a02942ea221dfa3a41111b5267dcc5377cee236",
+    commit: "ece4b9015f2bb20c664058cc3d7d2a2bb38fd900",
+    tree: "406b7116f3ece53770f7064ff59f818d365232f5",
   },
   candidate: {
-    commit: "e245bbc2104ee993863a7b7b39967105fc4c1f5c",
-    tree: "a6993aa2c9904f36ed4d2d0cfdb904bac00b57d1",
+    commit: "5a95427e636f97f4fc02c6b1425bfa008a41194a",
+    tree: "f2d83a1a54d566c2549593753caa7620e8bd2c07",
   },
 };
 const snapshot = snapshots[sourceLabel];
@@ -694,6 +694,23 @@ try {
     "clickToClearFrameMs",
     "clickToCanonicalNotificationMs",
   ];
+  assert.equal(
+    result.before.rendered.historyGroups,
+    sourceLabel === "baseline" ? 0 : 1,
+  );
+  assert.equal(
+    result.before.rendered.directTurns,
+    sourceLabel === "baseline" ? count : 0,
+  );
+  assert.equal(
+    result.before.rendered.groupTurns,
+    sourceLabel === "baseline" ? 0 : count,
+  );
+  assert.equal(result.before.rendered.outerGapPx, 24);
+  assert.equal(
+    result.before.rendered.historyGapPx,
+    sourceLabel === "baseline" ? null : 24,
+  );
   const samples = result.samples.map((sample, index) => {
     const timings = Object.fromEntries(
       timingFields.map((key) => {
@@ -760,6 +777,7 @@ try {
     informationPresentation: result.informationPresentation,
     rendered: result.before.rendered,
     readerBeforeSend: result.readerBeforeSend,
+    pausedReaderResize: result.pausedReaderResize,
     rendererSourceBundles,
     geometryProbeScope:
       "instrumented click-to-first-pending-observer getter wall times; not additive, not CPU, not performance acceptance",
