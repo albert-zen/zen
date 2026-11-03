@@ -937,6 +937,14 @@ subtree instead of re-mapping the whole history. Real native acceptance must cov
 the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts,
 attachments, both ACK/event orders and exactly one canonical user message.
 
+### Editable conversation information
+
+Thread and actual Room owners share the same native information layout. PAW uses its existing Room binding and never a third owner. The default typed components are related pull requests, lineage, related artifacts, triggers, background commands and the legacy default Board, with Room members added for Room owners. Thread-source defaults in a Room use only its actual current assistant member; an empty Room never invents one. Provider availability is independent of component placement: missing admitted PR/artifact bridges render explicitly unavailable, not an observed zero.
+
+Customize exposes add, remove placement, hide/show, collapse, reorder by drag or accessible up/down controls and Alt+arrow keys, and each type's defined configuration (currently Trigger filter/paused visibility and explicit Board document address on add). Additional Boards have independent body addresses, drafts, actions and iframe sessions within the same owner. Authored document IDs are not addresses. Removing a placement keeps its Board content; Reset restores default order/visibility and hides extra placements without deleting or rebinding content. A placed Board cannot be retargeted through configuration.
+
+Human native edits and model facade edits use the same typed operations and existing owner revision/CAS store, with their own admitted source authority. Conflict and uncertain-outcome edits remain as window-local drafts across closing/reopening; reads do not repeat writes, and a fresh review plus explicit Reapply is required. An in-flight edit cannot be repeated by reopening its panel. Background layout changes do not open or focus the panel. Asking attention is a separate, unhideable slot outside the customizable list and does not depend on any widget being visible or on a Turn remaining active. The Asking store and answer authority remain independent.
+
 ### Pending steer 全部撤回到输入框（2026-11-02）
 
 本节定义原生待消费 steer 的撤回合同；实际验收记录绑定当前组合版本，不能以旧分支
@@ -1056,7 +1064,17 @@ submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
 `deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
 ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
 
-### Native question cards and Asking attention
+### Room workspace questions and Asking attention
+
+The Room information panel is an independent workspace resource, not a view of its participant Threads' private panels or questions. PAW follows the same Room ownership even when it has one member. A member Thread is an admitted actor and publication provenance, never the resource address. Removing the author does not delete, move or hide an existing Room question; a current member can revise or withdraw it through the existing Room tools.
+
+Room question cards read only the Room journal workspace. The Room/PAW sidebar Asking capsule reads that same journal's `questionSummary.openCount` and revision from the existing Rooms list projection. Any open Room request keeps Asking visible, independently of selected member, selected Thread, model activity, hidden widgets or private Thread question counts. Answering, cancelling or withdrawing one request removes the capsule only when no other Room request remains open. Private Thread questions are not automatically imported, including into a single-member PAW.
+
+Room cards occupy a separate attention slot above the customizable widgets and cannot be hidden or removed by layout controls. Authored options start unselected and free text is independent per `(Room, question)` in the current window. Closing/reopening or changing workspace retains unsent drafts; application reload need not. Background publication never changes workspace or keyboard focus. Author labels are provenance only and distinguish a former/unavailable author without denying access to the Room resource.
+
+Human answers and cancellations use the exact Room/question revision and immutable response client ID. A saved receipt confirms the Room resource and ordinary Room message/operation transaction, not Thread admission or model consumption. Existing Room addressing/PAW delivery decides whether and where the message is delivered. Conflicts retain the local draft for explicit current-version review. Unknown outcomes keep their original payload and expose exact readback, never an automatic write retry; a reviewed explicit reapply reuses the same client ID. Current document and Room service checks, not presentation controls, fence writes.
+
+### Thread question cards and Asking attention
 
 Native accepted questions appear in the existing information panel attention slot,
 with independent `(Thread, call Item)` drafts, authored options, always-available

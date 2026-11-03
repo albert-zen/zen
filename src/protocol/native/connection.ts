@@ -1,3 +1,9 @@
+import {
+  NATIVE_MCP_BIND_METHOD,
+  NATIVE_MCP_MESSAGE_METHOD,
+  type OpenNativeBoundMcp,
+  type NativeBoundMcpConnection,
+} from "./bound-mcp.js";
 import { normalizeTimeZone } from "../../message-timezone.js";
 import { randomUUID } from "node:crypto";
 import { traceClock } from "../../trace.js";
@@ -51,6 +57,10 @@ import {
 } from "./wire.js";
 
 export class NativeConnection {
+  readonly #openBoundMcp: OpenNativeBoundMcp | undefined;
+  readonly #mcpLifetime = new AbortController();
+  #mcpBindingAttempted = false;
+  #boundMcp: NativeBoundMcpConnection | undefined;
   readonly #projection: NativeRecoveryProjection;
   readonly #send: SendJson;
   readonly #subscriptions = new Set<string>();
@@ -65,11 +75,13 @@ export class NativeConnection {
 
   constructor(options: {
     projection: NativeRecoveryProjection;
+    openBoundMcp?: OpenNativeBoundMcp;
     send: SendJson;
     appServer?: ZenAppServer;
     requestApproval?: ApprovalHandler;
     isInitialized?: () => boolean;
   }) {
+    this.#openBoundMcp = options.openBoundMcp;
     this.#projection = options.projection;
     this.#send = options.send;
     this.#appServer = options.appServer;
@@ -194,6 +206,65 @@ export class NativeConnection {
 
   async #receive(message: JsonRpcMessage, send: SendJson): Promise<void> {
     if (this.#closed || !isRequest(message)) return;
+    if (
+      [NATIVE_MCP_BIND_METHOD, NATIVE_MCP_MESSAGE_METHOD].includes(
+        message.method,
+      )
+    ) {
+      try {
+        if (!this.#initialized && !this.#isInitialized())
+          throw new Error("Not initialized");
+        if (!this.#openBoundMcp)
+          throw new Error("Bound MCP is unavailable on this Host");
+        const params = isRecord(message.params) ? message.params : {};
+        if (message.method === NATIVE_MCP_BIND_METHOD) {
+          if (this.#mcpBindingAttempted)
+            throw new Error("MCP owner is fixed once per connection");
+          this.#mcpBindingAttempted = true;
+          if (Object.keys(params).some((key) => key !== "owner"))
+            throw new Error("Only an explicit owner is accepted");
+          const bound = await this.#openBoundMcp({
+            owner: params.owner,
+            signal: this.#mcpLifetime.signal,
+            send: (value) => {
+              if (!this.#closed)
+                send({
+                  method: NATIVE_MCP_MESSAGE_METHOD,
+                  params: { message: value },
+                });
+            },
+          });
+          if (this.#closed) {
+            await bound.close();
+            throw new Error("Connection closed during MCP binding");
+          }
+          this.#boundMcp = bound;
+          send({ id: message.id, result: { bound: true } });
+        } else {
+          if (!this.#boundMcp)
+            throw new Error("Bind an owner before sending MCP messages");
+          if (
+            Object.keys(params).some((key) => key !== "message") ||
+            Buffer.byteLength(JSON.stringify(params), "utf8") > 1024 * 1024
+          )
+            throw new Error("Invalid bounded MCP envelope");
+          await this.#boundMcp.receive(params.message);
+          send({ id: message.id, result: { received: true } });
+        }
+      } catch (error) {
+        send({
+          id: message.id,
+          error: {
+            code: -32602,
+            message:
+              error instanceof Error
+                ? error.message
+                : "Bound MCP request failed",
+          },
+        });
+      }
+      return;
+    }
     if (message.method === "zen/trace/client-activation") {
       const params = isRecord(message.params) ? message.params : {};
       const observation = parseClientSendObservation(params.observation);
@@ -1531,6 +1602,10 @@ export class NativeConnection {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#mcpLifetime.abort(new Error("Native connection closed"));
+    void this.#boundMcp?.close().catch((error: unknown) => {
+      console.error("Bound MCP connection close failed", error);
+    });
     this.#unsubscribe();
     this.#subscriptions.clear();
     this.#barriers.clear();

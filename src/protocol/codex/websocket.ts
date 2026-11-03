@@ -1,3 +1,4 @@
+import type { OpenNativeBoundMcp } from "../native/bound-mcp.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import { WebSocket, WebSocketServer } from "ws";
@@ -15,6 +16,7 @@ export interface CodexWebSocketServer {
 
 export async function serveCodexWebSocket(options: {
   appServer: ZenAppServer;
+  openBoundMcp?: OpenNativeBoundMcp;
   zenHome: string;
   listen: string;
   bearerToken?: string;
@@ -76,6 +78,7 @@ export async function serveCodexWebSocket(options: {
     });
     const nativeConnection = new NativeConnection({
       projection: nativeProjection,
+      ...(options.openBoundMcp ? { openBoundMcp: options.openBoundMcp } : {}),
       appServer: options.appServer,
       requestApproval: (request) => connection.requestApproval(request),
       isInitialized: () => connection.initialized,

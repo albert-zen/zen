@@ -20,7 +20,7 @@ import {
   applyCompactionStatus,
   markCompactionOutcomeUnknown,
 } from "./compaction-feedback.js";
-import { ConversationInformationCards } from "./ConversationInformationCards.js";
+import { EditableInformationPanel } from "./EditableInformationPanel.js";
 import { PluginInformationHost } from "./plugin-information-host.js";
 import { resolveDeliveredMessage } from "./tool-action-targets.js";
 import type { MessageTargetRequest } from "./message-target-navigation.js";
@@ -1554,6 +1554,31 @@ function AppContent() {
         }
       }
     });
+    // One content-free edge per question change also reaches Threads this
+    // Desktop never read. Coalesce bursts; streaming/membership are not inputs.
+    let questionCatalogRead = false;
+    let questionCatalogDirty = false;
+    const questionAttentionChanged = (): void => {
+      if (!active) return;
+      questionCatalogDirty = true;
+      if (questionCatalogRead) return;
+      questionCatalogRead = true;
+      void Promise.resolve()
+        .then(async () => {
+          do {
+            questionCatalogDirty = false;
+            if (active) {
+              await Promise.all([loadThreadSummaries(), loadProjects()]);
+            }
+          } while (active && questionCatalogDirty);
+        })
+        .finally(() => {
+          questionCatalogRead = false;
+          if (active && questionCatalogDirty) questionAttentionChanged();
+        });
+    };
+    const disposeQuestionAttention =
+      window.zenx.threadQuestionAttention?.onChanged(questionAttentionChanged);
     const disposeNotifications = window.zenx.protocol.onNotification(
       (method, params) => {
         if (!active) return;
@@ -1573,8 +1598,14 @@ function AppContent() {
           nativeEvent?.type === "item_delta" ||
           nativeEvent?.type === "reasoning_summary_delta" ||
           nativeEvent?.type === "reasoning_content_delta";
+        const nativeQuestionAttention =
+          nativeEvent?.type === "user_question_attention_invalidated";
+        if (nativeQuestionAttention && !window.zenx.threadQuestionAttention)
+          questionAttentionChanged();
         if (
-          (method === "zen/thread/event" && !nativeTextDelta) ||
+          (method === "zen/thread/event" &&
+            !nativeTextDelta &&
+            !nativeQuestionAttention) ||
           method.startsWith("thread/") ||
           method.startsWith("turn/") ||
           method === "item/completed"
@@ -1860,6 +1891,7 @@ function AppContent() {
       if (endNotificationsRef.current === endNotifications)
         endNotificationsRef.current = null;
       disposeStatus();
+      disposeQuestionAttention?.();
       disposeNotifications();
       disposeApprovals();
       disposeResolved();
@@ -4620,12 +4652,20 @@ function AppContent() {
                 snapshot={pluginSnapshot}
                 registry={pluginUiRegistry}
                 resourcePanelWidth={workspacePanelWidth}
+                managedBoard
                 contextContent={
-                  !selectedRoomId && selectedThreadId ? (
-                    <ConversationInformationCards
-                      threadId={selectedThreadId}
-                      attention={questionAttention}
+                  selectedRoomId || selectedThreadId ? (
+                    <EditableInformationPanel
+                      owner={
+                        selectedRoomId
+                          ? { kind: "room", roomId: selectedRoomId }
+                          : { kind: "thread", threadId: selectedThreadId! }
+                      }
+                      attention={
+                        !selectedRoomId ? questionAttention : undefined
+                      }
                       threads={informationThreads}
+                      roomMembers={selectedRoom?.members}
                       snapshot={pluginSnapshot}
                       registry={pluginUiRegistry}
                       theme={appearance}

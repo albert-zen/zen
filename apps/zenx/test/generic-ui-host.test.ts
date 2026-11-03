@@ -10,6 +10,8 @@ import test from "node:test";
 import type { ZenXPluginSnapshot } from "../src/main/capabilities/types.js";
 import { ZenXPluginCatalog } from "../src/main/capabilities/plugin-catalog.js";
 import {
+  ZENX_ROOMS_READ_PERMISSION,
+  ZENX_ROOMS_WRITE_PERMISSION,
   zenXBundledAutomationPackages,
   type ZenXAutomationControlPort,
 } from "../src/main/capabilities/automation-control-package.js";
@@ -364,7 +366,8 @@ test("normal bundled product composition owns real Trigger and Room generic UI",
   });
   await registry.initialize();
   const port = {} as ZenXAutomationControlPort;
-  for (const capabilityPackage of zenXBundledAutomationPackages(port)) {
+  const packages = zenXBundledAutomationPackages(port);
+  for (const capabilityPackage of packages) {
     await registry.install(capabilityPackage, "bundled");
   }
 
@@ -383,15 +386,18 @@ test("normal bundled product composition owns real Trigger and Room generic UI",
     "zenx-triggers",
   ]);
   assert.deepEqual(normal.settings, []);
-  assert.equal(normal.commands.length, 20);
+  assert.equal(normal.commands.length, 23);
   assert.deepEqual(normal.commands.map((command) => command.tool).sort(), [
     "zenx_rooms_add_member",
     "zenx_rooms_create",
     "zenx_rooms_delete",
     "zenx_rooms_list",
     "zenx_rooms_post_message",
+    "zenx_rooms_questions",
     "zenx_rooms_remove_member",
     "zenx_rooms_rename",
+    "zenx_rooms_update_question",
+    "zenx_rooms_withdraw_question",
     "zenx_triggers_cancel",
     "zenx_triggers_create",
     "zenx_triggers_create_target",
@@ -406,6 +412,17 @@ test("normal bundled product composition owns real Trigger and Room generic UI",
     "zenx_triggers_update",
     "zenx_triggers_workspaces",
   ]);
+  const rooms = packages.find((entry) => entry.manifest.id === "zenx-rooms");
+  for (const [name, permission] of [
+    ["zenx_rooms_questions", ZENX_ROOMS_READ_PERMISSION],
+    ["zenx_rooms_update_question", ZENX_ROOMS_WRITE_PERMISSION],
+    ["zenx_rooms_withdraw_question", ZENX_ROOMS_WRITE_PERMISSION],
+  ]) {
+    assert.deepEqual(
+      rooms?.manifest.tools.find((tool) => tool.name === name)?.permissions,
+      [permission],
+    );
+  }
   assert.deepEqual(
     normal.panels.map((panel) => panel.pluginId),
     ["zenx-triggers"],

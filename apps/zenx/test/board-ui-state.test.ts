@@ -69,6 +69,41 @@ test("agent document refresh preserves unsent fields; save does not erase edits 
   assert.equal(session.values.answer, "newer typing");
   assert.equal(session.dirty, false);
 });
+
+test("an execution choice is captured per click and rechecked after pending field storage", async () => {
+  let saved = state();
+  saved.document.owner = { kind: "room", roomId: "pending-room" };
+  const pending = deferred<BoardSnapshot>();
+  const events: Record<string, unknown>[] = [];
+  const session = new BoardUiSession(saved.document.owner, async (input) => {
+    if (input.operation === "read") return saved;
+    if (input.operation === "draft") return await pending.promise;
+    events.push(input);
+    return { snapshot: saved, outcomes: [], navigation: [] };
+  });
+  await session.refresh();
+  session.edit({ answer: "unsent" });
+  let actor = "member-a";
+  const first = session.run("run", undefined, {
+    executionThreadId: actor,
+    assertCurrent: () => {
+      if (actor !== "member-a") throw new Error("Execution selection changed");
+    },
+  });
+  actor = "member-b";
+  saved = { ...saved, draftRevision: 1, values: { answer: "unsent" } };
+  pending.resolve(saved);
+  await assert.rejects(first, /selection changed/);
+  assert.equal(
+    events.length,
+    0,
+    "A pending click is not retargeted to a new selection",
+  );
+  await session.run("run", undefined, { executionThreadId: actor });
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.executionThreadId, "member-b");
+  assert.deepEqual(events[0]!.owner, { kind: "room", roomId: "pending-room" });
+});
 test("failed saves retain the exact unsent draft and never dispatch an event", async () => {
   const calls: unknown[] = [];
   const current = state();

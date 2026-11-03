@@ -22,6 +22,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 
 import {
+  BUNDLED_MCP_LICENSE_PACKAGES,
   applicationIconForPlatform,
   assertMacNativeHelperDeploymentTarget,
   copyChromeExtensionResource,
@@ -947,6 +948,18 @@ test("stages the real app without modifying reusable build output", async () => 
     );
     await access(path.join(appDirectory, "out", "preload", "index.cjs"));
     await access(path.join(appDirectory, "out", "renderer", "index.html"));
+    for (const name of BUNDLED_MCP_LICENSE_PACKAGES)
+      assert.equal(
+        await readFile(
+          path.join(
+            appDirectory,
+            "licenses",
+            `${name.replaceAll("/", "-")}.txt`,
+          ),
+          "utf8",
+        ),
+        `${name} fixture license`,
+      );
     await access(path.join(appDirectory, "node_modules", "ws", "index.js"));
     await access(
       path.join(
@@ -1649,6 +1662,15 @@ async function writeStorageWriterFixture(rootDirectory) {
     path.join(realRoot, "package-lock.json"),
     path.join(rootDirectory, "package-lock.json"),
   );
+  for (const name of BUNDLED_MCP_LICENSE_PACKAGES) {
+    const directory = path.join(rootDirectory, "node_modules", name);
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, "package.json"),
+      JSON.stringify({ name, version: "1.0.0" }),
+    );
+    await writeFile(path.join(directory, "LICENSE"), `${name} fixture license`);
+  }
 }
 
 async function writePtyFixture(rootDirectory) {

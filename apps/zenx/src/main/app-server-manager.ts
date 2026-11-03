@@ -1,8 +1,22 @@
+import type {
+  RoomUserQuestionPublicationInput,
+  RoomUserQuestionPublicationReceipt,
+} from "../../../../src/user-question-tool.js";
+import { validateRoomQuestionPublicationReceipt } from "../room-question-publication.js";
+import {
+  UserMcpMainBridge,
+  type UserMcpOwnerPort,
+} from "./user-mcp-main-bridge.js";
+import { isUserMcpHostEvent } from "./user-mcp-messages.js";
 import {
   validateBoardToolRequest,
   type BoardToolRequest,
 } from "../board-host.js";
-import type { ToolExecutionResult } from "../../../../src/tool.js";
+import type {
+  ApprovalHandler,
+  ApprovalRequest,
+  ToolExecutionResult,
+} from "../../../../src/tool.js";
 import { DEFAULT_TOOL_TIMEOUT_MS } from "../../../../src/tool-task.js";
 import { localErrorDetail } from "../local-error-detail.js";
 import {
@@ -81,6 +95,8 @@ export interface AppServerManagerOptions {
   threadUsageReadTimeoutMs?: number;
   recoveryDelaysMs?: readonly number[];
   capabilityHost?: ZenXCapabilityHost;
+  /** Existing main-process Board owner facts; no alternate owner store. */
+  userMcpOwners?: UserMcpOwnerPort;
   capabilityReplacementTimeoutMs?: number;
   configurationControlTimeoutMs?: number;
   shutdownGraceMs?: number;
@@ -115,6 +131,7 @@ export interface ApprovalResolvedEvent {
 }
 
 interface PendingApproval {
+  origin: "protocol" | "host-tool";
   event: ApprovalRequestEvent;
   decision: ApprovalDecision | null;
   client: ZenXProtocolClient;
@@ -131,8 +148,10 @@ interface UncertainCapabilityReplacement {
 
 export class AppServerManager {
   readonly #options: AppServerManagerOptions;
+  #userMcpBridge: UserMcpMainBridge | undefined;
   readonly #statusListeners = new Set<(status: AppServerHostStatus) => void>();
   readonly #notificationListeners = new Set<NotificationListener>();
+  readonly #threadQuestionAttentionListeners = new Set<() => void>();
   readonly #recoveryListeners = new Set<ThreadRecoveryListener>();
   readonly #approvalListeners = new Set<
     (event: ApprovalRequestEvent) => void
@@ -723,6 +742,20 @@ export class AppServerManager {
     }
   }
 
+  #roomQuestionPublisher:
+    | ((
+        input: RoomUserQuestionPublicationInput,
+        admit: () => Promise<void>,
+      ) => Promise<RoomUserQuestionPublicationReceipt>)
+    | undefined;
+  setRoomQuestionPublisher(
+    publisher: (
+      input: RoomUserQuestionPublicationInput,
+      admit: () => Promise<void>,
+    ) => Promise<RoomUserQuestionPublicationReceipt>,
+  ): void {
+    this.#roomQuestionPublisher = publisher;
+  }
   #remoteRooms:
     | ((
         operation: "list" | "read" | "post" | "trigger",
@@ -1207,6 +1240,11 @@ export class AppServerManager {
     return () => this.#recoveryListeners.delete(listener);
   }
 
+  onThreadQuestionAttentionInvalidated(listener: () => void): () => void {
+    this.#threadQuestionAttentionListeners.add(listener);
+    return () => this.#threadQuestionAttentionListeners.delete(listener);
+  }
+
   onNotification(listener: NotificationListener): () => void {
     this.#notificationListeners.add(listener);
     return () => this.#notificationListeners.delete(listener);
@@ -1242,6 +1280,91 @@ export class AppServerManager {
     pending.resolve({ decision });
   }
 
+  /** Bind native Host tools to the existing Desktop approval UI generation. */
+  hostToolApprovalHandler(): ApprovalHandler {
+    const client = this.#client;
+    const epoch = this.#processEpoch;
+    if (!client || !epoch || this.#stopping || this.#status.type !== "ready")
+      throw new Error("Host approval UI is not ready");
+    const generation = client.connectionGeneration;
+    const current = () =>
+      this.#client === client &&
+      this.#processEpoch === epoch &&
+      client.connectionGeneration === generation &&
+      !this.#stopping &&
+      this.#status.type === "ready";
+    return async (request: ApprovalRequest): Promise<ApprovalDecision> => {
+      if (!current() || request.signal.aborted) return "cancel";
+      const requestId = randomUUID();
+      const event: ApprovalRequestEvent = {
+        requestId,
+        params: {
+          threadId: request.threadId,
+          turnId: request.turnId,
+          itemId: request.itemId,
+          startedAtMs: Date.now(),
+          environmentId: null,
+          reason: "A tool from the current Host is waiting for your decision.",
+          command: request.command,
+          cwd: request.cwd,
+          ...(request.scope === undefined
+            ? {}
+            : { approvalScope: request.scope }),
+          ...(request.approvalTarget === undefined
+            ? {}
+            : { approvalTarget: { ...request.approvalTarget } }),
+          ...(request.toolName === undefined
+            ? {}
+            : { toolName: request.toolName }),
+          ...(request.toolArguments === undefined
+            ? {}
+            : { toolArguments: structuredClone(request.toolArguments) }),
+          commandActions: [],
+          proposedExecpolicyAmendment: null,
+          networkApprovalContext: null,
+          proposedNetworkPolicyAmendments: null,
+        },
+      };
+      let resolve!: (result: { decision: ApprovalDecision }) => void;
+      const response = new Promise<{ decision: ApprovalDecision }>((done) => {
+        resolve = done;
+      });
+      const pending: PendingApproval = {
+        origin: "host-tool",
+        event,
+        decision: null,
+        client,
+        connectionGeneration: generation,
+        wireRequestId: `host-tool:${requestId}`,
+        resolve,
+      };
+      this.#pendingApprovals.set(requestId, pending);
+      const abort = () =>
+        this.#cancelPendingApprovals((candidate) => candidate === pending);
+      request.signal.addEventListener("abort", abort, { once: true });
+      try {
+        if (request.signal.aborted || !current()) abort();
+        else for (const listener of this.#approvalListeners) listener(event);
+        const result = await response;
+        return current() && !request.signal.aborted
+          ? result.decision
+          : "cancel";
+      } finally {
+        request.signal.removeEventListener("abort", abort);
+        if (this.#pendingApprovals.get(requestId) === pending) {
+          this.#pendingApprovals.delete(requestId);
+          const resolved: ApprovalResolvedEvent = {
+            requestId,
+            threadId: request.threadId,
+            decision: pending.decision ?? "cancel",
+          };
+          for (const listener of this.#approvalResolvedListeners)
+            listener(resolved);
+        }
+      }
+    };
+  }
+
   async stop(
     options: { preserveConnectionAuthority?: boolean } = {},
   ): Promise<void> {
@@ -1271,6 +1394,8 @@ export class AppServerManager {
   }
 
   async #performStop(preserveConnectionAuthority: boolean): Promise<void> {
+    this.#userMcpBridge?.close();
+    this.#userMcpBridge = undefined;
     const failures: Error[] = [];
     if (!preserveConnectionAuthority) {
       try {
@@ -1364,6 +1489,7 @@ export class AppServerManager {
     client.onStatus((status) => {
       if (client !== this.#client || this.#stopping) return;
       if (status.type === "reconnecting") {
+        this.#userMcpBridge?.retireAll();
         this.#cancelPendingApprovals((pending) => pending.client === client);
         this.#setStatus({
           type: "reconnecting",
@@ -1398,6 +1524,7 @@ export class AppServerManager {
           const requestId = randomUUID();
           const event = { requestId, params };
           this.#pendingApprovals.set(requestId, {
+            origin: "protocol",
             event,
             decision: null,
             client,
@@ -1451,6 +1578,7 @@ export class AppServerManager {
   ): void {
     const pending = [...this.#pendingApprovals.values()].find(
       (candidate) =>
+        candidate.origin === "protocol" &&
         candidate.client === client &&
         candidate.connectionGeneration === connectionGeneration &&
         candidate.wireRequestId === params.requestId,
@@ -1475,6 +1603,8 @@ export class AppServerManager {
     signal: NodeJS.Signals | null,
   ): void {
     if (this.#child !== child) return;
+    this.#userMcpBridge?.close();
+    this.#userMcpBridge = undefined;
     this.#child = undefined;
     this.#childObservation = undefined;
     this.#acceptingCapabilityInvocations = false;
@@ -1586,9 +1716,120 @@ export class AppServerManager {
   }
 
   #installCapabilityBridge(child: ChildProcess): void {
+    this.#userMcpBridge?.close();
+    const bridge = new UserMcpMainBridge({
+      owners: this.#options.userMcpOwners,
+      captureApproval: () => {
+        const client = this.#client;
+        const epoch = this.#processEpoch;
+        const generation = client?.connectionGeneration;
+        return {
+          requestApproval: this.hostToolApprovalHandler(),
+          current: () =>
+            !!client &&
+            this.#client === client &&
+            this.#processEpoch === epoch &&
+            client.connectionGeneration === generation &&
+            !this.#stopping &&
+            this.#status.type === "ready",
+        };
+      },
+      send: (command) => {
+        if (this.#child === child && child.connected) child.send(command);
+      },
+    });
+    this.#userMcpBridge = bridge;
+    const roomPublications = new Map<string, AbortController>();
+    child.once("exit", () => {
+      for (const controller of roomPublications.values())
+        controller.abort(
+          new Error(
+            "Room question origin Host stopped; outcome may be unknown",
+          ),
+        );
+      roomPublications.clear();
+    });
     child.on("message", (message: unknown) => {
       if (this.#child !== child) return;
+      if (isUserMcpHostEvent(message)) {
+        void bridge.receive(message);
+        return;
+      }
       const hostEvent = isHostEvent(message) ? message : undefined;
+      if (hostEvent?.type === "thread-question/attention-invalidated") {
+        if (!this.#stopping && this.#status.type === "ready")
+          for (const listener of this.#threadQuestionAttentionListeners)
+            listener();
+        return;
+      }
+      if (hostEvent?.type === "room-question/publish-cancel") {
+        roomPublications
+          .get(hostEvent.requestId)
+          ?.abort(
+            new Error("Room question origin cancelled; outcome may be unknown"),
+          );
+        roomPublications.delete(hostEvent.requestId);
+        return;
+      }
+      if (hostEvent?.type === "room-question/publish-request") {
+        const controller = new AbortController();
+        const epoch = this.#processEpoch;
+        const publisher = this.#roomQuestionPublisher;
+        const admit = async () => {
+          controller.signal.throwIfAborted();
+          if (
+            this.#stopping ||
+            this.#roomQuestionPublisher !== publisher ||
+            this.#child !== child ||
+            !child.connected ||
+            this.#processEpoch !== epoch ||
+            this.status.type !== "ready"
+          )
+            throw new Error(
+              "Room question origin Host changed; outcome may be unknown",
+            );
+        };
+        if (roomPublications.has(hostEvent.requestId)) return;
+        if (roomPublications.size >= 32) {
+          child.send({
+            type: "room-question/publish-result",
+            requestId: hostEvent.requestId,
+            error: "Too many pending Room question publications",
+          } satisfies HostCommand);
+          return;
+        }
+        roomPublications.set(hostEvent.requestId, controller);
+        void (async () => {
+          try {
+            await admit();
+            if (!publisher)
+              throw new Error("Room question service unavailable");
+            const result = validateRoomQuestionPublicationReceipt(
+              await publisher(hostEvent.input, admit),
+            );
+            await admit();
+            if (result.roomId !== hostEvent.input.roomId)
+              throw new Error(
+                "Room question receipt target disagrees; outcome may be unknown",
+              );
+            child.send({
+              type: "room-question/publish-result",
+              requestId: hostEvent.requestId,
+              result,
+            } satisfies HostCommand);
+          } catch (error) {
+            if (this.#child === child && child.connected)
+              child.send({
+                type: "room-question/publish-result",
+                requestId: hostEvent.requestId,
+                error: asError(error).message,
+              } satisfies HostCommand);
+          } finally {
+            roomPublications.delete(hostEvent.requestId);
+          }
+        })();
+        return;
+      }
       if (hostEvent?.type === "board-tool/check-owner") {
         const pending = this.#pendingConfigurationRequests.get(
           hostEvent.requestId,

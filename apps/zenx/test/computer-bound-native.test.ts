@@ -74,7 +74,7 @@ func AXUIElementGetPid(_ element: AXUIElement, _ pid: inout pid_t) -> AXError {
   pid = element === foreign ? 43 : 42
   return .success
 }
-enum AXError { case success, failure }
+enum AXError: Int32 { case success = 0, failure = -1 }
 func AXIsProcessTrusted() -> Bool { true }
 func AXUIElementCreateApplication(_ pid: Int32) -> AXUIElement { appElement }
 func AXUIElementPerformAction(_ window: AXUIElement, _ action: String) -> AXError {
@@ -440,8 +440,23 @@ test(
         if (
           mode === "pointer-overlay" ||
           mode === "pointer-transparent-overlay"
-        )
+        ) {
           assert.match(result.error!, /not the selected application/);
+          assert.match(
+            result.error!,
+            /selectedPID=42, axHitStatus=0, axPIDStatus=0, hitPID=43/,
+          );
+        }
+        if (mode === "pointer-pid-unavailable")
+          assert.match(
+            result.error!,
+            /selectedPID=42, axHitStatus=0, axPIDStatus=-1, hitPID=0/,
+          );
+        if (mode === "pointer-no-ax-hit")
+          assert.match(
+            result.error!,
+            /axHitStatus=-1, axPIDStatus=not_queried, hitPID=unknown/,
+          );
         if (
           [
             "normal",
@@ -620,7 +635,7 @@ test("global AX pointer admission checks exact PID and containing retained windo
   );
   assert.match(
     pointer,
-    /AXUIElementGetPid\(hit, &hitPID\) == \.success, hitPID == expectedPID/,
+    /let pidStatus = AXUIElementGetPid\(hit, &hitPID\)[\s\S]*guard pidStatus == \.success, hitPID == expectedPID/,
   );
   assert.match(
     pointer,
@@ -639,4 +654,17 @@ test("global AX pointer admission checks exact PID and containing retained windo
     MAC_BOUND_TARGET_SOURCE,
     /try binding\.fence\(\)[\s\S]*if let pointerPoint \{ try binding\.pointerFence\(pointerPoint\) \}/,
   );
+});
+
+test("pointer refusal coordinates preserve the Float values actually queried through AX", () => {
+  const start = MAC_BOUND_TARGET_SOURCE.indexOf("func pointerWindow(");
+  const end = MAC_BOUND_TARGET_SOURCE.indexOf("func ownedRows(", start);
+  const pointer = MAC_BOUND_TARGET_SOURCE.slice(start, end);
+  assert.match(pointer, /let hitX = Float\(point.x\), hitY = Float\(point.y\)/);
+  assert.match(
+    pointer,
+    /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\), hitX, hitY, &hit\)/,
+  );
+  assert.match(pointer, /String\(Double\(hitX\)\)/);
+  assert.match(pointer, /String\(Double\(hitY\)\)/);
 });

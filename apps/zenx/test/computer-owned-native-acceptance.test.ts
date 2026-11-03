@@ -12,6 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { nativePointerRefusal } from "./native-pointer-refusal.js";
 import {
   MAC_BOUND_TARGET_SOURCE,
   runProcess,
@@ -375,18 +376,15 @@ test(
       evidence.failure = String(error);
       // Observe the public mouse-down hit at the actual refused point, not an
       // assumed drag start. This cannot authorize dispatch or replace failure.
-      const point = /, point=([^,]+),([^,]+), occluderBounds=/.exec(
-        String(error),
-      );
-      if (
-        point &&
-        Number.isFinite(Number(point[1])) &&
-        Number.isFinite(Number(point[2]))
-      ) {
+      const diagnostic = nativePointerRefusal(String(error));
+      if (diagnostic) {
+        evidence.pointerAdmissionDiagnostic = diagnostic;
         try {
+          if (diagnostic.selectedPID !== undefined)
+            assert.equal(diagnostic.selectedPID, ready.pid);
           const witness = await receiverFixture.pointerWitness(
-            Number(point[1]),
-            Number(point[2]),
+            diagnostic.point.x,
+            diagnostic.point.y,
             selected.windowId,
           );
           if (witness.available) assert.equal(witness.pid, ready.pid);
@@ -397,28 +395,32 @@ test(
             reason: "owned_pointer_hit_observation_failed",
           };
         }
-      }
-      // Identify only the exact PID already reported by the failed CG fence.
-      // Diagnostic failure cannot replace the original refusal or trigger input.
-      const occluderPID = /occluderPID=(\d+),/.exec(String(error))?.[1];
-      if (
-        occluderPID &&
-        Number(occluderPID) > 0 &&
-        Number(occluderPID) <= 2_147_483_647
-      ) {
-        try {
-          const identity = JSON.parse(
-            await runProcess(receiver, ["--inspect-pid", occluderPID], 5_000),
-          );
-          assert.equal(identity.kind, "owned-occluder-identity");
-          assert.equal(identity.pid, Number(occluderPID));
-          evidence.occluderIdentity = identity;
-        } catch {
-          evidence.occluderIdentity = {
-            pid: Number(occluderPID),
-            available: false,
-            reason: "exact_pid_identity_inspection_failed",
-          };
+        // Inspect only a PID returned successfully by the exact failed AX query,
+        // or the exact PID in a legacy CG refusal. A later identity read is not
+        // a lifetime binding and never authorizes dispatch or replaces failure.
+        const observedPID =
+          diagnostic.axPIDStatus === 0
+            ? diagnostic.hitPID
+            : diagnostic.legacyOccluderPID;
+        if (observedPID !== undefined && observedPID > 0) {
+          try {
+            const identity = JSON.parse(
+              await runProcess(
+                receiver,
+                ["--inspect-pid", String(observedPID)],
+                5_000,
+              ),
+            );
+            assert.equal(identity.kind, "owned-occluder-identity");
+            assert.equal(identity.pid, observedPID);
+            evidence.pointerRecipientIdentity = identity;
+          } catch {
+            evidence.pointerRecipientIdentity = {
+              pid: observedPID,
+              available: false,
+              reason: "exact_pid_identity_inspection_failed",
+            };
+          }
         }
       }
       throw error;
