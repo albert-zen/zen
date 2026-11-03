@@ -139,7 +139,7 @@ export function Select({
                   disabled={item.disabled}
                   className="ui-select-option"
                 >
-                  <SelectPrimitive.ItemText>
+                  <SelectPrimitive.ItemText data-ui-select-item-text="">
                     {item.label}
                   </SelectPrimitive.ItemText>
                   <SelectPrimitive.ItemIndicator>
@@ -475,7 +475,7 @@ export function Combobox({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => choose(item.value)}
             >
-              <span>{item.label}</span>
+              <span data-ui-select-item-text="">{item.label}</span>
               {item.value === value ? <Icon name="check" size={14} /> : null}
             </div>
           ))}
