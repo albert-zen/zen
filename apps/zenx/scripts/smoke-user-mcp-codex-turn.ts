@@ -6,11 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import type { createLiveUserMcpHost } from "../test/fixtures/live-user-mcp-host.js";
 
 // Actual Codex + actual MCP/Host, but a deterministic Responses protocol fixture,
 // NOT a live model, Desktop approval test, production registration, or user config.
 // Protocol inspected using Codex 0.166.0-alpha.1 app-server generate-ts --experimental.
 const root = await mkdtemp(path.join(os.tmpdir(), "zen-codex-mcp-turn-"));
+const liveMode = process.env.ZEN_MCP_CODEX_LIVE_HOST === "1";
+const useBuilt = process.env.ZEN_MCP_TEST_USE_BUILT === "1";
+let liveHost: Awaited<ReturnType<typeof createLiveUserMcpHost>> | undefined;
+let localServer: ReturnType<typeof createServer> | undefined;
 try {
   const home = path.join(root, "codex-home");
   const workspace = path.join(root, "workspace");
@@ -26,6 +31,10 @@ try {
     HOME: root,
     CODEX_HOME: home,
     TMPDIR: root,
+    LOGNAME: "zen-mcp-fixture",
+    USER: "zen-mcp-fixture",
+    SHELL: "/bin/sh",
+    TERM: "dumb",
   };
   const version = execFileSync(codex, ["--version"], {
     encoding: "utf8",
@@ -40,6 +49,7 @@ try {
   };
   let boardSnapshot: string;
   let sidebarSnapshot: string;
+  let sidebarExpected: Record<string, unknown>;
   const steps = [
     {
       name: "zenx_threads_read",
@@ -47,7 +57,9 @@ try {
       verify: (value: any) =>
         assert.match(
           JSON.stringify(value),
-          /A real private MCP fixture history/,
+          liveMode
+            ? /Actual already-running Desktop child history/
+            : /A real private MCP fixture history/,
         ),
     },
     {
@@ -90,6 +102,7 @@ try {
         assert.equal(value.state.open, false);
         assert.match(value.snapshot, /^mcp:[^:]+:r[1-9][0-9]*$/);
         sidebarSnapshot = value.snapshot;
+        sidebarExpected = { ...value.state, open: true };
       },
     },
     {
@@ -106,7 +119,7 @@ try {
       name: "zenx_self_control_sidebar_read",
       arguments: () => ({}),
       verify: (value: any) => {
-        assert.equal(value.state.open, true);
+        assert.deepEqual(value.state, sidebarExpected);
         assert.notEqual(value.snapshot, sidebarSnapshot);
       },
     },
@@ -117,7 +130,7 @@ try {
   let verifiedOutputs = 0;
   let fixtureError: unknown;
   const blockedEgress = new Set<string>();
-  const server = createServer(async (request, response) => {
+  const server = (localServer = createServer(async (request, response) => {
     try {
       // Proxy requests for any external target are rejected locally, never forwarded.
       if (request.method !== "POST" || request.url !== "/v1/responses") {
@@ -237,7 +250,7 @@ try {
       if (!response.headersSent) response.writeHead(500);
       response.end("Deterministic local protocol fixture assertion failed");
     }
-  });
+  }));
   server.on("connect", (request, socket) => {
     blockedEgress.add(`CONNECT ${request.url}`);
     socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -249,6 +262,58 @@ try {
   const address = server.address();
   assert(address && typeof address === "object");
   const local = `http://127.0.0.1:${address.port}`;
+  const childEnvironment = {
+    ...cleanEnvironment,
+    // This rejecting local proxy is not a kernel network isolation guarantee.
+    HTTP_PROXY: local,
+    HTTPS_PROXY: local,
+    ALL_PROXY: local,
+    NO_PROXY: "127.0.0.1,localhost",
+  };
+  let mcpArgs = ["--import", "tsx", fixture];
+  let hostBefore:
+    { processId: number; processEpoch: string; itemCount: number } | undefined;
+  let hostAfter: typeof hostBefore;
+  let hostItemsBefore: readonly unknown[] | undefined;
+  let independentSdkReadback = false;
+  if (liveMode) {
+    const { createLiveUserMcpHost } =
+      await import("../test/fixtures/live-user-mcp-host.js");
+    // This explicit fixture boots the actual Desktop child BEFORE Codex starts.
+    // The production launcher below only connects to this existing descriptor.
+    liveHost = await createLiveUserMcpHost(path.join(root, "private-host"), {
+      environment: childEnvironment,
+      useBuilt,
+    });
+    const before = await liveHost.manager.request("zen/thread/read", {
+      threadId: liveHost.threadId,
+    });
+    hostItemsBefore = before.thread.items;
+    const processId = liveHost.manager.processId;
+    const processEpoch = liveHost.manager.processEpoch;
+    assert.equal(typeof processId, "number");
+    assert.equal(typeof processEpoch, "string");
+    hostBefore = {
+      processId: processId!,
+      processEpoch: processEpoch!,
+      itemCount: before.thread.items.length,
+    };
+    mcpArgs = [
+      ...(useBuilt ? [] : ["--import", "tsx"]),
+      fileURLToPath(
+        new URL(
+          useBuilt
+            ? "../out/main/user-mcp-stdio-cli.js"
+            : "../src/main/user-mcp-stdio-cli.ts",
+          import.meta.url,
+        ),
+      ),
+      "--descriptor",
+      liveHost.descriptorFile,
+      "--thread",
+      liveHost.threadId,
+    ];
+  }
   await writeFile(
     path.join(home, "config.toml"),
     [
@@ -269,7 +334,7 @@ try {
       "stream_max_retries = 0",
       "[mcp_servers.zen_bound]",
       `command = ${JSON.stringify(process.execPath)}`,
-      `args = ${JSON.stringify(["--import", "tsx", fixture])}`,
+      `args = ${JSON.stringify(mcpArgs)}`,
       `cwd = ${JSON.stringify(repository)}`,
       "startup_timeout_sec = 60",
       "tool_timeout_sec = 30",
@@ -280,21 +345,17 @@ try {
       "[mcp_servers.zen_bound.tools.zenx_self_control_sidebar_update]",
       'approval_mode = "approve"',
       "[mcp_servers.zen_bound.env]",
-      `ZEN_MCP_FIXTURE_ROOT = ${JSON.stringify(path.join(root, "private-host"))}`,
+      ...(liveMode
+        ? []
+        : [
+            `ZEN_MCP_FIXTURE_ROOT = ${JSON.stringify(path.join(root, "private-host"))}`,
+          ]),
       "",
     ].join("\n"),
   );
   const child = spawn(codex, ["app-server", "--stdio", "--strict-config"], {
     cwd: workspace,
-    env: {
-      ...cleanEnvironment,
-      // No credentials or parent environment inherited. Deny incidental background
-      // HTTP(S) requests at the same local server, without an upstream connection.
-      HTTP_PROXY: local,
-      HTTPS_PROXY: local,
-      ALL_PROXY: local,
-      NO_PROXY: "127.0.0.1,localhost",
-    },
+    env: childEnvironment,
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";
@@ -354,6 +415,7 @@ try {
     pending.clear();
     rejectTerminal(error);
   };
+  child.stdin.on("error", fail);
   child.once("error", fail);
   child.once("exit", (code) =>
     fail(new Error(`Codex exited (${code}). stderr=${stderr}`)),
@@ -431,10 +493,90 @@ try {
       assert(item.result?.content?.some((part: any) => part.type === "text"));
     }
     assert(completedMessages.some((item) => item.text === finalText));
+    if (liveHost) {
+      // Independent official SDK client, same production launcher and live Host.
+      // Its reads use a separate MCP connection, not Codex's snapshot registry.
+      const { Client } =
+        await import("@modelcontextprotocol/sdk/client/index.js");
+      const { StdioClientTransport } =
+        await import("@modelcontextprotocol/sdk/client/stdio.js");
+      const transport = new StdioClientTransport({
+        command: process.execPath,
+        args: mcpArgs,
+        cwd: repository,
+        env: childEnvironment,
+        stderr: "pipe",
+      });
+      let sdkStderr = "";
+      transport.stderr?.on("data", (data) => (sdkStderr += String(data)));
+      const client = new Client({
+        name: "independent-live-host-readback",
+        version: "1",
+      });
+      try {
+        await client.connect(transport);
+        const read = async (name: string, args: Record<string, unknown>) => {
+          const result = await client.callTool({ name, arguments: args });
+          assert.notEqual(result.isError, true, JSON.stringify(result));
+          return JSON.parse(
+            (result.content as any[])
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+          );
+        };
+        const board = await read("zenx_board_read", { view: "document" });
+        assert.deepEqual(board.document, {
+          ...document,
+          owner: { kind: "thread" },
+        });
+        const sidebar = await read("zenx_self_control_sidebar_read", {});
+        assert.equal(sidebar.state.open, true);
+        independentSdkReadback = true;
+      } catch (error) {
+        throw new Error(
+          `Independent live Host readback failed. stderr=${sdkStderr}`,
+          { cause: error },
+        );
+      } finally {
+        await client.close();
+        await transport.close();
+      }
+      const after = await liveHost.manager.request("zen/thread/read", {
+        threadId: liveHost.threadId,
+      });
+      assert.deepEqual(
+        after.thread.items,
+        hostItemsBefore,
+        "Existing Host history must remain unchanged",
+      );
+      hostAfter = {
+        processId: liveHost.manager.processId!,
+        processEpoch: liveHost.manager.processEpoch!,
+        itemCount: after.thread.items.length,
+      };
+      assert.deepEqual(
+        hostAfter,
+        hostBefore,
+        "Launcher and tools must not restart the Host or append a Host Turn",
+      );
+    }
     console.log(
       JSON.stringify(
         {
           version,
+          mode: liveMode
+            ? `production connect-only launcher -> already-running actual Desktop child (${useBuilt ? "built" : "source"})`
+            : "existing actual Host composition fixture",
+          ...(liveMode
+            ? {
+                liveHost: {
+                  before: hostBefore,
+                  after: hostAfter,
+                  independentSdkReadback,
+                },
+              }
+            : {}),
           provider:
             "deterministic loopback Responses protocol fixture, no real LLM",
           providerRequests,
@@ -450,11 +592,17 @@ try {
             credentialsInherited: false,
             authorizationHeadersReceived: false,
             upstreamForwarding: false,
+            networkBoundary:
+              "local rejecting HTTP(S) proxy, not kernel isolation",
             blockedBackgroundTargets: [...blockedEgress].sort(),
             productionRegistration: false,
             userConfigurationChanged: false,
           },
-          notVerified: ["real LLM behavior", "Desktop approval UI"],
+          notVerified: [
+            "real LLM behavior",
+            "Desktop approval UI",
+            "Room/workspace Board semantics",
+          ],
         },
         null,
         2,
@@ -476,6 +624,14 @@ try {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 } finally {
-  // This also owns setup failures before servers/child/RPC cleanup exist.
-  await rm(root, { recursive: true, force: true });
+  // These also own setup failures before Codex/RPC cleanup exists.
+  try {
+    await liveHost?.close();
+  } finally {
+    if (localServer?.listening) {
+      localServer.closeAllConnections();
+      await new Promise<void>((resolve) => localServer!.close(() => resolve()));
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 }

@@ -6,11 +6,44 @@ Prerequisites: the repository dependencies and first-party plugin bundles prepar
 as for the existing `smoke:user-mcp-codex`, plus an installed Codex executable.
 Set `ZEN_CODEX_EXECUTABLE` if it is not on PATH.
 
-This opt-in smoke uses the **actual Codex app-server**, official MCP SDK stdio
-transport, and existing `real-user-mcp-stdio.ts` Host composition. Only the model
-provider is a deterministic loopback Responses protocol fixture. It does not
-exercise a real LLM's decisions, model quality, Desktop approval UI, production
-registration, login, or OAuth.
+This opt-in smoke uses the **actual Codex app-server** and official MCP SDK stdio
+transport. Its default mode keeps the existing `real-user-mcp-stdio.ts` Host
+composition. Only the model provider is a deterministic loopback Responses
+protocol fixture. It does not exercise a real LLM's decisions, model quality,
+Desktop approval UI, production registration, login, or OAuth.
+
+## Already-running Desktop child mode
+
+Prepare the built main entries from the exact checkout first:
+
+`npm run build:prepared --workspace @zen/zenx`
+
+Then run the same smoke with:
+
+`ZEN_MCP_CODEX_LIVE_HOST=1 ZEN_MCP_TEST_USE_BUILT=1 npm run smoke:user-mcp-codex-turn --workspace @zen/zenx`
+
+The existing `createLiveUserMcpHost` test fixture explicitly boots an actual
+private `AppServerManager` child and seeds its history **before Codex starts**.
+Codex launches the built production `user-mcp-stdio-cli.js` with that existing
+Host's explicit `--descriptor` and `--thread`. The launcher only connects; it
+does not boot the Host or create its owner Thread. Omit
+`ZEN_MCP_TEST_USE_BUILT=1` to check the source Host/launcher instead.
+
+This mode retains the same nine tool calls, ten Responses requests, CAS conflicts,
+deep Board/sidebar readback and terminal assertions. It additionally checks:
+
+- Host PID, process epoch and native Thread item count are identical before and
+  after Codex's turn and the independent reads. No Host restart or new Host Turn
+  is hidden behind the launcher.
+- A second official SDK client uses a separate production launcher connection to
+  deep-compare the full Board document and confirm the same sidebar is open.
+- The live fixture receives the deliberate clean environment for both its pnpm
+  processes and its `AppServerManager` child, including the rejecting local proxy.
+
+The Host uses a deterministic fake provider only to seed synthetic history. No
+real user Host or credentials are accessed. The generated private transport token
+is confined to this temporary Host. Both modes are explicitly Thread-bound;
+neither validates Room/workspace Board ownership or Desktop/Electron UI.
 
 ## What is asserted
 
@@ -34,11 +67,13 @@ calls are deliberate assertions, not automatic mutation retries.
 
 - A private temporary `CODEX_HOME`, HOME, workspace and Host data root are used and
   removed even if setup fails before Codex starts. Parent environment variables
-  and credentials are not inherited.
+  and credentials are not inherited. The live Host and provider are closed on
+  setup failure as well as turn success/failure.
 - The fixture binds only `127.0.0.1`, performs no upstream requests, checks that
   provider requests contain no authorization/cookie/API-key headers, and rejects
-  incidental background HTTP(S) proxy requests locally. Blocked target names, not
-  request bodies or credentials, appear in the summary.
+  incidental background HTTP(S) proxy requests locally. This is not a kernel-level
+  network isolation guarantee. Blocked target names, not request bodies or
+  credentials, appear in the summary.
 - Codex's shell sandbox remains read-only. Only the two fixed synthetic MCP write
   tools receive `approval_mode = "approve"` in this temporary client config.
   The Host's existing permissions and admission path are unchanged.
