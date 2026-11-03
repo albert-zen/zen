@@ -1,7 +1,7 @@
-name: Packaged Send backend fixed-Legend pair (reverse order)
+name: Packaged immutable backend fixed-latest-UI pair (WIP)
 on:
   push:
-    branches: [diagnostic/send-backend-fixed-frontend-20261103]
+    branches: [diagnostic/send-immutable-backend-fixed-ui-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 85ea447d369c144a5d1125fc7c5518ec62b276f2
+          ref: dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 662484149d6cfe97f427833cc37e9523cad03efe
+          ref: 7c916a741633741d760e0927ae7386a5fa0961c3
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -57,7 +57,7 @@ jobs:
           const digest = bytes => createHash('sha256').update(bytes).digest('hex');
           const builds = [];
           for (const source of ['baseline', 'candidate']) {
-            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), '3f139c57708aae4abc1e083e401171f4ca39c200');
+            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), 'a5b6da40df0538dee66ee7b13effd9c9995d1d19');
             const root = source + '/apps/zenx/out/renderer/';
             const files = (await readdir(root, { recursive: true })).filter(file => /\.(html|js|css)$/.test(file)).sort();
             assert.ok(files.length > 0);
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-backend-fixed-legend-5000
+          name: native-send-immutable-backend-fixed-ui-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

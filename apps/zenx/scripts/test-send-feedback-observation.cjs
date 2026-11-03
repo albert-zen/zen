@@ -608,12 +608,12 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
     "utf8",
   );
   for (const identity of [
-    "85ea447d369c144a5d1125fc7c5518ec62b276f2",
-    "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
-    "662484149d6cfe97f427833cc37e9523cad03efe",
-    "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
-    "3f139c57708aae4abc1e083e401171f4ca39c200",
-    "873fe8b84a6dadcf3defd3fa4948a05caefdb362",
+    "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
+    "ba960dd46644a9f8d87bd5c524b0d31019261444",
+    "7c916a741633741d760e0927ae7386a5fa0961c3",
+    "9e0168eff40971565093399fbf0728c99cdb088d",
+    "a5b6da40df0538dee66ee7b13effd9c9995d1d19",
+    "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad",
   ])
     assert.ok(launch.includes(identity));
   const snapshots = new Function(
@@ -638,7 +638,7 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
     "utf8",
   );
   assert.ok(
-    workflow.includes("diagnostic/send-backend-fixed-frontend-20261103"),
+    workflow.includes("diagnostic/send-immutable-backend-fixed-ui-20261103"),
   );
   assert.ok(workflow.includes("assert.deepEqual(builds[0], builds[1]"));
   for (const contract of [

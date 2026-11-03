@@ -61,19 +61,19 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "85ea447d369c144a5d1125fc7c5518ec62b276f2",
-    tree: "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
+    commit: "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
+    tree: "ba960dd46644a9f8d87bd5c524b0d31019261444",
     expectedVirtualTranscript: true,
   },
   candidate: {
-    commit: "662484149d6cfe97f427833cc37e9523cad03efe",
-    tree: "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
+    commit: "7c916a741633741d760e0927ae7386a5fa0961c3",
+    tree: "9e0168eff40971565093399fbf0728c99cdb088d",
     expectedVirtualTranscript: true,
   },
 };
 // The controlled backend pair has byte-identical ZenX source on both sides.
-const frontendSourceTree = "3f139c57708aae4abc1e083e401171f4ca39c200";
-const rendererSourceTree = "873fe8b84a6dadcf3defd3fa4948a05caefdb362";
+const frontendSourceTree = "a5b6da40df0538dee66ee7b13effd9c9995d1d19";
+const rendererSourceTree = "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad";
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
