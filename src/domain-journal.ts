@@ -263,7 +263,7 @@ export class DomainThreadJournal implements ThreadJournal {
   }
 
   async append(raw: CanonicalItem): Promise<ContextItem[]> {
-    const item = decodeCanonicalItem(raw);
+    const item = decodeCanonicalItem(structuredClone(raw));
     return this.#operation(item.threadId, async () => {
       await this.#migrate(item.threadId);
       if (this.#uncertain.has(item.threadId))
@@ -292,7 +292,12 @@ export class DomainThreadJournal implements ThreadJournal {
           item.threadId,
           snapshot,
         );
-        const previous = await this.#read(item.threadId, compiled?.trace);
+        // Private live facts are read-only here. The new caller-owned fact was
+        // detached before enqueue, and public reads still return defensive copies.
+        const previous =
+          this.#live.get(item.threadId) ??
+          compiled?.originals ??
+          (await this.#read(item.threadId, compiled?.trace));
         if (previous.some((i) => i.id === item.id))
           throw new Error(
             "Duplicate canonical Item identity; reconcile instead of retrying",
@@ -369,6 +374,7 @@ export class DomainThreadJournal implements ThreadJournal {
   ): Promise<
     | {
         contexts: readonly ContextItem[];
+        originals: CanonicalItem[];
         trace: Awaited<ReturnType<TraceReader["read"]>>;
       }
     | undefined
@@ -404,6 +410,10 @@ export class DomainThreadJournal implements ThreadJournal {
     const present = new Set(contexts.map((item) => item.id));
     const previous: CanonicalItem[] = [];
     const seenFacts = new Map<string, string>();
+    const originals = new Map<
+      string,
+      { sequence: number; item: CanonicalItem }
+    >();
     const missing: ContextItem[] = [];
     const frozen = new Map<string, ContextItem>();
     for (const record of observed.records)
@@ -435,6 +445,9 @@ export class DomainThreadJournal implements ThreadJournal {
       const item = decodeCanonicalItem(data.item);
       if (item.threadId !== threadId || !Number.isSafeInteger(data.sequence))
         throw new Error("Invalid accepted source fact");
+      // Read projections use original fact sequence, not Trace occurrence order.
+      // Repeated identical facts keep their last recorded sequence, as #read does.
+      originals.set(item.id, { sequence: data.sequence, item });
       const known = seenFacts.get(item.id);
       if (known !== undefined) {
         if (known !== JSON.stringify(item))
@@ -479,6 +492,9 @@ export class DomainThreadJournal implements ThreadJournal {
     // Reuse only inside the caller's existing serialized operation, never across admissions.
     return {
       contexts: missing.length === 0 ? contexts : [...contexts, ...missing],
+      originals: [...originals.values()]
+        .sort((a, b) => a.sequence - b.sequence)
+        .map(({ item }) => item),
       trace: observed,
     };
   }
@@ -558,7 +574,8 @@ export class DomainThreadJournal implements ThreadJournal {
         throw new Error(
           "Runtime log integrity incomplete; dispatch requires explicit reconciliation",
         );
-      const known = await this.#read(threadId, trace);
+      // Fresh source facts, never the warm projection, prove configuration.
+      const known = compiled?.originals ?? (await this.#read(threadId, trace));
       if (
         (await this.#items.exists(threadId)) &&
         !known.some((i) => i.type === "thread_metadata")
