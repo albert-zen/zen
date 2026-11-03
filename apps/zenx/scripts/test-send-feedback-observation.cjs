@@ -411,3 +411,67 @@ test("detached or non-intersecting pending cannot pass native subsequent-frame e
     }
   }
 });
+
+test("failure evidence distinguishes canonical replacement with the same client from an absent pending node", async () => {
+  for (const matches of [true, false]) {
+    const f = fixture();
+    try {
+      const pending = await f.row("pending");
+      pending.article.remove();
+      await f.row("canonical");
+      f.notify({ clientId: matches ? "client-A" : "client-other" });
+    } finally {
+      f.close();
+    }
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(f.record.nativeFinalOwnership)),
+      {
+        pendingConnected: false,
+        canonicalConnected: true,
+        canonicalMatchesPendingClient: matches,
+      },
+    );
+  }
+});
+
+test("geometry probes observe existing calls only before pending delivery and restore prototypes on stop", async () => {
+  const f = fixture();
+  const wrappedRect = f.w.Element.prototype.getBoundingClientRect;
+  const wrappedHeight = Object.getOwnPropertyDescriptor(
+    f.w.Element.prototype,
+    "scrollHeight",
+  ).get;
+  try {
+    const scroll = f.d.querySelector(".messages");
+    const content = f.d.querySelector(".messages-inner");
+    scroll.getBoundingClientRect();
+    content.getBoundingClientRect();
+    void scroll.scrollHeight;
+    f.w.getComputedStyle(f.d.querySelector("#thread-composer"));
+    const counts = f.record.geometryProbes.counts;
+    assert.equal(
+      counts["getBoundingClientRect:transcript-scrollport"].calls,
+      1,
+    );
+    assert.equal(counts["getBoundingClientRect:transcript-content"].calls, 1);
+    assert.equal(counts["get.scrollHeight:transcript-scrollport"].calls, 1);
+    assert.equal(counts["getComputedStyle:composer-editor"].calls, 1);
+    await f.row("pending");
+    scroll.getBoundingClientRect();
+    assert.equal(
+      counts["getBoundingClientRect:transcript-scrollport"].calls,
+      1,
+    );
+    assert.equal(
+      JSON.stringify(f.record.geometryProbes).includes("synthetic-nonce"),
+      false,
+    );
+  } finally {
+    f.close();
+  }
+  assert.notEqual(f.w.Element.prototype.getBoundingClientRect, wrappedRect);
+  assert.notEqual(
+    Object.getOwnPropertyDescriptor(f.w.Element.prototype, "scrollHeight").get,
+    wrappedHeight,
+  );
+});

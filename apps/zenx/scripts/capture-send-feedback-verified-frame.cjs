@@ -30,7 +30,7 @@ app.setPath("home", path.join(temporary, "home"));
 app.setPath("documents", path.join(temporary, "home", "Documents"));
 const result = {
   ok: false,
-  harnessVersion: "native-shared-arrival-ab-v1-not-acceptance",
+  harnessVersion: "native-layout-getter-attribution-v1-not-acceptance",
   version,
   acceptance: false,
   viewportWidth,
@@ -39,7 +39,7 @@ const result = {
   scope:
     "Production App, private production DomainThreadJournal history, native input and Send; no model network, no mock ACK or injected UI; actual product pending and canonical feedback measured separately.",
   measurementContract:
-    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. This is not compositor presentation telemetry or proof of pixel scanout.",
+    "Original v2 rAF-entry fields retained; verified fields are sampled after all geometry reads and revalidated in a later rAF opportunity. Native ResizeObserver and IntersectionObserver entries additionally verify real pending growth and scrollport intersection without geometry reads in those callbacks. Getter wrappers observe original-call wall time and report their own bookkeeping overhead. This instrumented run is not a latency benchmark, compositor presentation telemetry or proof of pixel scanout.",
   steps: [],
   blockedExternalRequests: 0,
 };
@@ -230,7 +230,8 @@ async function screenshot(name) {
   );
 }
 
-// Passive renderer observer. It never changes App state, UI, requests, or receipts.
+// Instrumented getter attribution plus existing browser observations.
+// No added geometry reads or changes to App state, UI, requests or receipts.
 function installObservation(nonce, threadId) {
   const record = {
     clockDomain: "renderer",
@@ -242,6 +243,14 @@ function installObservation(nonce, threadId) {
     frames: [],
     notifications: [],
     nativeLayoutEvents: [],
+    geometryProbes: {
+      instrumented: true,
+      wallTimeMeaning:
+        "inclusive original-call wall time, not CPU or additive attribution",
+      overheadMs: 0,
+      counts: {},
+      slowCalls: [],
+    },
     nativeLayoutAtClick: null,
     instrumentation: {
       mutationCallbacks: 0,
@@ -280,6 +289,150 @@ function installObservation(nonce, threadId) {
     };
   };
   document.addEventListener("click", capture, true);
+  // Observe calls the product already makes; never add a geometry read.
+  // Only the click-to-first-pending-observer window is attributed.
+  const restoreGeometry = [];
+  const probeActive = () =>
+    record.clickMs !== undefined &&
+    record.pendingDomMs === undefined &&
+    !stopped;
+  const category = (node) => {
+    if (!(node instanceof Element)) return "other";
+    for (const [selector, label] of [
+      [".messages", "transcript-scrollport"],
+      [".messages-inner", "transcript-content"],
+      ["#thread-composer", "composer-editor"],
+      [".bottom-zone", "composer-zone"],
+      [".composer-send-control, .composer-send-popover", "send-controls"],
+      [
+        ".information-toolbar, .information-dock, .information-popover",
+        "information",
+      ],
+      [".turn", "turn-row"],
+    ])
+      if (
+        [
+          "transcript-scrollport",
+          "transcript-content",
+          "composer-editor",
+          "composer-zone",
+        ].includes(label)
+          ? node.matches(selector)
+          : node.closest(selector)
+      )
+        return label;
+    return "other";
+  };
+  const reportGeometry = (method, node, start, end) => {
+    const overhead = performance.now();
+    const target = category(node),
+      key = method + ":" + target;
+    const bucket = (record.geometryProbes.counts[key] ??= {
+      calls: 0,
+      wallMs: 0,
+      maxWallMs: 0,
+    });
+    const wallMs = end - start;
+    bucket.calls++;
+    bucket.wallMs += wallMs;
+    bucket.maxWallMs = Math.max(bucket.maxWallMs, wallMs);
+    if (wallMs >= 2) {
+      const locations = [];
+      // Export only static bundle basenames and numeric positions, never raw stacks.
+      for (const match of String(new Error().stack).matchAll(
+        /(?:^|[/\\])(index-[A-Za-z0-9_-]+\.js):(\d+):(\d+)/g,
+      )) {
+        locations.push({
+          bundle: match[1],
+          line: Number(match[2]),
+          column: Number(match[3]),
+        });
+        if (locations.length === 8) break;
+      }
+      record.geometryProbes.slowCalls.push({
+        method,
+        target,
+        relativeToClickMs: start - record.clickMs,
+        wallMs,
+        locations,
+      });
+      record.geometryProbes.slowCalls.sort((a, b) => b.wallMs - a.wallMs);
+      record.geometryProbes.slowCalls.length = Math.min(
+        12,
+        record.geometryProbes.slowCalls.length,
+      );
+    }
+    record.geometryProbes.overheadMs += performance.now() - overhead;
+  };
+  const wrapCall = (method, original) =>
+    function (...args) {
+      if (!probeActive()) return Reflect.apply(original, this, args);
+      const start = performance.now();
+      try {
+        return Reflect.apply(original, this, args);
+      } finally {
+        reportGeometry(
+          method,
+          method === "getComputedStyle" ? args[0] : this,
+          start,
+          performance.now(),
+        );
+      }
+    };
+  for (const [owner, name] of [
+    [Element.prototype, "getBoundingClientRect"],
+    [Element.prototype, "getClientRects"],
+    [Element.prototype, "scrollIntoView"],
+    [HTMLElement.prototype, "focus"],
+    [window, "getComputedStyle"],
+  ]) {
+    const original = owner[name];
+    if (typeof original !== "function") continue;
+    const wrapped = wrapCall(name, original);
+    owner[name] = wrapped;
+    restoreGeometry.push(() => {
+      if (owner[name] === wrapped) owner[name] = original;
+    });
+  }
+  for (const [owner, names] of [
+    [
+      Element.prototype,
+      [
+        "scrollHeight",
+        "scrollWidth",
+        "clientHeight",
+        "clientWidth",
+        "clientTop",
+        "clientLeft",
+        "scrollTop",
+      ],
+    ],
+    [
+      HTMLElement.prototype,
+      [
+        "offsetHeight",
+        "offsetWidth",
+        "offsetTop",
+        "offsetLeft",
+        "offsetParent",
+      ],
+    ],
+  ]) {
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (!descriptor?.configurable || !descriptor.get) continue;
+      const get = wrapCall("get." + name, descriptor.get);
+      const set =
+        name === "scrollTop" && descriptor.set
+          ? wrapCall("set." + name, descriptor.set)
+          : descriptor.set;
+      Object.defineProperty(owner, name, { ...descriptor, get, set });
+      restoreGeometry.push(() => {
+        if (Object.getOwnPropertyDescriptor(owner, name)?.get === get)
+          Object.defineProperty(owner, name, descriptor);
+      });
+    }
+  }
   // Passive evidence from the same boxes as the production follow observer.
   // Entry sizes are browser-supplied; never read geometry or scroll here.
   const layoutTargets = new Map(
@@ -621,10 +774,23 @@ function installObservation(nonce, threadId) {
     stopped = true;
     cancelAnimationFrame(frameId);
     mutation.disconnect();
+    for (const restore of restoreGeometry.reverse()) restore();
     layoutObserver?.disconnect();
     intersectionObserver?.disconnect();
     off();
     document.removeEventListener("click", capture, true);
+    record.nativeFinalOwnership = {
+      pendingConnected: record.pendingBubble?.isConnected === true,
+      canonicalConnected: record.bubble?.isConnected === true,
+      canonicalMatchesPendingClient:
+        typeof record.pendingClientId === "string" &&
+        typeof record.messageId === "string" &&
+        record.notifications.some(
+          (event) =>
+            event.itemId === record.messageId &&
+            event.clientId === record.pendingClientId,
+        ),
+    };
     const { bubble, pendingBubble, stop, ...plain } = record;
     return plain;
   };

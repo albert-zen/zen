@@ -300,6 +300,12 @@ for (const file of rendererFiles)
     hashes[file],
     "Packaged renderer must equal the production build",
   );
+const rendererSourceBundles = Object.fromEntries(
+  rendererFiles
+    .filter((file) => /(?:^|[/\\])index-[A-Za-z0-9_-]+\.js$/.test(file))
+    .slice(0, 4)
+    .map((file) => [path.basename(file), hashes[file]]),
+);
 const rendererBundleSha256 = digest(
   JSON.stringify(
     Object.fromEntries(rendererFiles.map((file) => [file, hashes[file]])),
@@ -607,7 +613,7 @@ try {
     assert.equal(hash, packagedHashes[file]);
   assert.equal(
     result.harnessVersion,
-    "native-shared-arrival-ab-v1-not-acceptance",
+    "native-layout-getter-attribution-v1-not-acceptance",
   );
   assert.equal(result.acceptance, false);
   assert.equal(result.viewportWidth, viewportWidth);
@@ -705,12 +711,16 @@ try {
       verifiedClearWithinTarget: sample.verifiedClearWithinTarget,
       visibilityAtClick: sample.visibilityAtClick,
       instrumentation: sample.instrumentation,
+      geometryProbes: sample.geometryProbes,
       clickToPendingContentResizeMs: sample.clickToPendingContentResizeMs,
       nativeLayoutAtClick: sample.nativeLayoutAtClick,
       clickToPendingNativeIntersectionMs:
         sample.clickToPendingNativeIntersectionMs,
       clickToPendingNativeSubsequentFrameMs:
         sample.clickToPendingNativeSubsequentFrameMs,
+      clickToPendingNativeIntersectionEntryMs:
+        sample.pendingNativeIntersectionEntryMs - sample.clickMs,
+      nativeFinalOwnership: sample.nativeFinalOwnership,
       pendingNativeIntersectionRatio: sample.pendingNativeIntersectionRatio,
       pendingNativeIntersectionBounds: sample.pendingNativeIntersectionBounds,
       nativeLayoutEvents: sample.nativeLayoutEvents.map(
@@ -736,6 +746,9 @@ try {
     informationPresentation: result.informationPresentation,
     rendered: result.before.rendered,
     readerBeforeSend: result.readerBeforeSend,
+    rendererSourceBundles,
+    geometryProbeScope:
+      "instrumented click-to-first-pending-observer getter wall times; not additive, not CPU, not performance acceptance",
     samples,
     packaged: {
       isPackaged: true,
@@ -816,10 +829,45 @@ try {
     stage:
       capture?.waitingFor ?? capture?.pendingOperation ?? "launcher validation",
     reason: "native-capture-or-validation-failed",
+    rendererSourceBundles,
+    driverHashes: {
+      capture: hashes["scripts/capture-send-feedback.cjs"],
+      launcher: hashes["scripts/launch-send-feedback.mjs"],
+    },
+    informationPresentation: capture?.informationPresentation,
+    readerBeforeSend: capture?.readerBeforeSend,
     observedSamples: (capture?.samples ?? [])
       .slice(0, 3)
       .map((sample, index) => ({
         index,
+        geometryProbes: sample.geometryProbes,
+        nativeFinalOwnership: sample.nativeFinalOwnership,
+        nativeLayoutAtClick: sample.nativeLayoutAtClick,
+        nativeLayoutEvents: (sample.nativeLayoutEvents ?? [])
+          .slice(0, 16)
+          .map(({ atMs, ...entry }) => ({
+            ...entry,
+            relativeToClickMs: atMs - sample.clickMs,
+          })),
+        nativeLayoutEventsTruncated:
+          (sample.nativeLayoutEvents?.length ?? 0) > 16,
+        pendingIntersectionRatio: sample.pendingNativeIntersectionRatio,
+        pendingIntersectionBounds: sample.pendingNativeIntersectionBounds,
+        nativeIntersectionEntryMs: Number.isFinite(
+          sample.pendingNativeIntersectionEntryMs,
+        )
+          ? sample.pendingNativeIntersectionEntryMs - sample.clickMs
+          : null,
+        nativeIntersectionCallbackMs: Number.isFinite(
+          sample.pendingNativeIntersectionMs,
+        )
+          ? sample.pendingNativeIntersectionMs - sample.clickMs
+          : null,
+        nativeSubsequentFrameMs: Number.isFinite(
+          sample.pendingNativeSubsequentFrameMs,
+        )
+          ? sample.pendingNativeSubsequentFrameMs - sample.clickMs
+          : null,
         timings: Object.fromEntries(
           [
             "firstVisibleFeedbackMs",

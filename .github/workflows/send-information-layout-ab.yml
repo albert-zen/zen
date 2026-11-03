@@ -1,7 +1,7 @@
-name: Packaged shared-arrival Send A/B (diagnostic only)
+name: Packaged Send geometry readers (instrumented diagnostic)
 on:
   push:
-    branches: [diagnostic/send-shared-layout-native-20261103]
+    branches: [diagnostic/send-layout-readers-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -9,9 +9,9 @@ on:
 permissions:
   contents: read
 jobs:
-  paired-native-macos:
+  native-getter-macos:
     runs-on: macos-latest
-    timeout-minutes: 70
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,19 +20,14 @@ jobs:
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: e245bbc2104ee993863a7b7b39967105fc4c1f5c
-          persist-credentials: false
-          path: candidate
-      - uses: actions/checkout@v4
-        with:
           persist-credentials: false
           path: diagnostic
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Copy identical existing passive drivers into both exact source checkouts
+      - name: Copy existing bounded diagnostic into the exact source checkout
         run: |
-          for source in baseline candidate; do
+          for source in baseline; do
             cp diagnostic/apps/zenx/scripts/capture-send-feedback-verified-frame.cjs "$source/apps/zenx/scripts/capture-send-feedback.cjs"
             cp diagnostic/apps/zenx/scripts/launch-send-focus-paired.mjs "$source/apps/zenx/scripts/launch-send-feedback.mjs"
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
@@ -44,21 +39,14 @@ jobs:
           npm ci
           npm run build
           npm run build --workspace @zen/zenx
-      - name: Build exact candidate once
-        working-directory: candidate
-        timeout-minutes: 10
-        run: |
-          npm ci
-          npm run build
-          npm run build --workspace @zen/zenx
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
-      - name: Native 1280 control and 1120 popover pairs, three sends per fresh profile
-        timeout-minutes: 48
+      - name: Native 1280 dock source, three sends with bounded getter attribution
+        timeout-minutes: 20
         run: |
           failed=0
-          for case in control-baseline control-candidate narrow-candidate narrow-baseline; do
+          for case in control-baseline; do
             case "$case" in *-baseline) source=baseline ;; *-candidate) source=candidate ;; esac
             case "$case" in control-*) width=1280 ;; narrow-*) width=1120 ;; esac
             mkdir -p "results/$case"
@@ -75,7 +63,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-shared-layout-ab-5000
+          name: native-send-layout-getter-attribution-5000
           path: |
             results/*/send-information-layout.summary.json
             results/*/failure.json
