@@ -228,6 +228,28 @@ async function capture(name, mode) {
       "first card heading is not occluded by a higher titlebar layer",
     );
   }
+  const resizeState = await evaluate(
+    "(()=>{const p=document.querySelector('.auxiliary-panel[data-open=true][data-expanded=true]');if(!p)return null;const e=p.querySelector(':scope > .browser-panel-resizer');const prior=document.activeElement;e.focus({preventScroll:true});return {display:getComputedStyle(e).display,rects:e.getClientRects().length,focusable:document.activeElement===e,focusUnchanged:document.activeElement===prior}})()",
+  );
+  if (resizeState) {
+    assert.equal(
+      resizeState.display,
+      "none",
+      "Fullscreen workspace hides the split-width resizer",
+    );
+    assert.equal(
+      resizeState.rects,
+      0,
+      "Fullscreen split resizer has no interactive layout box",
+    );
+    assert.equal(
+      resizeState.focusable,
+      false,
+      "Fullscreen split resizer cannot take focus",
+    );
+    assert.equal(resizeState.focusUnchanged, true);
+    result.fullscreenSplitResizer = resizeState;
+  }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") assert.equal(geometry.expanded, "true");
   if (geometry.workspaceToggle && mode !== "closed") {

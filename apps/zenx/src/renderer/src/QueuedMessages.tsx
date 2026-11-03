@@ -39,6 +39,8 @@ export interface QueuedMessagesProps {
   pendingIds?: ReadonlySet<string>;
   steeringIds?: ReadonlySet<string>;
   running?: boolean;
+  /** True only when every exact pending fact explicitly targets a later Turn. */
+  waitsForTurnEnd?: boolean;
   onSteer?(message: QueuedMessagePreview): void;
   steerError?: {
     queuedItemId: string;
@@ -89,6 +91,7 @@ function QueueShelf({
   pendingIds,
   steeringIds,
   running = false,
+  waitsForTurnEnd = false,
   onSteer,
   steerError = null,
   busy = false,
@@ -252,9 +255,14 @@ function QueueShelf({
         >
           <Icon name="clock" size={14} />
           <span role="status" aria-live="polite" aria-atomic="true">
-            {t(running ? "queueWaitForTurnCount" : "queuePendingCount", {
-              count: messages.length,
-            })}
+            {t(
+              running && waitsForTurnEnd
+                ? "queueWaitForTurnCount"
+                : "queuePendingCount",
+              {
+                count: messages.length,
+              },
+            )}
           </span>
           <Icon name="chevron-down" size={12} className="queue-shelf-chevron" />
         </button>
