@@ -72,7 +72,6 @@
           }
         },
         "required": ["model"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -80,7 +79,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -192,7 +192,6 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["cwd"]
@@ -203,7 +202,8 @@
           {
             "required": ["projectless"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -235,6 +235,10 @@
             "type": "string",
             "enum": ["turns", "items", "agent_messages", "item"]
           },
+          "throughItemId": {
+            "type": "string",
+            "description": "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn."
+          },
           "turnId": {
             "type": "string"
           },
@@ -257,13 +261,8 @@
           "device": {
             "type": "string",
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
-          },
-          "throughItemId": {
-            "type": "string",
-            "description": "Exact enabled compaction cutoff from the logical original-history reference. Requires threadId; supports items or item, cursor and maxItemsPerTurn."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -271,7 +270,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -301,7 +301,6 @@
             "description": "Fleet device ID from zenx_self_control_devices. Omit or use local for this machine."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -309,7 +308,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -339,7 +339,6 @@
           }
         },
         "required": ["name"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -347,7 +346,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -376,7 +376,6 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -384,7 +383,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -413,7 +413,6 @@
             "description": "Optional workspace path to disambiguate the target."
           }
         },
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -421,7 +420,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -463,7 +463,6 @@
           }
         },
         "required": ["text"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -471,7 +470,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": [
         "zenx-self-control.workspace-read",
@@ -584,7 +584,6 @@
           }
         },
         "required": ["turnId"],
-        "additionalProperties": false,
         "oneOf": [
           {
             "required": ["target"]
@@ -592,7 +591,8 @@
           {
             "required": ["threadId"]
           }
-        ]
+        ],
+        "additionalProperties": false
       },
       "permissions": ["zenx-self-control.workspace-read"],
       "interactionMode": "background_safe",
@@ -932,7 +932,10 @@
                               "type": "object",
                               "properties": {
                                 "instanceKey": {
-                                  "const": "default"
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
                                 }
                               },
                               "additionalProperties": false
@@ -1032,7 +1035,10 @@
                                   "type": "object",
                                   "properties": {
                                     "instanceKey": {
-                                      "const": "default"
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 128,
+                                      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
                                     }
                                   },
                                   "additionalProperties": false

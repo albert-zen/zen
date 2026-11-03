@@ -226,7 +226,7 @@ export class ThreadSidebarStore implements ThreadSidebarPort {
     const owner = sidebarOwner(input);
     return this.#serialize(owner, async () => {
       const state = await this.#load(owner);
-      admit?.();
+      await admit?.();
       return structuredClone(state);
     });
   }
@@ -242,7 +242,7 @@ export class ThreadSidebarStore implements ThreadSidebarPort {
       // Trusted caller admission remains inside this owner's queue after I/O.
       // Once admitted, a commit may finish despite later revocation; no claim of
       // an OS-atomic transaction with Room membership storage is made.
-      admit?.();
+      await admit?.();
       if (current.revision !== request.expectedRevision)
         return { applied: false, state: structuredClone(current) };
       const next = applySidebarPatch(current, request.patch);

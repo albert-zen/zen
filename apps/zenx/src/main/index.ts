@@ -15,6 +15,9 @@ import {
 } from "./workspace-external-open.js";
 import type { SidebarOwner } from "../thread-sidebar-state.js";
 import { ThreadSidebarStore } from "./thread-sidebar-store.js";
+import { NativeInformationService } from "./native-information-service.js";
+import { captureNativeInformationDocument } from "./native-information-document.js";
+import type { SidebarAdmission } from "../thread-sidebar-state.js";
 import { FileTraceStore } from "../../../../src/trace.js";
 import { installModelRequestDebugIpc } from "./model-request-debug-electron.js";
 import { ForegroundActivity } from "./foreground-activity.js";
@@ -448,16 +451,130 @@ async function bootstrapZenX(): Promise<void> {
     new FileTraceStore(join(zenDataDirectory, "trace")),
   );
   threadSidebarStore = threadSidebar;
+  const information = new NativeInformationService({
+    sidebar: threadSidebar,
+    rooms: () =>
+      automationService?.roomsAvailable() &&
+      capabilityService
+        ?.pluginSnapshot()
+        .plugins.some(
+          (plugin) =>
+            plugin.id === "zenx-rooms" && plugin.enabled && plugin.available,
+        )
+        ? automationService.snapshot().rooms
+        : [],
+    async assertThreadExists(threadId) {
+      const manager = appServerManager;
+      if (!manager) throw Error("Information Host is unavailable");
+      const epoch = manager.processEpoch;
+      const summaries = await Promise.all([
+        manager.listThreadSummaries(),
+        manager.listThreadSummaries({ archived: true }),
+      ]);
+      if (
+        manager !== appServerManager ||
+        manager.processEpoch !== epoch ||
+        manager.status.type !== "ready"
+      )
+        throw Error("Information Host changed during admission; read again");
+      if (
+        !summaries
+          .flat()
+          .some(
+            (thread) =>
+              thread.threadId === threadId && thread.status !== "systemError",
+          )
+      )
+        throw Error("Information Thread does not exist or is unavailable");
+    },
+  });
+  const nativeSidebarRequest = async <T>(
+    event: Electron.IpcMainInvokeEvent,
+    action: (admit: SidebarAdmission) => Promise<T>,
+  ): Promise<T> => {
+    const frame = event.senderFrame;
+    const document = captureNativeInformationDocument({
+      rendererUrl:
+        process.env["ELECTRON_RENDERER_URL"] ??
+        pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+      sender: () => {
+        const destroyed =
+          event.sender.isDestroyed() ||
+          !frame ||
+          frame.isDestroyed() ||
+          frame.detached;
+        const window = destroyed
+          ? null
+          : BrowserWindow.fromWebContents(event.sender);
+        return {
+          ownedWindow: window !== null && ownedAppWindowIds.has(window.id),
+          mainFrame: !destroyed && frame === event.sender.mainFrame,
+          url: destroyed ? "" : frame.url,
+          document: destroyed ? null : frame,
+          destroyed: !!destroyed,
+        };
+      },
+      onDocumentNavigation(invalidate) {
+        const navigating = (
+          details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
+        ) => {
+          if (details.isMainFrame && !details.isSameDocument) invalidate();
+        };
+        event.sender.on("did-start-navigation", navigating);
+        return () =>
+          event.sender.removeListener("did-start-navigation", navigating);
+      },
+    });
+    try {
+      const result = await action(document.admit);
+      // Never deliver a late layout/resource receipt to a replacement document.
+      document.admit();
+      return result;
+    } finally {
+      document.close();
+    }
+  };
   ipcMain.handle(
     ipcChannels.threadSidebarRead,
-    (_event, owner: SidebarOwner | string) => threadSidebar.read(owner),
+    (event, owner: SidebarOwner | string) =>
+      nativeSidebarRequest(event, (admit) =>
+        information.readSidebar(owner, admit),
+      ),
   );
-  ipcMain.handle(ipcChannels.threadSidebarUpdate, (_event, request) =>
-    threadSidebar.update(request, undefined, { kind: "ui" }),
+  ipcMain.handle(ipcChannels.threadSidebarUpdate, (event, request: unknown) =>
+    nativeSidebarRequest(event, (admit) =>
+      information.updateSidebar(request, admit),
+    ),
+  );
+  ipcMain.handle(
+    ipcChannels.informationRead,
+    (event, owner: SidebarOwner | string) =>
+      nativeSidebarRequest(event, (admit) => information.read(owner, admit)),
+  );
+  ipcMain.handle(ipcChannels.informationUpdate, (event, request: unknown) =>
+    nativeSidebarRequest(event, (admit) => information.update(request, admit)),
   );
   threadSidebar.onChanged((state) => {
-    for (const window of appWindows())
-      window.webContents.send(ipcChannels.threadSidebarChanged, state);
+    for (const window of appWindows()) {
+      const contents = window.webContents;
+      if (contents.isDestroyed()) continue;
+      const frame = contents.mainFrame;
+      if (
+        frame.isDestroyed() ||
+        frame.detached ||
+        !isTrustedImZenXSetupSender(
+          {
+            ownedWindow: ownedAppWindowIds.has(window.id),
+            mainFrame: true,
+            url: frame.url,
+          },
+          process.env["ELECTRON_RENDERER_URL"] ??
+            pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+        )
+      )
+        continue;
+      contents.send(ipcChannels.threadSidebarChanged, state);
+    }
   });
   installModelRequestDebugIpc({
     rendererUrl:

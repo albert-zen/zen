@@ -273,19 +273,24 @@ test("add mints identity/binding, typed configuration and local moves preserve o
       f.edit(result.snapshot, [{ op: "add", type: "attention" }]),
       /Unknown information component/,
     );
-    await assert.rejects(
-      f.edit(result.snapshot, [
-        {
-          op: "add",
-          type: "board",
-          config: { instanceKey: "new-document-not-yet-supported" },
-        },
-      ]),
-      /not available/,
-    );
-    await assert.rejects(
-      f.edit(result.snapshot, [{ op: "add", type: "board" }]),
-      /already placed/,
+    const independent = await f.edit(result.snapshot, [
+      {
+        op: "add",
+        type: "board",
+        config: { instanceKey: "independent-document" },
+      },
+    ]);
+    const generated = await f.edit(independent.snapshot, [
+      { op: "add", type: "board" },
+    ]);
+    assert.equal(generated.applied, true);
+    const placed = (
+      await f.store.read(roomOwner)
+    ).informationLayout!.widgets.filter((widget) => widget.type === "board");
+    assert.equal(placed.length, 3);
+    assert.equal(
+      new Set(placed.map((widget) => widget.config.instanceKey)).size,
+      3,
     );
   } finally {
     await f.close();

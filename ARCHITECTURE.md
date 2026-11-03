@@ -4,6 +4,8 @@
 
 - **Independent information Board addresses** — Optional Board instance keys distinguish multiple documents within the same existing Thread/Room owner and plugin storage, retaining the legacy default address while separating authored document IDs from body CAS, drafts, actions and iframe sessions; removing a layout placement never deletes its body or changes execution ownership.
 
+- **Native information admission** — The native information service admits the current trusted main-frame document and live Thread/Room member choices into the existing sidebar CAS operations, minting component identities and bindings without a new owner or persistence domain.
+
 - **Editable conversation information layout** — Typed component instances, defaults and revision-checked local edits belong to the existing Thread/Room sidebar presentation store and Trace recovery; PAW uses its actual Room binding rather than a third owner, Host-bound sources retain their provider authority, reads of defaults never write state, and layout edits own neither provider content nor question state and create no execution, scheduling or foreground authority.
 
 ## ItemList / Trace / current product state contract

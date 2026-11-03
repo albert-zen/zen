@@ -68,6 +68,7 @@ import type {
 declare global {
   interface Window {
     zenx: {
+      information?: import("../../native-information.js").NativeInformationApi;
       threadSidebar?: import("../../thread-sidebar-state.js").ThreadSidebarApi;
       modelRequestDebug?: {
         request(
