@@ -374,19 +374,19 @@ export function readUserQuestions(
       continue;
     }
     const request = { threadId, callItemId: call.id };
-    const accepted = results.filter((result) => {
+    const accepted = results.flatMap((result) => {
       if (
         result.turnId !== call.turnId ||
         result.content.callId !== call.content.callId
       )
-        return false;
+        return [];
       const offset = result.source.metadata?.bodyStart;
       if (
         typeof offset !== "number" ||
         !Number.isSafeInteger(offset) ||
         offset < 0
       )
-        return false;
+        return [];
       try {
         const envelope = JSON.parse(result.content.text.slice(offset)) as {
           kind?: unknown;
@@ -394,8 +394,7 @@ export function readUserQuestions(
           request?: QuestionIdentity;
           requestRef?: unknown;
         };
-        return (
-          envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
+        return envelope.kind === USER_QUESTION_PUBLICATION_KIND &&
           ((envelope.version === 1 && Object.keys(envelope).length === 3) ||
             (envelope.version === 2 &&
               Object.keys(envelope).length === 4 &&
@@ -403,16 +402,14 @@ export function readUserQuestions(
                 userQuestionRequestRef(call.source.sequence))) &&
           envelope.request?.threadId === threadId &&
           envelope.request.callItemId === call.id
-        );
+          ? [{ result, envelope }]
+          : [];
       } catch {
-        return false;
+        return [];
       }
     });
     if (accepted.length === 0) continue;
-    const result = accepted[0]!;
-    const envelope = JSON.parse(
-      result.content.text.slice(Number(result.source.metadata?.bodyStart)),
-    );
+    const { result, envelope } = accepted[0]!;
     const question: UserQuestionState = {
       request,
       ...(envelope.version === 2
