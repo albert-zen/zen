@@ -1,4 +1,8 @@
 export const ipcChannels = {
+  nativeEditingRegister: "zenx:native-editing:register",
+  nativeEditingPrepare: "zenx:native-editing:prepare",
+  nativeEditingPrepared: "zenx:native-editing:prepared",
+  nativeEditingCompleted: "zenx:native-editing:completed",
   threadQuestionAttentionChanged: "zenx:thread-question-attention:changed",
   roomQuestionsRequest: "zenx:room-questions:request",
   roomQuestionsChanged: "zenx:room-questions:changed",

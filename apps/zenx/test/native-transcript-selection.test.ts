@@ -279,6 +279,38 @@ test("explicit native Select All mounts canonical order only until actual Select
       5000,
       "a cancellation cannot discard an already established native Selection",
     );
+    assert.ok(
+      controller.current,
+      "full DOM retains target/Find materialization handle",
+    );
+    let revealed = 0;
+    const oldOwner = controller.current!.captureReveal();
+    await act(async () =>
+      assert.equal(
+        await controller.current!.reveal("row-4200", () => {
+          revealed++;
+        }),
+        true,
+      ),
+    );
+    assert.equal(revealed, 1);
+    assert.equal(
+      oldOwner.isCurrent(),
+      false,
+      "new explicit navigation retires previous ownership",
+    );
+    let prepared = false;
+    const materialized = controller.current!.materialize("row-42", () => {
+      prepared = true;
+    });
+    assert.equal(prepared, true);
+    assert.equal(materialized?.element.dataset.transcriptRowKey, "row-42");
+    document.dispatchEvent(new dom.window.WheelEvent("wheel"));
+    assert.equal(
+      materialized?.isCurrent(),
+      false,
+      "reader wheel cancels queued full-DOM target navigation",
+    );
     assert.equal(selection.toString().includes("Canonical 0"), true);
     assert.ok(
       selection.toString().indexOf("Canonical 0") <

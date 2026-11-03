@@ -1,3 +1,4 @@
+import { nativeEditingLocalSelectionSelector } from "../../native-editing.js";
 import { readTranscriptAnchor } from "./transcript-viewport-pins.js";
 
 /** Editors retain their native local selection; a visible transcript owns page selection. */
@@ -10,11 +11,7 @@ export function ownsNativeTranscriptSelection(viewport: HTMLElement): boolean {
   )
     return false;
   const active = document.activeElement;
-  if (
-    active?.closest(
-      "input,textarea,select,[contenteditable]:not([contenteditable='false']),.cm-editor,.xterm,[role='dialog'],[data-thread-find-ignore]",
-    )
-  )
+  if (active?.closest(nativeEditingLocalSelectionSelector))
     return false;
   // A native page-wide Select All includes every visible transcript, even if
   // a sidebar button owns focus. Do not silently narrow it to one DOM subtree.

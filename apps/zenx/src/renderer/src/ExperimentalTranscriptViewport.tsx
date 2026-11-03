@@ -507,6 +507,74 @@ function NativeSelectableTranscriptViewport(props: Props) {
     let armed = false;
     let frame = 0;
     let alive = true;
+    let navigation = 0;
+    const frames = new Map<number, (value: boolean) => void>();
+    const cancelNavigation = () => {
+      navigation++;
+      for (const [frame, resolve] of frames) {
+        cancelAnimationFrame(frame);
+        resolve(false);
+      }
+      frames.clear();
+    };
+    const ownership = (version: number): TranscriptRevealOwnership => ({
+      isCurrent: () => alive && node.isConnected && navigation === version,
+      cancel: () => {
+        if (navigation === version) cancelNavigation();
+      },
+    });
+    const reveal = (
+      key: string,
+      prepare?: () => void,
+      onRevealed?: () => void,
+    ) => {
+      if (!latest.current.rows.some((row) => row.key === key)) return null;
+      cancelNavigation();
+      const version = navigation;
+      if (prepare) flushSync(prepare);
+      const element = Array.from(
+        node.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
+      ).find((row) => row.dataset.transcriptRowKey === key);
+      if (!element) return null;
+      const owner = ownership(version);
+      const settled = new Promise<boolean>((resolve) => {
+        const frame = requestAnimationFrame(() => {
+          frames.delete(frame);
+          if (
+            !owner.isCurrent() ||
+            !element.isConnected ||
+            !node.contains(element)
+          ) {
+            resolve(false);
+            return;
+          }
+          try {
+            element.scrollIntoView({ block: "start", behavior: "auto" });
+            latest.current.onViewportScroll(node, true);
+            if (!owner.isCurrent()) {
+              resolve(false);
+              return;
+            }
+            onRevealed?.();
+            resolve(true);
+          } catch {
+            resolve(false);
+          }
+        });
+        frames.set(frame, resolve);
+      });
+      return { element, ...owner, settled };
+    };
+    const handle: VirtualTranscriptHandle = {
+      captureReveal: () => ownership(navigation),
+      reveal: (key, onRevealed) =>
+        reveal(key, undefined, onRevealed)?.settled ?? Promise.resolve(false),
+      materialize: (key, prepare, onRevealed) =>
+        reveal(key, prepare, onRevealed),
+    };
+    props.controller.current = handle;
+    for (const type of ["pointerdown", "keydown", "wheel"])
+      document.addEventListener(type, cancelNavigation, true);
     const finish = () => {
       if (!alive || !completeRef.current) return;
       if (transcriptSelectionIntersects(node)) {
@@ -540,8 +608,12 @@ function NativeSelectableTranscriptViewport(props: Props) {
       cancelAnimationFrame(frame);
       document.removeEventListener("selectionchange", selection);
       document.removeEventListener("focusin", focus);
+      cancelNavigation();
+      if (props.controller.current === handle) props.controller.current = null;
+      for (const type of ["pointerdown", "keydown", "wheel"])
+        document.removeEventListener(type, cancelNavigation, true);
     };
-  }, [complete, props.position, props.viewport]);
+  }, [complete, props.position, props.viewport, props.controller]);
   if (!complete) return <ExperimentalTranscriptViewport {...props} />;
   const {
     rows,
