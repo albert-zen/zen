@@ -27,6 +27,8 @@ export type Thread = Omit<
   canonicalItems?: readonly CanonicalItem[];
   /** Persisted semantic model context; absent on older Hosts, never reconstructed wire. */
   itemList?: readonly import("../../../../src/item-list.js").ContextItem[];
+  userQuestions?: ThreadSnapshot["userQuestions"];
+  userQuestionsPage?: ThreadSnapshot["userQuestionsPage"];
   turns: Turn[];
   queuedMessages?: Array<
     NonNullable<CodexThread["queuedMessages"]>[number] & {
@@ -176,11 +178,15 @@ export type UserInputPart =
   | { type: "attachment"; attachment: AttachmentRef };
 
 export interface ClientRequestParams {
+  "zen/thread/questions/list": import("../../../../src/protocol/native/wire.js").NativeQuestionListParams;
+  "zen/thread/questions/read": import("../../../../src/protocol/native/wire.js").NativeQuestionReadParams;
+  "zen/thread/questions/respond": import("../../../../src/protocol/native/wire.js").NativeQuestionRespondParams;
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportParams;
   "zen/thread/import": import("../../../../src/protocol/session-import.js").SessionImportCommitParams;
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupParams;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerParams;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditParams;
+  "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallParams;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageParams;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryParams;
   "zen/trace/client-activation": {
@@ -281,6 +287,9 @@ export interface ClientRequestParams {
 }
 
 export interface ClientRequestResults {
+  "zen/thread/questions/list": import("../../../../src/protocol/native/wire.js").NativeQuestionListResult;
+  "zen/thread/questions/read": import("../../../../src/protocol/native/wire.js").NativeQuestionReadResult;
+  "zen/thread/questions/respond": import("../../../../src/protocol/native/wire.js").NativeQuestionRespondResult;
   "zen/thread/import/preview": import("../../../../src/protocol/session-import.js").SessionImportPreview;
   "zen/thread/import": {
     thread: ThreadSnapshot;
@@ -289,6 +298,7 @@ export interface ClientRequestResults {
   "zen/turn/wake": import("../../../../src/protocol/native/wire.js").NativeHostWakeupResult;
   "zen/thread/queue/steer": import("../../../../src/protocol/native/wire.js").NativeQueueSteerResult;
   "zen/thread/queue/edit": import("../../../../src/protocol/native/wire.js").NativeQueueEditResult;
+  "zen/thread/steer/recall": import("../../../../src/protocol/native/wire.js").NativeSteerRecallResult;
   "zen/thread/message": import("../../../../src/protocol/native/wire.js").NativeThreadMessageResult;
   "zen/turn/retry": import("../../../../src/protocol/native/wire.js").NativeTurnRetryResult;
   "zen/trace/client-activation": { observed: boolean };

@@ -170,11 +170,7 @@ export function beginComposerSubmission(
   clientObservation?: ClientSendObservation,
   timezone: () => string | undefined = clientTimeZone,
 ): ComposerState {
-  if (
-    state.submission?.status === "pending" ||
-    state.compaction?.status === "pending"
-  )
-    return state;
+  if (state.submission?.status === "pending") return state;
   const text = state.draft.text.trim();
   if (!composerDraftHasContent(state.draft)) return state;
   const retry =
@@ -247,23 +243,46 @@ export function beginImmediateComposerSubmission(
   };
 }
 
+/** A native start may race with another admission and become staged steer. */
+function queuedAdmissionMatchesIntent(
+  intent: ComposerIntent,
+  stagedSteer: boolean,
+): boolean {
+  return (
+    intent === "queue" ||
+    (stagedSteer && (intent === "start" || intent === "steer"))
+  );
+}
+
 /** A read/event confirms exact identities only; absence does not prove rejection. */
 function reconcilePendingSendPresentations(
   state: ComposerState,
   items: readonly CanonicalItem[],
 ): ComposerState {
   if (!state.pendingSends?.length) return state;
-  const admitted = new Set<string>();
+  const delivered = new Set<string>();
+  const queued = new Map<string, boolean>();
   for (const item of items) {
     if (
-      (item.type === "user_message" || item.type === "user_message_queued") &&
-      item.clientId !== undefined
+      (item.type !== "user_message" && item.type !== "user_message_queued") ||
+      item.clientId === undefined
     )
-      admitted.add(item.clientId);
+      continue;
+    if (item.type === "user_message") delivered.add(item.clientId);
+    else if (item.type === "user_message_queued")
+      queued.set(
+        item.clientId,
+        queued.get(item.clientId) === true || item.deliveryMode === "steer",
+      );
   }
-  const pendingSends = state.pendingSends.filter(
-    (entry) => !admitted.has(entry.clientId),
-  );
+  const pendingSends = state.pendingSends.filter((entry) => {
+    if (delivered.has(entry.clientId)) return false;
+    const stagedSteer = queued.get(entry.clientId);
+    return (
+      stagedSteer === undefined ||
+      !queuedAdmissionMatchesIntent(entry.intent, stagedSteer)
+    );
+  });
   return pendingSends.length === state.pendingSends.length
     ? state
     : { ...state, pendingSends };
@@ -437,14 +456,19 @@ export function reconcileCanonicalAdmission(
   const delivered = items.find(
     (item) => item.type === "user_message" && item.clientId === clientId,
   );
-  const queued = items.some(
+  const queued = items.find(
     (item) => item.type === "user_message_queued" && item.clientId === clientId,
   );
-  // A queued record only confirms a queue submission; other modes require
-  // the actual user_message associated with a Turn.
+  // Native staged steer proves admission, not model claim. Legacy modes still
+  // require their matching canonical admission kind.
   if (
     delivered === undefined &&
-    (!queued || (submission !== null && submission.intent !== "queue"))
+    (queued?.type !== "user_message_queued" ||
+      (submission !== null &&
+        !queuedAdmissionMatchesIntent(
+          submission.intent,
+          queued.deliveryMode === "steer",
+        )))
   )
     return state;
   const terminal =

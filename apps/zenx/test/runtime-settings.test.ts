@@ -26,6 +26,68 @@ async function fixture() {
     close: () => rm(directory, { recursive: true, force: true }),
   };
 }
+
+test("normal Desktop Host configuration needs no Ask opt-in and preserves an unanswered question across restart", async () => {
+  const { createHostedAppServer } = await import("../../cli/src/host.js");
+  const { service, close } = await fixture();
+  let host: ReturnType<typeof createHostedAppServer> | undefined;
+  try {
+    await service.save({
+      ...(await service.publicSettings()).profile,
+      toolPresentation: "direct",
+    });
+    const config = await service.hostConfig();
+    assert.equal(
+      config.experimentalUserQuestions,
+      undefined,
+      "normal Desktop profile contains no experimental enablement",
+    );
+    host = createHostedAppServer(config);
+    const thread = await host.startThread();
+    await (
+      await host.startTurn(
+        thread.id,
+        '!tool ask_user_question {"questions":[{"id":"scope","prompt":"Which scope?"}],"answerTemplate":"Scope: {{scope}}"}',
+      )
+    ).done;
+    const question = (await host.listUserQuestions(thread.id)).questions[0]!;
+    assert.equal(question.state, "open");
+    await host.closeHostResources();
+    host = createHostedAppServer(await service.hostConfig());
+    assert.deepEqual((await host.listUserQuestions(thread.id)).questions, [
+      question,
+    ]);
+    const summary = await host.readThreadSummary(thread.id);
+    assert.equal(
+      summary.status === "systemError"
+        ? undefined
+        : summary.userQuestionSummary?.openCount,
+      1,
+    );
+    const response = await host.respondToUserQuestion(thread.id, {
+      questionCallItemId: question.request.callItemId,
+      clientId: "desktop-late-answer",
+      outcome: "answer",
+      answers: [
+        { questionId: "scope", optionIds: [], text: "Answer after restart" },
+      ],
+    });
+    await response.turn.done;
+    assert.equal(
+      (
+        await host.readUserQuestion(
+          thread.id,
+          question.request.callItemId,
+          "desktop-late-answer",
+        )
+      ).response.status,
+      "claimed",
+    );
+  } finally {
+    await host?.closeHostResources();
+    await close();
+  }
+});
 test("same draft is unchanged; stale window cannot overwrite a committed configuration", async () => {
   const { service, close } = await fixture();
   try {

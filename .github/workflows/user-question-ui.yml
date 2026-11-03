@@ -1,0 +1,45 @@
+name: Native question origin slice acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/user-question-ui.yml
+      - apps/zenx/scripts/capture-user-question.cjs
+      - apps/zenx/scripts/launch-user-question-acceptance.mjs
+      - apps/zenx/scripts/seed-user-question-acceptance.mjs
+      - apps/cli/src/host.ts
+      - src/user-question*.ts
+      - apps/zenx/src/renderer/src/UserQuestionCards.tsx
+      - apps/zenx/src/renderer/src/user-question-state.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-question-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-question:
+    runs-on: macos-14
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build --workspace @zen/zenx
+      - name: Synthetic full production App mixed-origin recall and Asking badge
+        timeout-minutes: 6
+        run: node apps/zenx/scripts/launch-user-question-acceptance.mjs "${{ runner.temp }}/user-question-ui" origin
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: user-question-ui-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/user-question-ui/source.json
+            ${{ runner.temp }}/user-question-ui/acceptance.json
+            ${{ runner.temp }}/user-question-ui/lifecycle.json
+            ${{ runner.temp }}/user-question-ui/*.png
+          if-no-files-found: error
+          retention-days: 14
