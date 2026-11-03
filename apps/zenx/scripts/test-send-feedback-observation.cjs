@@ -602,18 +602,45 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("real Legend pair locks full-DOM baseline and keeps reader regression outside timing", () => {
+test("backend pair locks identical real Legend frontend and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "3b411e8480d6dacd7b9baed6276849fa99fbda7e",
-    "c0afbda944b4714544bd1f24d984e0d16909cda8",
     "85ea447d369c144a5d1125fc7c5518ec62b276f2",
     "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
+    "662484149d6cfe97f427833cc37e9523cad03efe",
+    "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
+    "3f139c57708aae4abc1e083e401171f4ca39c200",
+    "873fe8b84a6dadcf3defd3fa4948a05caefdb362",
   ])
     assert.ok(launch.includes(identity));
+  const snapshots = new Function(
+    "return (" +
+      launch.slice(
+        launch.indexOf("const snapshots = {") + "const snapshots = ".length,
+        launch.indexOf("\n};", launch.indexOf("const snapshots = {")) + 2,
+      ) +
+      ")",
+  )();
+  assert.equal(snapshots.baseline.expectedVirtualTranscript, true);
+  assert.equal(snapshots.candidate.expectedVirtualTranscript, true);
+  assert.ok(
+    launch.includes("const virtual = snapshot.expectedVirtualTranscript"),
+  );
+  assert.equal(launch.includes('sourceLabel === "candidate"'), false);
+  const workflow = readFileSync(
+    path.join(
+      __dirname,
+      "../../../.github/workflows/send-information-layout-ab.yml",
+    ),
+    "utf8",
+  );
+  assert.ok(
+    workflow.includes("diagnostic/send-backend-fixed-frontend-20261103"),
+  );
+  assert.ok(workflow.includes("assert.deepEqual(builds[0], builds[1]"));
   for (const contract of [
     "pendingHosts",
     "historyGroups",
@@ -1496,4 +1523,32 @@ test("fixed synthetic screenshot exporter preserves failed-case PNGs and rejects
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("later diagnostic failure retains only finite or null observed main handler duration", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const observed = launch.slice(launch.indexOf("observedSamples:"));
+  const projection = observed
+    .slice(
+      observed.indexOf("ipcDurationMs:") + "ipcDurationMs:".length,
+      observed.indexOf(",\n        activationKind:"),
+    )
+    .trim()
+    .replace(/,$/, "");
+  const project = new Function("sample", "return (" + projection + ")");
+  for (const durationMs of [0, 12.5, 1400])
+    assert.equal(project({ ipc: [{ durationMs }] }), durationMs);
+  for (const durationMs of [undefined, null, NaN, Infinity, "private-value"])
+    assert.equal(project({ ipc: [{ durationMs }] }), null);
+  assert.equal(project({}), null);
+  assert.equal(project({ ipc: [] }), null);
+  assert.ok(source.includes('clockDomain: "electron-main"'));
+  assert.ok(
+    source.includes(
+      "Main-process durations are never subtracted from renderer performance.now()",
+    ),
+  );
 });

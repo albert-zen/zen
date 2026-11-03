@@ -61,14 +61,30 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "3b411e8480d6dacd7b9baed6276849fa99fbda7e",
-    tree: "c0afbda944b4714544bd1f24d984e0d16909cda8",
-  },
-  candidate: {
     commit: "85ea447d369c144a5d1125fc7c5518ec62b276f2",
     tree: "fa7a613cd33b9bbd2f3205c583a9a12d9c59acab",
+    expectedVirtualTranscript: true,
+  },
+  candidate: {
+    commit: "662484149d6cfe97f427833cc37e9523cad03efe",
+    tree: "5a5c07ff286dfb6ba1283b13e0fe4b72ad64da08",
+    expectedVirtualTranscript: true,
   },
 };
+// The controlled backend pair has byte-identical ZenX source on both sides.
+const frontendSourceTree = "3f139c57708aae4abc1e083e401171f4ca39c200";
+const rendererSourceTree = "873fe8b84a6dadcf3defd3fa4948a05caefdb362";
+for (const [subtree, expectedTree] of [
+  ["apps/zenx", frontendSourceTree],
+  ["apps/zenx/src/renderer", rendererSourceTree],
+])
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD:" + subtree], {
+      encoding: "utf8",
+    }).trim(),
+    expectedTree,
+    "Controlled backend pair must preserve the fixed frontend source",
+  );
 const snapshot = snapshots[sourceLabel];
 const expected = snapshot?.commit;
 assert.ok(
@@ -326,9 +342,12 @@ await writeFile(
       version,
       sourceCommit: expected,
       sourceTree: snapshot.tree,
+      frontendSourceTree,
+      rendererSourceTree,
+      expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
       packagedHashes,
       comparisonRole:
-        "full-DOM versus real Legend WIP native pair, not production acceptance: " +
+        "backend-only change with fixed real Legend frontend, not production acceptance: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,
@@ -844,7 +863,7 @@ try {
   });
   assert.equal(result.before.turns, count);
   assert.equal(result.before.messages, count * 2);
-  const virtual = sourceLabel === "candidate";
+  const virtual = snapshot.expectedVirtualTranscript;
   assert.equal(result.before.rendered.virtual, virtual);
   const mountedCount = result.before.rendered.turnBlocks;
   if (virtual) {
@@ -988,6 +1007,9 @@ try {
     experimentalSession: result.experimentalSession,
     sourceCommit: expected,
     sourceTree: snapshot.tree,
+    frontendSourceTree,
+    rendererSourceTree,
+    expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
     sourceLabel,
     pairCase,
     viewportWidth,
@@ -1132,6 +1154,9 @@ try {
       .slice(0, 3)
       .map((sample, index) => ({
         index,
+        ipcDurationMs: Number.isFinite(sample.ipc?.[0]?.durationMs)
+          ? sample.ipc[0].durationMs
+          : null,
         activationKind: sample.activationKind,
         sendPanelOpenAtActivation: sample.sendPanelOpenAtActivation,
         editorFocusedAtActivation: sample.editorFocusedAtActivation,

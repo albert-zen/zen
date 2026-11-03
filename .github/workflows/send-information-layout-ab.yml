@@ -1,7 +1,7 @@
-name: Packaged Send real Legend pair (WIP experiment)
+name: Packaged Send backend fixed-Legend pair (WIP experiment)
 on:
   push:
-    branches: [diagnostic/send-legend-native-20261103]
+    branches: [diagnostic/send-backend-fixed-frontend-20261103]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3b411e8480d6dacd7b9baed6276849fa99fbda7e
+          ref: 85ea447d369c144a5d1125fc7c5518ec62b276f2
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 85ea447d369c144a5d1125fc7c5518ec62b276f2
+          ref: 662484149d6cfe97f427833cc37e9523cad03efe
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -41,16 +41,36 @@ jobs:
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build locked full-DOM baseline and real Legend WIP
+      - name: Build locked backend pair with identical real Legend frontend
         timeout-minutes: 16
         run: |
           for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
+      - name: Require byte-identical renderer sources and production builds
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readdir, readFile } from 'node:fs/promises';
+          const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+          const builds = [];
+          for (const source of ['baseline', 'candidate']) {
+            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), '3f139c57708aae4abc1e083e401171f4ca39c200');
+            const root = source + '/apps/zenx/out/renderer/';
+            const files = (await readdir(root, { recursive: true })).filter(file => /\.(html|js|css)$/.test(file)).sort();
+            assert.ok(files.length > 0);
+            builds.push(Object.fromEntries(await Promise.all(files.map(async file => ['out/renderer/' + file, digest(await readFile(root + file))]))));
+          }
+          assert.deepEqual(builds[0], builds[1], 'Both backend sources must ship the identical renderer build');
+          console.log('IDENTICAL_RENDERER_BUNDLE_SHA256 ' + digest(JSON.stringify(builds[0])));
+          // Main/host bundles include the backend change and are expected to differ.
+          NODE
       - name: Verify existing observer identity and post-geometry timing contracts
         working-directory: baseline
         run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
-      - name: Native dock Enter real Legend pair, not production acceptance
+      - name: Native dock Enter backend pair, not production acceptance
         timeout-minutes: 20
         run: |
           failed=0
@@ -73,7 +93,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-real-legend-5000
+          name: native-send-backend-fixed-legend-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

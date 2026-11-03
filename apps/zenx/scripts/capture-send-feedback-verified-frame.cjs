@@ -1650,7 +1650,7 @@ async function run() {
       ),
     "App mounted",
   );
-  // Identical test-only preparation on both owned Apps. Baseline ignores it.
+  // Identical test-only preparation on both owned Apps, before selection.
   await evaluate(
     "sessionStorage.setItem('zenx.experimental.virtualTranscript','1')",
   );
