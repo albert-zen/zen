@@ -157,7 +157,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
       ),
     },
   ];
-  const tool = {
+  const tool: CommandItem = {
     type: "commandExecution",
     id: "tool-item",
     pluginId: null,
@@ -173,7 +173,7 @@ test("virtual Find reveals unmounted data, wraps, respects editor shortcuts, pre
     structuredContent: { body: "Visible structure" },
     aggregatedOutput: "Visible output",
     exitCode: 0,
-  } satisfies CommandItem;
+  };
   turns = [
     ...turns,
     { id: "tool-turn", status: "completed", items: [tool] } as Turn,

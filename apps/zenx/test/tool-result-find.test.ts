@@ -235,7 +235,7 @@ test("immutable cache tracks registry availability changes without reserializing
       return { title: "Needle card" };
     },
   });
-  const tracked = { ...item, structuredContent: structured };
+  const tracked: CommandItem = { ...item, structuredContent: structured };
   const source = [{ id: "t", status: "completed", items: [tracked] } as Turn];
   const index = createTranscriptFindIndexer(),
     canonical = new Map();
