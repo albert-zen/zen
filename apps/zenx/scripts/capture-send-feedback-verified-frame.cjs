@@ -1729,6 +1729,14 @@ function invokeProductSelectAll() {
   selectAll.click(selectAll, window, {});
 }
 
+// Owned synthetic text stays only in main-process lexical memory, never result/artifacts.
+let nativeCopyCandidate;
+async function nativeCopyReaderState() {
+  return evaluate(
+    `(()=>{const s=document.querySelector('.messages'),r=s.getBoundingClientRect(),b=document.querySelector('.back-live');return {paused:Boolean(b&&b.getClientRects().length&&getComputedStyle(b).visibility==='visible'),clear:Boolean(getSelection()?.isCollapsed),width:innerWidth,height:innerHeight,scrollTop:s.scrollTop,viewportHeight:s.clientHeight,bottomDistance:s.scrollHeight-s.clientHeight-s.scrollTop,x:Math.round(r.left+r.width/2),y:Math.round(r.top+80)}})()`,
+  );
+}
+
 async function reloadOwnedRenderer() {
   let reloadTimer, reloadFinished;
   try {
@@ -1851,6 +1859,8 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
     prepared.boundedBefore && prepared.pausedBefore && prepared.anchorCaptured,
     true,
   );
+  const reader = await nativeCopyReaderState();
+  assert.ok(reader.paused && reader.clear);
   const menuStarted = performance.now();
   invokeProductSelectAll();
   await until(async () => {
@@ -1890,6 +1900,7 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
       "native Cocoa Copy updates the owned synthetic clipboard",
     );
     const copied = clipboard.readText();
+    assert.ok(Buffer.byteLength(copied, "utf8") <= 8 * 1024 * 1024);
     const copy = await observeNativeCopy(copied);
     Object.assign(result.nativeSelectAllQuality, copy);
     // Endpoint/body failures remain immediate. Raw equality is sticky at final acceptance.
@@ -1897,6 +1908,16 @@ async function checkNativeSelectAll(canonicalTurns, samples) {
     assert.equal(copy.copiedMarkerCount, 5003);
     assert.equal(copy.copiedMessageCount, 10006);
     assert.equal(copy.fullLastAssistantCopied, true);
+    nativeCopyCandidate = {
+      copied,
+      reader: await nativeCopyReaderState(),
+      bounds: window.getBounds(),
+      placeholder: copy.clipboardAddsOnlyComposerPlaceholderLF
+        ? await evaluate(
+            "window.__nativeSelectAllQuality.copyComposer.placeholder",
+          )
+        : null,
+    };
     await screenshot("native-select-all.png");
   } finally {
     clipboard.clear();
@@ -1955,9 +1976,13 @@ async function checkFullDomNativeCopy(canonicalTurns, samples, threadTarget) {
     window.webContents.focusedFrame === window.webContents.mainFrame;
   let ownsClipboard = false;
   try {
-    window.setBounds({ ...window.getBounds(), width: 1280, height: 677 });
+    assert.ok(nativeCopyCandidate);
+    window.setBounds(nativeCopyCandidate.bounds);
     await until(
-      async () => evaluate("innerWidth===1280&&innerHeight===677"),
+      async () =>
+        evaluate(
+          `innerWidth===${nativeCopyCandidate.reader.width}&&innerHeight===${nativeCopyCandidate.reader.height}`,
+        ),
       "full DOM control window bounds",
     );
     await evaluate(
@@ -2005,6 +2030,36 @@ async function checkFullDomNativeCopy(canonicalTurns, samples, threadTarget) {
         state.mountedMessageRows === 10006
       );
     }, "same full DOM canonical users and assistants in exact order");
+    // Same paused UI and viewport, not a claim of an identical canonical pixel anchor.
+    const beforeWheel = await nativeCopyReaderState();
+    assert.ok(focused() && beforeWheel.clear && beforeWheel.viewportHeight > 0);
+    const point = { x: beforeWheel.x, y: beforeWheel.y };
+    window.webContents.sendInputEvent({ type: "mouseMove", ...point });
+    window.webContents.sendInputEvent({
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY: 3600,
+      canScroll: true,
+      hasPreciseScrollingDeltas: true,
+    });
+    await until(async () => {
+      const state = await nativeCopyReaderState();
+      control.pausedBefore = state.paused;
+      control.selectionClearBeforeSelectAll = state.clear;
+      control.nativeWheelMovedViewport =
+        beforeWheel.scrollTop - state.scrollTop >= beforeWheel.viewportHeight;
+      control.sameViewportAsCandidate =
+        state.width === nativeCopyCandidate.reader.width &&
+        state.height === nativeCopyCandidate.reader.height;
+      return (
+        state.paused &&
+        state.clear &&
+        state.bottomDistance > 100 &&
+        control.nativeWheelMovedViewport &&
+        control.sameViewportAsCandidate
+      );
+    }, "full DOM native wheel establishes paused reader before Select All");
     control.ownedFocusBeforeSelectAll = focused();
     assert.equal(control.ownedFocusBeforeSelectAll, true);
     const edit = Menu.getApplicationMenu()?.items.find((item) =>
@@ -2053,8 +2108,33 @@ async function checkFullDomNativeCopy(canonicalTurns, samples, threadTarget) {
       async () => clipboard.readText() !== sentinel,
       "full DOM native Copy updates owned clipboard",
     );
-    const copy = await observeNativeCopy(clipboard.readText());
+    const copied = clipboard.readText();
+    assert.ok(Buffer.byteLength(copied, "utf8") <= 8 * 1024 * 1024);
+    const copy = await observeNativeCopy(copied);
     Object.assign(control, copy);
+    const reader = await nativeCopyReaderState();
+    control.candidateCopiedUTF16Length = nativeCopyCandidate.copied.length;
+    control.candidatePausedAtCopy = nativeCopyCandidate.reader.paused;
+    control.pausedAtCopy = reader.paused;
+    control.samePausedReaderState =
+      control.candidatePausedAtCopy &&
+      reader.paused &&
+      control.sameViewportAsCandidate &&
+      reader.width === nativeCopyCandidate.reader.width &&
+      reader.height === nativeCopyCandidate.reader.height;
+    control.wholeCopyMatchesCandidate =
+      control.samePausedReaderState && copied === nativeCopyCandidate.copied;
+    control.samePlaceholderAsCandidate = Boolean(
+      nativeCopyCandidate.placeholder &&
+      copy.clipboardAddsOnlyComposerPlaceholderLF &&
+      (await evaluate(
+        `window.__nativeSelectAllQuality.copyComposer.placeholder===${JSON.stringify(nativeCopyCandidate.placeholder)}`,
+      )),
+    );
+    control.selectionMatchesCandidateFromExactPlaceholder =
+      control.wholeCopyMatchesCandidate &&
+      control.samePlaceholderAsCandidate &&
+      result.nativeSelectAllQuality.clipboardAddsOnlyComposerPlaceholderLF;
     assert.equal(copy.selectionSurvivesCopy, true);
     assert.equal(copy.copiedMarkerCount, 5003);
     assert.equal(copy.copiedMessageCount, 10006);
@@ -2063,6 +2143,7 @@ async function checkFullDomNativeCopy(canonicalTurns, samples, threadTarget) {
   } catch {
     control.completed = false;
   } finally {
+    nativeCopyCandidate = undefined;
     result.sidebarSelectionScroll = sidebarSelectionScroll;
     try {
       if (ownsClipboard) clipboard.clear();
@@ -3225,6 +3306,7 @@ void verifyPackagedRuntime()
       } catch {}
   })
   .finally(async () => {
+    nativeCopyCandidate = undefined;
     if (traceStarted)
       try {
         const rawPath = await stopOwnedTrace();

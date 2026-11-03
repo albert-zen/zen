@@ -673,6 +673,15 @@ function projectFailureTranscriptQuality(capture) {
     fullDomControl: capture?.nativeFullDomCopyControl
       ? {
           ...projectSelectAll(capture.nativeFullDomCopyControl),
+          candidateCopiedUTF16Length:
+            Number.isInteger(
+              capture.nativeFullDomCopyControl.candidateCopiedUTF16Length,
+            ) &&
+            capture.nativeFullDomCopyControl.candidateCopiedUTF16Length >= 0 &&
+            capture.nativeFullDomCopyControl.candidateCopiedUTF16Length <=
+              8 * 1024 * 1024
+              ? capture.nativeFullDomCopyControl.candidateCopiedUTF16Length
+              : null,
           ...Object.fromEntries(
             [
               "afterVirtualAssertions",
@@ -682,6 +691,15 @@ function projectFailureTranscriptQuality(capture) {
               "ownedFocusBeforeCopy",
               "clipboardWasEmpty",
               "completed",
+              "selectionClearBeforeSelectAll",
+              "nativeWheelMovedViewport",
+              "sameViewportAsCandidate",
+              "candidatePausedAtCopy",
+              "pausedAtCopy",
+              "samePausedReaderState",
+              "wholeCopyMatchesCandidate",
+              "samePlaceholderAsCandidate",
+              "selectionMatchesCandidateFromExactPlaceholder",
             ].map((key) => [
               key,
               boolean(capture.nativeFullDomCopyControl[key]),

@@ -2025,6 +2025,13 @@ test("failed native quality exports fixed finite evidence without text or DOM id
       selectedUTF16Length: Infinity,
       text: "NEVER_EXPORT",
       error: "NEVER_EXPORT",
+      wholeCopyMatchesCandidate: true,
+      samePausedReaderState: "NEVER_EXPORT",
+      candidateCopiedUTF16Length: Infinity,
+      nativeCopyCandidate: {
+        copied: "NEVER_EXPORT",
+        placeholder: "NEVER_EXPORT",
+      },
     },
     nativeSelectionQuality: {
       selectionOwnedByTarget: false,
@@ -2071,6 +2078,16 @@ test("failed native quality exports fixed finite evidence without text or DOM id
   assert.equal(result.selectAll.fullLastAssistantCopied, true);
   assert.equal(result.selectAll.menuToSelectionMs, null);
   assert.equal(result.selectAll.clearToRestoreMs, 12.5);
+  assert.equal(result.fullDomControl.wholeCopyMatchesCandidate, true);
+  assert.equal(result.fullDomControl.samePausedReaderState, null);
+  assert.equal(result.fullDomControl.candidateCopiedUTF16Length, null);
+  for (const length of [-1, 0.5, 8 * 1024 * 1024 + 1])
+    assert.equal(
+      project({
+        nativeFullDomCopyControl: { candidateCopiedUTF16Length: length },
+      }).fullDomControl.candidateCopiedUTF16Length,
+      null,
+    );
   assert.equal(result.fullDomControl.completed, false);
   assert.equal(result.fullDomControl.defaultOffAfterReload, true);
   assert.equal(result.fullDomControl.defaultSelectAllRole, null);
@@ -2202,13 +2219,27 @@ async function nativeSelectAllFixture(
   d.body.innerHTML =
     '<main class="app-shell thread-view"><button class="thread-row" data-thread-id="owned-thread">Owned Thread</button><div class="messages experimental-transcript-viewport"></div><button class="back-live">Live</button><textarea id="thread-composer"></textarea></main>';
   const scroller = d.querySelector(".messages"),
-    editor = d.querySelector("textarea");
+    editor = d.querySelector("textarea"),
+    backLive = d.querySelector(".back-live");
+  w.innerWidth = 1280;
+  w.innerHeight = 677;
+  backLive.getClientRects = () => [{ width: 100, height: 20 }];
+  Object.defineProperties(scroller, {
+    clientHeight: { value: 600 },
+    scrollHeight: { value: 10000 },
+  });
+  scroller.scrollTop = 6000;
   if (withPlaceholder) {
     editor.placeholder = "Ask ZenX anything…";
     editor.getClientRects = () => [{ width: 100, height: 20 }];
   }
   w.requestAnimationFrame = (callback) => queueMicrotask(() => callback(1));
-  scroller.getBoundingClientRect = () => ({ top: 20, bottom: 620 });
+  scroller.getBoundingClientRect = () => ({
+    left: 0,
+    width: 1000,
+    top: 20,
+    bottom: 620,
+  });
   const samples = Array.from({ length: 3 }, (_, i) => ({
     nonce: `Synthetic latency message 10000 ${i} unit-owned`,
   }));
@@ -2279,7 +2310,8 @@ async function nativeSelectAllFixture(
   let reloaded = false,
     reloadFinished,
     nativeSelectAllCalls = 0,
-    revealCalls = 0;
+    revealCalls = 0,
+    wheelCalls = 0;
   let cleared = false,
     menuCalls = 0,
     nativeCopyCalls = 0,
@@ -2319,16 +2351,38 @@ async function nativeSelectAllFixture(
       },
       reload() {
         reloaded = true;
+        backLive.remove();
+        scroller.scrollTop = 9400;
         delete w.__nativeSelectAllQuality;
         w.getSelection().removeAllRanges();
         mount(true);
         delete scroller.dataset.nativeTranscriptSelection;
+        if (fault === "control-changed-prefix")
+          d.querySelector(".thread-row").textContent = "Other Thread";
+        if (fault === "control-changed-extra-ui")
+          editor.before(d.createTextNode("Extra owned UI"));
+        if (fault === "control-changed-body")
+          scroller
+            .querySelector(".agent-copy")
+            .append(" Extra owned reply text");
+        if (fault === "control-changed-placeholder")
+          editor.placeholder = "Ask ZenX anything?";
         if (fault === "control-wrong-thread")
           for (const row of scroller.querySelectorAll("article.user-row"))
             row.dataset.sentMessageId = "foreign-" + row.dataset.sentMessageId;
         if (fault === "control-wrong-focus")
           nativeWindow.webContents.focusedFrame = {};
         reloadFinished();
+      },
+      sendInputEvent(event) {
+        if (event.type !== "mouseWheel") return;
+        assert.equal(reloaded, true);
+        assert.equal(event.deltaY, 3600);
+        wheelCalls++;
+        if (fault !== "control-no-wheel-movement")
+          scroller.scrollTop -= event.deltaY;
+        if (fault !== "control-missing-pause") editor.before(backLive);
+        if (fault === "control-changed-viewport") w.innerWidth = 1120;
       },
       async insertText(text) {
         editor.setRangeText(
@@ -2504,7 +2558,7 @@ async function nativeSelectAllFixture(
     "revealThreadWithSidebarWheel",
     "fullDomControl",
     source.slice(start, source.indexOf("\nasync function run()", start)) +
-      "; return async (...args) => { await checkNativeSelectAll(...args); if (fullDomControl) await checkFullDomNativeCopy(...args, \"document.querySelector('.thread-row[data-thread-id=owned-thread]')\"); assertNativeClipboardMatch(); if (fullDomControl) assert.equal(result.nativeFullDomCopyControl.completed, true, 'Full DOM native Copy control must complete'); };",
+      "; return { cleared: () => nativeCopyCandidate === undefined, cleanup: () => { nativeCopyCandidate = undefined; }, run: async (...args) => { await checkNativeSelectAll(...args); if (fullDomControl) await checkFullDomNativeCopy(...args, \"document.querySelector('.thread-row[data-thread-id=owned-thread]')\"); assertNativeClipboardMatch(); if (fullDomControl) assert.equal(result.nativeFullDomCopyControl.completed, true, 'Full DOM native Copy control must complete'); } };",
   )(
     assert,
     { platform: "darwin" },
@@ -2525,10 +2579,12 @@ async function nativeSelectAllFixture(
   );
   let error;
   try {
-    await check(turns, samples);
+    await check.run(turns, samples);
   } catch (caught) {
     error = caught;
   }
+  const mainMemoryCleared = check.cleared();
+  check.cleanup();
   const privateStateCleaned = !w.__nativeSelectAllQuality;
   const unrelatedSessionPreserved =
     fullDomControl &&
@@ -2549,7 +2605,9 @@ async function nativeSelectAllFixture(
     cleared,
     nativeSelectAllCalls,
     revealCalls,
+    wheelCalls,
     privateStateCleaned,
+    mainMemoryCleared,
     unrelatedSessionPreserved,
   };
 }
@@ -2985,6 +3043,21 @@ test("same-session default full DOM Copy executes native actions, reuses attribu
     control.clipboardPlaceholderInsertionAfterCanonicalMessages,
     true,
   );
+  for (const key of [
+    "selectionClearBeforeSelectAll",
+    "nativeWheelMovedViewport",
+    "sameViewportAsCandidate",
+    "candidatePausedAtCopy",
+    "pausedAtCopy",
+    "samePausedReaderState",
+    "wholeCopyMatchesCandidate",
+    "samePlaceholderAsCandidate",
+    "selectionMatchesCandidateFromExactPlaceholder",
+  ])
+    assert.equal(control[key], true, key);
+  assert.equal(control.candidateCopiedUTF16Length, original.copiedUTF16Length);
+  assert.equal(run.wheelCalls, 1);
+  assert.equal(JSON.stringify(run.result).includes("Ask ZenX anything"), false);
   assert.equal(control.selectionCleared, true);
   assert.equal(run.nativeSelectAllCalls, 1);
   assert.equal(run.nativeCopyCalls, 2);
@@ -2996,6 +3069,7 @@ test("same-session default full DOM Copy executes native actions, reuses attribu
   assert.equal(run.revealCalls, 1);
   assert.equal(
     run.privateStateCleaned &&
+      run.mainMemoryCleared &&
       run.unrelatedSessionPreserved &&
       run.clipboardCleared,
     true,
@@ -3036,7 +3110,11 @@ test("full DOM control fails closed for bridge substitution, canonical reorder a
         fault,
       );
       assert.equal(run.result.nativeFullDomCopyControl.completed, false, fault);
-      assert.equal(run.privateStateCleaned, true, fault);
+      assert.equal(
+        run.privateStateCleaned && run.mainMemoryCleared,
+        true,
+        fault,
+      );
       if (
         [
           "control-copy-lost-selection",
@@ -3066,6 +3144,68 @@ test("full DOM control fails closed for bridge substitution, canonical reorder a
         ].includes(fault)
           ? 1
           : 0,
+        fault,
+      );
+    }
+  } finally {
+    sharedDom.window.close();
+  }
+});
+
+test("same-state whole native Copy comparison rejects missing pause, changed viewport and extra UI/body/prefix", async () => {
+  const sharedDom = new JSDOM("", {
+    runScripts: "outside-only",
+    url: "https://owned.invalid",
+  });
+  try {
+    for (const fault of [
+      "control-missing-pause",
+      "control-no-wheel-movement",
+      "control-changed-viewport",
+      "control-changed-extra-ui",
+      "control-changed-body",
+      "control-changed-prefix",
+      "control-changed-placeholder",
+    ]) {
+      const run = await nativeSelectAllFixture(fault, sharedDom, true),
+        control = run.result.nativeFullDomCopyControl;
+      assert.match(
+        run.error?.message ?? "",
+        /comparison diagnostics do not waive/,
+        fault,
+      );
+      assert.notEqual(control.wholeCopyMatchesCandidate, true, fault);
+      assert.notEqual(
+        control.selectionMatchesCandidateFromExactPlaceholder,
+        true,
+        fault,
+      );
+      if (
+        [
+          "control-missing-pause",
+          "control-no-wheel-movement",
+          "control-changed-viewport",
+        ].includes(fault)
+      )
+        assert.equal(control.completed, false, fault);
+      else {
+        assert.equal(control.completed, true, fault);
+        assert.equal(control.samePausedReaderState, true, fault);
+        assert.equal(control.copiedMessageCount, 10006, fault);
+        assert.equal(
+          control.clipboardAddsOnlyComposerPlaceholderLF,
+          true,
+          fault,
+        );
+      }
+      if (fault === "control-changed-prefix")
+        assert.equal(
+          control.copiedUTF16Length,
+          control.candidateCopiedUTF16Length,
+        );
+      assert.equal(
+        run.privateStateCleaned && run.mainMemoryCleared,
+        true,
         fault,
       );
     }
