@@ -28,6 +28,8 @@ export type {
 import { createHash, randomUUID } from "node:crypto";
 import { open, readFile } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { sandboxCommand } from "./sandbox.js";
 import type { SandboxMode } from "./item.js";
 import { StringDecoder } from "node:string_decoder";
@@ -2210,24 +2212,109 @@ function abortReason(signal: AbortSignal): unknown {
 }
 
 const SAFE_ENVIRONMENT_VARIABLES = new Set([
+  "APPDATA",
+  "COMMONPROGRAMFILES",
   "COLORTERM",
   "COMSPEC",
   "FORCE_COLOR",
   "HOME",
+  "HOMEDRIVE",
+  "HOMEPATH",
   "LANG",
+  "LOCALAPPDATA",
   "LOGNAME",
   "NO_COLOR",
+  "ONEDRIVE",
   "PATH",
   "PATHEXT",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PUBLIC",
   "SHELL",
+  "SYSTEMDRIVE",
   "SYSTEMROOT",
   "TEMP",
   "TERM",
   "TMP",
   "TMPDIR",
   "USER",
+  "USERDOMAIN",
+  "USERNAME",
+  "USERPROFILE",
   "WINDIR",
 ]);
+
+function userEnvironmentKey(platform: NodeJS.Platform, name: string): string {
+  return platform === "win32" ? name.toUpperCase() : name;
+}
+
+function readUserEnvironmentVariable(
+  environment: Readonly<NodeJS.ProcessEnv>,
+  platform: NodeJS.Platform,
+  name: string,
+): string | undefined {
+  const wanted = userEnvironmentKey(platform, name);
+  for (const [key, value] of Object.entries(environment))
+    if (userEnvironmentKey(platform, key) === wanted && value) return value;
+  return undefined;
+}
+
+/**
+ * Windows children need the user's own profile variables even when the Host
+ * process was started from a shortcut with a trimmed environment: POSIX-minded
+ * CLIs and shells resolve `~`, caches and credentials through HOME/APPDATA, and
+ * a missing value surfaces as a plausible but false "not logged in" state.
+ * Derivation only fills gaps; an inherited value is never replaced.
+ */
+export function completeWindowsUserEnvironment(
+  environment: NodeJS.ProcessEnv,
+  options: {
+    platform?: NodeJS.Platform;
+    home?: string | undefined;
+    userProfile?: string | undefined;
+  } = {},
+): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return environment;
+  const read = (name: string) =>
+    readUserEnvironmentVariable(environment, platform, name);
+  let profile = read("USERPROFILE");
+  if (!profile) {
+    const drive = read("HOMEDRIVE");
+    const path = read("HOMEPATH");
+    if (drive && path) profile = `${drive}${path}`;
+  }
+  profile ??= options.userProfile;
+  profile ??= ((): string | undefined => {
+    if (options.home !== undefined) return options.home;
+    try {
+      return homedir();
+    } catch {
+      return undefined;
+    }
+  })();
+  if (!profile) return environment;
+  const fill = (name: string, value: string) => {
+    if (read(name) === undefined) environment[name] = value;
+  };
+  const localAppData = join(profile, "AppData", "Local");
+  fill("USERPROFILE", profile);
+  fill("HOME", profile);
+  fill("APPDATA", join(profile, "AppData", "Roaming"));
+  fill("LOCALAPPDATA", localAppData);
+  fill("TEMP", join(localAppData, "Temp"));
+  fill("TMP", join(localAppData, "Temp"));
+  if (!read("HOMEDRIVE") && /^[A-Za-z]:/.test(profile))
+    environment.HOMEDRIVE = profile.slice(0, 2).toUpperCase();
+  if (!read("HOMEPATH") && /^[A-Za-z]:/.test(profile))
+    environment.HOMEPATH = profile.slice(2) || "\\";
+  if (!read("SYSTEMDRIVE")) {
+    const systemRoot = read("SYSTEMROOT") ?? read("WINDIR");
+    if (systemRoot && /^[A-Za-z]:/.test(systemRoot))
+      environment.SYSTEMDRIVE = systemRoot.slice(0, 2).toUpperCase();
+  }
+  return environment;
+}
 
 /**
  * Shell tools get a deliberately small process environment. Provider keys and
@@ -2250,5 +2337,15 @@ export function sanitizeToolEnvironment(
       environment[name] = value;
     }
   }
-  return environment;
+  const completed = completeWindowsUserEnvironment(environment, {
+    userProfile: readUserEnvironmentVariable(
+      source,
+      process.platform,
+      "USERPROFILE",
+    ),
+  });
+  // A blocked name stays blocked even when the completion could derive it.
+  for (const name of Object.keys(completed))
+    if (blocked.has(key(name))) delete completed[name];
+  return completed;
 }
