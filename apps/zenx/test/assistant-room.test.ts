@@ -14,8 +14,14 @@ import { randomUUID } from "node:crypto";
 import {
   ZenXTriggerService,
   type ZenXTriggerAppServerPort,
+  type ZenXTriggerStorePort,
 } from "../src/main/trigger-service.js";
 import { ZenXTriggerStore } from "../src/main/trigger-store.js";
+import { AutomationTransactionStore } from "../src/main/automation-transaction-store.js";
+import {
+  automationTransactionForSnapshot,
+  readAutomationProjection,
+} from "../src/main/automation-transaction-adapter.js";
 import type { ClientRequestParams } from "../src/protocol-client/index.js";
 import type { NativeThreadRecoverySnapshot } from "../../../src/protocol/native/recovery.js";
 import {
@@ -122,9 +128,26 @@ class ModelStub implements ZenXTriggerAppServerPort {
     };
   }
 }
-async function fixture() {
+async function fixture({ journaled = false } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "zenx-assistant-"));
-  const store = new ZenXTriggerStore(path.join(dir, "state.json"));
+  // Full Rooms listing reads its question summary from the real Room journal.
+  const journal = journaled
+    ? await AutomationTransactionStore.create(
+        { directory: dir, assertWriterLease: () => {} },
+        { triggers: [], history: [], rooms: [] },
+      )
+    : undefined;
+  const store: ZenXTriggerStorePort = journal
+    ? {
+        roomHistory: journal,
+        read: () => readAutomationProjection(journal),
+        write: async (snapshot, events = []) => {
+          await journal.append(
+            automationTransactionForSnapshot(journal, snapshot, events),
+          );
+        },
+      }
+    : new ZenXTriggerStore(path.join(dir, "state.json"));
   const model = new ModelStub();
   const service = new ZenXTriggerService(model, store);
   await service.start();
@@ -134,6 +157,7 @@ async function fixture() {
     store,
     close: async () => {
       await service.stop();
+      await journal?.close();
       await rm(dir, { recursive: true, force: true });
     },
   };
@@ -624,7 +648,7 @@ test("conversation introduction receipt survives restart and the bound naming to
 });
 
 test("explicit Start introduction works after cancelling an unsent introduction", async () => {
-  const f = await fixture();
+  const f = await fixture({ journaled: true });
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
     pretendToBeVisual: true,
@@ -715,7 +739,7 @@ test("explicit Start introduction works after cancelling an unsent introduction"
 });
 
 test("restarted introduction retains its new operation when delivery and refresh are uncertain", async () => {
-  const f = await fixture();
+  const f = await fixture({ journaled: true });
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
     pretendToBeVisual: true,
@@ -834,7 +858,7 @@ test("restarted introduction retains its new operation when delivery and refresh
 });
 
 test("restarted introduction lookup across remount retains one admission", async () => {
-  const f = await fixture();
+  const f = await fixture({ journaled: true });
   const dom = new JSDOM('<div id="root"></div>', {
     url: "http://localhost",
     pretendToBeVisual: true,
@@ -1011,7 +1035,7 @@ test("interrupted preparation remains explicit and cancellable across restart wi
 });
 
 test("failed bootstrap delivery stays explicit and never redispatches after restart", async () => {
-  const f = await fixture();
+  const f = await fixture({ journaled: true });
   try {
     const room = await f.service.createAssistantRoom(input);
     const id = `${room.operationEpoch}:${randomUUID()}`;
