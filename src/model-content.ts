@@ -95,6 +95,7 @@ export function projectModelMessages(
   messages: readonly ModelMessage[],
   inputModalities?: readonly string[] | null,
   onMediaProjected?: (source: object, projected: object) => void,
+  budget: MediaProjectionBudget | null = DEFAULT_MEDIA_PROJECTION_BUDGET,
 ): ModelMessage[] {
   const supported = new Set(inputModalities ?? ["text"]);
   const project = (content: UserInput): UserInput =>
@@ -106,7 +107,7 @@ export function projectModelMessages(
       }
       return { type: "text", text: mediaReceipt(part.type, part.attachment) };
     });
-  return messages.map((message) => {
+  const projectedMessages = messages.map((message) => {
     const projected: ModelMessage =
       message.role === "user" && "content" in message
         ? { ...message, content: project(message.content) }
@@ -116,6 +117,110 @@ export function projectModelMessages(
     copyModelMessageContextCategory(message, projected);
     return projected;
   });
+  return budget === null
+    ? projectedMessages
+    : elideMediaOverBudget(projectedMessages, budget);
+}
+
+/** Request-only image allowance; older images become textual receipts. */
+export interface MediaProjectionBudget {
+  maxImages: number;
+  maxBytes: number;
+}
+
+/**
+ * Keep the newest images that fit. Audio and text are never budgeted, and the
+ * newest image is always kept so a single oversized screenshot still reaches
+ * the model instead of a request with no visual evidence at all.
+ */
+export const DEFAULT_MEDIA_PROJECTION_BUDGET: MediaProjectionBudget = {
+  maxImages: 24,
+  maxBytes: 8 * 1024 * 1024,
+};
+
+export function elideMediaOverBudget(
+  messages: readonly ModelMessage[],
+  budget: MediaProjectionBudget,
+): ModelMessage[] {
+  const occurrences: Array<{
+    message: number;
+    part: number;
+    attachment: AttachmentRef;
+  }> = [];
+  messages.forEach((message, messageIndex) => {
+    mediaParts(message)?.forEach((part, partIndex) => {
+      if (part.type === "image")
+        occurrences.push({
+          message: messageIndex,
+          part: partIndex,
+          attachment: part.attachment,
+        });
+    });
+  });
+  if (occurrences.length === 0) return [...messages];
+  let images = 0;
+  let bytes = 0;
+  const dropped = new Set<string>();
+  for (let index = occurrences.length - 1; index >= 0; index--) {
+    const occurrence = occurrences[index];
+    if (occurrence === undefined) continue;
+    const fits =
+      images === 0 ||
+      (images + 1 <= budget.maxImages &&
+        bytes + occurrence.attachment.byteLength <= budget.maxBytes);
+    if (fits) {
+      images += 1;
+      bytes += occurrence.attachment.byteLength;
+    } else {
+      dropped.add(`${String(occurrence.message)}:${String(occurrence.part)}`);
+    }
+  }
+  if (dropped.size === 0) return [...messages];
+  return messages.map((message, messageIndex) => {
+    const parts = mediaParts(message);
+    if (parts === undefined) return message;
+    const next = parts.map((part, partIndex) =>
+      part.type === "image" &&
+      dropped.has(`${String(messageIndex)}:${String(partIndex)}`)
+        ? { type: "text" as const, text: omittedMediaReceipt(part.attachment) }
+        : part,
+    );
+    return withMediaParts(message, next);
+  });
+}
+
+function mediaParts(
+  message: ModelMessage,
+): readonly UserInputPart[] | undefined {
+  if (message.role === "user" && "content" in message) return message.content;
+  if (message.role === "tool" && message.modelContent !== undefined)
+    return message.modelContent;
+  return undefined;
+}
+
+function withMediaParts(
+  message: ModelMessage,
+  parts: readonly UserInputPart[],
+): ModelMessage {
+  if (message.role === "user" && "content" in message)
+    return { ...message, content: parts };
+  if (message.role === "tool" && message.modelContent !== undefined)
+    return { ...message, modelContent: parts };
+  return message;
+}
+
+export function omittedMediaReceipt(ref: AttachmentRef): string {
+  const size =
+    ref.width !== undefined && ref.height !== undefined
+      ? `${String(ref.width)}x${String(ref.height)}, `
+      : "";
+  return `[image attachment sha256:${ref.sha256.slice(0, 12)}, ${ref.mediaType}, ${size}${formatBytes(ref.byteLength)}; omitted from this request by the image budget, view it again if the pixels matter]`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function mediaReceipt(kind: MediaKind, ref: AttachmentRef): string {

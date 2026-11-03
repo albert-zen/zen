@@ -226,7 +226,7 @@ test("default-on asynchronous Ask survives completed independent work and Host r
     assert.ok(answerInput.kind === "message");
     assert.deepEqual(answerInput.content.parts.at(-1), {
       type: "text",
-      text: `Reply to question ${question.request.callItemId}:\nscope: Small, answered later`,
+      text: `Reply to question scope:\nscope: Small, answered later`,
     });
     const answered = await host.readThreadSummary(thread.id);
     assert.equal(

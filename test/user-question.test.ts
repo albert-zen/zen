@@ -95,7 +95,7 @@ test("explicit templates keep their exact prior bytes and invalid explicit templ
   );
   assert.equal(
     renderUserQuestionReply(specification, reply),
-    "Reply to question call-a:\nScope: Small",
+    "Reply to question scope:\nScope: Small",
   );
   for (const answerTemplate of [null, "", "{{scope}} {{scope}}", "{{missing}}"])
     assert.throws(() =>
