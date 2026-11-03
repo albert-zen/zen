@@ -1756,7 +1756,7 @@ function ThreadViewContent({
             value={virtualTranscript ? navigateQuoteSource : null}
           >
             <TranscriptViewport
-              key={thread?.id ?? composerId}
+              key={virtualTranscript ? (thread?.id ?? composerId) : undefined}
               experimental={virtualTranscript && transcriptRows.length > 0}
               viewport={scrollRef}
               controller={virtualViewport}
