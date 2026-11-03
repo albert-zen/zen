@@ -2,6 +2,9 @@ import type { ClientRequestMethod } from "./types.js";
 
 export const clientRequestMethods = [
   "zen/initialize",
+  "zen/thread/questions/list",
+  "zen/thread/questions/read",
+  "zen/thread/questions/respond",
   "zen/thread/message",
   "zen/turn/send",
   "zen/trace/client-activation",
@@ -28,6 +31,7 @@ export const clientRequestMethods = [
   "zen/thread/queue/cancel",
   "zen/thread/queue/edit",
   "zen/thread/queue/steer",
+  "zen/thread/steer/recall",
   "thread/read",
   "thread/list",
   "thread/name/set",

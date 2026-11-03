@@ -125,6 +125,11 @@ export class NativeRecoveryProjection {
       event: structuredClone(event),
     };
     state.watermark = projected.watermark;
+    if (event.type === "user_question_attention_invalidated")
+      state.events = state.events.filter(
+        ({ event: previous }) =>
+          previous.type !== "user_question_attention_invalidated",
+      );
     if (event.type === "turn_recovery") {
       // Only the newest live observation matters; canonical repair diagnostics
       // remain in the journal independently of this bounded display tail.
@@ -254,6 +259,7 @@ function eventEstablishesCanonicalBoundary(event: AppServerEvent): boolean {
     case "queue_failed":
     case "queue_admission_started":
     case "context_compaction_status":
+    case "user_question_attention_invalidated":
       return false;
   }
 }
@@ -274,6 +280,7 @@ function eventRepresentedInSnapshot(
         snapshot.itemList?.some((item) => item.id === event.item.id) === true
       );
     case "model_catalog_updated":
+    case "user_question_attention_invalidated":
       return true;
     case "queue_failed":
     case "queue_admission_started":

@@ -1,6 +1,13 @@
 import { useCommittedCallback } from "./use-committed-callback.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
+import { PendingSteerPanel } from "./PendingSteerPanel.js";
+import type { SteerRecallStore } from "./steer-recall-state.js";
+import {
+  pendingSteerMessages,
+  type PendingSteerInput,
+  type RecoveredSteerRecall,
+} from "../../../../../src/steer-recall.js";
 import { readReferenceClipboard } from "./reference-clipboard.js";
 import type { QuoteReference } from "./composer-selector.js";
 import { BackgroundShellStatus } from "./BackgroundShellStatus.js";
@@ -301,6 +308,9 @@ function goToMessageQuoteSource(
 }
 
 interface ThreadViewProps {
+  steerRecallStore?: SteerRecallStore;
+  onRestoreRecalled?(result: RecoveredSteerRecall): boolean | Promise<boolean>;
+  pendingSteer?: readonly PendingSteerInput[];
   localModelDebug?: boolean;
   debugMode?: boolean;
   onExitDebug?(): void;
@@ -391,6 +401,20 @@ const unavailableImageReader = async (): Promise<Uint8Array> => {
 };
 
 export function ThreadView(props: ThreadViewProps) {
+  const pendingSteer = useMemo(
+    () => pendingSteerMessages(props.thread?.canonicalItems ?? []),
+    [props.thread?.canonicalItems],
+  );
+  const queueThread = useMemo(() => {
+    if (props.thread === null || pendingSteer.length === 0) return props.thread;
+    const ids = new Set(pendingSteer.map((item) => item.id));
+    return {
+      ...props.thread,
+      queuedMessages: props.thread.queuedMessages?.filter(
+        (item) => !ids.has(item.id),
+      ),
+    };
+  }, [props.thread, pendingSteer]);
   const debugging = props.thread !== null && props.debugMode === true;
   const debuggingRef = useRef(debugging);
   useLayoutEffect(() => {
@@ -528,6 +552,8 @@ export function ThreadView(props: ThreadViewProps) {
           ) : (
             <ThreadViewContent
               {...props}
+              thread={queueThread}
+              pendingSteer={pendingSteer}
               threadAttachments={attachments}
               canonicalPresentation={presentation}
               sourceThreadId={sourceThreadId}
@@ -549,6 +575,9 @@ function ThreadViewContent({
   canonicalPresentation,
   sourceThreadId,
   isForkCurrent,
+  steerRecallStore,
+  onRestoreRecalled,
+  pendingSteer = [],
   composerId = "thread-composer",
   composerSendMode = "soft",
   onComposerSendModeChange,
@@ -938,14 +967,13 @@ function ThreadViewContent({
     () => projectContextCompactions(displayedThread?.canonicalItems),
     [displayedThread?.canonicalItems],
   );
+  const transcriptOrder = useMemo(
+    () => indexTranscriptOrder(displayedThread?.canonicalItems),
+    [displayedThread?.canonicalItems],
+  );
   const transcriptRows = useMemo(
-    () =>
-      buildTranscriptRows(
-        turns,
-        displayedThread?.canonicalItems,
-        contextCompactions,
-      ),
-    [contextCompactions, displayedThread?.canonicalItems, turns],
+    () => buildTranscriptRows(turns, transcriptOrder, contextCompactions),
+    [contextCompactions, transcriptOrder, turns],
   );
   const pendingApprovals = useMemo(
     () =>
@@ -965,7 +993,7 @@ function ThreadViewContent({
   const compactRequested = isCompactCommand(composer.draft.text);
   const submitting =
     composer.submission?.status === "pending" ||
-    composer.compaction?.status === "pending";
+    (compactRequested && composer.compaction?.status === "pending");
   const hasDraft = composerDraftHasContent(composer.draft);
   const blockedByImageCapability =
     !compactRequested &&
@@ -1109,13 +1137,23 @@ function ThreadViewContent({
     if (zone !== null) zone.scrollTop = zone.scrollHeight;
   }, [composer.compaction, thread?.id]);
 
-  const submit = (intent: ComposerIntent) => {
+  const submit = (intent: ComposerIntent, trigger?: HTMLButtonElement) => {
     if (composerDisabled || !hasDraft || submitting || blockedByImageCapability)
       return;
     if (intent === "start" && runningTurn !== null) return;
     if (intent !== "start" && runningTurn === null) return;
     const observation = observeSendActivation();
     reportSendActivation(observation, thread?.id);
+    // Return only the activated Send's focus before clearing the draft disables it.
+    // Editor input, other owners and later receipts must not acquire focus here.
+    const editor = composerTextareaRef.current;
+    if (
+      trigger?.isConnected &&
+      trigger === document.activeElement &&
+      viewRef.current?.contains(trigger) &&
+      editor?.isConnected
+    )
+      editor.focus({ preventScroll: true });
     void onSubmit(intent, runningTurn?.id ?? null, observation);
   };
 
@@ -1167,9 +1205,9 @@ function ThreadViewContent({
     : primaryMode === "stop"
       ? i18n.t(interrupting ? "shell:stopping" : "shell:stop")
       : intentLabel(sendIntent);
-  const primary = () => {
+  const primary = (trigger?: HTMLButtonElement) => {
     if (primaryMode === "stop") void interrupt();
-    else submit(sendIntent);
+    else submit(sendIntent, trigger);
   };
   const saveQueuedEdit = async (key: string, draft: ComposerDraft) => {
     const session = editSessionsRef.current[key];
@@ -1735,6 +1773,18 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
+        {thread?.canonicalItems ? (
+          <PendingSteerPanel
+            key={`steer-recall:${thread.id}`}
+            threadId={thread.id}
+            items={thread.canonicalItems}
+            pending={pendingSteer}
+            runningTurnId={runningTurn?.id ?? null}
+            store={steerRecallStore}
+            onRestore={onRestoreRecalled}
+            onReadAttachment={onReadAttachment}
+          />
+        ) : null}
         {thread ? (
           <QueuedMessages
             threadId={thread.id}
@@ -2447,11 +2497,7 @@ type TranscriptRow =
       order: number;
     };
 
-function buildTranscriptRows(
-  turns: readonly Turn[],
-  canonicalItems: Thread["canonicalItems"],
-  compactions: readonly ContextCompactionProjection[],
-): TranscriptRow[] {
+function indexTranscriptOrder(canonicalItems: Thread["canonicalItems"]) {
   const fallbackStart = (canonicalItems?.length ?? 0) + 1;
   const turnEnds = new Map<string, number>();
   canonicalItems?.forEach((item, index) => {
@@ -2459,6 +2505,14 @@ function buildTranscriptRows(
       turnEnds.set(item.turnId, index);
     }
   });
+  return { fallbackStart, turnEnds };
+}
+
+function buildTranscriptRows(
+  turns: readonly Turn[],
+  { fallbackStart, turnEnds }: ReturnType<typeof indexTranscriptOrder>,
+  compactions: readonly ContextCompactionProjection[],
+): TranscriptRow[] {
   const rows: TranscriptRow[] = turns.map((turn, index) => ({
     type: "turn",
     turn,

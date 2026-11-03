@@ -145,7 +145,7 @@ New thread 保留独立 row，插件入口紧随其后且位于置顶等展示�
 
 ### 4.1 Thread row 与管理菜单
 
-- 最近（Recent）与各 Project 的默认自动顺序均按最新用户原始接收时间或成功接受最终 Agent 回复的完成时间排序，同时间以 Thread ID 稳定打破平局。中间文字、流式 token、工具、状态和元数据不得重新排序；运行指示仍实时更新。排队与 steer 的再次交付不产生新接收时间；旧 Host 缺少此投影时稳定退回创建时间。Project 已保存的用户手动顺序优先，未记录的新线程在其后按同一消息时间排序；读取或模型活动不把自动顺序写成手动 preference。Pinned 严格按用户保存的顺序，模型运行、消息或提问均不得改变其现有排列；Inbox 保留现有 Turn-start 分组顺序。
+- 最近（Recent）与各 Project 的默认自动顺序均按最新用户原始接收时间、成功接受最终 Agent 回复的完成时间或本地问题成功发布的记录时间排序，同时间以 Thread ID 稳定打破平局。中间文字、流式 token、普通工具、状态和元数据不得重新排序；运行指示仍实时更新。排队与 steer 的再次交付不产生新接收时间；旧 Host 缺少此投影时稳定退回创建时间。Project 已保存的用户手动顺序优先，未记录的新线程在其后按同一消息时间排序；读取或模型活动不把自动顺序写成手动 preference。Pinned 严格按用户保存的顺序，模型运行、消息或提问均不得改变其现有排列；Inbox 保留现有 Turn-start 分组顺序。
 
 - 结束提示从本线程实际开始执行后产生的 canonical 终态 ID 推导，复制/fork/导入的历史闭合不算新结束；已读先后采用稳定的终态序号，不受系统时钟回拨影响。不能用中间 Agent 文字、兼容 phase、流式 delta 或 updatedAt 代替。新运行会抑制旧提示而不标记已读；仅在前台有焦点、已结束 Turn 的真实尾部进入阅读范围后清除。选择/hover、隐藏子线程、后台 tab、未聚焦窗口和断线后的临时 interrupted 投影不构成确认。已明确观测到的当前连接实时终态保存一份去重的待查看身份，跨 reload 保留且不被安装时间基线或时钟回拨吞掉；native resume 屏障转交的当前 epoch 重叠事件同样算实时观测，自动重连在 ready 后转交且握手未完成时暂存；恢复旧快照本身不产生这种观测。若结束完全发生在离线期间、恢复无重叠事件且从未建立终态已读游标，时间又回拨到安装基线之前，则保守静默，不能从未知冷历史猜测新结束。缺少新 summary 字段的旧服务保持静默。升级旧消息游标时只初始化一次 Thread 终态基线，旧历史不重新亮点（因此升级前真正未查看的旧结束也不会补提醒）；Room 消息计数与游标保持原语义。
 
@@ -935,3 +935,190 @@ admission and canonical message paint. Composer-only changes reuse the transcrip
 subtree instead of re-mapping the whole history. Real native acceptance must cover
 the same 1000- and 5000-Turn histories, delayed/rejected admission, newer drafts,
 attachments, both ACK/event orders and exactly one canonical user message.
+
+### Pending steer 全部撤回到输入框（2026-11-02）
+
+本节定义原生待消费 steer 的撤回合同；实际验收记录绑定当前组合版本，不能以旧分支
+结果替代。普通消息的即时反馈与长历史性能合同保持不变。
+
+#### 范围与入口
+
+初版只覆盖当前私有 Thread 的人类 steer：Host 已持久接纳，但尚未由下一次
+模型输入准备过程 claim 的消息。“全部”是点击时的精确快照，不包含后来到达的
+消息、其他 Thread、Host/Agent 输入或明确选择 Next turn / Each turn 的队列。
+Side chat 必须使用自身精确 Thread，只有实现验证归属和权限后才能纳入；不承诺
+Room 或跨作者撤回，也不根据消息正文推断作者。
+
+工具执行或压缩期间仍可接纳普通消息为 pending steer。撤回不停止 Turn、
+不中断工具或压缩、不跳过完成边界、不删除已进入模型上下文的内容。
+
+Composer 上方的待处理区域显示“等待进入模型 · N 条”和“全部撤回到输入框”；
+单条时使用“撤回到输入框”。采用清楚的文字按钮，不以停止或删除图标替代含义。
+内容、图片和引用继续可见，真正被截断的内容可展开。
+
+状态区分接纳中、等待进入模型、正在撤回、已进入模型输入、撤回结果尚未确认、
+已撤回。只有权威 pending 状态可撤回；不能根据没有首 token、正在工具调用或
+没有 provider dispatch 记录推断。已撤回与已恢复到输入框是两个事实。
+
+#### 原子批次
+
+请求包含精确 Thread、唯一操作 ID，以及快照中所有消息的 ID、client ID 和
+revision。服务端在 admission / model-input claim 共用的 Thread mutation fence
+内校验全批来源、权限、状态和版本。任一目标已 claim、已变化或不合法，整批不执行；
+不能以逐条 Cancel 或多个请求模拟原子撤回。
+
+全批符合时提交一个持久批次控制事实，持久成功后才能 ACK。点击后新到达的消息
+不纳入快照。冲突显示“消息状态已变化，本次没有撤回。请查看仍在等待的消息。”
+刷新状态后由用户再次明确操作，不自动扩大目标或重试。
+
+**生命周期：保留已有投递策略，不自动启动新 Turn。**
+正常完成检查发现绑定当前 Turn 的 pending steer 时，继续同一个 Turn 的处理循环，
+不是创建新 Turn。Stop、执行错误或进程崩溃后，未 claim 的消息保留为 held，
+不自动运行、恢复或调度任何 Turn。它们仍可全部撤回，界面明确显示：
+“这些消息尚未进入模型；再次发送/继续时会一并提交，可先全部撤回”。
+
+下一次由用户独立明确授权的发送、继续、Retry 或 Replace 接纳，才按原始接纳顺序
+携带这些 held 消息，位于该次新输入之前；具体入口仍遵循已有权限和投递策略。
+这不是自动重试、自动新建 Turn，也不是将 steer 转换为 follow-up。绑定已终止
+Turn 的 pending 状态不可用于复活该 Turn。普通 next-turn 队列选择及 queue_pending
+检查必须区分 held steer，避免把合法显式 Retry 错挡为尚有普通队列。
+
+claim / recall / 正常完成 / Stop /
+error / crash / 下一次显式接纳的全部竞态及顺序须通过原生验收。
+
+#### 合并回输入框
+
+仅在权威成功回执确认后恢复。按原始接纳顺序合并各条正文，以两个换行隔开；
+不注入编号、时间、来源 ID 或其他元数据。现有草稿完整保留在最后，中间以空行
+分隔。使用最新草稿的原子 reducer 合并，不用点击时旧快照覆盖之后的输入。
+
+图片按原消息顺序及每条内部顺序恢复，再保留现有草稿图片；相同图片不擅自去重。
+保留 AttachmentRef，给草稿元素分配唯一身份；撤回投影的移除不能释放仍被回执
+或草稿引用的附件。多条消息下次成为一条消息，图片使用现有 Composer 图片区，
+不宣称原来的多模态逐消息分段完全不变。
+
+文件、Thread、选中文本等引用保留结构、位置及来源。每条先以自己的原 client ID
+解码引用，再合并结构化草稿；下一次显式发送使用新的 client ID 编码。禁止拼接
+序列化引用头，禁止把图片转换为文件指针。不能无损转换的技能、音频等输入明确
+说明阻碍；不能先撤回再丢弃，也不能把部分恢复伪装成全部成功。
+
+普通成功无需确认弹窗，不自动发送。仅发起操作的仍存活窗口可以自动合并。
+Composer 正在提交、目标 Thread 已切换或无法安全合并时，保留恢复卡片：
+“已撤回 N 条，内容已保留。恢复到输入框”。不自动导航、不抢焦点、不改写未决
+submission。用户明确恢复时仍以最新草稿进行非覆盖合并。
+
+#### 失败、未知与崩溃恢复
+
+明确未提交的失败保留待处理消息及草稿，展示原因和可展开的本机原始错误详情。
+传输异常显示“撤回结果尚未确认”，保留操作 ID 和目标快照，通过只读查询确认
+精确回执。“检查结果”不是重放；没有证据不自动取消、不恢复文本、不重新发送。
+
+不全局锁住 Composer，不等待压缩结束。新的普通消息可独立发送，使用独立身份，
+不加入旧撤回快照；仅禁止对相同未决批次重复操作。
+
+持久 RecallReceipt / 批次控制事实通过原始输入及已提交编辑事实保留可恢复的
+结构化内容，不新增一份可编辑历史。**不因此把普通 Composer 草稿改为 Host
+持久存储，不承诺跨窗口自动插入 exactly-once。**
+
+其他窗口更新撤回状态，但不自动插入自己的草稿。窗口关闭、崩溃或重启后，
+从精确回执提供用户明确操作的恢复卡片。如果可能已经恢复过，明示
+“再次恢复会追加到当前草稿”，由用户决定，绝不自动追加或发送。
+一次内存合并不能成为永久交付证据，不能据此丢弃原始恢复依据及附件引用。
+
+旧版本已经提交为模型语义 user_message 的 steer 不获得追溯撤回能力，
+不能仅凭未发现 dispatch 就从 ItemList 移除。
+
+#### 可访问性与验收
+
+使用共享按钮、本地化、焦点和错误组件；完整中英文及数量文案，键盘可达，
+至少 44px 操作目标，状态不只依赖颜色。仍在原 Composer 的成功恢复可返回输入焦点；
+用户已导航或正在其他区域编辑则不抢焦点。不新增发送/撤销快捷键。
+390 × 600 窄窗口中批准请求、待处理内容、错误和 Composer 均须可达。
+
+完整真实 App 验收至少覆盖：
+
+- 长对话普通发送及时反馈；工具/压缩期间 pending steer 可见，撤回不终止工作。
+- claim 赢得竞态则全批不执行；任一 revision 变化或权限失效同样全批失败。
+- 点击后新到消息不被旧快照包含；目标 Turn 结束行为符合明确的既有策略。
+- 空草稿、已有草稿、请求期间输入、正在提交、切换 Thread 均不丢失内容。
+- 多正文、重复图片、结构化引用及特殊字符正确合并；不支持输入不被扁平化。
+- 明确失败、响应丢失、重复查询不重复撤回、插入或自动发送。
+- 发起窗口关闭/崩溃后可明确恢复；其他窗口不自动插入。
+- 撤回输入不进入后续模型请求；已 claim 输入不能撤回；ItemList 不改写。
+- 中英文、键盘、窄窗、深浅色完整页面截图绑定精确源码与 bundle SHA。
+
+未运行的测试标明未验证；单组件测试、示意图及未运行 CI 不是完整 E2E 通过。
+
+原生人类普通发送及显式 steer 使用 Core staged admission；旧 Core/CAS
+`steerTurn` 保留立即模型语义兼容行为，不显示可撤回承诺。接纳中的本地 Sending
+副本只由精确 client ID 与匹配 admission kind 消除：start/steer 可以由
+`deliveryMode: steer` 的 staged fact 确认，普通 Next turn queue 不能误消除它们。
+ACK/事件乱序或丢失不覆盖新草稿，也不把已接纳错误显示为未知。
+
+### Native question cards and Asking attention
+
+Native accepted questions appear in the existing information panel attention slot,
+with independent `(Thread, call Item)` drafts, authored options, always-available
+free text, explicit Send and explicit Cancel request. Nothing is preselected or
+sent automatically. Hiding the information panel, changing Thread, or the model
+ending its Turn does not cancel a question, clear its draft, move focus or navigate.
+This initial renderer-local draft does not survive application reload; native
+accepted/pending questions do. Neither Board fields nor Composer/queue-edit fields
+are reused. Each authored question must have a valid answer before one group Send.
+Models may publish questions and optional choices without an answer template.
+Missing templates use deterministic ID-labelled answer text in authored question
+order; existing explicit templates keep their exact rendering. The native read
+shape still includes a normalized template, and question text is never evaluated
+as a template.
+
+The view reads bounded native pages and exact response identities. Invalidation
+restarts pagination; additional pages remain explicitly reachable. Pending means
+admitted, not model-visible; claimed means model input, not successful inference.
+Unknown writes retain their exact identity/payload and expose read-only Check
+response. Not-found is not proof that an in-flight write failed. No reconnect,
+status event or late callback resends or clears a newer draft. Disconnect fences
+all outstanding response observations; reopening begins a fresh page traversal.
+Question actions use the committed private Thread owner and current writable
+state, including archive/disconnection, with no authority published during render.
+Retained handlers cannot write after owner change or unmount. Local diagnostics
+remain expandable plain text. Current Host authority, not disabled controls,
+resolves concurrent clients. Question publication is available by default, as one feature with native question
+cards and Asking attention, without a hidden experiment or a Settings opt-in. The
+existing Host embedding startup option can still explicitly disable new
+publication; it never hides accepted questions, removes Asking attention or
+disables responses to existing questions. Questions do not grant tool permission
+or replace action approval. The feature does not change Pinned/hidden state or
+provide selected-thread live reveal or hidden-child attention discovery.
+
+The sidebar renders a compact **Asking / 待回答** capsule only from the native
+summary’s positive `openCount`; its accessible label and tooltip count request
+groups, not individual authored questions. It is independent of running,
+approval and unread indicators in both row densities. Missing/unavailable summary
+authority stays silent; zero open requests is not a claim that pending answers
+have entered the model. Real accepted publication timestamps already feed the
+shared Recent/default Project sorter; status changes and recall never invent a
+new publication time. Human answer receipts keep ordinary message ordering.
+Pinned and manual Project preferences are untouched, as is Inbox grouping.
+
+Summary updates never select a Thread, open its information panel, take keyboard
+focus, reveal a hidden child or change Pin. Existing question cards remain
+explicitly reachable for a selected Thread. Selected-thread new-question reveal
+and accurate parent-lineage attention with an explicit hidden-child entry remain
+separate integration gaps, not completed by this badge-only slice.
+
+#### Whole-batch recall returns to its original inputs
+
+One authoritative atomic recall receipt is validated before partitioning UI
+restoration destinations. Ordinary messages retain the existing lossless
+Composer/reference/image merge; question replies restore normalized choices and
+free text to their exact original question cards, never backend-rendered answer
+text in Composer. Cancellation preserves an available local pre-cancel draft;
+a cold client cannot invent the missing draft. Exact withdrawn response reads,
+current open question authority, unchanged question drafts and the current
+Thread/page/selection generation all pass before any destination is changed.
+A newer draft, newer response, navigation or submitting destination leaves the
+whole receipt recoverable, without partial insertion. In-window applied markers
+advance only after all destinations accept. Old recalled client identities are
+terminal; a later explicit new answer receives a fresh identity. Restoration
+never sends, navigates, steals focus, enables shared Host publication or promises
+cross-window automatic insertion.
