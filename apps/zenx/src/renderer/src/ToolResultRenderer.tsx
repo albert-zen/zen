@@ -9,6 +9,11 @@ import {
   type PluginUiRegistry,
 } from "./plugin-ui-host.js";
 
+import {
+  resolveToolResultPresentation,
+  toolResultFallbackText,
+} from "./tool-result-presentation.js";
+
 export function ToolResultRenderer({
   item,
   snapshot,
@@ -21,41 +26,15 @@ export function ToolResultRenderer({
   theme: "light" | "dark";
 }) {
   useTranslation("panels");
-  const renderer = (snapshot?.resultRenderers ?? []).find(
-    (candidate) => candidate.contentType === item.contentType,
-  );
-  const surface = snapshot?.surfaces.find(
-    (candidate) =>
-      candidate.pluginId === renderer?.pluginId &&
-      candidate.id === renderer.surfaceId,
-  );
-  const bundle = snapshot?.bundles.find(
-    (candidate) =>
-      candidate.pluginId === renderer?.pluginId &&
-      candidate.id === surface?.bundleId,
-  );
-  const rendererAvailable =
-    surface !== undefined &&
-    bundle !== undefined &&
-    bundle.apiVersion === 1 &&
-    (bundle.kind === "isolated" ||
-      registry?.resolveTrusted(bundle.entry)?.[surface.exportName] !==
-        undefined);
-  if (
-    renderer === undefined ||
-    snapshot === null ||
-    registry === null ||
-    !rendererAvailable ||
-    item.structuredContent === undefined
-  ) {
+  const presentation = resolveToolResultPresentation(item, snapshot, registry);
+  if (presentation.kind === "fallback" || !snapshot || !registry)
     return <ToolResultFallback item={item} />;
-  }
   return (
     <GenericPluginUiHost
       registry={registry}
       snapshot={snapshot}
-      pluginId={renderer.pluginId}
-      surfaceId={renderer.surfaceId}
+      pluginId={presentation.pluginId}
+      surfaceId={presentation.surfaceId}
       context={{
         contentType: item.contentType,
         structuredContent: item.structuredContent,
@@ -74,17 +53,25 @@ export function ToolResultRenderer({
 
 export function ToolResultFallback({ item }: { item: CommandItem }) {
   useTranslation("panels");
-  const json =
-    item.structuredContent === undefined
-      ? null
-      : JSON.stringify(item.structuredContent, null, 2);
+  const { structured: json, output } = toolResultFallbackText(item);
   return (
     <section
       className="tool-result-fallback"
       aria-label={i18n.t("panels:toolResult")}
     >
-      {json === null ? null : <pre>{json}</pre>}
-      {item.aggregatedOutput ? <pre>{item.aggregatedOutput}</pre> : null}
+      {json === null ? null : (
+        <pre
+          data-thread-find-item-id={item.id}
+          data-thread-find-field="tool-structured"
+        >
+          {json}
+        </pre>
+      )}
+      {output ? (
+        <pre data-thread-find-item-id={item.id} data-thread-find-field="output">
+          {output}
+        </pre>
+      ) : null}
       {item.exitCode === null ? null : (
         <small>
           {i18n.t("panels:exitCode")} {item.exitCode}
