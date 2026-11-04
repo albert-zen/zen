@@ -12666,3 +12666,97 @@ button:disabled {
 .room-asking-badge {
   flex: 0 0 auto;
 }
+
+/* WIP virtual viewport: no outer .messages padding or inherited history grid. */
+.experimental-transcript-viewport .virtual-transcript-row,
+.experimental-transcript-viewport .virtual-transcript-header,
+.experimental-transcript-viewport .virtual-transcript-footer {
+  width: calc(100% - var(--conversation-gutter) * 2);
+  max-width: var(--conversation-width);
+  min-width: 0;
+  margin: 0 auto;
+}
+.virtual-transcript-row {
+  padding-bottom: 24px;
+}
+.virtual-transcript-header {
+  padding-top: 28px;
+}
+.virtual-transcript-footer {
+  display: grid;
+  gap: 24px;
+  padding-bottom: max(38px, calc(var(--bottom-zone-height, 0px) + 24px));
+}
+/* The final row already carries its gap. With no rendered footer content,
+   subtract that gap once so the total composer clearance matches full DOM. */
+.virtual-transcript-footer:empty {
+  padding-bottom: calc(
+    max(38px, calc(var(--bottom-zone-height, 0px) + 24px)) - 24px
+  );
+}
+@media (max-width: 640px) {
+  .virtual-transcript-row {
+    padding-bottom: 20px;
+  }
+  .virtual-transcript-header {
+    padding-top: 20px;
+  }
+  .virtual-transcript-footer {
+    gap: 20px;
+    padding-bottom: max(28px, calc(var(--bottom-zone-height, 0px) + 24px));
+  }
+  .virtual-transcript-footer:empty {
+    padding-bottom: calc(
+      max(28px, calc(var(--bottom-zone-height, 0px) + 24px)) - 20px
+    );
+  }
+}
+
+/* WIP data-backed Find is opt-in with the virtual viewport, never a second scroller. */
+.virtual-transcript-find {
+  position: absolute;
+  z-index: 12;
+  top: 12px;
+  right: 16px;
+  width: min(460px, calc(100% - 32px));
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--color-surface-overlay);
+  color: var(--text);
+  box-shadow: 0 4px 18px var(--color-shadow-find);
+}
+.virtual-transcript-find-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.virtual-transcript-find-controls input {
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--surface);
+  color: inherit;
+}
+.virtual-transcript-find-controls > span {
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.virtual-transcript-find-controls .icon-button {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+.virtual-transcript-find-note {
+  margin: 4px 4px 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+::highlight(zenx-thread-find-active) {
+  background-color: var(--color-surface-find-match);
+  color: var(--color-text-on-find-match);
+}

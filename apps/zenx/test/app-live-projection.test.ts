@@ -2043,8 +2043,8 @@ test("actual App cached navigation restores tall-Composer position", async () =>
     const reused = scroll();
     await choose(0);
     assert.equal(
-      scroll(),
-      reused,
+      scroll() === reused,
+      true,
       "actual cached App navigation reuses ThreadView",
     );
     const textarea =

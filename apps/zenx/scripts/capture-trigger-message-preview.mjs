@@ -166,38 +166,107 @@ try {
       type: "keyUp",
     });
   };
-  const click = async (x, y) => {
-    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-    for (const type of ["mousePressed", "mouseReleased"])
-      await send("Input.dispatchMouseEvent", {
-        type,
-        x,
-        y,
-        button: "left",
-        clickCount: 1,
-      });
-  };
   await send("Page.enable");
   await send("Runtime.enable");
   lifecycle.captureStarted();
   await send("Network.enable");
 
-  // DOM is inspected immediately before each real CDP click. scrollIntoView
-  // only exposes the requested target; it does not replace activation/focus.
-  const clickSelector = async (selector, index = 0) => {
-    const target = await evaluate(
-      `(() => { const e=document.querySelectorAll(${JSON.stringify(selector)})[${index}]; if(!e) return null; e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,disabled:e.disabled,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}; })()`,
+  // Native wheel input expresses reading intent before exposing an offscreen
+  // transcript source. Programmatic scrollIntoView can leave live following on.
+  const clickSelector = async (selector, index = 0, observations = []) => {
+    const inspect = () =>
+      evaluate(`(async () => {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        const e = document.querySelectorAll(${JSON.stringify(selector)})[${index}];
+        const viewport = e?.closest('.messages');
+        if (!e || !viewport) return null;
+        const r = e.getBoundingClientRect();
+        const v = viewport.getBoundingClientRect();
+        const bottomZone = viewport.closest('.thread-view')?.querySelector('.bottom-zone')?.getBoundingClientRect();
+        const left = Math.max(0, v.left), right = Math.min(innerWidth, v.right);
+        const top = Math.max(0, v.top), bottom = Math.min(innerHeight, v.bottom, bottomZone?.top ?? innerHeight);
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const wheelX = left + Math.min(8, (right - left) / 2), wheelY = (top + bottom) / 2;
+        return {
+          x, y, width: r.width, height: r.height, scrollTop: viewport.scrollTop,
+          disabled: !!e.disabled || e.getAttribute('aria-disabled') === 'true',
+          visible: r.left >= left && r.right <= right && r.top >= top && r.bottom <= bottom,
+          hit: e.contains(document.elementFromPoint(x, y)),
+          top, bottom, wheelX, wheelY,
+          wheelHit: viewport.contains(document.elementFromPoint(wheelX, wheelY))
+        };
+      })()`);
+    const stable = (a, b) =>
+      a &&
+      b &&
+      b.visible &&
+      b.hit &&
+      !b.disabled &&
+      ["x", "y", "width", "height", "scrollTop"].every(
+        (key) => Math.abs(a[key] - b[key]) < 0.5,
+      );
+    const deadline = Date.now() + 5_000;
+    let previous;
+    while (Date.now() < deadline) {
+      const target = await inspect();
+      observations.push({ action: "inspect", target });
+      assert.ok(
+        target && !target.disabled && target.width > 0 && target.height > 0,
+        `Mounted, enabled source target: ${selector}`,
+      );
+      if (!target.visible) {
+        const margin = target.height / 2;
+        const outsideY =
+          target.y - margin < target.top || target.y + margin > target.bottom;
+        assert.ok(
+          outsideY && target.bottom > target.top && target.wheelHit,
+          `Scrollable, unobscured transcript: ${selector}`,
+        );
+        const step = (target.bottom - target.top) * 0.75;
+        const deltaY = Math.max(
+          -step,
+          Math.min(step, target.y - (target.top + target.bottom) / 2),
+        );
+        observations.push({ action: "wheel", deltaY, target });
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: target.wheelX,
+          y: target.wheelY,
+          deltaX: 0,
+          deltaY,
+        });
+        previous = undefined;
+        continue;
+      }
+      if (target.hit && stable(previous, target)) {
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: target.x,
+          y: target.y,
+        });
+        const ready = await inspect();
+        observations.push({ action: "before-press", target: ready });
+        if (!stable(target, ready)) {
+          previous = ready;
+          continue;
+        }
+        for (const type of ["mousePressed", "mouseReleased"])
+          await send("Input.dispatchMouseEvent", {
+            type,
+            x: ready.x,
+            y: ready.y,
+            button: "left",
+            clickCount: 1,
+          });
+        await delay(120);
+        return;
+      }
+      previous = target;
+    }
+    throw new Error(
+      `Source target never became stable and clickable: ${selector}`,
     );
-    assert.ok(
-      target &&
-        !target.disabled &&
-        target.width > 0 &&
-        target.height > 0 &&
-        target.hit,
-      `Visible, unobscured target: ${selector}`,
-    );
-    await click(target.x, target.y);
-    await delay(120);
   };
   for (const options of [
     {
@@ -281,7 +350,12 @@ try {
       "Protocol timestamps retain exact expected UTC instant",
     );
     await capture("01-message");
-    await clickSelector(".trigger-message-row .message-source-link");
+    receipt.sourceInput = [];
+    await clickSelector(
+      ".trigger-message-row .message-source-link",
+      0,
+      receipt.sourceInput,
+    );
     await waitFor(
       "!!document.querySelector('.preview-source .trigger-editor')",
     );
