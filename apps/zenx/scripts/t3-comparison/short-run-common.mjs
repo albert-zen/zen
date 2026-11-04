@@ -53,15 +53,24 @@ export async function installObservation(page,selectors,text){return page.evalua
 export async function requireLiveBottom(page,rootSelector){
  return until(()=>page.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(rootSelector)});if(!e)return null;const distance=e.scrollHeight-e.clientHeight-e.scrollTop;return distance<=4?{distance,clientHeight:e.clientHeight}:null;})()`),'actual transcript at live bottom before Send');
 }
-export async function stopOwnedProcess(child,closed,main,page,log){
+export async function stopOwnedProcess(child,closed,main,page,log,{normalCloseOnly=false}={}){
  page?.close();main?.close();
- if(child&&child.exitCode===null&&child.signalCode===null){
-  for(const signal of ['SIGTERM','SIGKILL']){try{process.kill(-child.pid,signal);}catch(error){if(error.code!=='ESRCH')throw error;}
-   const stopped=await Promise.race([closed.then(()=>true,()=>true),delay(5000).then(()=>false)]);if(stopped)break;
+ const result={processGroupDead:true,cleanupSignals:[]};
+ if(child?.pid!==undefined){
+  assert.notEqual(process.platform,'win32','Owned group cleanup requires POSIX');
+  const groupAlive=()=>{try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
+  // A zero-exit leader is not proof its detached descendants have exited.
+  // Normal close must fail before forced cleanup, preventing cold reopen.
+  if(normalCloseOnly)assert.equal(groupAlive(),false,'Normal close left owned POSIX group alive');
+  else for(const signal of ['SIGTERM','SIGKILL']){
+   if(!groupAlive())break;
+   try{process.kill(-child.pid,signal);result.cleanupSignals.push(signal);}catch(error){if(error.code!=='ESRCH')throw error;}
+   const deadline=Date.now()+5000;while(groupAlive()&&Date.now()<deadline)await delay(25);
   }
-  assert(child.exitCode!==null||child.signalCode!==null,'Owned native process still running; keep profile for safe cleanup');
+  assert.equal(groupAlive(),false,'Owned POSIX group still present; keep profile for safe cleanup');
+  if(child.exitCode===null&&child.signalCode===null)await Promise.race([closed,delay(5000).then(()=>{throw Error('Owned leader close unconfirmed; keep profile');})]);
  }
- await log?.close().catch(()=>{});
+ await log?.close().catch(()=>{});return result;
 }
 export async function loadFixture(file){const f=JSON.parse(await readFile(file,'utf8'));assert.equal(f.contentSha256,createHash('sha256').update(JSON.stringify({turns:f.turns,sends:f.sends})).digest('hex'));assert.equal(f.turns.length,100);assert.equal(f.sends.length,3);for(const t of f.turns)for(const key of ['user','assistant'])assert.equal(Buffer.byteLength(t[key]),256);for(const t of f.sends)assert.equal(Buffer.byteLength(t),256);return f;}
 export function makeFixture(){

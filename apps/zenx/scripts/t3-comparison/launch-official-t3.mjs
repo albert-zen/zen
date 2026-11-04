@@ -65,8 +65,7 @@ async function rpc(tag,payload){return page.evaluate(`window.__ownedOfficialRpc(
 async function quit(){
  page?.close();main?.evaluate(`__ownedComparisonElectron.app.quit();true`).catch(()=>{});
  const result=await Promise.race([closed,delay(20000).then(()=>{throw Error('Official normal app quit did not finish');})]);
- lifecycle.push({phase:'normal-close',...result});assert.equal(result.code,0);assert.equal(result.signal,null);
- main?.close();await privateLog?.close();
+ try{assert.equal(result.code,0);assert.equal(result.signal,null);const group=await stopOwnedProcess(child,closed,main,page,privateLog,{normalCloseOnly:true});lifecycle.push({phase:'normal-close',...result,...group});}catch(error){lifecycle.push({phase:'normal-close-failed',...result,processGroupAbsentUnconfirmed:true});throw error;}
 }
 const report={status:'not-started',officialVersion:'0.1.7-nightly.20261103.4119',sourceCommit:'cefb544af3c98224874419198c0359b652ca3c94',assetBytes:186437562,assetSha256:'3a65c0355a08a8d32e0df04d7719f545551d76be5e7b4662b7f26335f06f0c95',fixtureContentSha256:fixture.contentSha256,history:{priorConversationPairs:count,priorCompletedTurnItems:count*2,priorProviderRuns:0,priorMessages:count*2,textLength:256,seed:'official AgentSessionScanner + AgentSessionImporter + EventSink; no raw SQLite writes'},hostBefore,results,lifecycle,durability:'SQLite WAL synchronous=NORMAL; normal process close/cold reopen only. Not equivalent to per-send fsync or power-loss durability.',modelSelection:{instanceId:'codex',model:'gpt-6-astra',source:'Official packages/contracts/src/model.ts DEFAULT_MODEL and codex default; no model credentials supplied'},presentationEvidence:'Shared native IO + transcript/composer clipping + distinct later rAF, not screenshot/pixel-presented proof. Do not pool with existing Zen strict later-frame results.'};
 try{
