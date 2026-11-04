@@ -362,3 +362,119 @@ test("failed temporary-page cleanup never becomes a confirmed release receipt", 
     await cdp.close();
   }
 });
+
+test("session finish waits for accepted creates before selecting temporary pages", async () => {
+  const cdp = await createFakeCdpServer({ closeTargetsWithoutEvents: true });
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false, ...args },
+      signal: new AbortController().signal,
+    });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  cdp.interceptRequests(async (request) => {
+    if (request.method === "Target.createTarget") await held;
+  });
+  try {
+    await invoke("browser_list_tabs");
+    const opened = invoke("browser_open", {
+      url: "https://example.test/temporary",
+    });
+    await waitUntil(() => cdp.count("Target.createTarget") === 1);
+    // This create was accepted before finish, but has not reached the wire yet.
+    const queued = invoke("browser_open", {
+      url: "https://example.test/queued",
+    });
+    const closing = invoke("browser_close_session");
+    await nextTurn();
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+    release();
+    const tabsCreated = (await Promise.all([
+      opened,
+      queued,
+    ])) as BrowserTabSummary[];
+    await closing;
+    const tabs = (await invoke("browser_list_tabs")) as BrowserTabSummary[];
+    assert.equal(
+      cdp.count("Target.createTarget"),
+      2,
+      "accepted creates execute once",
+    );
+    assert.equal(
+      cdp.count("Target.closeTarget"),
+      2,
+      "all known temporary pages are closed",
+    );
+    assert.deepEqual(
+      tabs.map((tab) => tab.tabId),
+      ["target-1"],
+      "the original human page remains open",
+    );
+    assert.ok(
+      tabsCreated.every(
+        (created) => !tabs.some((tab) => tab.tabId === created.tabId),
+      ),
+    );
+  } finally {
+    release();
+    await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("session finish rejects new creates after its cleanup request", async () => {
+  const cdp = await createFakeCdpServer({ closeTargetsWithoutEvents: true });
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false, ...args },
+      signal: new AbortController().signal,
+    });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  cdp.interceptRequests(async (request) => {
+    if (request.method === "Target.createTarget") await held;
+  });
+  try {
+    await invoke("browser_list_tabs");
+    const opened = invoke("browser_open", {
+      url: "https://example.test/temporary",
+    });
+    await waitUntil(() => cdp.count("Target.createTarget") === 1);
+    const closing = invoke("browser_close_session");
+    const rejected = assert.rejects(
+      invoke("browser_open", { url: "https://example.test/too-late" }),
+      /session is closing/u,
+    );
+    await nextTurn();
+    release();
+    await opened;
+    await closing;
+    await rejected;
+    assert.equal(
+      cdp.count("Target.createTarget"),
+      1,
+      "no create after the cleanup admission boundary",
+    );
+    assert.equal(cdp.count("Target.closeTarget"), 1);
+  } finally {
+    release();
+    await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});

@@ -1540,6 +1540,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   async finishSession(sessionId: string): Promise<void> {
     const session = this.#requireSession(sessionId);
     this.#stopSessionObservation(session);
+    // Accepted creates can still be acquiring their exact target ownership.
+    // Stop new admission first, then decide cleanup only after that tail settles.
+    await session.operationTail;
+    this.#assertSessionCurrent(session);
     // Only positively identified pages created by this session are disposable.
     // Unknown creates and pre-existing user pages never enter this set.
     const outcomes = await Promise.allSettled(
@@ -1884,6 +1888,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     run: () => Promise<T>,
     allowTainted = false,
   ): Promise<T> {
+    // Check admission only once: already-accepted queued operations retain their
+    // settlement fence, while later work cannot create a page behind cleanup.
+    if (session.closeQueued && !allowTainted)
+      throw new Error("User browser session is closing");
     return this.#closure.enqueue(
       session,
       () => {
