@@ -59,6 +59,7 @@ export function readMessageSelection(
         : [...viewport.querySelectorAll<HTMLElement>(selector)].filter(
             (owner) => range.intersectsNode(owner),
           );
+  const seen = new Map<string, Set<string>>();
   const sources = owners
     .flatMap((owner) => {
       const threadId = owner.dataset.quoteThreadId!;
@@ -67,13 +68,13 @@ export function readMessageSelection(
         : [owner.dataset.quoteItemId!];
       return ids.map((id) => ({ threadId, id }));
     })
-    .filter(
-      (source, index, all) =>
-        all.findIndex(
-          (other) =>
-            other.threadId === source.threadId && other.id === source.id,
-        ) === index,
-    );
+    .filter(({ threadId, id }) => {
+      let ids = seen.get(threadId);
+      if (!ids) seen.set(threadId, (ids = new Set()));
+      if (ids.has(id)) return false;
+      ids.add(id);
+      return true;
+    });
   return sources.length === 1 && startOwner === endOwner
     ? { ...sources[0]!, excerpt }
     : { excerpt, sources };
