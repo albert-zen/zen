@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { browserInspectScript } from "../src/main/capabilities/browser-provider.ts";
+import {
+  browserInputLifecycleEventInvalidates,
+  browserInspectScript,
+} from "../src/main/capabilities/browser-provider.ts";
 import {
   browserInputSnapshotScript,
   includesBrowserInputSnapshot,
@@ -44,6 +47,7 @@ const helpers = new Set([
   "promiseCapability",
   "throwIfAborted",
   "abortReason",
+  "userBrowserDocumentEventInvalidates",
 ]);
 const extracted = ast.statements
   .filter(
@@ -97,6 +101,7 @@ function fixture(options = {}) {
     owner,
     WebSocket: { OPEN: 1 },
     performance: { now: () => now },
+    browserInputLifecycleEventInvalidates,
     browserInspectScript,
     browserInputSnapshotScript,
     includesBrowserInputSnapshot,
@@ -238,6 +243,20 @@ async function start(f, signal, expectedIdentity) {
   await until(() => f.main().length > count);
   return { result, request: f.main().at(-1) };
 }
+
+test("fixture delivers lifecycle events through the real input invalidation helper", async () => {
+  const f = fixture();
+  await f.client.testFence();
+  const epoch = f.client.testEpoch();
+  assert.equal(epoch.inputLifecycleRevision, 0);
+  // Deliver outside an observer hook so a missing VM dependency fails directly
+  // instead of being swallowed by the observer's intentional error isolation.
+  f.event("Page.loadEventFired");
+  assert.equal(epoch.inputLifecycleRevision, 0);
+  f.event("Page.frameStartedLoading", { frameId: "frame-1" });
+  assert.equal(epoch.inputLifecycleRevision, 1);
+  assert.equal(f.observer.counters.observerErrors, 0);
+});
 
 test("first exact inspection starts its own window after setup, including frame and world cost", async () => {
   const f = fixture({
