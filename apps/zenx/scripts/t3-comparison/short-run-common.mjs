@@ -63,13 +63,15 @@ export function ownedProcessMetadata(pid,inspectorPid=null){
  }catch(error){value.metadataError={name:error.name,code:error.code??null,status:error.status??null};}
  return value;
 }
+const deniedOwnedProcesses=new WeakMap();
 export async function stopOwnedProcess(child,closed,main,page,log,{normalCloseOnly=false}={}){
+ if(child&&deniedOwnedProcesses.has(child))throw deniedOwnedProcesses.get(child);
  page?.close();main?.close();
  const result={processGroupDead:true,cleanupSignals:[]};
  if(child?.pid!==undefined){
   assert.notEqual(process.platform,'win32','Owned group cleanup requires POSIX');
   assert(Number.isSafeInteger(child.pid)&&child.pid>1,'Invalid owned spawned PID');
-  const annotate=(error,operation,signal)=>{error.ownedProcess={operation,signal,code:error.code??null,...ownedProcessMetadata(child.pid)};return error;};
+  const annotate=(error,operation,signal)=>{if(error.code==='EPERM')deniedOwnedProcesses.set(child,error);error.ownedProcess={operation,signal,code:error.code??null,...ownedProcessMetadata(child.pid)};return error;};
   const groupAlive=()=>{try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw annotate(error,'probe-owned-group',0);}};
   // A zero-exit leader is not proof its detached descendants have exited.
   // Normal close must fail before forced cleanup, preventing cold reopen.
