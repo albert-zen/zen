@@ -1,30 +1,4 @@
 export const en = {
-  imagePreparationTitle: "Model image view adjusted ({{count}})",
-  imagePreparationUnavailableTitle:
-    "Image unavailable to model ({{unavailableCount}})",
-  imagePreparationMixedTitle:
-    "Model image view: {{count}} prepared, {{unavailableCount}} unavailable",
-  imagePreparationPreserved:
-    "The model sees prepared images. Your original attachments are preserved.",
-  imagePreparationUnavailablePreserved:
-    "No image pixels were sent for these images. Your original attachments are preserved.",
-  imagePreparationMixedPreserved:
-    "The model sees only the prepared images; unavailable images were not sent. Your original attachments are preserved.",
-  imagePreparationFallbackUnsupported:
-    "Original-detail input is unsupported by this model, so a bounded high-detail view was used.",
-  imagePreparationFallbackUnknown:
-    "Original-detail support is unknown for this model, so a bounded high-detail view was used.",
-  imagePreparationDetails: "View image sizes",
-  imagePreparationDimensions:
-    "Image {{number}}: {{originalWidth}} × {{originalHeight}} → {{preparedWidth}} × {{preparedHeight}} ({{profile}})",
-  imagePreparationUnavailableDecode:
-    "Image {{number}}: {{originalWidth}} × {{originalHeight}} · unavailable to model (could not decode image)",
-  imagePreparationUnavailableDecodeNoDimensions:
-    "Image {{number}}: unavailable to model (could not decode image)",
-  imagePreparationUnavailableProcessing:
-    "Image {{number}}: {{originalWidth}} × {{originalHeight}} · unavailable to model (could not prepare image)",
-  imagePreparationUnavailableProcessingNoDimensions:
-    "Image {{number}}: unavailable to model (could not prepare image)",
   pendingSendSending: "Sending…",
   pendingSendAdmitted: "Admitted; waiting for the conversation to update",
   pendingSendNotSent: "Not sent",
@@ -996,31 +970,6 @@ export const en = {
 } as const;
 
 export const zhCN = {
-  imagePreparationTitle: "模型图片视图已调整（{{count}} 张）",
-  imagePreparationUnavailableTitle:
-    "模型无法查看图片（{{unavailableCount}} 张）",
-  imagePreparationMixedTitle:
-    "模型图片视图：已处理 {{count}} 张，无法查看 {{unavailableCount}} 张",
-  imagePreparationPreserved: "模型看到的是处理后的图片；原始附件仍然保留。",
-  imagePreparationUnavailablePreserved:
-    "这些图片的像素没有发送给模型；原始附件仍然保留。",
-  imagePreparationMixedPreserved:
-    "模型只能看到已处理的图片；无法查看的图片没有发送。原始附件仍然保留。",
-  imagePreparationFallbackUnsupported:
-    "此模型不支持原图细节输入，因此使用受限的高细节视图。",
-  imagePreparationFallbackUnknown:
-    "无法确定此模型是否支持原图细节输入，因此使用受限的高细节视图。",
-  imagePreparationDetails: "查看图片尺寸",
-  imagePreparationDimensions:
-    "图片 {{number}}：{{originalWidth}} × {{originalHeight}} → {{preparedWidth}} × {{preparedHeight}}（{{profile}}）",
-  imagePreparationUnavailableDecode:
-    "图片 {{number}}：{{originalWidth}} × {{originalHeight}} · 模型无法查看（图片解码失败）",
-  imagePreparationUnavailableDecodeNoDimensions:
-    "图片 {{number}}：模型无法查看（图片解码失败）",
-  imagePreparationUnavailableProcessing:
-    "图片 {{number}}：{{originalWidth}} × {{originalHeight}} · 模型无法查看（图片处理失败）",
-  imagePreparationUnavailableProcessingNoDimensions:
-    "图片 {{number}}：模型无法查看（图片处理失败）",
   pendingSendSending: "正在发送…",
   pendingSendAdmitted: "已接纳，等待会话更新",
   pendingSendNotSent: "未发送",
