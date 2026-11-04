@@ -522,7 +522,7 @@ for (const platform of ["darwin", "win32", "linux"])
     dom.window.close();
   });
 
-test("preload lost completion timer is request-bound and never cancels an existing Selection", async (t) => {
+test("preload watchdog retires only the prepared request and leaves Selection ownership to the renderer", async (t) => {
   const { JSDOM } = await import("jsdom");
   const dom = new JSDOM("<body><div>Canonical transcript text</div></body>");
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -552,14 +552,30 @@ test("preload lost completion timer is request-bound and never cancels an existi
   prepare(3);
   const range = dom.window.document.createRange();
   range.selectNodeContents(dom.window.document.body);
-  dom.window.document.getSelection()!.addRange(range);
+  const selection = dom.window.document.getSelection()!;
+  selection.addRange(range);
   t.mock.timers.tick(1500);
   assert.equal(
     cancelled,
-    2,
-    "actual Selection remains owned by renderer lifecycle",
+    3,
+    "cleanup notifies the renderer even when a document Selection exists",
   );
+  assert.ok(
+    selection.getRangeAt(0) === range,
+    "preload cleanup does not replace the existing Selection range",
+  );
+  assert.equal(selection.toString(), "Canonical transcript text");
   off();
+  const offUnprepared = api.onPrepareSelectAll(() => false);
+  prepare(4);
+  t.mock.timers.tick(1500);
+  assert.equal(cancelled, 3, "an unprepared view receives no cleanup notice");
+  offUnprepared();
+  assert.equal(
+    cancelled,
+    3,
+    "expired requests do not notify again on teardown",
+  );
   offCancel();
   dom.window.close();
 });

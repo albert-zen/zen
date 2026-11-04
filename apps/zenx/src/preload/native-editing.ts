@@ -89,8 +89,9 @@ export function createNativeEditingApi(
     if (request.timer) clearTimeout(request.timer);
     request.timer = setTimeout(() => {
       if (pending !== request) return;
-      if (document.getSelection()?.isCollapsed === false) pending = undefined;
-      else cancel();
+      // Retire preparation even for unrelated document selections. Each view's
+      // cancellation listener preserves Selection that intersects that view.
+      cancel();
     }, 1500);
   };
   const keydown = (event: KeyboardEvent) => {

@@ -520,7 +520,7 @@ function NativeSelectableTranscriptViewport(props: Props) {
     const document = node.ownerDocument;
     alignTranscriptSelectionAnchor(node, anchor.current);
     props.onViewportScroll(node, true);
-    let armed = false;
+    let armed = transcriptSelectionIntersects(node);
     let frame = 0;
     let alive = true;
     let navigation = 0;
