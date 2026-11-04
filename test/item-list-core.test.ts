@@ -9,6 +9,8 @@ import {
   type ContextItem,
 } from "../src/item-list.js";
 import type { CanonicalItem } from "../src/item.js";
+import { compileModelMessages } from "../src/model.js";
+import { estimateModelInput } from "../src/model-usage.js";
 const base = {
   id: "input",
   threadId: "thread",
@@ -136,6 +138,55 @@ test("empty reasoning observations never become semantic input or selected token
     }).length,
     1,
   );
+});
+
+test("legacy context inspection excludes empty public reasoning without changing replayable reasoning", () => {
+  const selection = {
+    providerProfileId: "fixture",
+    modelId: "synthetic",
+    reasoningEffort: "medium",
+  };
+  const started: CanonicalItem = {
+    ...base,
+    id: "started",
+    type: "turn_started",
+    selection,
+  };
+  for (const summary of [undefined, ""]) {
+    const observation: CanonicalItem = {
+      ...base,
+      type: "reasoning",
+      reasoningContent: "",
+      contentVisibility: "public",
+      ...(summary === undefined ? {} : { summary }),
+    };
+    const before = structuredClone(observation);
+    const messages = compileModelMessages([started, observation], selection);
+    assert.deepEqual(messages, []);
+    assert.equal(estimateModelInput(messages, []).total, 0);
+    assert.deepEqual(observation, before);
+  }
+  for (const content of [
+    {
+      reasoningContent: "",
+      contentVisibility: "public" as const,
+      summary: "Public summary",
+    },
+    { reasoningContent: "Public text", contentVisibility: "public" as const },
+    {
+      reasoningContent: "synthetic-opaque",
+      contentVisibility: "opaque" as const,
+      providerItemId: "provider-item",
+    },
+  ]) {
+    assert.deepEqual(
+      compileModelMessages(
+        [started, { ...base, type: "reasoning", ...content }],
+        selection,
+      ),
+      [{ role: "reasoning", ...content }],
+    );
+  }
 });
 
 test("partial samples and nested tool lifecycle are not semantic history", () => {
