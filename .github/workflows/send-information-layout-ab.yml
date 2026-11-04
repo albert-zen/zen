@@ -1,7 +1,7 @@
-name: Packaged immutable backend fixed-latest-UI pair (WIP)
+name: Packaged ItemList read-warming actual-main pair
 on:
   push:
-    branches: [diagnostic/send-immutable-backend-fixed-ui-20261103]
+    branches: [diagnostic/send-item-read-warming-main-pair-20261104]
     paths:
       - .github/workflows/send-information-layout-ab.yml
       - apps/zenx/scripts/capture-send-feedback-verified-frame.cjs
@@ -18,12 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64
+          ref: 869921bd6ba827880113ca1e14a12ac6e2324b1e
           persist-credentials: false
           path: baseline
       - uses: actions/checkout@v4
         with:
-          ref: 7c916a741633741d760e0927ae7386a5fa0961c3
+          ref: 14619d9869dc7c847a69d3380e7f95412a1f020f
           persist-credentials: false
           path: candidate
       - uses: actions/checkout@v4
@@ -41,7 +41,7 @@ jobs:
             cp diagnostic/apps/zenx/scripts/long-thread-domain-seed.mjs "$source/apps/zenx/scripts/"
             cp diagnostic/apps/zenx/scripts/summarize-send-timeline.cjs "$source/apps/zenx/scripts/"
           done
-      - name: Build locked backend pair with identical real Legend frontend
+      - name: Build locked backend pair with identical actual-main full-DOM frontend
         timeout-minutes: 16
         run: |
           for source in baseline candidate; do
@@ -57,7 +57,7 @@ jobs:
           const digest = bytes => createHash('sha256').update(bytes).digest('hex');
           const builds = [];
           for (const source of ['baseline', 'candidate']) {
-            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), 'a5b6da40df0538dee66ee7b13effd9c9995d1d19');
+            assert.equal(execFileSync('git', ['rev-parse', 'HEAD:apps/zenx'], { cwd: source, encoding: 'utf8' }).trim(), 'd524e5c03244f40f696a2dad7ea02159382344b2');
             const root = source + '/apps/zenx/out/renderer/';
             const files = (await readdir(root, { recursive: true })).filter(file => /\.(html|js|css)$/.test(file)).sort();
             assert.ok(files.length > 0);
@@ -75,7 +75,7 @@ jobs:
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control candidate baseline"; do
+          for case_spec in "1280 enter control baseline candidate"; do
             read -r width activation prefix first second <<< "$case_spec"
             for source in "$first" "$second"; do
               case="$prefix-$source"
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-send-immutable-backend-fixed-ui-5000
+          name: native-send-item-read-warming-main-5000
           # Owned synthetic PNGs survive a later diagnostic assertion failure.
           path: |
             results/*/send-information-layout.summary.json

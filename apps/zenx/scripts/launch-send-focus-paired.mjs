@@ -61,19 +61,19 @@ const hostSnapshot = () => ({
 const hostBefore = hostSnapshot();
 const snapshots = {
   baseline: {
-    commit: "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
-    tree: "ba960dd46644a9f8d87bd5c524b0d31019261444",
-    expectedVirtualTranscript: true,
+    commit: "869921bd6ba827880113ca1e14a12ac6e2324b1e",
+    tree: "162233ca48deadad698faad2157505b35dca2296",
+    expectedVirtualTranscript: false,
   },
   candidate: {
-    commit: "7c916a741633741d760e0927ae7386a5fa0961c3",
-    tree: "9e0168eff40971565093399fbf0728c99cdb088d",
-    expectedVirtualTranscript: true,
+    commit: "14619d9869dc7c847a69d3380e7f95412a1f020f",
+    tree: "f2d56e96b58217fe75193c93f2b254671c1eb7ef",
+    expectedVirtualTranscript: false,
   },
 };
 // The controlled backend pair has byte-identical ZenX source on both sides.
-const frontendSourceTree = "a5b6da40df0538dee66ee7b13effd9c9995d1d19";
-const rendererSourceTree = "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad";
+const frontendSourceTree = "d524e5c03244f40f696a2dad7ea02159382344b2";
+const rendererSourceTree = "fa9d29aa44891025497b04df8b9803487d5abba5";
 for (const [subtree, expectedTree] of [
   ["apps/zenx", frontendSourceTree],
   ["apps/zenx/src/renderer", rendererSourceTree],
@@ -347,7 +347,7 @@ await writeFile(
       expectedVirtualTranscript: snapshot.expectedVirtualTranscript,
       packagedHashes,
       comparisonRole:
-        "backend-only change with fixed real Legend frontend, not production acceptance: " +
+        "backend-only change with fixed actual-main full-DOM frontend, not production acceptance: " +
         activationKind,
       priorUserMessages: count,
       priorCompletedTurns: count,

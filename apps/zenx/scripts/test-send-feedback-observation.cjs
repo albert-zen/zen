@@ -591,7 +591,7 @@ test("timeline integration remains single source, bounded and private", () => {
     ),
     "utf8",
   );
-  assert.ok(workflow.includes('"1280 enter control candidate baseline"'));
+  assert.ok(workflow.includes('"1280 enter control baseline candidate"'));
   assert.equal(
     workflow.includes('"1120 click narrow candidate baseline"'),
     false,
@@ -602,18 +602,18 @@ test("timeline integration remains single source, bounded and private", () => {
   );
 });
 
-test("backend pair locks identical real Legend frontend and keeps reader regression outside timing", () => {
+test("backend pair locks identical actual-main full-DOM frontend and keeps reader regression outside timing", () => {
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
   );
   for (const identity of [
-    "dbb989a0b01b30abd1be1fe8f7e3963c93cd2a64",
-    "ba960dd46644a9f8d87bd5c524b0d31019261444",
-    "7c916a741633741d760e0927ae7386a5fa0961c3",
-    "9e0168eff40971565093399fbf0728c99cdb088d",
-    "a5b6da40df0538dee66ee7b13effd9c9995d1d19",
-    "2fe1ea3ad0c013b8678b882bf8f8fbcf0be124ad",
+    "869921bd6ba827880113ca1e14a12ac6e2324b1e",
+    "162233ca48deadad698faad2157505b35dca2296",
+    "14619d9869dc7c847a69d3380e7f95412a1f020f",
+    "f2d56e96b58217fe75193c93f2b254671c1eb7ef",
+    "d524e5c03244f40f696a2dad7ea02159382344b2",
+    "fa9d29aa44891025497b04df8b9803487d5abba5",
   ])
     assert.ok(launch.includes(identity));
   const snapshots = new Function(
@@ -624,8 +624,8 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
       ) +
       ")",
   )();
-  assert.equal(snapshots.baseline.expectedVirtualTranscript, true);
-  assert.equal(snapshots.candidate.expectedVirtualTranscript, true);
+  assert.equal(snapshots.baseline.expectedVirtualTranscript, false);
+  assert.equal(snapshots.candidate.expectedVirtualTranscript, false);
   assert.ok(
     launch.includes("const virtual = snapshot.expectedVirtualTranscript"),
   );
@@ -638,7 +638,7 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
     "utf8",
   );
   assert.ok(
-    workflow.includes("diagnostic/send-immutable-backend-fixed-ui-20261103"),
+    workflow.includes("diagnostic/send-item-read-warming-main-pair-20261104"),
   );
   assert.ok(workflow.includes("assert.deepEqual(builds[0], builds[1]"));
   for (const contract of [
@@ -660,6 +660,63 @@ test("backend pair locks identical real Legend frontend and keeps reader regress
   );
   assert.ok(source.includes("native resize preserves paused reader offset"));
   assert.ok(source.includes("native resize must not restore live following"));
+});
+
+test("backend source locks accept only the two exact clean full-DOM snapshots", () => {
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const check = new Function(
+    "assert",
+    "execFileSync",
+    "sourceLabel",
+    launch.slice(
+      launch.indexOf("const snapshots = {"),
+      launch.indexOf("await mkdir(uploadDirectory"),
+    ),
+  );
+  const sources = {
+    baseline: [
+      "869921bd6ba827880113ca1e14a12ac6e2324b1e",
+      "162233ca48deadad698faad2157505b35dca2296",
+    ],
+    candidate: [
+      "14619d9869dc7c847a69d3380e7f95412a1f020f",
+      "f2d56e96b58217fe75193c93f2b254671c1eb7ef",
+    ],
+  };
+  for (const [label, [commit, tree]] of Object.entries(sources)) {
+    const outputs = {
+      "rev-parse HEAD:apps/zenx": "d524e5c03244f40f696a2dad7ea02159382344b2",
+      "rev-parse HEAD:apps/zenx/src/renderer":
+        "fa9d29aa44891025497b04df8b9803487d5abba5",
+      "rev-parse HEAD": commit,
+      "rev-parse HEAD^{tree}": tree,
+      "diff --name-only HEAD": "",
+    };
+    const run = (overrides = {}, sourceLabel = label) =>
+      check(
+        assert,
+        (command, args) => {
+          assert.equal(command, "git");
+          const key = args.join(" ");
+          assert.ok(Object.hasOwn(outputs, key));
+          return (
+            (Object.hasOwn(overrides, key) ? overrides[key] : outputs[key]) +
+            "\n"
+          );
+        },
+        sourceLabel,
+      );
+    assert.doesNotThrow(() => run());
+    assert.throws(() => run({}, "unapproved"), /Only independently identified/);
+    for (const key of Object.keys(outputs))
+      assert.throws(
+        () => run({ [key]: "different-source" }),
+        assert.AssertionError,
+      );
+  }
 });
 
 test("Selection getter probes preserve values and restore native descriptors", async () => {
