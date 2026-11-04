@@ -7,6 +7,7 @@ import {
   parseUserQuestionReply,
   normalizeUserQuestionReply,
   renderUserQuestionReply,
+  matchesUserQuestionReplyBody,
   type UserQuestionReply,
   type UserQuestionAnswer,
 } from "./user-question.js";
@@ -2270,6 +2271,16 @@ export class ZenAppServer {
           text: renderUserQuestionReply(question.specification, reply),
         },
       ];
+      const original = thread.items.find(
+        (item) =>
+          (item.type === "user_message" ||
+            item.type === "user_message_queued") &&
+          item.clientId === request.clientId &&
+          JSON.stringify(item.questionReply) === JSON.stringify(reply),
+      );
+      if (original?.type === "user_message")
+        input = contentFromUserMessage(original);
+      else if (original?.type === "user_message_queued") input = original.input;
     } catch (error) {
       throw new AppServerError(
         "invalid_request",
@@ -6554,7 +6565,12 @@ export class ZenAppServer {
         input.length !== 1 ||
         input[0]?.type !== "text" ||
         input[0].skillSource !== undefined ||
-        input[0].text !== renderUserQuestionReply(question.specification, reply)
+        !matchesUserQuestionReplyBody(
+          question.specification,
+          reply,
+          input[0].text,
+          question.requestRef,
+        )
       )
         throw new Error(
           "Question response body differs from its validated answer",
@@ -7504,6 +7520,18 @@ function remapForkContext(
     if (copied.content.excludedItemIds !== undefined)
       copied.content.excludedItemIds =
         copied.content.excludedItemIds.map(remap);
+  }
+  if (
+    copied.kind === "tool_call" &&
+    copied.content.name === "ask_user_question"
+  ) {
+    copied.source.metadata = {
+      ...copied.source.metadata,
+      questionOrigin: copied.source.metadata?.questionOrigin ?? {
+        threadId: item.threadId,
+        callItemId: item.id,
+      },
+    };
   }
   const metadata = copied.source.metadata;
   if (metadata !== undefined) {
