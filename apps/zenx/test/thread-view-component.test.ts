@@ -5204,6 +5204,444 @@ test("stable App transcript props avoid visiting all turn IDs for composer-only 
   });
 });
 
+// Controlled 600px viewport / 280px rows, matching the existing virtual
+// interaction fixtures. This exercises the npm Legend component, not native layout.
+function enableMemoVirtualGeometry() {
+  assert.equal(
+    window.sessionStorage.getItem("zenx.experimental.virtualTranscript"),
+    null,
+  );
+  const proto = window.HTMLElement.prototype;
+  const rect = (height: number) => ({
+    top: 0,
+    bottom: height,
+    left: 0,
+    right: 800,
+    width: 800,
+    height,
+    x: 0,
+    y: 0,
+    toJSON() {},
+  });
+  proto.getBoundingClientRect = function () {
+    return rect(this.classList.contains("messages") ? 600 : 280);
+  };
+  const tops = new WeakMap<HTMLElement, number>();
+  Object.defineProperties(proto, {
+    scrollTop: {
+      configurable: true,
+      get() {
+        return tops.get(this) ?? 0;
+      },
+      set(value: number) {
+        tops.set(
+          this,
+          Math.max(0, Math.min(this.scrollHeight - this.clientHeight, value)),
+        );
+      },
+    },
+    scrollHeight: {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (!this.classList.contains("messages")) return 280;
+        const region = Array.from(
+          this.querySelectorAll<HTMLElement>(".virtual-transcript-content div"),
+        ).find(
+          (element) =>
+            element.style.position === "relative" &&
+            element.style.height.endsWith("px"),
+        );
+        return Math.max(
+          600,
+          (parseFloat(region?.style.height ?? "0") || 0) + 560,
+        );
+      },
+    },
+  });
+  for (const name of [
+    "clientHeight",
+    "offsetHeight",
+    "clientWidth",
+    "offsetWidth",
+    "scrollWidth",
+  ])
+    Object.defineProperty(proto, name, {
+      configurable: true,
+      get() {
+        return name.endsWith("Width")
+          ? 800
+          : this.classList.contains("messages")
+            ? 600
+            : 280;
+      },
+    });
+  proto.scrollTo = function (options) {
+    if (typeof options === "object")
+      this.scrollTop = options.top ?? this.scrollTop;
+    this.dispatchEvent(new window.Event("scroll"));
+  };
+  const previous = globalThis.ResizeObserver;
+  const previousWindow = window.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  window.ResizeObserver = globalThis.ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = previous;
+    window.ResizeObserver = previousWindow;
+  };
+}
+const settleMemoVirtualLayout = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  });
+
+for (const virtual of [false, true]) {
+  test(`native ItemList-only appends retain transcript elements without revisiting historical row props (${virtual ? "default virtual" : "fallback"})`, async (t) => {
+    const count = 160;
+    let idReads = 0;
+    const turns = Array.from({ length: count }, (_, i) => ({
+      ...turnWithItems("completed", [
+        user(`Question ${i}`, `user-${i}`),
+        agent(`Answer ${i}`),
+      ]),
+      get id() {
+        idReads++;
+        return `item-list-turn-${i}`;
+      },
+    }));
+    const canonicalItems: CanonicalItem[] = turns.flatMap((turn, i) => [
+      {
+        type: "user_message",
+        id: `user-${i}`,
+        threadId: "thread-1",
+        turnId: turn.id,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        text: `Question ${i}`,
+      },
+      {
+        type: "agent_message",
+        id: `agent-Answer ${i}`,
+        threadId: "thread-1",
+        turnId: turn.id,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        text: `Answer ${i}`,
+      },
+    ]);
+    let view: Thread = { ...thread(turns), canonicalItems };
+    const approvals: ApprovalCardState[] = [];
+    const composer = beginImmediateComposerSubmission(
+      editComposer(emptyComposerState(), "A new ordinary message"),
+      "start",
+      null,
+      () => "item-list-client",
+    );
+    await withDom(async (root) => {
+      const restore = virtual ? enableMemoVirtualGeometry() : () => {};
+      try {
+        const renderView = () =>
+          root.render(
+            createElement(ThreadView, {
+              thread: view,
+              approvals,
+              wakeups: [], // The actual App also supplies a fresh empty array.
+              composer,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          );
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.equal(
+          !!document.querySelector(".experimental-transcript-viewport"),
+          virtual,
+          "the regression executes the intended viewport path",
+        );
+        const first = requiredElement(".turn");
+        const mountedBefore = document.querySelectorAll(".turn").length;
+        if (virtual)
+          assert.ok(
+            mountedBefore > 0 && mountedBefore < count,
+            "the real Legend viewport mounts only a bounded subset of history",
+          );
+        const firstRow = first.closest("[data-transcript-row-key]");
+        const text = requiredElement(".turn .user-bubble p").firstChild!;
+        const selection = document.getSelection()!;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        selection.addRange(range);
+        const selected = selection.toString();
+        assert.ok(selected.length > 0);
+        const before = view;
+        view = applyNativeThreadEvent(view, {
+          type: "context_item_completed",
+          threadId: view.id,
+          item: {
+            id: "context-user",
+            threadId: view.id,
+            turnId: "new-turn",
+            createdAt: "2026-01-01T00:00:02.000Z",
+            source: { kind: "user_message", sequence: canonicalItems.length },
+            kind: "message",
+            role: "user",
+            content: {
+              text: "A new ordinary message",
+              parts: [{ type: "text", text: "A new ordinary message" }],
+            },
+          },
+        });
+        assert.ok(
+          view !== before,
+          "ItemList append replaces the Thread wrapper",
+        );
+        assert.ok(
+          view.itemList !== before.itemList,
+          "ItemList append replaces only its semantic array",
+        );
+        assert.ok(
+          view.turns === before.turns,
+          "ItemList append retains displayed Turns",
+        );
+        assert.ok(
+          view.canonicalItems === before.canonicalItems,
+          "ItemList append retains canonical presentation",
+        );
+        idReads = 0;
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        t.diagnostic(
+          `ItemList-only append: ${idReads} historical Turn.id reads for ${count} turns`,
+        );
+        assert.ok(
+          idReads <= 4,
+          `ItemList-only append revisited ${idReads} historical row props`,
+        );
+        assert.ok(
+          requiredElement(".turn") === first,
+          "the historical Turn DOM is retained",
+        );
+        assert.equal(
+          document.querySelectorAll(".turn").length,
+          virtual ? mountedBefore : count,
+        );
+        if (virtual)
+          assert.ok(
+            first.closest("[data-transcript-row-key]") === firstRow,
+            "the virtual row DOM is retained alongside its Turn",
+          );
+        assert.equal(selection.toString(), selected);
+        assert.ok(
+          selection.anchorNode === text,
+          "the selection anchor is retained",
+        );
+        assert.equal(
+          requiredElement(
+            '[data-pending-send-client-id="item-list-client"]',
+          ).getAttribute("data-send-state"),
+          "sending",
+        );
+        selection.removeAllRanges();
+
+        view = applyNativeThreadEvent(view, {
+          type: "turn_started",
+          threadId: view.id,
+          turnId: "new-turn",
+        });
+        view = applyNativeThreadEvent(view, {
+          type: "item_completed",
+          item: {
+            type: "user_message",
+            id: "new-canonical-user",
+            clientId: "item-list-client",
+            threadId: view.id,
+            turnId: "new-turn",
+            createdAt: "2026-01-01T00:00:02.000Z",
+            text: "Native admitted ordinary message",
+          },
+        });
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        if (!virtual) {
+          assert.equal(document.querySelectorAll(".turn").length, count + 1);
+          assert.ok(
+            requiredElement(".turn") === first,
+            "the historical Turn DOM is retained",
+          );
+          assert.match(
+            document.querySelector(".turn:last-child")?.textContent ?? "",
+            /Native admitted ordinary message/,
+          );
+        } else {
+          assert.ok(
+            document.querySelectorAll(".turn").length < count,
+            "a canonical append does not materialize the whole history",
+          );
+          assert.ok(
+            Array.from(
+              document.querySelectorAll("[data-transcript-row-key]"),
+            ).some(
+              (row) =>
+                row.getAttribute("data-transcript-row-key") ===
+                JSON.stringify(["thread-1", "turn", "new-turn"]),
+            ),
+            "the canonical append invalidates the virtual row data",
+          );
+        }
+        assert.match(
+          document.querySelector(
+            '[data-thread-find-item-id="new-canonical-user"]',
+          )?.textContent ?? "",
+          /Native admitted ordinary message/,
+        );
+
+        view = { ...view, id: "thread-2" };
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.ok(
+          requiredElement(".turn") !== first,
+          "a different Thread owns new transcript elements",
+        );
+        if (virtual) {
+          assert.ok(
+            Array.from(
+              document.querySelectorAll("[data-transcript-row-key]"),
+            ).every(
+              (row) =>
+                JSON.parse(row.getAttribute("data-transcript-row-key")!)[0] ===
+                "thread-2",
+            ),
+            "the virtual rows are keyed to the new Thread owner",
+          );
+        }
+      } finally {
+        try {
+          await act(async () => root.render(null));
+        } finally {
+          restore();
+        }
+      }
+    });
+  });
+
+  test(`preview wrapper changes retain compaction disclosure while preview presence remains live (${virtual ? "default virtual" : "fallback"})`, async (t) => {
+    let idReads = 0;
+    const turns = [
+      {
+        ...turnWithItems("completed", [
+          user("Keep this request"),
+          { ...agent("Kept answer"), id: "agent-1" },
+        ]),
+        get id() {
+          idReads++;
+          return "turn-1";
+        },
+      },
+      {
+        ...turnWithItems("inProgress", [user("Continue", "preview-input")]),
+        id: "turn-2",
+      },
+    ];
+    const source = { ...thread(turns), canonicalItems: compactionHistory() };
+    let preview: Thread | undefined = source;
+    let live: Thread | null = null;
+    const approvals: ApprovalCardState[] = [];
+    const composer = emptyComposerState();
+    await withDom(async (root) => {
+      const restore = virtual ? enableMemoVirtualGeometry() : () => {};
+      try {
+        const renderView = () =>
+          root.render(
+            createElement(ThreadView, {
+              thread: live,
+              contextPreview: preview,
+              approvals,
+              composer,
+              onDraftChange: () => undefined,
+              onInterrupt: noop,
+              onRespondToApproval: noop,
+              onSubmit: noop,
+            }),
+          );
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.ok(
+          document.querySelector(".turn-running-label") === null,
+          "context preview has no live Turn controls",
+        );
+        assert.equal(
+          !!document.querySelector(".experimental-transcript-viewport"),
+          virtual,
+          "the regression executes the intended viewport path",
+        );
+        const first = requiredElement(".turn");
+        const compaction = requiredButton(".context-compaction-toggle");
+        await act(async () => compaction.click());
+        assert.equal(compaction.getAttribute("aria-expanded"), "true");
+        preview = { ...source, name: "Changed preview metadata" };
+        idReads = 0;
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        t.diagnostic(
+          `Preview wrapper replacement: ${idReads} first-Turn.id reads`,
+        );
+        assert.equal(
+          idReads,
+          0,
+          "the unchanged preview must not rebuild its historical rows",
+        );
+        assert.ok(
+          requiredElement(".turn") === first,
+          "the historical Turn DOM is retained",
+        );
+        assert.ok(
+          requiredButton(".context-compaction-toggle") === compaction,
+          "the compaction disclosure DOM is retained",
+        );
+        assert.equal(compaction.getAttribute("aria-expanded"), "true");
+
+        preview = undefined;
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.ok(
+          document.querySelector(".turn") === null,
+          "removing the preview removes its Turns",
+        );
+        assert.ok(
+          document.querySelector(".context-compaction-toggle") === null,
+          "removing the preview removes its compactions",
+        );
+        preview = source;
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.equal(document.querySelectorAll(".turn").length, 2);
+        assert.ok(
+          document.querySelector(".turn-running-label") === null,
+          "context preview has no live Turn controls",
+        );
+        live = source;
+        preview = undefined;
+        await act(async () => renderView());
+        if (virtual) await settleMemoVirtualLayout();
+        assert.ok(
+          document.querySelector(".turn-running-label"),
+          "the same history as a real Thread has live controls",
+        );
+        assert.ok(document.querySelector(".context-compaction-toggle"));
+      } finally {
+        try {
+          await act(async () => root.render(null));
+        } finally {
+          restore();
+        }
+      }
+    });
+  });
+}
+
 test("local sending presentation hides draft framing but keeps readable skill and reference names", async () => {
   const { PendingSendRows } =
     await import("../src/renderer/src/PendingSendRows.js");
