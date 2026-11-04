@@ -34,6 +34,8 @@ export interface QueuedMessageEditorProps {
   onReferenceSource?(
     reference: Extract<Reference, { kind: "message" }>,
   ): HTMLElement | null;
+  /** Capture the exact source request before closing; newer navigation may supersede it. */
+  referenceSourceGuard?(target: HTMLElement): () => boolean;
   trigger: HTMLElement | null;
   /** Exact parent-owned thread/selection guard, including a connected trigger. */
   canRestoreFocus?(): boolean;
@@ -219,10 +221,16 @@ function EditorSession(props: QueuedMessageEditorProps) {
     if (reference.kind !== "message" || !canEdit()) return false;
     const target = latest.current.onReferenceSource?.(reference);
     if (!target) return false;
+    const isCurrent =
+      latest.current.referenceSourceGuard?.(target) ?? (() => true);
     restoreRequested.current = false;
     latest.current.onClose("source");
     requestAnimationFrame(() => {
-      if (target.isConnected && (latest.current.canRestoreFocus?.() ?? true)) {
+      if (
+        target.isConnected &&
+        isCurrent() &&
+        (latest.current.canRestoreFocus?.() ?? true)
+      ) {
         target.scrollIntoView({ block: "center", behavior: "auto" });
         target.focus({ preventScroll: true });
       }

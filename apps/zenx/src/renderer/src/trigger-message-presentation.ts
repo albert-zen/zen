@@ -1,3 +1,6 @@
+import type { ThreadItem } from "../../protocol-client/index.js";
+import type { TriggerHistoryEntry } from "../../main/trigger-types.js";
+
 /** UI-only projection of the Host's exact wakeup formatter. Never grants source authority. */
 export function triggerMessagePresentation(
   text: string,
@@ -36,4 +39,49 @@ export function triggerMessagePresentation(
   }
   const start = boundary + separator.length;
   return { name, text: text.slice(start), envelope: text.slice(0, start) };
+}
+
+/** Recognize only the Host builder's envelope. Unknown formats remain behind disclosure. */
+export function hostMessageSummary(
+  text: string,
+  historyPrompt?: string,
+): string {
+  if (!text.startsWith("[ZenX trigger wakeup]\n")) return "";
+  const headerEnd = text.indexOf("\n\nInjected prompt:\n");
+  if (headerEnd < 0) return "";
+  const header = text.slice(0, headerEnd);
+  const title = /^Registered trigger: (.+)$/mu.exec(header)?.[1]?.trim();
+  const promptStart = headerEnd + "\n\nInjected prompt:\n".length;
+  const promptEnd = text
+    .slice(promptStart)
+    .search(
+      /\n\n(?:Current Room message \(|Bounded source context \(|PAW context:|Reply Room ID:|Associated assistant Room IDs:)/u,
+    );
+  const prompt =
+    historyPrompt ??
+    text.slice(
+      promptStart,
+      promptEnd < 0 ? undefined : promptStart + promptEnd,
+    );
+  const excerpt = prompt.trim().replace(/\s+/gu, " ").slice(0, 180);
+  return [title?.slice(0, 120), excerpt].filter(Boolean).join(" · ");
+}
+
+/** The same exact client/source match used by the transcript renderer and its Find projection. */
+export function findInputWakeup(
+  item: Extract<
+    ThreadItem,
+    { type: "userMessage" | "threadMessage" | "hostMessage" }
+  >,
+  entries: readonly TriggerHistoryEntry[],
+) {
+  return entries.find(
+    (entry) =>
+      entry.clientUserMessageId === item.clientId &&
+      (item.type === "userMessage" ||
+        (item.type === "hostMessage" &&
+          (item.source === "trigger"
+            ? entry.triggerId === item.sourceId
+            : item.source === "room" && entry.sourceRoomId === item.sourceId))),
+  );
 }

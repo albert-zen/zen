@@ -28,3 +28,17 @@ test("non-macOS application menu policy remains absent", async () => {
     /if \(platform !== "darwin"\) \{\s*Menu\.setApplicationMenu\(null\);\s*return;\s*\}/su,
   );
 });
+
+// Page editing stays an Electron role; virtualization must not install a
+// synchronous full-history preparation command or intercept editor shortcuts.
+test("native Select All and Copy retain the ordinary Electron editing roles", async () => {
+  const source = await readFile(menuSource, "utf8");
+  for (const role of ["copy", "selectAll"]) {
+    const entry = source.match(
+      new RegExp(`\\{[^{}]*role: "${role}"[^{}]*\\}`, "su"),
+    )?.[0];
+    assert.ok(entry);
+    assert.equal(entry.includes("click:"), false);
+  }
+  assert.equal(source.includes("nativeEditing"), false);
+});

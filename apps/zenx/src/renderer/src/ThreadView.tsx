@@ -1,3 +1,13 @@
+import { VirtualTranscriptFind } from "./VirtualTranscriptFind.js";
+import {
+  findMessageQuoteSource,
+  quoteSourceTarget,
+} from "./quote-source-navigation.js";
+import { isNestedTranscriptScroll } from "./transcript-viewport-pins.js";
+import {
+  TranscriptViewport,
+  type VirtualTranscriptHandle,
+} from "./ExperimentalTranscriptViewport.js";
 import { useCommittedCallback } from "./use-committed-callback.js";
 import { PendingSendRows } from "./PendingSendRows.js";
 import { indexTurnOutcomeItems } from "./turn-outcome-index.js";
@@ -17,7 +27,10 @@ import {
   reportSendActivation,
 } from "./send-observation.js";
 import type { ClientSendObservation } from "../../../../../src/client-observation.js";
-import { triggerMessagePresentation } from "./trigger-message-presentation.js";
+import {
+  findInputWakeup,
+  triggerMessagePresentation,
+} from "./trigger-message-presentation.js";
 import { InlineComposerEditor } from "./InlineComposerEditor.js";
 import type { ComposerInput } from "./composer-input.js";
 import { normalizeInlineReferences } from "./reference-draft.js";
@@ -262,6 +275,10 @@ const CanonicalMessageForkContext = createContext<{
   isCurrent(itemId: string): boolean;
 } | null>(null);
 
+const MessageQuoteSourceContext = createContext<
+  ((quote: SentMessageQuote) => boolean) | null
+>(null);
+
 const CanonicalQuoteItemsContext = createContext<
   ReadonlyMap<string, readonly CanonicalItem[]>
 >(new Map());
@@ -280,22 +297,6 @@ function useQuoteAttributes(ids: string | string[]) {
     : {};
 }
 
-function findMessageQuoteSource(
-  viewport: Element | null,
-  quote: SentMessageQuote,
-): HTMLElement | null {
-  return (
-    Array.from(
-      viewport?.querySelectorAll<HTMLElement>(
-        "[data-quote-thread-id][data-quote-item-id]",
-      ) ?? [],
-    ).find(
-      (element) =>
-        element.dataset.quoteThreadId === quote.threadId &&
-        element.dataset.quoteItemId === quote.id,
-    ) ?? null
-  );
-}
 function goToMessageQuoteSource(
   viewport: Element | null,
   quote: SentMessageQuote,
@@ -847,6 +848,29 @@ function ThreadViewContent({
     };
   }, [thread?.id, composer.draft.text.startsWith("/")]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualViewport = useRef<VirtualTranscriptHandle | null>(null);
+  const [virtualTranscript] = useState(() => {
+    try {
+      if (typeof window.ResizeObserver !== "function") return false;
+      return (
+        window.sessionStorage.getItem("zenx.experimental.virtualTranscript") !==
+        "0"
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [virtualTranscriptFind] = useState(() => {
+    try {
+      return (
+        window.sessionStorage.getItem(
+          "zenx.experimental.virtualTranscriptFind",
+        ) !== "0"
+      );
+    } catch {
+      return false;
+    }
+  });
   const shouldFollowRef = useRef(readingState.scroll?.following ?? true);
   const observedScrollTop = useRef(0);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -1073,6 +1097,7 @@ function ThreadViewContent({
     if (!scroll) return;
     const saved = readingState.scroll;
     shouldFollowRef.current = saved?.following ?? true;
+    if (virtualTranscript) return;
     scroll.scrollTop =
       saved?.following === false ? saved.top : scroll.scrollHeight;
     observedScrollTop.current = scroll.scrollTop;
@@ -1080,9 +1105,78 @@ function ThreadViewContent({
       scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight <= 1,
     );
     saveReadingPosition();
-  }, [readingState, saveReadingPosition]);
+  }, [readingState, saveReadingPosition, virtualTranscript]);
 
-  useMessageTargetNavigation(thread, scrollRef, pauseFollowing);
+  const quoteSourceGuards = useRef(new WeakMap<HTMLElement, () => boolean>());
+  const resolveQuoteSource = useCommittedCallback(
+    (quote: SentMessageQuote): HTMLElement | null => {
+      const mounted = findMessageQuoteSource(scrollRef.current, quote);
+      if (!virtualTranscript || !displayedThread || !virtualViewport.current)
+        return mounted;
+      const target = quoteSourceTarget(
+        displayedThread.id,
+        turns,
+        canonicalPresentation,
+        quote,
+      );
+      if (!target) return mounted;
+      const owner = currentThreadRef.current;
+      pauseFollowing();
+      let source: HTMLElement | null = null;
+      const materialized = virtualViewport.current.materialize(
+        target.rowKey,
+        () => target.disclosures.forEach((key) => readingState.set(key, true)),
+        () => {
+          if (
+            source?.isConnected &&
+            currentThreadRef.current === owner &&
+            (document.activeElement === source ||
+              document.activeElement === document.body)
+          )
+            source.scrollIntoView({ block: "center", behavior: "auto" });
+        },
+      );
+      if (!materialized) return null;
+      source = findMessageQuoteSource(materialized.element, quote);
+      if (
+        !source ||
+        source.closest("[hidden], [aria-hidden='true'], [inert]")
+      ) {
+        materialized.cancel();
+        return null;
+      }
+      const element = source;
+      quoteSourceGuards.current.set(
+        element,
+        () => currentThreadRef.current === owner && materialized.isCurrent(),
+      );
+      return element;
+    },
+  );
+  const navigateQuoteSource = useCommittedCallback(
+    (quote: SentMessageQuote): boolean => {
+      pauseFollowing();
+      const source = resolveQuoteSource(quote);
+      if (!source) return false;
+      source.scrollIntoView({ block: "center", behavior: "auto" });
+      source.focus({ preventScroll: true });
+      return true;
+    },
+  );
+  const materializeTargetTurn = useCallback(
+    (turnId: string, onRevealed: () => void) =>
+      virtualViewport.current?.reveal(
+        JSON.stringify([displayedThread?.id, "turn", turnId]),
+        onRevealed,
+      ) ?? Promise.resolve(false),
+    [displayedThread?.id],
+  );
+  useMessageTargetNavigation(
+    thread,
+    scrollRef,
+    pauseFollowing,
+    virtualTranscript ? materializeTargetTurn : undefined,
+  );
 
   // New transcript data may advance a live reader. Approvals, focus and Composer
   // layout are not new messages and must not independently pull an idle reader.
@@ -1113,6 +1207,7 @@ function ThreadViewContent({
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     const content = scroll?.firstElementChild;
+    if (virtualTranscript) return;
     if (!scroll || !content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
       // Layout can settle after completion (Markdown, images, canonical fold).
@@ -1126,7 +1221,7 @@ function ThreadViewContent({
     observer.observe(scroll);
     if (bottomZoneRef.current) observer.observe(bottomZoneRef.current);
     return () => observer.disconnect();
-  }, [followBottom, pauseFollowing]);
+  }, [followBottom, pauseFollowing, virtualTranscript]);
 
   // Keep a newly failed request visible when approvals, queued messages and a
   // long draft overflow the bottom zone. User scrolling afterwards is left
@@ -1576,6 +1671,26 @@ function ThreadViewContent({
     ],
   );
 
+  const virtualTranscriptRows = useMemo(
+    () =>
+      virtualTranscript
+        ? transcriptRows.map((row, index) => ({
+            key: JSON.stringify([
+              displayedThread?.id,
+              row.type,
+              row.type === "turn" ? row.turn.id : row.compaction.item.id,
+            ]),
+            content: renderedTranscriptRows[index],
+          }))
+        : [],
+    [
+      virtualTranscript,
+      displayedThread?.id,
+      transcriptRows,
+      renderedTranscriptRows,
+    ],
+  );
+
   return (
     <div
       className={`thread-view${draggingImages ? " image-dragging" : ""}`}
@@ -1607,106 +1722,166 @@ function ThreadViewContent({
         );
       }}
     >
-      <div
-        className="messages"
-        style={{ overflowAnchor: atLive ? "none" : undefined }}
-        ref={scrollRef}
-        onWheel={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          if (event.deltaY < 0) pauseFollowing();
-          else if (
-            event.deltaY > 0 &&
-            event.currentTarget.scrollHeight -
-              event.currentTarget.scrollTop -
-              event.currentTarget.clientHeight <=
-              1 &&
-            !transcriptHasSelection(event.currentTarget)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          }
-        }}
-        onPointerDownCapture={(event) => {
-          if (!isNestedTranscriptScroll(event.target, event.currentTarget))
-            pauseFollowing();
-        }}
-        onFocusCapture={pauseFollowing}
-        onKeyDownCapture={(event) => {
-          if (isNestedTranscriptScroll(event.target, event.currentTarget))
-            return;
-          const downward =
-            ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
-            !(event.key === " " && event.shiftKey);
-          const upward =
-            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
-            (event.key === " " && event.shiftKey);
-          if (!downward && !upward) return;
-          const target = event.currentTarget;
-          if (
-            downward &&
-            target.scrollHeight - target.scrollTop - target.clientHeight <= 1 &&
-            !transcriptHasSelection(target)
-          ) {
-            shouldFollowRef.current = true;
-            followBottom();
-          } else pauseFollowing();
-        }}
-        onScroll={(event) => {
-          const target = event.currentTarget;
-          const top = target.scrollTop;
-          const atBottom = target.scrollHeight - top - target.clientHeight <= 1;
-          // Native/programmatic scroll delivery can lag behind content growth.
-          // A changed range alone is not reader movement. Explicitly reaching
-          // the bottom restores follow intent; upward reading releases it.
-          if (transcriptHasSelection(target)) pauseFollowing();
-          else if (Math.abs(top - observedScrollTop.current) > 0.5) {
-            // Content shrinking can clamp the native offset to the new floor.
-            // That is layout, not an upward gesture or a new follow request.
-            const clamped = atBottom && observedScrollTop.current > top;
-            if (!clamped)
-              shouldFollowRef.current =
-                top > observedScrollTop.current && atBottom;
-          }
-          observedScrollTop.current = top;
-          setAtLive(atBottom);
-          saveReadingPosition();
-        }}
-      >
-        <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
-          <ThreadImagesContext.Provider value={imageContext}>
-            <div className="messages-inner">
-              <ImportedThreadNotice
-                items={displayedThread?.canonicalItems ?? []}
-              />
-              {transcriptRows.length === 0 ? (
-                (emptyContent ?? (
-                  <div className="thread-empty">
-                    <h2>{i18n.t("shell:startANewThread")}</h2>
-                    <p>{i18n.t("shell:describeOutcome")}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="transcript-history">
-                  {renderedTranscriptRows}
-                </div>
-              )}
-              {composer.pendingSends && (
-                <PendingSendRows
-                  key={thread?.id ?? composerId}
-                  messages={composer.pendingSends}
-                  onRecover={onRecoverPendingSend}
-                  onDismiss={onDismissPendingSend}
-                  onCheck={onCheckPendingSends}
+      {virtualTranscript &&
+      virtualTranscriptFind &&
+      displayedThread &&
+      transcriptRows.length > 0 ? (
+        <VirtualTranscriptFind
+          key={displayedThread.id}
+          threadId={displayedThread.id}
+          turns={turns}
+          canonical={canonicalPresentation.turns}
+          view={viewRef}
+          viewport={scrollRef}
+          controller={virtualViewport}
+          reading={readingState}
+          wakeups={wakeups}
+          pluginSnapshot={pluginSnapshot}
+          pluginUiRegistry={pluginUiRegistry}
+          pauseFollowing={pauseFollowing}
+        />
+      ) : null}
+      <MessageLinkContext.Provider value={onOpenMessageLink ?? null}>
+        <ThreadImagesContext.Provider value={imageContext}>
+          <MessageQuoteSourceContext.Provider
+            value={virtualTranscript ? navigateQuoteSource : null}
+          >
+            <TranscriptViewport
+              key={virtualTranscript ? (thread?.id ?? composerId) : undefined}
+              experimental={virtualTranscript && transcriptRows.length > 0}
+              viewport={scrollRef}
+              controller={virtualViewport}
+              position={readingState}
+              rows={virtualTranscriptRows}
+              header={
+                <>
+                  <ImportedThreadNotice
+                    items={displayedThread?.canonicalItems ?? []}
+                  />
+                </>
+              }
+              footer={
+                <>
+                  {composer.pendingSends && (
+                    <PendingSendRows
+                      key={thread?.id ?? composerId}
+                      messages={composer.pendingSends}
+                      onRecover={onRecoverPendingSend}
+                      onDismiss={onDismissPendingSend}
+                      onCheck={onCheckPendingSends}
+                    />
+                  )}
+                  {composer.compaction?.status === "pending" ? (
+                    <ContextCompactionProgress state={composer.compaction} />
+                  ) : null}
+                </>
+              }
+              onContentSettled={followBottom}
+              className="messages"
+              style={{ overflowAnchor: atLive ? "none" : undefined }}
+              onWheel={(event) => {
+                if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                  return;
+                if (event.deltaY < 0) pauseFollowing();
+                else if (
+                  event.deltaY > 0 &&
+                  event.currentTarget.scrollHeight -
+                    event.currentTarget.scrollTop -
+                    event.currentTarget.clientHeight <=
+                    1 &&
+                  !transcriptHasSelection(event.currentTarget)
+                ) {
+                  shouldFollowRef.current = true;
+                  followBottom();
+                }
+              }}
+              onPointerDownCapture={(event) => {
+                if (
+                  !isNestedTranscriptScroll(event.target, event.currentTarget)
+                )
+                  pauseFollowing();
+              }}
+              onFocusCapture={pauseFollowing}
+              onKeyDownCapture={(event) => {
+                if (isNestedTranscriptScroll(event.target, event.currentTarget))
+                  return;
+                const downward =
+                  ["ArrowDown", "PageDown", "End", " "].includes(event.key) &&
+                  !(event.key === " " && event.shiftKey);
+                const upward =
+                  ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+                  (event.key === " " && event.shiftKey);
+                if (!downward && !upward) return;
+                const target = event.currentTarget;
+                if (
+                  downward &&
+                  target.scrollHeight -
+                    target.scrollTop -
+                    target.clientHeight <=
+                    1 &&
+                  !transcriptHasSelection(target)
+                ) {
+                  shouldFollowRef.current = true;
+                  followBottom();
+                } else pauseFollowing();
+              }}
+              onViewportScroll={(target, layoutCorrection) => {
+                const top = target.scrollTop;
+                const atBottom =
+                  target.scrollHeight - top - target.clientHeight <= 1;
+                // Native/programmatic scroll delivery can lag behind content growth.
+                // A changed range alone is not reader movement. Explicitly reaching
+                // the bottom restores follow intent; upward reading releases it.
+                if (transcriptHasSelection(target)) pauseFollowing();
+                else if (
+                  !layoutCorrection &&
+                  Math.abs(top - observedScrollTop.current) > 0.5
+                ) {
+                  // Content shrinking can clamp the native offset to the new floor.
+                  // That is layout, not an upward gesture or a new follow request.
+                  const clamped = atBottom && observedScrollTop.current > top;
+                  if (!clamped)
+                    shouldFollowRef.current =
+                      top > observedScrollTop.current && atBottom;
+                }
+                observedScrollTop.current = top;
+                setAtLive(atBottom);
+                saveReadingPosition();
+              }}
+            >
+              <div className="messages-inner">
+                <ImportedThreadNotice
+                  items={displayedThread?.canonicalItems ?? []}
                 />
-              )}
-              {composer.compaction?.status === "pending" ? (
-                <ContextCompactionProgress state={composer.compaction} />
-              ) : null}
-            </div>
-          </ThreadImagesContext.Provider>
-        </MessageLinkContext.Provider>
-      </div>
+                {transcriptRows.length === 0 ? (
+                  (emptyContent ?? (
+                    <div className="thread-empty">
+                      <h2>{i18n.t("shell:startANewThread")}</h2>
+                      <p>{i18n.t("shell:describeOutcome")}</p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="transcript-history">
+                    {renderedTranscriptRows}
+                  </div>
+                )}
+                {composer.pendingSends && (
+                  <PendingSendRows
+                    key={thread?.id ?? composerId}
+                    messages={composer.pendingSends}
+                    onRecover={onRecoverPendingSend}
+                    onDismiss={onDismissPendingSend}
+                    onCheck={onCheckPendingSends}
+                  />
+                )}
+                {composer.compaction?.status === "pending" ? (
+                  <ContextCompactionProgress state={composer.compaction} />
+                ) : null}
+              </div>
+            </TranscriptViewport>
+          </MessageQuoteSourceContext.Provider>
+        </ThreadImagesContext.Provider>
+      </MessageLinkContext.Provider>
 
       <MessageSelectionActions
         viewport={scrollRef}
@@ -2062,8 +2237,7 @@ function ThreadViewContent({
                 onBlur={() => selector.dismiss()}
                 onReferenceSource={(reference) => {
                   if (reference.kind !== "message") return false;
-                  pauseFollowing();
-                  return goToMessageQuoteSource(scrollRef.current, reference);
+                  return navigateQuoteSource(reference);
                 }}
                 onPaste={(event) => {
                   if (composerDisabled || submitting) return;
@@ -2421,13 +2595,16 @@ function ThreadViewContent({
             onSave={(draft) => saveQueuedEdit(key, draft)}
             onReferenceSource={(reference) => {
               if (currentThreadRef.current !== session.threadId) return null;
-              const target = findMessageQuoteSource(
-                scrollRef.current,
-                reference,
-              );
+              const target = resolveQuoteSource(reference);
               if (target) pauseFollowing();
               return target;
             }}
+            referenceSourceGuard={
+              virtualTranscript
+                ? (target) =>
+                    quoteSourceGuards.current.get(target) ?? (() => true)
+                : undefined
+            }
             onClose={(reason) => {
               const current = editSessionsRef.current[key];
               if (current?.owner === editOwner.current) {
@@ -2687,23 +2864,6 @@ function transcriptHasSelection(element: Element | null): boolean {
       (selection.focusNode !== null && element.contains(selection.focusNode)))
   );
 }
-function isNestedTranscriptScroll(
-  target: EventTarget | null,
-  transcript: HTMLElement,
-): boolean {
-  for (
-    let element = target instanceof Element ? target : null;
-    element && element !== transcript;
-    element = element.parentElement
-  ) {
-    if (
-      element.scrollHeight > element.clientHeight &&
-      /auto|scroll/.test(getComputedStyle(element).overflowY)
-    )
-      return true;
-  }
-  return false;
-}
 
 const TurnBlock = memo(function TurnBlock({
   turn,
@@ -2828,16 +2988,7 @@ const TurnBlock = memo(function TurnBlock({
       { type: "userMessage" | "threadMessage" | "hostMessage" }
     >,
   ) => {
-    const wakeup = wakeups.find(
-      (entry) =>
-        entry.clientUserMessageId === item.clientId &&
-        (item.type === "userMessage" ||
-          (item.type === "hostMessage" &&
-            (item.source === "trigger"
-              ? entry.triggerId === item.sourceId
-              : item.source === "room" &&
-                entry.sourceRoomId === item.sourceId))),
-    );
+    const wakeup = findInputWakeup(item, wakeups);
     if (item.type === "hostMessage")
       return (
         <WakeupCard key={item.id} item={item} entry={wakeup} turn={turn} />
@@ -2855,6 +3006,7 @@ const TurnBlock = memo(function TurnBlock({
       <TriggerMessageBubble
         text={item.content.map((part) => part.text).join("\n")}
         sourceId={wakeup.triggerId}
+        findItemId={item.id}
         key={item.id}
         turn={turn}
       />
@@ -3926,6 +4078,7 @@ function TraceDetail({
     return (
       <div
         className="trace-detail trace-detail-markdown"
+        data-thread-find-item-id={item.id}
         {...quoteAttributes}
         tabIndex={-1}
       >
@@ -3942,7 +4095,7 @@ function TraceDetail({
     >
       <ToolImages itemId={item.id} />
       <div className="trace-tool-card">
-        <ToolInput command={item.command} />
+        <ToolInput command={item.command} findItemId={item.id} />
         <div
           className="trace-output"
           role="region"
@@ -3965,7 +4118,13 @@ function TraceDetail({
   );
 }
 
-function ToolInput({ command }: { command: string }) {
+function ToolInput({
+  command,
+  findItemId,
+}: {
+  command: string;
+  findItemId: string;
+}) {
   const preview = useRef<HTMLSpanElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -3999,12 +4158,22 @@ function ToolInput({ command }: { command: string }) {
           ref={preview}
           aria-hidden={expanded || undefined}
         >
-          <code>{command}</code>
+          <code
+            data-thread-find-item-id={findItemId}
+            data-thread-find-field="command"
+          >
+            {command}
+          </code>
         </span>
       </Heading>
       {overflows ? (
         <pre className="trace-command">
-          <code>{command}</code>
+          <code
+            data-thread-find-item-id={findItemId}
+            data-thread-find-field="command"
+          >
+            {command}
+          </code>
         </pre>
       ) : null}
     </>
@@ -4046,6 +4215,7 @@ function InputMessage({
   onReadAttachment(attachment: AttachmentRef): Promise<Uint8Array>;
 }) {
   const quoteAttributes = useQuoteAttributes(item.id);
+  const navigateQuoteSource = useContext(MessageQuoteSourceContext);
   const text = item.content.map((content) => content.text).join("\n");
   const article = useRef<HTMLElement>(null);
   const canonical = useContext(CanonicalInputContentContext).get(item.id);
@@ -4118,7 +4288,7 @@ function InputMessage({
         </div>
       )}
       {(presented.text.length > 0 || presented.references.length > 0) && (
-        <div className="user-bubble">
+        <div className="user-bubble" data-thread-find-item-id={item.id}>
           {presented.references.length > 0 ? (
             presentation.map((part, index) => (
               <InlineReferenceContent
@@ -4127,10 +4297,12 @@ function InputMessage({
                 references={part.references}
                 onSource={(reference) =>
                   reference.kind === "message" &&
-                  goToMessageQuoteSource(
-                    article.current?.closest(".thread-view") ?? null,
-                    reference,
-                  )
+                  (navigateQuoteSource
+                    ? navigateQuoteSource(reference)
+                    : goToMessageQuoteSource(
+                        article.current?.closest(".thread-view") ?? null,
+                        reference,
+                      ))
                 }
               />
             ))
@@ -4225,7 +4397,7 @@ function AgentMessage({
       {...quoteAttributes}
       tabIndex={-1}
     >
-      <div data-message-quote-body>
+      <div data-message-quote-body data-thread-find-item-id={item.id}>
         <Markdown text={item.text} />
       </div>
       {item.text.length === 0 ? <span className="stream-cursor" /> : null}
@@ -4369,10 +4541,12 @@ function MessageForkButton({ target }: { target: MessageForkTarget }) {
 function TriggerMessageBubble({
   text,
   sourceId,
+  findItemId,
   turn,
 }: {
   text: string;
   sourceId?: string;
+  findItemId?: string;
   turn: Turn;
 }) {
   const presentation = triggerMessagePresentation(text, sourceId);
@@ -4383,7 +4557,7 @@ function TriggerMessageBubble({
         label={presentation.name || i18n.t("shell:hostMessageTrigger")}
         className="host-message-source"
       />
-      <div className="user-bubble">
+      <div className="user-bubble" data-thread-find-item-id={findItemId}>
         <Markdown text={presentation.text} />
       </div>
       <MessageActions
@@ -4413,12 +4587,14 @@ function WakeupCard(
         <TriggerMessageBubble
           text={item.text}
           sourceId={item.sourceId}
+          findItemId={item.id}
           turn={turn}
         />
       );
     return (
       <article className="wakeup-card host-message-row">
         <HostMessageContent
+          findItemId={item.id}
           sourceNavigation
           source={item.source}
           sourceId={item.sourceId}
