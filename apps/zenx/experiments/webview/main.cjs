@@ -19,6 +19,7 @@ const report = {
     "No OS IME or native file-dialog acceptance",
     "Renderer reload destroys live guests; persistence is only across panel/tab switches",
     "No multi-panel simultaneous interactive mirroring",
+    "Input is injected into each WebContents separately, not an OS pointer-routing audit",
   ],
 };
 let window, server;
@@ -178,9 +179,9 @@ async function finish(error) {
       id === undefined ? [] : [id],
     );
   };
-  const clickAtCenter = () => {
+  const clickAtCenter = (target) => {
     for (const type of ["mouseDown", "mouseUp"])
-      window.webContents.sendInputEvent({
+      target.sendInputEvent({
         type,
         x: 400,
         y: 300,
@@ -264,7 +265,7 @@ async function finish(error) {
         pixel[1] > 140 && pixel[0] < 100 && pixel[2] < 60,
         `Visible guest pixel: ${[...pixel]}`,
       );
-      clickAtCenter();
+      clickAtCenter(a);
       await until(
         async () => (await a.executeJavaScript("clicks")) === 1,
         "Visible guest did not receive native input",
@@ -272,10 +273,14 @@ async function finish(error) {
     },
   );
   await check(
-    "DOM modal composites above guest and intercepts native input",
+    "DOM modal composites above guest and receives host-targeted input",
     async () => {
       await ui("document.querySelector('#overlay').style.display='block'");
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await frame();
+      assert.equal(
+        await ui("document.elementFromPoint(400, 300).id"),
+        "overlay",
+      );
       const screenshot = await window.webContents.capturePage();
       await fs.writeFile(
         path.join(output, "synthetic-overlay.png"),

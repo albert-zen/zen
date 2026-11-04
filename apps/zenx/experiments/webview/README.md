@@ -29,7 +29,7 @@ and limits navigation to the two synthetic fixture pages.
 
 The real native smoke checks sandbox preferences and absence of Node, ten repeated
 switch/hide/show cycles, exact WebContents identity and retained history/input
-state, DOM modal pixel coverage and native input interception, CDP actions and a
+state, DOM modal pixel coverage, host hit-testing/input and separate native guest input, CDP actions and a
 fresh screenshot of the hidden guest, independent close, observable guest crash,
 and host renderer reload. Screenshots are clearly synthetic, not production UI
 acceptance. Assertions and errors are written to `report.json`.
@@ -40,7 +40,9 @@ not that reload persistence is solved. It also does not certify OS focus/IME,
 file dialogs, multi-window transfers, shared interactive mirroring, or production
 WorkspaceBrowser authorization and scheduling. The focus assertion observes the
 Electron foreground window before/after one background action; it is not a
-continuous OS focus audit.
+continuous OS focus audit. Input is injected separately into host and guest
+WebContents; the overlay assertion does not certify OS-level cross-guest pointer
+routing. Electron host sendInputEvent does not forward to guest contents.
 
 ## Follow-on integration, after the other experiments
 
