@@ -234,37 +234,64 @@ test("a fence change after acknowledged release is unknown but does not quaranti
   assert.equal(f.quarantined, false);
 });
 
-test("native picker controls and associated label descendants reject before any input", () => {
-  const dom = new JSDOM(
-    '<input type="file" id="file"><label for="file"><span id="file-label">Choose file</span></label><input id="text"><label for="text" id="text-label">Text</label>',
-    { runScripts: "outside-only", url: "https://fixture.test" },
-  );
-  try {
-    for (const id of ["file", "file-label"]) {
-      dom.window.document.elementFromPoint = () =>
-        dom.window.document.getElementById(id);
-      assert.throws(
-        () =>
+test("native HTML controls and labels retain observed pointer and key input", async () => {
+  const controls = [
+    'input type="file"',
+    'input type="color"',
+    'input type="date"',
+    'input type="datetime-local"',
+    'input type="month"',
+    'input type="time"',
+    'input type="week"',
+    "select",
+  ];
+  for (const control of controls) {
+    const dom = new JSDOM(
+      `<${control} id="picker"></${control.split(" ")[0]}><label for="picker" tabindex="0" id="label"><span id="child">Choose</span></label>`,
+      { runScripts: "outside-only", url: "https://fixture.test" },
+    );
+    try {
+      for (const id of ["picker", "label", "child"]) {
+        const target = dom.window.document.getElementById(id)!;
+        dom.window.document.elementFromPoint = () => target;
+        const read = () =>
           requireBrowserInputSnapshot(
             dom.window.eval(
               browserInputProbeScript({ kind: "click", x: 5, y: 5 }),
             ),
-          ),
-        /BROWSER_INPUT_UNSUPPORTED:native-surface/u,
-      );
+          );
+        const calls: string[] = [];
+        const port: BrowserTargetedInputPort = {
+          assertCurrent() {},
+          snapshot: async () => read(),
+          beforeDispatch() {},
+          dispatch: async (_, params, sent) => {
+            calls.push(String(params.type));
+            sent();
+          },
+          quarantine() {
+            assert.fail("ordinary HTML control must not quarantine");
+          },
+        };
+        await dispatchBrowserTargetedInput(port, read(), {
+          kind: "click",
+          x: 5,
+          y: 5,
+        });
+        assert.deepEqual(calls, ["mousePressed", "mouseReleased"]);
+        if (id !== "child") {
+          target.focus();
+          calls.length = 0;
+          await dispatchBrowserTargetedInput(port, read(), {
+            kind: "key",
+            key: "Enter",
+          });
+          assert.deepEqual(calls, ["keyDown", "keyUp"]);
+        }
+      }
+    } finally {
+      dom.window.close();
     }
-    dom.window.document.elementFromPoint = () =>
-      dom.window.document.getElementById("text-label");
-    assert.equal(
-      typeof (
-        dom.window.eval(
-          browserInputProbeScript({ kind: "click", x: 5, y: 5 }),
-        ) as BrowserInputSnapshot
-      ).pointerHitId,
-      "string",
-    );
-  } finally {
-    dom.window.close();
   }
 });
 
@@ -442,7 +469,7 @@ test("open shadow focus resolves the real input and invalidates A to B before di
   }
 });
 
-test("shadow native picker controls and associated labels reject before any Input dispatch", async () => {
+test("open-shadow HTML controls and labels retain observed native input", async () => {
   const f = shadowFixture();
   try {
     for (const control of [
@@ -455,48 +482,38 @@ test("shadow native picker controls and associated labels reject before any Inpu
       for (const id of ["picker", "label", "child"]) {
         const target = f.root.getElementById(id)!;
         f.root.elementFromPoint = () => target;
+        const read = () =>
+          requireBrowserInputSnapshot(
+            f.dom.window.eval(
+              browserInputProbeScript({ kind: "click", x: 5, y: 5 }),
+            ),
+          );
         let sent = 0;
-        await assert.rejects(
-          dispatchBrowserTargetedInput(
-            {
-              assertCurrent() {},
-              snapshot: async () =>
-                f.dom.window.eval(
-                  browserInputProbeScript({ kind: "click", x: 5, y: 5 }),
-                ) as BrowserInputSnapshot,
-              beforeDispatch() {},
-              dispatch: async () => {
-                sent++;
-              },
-              quarantine() {},
-            },
-            f.read(),
-            { kind: "click", x: 5, y: 5 },
-          ),
-          /BROWSER_INPUT_UNSUPPORTED:native-surface/,
-        );
-        assert.equal(sent, 0);
+        const port: BrowserTargetedInputPort = {
+          assertCurrent() {},
+          snapshot: async () => read(),
+          beforeDispatch() {},
+          dispatch: async (_, __, onDispatched) => {
+            sent++;
+            onDispatched();
+          },
+          quarantine() {
+            assert.fail("HTML controls must not quarantine");
+          },
+        };
+        await dispatchBrowserTargetedInput(port, read(), {
+          kind: "click",
+          x: 5,
+          y: 5,
+        });
+        assert.equal(sent, 2);
         if (id !== "child") {
           (target as HTMLElement).focus();
-          const observed = f.read();
-          assert.equal(observed.focusId, null);
-          await assert.rejects(
-            dispatchBrowserTargetedInput(
-              {
-                assertCurrent() {},
-                snapshot: async () => f.read(),
-                beforeDispatch() {},
-                dispatch: async () => {
-                  sent++;
-                },
-                quarantine() {},
-              },
-              observed,
-              { kind: "key", key: "Enter" },
-            ),
-            /BROWSER_INPUT_UNSUPPORTED:native-surface/,
-          );
-          assert.equal(sent, 0);
+          await dispatchBrowserTargetedInput(port, read(), {
+            kind: "key",
+            key: "Enter",
+          });
+          assert.equal(sent, 4);
         }
       }
     }

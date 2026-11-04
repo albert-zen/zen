@@ -417,10 +417,6 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
   }
 
   #new(threadId: string, owner?: Owner, id: string = randomUUID()): Tab {
-    if (this.#tabs.size >= 20)
-      throw new Error(
-        "Close a browser tab before opening another (20 tab limit)",
-      );
     const view = this.#dependencies.createView();
     const tab: Tab = {
       id,
@@ -1172,7 +1168,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
                 assertCurrent: () => {
                   if (tab.nativeDialogOpen)
                     throw new Error(
-                      "Browser native dialog requires human control; no automatic dialog acceptance or foreground fallback",
+                      "Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability",
                     );
                   if (!dispatched && tab.observation !== observation)
                     throw new Error(
@@ -1854,10 +1850,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
       throw new Error(
         "Browser programmable evaluation is still in flight; mutations remain blocked until native settlement or tab closure",
       );
-    if (
-      !inputOptions.allowQuarantinedClose &&
-      tab.inputQuarantine !== undefined
-    )
+    if (inputOptions.targetedInput && tab.inputQuarantine !== undefined)
       throw new Error(tab.inputQuarantine);
     if (tab.inputInFlight)
       throw new Error(
@@ -1892,10 +1885,7 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         throw new Error(
           "Browser targeted input is already in flight; inspect again",
         );
-      if (
-        tab.inputQuarantine !== undefined &&
-        !inputOptions.allowQuarantinedClose
-      )
+      if (tab.inputQuarantine !== undefined && inputOptions.targetedInput)
         throw new Error(tab.inputQuarantine);
       this.#requireAgentTab(sessionId, tab.id);
       this.#assertControlRevision(tab, revision);

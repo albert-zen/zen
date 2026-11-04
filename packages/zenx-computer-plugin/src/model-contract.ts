@@ -87,7 +87,7 @@ function windowTarget(value: unknown): Record<string, unknown> {
     throw Error(
       "Computer window reference lacks an exact native target; list windows again",
     );
-  if (typeof target.windowTitle !== "string" || !target.windowTitle)
+  if (typeof target.windowTitle !== "string")
     throw Error(
       "Computer window reference lacks an exact window title; list windows again",
     );

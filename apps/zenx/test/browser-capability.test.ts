@@ -4,14 +4,11 @@ import { JSDOM } from "jsdom";
 
 import {
   browserScrollScript,
-  assertBrowserTabCapacity,
   BrowserZenXCapabilityPackage,
   browserInspectScript,
   browserActionScript,
   browserCapabilityManifest,
   browserPartitionName,
-  MAX_BROWSER_TABS_GLOBAL,
-  MAX_BROWSER_TABS_PER_SESSION,
   redactBrowserUrl,
   resolveBrowserObservedTarget,
   type BrowserInspection,
@@ -501,18 +498,6 @@ test("browser rejects stale and forged targets without classifying text sensitiv
       "type",
     ),
     password,
-  );
-});
-
-test("browser enforces per-session and global tab limits", () => {
-  assert.doesNotThrow(() => assertBrowserTabCapacity(0, 0));
-  assert.throws(
-    () => assertBrowserTabCapacity(1, MAX_BROWSER_TABS_PER_SESSION),
-    /session tab limit/u,
-  );
-  assert.throws(
-    () => assertBrowserTabCapacity(MAX_BROWSER_TABS_GLOBAL, 0),
-    /global tab limit/u,
   );
 });
 

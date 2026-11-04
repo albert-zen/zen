@@ -60,7 +60,7 @@
     },
     {
       "name": "computer_list_windows",
-      "description": "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
+      "description": "List open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
       "inputSchema": {
         "type": "object",
         "properties": {

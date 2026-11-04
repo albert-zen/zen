@@ -80,17 +80,44 @@ export type BoundComputerInput =
   | { operation: "shortcut"; key: string; modifiers: string[] }
   | { operation: "scroll"; deltaY: number };
 
-export const COMPUTER_BASIC_KEYS = [
-  "enter",
-  "escape",
-  "tab",
-  "backspace",
-  "space",
-  "arrowUp",
-  "arrowDown",
-  "arrowLeft",
-  "arrowRight",
-] as const;
+/** Layout-independent macOS virtual keys; printable text uses Unicode input instead. */
+export const COMPUTER_NATIVE_KEY_CODES = {
+  enter: 36,
+  escape: 53,
+  tab: 48,
+  backspace: 51,
+  space: 49,
+  arrowUp: 126,
+  arrowDown: 125,
+  arrowLeft: 123,
+  arrowRight: 124,
+  delete: 117,
+  home: 115,
+  end: 119,
+  pageUp: 116,
+  pageDown: 121,
+  f1: 122,
+  f2: 120,
+  f3: 99,
+  f4: 118,
+  f5: 96,
+  f6: 97,
+  f7: 98,
+  f8: 100,
+  f9: 101,
+  f10: 109,
+  f11: 103,
+  f12: 111,
+  f13: 105,
+  f14: 107,
+  f15: 113,
+  f16: 106,
+  f17: 64,
+  f18: 79,
+  f19: 80,
+  f20: 90,
+} as const;
+export const COMPUTER_BASIC_KEYS = Object.keys(COMPUTER_NATIVE_KEY_CODES);
 export function validateComputerAppText(text: string): void {
   if (!text || Array.from(text).length > 1024 || /[\uD800-\uDFFF]/u.test(text))
     throw new Error("text must contain 1 to 1024 well-formed Unicode scalars");

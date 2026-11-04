@@ -541,7 +541,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_pointer_click",
       description:
-        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No frames, dragging, OS input or automatic foreground fallback. Detected page, viewport, focus, or user input changes reject. Open shadow roots resolve within bounded limits; ordinary div/span containers remain supported after exact-node metadata checks, while known closed or unresolved shadow surfaces reject locally. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         {
           ...common(),
@@ -558,7 +558,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_key_press",
       description:
-        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; identifiable native pickers reject and native UI requires human control, never global input or forced activation. Unknown input is never replayed.",
+        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Open shadow focus resolves to its real node; ordinary focused contenteditable containers remain supported after exact-node metadata checks, while known closed or unresolved shadow focus is unavailable. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         { ...common(), key: { type: "string", enum: [...browserInputKeys] } },
         ["observationId", "key"],
@@ -1398,8 +1398,6 @@ export interface BrowserObservation {
   targets: Map<string, BrowserTargetFingerprint>;
 }
 
-export const MAX_BROWSER_TABS_PER_SESSION = 8;
-export const MAX_BROWSER_TABS_GLOBAL = 24;
 export const MAX_BROWSER_SCREENSHOT_BYTES = 4 * 1024 * 1024;
 export const BROWSER_SCREENSHOT_TTL_MS = 5 * 60_000;
 export const MAX_BROWSER_SCREENSHOT_ARTIFACTS = 16;
@@ -2031,7 +2029,7 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
           assertCurrent: () => {
             if (tab.nativeDialogOpen)
               throw new Error(
-                "Browser native dialog requires human control; no automatic dialog acceptance or foreground fallback",
+                "Browser targeted input cannot operate this open dialog; use an available dialog or Computer capability with its own authorization",
               );
             if (!dispatched && tab.observation !== observation)
               throw new Error(
@@ -2333,11 +2331,6 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   #reserveOpen(sessionId: string): BrowserSessionIncarnation {
     if (this.#closing) throw new Error("ZenX browser backend is closed");
     const existing = this.#sessions.get(sessionId);
-    const currentGlobal = this.#tabs.size + this.#pendingGlobal;
-    const currentSession =
-      [...this.#tabs.values()].filter((tab) => tab.sessionId === sessionId)
-        .length + (existing?.pending ?? 0);
-    assertBrowserTabCapacity(currentGlobal, currentSession);
     const incarnation = existing ?? this.#createIncarnation(sessionId);
     this.#pendingGlobal += 1;
     incarnation.pending += 1;
@@ -2750,22 +2743,6 @@ export function browserActionScript(
     showAgentPointer(point);
     return { ok: true };
   })()`;
-}
-
-export function assertBrowserTabCapacity(
-  currentGlobal: number,
-  currentSession: number,
-): void {
-  if (currentGlobal >= MAX_BROWSER_TABS_GLOBAL) {
-    throw new Error(
-      `ZenX browser global tab limit (${MAX_BROWSER_TABS_GLOBAL}) reached; close a tab or session before opening another`,
-    );
-  }
-  if (currentSession >= MAX_BROWSER_TABS_PER_SESSION) {
-    throw new Error(
-      `ZenX browser session tab limit (${MAX_BROWSER_TABS_PER_SESSION}) reached; close a tab before opening another`,
-    );
-  }
 }
 
 export function browserPartitionName(

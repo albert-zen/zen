@@ -9,12 +9,12 @@ locked, using fresh controls and an actual post-action inspection; native errors
 remain failures. Other providers, window images and foreground input require an
 active session. System suspension blocks all Computer work. The Host never
 unlocks the desktop or replays input. On Windows and the bundled macOS provider,
-`computer_list_windows({})` returns up to 32 open windows with exact, owner-scoped
+`computer_list_windows({})` returns open windows with exact, owner-scoped
 short `ref` values. Pass a window ref to `computer_inspect`,
 `computer_screenshot` or `computer_select_target`. Native callers can still
 use the exact target object. Listing does not activate windows or enumerate
 installed applications. Use `query` to filter by application name, PID or
-title before the result limit.
+title. Discovery does not silently omit windows after an arbitrary count; normal provider output and operation budgets still apply.
 
 Titles are preserved exactly, including empty titles and titles longer than 256
 characters; targeted operations accept titles up to 4096 characters. Re-list after a window closes or is renamed. Identical titles within
@@ -344,3 +344,22 @@ drag in that provider instance. A release-post receipt is not proof that the
 application received it or completed a drop. Reobserve rather than replaying.
 Native receiver fixtures record drag events independently; Linux tests cannot
 establish macOS delivery or application effect.
+
+Native macOS key input and shortcuts support layout-independent navigation keys
+(`home`, `end`, `pageUp`, `pageDown`, forward `delete`), the existing basic keys,
+and `f1` through `f20`. These use the same selected binding, permissions and
+release checks; individual applications still decide how to handle posted keys.
+Other providers retain their own advertised key vocabulary.
+
+Foreground input waits for the activity indicator to be painted, without a fixed
+one-second sleep on every operation. Cancellation, permission and exact target
+checks still precede dispatch. Native typing retains a 1024-Unicode-scalar
+resource budget: the helper preconstructs Unicode events before posting, checks
+application/desktop identity between chunks and has a ten-second operation
+deadline. Larger text needs an explicit later
+operation, not automatic continuation after a partial or uncertain result.
+
+Native foreground shortcuts accept printable single-character logical keys,
+including punctuation such as `[`, `]`, `-`, `=` and `,`, as well as named keys.
+The current keyboard layout must resolve the key uniquely; unavailable or
+ambiguous mappings still fail before posting. There is no assumed ANSI layout.

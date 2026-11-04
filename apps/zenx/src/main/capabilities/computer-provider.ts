@@ -11,6 +11,7 @@ import {
 import {
   ComputerTargetSession,
   COMPUTER_BASIC_KEYS,
+  COMPUTER_NATIVE_KEY_CODES,
   type ComputerCaptureImage,
 } from "./computer-target-session.js";
 import { NativeComputerTargetTransport } from "./computer-target-transport.js";
@@ -51,15 +52,7 @@ import {
 
 export const COMPUTER_SHORTCUT_KEYS = [
   ...Array.from("abcdefghijklmnopqrstuvwxyz0123456789"),
-  "enter",
-  "escape",
-  "tab",
-  "backspace",
-  "space",
-  "arrowUp",
-  "arrowDown",
-  "arrowLeft",
-  "arrowRight",
+  ...COMPUTER_BASIC_KEYS,
 ];
 
 export interface ComputerTarget {
@@ -293,10 +286,11 @@ export function selectComputerWindows(
           .includes(query.toLocaleLowerCase())),
   );
   return {
-    windows: matching
-      .slice(0, 32)
-      .map(({ applicationName, ...target }) => ({ target, applicationName })),
-    truncated: matching.length > 32,
+    windows: matching.map(({ applicationName, ...target }) => ({
+      target,
+      applicationName,
+    })),
+    truncated: false,
   };
 }
 
@@ -409,7 +403,7 @@ export const computerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_list_windows",
       description:
-        "List up to 32 open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow truncated results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
+        "List open desktop windows and their running applications without activating them. Pass a case-insensitive query matching application name, PID, or title to narrow results. Use its returned window ref with computer_inspect; this is not a catalog of installed apps.",
       inputSchema: objectSchema(
         { query: { type: "string", minLength: 1, maxLength: 256 } },
         [],
@@ -601,6 +595,11 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
                 properties: {
                   ...(tool.inputSchema.properties as Record<string, unknown>),
                   bindingId: stringSchema(),
+                  ...(tool.name === "computer_foreground_key_press"
+                    ? {
+                        key: { type: "string", enum: [...COMPUTER_BASIC_KEYS] },
+                      }
+                    : {}),
                 },
                 required: [
                   ...(tool.inputSchema.required as string[]),
@@ -659,11 +658,18 @@ export const boundComputerCapabilityManifest: ZenXPluginManifestV2 = {
     {
       name: "computer_foreground_shortcut",
       description:
-        "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted letter/digit in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
+        "FOREGROUND TAKEOVER: send one shortcut to this thread's selected exact window. key is a logical unshifted printable character in the current Command layout when command is present, otherwise the current base layout; modifiers apply separately. Navigation keys are layout-independent. Missing or ambiguous character mappings/input-source changes fail closed; no ANSI fallback.",
       inputSchema: objectSchema(
         {
           bindingId: stringSchema(),
-          key: { type: "string", enum: COMPUTER_SHORTCUT_KEYS },
+          key: {
+            anyOf: [
+              { type: "string", enum: COMPUTER_SHORTCUT_KEYS },
+              { type: "string", minLength: 1, maxLength: 1 },
+            ],
+            description:
+              "A named native key or one printable logical unshifted Unicode scalar. The current keyboard layout must map it uniquely.",
+          },
           modifiers: {
             type: "array",
             minItems: 1,
@@ -1513,7 +1519,11 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
         };
       }
       case "computer_foreground_key_press": {
-        const key = requiredComputerKey(invocation.arguments);
+        const key = this.#backend.targetSession
+          ? requiredString(invocation.arguments, "key")
+          : requiredComputerKey(invocation.arguments);
+        if (this.#backend.targetSession && !COMPUTER_BASIC_KEYS.includes(key))
+          throw new Error(`Unsupported computer key: ${key}`);
         await this.#withForegroundActivity(
           invocation,
           signal,
@@ -1530,7 +1540,11 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
               );
               return;
             }
-            await this.#backend.foregroundKeyPress(key, signal, onStopping);
+            await this.#backend.foregroundKeyPress(
+              key as ComputerKey,
+              signal,
+              onStopping,
+            );
           },
         );
         return {
@@ -1631,7 +1645,6 @@ export class ComputerZenXCapabilityPackage implements ZenXCapabilityPackage {
     operation: (signal: AbortSignal, onStopping?: () => void) => Promise<T>,
   ): Promise<T> {
     const execute = async (signal: AbortSignal, onStopping?: () => void) => {
-      await foregroundTakeoverNotice(signal);
       signal.throwIfAborted();
       return await operation(signal, onStopping);
     };
@@ -3243,7 +3256,7 @@ let appElement = AXUIElementCreateApplication(running.processIdentifier)
 // assistive client requests the application role. Query it before resolving
 // windows so the first scoped inspection can include the web-area subtree.
 _ = textAttribute(appElement, kAXRoleAttribute)
-let requestedWindowTitle = string(targetRequest["windowTitle"])
+let requestedWindowTitle = targetRequest["windowTitle"] as? String
 var windows = elementArrayAttribute(appElement, kAXWindowsAttribute)
 if let focused = elementAttribute(appElement, kAXFocusedWindowAttribute) { windows.append(focused) }
 if let main = elementAttribute(appElement, kAXMainWindowAttribute) { windows.append(main) }
@@ -3918,27 +3931,6 @@ function requireScopedWindow(target: ComputerTarget, toolName: string): void {
       `${toolName} requires target.windowTitle so the provider cannot inspect or act across sibling windows`,
     );
   }
-}
-
-async function foregroundTakeoverNotice(signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, 1_000);
-    const abort = (): void => {
-      clearTimeout(timer);
-      reject(
-        signal.reason ??
-          new DOMException(
-            "The foreground operation was cancelled",
-            "AbortError",
-          ),
-      );
-    };
-    signal.addEventListener("abort", abort, { once: true });
-  });
 }
 
 function requiredFiniteNumber(
@@ -4789,7 +4781,8 @@ func resolveShortcut(_ key: String, _ modifiers: [String]) throws -> (CGKeyCode,
   if modifiers.contains("option") { flags.insert(.maskAlternate) }
   if modifiers.contains("shift") { flags.insert(.maskShift) }
   if let code = keyCodes[key] { return (code, flags, nil) }
-  guard key.utf8.count == 1, "abcdefghijklmnopqrstuvwxyz0123456789".contains(key) else { try refuse("Unsupported logical shortcut key") }
+  guard key.unicodeScalars.count == 1, let scalar = key.unicodeScalars.first,
+        scalar.value > 32, scalar.value != 127 else { try refuse("Unsupported logical shortcut key") }
   let layout = try readKeyboardLayout()
   var matches: [CGKeyCode] = []
   // Logical base key under the current Command layout when Command is present.
@@ -4812,7 +4805,9 @@ func unicodeChunks(_ text: String) throws -> [[UniChar]] {
   return chunks
 }
 
-let keyCodes: [String: CGKeyCode] = ["enter":36, "escape":53, "tab":48, "backspace":51, "space":49, "arrowUp":126, "arrowDown":125, "arrowLeft":123, "arrowRight":124]
+let keyCodes: [String: CGKeyCode] = [${Object.entries(COMPUTER_NATIVE_KEY_CODES)
+  .map(([key, code]) => `"${key}":${code}`)
+  .join(", ")}]
 var bindings: [String: Binding] = [:]
 while let line = readLine() {
   var posted = 0
@@ -5010,7 +5005,11 @@ function requiredComputerShortcut(arguments_: Record<string, unknown>): {
   const key = requiredString(arguments_, "key");
   const modifiers = arguments_.modifiers;
   if (
-    !COMPUTER_SHORTCUT_KEYS.includes(key) ||
+    !(
+      COMPUTER_BASIC_KEYS.includes(key) ||
+      (Array.from(key).length === 1 &&
+        !/[\u0000-\u0020\u007f\uD800-\uDFFF]/u.test(key))
+    ) ||
     !Array.isArray(modifiers) ||
     modifiers.length < 1 ||
     modifiers.length > 4 ||
