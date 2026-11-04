@@ -709,6 +709,28 @@ function ThreadViewContent({
     () => pendingQueuedMessages(thread?.canonicalItems ?? []),
     [thread?.canonicalItems],
   );
+  // Queue is a pending projection, not proof of next-Turn delivery. Agent
+  // guidance and Host steer may be staged here until the current safe boundary.
+  const queueWaitsForTurnEnd = useMemo(() => {
+    const byId = new Map(nativeQueue.map((item) => [item.id, item]));
+    return (
+      thread?.queuedMessages?.every((message) => {
+        const item = byId.get(message.id);
+        if (
+          !item ||
+          item.threadId !== thread.id ||
+          item.clientId !== message.clientId ||
+          item.revision !== (message.revision ?? 0)
+        )
+          return false;
+        if (item.type === "user_message_queued")
+          return item.deliveryMode !== "steer";
+        if (item.type === "thread_message_queued")
+          return item.messageType === "follow_up";
+        return item.intent === "queue";
+      }) === true
+    );
+  }, [nativeQueue, thread?.id, thread?.queuedMessages]);
   const observedEdit = (session: QueueEditSession) =>
     session.confirmed !== undefined &&
     thread?.id === session.threadId &&
@@ -1951,18 +1973,6 @@ function ThreadViewContent({
             onRespond={respondToApproval}
           />
         ))}
-        {thread?.canonicalItems ? (
-          <PendingSteerPanel
-            key={`steer-recall:${thread.id}`}
-            threadId={thread.id}
-            items={thread.canonicalItems}
-            pending={pendingSteer}
-            runningTurnId={runningTurn?.id ?? null}
-            store={steerRecallStore}
-            onRestore={onRestoreRecalled}
-            onReadAttachment={onReadAttachment}
-          />
-        ) : null}
         {thread ? (
           <QueuedMessages
             threadId={thread.id}
@@ -1994,6 +2004,7 @@ function ThreadViewContent({
               });
             }}
             running={runningTurn !== null}
+            waitsForTurnEnd={queueWaitsForTurnEnd}
             steeringIds={steerLocks.current.get(thread.id)}
             onSteer={
               onSteerQueued ? (message) => void steerQueued(message) : undefined
@@ -2110,6 +2121,18 @@ function ThreadViewContent({
             focusComposer={() =>
               composerTextareaRef.current?.focus({ preventScroll: true })
             }
+          />
+        ) : null}
+        {thread?.canonicalItems ? (
+          <PendingSteerPanel
+            key={`steer-recall:${thread.id}`}
+            threadId={thread.id}
+            items={thread.canonicalItems}
+            pending={pendingSteer}
+            runningTurnId={runningTurn?.id ?? null}
+            store={steerRecallStore}
+            onRestore={onRestoreRecalled}
+            onReadAttachment={onReadAttachment}
           />
         ) : null}
         {composer.compaction?.status === "failed" ||

@@ -546,3 +546,31 @@ test("Chinese queue header exposes actual one and many counts rather than an unt
     await i18n.changeLanguage("en");
   }
 });
+
+test("Queue and steer counts share separators and localized message units", async () => {
+  const previous = i18n.language;
+  try {
+    for (const [language, suffix] of [
+      ["zh-CN", "条"],
+      ["en", "message"],
+    ]) {
+      await i18n.changeLanguage(language);
+      for (const key of [
+        "queueWaitForTurnCount",
+        "queuePendingCount",
+        "steerPendingCount",
+      ]) {
+        assert.ok(
+          i18n.t(`shell:${key}`, { count: 1 }).endsWith(` · 1 ${suffix}`),
+        );
+        assert.ok(
+          i18n
+            .t(`shell:${key}`, { count: 2 })
+            .endsWith(` · 2 ${language === "en" ? "messages" : suffix}`),
+        );
+      }
+    }
+  } finally {
+    await i18n.changeLanguage(previous);
+  }
+});

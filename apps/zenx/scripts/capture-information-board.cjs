@@ -22,7 +22,8 @@ const result = {
   synthetic: true,
   platform: process.platform,
   inputBoundaries: {
-    pointer: "Electron native events with trusted DOM click acknowledgement",
+    pointer:
+      "Electron sendInputEvent with trusted DOM acknowledgement, not OS non-client hit-testing; systemSidebarClicks separately use production bound Computer CoreGraphics input",
     field: "Electron native Select All and insertText with exact UI readback",
     select:
       "production DOM input/change; native OS popup input is not accepted by this run",
@@ -31,7 +32,7 @@ const result = {
   cases: [],
   blockedExternalRequests: 0,
 };
-let window, taskId;
+let window, taskId, ownedSidebarInput;
 let clickSequence = 0;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression) {
@@ -55,14 +56,7 @@ async function until(check, label) {
 }
 const query = (selector) =>
   `document.querySelector(${JSON.stringify(selector)})`;
-async function click(selector, label = selector) {
-  await until(() => evaluate(`Boolean(${query(selector)})`), label);
-  await evaluate(
-    `${query(selector)}.scrollIntoView({block:'center',inline:'nearest'})`,
-  );
-  const point = await evaluate(
-    `(()=>{const e=${query(selector)},r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));return {x:Math.round(x),y:Math.round(y)}})()`,
-  );
+async function click(selector, label = selector, systemPointer = false) {
   window.show();
   window.focus();
   window.webContents.focus();
@@ -71,26 +65,45 @@ async function click(selector, label = selector) {
     "owned window focus",
   );
   const acknowledgedClick = ++clickSequence;
-  await evaluate(
-    `(()=>{const e=${query(selector)};e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return true})()`,
-  );
-  window.webContents.sendInputEvent({
-    type: "mouseDown",
-    button: "left",
-    clickCount: 1,
-    ...point,
-  });
-  window.webContents.sendInputEvent({
-    type: "mouseUp",
-    button: "left",
-    clickCount: 1,
-    ...point,
-  });
+  let point;
+  // Renderer refresh can replace a control between separate evaluations. Locate,
+  // validate and arm the same element atomically, after focus has settled. Only
+  // missing pre-dispatch targets may wait; unknown dispatched input never retries.
+  await until(async () => {
+    point = await evaluate(
+      `(()=>{const e=${query(selector)};if(!e)return null;e.scrollIntoView({block:'center',inline:'nearest'});const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;if(e.disabled||!r.width||!r.height||!e.contains(document.elementFromPoint(x,y)))throw Error('Obscured/disabled native target: '+${JSON.stringify(label)}+' '+JSON.stringify({r:{x:r.x,y:r.y,width:r.width,height:r.height},hits:document.elementsFromPoint(x,y).map(n=>n.className).slice(0,5)}));e.addEventListener('click',event=>{if(event.isTrusted)window.__informationNativeClick=${acknowledgedClick}},{capture:true,once:true});return {x:Math.round(x),y:Math.round(y)}})()`,
+    );
+    return point !== null;
+  }, label + " target prepared before input");
+  if (systemPointer) {
+    const receipt = await ownedSidebarInput.click(window, point);
+    (result.systemSidebarClicks ??= []).push({
+      label,
+      receipt,
+      input: "production Computer exact PID/CG/AX bound CoreGraphics events",
+    });
+  } else {
+    window.webContents.sendInputEvent({
+      type: "mouseDown",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
+    window.webContents.sendInputEvent({
+      type: "mouseUp",
+      button: "left",
+      clickCount: 1,
+      ...point,
+    });
+  }
   // Posting native input is not an acknowledgement: a following IPC read can
   // otherwise observe pre-click idle before React starts the layout write.
   await until(
     () => evaluate(`window.__informationNativeClick===${acknowledgedClick}`),
-    label + " trusted native click delivered",
+    label +
+      (systemPointer
+        ? " trusted OS click delivered"
+        : " trusted Chromium click delivered"),
   );
   result.steps.push(label);
 }
@@ -245,6 +258,28 @@ async function capture(name, mode) {
       "first card heading is not occluded by a higher titlebar layer: " +
         JSON.stringify(geometry.firstCardHeading),
     );
+  }
+  const resizeState = await evaluate(
+    "(()=>{const p=document.querySelector('.auxiliary-panel[data-open=true][data-expanded=true]');if(!p)return null;const e=p.querySelector(':scope > .browser-panel-resizer');const prior=document.activeElement;e.focus({preventScroll:true});return {display:getComputedStyle(e).display,rects:e.getClientRects().length,focusable:document.activeElement===e,focusUnchanged:document.activeElement===prior}})()",
+  );
+  if (resizeState) {
+    assert.equal(
+      resizeState.display,
+      "none",
+      "Fullscreen workspace hides the split-width resizer",
+    );
+    assert.equal(
+      resizeState.rects,
+      0,
+      "Fullscreen split resizer has no interactive layout box",
+    );
+    assert.equal(
+      resizeState.focusable,
+      false,
+      "Fullscreen split resizer cannot take focus",
+    );
+    assert.equal(resizeState.focusUnchanged, true);
+    result.fullscreenSplitResizer = resizeState;
   }
   assert.equal(geometry.overflow, false, "no page-level horizontal overflow");
   if (mode !== "closed") assert.equal(geometry.expanded, "true");
@@ -808,9 +843,86 @@ async function run() {
     '.auxiliary-heading button[aria-label="Expand side panel"]',
     "Internally maximize workspace (not OS fullscreen)",
   );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await click(
+      ".sidebar-collapse-button",
+      "Collapse sidebar in maximized resource workspace",
+    );
+    await until(
+      () =>
+        evaluate(
+          "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+        ),
+      "sidebar collapsed",
+    );
+    await pause(250);
+    if (process.platform === "darwin") {
+      const strip = await evaluate(
+        "(()=>{const b=document.querySelector('.sidebar-collapse-button').getBoundingClientRect(),h=document.querySelector('.auxiliary-heading').getBoundingClientRect();return {buttonRight:b.right,headingLeft:h.left}})()",
+      );
+      assert.ok(
+        strip.headingLeft >= strip.buttonRight,
+        "Fullscreen drag heading clears native toggle hit region",
+      );
+      result.sidebarNativeStrip = strip;
+    }
+    await click(
+      ".sidebar-collapse-button",
+      "Expand sidebar from native strip while workspace is maximized",
+    );
+    await until(
+      () =>
+        evaluate(
+          "!document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+        ),
+      "sidebar expands after actual click",
+    );
+  }
   await click(
     '[data-tab-id="primary-conversation"] [role="tab"]',
     "Select the main-conversation workspace Tab",
+  );
+  await click(
+    '.thread-row-shell[data-thread-id="information-other"] > button.thread-row',
+    "Navigate away from maximized primary conversation",
+  );
+  await until(
+    () =>
+      evaluate(
+        "document.querySelector('.thread-row-shell[data-thread-id=\"information-other\"] > button.thread-row')?.getAttribute('aria-current')==='page' || !document.querySelector('.auxiliary-panel[data-primary-active=true]')",
+      ),
+    "second conversation shown",
+  );
+  await click(main, "Return to retained primary conversation");
+  await until(
+    () =>
+      evaluate(
+        "Boolean(document.querySelector('.auxiliary-panel[data-primary-active=true] [data-tab-id=\"primary-conversation\"] [aria-selected=true]'))",
+      ),
+    "primary selection survives production panel remount",
+  );
+  await click(
+    '.auxiliary-heading button[aria-label="Restore side panel"]',
+    "Restore original resource after retained primary conversation",
+  );
+  await until(
+    () =>
+      evaluate(
+        "Boolean(document.querySelector('[data-tab-id=\"file:fixture.txt\"] [aria-selected=true]'))",
+      ),
+    "original resource fallback retained",
+  );
+  await click(
+    '.auxiliary-heading button[aria-label="Expand side panel"]',
+    "Reenter fullscreen on retained resource",
+  );
+  await click(
+    '[data-tab-id="primary-conversation"] [role="tab"]',
+    "Select primary again after restoring resource",
+  );
+  // Navigation remounts the real ThreadView; subsequent tests compare its new DOM identity.
+  await evaluate(
+    "(()=>{window.__informationComposer=document.querySelector('#thread-composer');return true})()",
   );
   await click(
     ".information-toolbar button",
@@ -1465,6 +1577,97 @@ async function run() {
       "Electron capturePage of the actual information surface; no redrawing or image editing",
     nativeInputsRetained: true,
   });
+  // Restore the production preference before the OS-pointer scenario uses
+  // English accessible names; the Chinese reference captures above stay intact.
+  await evaluate(
+    "(()=>{localStorage.setItem('zenx.language','en');dispatchEvent(new StorageEvent('storage',{key:'zenx.language',newValue:'en',storageArea:localStorage}));return true})()",
+  );
+  await until(
+    () => evaluate("document.documentElement.lang==='en'"),
+    "English preference restored before system-pointer acceptance",
+  );
+  // Unlike sendInputEvent, the production Computer path traverses macOS's
+  // actual non-client drag hit test. No trust prompt, TCC change or fallback.
+  if (process.platform === "darwin") {
+    result.sidebarOsInput = { status: "running", permissionChanges: false };
+    try {
+      ownedSidebarInput = await require(
+        path.join(temporary, "owned-sidebar-native-input.cjs"),
+      ).prepareOwnedSidebarInput(temporary);
+      await click(
+        main,
+        "Select owned main Thread for system-pointer acceptance",
+      );
+      await until(
+        () => evaluate("Boolean(document.querySelector('.auxiliary-panel'))"),
+        "owned Thread workspace mounted",
+      );
+      if (
+        !(await evaluate(
+          "document.querySelector('.auxiliary-panel').dataset.open==='true'",
+        ))
+      )
+        await click(
+          "#thread-browser-toggle",
+          "Open workspace for system-pointer acceptance",
+        );
+      if (
+        !(await evaluate(
+          "document.querySelector('.auxiliary-panel').dataset.expanded==='true'",
+        ))
+      )
+        await click(
+          '.auxiliary-heading button[aria-label="Expand side panel"]',
+          "Maximize workspace for system-pointer acceptance",
+        );
+      await click(
+        '[data-tab-id="file:fixture.txt"] [role="tab"]',
+        "Select owned resource before system-pointer acceptance",
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await click(
+          ".sidebar-collapse-button",
+          "Collapse sidebar before actual OS click",
+        );
+        await until(
+          () =>
+            evaluate(
+              "document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+            ),
+          "sidebar fully collapsed before OS click",
+        );
+        await pause(250);
+        await click(
+          ".sidebar-collapse-button",
+          "Expand sidebar using actual bound macOS pointer",
+          true,
+        );
+        await until(
+          () =>
+            evaluate(
+              "!document.querySelector('.app-shell').classList.contains('sidebar-collapsed')",
+            ),
+          "OS click expanded the actual sidebar",
+        );
+      }
+      result.sidebarOsInput = {
+        status: "passed",
+        permissionChanges: false,
+        clicks: result.systemSidebarClicks.length,
+      };
+      await screenshot("15-macos-system-sidebar-click.png");
+    } catch (error) {
+      result.sidebarOsInput = {
+        status: /Accessibility permission is not granted/.test(String(error))
+          ? "blocked"
+          : "failed",
+        permissionChanges: false,
+        reason: String(error),
+        nativeDelivery: "unverified",
+      };
+      throw error;
+    }
+  }
   result.ok = true;
 }
 void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
@@ -1485,6 +1688,7 @@ void import(pathToFileURL(path.join(__dirname, "../out/main/index.js")).href)
       } catch {}
   })
   .finally(async () => {
+    await ownedSidebarInput?.close();
     await fs.writeFile(
       path.join(directory, "acceptance.json"),
       JSON.stringify(result, null, 2),

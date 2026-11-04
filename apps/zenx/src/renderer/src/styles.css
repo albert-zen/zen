@@ -8309,6 +8309,17 @@ button:disabled {
     width: auto;
     min-width: var(--native-leading-safe-area);
   }
+  /* An expanded workspace starts at x=0 when the Sidebar is collapsed. Its
+     heading is a drag region, and overlapping the native strip would swallow
+     the sidebar toggle even though it paints above. Keep the heading's box
+     clear of that strip; the titlebar covers the resulting gap. */
+  :root[data-platform="darwin"]
+    .app-shell.sidebar-collapsed
+    .auxiliary-panel[data-open="true"][data-expanded="true"]
+    > .auxiliary-heading {
+    margin-inline-start: calc(var(--native-leading-safe-area) - 8px);
+    padding-inline-start: 8px;
+  }
   /* The native controls own the leading viewport strip, independent of the
      Sidebar and tab order. A right-aligned panel can enter that strip while
      expanding or while the Sidebar animates; reserve only the intersecting
@@ -12303,6 +12314,9 @@ button:disabled {
 
 /* Local Send feedback is not a canonical message or delivery receipt. */
 .pending-send-content {
+  /* Match a settled bubble: the browser's default paragraph margins puffed
+     the local echo up by two lines' worth of space before admission. */
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

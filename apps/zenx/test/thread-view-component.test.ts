@@ -1499,7 +1499,7 @@ test("mounted Thread queue disappears on canonical acceptance without navigation
     assert.equal(queue?.getAttribute("aria-live"), null);
     assert.equal(
       queue?.querySelector('[role="status"]')?.textContent,
-      "After this turn · 1",
+      "After this turn · 1 message",
     );
     current = applyNativeThreadEvent(current, {
       type: "item_completed",
