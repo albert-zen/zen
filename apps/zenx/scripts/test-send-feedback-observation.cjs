@@ -603,6 +603,52 @@ test("timeline integration remains single source, bounded and private", () => {
 });
 
 test("selection performance pair locks each exact Legend source and keeps reader regression outside timing", () => {
+  // Reuse run 41743199059 only while every unchanged observer/dependency byte matches.
+  const digest = (bytes) =>
+    require("node:crypto").createHash("sha256").update(bytes).digest("hex");
+  for (const [file, expectedHash] of Object.entries({
+    "capture-send-feedback-verified-frame.cjs":
+      "056f7314b019b3bdfe27262c8a6775367dd69e5ab1b690ba05527114a8bf4cce",
+    "long-thread-domain-seed.mjs":
+      "b535d48f6fc94ebe0039271438213cd5d91a4a72fbab010ef8d8a77d044e0054",
+    "summarize-send-timeline.cjs":
+      "9a947307797d277d2d480e97174d711e1546fffe9533d1c933ea580e50d4074b",
+    "../../../package-lock.json":
+      "d1d5633673931da6b4a8e9b5881930669ac070b05d3197997189a3c84c8a4ea8",
+    "../../../package.json":
+      "73d3b8ba4a68a827f7b6dd35ae0a394d195162888c9c76c1ee7cb380b2f47c4c",
+    "../package.json":
+      "4e9e407d940eb3743ddd62124c19e4abb6b7a5996691a78850e5998d6fde0511",
+  }))
+    assert.equal(
+      digest(readFileSync(path.join(__dirname, file))),
+      expectedHash,
+      file,
+    );
+  // JSDOM resolves from the product checkout cwd, not the diagnostic directory.
+  for (const [file, expectedHash] of Object.entries({
+    "package-lock.json":
+      "308b3d642cf1dd9e25a2d8ebf849da0a7584e5aa1825f445977cdca026c5d2cb",
+    "package.json":
+      "44c7a345a7c51e4c0b829225ace3d1a54540b65ca3aff11256c5b9e521320eb6",
+    "apps/zenx/package.json":
+      "9317909d3954416db0258b37583a9307cb241750171c66a332c84c5ef87e72ee",
+  }))
+    assert.equal(digest(readFileSync(path.resolve(file))), expectedHash, file);
+  const observerTest = readFileSync(__filename, "utf8");
+  assert.equal(
+    digest(
+      observerTest.slice(
+        0,
+        observerTest.indexOf('\ntest("selection performance pair'),
+      ) +
+        observerTest.slice(
+          observerTest.indexOf('\ntest("Selection getter probes'),
+        ),
+    ),
+    "405fa2f8e728ffbe5fa37b382dea83287698ac856fa26c4b6b558d85e6c40d71",
+    "Unchanged observer contracts must match the completed full-preflight run",
+  );
   const launch = readFileSync(
     path.join(__dirname, "launch-send-focus-paired.mjs"),
     "utf8",
@@ -667,7 +713,12 @@ test("selection performance pair locks each exact Legend source and keeps reader
     workflow.match(/for source in baseline candidate; do/g).length,
     2,
   );
-  assert.equal(workflow.match(/run: node --test/g).length, 1);
+  assert.equal(workflow.match(/node --test/g).length, 2);
+  assert.ok(
+    workflow.includes(
+      "--test-name-pattern='selection performance pair|source identity guards|timeline integration' ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs",
+    ),
+  );
   assert.ok(workflow.includes("timeout-minutes: 35"));
   for (const contract of [
     "pendingHosts",
@@ -688,6 +739,67 @@ test("selection performance pair locks each exact Legend source and keeps reader
   );
   assert.ok(source.includes("native resize preserves paused reader offset"));
   assert.ok(source.includes("native resize must not restore live following"));
+});
+
+test("source identity guards execute exact launcher checks for both labels and reject substitutions", () => {
+  const vm = require("node:vm");
+  const launch = readFileSync(
+    path.join(__dirname, "launch-send-focus-paired.mjs"),
+    "utf8",
+  );
+  const start = launch.indexOf("const snapshots = {");
+  const prefix = launch.slice(
+    start,
+    launch.indexOf("\nawait mkdir(uploadDirectory"),
+  );
+  assert.ok(
+    start >= 0 &&
+      prefix.includes("Tracked production checkout must be unchanged"),
+  );
+  const snapshots = vm.runInNewContext(
+    launch.slice(start, launch.indexOf("\n};", start) + 3) + "\nsnapshots",
+  );
+  for (const [sourceLabel, snapshot] of Object.entries(snapshots)) {
+    const values = {
+      "rev-parse HEAD:apps/zenx": snapshot.frontendSourceTree,
+      "rev-parse HEAD:apps/zenx/src/renderer": snapshot.rendererSourceTree,
+      "rev-parse HEAD": snapshot.commit,
+      "rev-parse HEAD^{tree}": snapshot.tree,
+      "diff --name-only HEAD": "",
+    };
+    const check = (answers) => {
+      const calls = [];
+      vm.runInNewContext(prefix, {
+        assert,
+        sourceLabel,
+        execFileSync(command, args, options) {
+          assert.equal(command, "git");
+          assert.equal(options.encoding, "utf8");
+          const key = args.join(" ");
+          assert.ok(Object.hasOwn(answers, key));
+          calls.push(key);
+          return answers[key] + "\n";
+        },
+      });
+      assert.deepEqual(calls, Object.keys(values));
+    };
+    check(values);
+    for (const key of Object.keys(values))
+      assert.throws(() => check({ ...values, [key]: "0".repeat(40) }), {
+        code: "ERR_ASSERTION",
+      });
+  }
+  assert.throws(
+    () =>
+      vm.runInNewContext(prefix, {
+        assert,
+        sourceLabel: "unknown",
+        execFileSync() {
+          throw new Error("Unknown labels must fail before git");
+        },
+      }),
+    { code: "ERR_ASSERTION" },
+  );
 });
 
 test("Selection getter probes preserve values and restore native descriptors", async () => {

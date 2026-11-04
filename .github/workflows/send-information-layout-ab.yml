@@ -47,9 +47,13 @@ jobs:
           for source in baseline candidate; do
             (cd "$source" && npm ci && npm run build && npm run build --workspace @zen/zenx)
           done
-      - name: Verify existing observer identity and post-geometry timing contracts
+      # Reuse unchanged full observer contracts passed in run 41743199059 (e8cd152).
+      # Capture, seed, observer body and dependency lock bytes are unchanged.
+      - name: Verify changed source identity guards and existing timing contracts
         working-directory: candidate
-        run: node --test ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
+        run: |
+          node --test --test-name-pattern='selection performance pair|source identity guards|timeline integration' ../diagnostic/apps/zenx/scripts/test-send-feedback-observation.cjs
+          node --test ../diagnostic/apps/zenx/scripts/test-recall-profile-review.cjs ../diagnostic/apps/zenx/scripts/test-send-native-phase-summary.cjs ../diagnostic/apps/zenx/scripts/test-send-timeline-summary.cjs
       # Reviewed visible coverage permits offscreen retained rows, never visible gaps.
       - name: Native dock Enter and post-timing Find/Selection/Copy quality, default remains off
         timeout-minutes: 20
