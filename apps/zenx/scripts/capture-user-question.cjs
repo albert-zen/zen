@@ -458,7 +458,7 @@ async function runOrigin() {
     await until(
       () =>
         evaluate(
-          `document.querySelector('.pending-steer-heading strong')?.textContent.includes('2')`,
+          `document.querySelector('.pending-steer-heading [role="status"]')?.textContent.includes('2')`,
         ),
       "two real recallable steer inputs",
     );
@@ -473,7 +473,7 @@ async function runOrigin() {
         }),
       };
     await click(
-      ".pending-steer-heading button:not(:disabled)",
+      ".pending-steer-heading .queue-header-action:not(:disabled)",
       "Native one whole-batch Recall",
     );
     await until(
