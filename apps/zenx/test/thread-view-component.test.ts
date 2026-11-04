@@ -2584,7 +2584,7 @@ test("opaque reasoning with a summary is a static summary row", async () => {
   });
 });
 
-test("adjacent no-details reasoning shares an honest count while tools and public summaries remain in order", async () => {
+test("grouped reasoning keeps every item without public details alongside tools and summaries", async () => {
   await withDom(async (root) => {
     await renderInteractive(
       root,
@@ -2601,9 +2601,19 @@ test("adjacent no-details reasoning shares an honest count while tools and publi
     await act(async () => requiredButton(".trace-toggle").click());
     const details = requiredElement(".trace-items");
     const rows = [...details.children].map((row) => row.textContent ?? "");
-    assert.equal(rows.length, 2);
-    assert.match(rows[0]!, /Shell/u);
-    assert.match(rows[1]!, /Public summary/u);
+    assert.equal(rows.length, 7);
+    assert.deepEqual(
+      rows.map((text) => text.trim()),
+      [
+        "Thought",
+        "Thought",
+        "Shell Run commandCompleted",
+        "Thought",
+        "Public summary",
+        "Thought",
+        "Thought",
+      ],
+    );
     assert.equal(
       details.querySelectorAll(".trace-reasoning-without-details").length,
       0,
@@ -2613,6 +2623,56 @@ test("adjacent no-details reasoning shares an honest count while tools and publi
         .length,
       0,
     );
+  });
+});
+
+test("native opaque reasoning keeps summary and empty rows through completion without exposing provider payload", async () => {
+  let value = thread([turnWithItems("inProgress", [])]);
+  for (const [id, summary] of [
+    ["opaque-empty", undefined],
+    ["opaque-summary", "Visible provider summary"],
+  ] as const) {
+    value = applyNativeThreadEvent(value, {
+      type: "item_completed",
+      item: {
+        type: "reasoning",
+        id,
+        threadId: value.id,
+        turnId: "turn-1",
+        createdAt: "2026-11-04T00:00:00.000Z",
+        contentVisibility: "opaque",
+        reasoningContent: "opaque-payload-must-not-be-rendered",
+        ...(summary === undefined ? {} : { summary }),
+      },
+    });
+  }
+  await withDom(async (root) => {
+    await renderInteractive(root, value.turns[0]!);
+    await act(async () => requiredButton(".trace-toggle").click());
+    const assertRows = () => {
+      assert.deepEqual(
+        [...requiredElement(".trace-items").children].map(
+          (row) => row.textContent,
+        ),
+        ["Thought", "Visible provider summary"],
+      );
+      assert.doesNotMatch(
+        document.body.innerHTML,
+        /opaque-payload-must-not-be-rendered/u,
+      );
+      assert.equal(
+        document.querySelectorAll(".trace-items [aria-expanded]").length,
+        0,
+      );
+    };
+    assertRows();
+    await renderInteractive(root, {
+      ...value.turns[0]!,
+      status: "completed",
+      items: [...value.turns[0]!.items, agent("Done")],
+    });
+    await act(async () => requiredButton(".turn-toggle").click());
+    assertRows();
   });
 });
 
