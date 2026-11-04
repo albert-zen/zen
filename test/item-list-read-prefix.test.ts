@@ -416,6 +416,7 @@ for (const interleaving of [
   "newer-read",
   "append",
   "failed-append",
+  "no-op-append",
   "missing-read",
   "older-error",
 ] as const) {
@@ -478,6 +479,9 @@ for (const interleaving of [
               name: "ThreadJournalAppendOutcomeUnknownError",
             },
           );
+          expectedParses = 1;
+        } else if (interleaving === "no-op-append") {
+          await store.withAppendSnapshot("t", async () => {});
           expectedParses = 1;
         } else {
           assert.deepEqual(await store.read("absent"), []);
