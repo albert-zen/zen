@@ -311,3 +311,77 @@ test("dialogs are exact-route evidence and another route cannot clear them", () 
   evidence.acceptEvent("child", "Page.javascriptDialogClosed", {});
   assert.equal(evidence.hasOpenDialog, false);
 });
+
+test("Page lifecycle invalidates captures without inventing Runtime destruction", () => {
+  for (const method of [
+    "Page.navigatedWithinDocument",
+    "Page.frameStartedNavigating",
+    "Page.frameStartedLoading",
+    "Page.documentOpened",
+    "Page.frameNavigated",
+  ]) {
+    const evidence = new BrowserFrameEvidence("root");
+    evidence.acceptEvent(
+      "root",
+      "Runtime.executionContextCreated",
+      context(7, "main", "live-context"),
+    );
+    const live = evidence.context("root", "main", 7)!;
+    const capture = evidence.capture();
+    evidence.acceptEvent(
+      "root",
+      method,
+      method === "Page.documentOpened" || method === "Page.frameNavigated"
+        ? { frame: tree().frameTree.frame }
+        : { frameId: "main" },
+    );
+    assert.throws(() => evidence.assertCapture(capture), /changed/);
+    evidence.assertContext(live);
+  }
+});
+
+test("new default context survives a later Page commit and uniquely identified old destruction", () => {
+  const evidence = new BrowserFrameEvidence("root");
+  evidence.acceptEvent(
+    "root",
+    "Runtime.executionContextCreated",
+    context(7, "main", "old-default", true),
+  );
+  evidence.acceptEvent(
+    "root",
+    "Runtime.executionContextCreated",
+    context(8, "main", "new-default", true),
+  );
+  const current = evidence.context("root", "main", 8)!;
+  assert.equal(evidence.context("root", "main", 7), undefined);
+  evidence.acceptEvent("root", "Page.frameNavigated", {
+    frame: tree("main", "new-loader").frameTree.frame,
+  });
+  evidence.assertContext(current);
+  evidence.acceptEvent(
+    "root",
+    "Runtime.executionContextCreated",
+    context(8, "main", "replacement-default", true),
+  );
+  const replacement = evidence.context("root", "main", 8)!;
+  evidence.acceptEvent("root", "Runtime.executionContextDestroyed", {
+    executionContextId: 8,
+    executionContextUniqueId: "new-default",
+  });
+  evidence.assertContext(replacement);
+  assert.throws(() => evidence.assertContext(current), /changed/);
+});
+
+test("incomplete child commit metadata still invalidates the screenshot fence", () => {
+  for (const method of ["Page.frameNavigated", "Page.documentOpened"]) {
+    const evidence = new BrowserFrameEvidence("root");
+    evidence.acceptEvent("root", "Target.attachedToTarget", attach("child"));
+    const capture = evidence.capture();
+    assert.equal(
+      evidence.acceptEvent("child", method, { frame: { id: "child-frame" } }),
+      true,
+    );
+    assert.throws(() => evidence.assertCapture(capture), /changed/);
+    assert.equal(evidence.document("child", "child-frame"), undefined);
+  }
+});

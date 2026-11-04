@@ -27,6 +27,11 @@ import {
 import { observeElectronPage } from "./browser-electron-observation.js";
 import { BrowserFrameEvidence } from "./browser-frame-evidence.js";
 import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+  browserFrameInputNeedsObserver,
+} from "./browser-frame-input.js";
+import {
   ObservationPresentation,
   observationReadOptions,
   observationReadProperties,
@@ -542,7 +547,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_pointer_click",
       description:
-        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No dragging, OS input or automatic foreground fallback. Detected page, frame lifecycle, viewport, focus, or user input changes reject. Observed same-origin frames with mapped geometry and bounded open or closed author shadow roots are supported after trusted observation; discovering a closed root requires re-inspection before input. Cross-origin/OOPIF, unmappable geometry and unresolved surfaces reject locally. Ordinary div/span containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+        "Click CSS viewport coordinates in the exact observed browser tab without requesting window activation. Requires a real screenshot and inputViewport from the latest inspection. Convert screenshot pixels with x * inputViewport.width / screenshot.width and likewise y. No dragging, OS input or automatic foreground fallback. Detected page, frame lifecycle, viewport, focus, or user input changes reject. Observed HTML iframe chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots are supported after trusted observation. Frame mapping requires verified static invertible 2D geometry and complete owner/context evidence; unresolved ancestry or geometry rejects locally. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Ordinary div/span containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         {
           ...common(),
@@ -559,7 +564,7 @@ function browserTargetedInputTools(): ZenXPluginManifestV2["tools"] {
     {
       name: "browser_key_press",
       description:
-        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves inside observed same-origin frames and bounded open or closed author shadow roots after trusted observation; discovering a closed root requires re-inspection before input. Cross-origin/OOPIF, unmappable geometry and unresolved focus are unavailable. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
+        "Press one named unmodified key in the exact browser tab's already-focused observed element, without requesting window activation. Requires focusedInputAvailable and a fresh inspection; never selects a current tab or focuses an element implicitly. Focus resolves through complete observed HTML iframe owner/context chains, including cross-origin/out-of-process frames when exact child routing is available, and bounded author shadow roots. Verified static invertible 2D geometry is required; unresolved ancestry, geometry or focus is unavailable. Newly discovered geometry or closed roots require re-inspection. Extension child sessions require Chrome 125+ and the current root lease; unavailable routing never falls back. Detected frame lifecycle changes reject. Ordinary focused contenteditable containers remain supported after exact-node metadata checks. Ordinary tab input stays targeted without selecting an active tab. Trusted input can trigger site dialogs or popups; HTML select and file/date/color controls are supported; an OS dialog needs an appropriate provider capability, never implicit global input or forced activation. Unknown input is never replayed.",
       inputSchema: browserTargetSchema(
         { ...common(), key: { type: "string", enum: [...browserInputKeys] } },
         ["observationId", "key"],
@@ -1307,6 +1312,7 @@ interface BrowserTab {
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
   frameEvidence: BrowserFrameEvidence;
+  frameInputObserver?: BrowserFrameInputObserver;
   nativeDialogOpen?: boolean;
 }
 
@@ -1910,8 +1916,10 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
   async inspect(sessionId: string, tabId: string): Promise<BrowserInspection> {
     const tab = this.#requireTab(sessionId, tabId);
     const documentVersion = tab.documentVersion;
-    const inputLifecycleRevision = tab.inputLifecycleRevision;
+    let inputLifecycleRevision = tab.inputLifecycleRevision;
+    let frameCapture: ReturnType<typeof browserFrameCaptureFor>;
     const assertInputCapture = () => {
+      frameCapture?.assertCurrent();
       if (
         tab.inputLifecycleRevision !== inputLifecycleRevision ||
         tab.frameEvidence.failure
@@ -1924,6 +1932,10 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       tab,
       browserInspectScript,
     );
+    frameCapture = inspected.inputSnapshot
+      ? browserFrameCaptureFor(inspected.inputSnapshot)
+      : undefined;
+    if (frameCapture) inputLifecycleRevision = tab.inputLifecycleRevision;
     const observationId = randomUUID();
     const screenshot = await this.#captureScreenshot(tab, observationId);
     let input: BrowserInputObservation | undefined;
@@ -1936,7 +1948,9 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
       try {
         const snapshot = requireBrowserInputSnapshot(inspected.inputSnapshot);
         const after = requireBrowserInputSnapshot(
-          await evaluateInTab(tab, browserInputSnapshotScript),
+          frameCapture
+            ? await frameCapture.probe()
+            : await evaluateInTab(tab, browserInputSnapshotScript),
         );
         assertBrowserInputSnapshot(snapshot, after);
         assertInputCapture();
@@ -2089,29 +2103,35 @@ export class ElectronBrowserBackend implements ZenXBrowserBackend {
     let dispatched = false;
     tab.inputInFlight = true;
     try {
+      const assertActionCurrent = () => {
+        signal?.throwIfAborted();
+        assertInputLifecycle();
+        observation.assertInputCapture?.();
+        if (tab.nativeDialogOpen)
+          throw new Error(
+            "Browser targeted input cannot operate this open dialog; use an available dialog or Computer capability with its own authorization",
+          );
+        if (!dispatched && tab.observation !== observation)
+          throw new Error("Browser observation changed before targeted input");
+        if (
+          this.#requireTab(sessionId, tabId) !== tab ||
+          tab.documentVersion !== version
+        )
+          throw new Error(
+            "Browser document or session changed during targeted input",
+          );
+      };
       await dispatchBrowserTargetedInput(
         {
-          assertCurrent: () => {
-            assertInputLifecycle();
-            if (tab.nativeDialogOpen)
-              throw new Error(
-                "Browser targeted input cannot operate this open dialog; use an available dialog or Computer capability with its own authorization",
-              );
-            if (!dispatched && tab.observation !== observation)
-              throw new Error(
-                "Browser observation changed before targeted input",
-              );
-            if (
-              this.#requireTab(sessionId, tabId) !== tab ||
-              tab.documentVersion !== version
-            )
-              throw new Error(
-                "Browser document or session changed during targeted input",
-              );
-          },
+          assertCurrent: assertActionCurrent,
           snapshot: async () =>
             requireBrowserInputSnapshot(
-              await evaluateInTab(tab, browserInputProbeScript(action)),
+              browserFrameCaptureFor(input.snapshot)
+                ? await browserFrameCaptureFor(input.snapshot)!.probe(
+                    action,
+                    assertActionCurrent,
+                  )
+                : await evaluateInTab(tab, browserInputProbeScript(action)),
             ),
           beforeDispatch: () => {
             if (tab.observation !== observation)
@@ -3267,6 +3287,25 @@ async function evaluateInTab<T>(
     tab.window.webContents.debugger,
     expression,
     beforeDispatch,
+    () =>
+      (tab.frameInputObserver ??= new BrowserFrameInputObserver(
+        tab.frameEvidence,
+        {
+          assertCurrent: () => {
+            if (
+              tab.window.webContents.isDestroyed() ||
+              !tab.window.webContents.debugger.isAttached()
+            )
+              throw new Error("Browser frame attachment was retired");
+          },
+          send: (sessionId, method, params) =>
+            tab.window.webContents.debugger.sendCommand(
+              method,
+              params,
+              sessionId || undefined,
+            ),
+        },
+      )),
   );
 }
 
@@ -3275,6 +3314,7 @@ export async function evaluateBrowserDocument<T>(
   debuggerApi: Pick<BrowserWindow["webContents"]["debugger"], "sendCommand">,
   expression: string,
   beforeDispatch?: () => void,
+  frameObserver?: () => BrowserFrameInputObserver,
 ): Promise<T> {
   const tree = (await debuggerApi.sendCommand("Page.getFrameTree")) as {
     frameTree?: { frame?: { id?: string } };
@@ -3308,7 +3348,7 @@ export async function evaluateBrowserDocument<T>(
     );
   }
   if (includesBrowserInputSnapshot(expression)) {
-    return (await resolveBrowserInputEvidence(
+    let resolved = await resolveBrowserInputEvidence(
       response.result?.value,
       async (method, params) => {
         beforeDispatch?.();
@@ -3321,7 +3361,38 @@ export async function evaluateBrowserDocument<T>(
               : {}),
         });
       },
-    )) as T;
+    );
+    if (
+      frameObserver &&
+      (expression === browserInspectScript ||
+        expression === browserInputSnapshotScript)
+    ) {
+      const nested = expression === browserInspectScript;
+      const inputSnapshot = nested
+        ? (resolved as BrowserDomInspection)?.inputSnapshot
+        : resolved;
+      if (browserFrameInputNeedsObserver(tree, inputSnapshot)) {
+        try {
+          const capture = await frameObserver().prepare(tree);
+          resolved = nested
+            ? {
+                ...(resolved as BrowserDomInspection),
+                inputSnapshot: capture?.snapshot,
+              }
+            : capture?.snapshot;
+        } catch {
+          // Optional remote-frame preparation cannot remove DOM inspection. No
+          // legacy snapshot is re-used after a failed/uncertain child setup.
+          resolved = nested
+            ? {
+                ...(resolved as BrowserDomInspection),
+                inputSnapshot: undefined,
+              }
+            : undefined;
+        }
+      }
+    }
+    return resolved as T;
   }
   return response.result?.value as T;
 }

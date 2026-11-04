@@ -42,6 +42,7 @@ const inputCaptureDiagnostics: Array<
   UserBrowserInputCaptureDiagnostic & { phase: string }
 > = [];
 let inputPhase = "initial-inspection";
+let remoteFrameFailure: Record<string, unknown> | undefined;
 const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   encoded,
 ) => ({
@@ -53,6 +54,8 @@ const decodeNodeSmokeLiveImage: UserBrowserLiveImageDecoder = async (
   toJPEG: () => encoded,
 });
 const server = createServer((request, response) => {
+  // Keep this disposable origin consistently site-keyed from its first document.
+  response.setHeader("Origin-Agent-Cluster", "?0");
   if (request.url?.startsWith(browserExtensionsFixturePath)) {
     response.setHeader("content-type", "application/json");
     response.setHeader("cache-control", "no-store");
@@ -60,10 +63,12 @@ const server = createServer((request, response) => {
     return;
   }
   if (fixtureRequests.length < 32) fixtureRequests.push(request.url ?? "");
-  if (request.url?.startsWith("/input-contract")) {
+  if (
+    request.url?.startsWith("/input-contract") ||
+    request.url?.startsWith("/remote-frame-child")
+  ) {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
-    response.setHeader("Origin-Agent-Cluster", "?0");
     response.end(targetedInputContractPage(request.url));
     return;
   }
@@ -113,7 +118,7 @@ try {
       `--user-data-dir=${directory}`,
       "--remote-debugging-port=0",
       "--site-per-process",
-      "--host-resolver-rules=MAP localhost 127.0.0.1",
+      "--host-resolver-rules=MAP localhost 127.0.0.1, MAP nested.localhost 127.0.0.1",
       "--no-first-run",
       "--no-default-browser-check",
       "--enable-logging=stderr",
@@ -440,6 +445,10 @@ try {
     tabId: opened.tabId,
     endpoint,
     origin: `http://127.0.0.1:${String(port)}`,
+    remoteFrameInput: "supported",
+    onFailure: (diagnostic) => {
+      remoteFrameFailure = diagnostic;
+    },
     onPhase: (phase) => {
       inputPhase = phase;
     },
@@ -576,6 +585,7 @@ try {
       targets,
       inputPhase,
       inputCaptureDiagnostics,
+      remoteFrameFailure,
     }),
   );
   console.error(browserObservation?.diagnostics("smoke failed", String(error)));

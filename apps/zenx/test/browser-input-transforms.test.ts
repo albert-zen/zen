@@ -14,18 +14,22 @@ import {
   type BrowserInputSnapshot,
 } from "../src/main/capabilities/browser-targeted-input.js";
 
-function fixture(slotted = false) {
+function fixture(slotted: boolean | "closed" = false) {
   const dom = new JSDOM("<!doctype html><body></body>", {
     runScripts: "outside-only",
     url: "https://fixture.test/",
   });
   const document = dom.window.document;
+  const roots = new Map<Element, ShadowRoot>();
   const frame = document.createElement("iframe");
   frame.style.cssText =
     "width:200px;height:120px;border:3px solid;padding:2px;transform:matrix(2,0,0,2,0,0)";
   if (slotted) {
     const host = document.createElement("div");
-    const root = host.attachShadow({ mode: "open" });
+    const root = host.attachShadow({
+      mode: slotted === "closed" ? "closed" : "open",
+    });
+    roots.set(host, root);
     root.innerHTML =
       '<div style="transform:matrix(2,0,0,2,0,0)"><slot></slot></div>';
     document.body.append(host);
@@ -68,6 +72,9 @@ function fixture(slotted = false) {
     before?: (method: string, params: Record<string, unknown>) => void;
     afterPress?: () => void;
   } = {};
+  const backendNodes = new Map<number, Element>();
+  const ids = new WeakMap<Element, number>();
+  let backendSequence = 1000;
   let sequence = 0;
   let quarantined = false;
   const input: Record<string, unknown>[] = [];
@@ -87,6 +94,28 @@ function fixture(slotted = false) {
         return { exceptionDetails: { text: String(error) } };
       }
     }
+    if (method === "Runtime.callFunctionOn") {
+      const node = objects.get(String(params.objectId));
+      assert.ok(node, "Invoke only an owned wrapper");
+      try {
+        const fn = dom.window.eval(`(${String(params.functionDeclaration)})`);
+        const args =
+          (params.arguments as { value: unknown }[] | undefined) ?? [];
+        assert.ok(
+          typeof fn === "function",
+          "Evaluate the trusted native ancestor query",
+        );
+        const value = fn.call(node, ...args.map((argument) => argument.value));
+        if (params.returnByValue !== false) return { result: { value } };
+        if (value?.nodeType !== 1)
+          return { result: { subtype: "null", value: null } };
+        const objectId = `owned:${++sequence}`;
+        objects.set(objectId, value);
+        return { result: { subtype: "node", objectId } };
+      } catch (error) {
+        return { exceptionDetails: { text: String(error) } };
+      }
+    }
     if (method === "Runtime.releaseObject") {
       assert.ok(
         objects.delete(String(params.objectId)),
@@ -96,21 +125,31 @@ function fixture(slotted = false) {
     }
     const element = params.objectId
       ? objects.get(String(params.objectId))
-      : [...nativeModels].find(
-          ([, model]) => model.id === params.backendNodeId,
-        )?.[0];
-    const model = element && nativeModels.get(element);
-    assert.ok(model, "Native evidence must name an exact registered iframe");
-    if (method === "DOM.describeNode")
+      : backendNodes.get(Number(params.backendNodeId));
+    assert.ok(element, "Native evidence must name an exact owned node");
+    const model = nativeModels.get(element);
+    if (method === "DOM.describeNode") {
+      let id = ids.get(element);
+      if (!id) {
+        id = model?.id ?? ++backendSequence;
+        ids.set(element, id);
+        backendNodes.set(id, element);
+      }
+      const shadow = element.shadowRoot ?? roots.get(element);
       return {
         node: {
           nodeType: 1,
-          localName: "iframe",
-          backendNodeId: model.id,
+          localName: element.localName,
+          backendNodeId: id,
           attributes: [],
+          ...(shadow
+            ? { shadowRoots: [{ nodeType: 11, shadowRootType: shadow.mode }] }
+            : {}),
         },
       };
+    }
     assert.equal(method, "DOM.getBoxModel");
+    assert.ok(model, "Only registered native frame geometry is queried");
     // Width/height intentionally describe the border box, not child coordinates.
     return { model: { content: [...model.quad()], width: 210, height: 130 } };
   };
@@ -171,6 +210,7 @@ function fixture(slotted = false) {
     ready,
     dispatch,
     registerNative,
+    roots,
     get quarantined() {
       return quarantined;
     },
@@ -498,6 +538,61 @@ test("transformed iframe key release retains inner focus and child-scroll semant
     await f.dispatch(observed, { kind: "key", key: "Tab" });
     assert.equal(f.input.length, 2);
     assert.equal(f.quarantined, false);
+  } finally {
+    f.dom.window.close();
+  }
+});
+
+for (const mapping of ["ordinary", "affine"] as const) {
+  test(`undiscovered closed-slot ancestry blocks the legacy ${mapping} mapping before input`, async () => {
+    const f = fixture("closed");
+    try {
+      const root = f.roots.get(f.frame.parentElement!)!;
+      (root.querySelector("div") as HTMLElement).style.transform =
+        "matrix(-1,0,0,-1,0,0)";
+      if (mapping === "ordinary") {
+        f.frame.style.transform = "none";
+        f.rect.width = 210;
+        f.rect.height = 130;
+      }
+      assert.equal(f.frame.assignedSlot, null);
+      const raw = requireBrowserInputSnapshot(f.raw());
+      assert.equal(
+        raw.nativeFrameCandidates?.length ?? 0,
+        mapping === "affine" ? 1 : 0,
+      );
+      assert.equal(raw.frameAncestorCandidates?.length, 1);
+      await assert.rejects(f.read(), /shadow-slot ancestry is unresolved/);
+      assert.equal((await f.inspect()).inputSnapshot, undefined);
+      assert.equal(f.input.length, 0);
+      assert.equal(f.objects.size, 0);
+    } finally {
+      f.dom.window.close();
+    }
+  });
+}
+
+test("closed-slot attachment during caller owner cleanup cannot escape the final native recheck", async () => {
+  const f = fixture();
+  try {
+    await f.ready();
+    let attached = false;
+    f.hooks.before = (method, params) => {
+      if (
+        !attached &&
+        method === "Runtime.releaseObject" &&
+        f.objects.get(String(params.objectId)) === f.frame
+      ) {
+        attached = true;
+        const root = f.document.body.attachShadow({ mode: "closed" });
+        root.innerHTML =
+          '<div style="transform:matrix(-1,0,0,-1,0,0)"><slot></slot></div>';
+        f.roots.set(f.document.body, root);
+      }
+    };
+    await assert.rejects(f.read(), /shadow-slot ancestry is unresolved/);
+    assert.equal(f.objects.size, 0);
+    assert.equal(f.input.length, 0);
   } finally {
     f.dom.window.close();
   }

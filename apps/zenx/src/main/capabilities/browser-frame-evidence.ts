@@ -85,6 +85,33 @@ export class BrowserFrameEvidence {
     return this.#routes.get(sessionId)?.parentSessionId;
   }
 
+  routes(): readonly {
+    sessionId: string;
+    parentSessionId?: string;
+    targetId?: string;
+    depth: number;
+  }[] {
+    this.#assertAvailable();
+    return [...this.#routes.values()].map(
+      ({ sessionId, parentSessionId, targetId, depth }) => ({
+        sessionId,
+        parentSessionId,
+        targetId,
+        depth,
+      }),
+    );
+  }
+
+  frames(sessionId: string): readonly BrowserFrameDocumentEvidence[] {
+    this.#assertAvailable();
+    return [...(this.#routes.get(sessionId)?.frames.values() ?? [])];
+  }
+
+  contexts(sessionId: string): readonly BrowserFrameContextEvidence[] {
+    this.#assertAvailable();
+    return [...(this.#routes.get(sessionId)?.contexts.values() ?? [])];
+  }
+
   capture(): BrowserFrameCaptureFence {
     this.#assertAvailable();
     return Object.freeze({ revision: this.#revision, root: this.#root });
@@ -214,6 +241,11 @@ export class BrowserFrameEvidence {
         isDefault: aux.isDefault,
       });
       const previous = route.contexts.get(context.id);
+      if (context.isDefault)
+        for (const [id, candidate] of route.contexts) {
+          if (candidate.isDefault && candidate.frameId === context.frameId)
+            route.contexts.delete(id);
+        }
       route.contexts.set(context.id, context);
       // Creating an isolated observation world is preparation, not interference.
       if (context.isDefault || previous !== undefined) this.#revision++;
@@ -222,8 +254,9 @@ export class BrowserFrameEvidence {
     if (method === "Runtime.executionContextDestroyed") {
       for (const [id, context] of route.contexts)
         if (
-          id === value.executionContextId ||
-          context.uniqueId === value.executionContextUniqueId
+          typeof value.executionContextUniqueId === "string"
+            ? context.uniqueId === value.executionContextUniqueId
+            : id === value.executionContextId
         )
           route.contexts.delete(id);
       this.#revision++;
@@ -235,11 +268,13 @@ export class BrowserFrameEvidence {
       return true;
     }
     if (method === "Page.frameNavigated" || method === "Page.documentOpened") {
-      const frame = object(value.frame);
-      if (!frame || !this.#recordFrame(route, frame)) return false;
-      for (const [id, context] of route.contexts)
-        if (context.frameId === frame.id) route.contexts.delete(id);
+      // Even incomplete native commit metadata invalidates the screenshot. It
+      // cannot publish new frame identity; a fresh native tree must prove that.
       this.#revision++;
+      const frame = object(value.frame);
+      if (frame) this.#recordFrame(route, frame);
+      // Page lifecycle does not prove Runtime context destruction. In-document
+      // navigation and document.open can retain the exact isolated worlds.
       return true;
     }
     if (
@@ -250,7 +285,7 @@ export class BrowserFrameEvidence {
       method === "Page.navigatedWithinDocument" ||
       method === "Page.backForwardCacheNotUsed"
     ) {
-      if (identifier(value.frameId)) {
+      if (method === "Page.frameDetached" && identifier(value.frameId)) {
         route.frames.delete(value.frameId);
         for (const [id, context] of route.contexts)
           if (context.frameId === value.frameId) route.contexts.delete(id);

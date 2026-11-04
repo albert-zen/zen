@@ -84,8 +84,12 @@ function fixture() {
         "Evaluate the trusted registration function",
       );
       try {
+        const value = fn.call(node, ...args.map((arg) => arg.value));
         return {
-          result: { value: fn.call(node, ...args.map((arg) => arg.value)) },
+          result:
+            params.returnByValue === false && value?.nodeType
+              ? remote(value as Node)
+              : { value },
         };
       } catch (error) {
         return { exceptionDetails: { text: String(error) } };

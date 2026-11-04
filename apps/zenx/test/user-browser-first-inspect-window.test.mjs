@@ -6,6 +6,11 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { BrowserFrameEvidence } from "../src/main/capabilities/browser-frame-evidence.ts";
 import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+  browserFrameInputNeedsObserver,
+} from "../src/main/capabilities/browser-frame-input.ts";
+import {
   browserInputLifecycleEventInvalidates,
   browserInspectScript,
 } from "../src/main/capabilities/browser-provider.ts";
@@ -104,6 +109,9 @@ function fixture(options = {}) {
     performance: { now: () => now },
     browserInputLifecycleEventInvalidates,
     BrowserFrameEvidence,
+    BrowserFrameInputObserver,
+    browserFrameCaptureFor,
+    browserFrameInputNeedsObserver,
     browserInspectScript,
     browserInputSnapshotScript,
     includesBrowserInputSnapshot,

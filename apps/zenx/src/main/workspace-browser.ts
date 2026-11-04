@@ -22,6 +22,10 @@ import {
 
 import { ipcChannels } from "../preload/ipc.js";
 import { observeElectronPage } from "./capabilities/browser-electron-observation.js";
+import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+} from "./capabilities/browser-frame-input.js";
 import { BrowserFrameEvidence } from "./capabilities/browser-frame-evidence.js";
 import {
   assertBrowserObservation,
@@ -97,6 +101,7 @@ interface Tab {
   inputInFlight?: boolean;
   inputLifecycleRevision: number;
   frameEvidence: BrowserFrameEvidence;
+  frameInputObserver?: BrowserFrameInputObserver;
   programmableInFlight?: boolean;
   mainExecutionContexts: Map<string, { id: number; uniqueId: string }>;
   nativeDialogOpen?: boolean;
@@ -932,8 +937,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
         const documentVersion = tab.documentVersion;
         const navigationGeneration = tab.navigationGeneration;
         const renderRevision = tab.renderRevision;
-        const inputLifecycleRevision = tab.inputLifecycleRevision;
+        let inputLifecycleRevision = tab.inputLifecycleRevision;
+        let frameCapture: ReturnType<typeof browserFrameCaptureFor>;
         const assertInputCapture = () => {
+          frameCapture?.assertCurrent();
           if (
             tab.inputLifecycleRevision !== inputLifecycleRevision ||
             tab.frameEvidence.failure
@@ -955,6 +962,10 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           "inspection",
           renderRevision,
         );
+        frameCapture = inspected.inputSnapshot
+          ? browserFrameCaptureFor(inspected.inputSnapshot)
+          : undefined;
+        if (frameCapture) inputLifecycleRevision = tab.inputLifecycleRevision;
         const observationId = randomUUID();
         const image = await this.#capture(sessionId, tab, signal);
         assertAdmitted();
@@ -1011,7 +1022,9 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
               inspected.inputSnapshot,
             );
             const after = requireBrowserInputSnapshot(
-              await this.#evaluate(tab, browserInputSnapshotScript),
+              frameCapture
+                ? await frameCapture.probe()
+                : await this.#evaluate(tab, browserInputSnapshotScript),
             );
             assertBrowserInputSnapshot(snapshot, after);
             assertInputCapture();
@@ -1201,35 +1214,46 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
           let dispatched = false;
           tab.inputInFlight = true;
           try {
+            const assertActionCurrent = () => {
+              signal?.throwIfAborted();
+              assertInputLifecycle();
+              observation.assertInputCapture?.();
+              if (tab.nativeDialogOpen)
+                throw new Error(
+                  "Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability",
+                );
+              if (!dispatched && tab.observation !== observation)
+                throw new Error(
+                  "Browser observation changed before targeted input",
+                );
+              this.#assertAgentOperationCurrent(
+                sessionId,
+                tab,
+                navigation,
+                version,
+                "targeted input",
+                render,
+              );
+              this.#assertControlRevision(tab, control);
+              if (this.#sessionIncarnations.get(sessionId) !== incarnation)
+                throw new Error(
+                  "Browser session changed during targeted input",
+                );
+            };
             await dispatchBrowserTargetedInput(
               {
-                assertCurrent: () => {
-                  assertInputLifecycle();
-                  if (tab.nativeDialogOpen)
-                    throw new Error(
-                      "Browser targeted input cannot operate this open native dialog; use an available dialog or Computer capability",
-                    );
-                  if (!dispatched && tab.observation !== observation)
-                    throw new Error(
-                      "Browser observation changed before targeted input",
-                    );
-                  this.#assertAgentOperationCurrent(
-                    sessionId,
-                    tab,
-                    navigation,
-                    version,
-                    "targeted input",
-                    render,
-                  );
-                  this.#assertControlRevision(tab, control);
-                  if (this.#sessionIncarnations.get(sessionId) !== incarnation)
-                    throw new Error(
-                      "Browser session changed during targeted input",
-                    );
-                },
+                assertCurrent: assertActionCurrent,
                 snapshot: async () =>
                   requireBrowserInputSnapshot(
-                    await this.#evaluate(tab, browserInputProbeScript(action)),
+                    browserFrameCaptureFor(input.snapshot)
+                      ? await browserFrameCaptureFor(input.snapshot)!.probe(
+                          action,
+                          assertActionCurrent,
+                        )
+                      : await this.#evaluate(
+                          tab,
+                          browserInputProbeScript(action),
+                        ),
                   ),
                 beforeDispatch: () => {
                   if (tab.observation !== observation)
@@ -1605,7 +1629,11 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     if (operation === "network_start" || operation === "console_start") {
       if (collector === undefined) {
         const debuggerApi = tab.view.webContents.debugger;
-        if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+        if (!debuggerApi.isAttached()) {
+          debuggerApi.attach("1.3");
+          tab.frameEvidence = new BrowserFrameEvidence("");
+          tab.frameInputObserver = undefined;
+        }
         const buffer = new BrowserEventBuffer();
         const state = {
           sessionId,
@@ -2129,12 +2157,32 @@ export class WorkspaceBrowser implements ZenXBrowserBackend {
     beforeDispatch?: () => void,
   ): Promise<T> {
     const debuggerApi = tab.view.webContents.debugger;
-    if (!debuggerApi.isAttached()) debuggerApi.attach("1.3");
+    if (!debuggerApi.isAttached()) {
+      debuggerApi.attach("1.3");
+      tab.frameEvidence = new BrowserFrameEvidence("");
+      tab.frameInputObserver = undefined;
+    }
     await debuggerApi.sendCommand("Page.enable");
     return await evaluateBrowserDocument<T>(
       debuggerApi,
       expression,
       beforeDispatch,
+      () =>
+        (tab.frameInputObserver ??= new BrowserFrameInputObserver(
+          tab.frameEvidence,
+          {
+            assertCurrent: () => {
+              if (
+                tab.view.webContents.isDestroyed() ||
+                !debuggerApi.isAttached() ||
+                tab.control !== "agent"
+              )
+                throw new Error("Browser frame attachment or control changed");
+            },
+            send: (sessionId, method, params) =>
+              debuggerApi.sendCommand(method, params, sessionId || undefined),
+          },
+        )),
     );
   }
 }

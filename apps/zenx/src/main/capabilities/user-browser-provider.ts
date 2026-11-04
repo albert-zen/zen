@@ -6,6 +6,11 @@ import {
 import { localErrorDetail } from "../../local-error-detail.js";
 import { BrowserFrameEvidence } from "./browser-frame-evidence.js";
 import {
+  BrowserFrameInputObserver,
+  browserFrameCaptureFor,
+  browserFrameInputNeedsObserver,
+} from "./browser-frame-input.js";
+import {
   type CdpDiagnosticConnection,
   type UserBrowserCdpDiagnosticObserver,
 } from "./user-browser-cdp-diagnostics.js";
@@ -143,6 +148,7 @@ interface ZenXUserBrowserDocumentExecutionFence extends UserBrowserAttachmentOwn
   loaderId: string;
   url: string;
   executionContextId?: number;
+  frameTree?: unknown;
 }
 
 interface UserBrowserScreencastState {
@@ -2866,8 +2872,8 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       signal,
       expression === browserInspectScript,
     );
-    const inputLifecycleRevision =
-      before.attachmentEpoch.inputLifecycleRevision;
+    let inputLifecycleRevision = before.attachmentEpoch.inputLifecycleRevision;
+    let frameCapture: ReturnType<typeof browserFrameCaptureFor>;
     const inspectDeadline = before.inspectDeadline;
     if (
       expectedDocumentIdentity !== undefined &&
@@ -2954,7 +2960,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       // the nested snapshot in DOM inspection. Only this exact trusted read gets
       // the same downgrade; its normal document/publication fences still run.
       const optionalInputOnly = expression === browserInputSnapshotScript;
-      const resolved = includesBrowserInputSnapshot(expression)
+      let resolved = includesBrowserInputSnapshot(expression)
         ? await resolveBrowserInputEvidence(
             optionalInputOnly ? { inputSnapshot: rawValue } : rawValue,
             async (method, params) => {
@@ -2976,6 +2982,39 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             (objectId) => this.#releaseInputObject(before, objectId),
           )
         : rawValue;
+      if (expression === browserInspectScript || optionalInputOnly) {
+        const legacy = asRecord(resolved)?.inputSnapshot;
+        if (browserFrameInputNeedsObserver(before.frameTree, legacy)) {
+          try {
+            const evidence = before.attachmentEpoch.frameEvidence;
+            if (!evidence)
+              throw new Error("Browser child frame evidence is unavailable");
+            const observer = new BrowserFrameInputObserver(evidence, {
+              assertCurrent: () => this.#assertDocumentFence(before, true),
+              send: async (sessionId, method, params) =>
+                await this.#send(
+                  method,
+                  params,
+                  sessionId,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  () => this.#assertDocumentFence(before, true),
+                ),
+            });
+            frameCapture = await observer.prepare(before.frameTree);
+            resolved = {
+              ...asRecord(resolved),
+              inputSnapshot: frameCapture?.snapshot,
+            };
+            inputLifecycleRevision =
+              before.attachmentEpoch.inputLifecycleRevision;
+          } catch {
+            resolved = { ...asRecord(resolved), inputSnapshot: undefined };
+          }
+        }
+      }
       const value = optionalInputOnly
         ? asRecord(resolved)?.inputSnapshot
         : resolved;
@@ -3011,6 +3050,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         ...(includesBrowserInputSnapshot(expression)
           ? {
               assertInputCapture: () => {
+                frameCapture?.assertCurrent();
                 this.#assertDocumentFence(before, true);
                 if (
                   before.attachmentEpoch.inputLifecycleRevision !==
@@ -3091,6 +3131,9 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
             assertFence();
             await this.#documentBarrier(fence, signal);
             assertFence();
+            const frameCapture = browserFrameCaptureFor(observed);
+            if (frameCapture)
+              return await frameCapture.probe(action, assertFence);
             const response = asRecord(
               await this.#sendDocumentCommand(
                 fence,
@@ -3838,6 +3881,7 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
       ) {
         throw new Error("User browser CDP document identity is invalid");
       }
+      fence.frameTree = response;
       fence.frameId = frame.id;
       fence.loaderId = frame.loaderId;
       fence.url = frame.url;

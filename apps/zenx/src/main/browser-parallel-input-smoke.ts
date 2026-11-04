@@ -31,7 +31,10 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import WebSocket from "ws";
 import { UserBrowserCdpDiagnosticObserver } from "./capabilities/user-browser-cdp-diagnostics.js";
-import { BrowserInputUnsupportedError } from "./capabilities/browser-targeted-input.js";
+import {
+  BrowserInputUnsupportedError,
+  BrowserInputOutcomeUnknownError,
+} from "./capabilities/browser-targeted-input.js";
 import type {
   BrowserInspection,
   ZenXBrowserBackend,
@@ -322,12 +325,22 @@ async function settleMacFixtureInput(options: {
   }
 }
 
-type RemoteFrameMode = "cross-origin-same-process" | "cross-origin-oopif";
+const remoteFrameModes = [
+  "cross-origin-same-process",
+  "cross-origin-oopif",
+  "nested-oopif",
+  "nested-same-process",
+] as const;
+type RemoteFrameMode = (typeof remoteFrameModes)[number];
+function isRemoteFrameMode(value: string | null): value is RemoteFrameMode {
+  return remoteFrameModes.some((mode) => mode === value);
+}
 interface RemoteFrameFixture {
   mode: RemoteFrameMode;
   parentOrigin: string;
   childOrigin: string;
   nonce: string;
+  leafOrigin?: string;
 }
 
 /** Fixed synthetic commands only; neither side accepts code from postMessage. */
@@ -335,44 +348,93 @@ export function remoteFrameContractPage(
   role: "parent" | "child",
   fixture: RemoteFrameFixture,
 ): string {
-  for (const origin of [fixture.parentOrigin, fixture.childOrigin]) {
+  for (const origin of [
+    fixture.parentOrigin,
+    fixture.childOrigin,
+    ...(fixture.leafOrigin ? [fixture.leafOrigin] : []),
+  ]) {
     const url = new URL(origin);
     assert.ok(
       url.protocol === "http:" &&
-        ["127.0.0.1", "localhost"].includes(url.hostname) &&
+        ["127.0.0.1", "localhost", "nested.localhost"].includes(url.hostname) &&
         url.origin === origin,
       "Remote frame fixtures must use exact disposable loopback origins",
     );
   }
   assert.notEqual(fixture.parentOrigin, fixture.childOrigin);
   assert.match(fixture.nonce, /^[a-f0-9-]{36}$/u);
-  assert.ok(
-    ["cross-origin-same-process", "cross-origin-oopif"].includes(fixture.mode),
-  );
+  assert.ok(isRemoteFrameMode(fixture.mode));
   const config = JSON.stringify(fixture).replaceAll("<", "\\u003c");
+  if (role === "child" && fixture.leafOrigin) {
+    const leafUrl = new URL("/remote-frame-child", fixture.leafOrigin);
+    for (const [key, value] of Object.entries({
+      ...fixture,
+      parentOrigin: fixture.childOrigin,
+      childOrigin: fixture.leafOrigin,
+      leafOrigin: "",
+    }))
+      leafUrl.searchParams.set(key, value);
+    return `<!doctype html><meta charset="utf-8"><title>ZenX nested frame owner</title>
+<style>body{margin:0}iframe{position:absolute;display:block;left:40px;top:50px;width:400px;height:300px;border:3px solid #573;padding:2px}</style>
+<script>
+const config=${config},documentId=crypto.randomUUID(),pending=new Map(),frame=document.createElement('iframe');
+frame.id='nested-contract-frame';
+window.addEventListener('message',event=>{
+  const message=event.data;
+  if(!message||message.nonce!==config.nonce)return;
+  if(event.source===parent&&event.origin===config.parentOrigin&&message.kind==='request'&&Number.isSafeInteger(message.id)&&message.id>0){
+    if(!['state','focus','point','mutate','armReplace'].includes(message.method)||pending.size>=32||pending.has(message.id))return;
+    const timer=setTimeout(()=>pending.delete(message.id),5000);pending.set(message.id,{method:message.method,timer});
+    frame.contentWindow.postMessage(message,config.leafOrigin);return;
+  }
+  if(event.source!==frame.contentWindow||event.origin!==config.leafOrigin)return;
+  if(message.kind==='ready'){parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOrigin);return}
+  if(message.kind!=='reply')return;
+  const request=pending.get(message.id);if(!request)return;pending.delete(message.id);clearTimeout(request.timer);
+  let result=message.result;
+  // Independent forward oracle for this authored owner: known offset, border,
+  // and padding. Never derive expected coordinates from provider geometry.
+  if(request.method==='point'){const x=result.x+40+3+2,y=result.y+50+3+2,r=frame.getBoundingClientRect();result={...result,x,y,owners:[{id:frame.id,left:r.left,top:r.top,width:r.width,height:r.height,hitId:document.elementFromPoint?.(x,y)?.id||'',scrollX,scrollY},...(result.owners||[])]}}
+  if(request.method==='state')result={...result,ownerDocuments:[documentId,...(result.ownerDocuments||[])]};
+  parent.postMessage({kind:'reply',nonce:config.nonce,id:message.id,result},config.parentOrigin);
+});
+frame.src=${JSON.stringify(leafUrl.href)};document.documentElement.append(frame);
+</script>`;
+  }
   if (role === "child")
     return `<!doctype html><meta charset="utf-8"><title>ZenX remote child fixture</title>
 <style>body{margin:0;min-height:900px}canvas,input{position:absolute;box-sizing:border-box;left:0}canvas{top:0;background:#acf}input{width:190px;height:32px}#text-a{top:90px}#text-b{top:140px}</style>
 <canvas id="canvas" tabindex="0" width="200" height="60"></canvas><input id="text-a"><input id="text-b">
 <script>
-const config=${config},events=[];let clicks=0;
-const documentId=crypto.randomUUID();
+const config=${config},events=[];let clicks=0,replaceOnPress=false,documentId=crypto.randomUUID();
 const node=id=>['canvas','text-a','text-b'].includes(id)?document.getElementById(id):null;
-for(const type of ['pointerdown','pointerup','keydown','keyup'])window.addEventListener(type,event=>events.push({type:event.type,trusted:event.isTrusted,target:event.target.id}),true);
-node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus()};
+const witness=event=>{
+  events.push({type:event.type,trusted:event.isTrusted,target:event.target.id});
+  if(event.type==='pointerdown'&&event.isTrusted&&replaceOnPress){
+    replaceOnPress=false;
+    const body='<canvas id="canvas" tabindex="0" width="200" height="60"></canvas><input id="text-a"><input id="text-b">';
+    document.open();document.write('<!doctype html><body>'+body+'</body>');document.close();documentId=crypto.randomUUID();bind();node('text-b').focus();
+  }
+};
+const bind=()=>{
+  for(const type of ['pointerdown','pointerup','keydown','keyup'])window.addEventListener(type,witness,true);
+  window.addEventListener('message',receive);
+  node('canvas').onclick=event=>{if(!event.isTrusted)throw Error('Untrusted fixture click');clicks++;event.currentTarget.focus()};
+};
 const state=()=>({mode:config.mode,documentId,events:[...events],clicks,widgets:{},values:{'text-a':node('text-a').value,'text-b':node('text-b').value},inner:document.activeElement?.id,visibility:document.visibilityState});
-window.addEventListener('message',event=>{
+const receive=event=>{
   const message=event.data;
   if(event.source!==parent||event.origin!==config.parentOrigin||!message||message.nonce!==config.nonce||message.kind!=='request'||!Number.isSafeInteger(message.id)||message.id<1)return;
   let result;
   if(message.method==='state')result=state();
   else if(message.method==='focus'&&node(message.argument)){node(message.argument).focus();result={inner:document.activeElement?.id}}
-  else if(message.method==='point'&&node(message.argument)){const r=node(message.argument).getBoundingClientRect();result={x:r.left+r.width/2,y:r.top+r.height/2}}
+  else if(message.method==='point'&&node(message.argument)){const r=node(message.argument).getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;result={x,y,documentId,hitId:document.elementFromPoint?.(x,y)?.id||'',owners:[]}}
   else if(message.method==='mutate'){node('text-a').style.marginLeft='8px';result=state()}
+  else if(message.method==='armReplace'){replaceOnPress=true;result={armed:true}}
   else return;
   parent.postMessage({kind:'reply',nonce:config.nonce,id:message.id,result},config.parentOrigin);
-});
-node('text-a').focus();
+};
+bind();node('text-a').focus();
 parent.postMessage({kind:'ready',nonce:config.nonce,documentId},config.parentOrigin);
 </script>`;
   const childUrl = new URL("/remote-frame-child", fixture.childOrigin);
@@ -399,8 +461,9 @@ const request=(method,argument)=>new Promise((resolve,reject)=>{
 window.contract={mode:config.mode,get ready(){return ready},
   async state(){return {...await request('state'),visibility:document.visibilityState,outer:document.activeElement?.id}},
   async focus(id){return {...await request('focus',id),outer:document.activeElement?.id}},
-  async point(id){const point=await request('point',id);return {x:point.x+20+5+7,y:point.y+20+5+11}},
+  async point(id){const point=await request('point',id),x=point.x+20+5+7,y=point.y+20+5+11,r=frame.getBoundingClientRect();return {...point,x,y,owners:[{id:frame.id,left:r.left,top:r.top,width:r.width,height:r.height,hitId:document.elementFromPoint?.(x,y)?.id||'',scrollX,scrollY},...(point.owners||[])]}},
   mutate(){return request('mutate')},
+  armReplace(){return request('armReplace')},
   reopenFrame(){ready=false;frame.src=childUrl+'&revision='+(++revision)}
 };
 frame.src=childUrl;document.documentElement.append(frame);
@@ -410,23 +473,26 @@ frame.src=childUrl;document.documentElement.append(frame);
 function remoteFrameFixtureFromUrl(requestUrl: string): RemoteFrameFixture {
   const query = new URL(requestUrl, "http://127.0.0.1").searchParams;
   const mode = query.get("mode");
-  assert.ok(
-    mode === "cross-origin-same-process" || mode === "cross-origin-oopif",
-  );
+  assert.ok(isRemoteFrameMode(mode));
   return {
     mode,
     parentOrigin: query.get("parentOrigin") ?? "",
     childOrigin: query.get("childOrigin") ?? "",
     nonce: query.get("nonce") ?? "",
+    ...(query.get("leafOrigin")
+      ? { leafOrigin: query.get("leafOrigin")! }
+      : {}),
   };
 }
 
 /** Served only by the disposable local smoke servers, before any tracker exists. */
 export function targetedInputContractPage(requestUrl: string): string {
   const mode = new URL(requestUrl, "http://127.0.0.1").searchParams.get("mode");
-  if (mode === "cross-origin-same-process" || mode === "cross-origin-oopif")
+  if (isRemoteFrameMode(mode))
     return remoteFrameContractPage(
-      "parent",
+      new URL(requestUrl, "http://127.0.0.1").pathname === "/remote-frame-child"
+        ? "child"
+        : "parent",
       remoteFrameFixtureFromUrl(requestUrl),
     );
   return `<!doctype html><meta charset="utf-8"><title>ZenX targeted input contract</title>
@@ -512,6 +578,7 @@ node(mode==='ordinary-dom'?'editor':'text-a').focus();
 
 interface ContractState {
   mode: string;
+  documentId?: string;
   widgets: Record<string, number>;
   values: Record<string, string | undefined>;
   events: { type: string; trusted: boolean; target: string }[];
@@ -521,6 +588,123 @@ interface ContractState {
   visibility: string;
   outer: string;
 }
+interface RemoteFixturePoint {
+  x: number;
+  y: number;
+  documentId: string;
+  hitId: string;
+  owners: {
+    id: string;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    hitId: string;
+    scrollX: number;
+    scrollY: number;
+  }[];
+}
+
+/** The independent authored forward point must match every current DOM owner. */
+export function assertRemoteFixturePoint(
+  point: RemoteFixturePoint,
+  id: string,
+  depth: number,
+): void {
+  assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+  assert.equal(
+    point.hitId,
+    id,
+    "Independent child point must hit the requested element",
+  );
+  assert.equal(point.owners.length, depth);
+  for (const [index, owner] of point.owners.entries()) {
+    const expected =
+      index === 0
+        ? { id: "contract-frame", left: 20, top: 20, width: 644, height: 512 }
+        : {
+            id: "nested-contract-frame",
+            left: 40,
+            top: 50,
+            width: 410,
+            height: 310,
+          };
+    assert.equal(owner.id, expected.id);
+    assert.equal(
+      owner.hitId,
+      owner.id,
+      "Mapped point must hit the actual parent iframe",
+    );
+    assert.equal(owner.scrollX, 0);
+    assert.equal(owner.scrollY, 0);
+    for (const key of ["left", "top", "width", "height"] as const)
+      assert.ok(
+        Math.abs(owner[key] - expected[key]) < 0.01,
+        `Fixture owner ${owner.id} ${key} is ${owner[key]}, expected ${expected[key]}`,
+      );
+  }
+}
+
+/** CDP ACK is not child-consumption evidence. Only read the already-issued pair. */
+export async function settleRemoteFixturePair(
+  read: () => Promise<ContractState>,
+  before: ContractState,
+  kind: "click" | "key",
+  id: string,
+): Promise<{ state: ContractState; reads: number }> {
+  const expected = (
+    kind === "click" ? ["pointerdown", "pointerup"] : ["keydown", "keyup"]
+  ).map((type) => ({ type, trusted: true, target: id }));
+  let reads = 0;
+  const state = await poll(async () => {
+    const current = await read();
+    reads++;
+    assert.equal(
+      current.documentId,
+      before.documentId,
+      "Child document changed while consuming the issued pair",
+    );
+    assert.equal(current.visibility, "hidden");
+    assert.deepEqual(
+      current.events.slice(0, before.events.length),
+      before.events,
+      "Remote witness history must not change",
+    );
+    const events = current.events.slice(before.events.length);
+    assert.ok(
+      events.length <= expected.length,
+      "Unexpected additional remote input",
+    );
+    assert.deepEqual(
+      events,
+      expected.slice(0, events.length),
+      "Remote input must be the exact trusted target/type prefix",
+    );
+    const expectedClicks =
+      before.clicks + Number(kind === "click" && id === "canvas");
+    assert.ok(
+      current.clicks === before.clicks || current.clicks === expectedClicks,
+      "Unexpected remote click effect",
+    );
+    const expectedValue =
+      kind === "key" && id in before.values
+        ? before.values[id] + " "
+        : undefined;
+    if (expectedValue !== undefined)
+      assert.ok(
+        current.values[id] === before.values[id] ||
+          current.values[id] === expectedValue,
+        "Unexpected remote text effect",
+      );
+    return events.length === expected.length &&
+      current.clicks === expectedClicks &&
+      (expectedValue === undefined || current.values[id] === expectedValue)
+      ? current
+      : undefined;
+  }, "exact remote trusted pair and effect (read-only settlement)");
+  return { state, reads };
+}
+
 interface ContractInput {
   method: string;
   type: string;
@@ -548,6 +732,7 @@ interface FramePlacementEvidence {
     targetInfo: { targetId: string; type: string; url: string };
   };
   ownerBackendNodeId: number;
+  descendant?: FramePlacementEvidence;
 }
 
 /** Process placement is observed, never inferred from cross-origin URLs. */
@@ -630,10 +815,29 @@ export function assertRemoteFramePlacement(
       "OOPIF fixture requires its child-session default context",
     );
   }
+  if (
+    evidence.mode === "nested-oopif" ||
+    evidence.mode === "nested-same-process"
+  ) {
+    assert.ok(
+      evidence.descendant,
+      "Nested fixture requires independently observed descendant placement",
+    );
+    assert.equal(evidence.descendant.rootFrameId, evidence.childFrameId);
+    assert.equal(
+      evidence.descendant.mode,
+      evidence.mode === "nested-oopif"
+        ? "cross-origin-oopif"
+        : "cross-origin-same-process",
+    );
+    assertRemoteFramePlacement(evidence.descendant);
+  }
 }
 
+type FixtureCdpEndpoint = Pick<Rpc, "send" | "onEvent">;
+
 async function observeRemoteFramePlacement(
-  rpc: Rpc,
+  rpc: FixtureCdpEndpoint,
   browserRpc: Rpc,
   mode: RemoteFrameMode,
   rootUrl: string,
@@ -674,7 +878,7 @@ async function observeRemoteFramePlacement(
       childUrl: child.url,
       ownerBackendNodeId: owner.backendNodeId as number,
     };
-    if (mode === "cross-origin-oopif") {
+    if (mode !== "cross-origin-same-process") {
       const candidates = targets.filter(
         (target) => target.type === "iframe" && target.url === child.url,
       );
@@ -718,6 +922,27 @@ async function observeRemoteFramePlacement(
         childSessionFrameId: childTree.frame.id,
         childContexts,
       });
+      if (mode === "nested-oopif" || mode === "nested-same-process") {
+        removeChild();
+        removeChild = undefined;
+        const parentSessionId = childSessionId;
+        const childRpc: FixtureCdpEndpoint = {
+          send: async (method, params = {}) =>
+            await browserRpc.send(method, params, parentSessionId),
+          onEvent: (listener) =>
+            browserRpc.onEvent((event) => {
+              if (event.sessionId === parentSessionId) listener(event);
+            }),
+        };
+        evidence.descendant = await observeRemoteFramePlacement(
+          childRpc,
+          browserRpc,
+          mode === "nested-oopif"
+            ? "cross-origin-oopif"
+            : "cross-origin-same-process",
+          child.url,
+        );
+      }
     }
     assertRemoteFramePlacement(evidence);
     return evidence;
@@ -731,6 +956,157 @@ async function observeRemoteFramePlacement(
   }
 }
 
+/** Intentional unknown outcome owns a separate tab and physically closes it. */
+async function runInterruptedRemoteFrameSmoke(options: {
+  backend: ZenXBrowserBackend;
+  sessionId: string;
+  endpoint: string;
+  url: string;
+  browserRpc: Pick<Rpc, "send">;
+  inputs: ContractInput[];
+  guard(): Promise<void>;
+}): Promise<Record<string, unknown>> {
+  const { backend, sessionId, inputs, guard } = options;
+  const owned = await backend.open(sessionId, options.url);
+  let rpc: Rpc | undefined;
+  try {
+    const target = await poll(async () => {
+      const targets = (await (
+        await fetch(`${options.endpoint}/json/list`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json()) as Target[];
+      return targets.find((target) => target.id === owned.tabId);
+    }, "dedicated interrupted-input target");
+    rpc = await Rpc.connect(target.webSocketDebuggerUrl);
+    const fixture = rpc;
+    await poll(
+      async () =>
+        (await fixture.evaluate<boolean>("window.contract?.ready === true"))
+          ? true
+          : undefined,
+      "dedicated remote child",
+    );
+    await guard();
+    assert.equal(await fixture.evaluate("document.visibilityState"), "hidden");
+    assert.deepEqual(await fixture.evaluate("window.contract.armReplace()"), {
+      armed: true,
+    });
+    const before = await fixture.evaluate<
+      ContractState & { documentId: string }
+    >("window.contract.state()");
+    const position = await fixture.evaluate<{ x: number; y: number }>(
+      "window.contract.point('canvas')",
+    );
+    const capture = async () =>
+      await poll(async () => {
+        const count = inputs.length;
+        const observed = await backend.inspect(sessionId, owned.tabId);
+        assert.equal(observed.screenshot.status, "captured");
+        assert.equal(
+          inputs.length,
+          count,
+          "Interrupted-target inspection must never dispatch Input",
+        );
+        await guard();
+        return observed.inputViewport ? observed : undefined;
+      }, "interrupted-target coherent capture (read-only)");
+    const observed = await capture();
+    const start = inputs.length;
+    let reason = "";
+    await assert.rejects(
+      () =>
+        backend.pointerClick!(
+          sessionId,
+          owned.tabId,
+          observed.observationId,
+          position.x,
+          position.y,
+        ),
+      (error) => {
+        assert.ok(error instanceof BrowserInputOutcomeUnknownError);
+        assert.equal(error.inputMayRemainPressed, true);
+        reason = error.message;
+        return true;
+      },
+    );
+    assert.deepEqual(
+      inputs
+        .slice(start)
+        .map((event) => ({ method: event.method, type: event.type })),
+      [{ method: "Input.dispatchMouseEvent", type: "mousePressed" }],
+      "A changed child must never receive a successor release",
+    );
+    const after = await fixture.evaluate<
+      ContractState & { documentId: string }
+    >("window.contract.state()");
+    assert.notEqual(after.documentId, before.documentId);
+    assert.deepEqual(after.events.slice(before.events.length), [
+      { type: "pointerdown", trusted: true, target: "canvas" },
+    ]);
+    assert.equal(after.clicks, before.clicks);
+    assert.equal(after.visibility, "hidden");
+    // A fresh, deliberate different action confirms the held-input fence. It is
+    // not a retry or release of the unknown earlier click.
+    // Quarantine intentionally withholds authorizing input metadata. A single
+    // ordinary read remains available; never wait for an input-ready capture.
+    const fresh = await backend.inspect(sessionId, owned.tabId);
+    assert.equal(fresh.screenshot.status, "captured");
+    assert.equal(fresh.inputViewport, undefined);
+    await guard();
+    await assert.rejects(
+      () =>
+        backend.keyPress!(sessionId, owned.tabId, fresh.observationId, "Space"),
+      /blocked|held|pressed|close.*tab/iu,
+    );
+    assert.equal(inputs.length, start + 1);
+    assert.deepEqual(
+      (await fixture.evaluate<ContractState>("window.contract.state()")).events,
+      after.events,
+    );
+    await guard();
+    return {
+      scenario: "remote-document-open-after-press",
+      layer: "headed-provider-cdp-contract",
+      nativeExtensionRouting: "not-exercised",
+      status: "passed",
+      inputDispatches: 1,
+      successorReleaseDispatches: 0,
+      quarantined: true,
+      reason,
+    };
+  } finally {
+    rpc?.close();
+    // Provider closeTab settles only its logical attachment; it is not physical
+    // Chrome closure and cannot release the possibly held input by itself.
+    try {
+      await backend.closeTab(sessionId, owned.tabId);
+    } finally {
+      const closed = await options.browserRpc.send("Target.closeTarget", {
+        targetId: owned.tabId,
+      });
+      assert.equal(
+        closed.success,
+        true,
+        "The exact positively-created disposable target must physically close",
+      );
+    }
+    await poll(async () => {
+      const targets = (await (
+        await fetch(`${options.endpoint}/json/list`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(5_000),
+        })
+      ).json()) as Target[];
+      return targets.some((target) => target.id === owned.tabId)
+        ? undefined
+        : true;
+    }, "physical interrupted-input target closure");
+    await guard();
+  }
+}
+
 /** Real protocol acceptance, shared by both headed smoke entry points. */
 export async function runTargetedInputContractSmoke(options: {
   backend: ZenXBrowserBackend;
@@ -740,6 +1116,7 @@ export async function runTargetedInputContractSmoke(options: {
   origin: string;
   guard(): Promise<void>;
   onPhase?(phase: string): void;
+  onFailure?(diagnostic: Record<string, unknown>): void;
   remoteFrameInput?: "supported" | "unsupported";
 }): Promise<Record<string, unknown>[]> {
   const { backend, sessionId, tabId, endpoint, origin, guard } = options;
@@ -782,6 +1159,7 @@ export async function runTargetedInputContractSmoke(options: {
   });
   const inputs: ContractInput[] = [];
   const reports: Record<string, unknown>[] = [];
+  let remoteWitness: Record<string, unknown> | undefined;
   // A passive, scoped tap on actual outgoing ws messages. No mock transport,
   // rewritten events, retries, tracker access or synthetic trusted-event shims.
   // Only the provider's browser socket/session-scoped Input is counted.
@@ -890,7 +1268,19 @@ export async function runTargetedInputContractSmoke(options: {
         ? ["mousePressed", "mouseReleased"]
         : ["keyDown", "keyUp"],
     );
-    const after = await state();
+    const after = isRemoteFrameMode(before.mode)
+      ? (
+          await settleRemoteFixturePair(
+            async () => {
+              await guard();
+              return await state();
+            },
+            before,
+            kind,
+            id,
+          )
+        ).state
+      : await state();
     const observedEvents = after.events.slice(before.events.length);
     assert.deepEqual(
       observedEvents.map((event) => event.type),
@@ -957,23 +1347,32 @@ export async function runTargetedInputContractSmoke(options: {
       "closed-shadow",
       "deep-shadow",
       "ordinary-dom",
-      "cross-origin-same-process",
-      "cross-origin-oopif",
+      ...remoteFrameModes,
     ]) {
+      remoteWitness = undefined;
       const withheldBefore = withheldCaptures;
       options.onPhase?.(`input-contracts:${mode}:navigate`);
       await guard();
-      const remoteMode =
-        mode === "cross-origin-same-process" || mode === "cross-origin-oopif";
+      const remoteMode = isRemoteFrameMode(mode);
       const contractUrl = new URL("/input-contract", origin);
       contractUrl.searchParams.set("mode", mode);
       if (remoteMode) {
         contractUrl.searchParams.set("parentOrigin", origin);
         contractUrl.searchParams.set(
           "childOrigin",
-          `http://${mode === "cross-origin-oopif" ? "localhost" : "127.0.0.1"}:${remoteAddress.port}`,
+          `http://${mode === "cross-origin-same-process" ? "127.0.0.1" : "localhost"}:${remoteAddress.port}`,
         );
         contractUrl.searchParams.set("nonce", randomUUID());
+        if (mode === "nested-oopif")
+          contractUrl.searchParams.set(
+            "leafOrigin",
+            `http://nested.localhost:${remoteAddress.port}`,
+          );
+        if (mode === "nested-same-process")
+          contractUrl.searchParams.set(
+            "leafOrigin",
+            origin.replace("127.0.0.1", "localhost"),
+          );
       }
       await backend.navigate(sessionId, tabId, contractUrl.href);
       await poll(async () => {
@@ -1017,17 +1416,61 @@ export async function runTargetedInputContractSmoke(options: {
           const id = kind === "click" ? "canvas" : "text-a";
           if (kind === "key") assert.equal((await focus(id)).inner, id);
           const before = await state();
+          remoteWitness = {
+            mode,
+            layer: "direct-root-cdp-fixture-oracle",
+            kind,
+            id,
+            placement,
+            before,
+            dispatchAttempts: 0,
+            acknowledgedDispatches: 0,
+            settlementReads: 0,
+          };
+          const screenshot = await rpc.send("Page.captureScreenshot", {
+            format: "png",
+            fromSurface: true,
+            captureBeyondViewport: false,
+          });
+          assert.ok(
+            typeof screenshot.data === "string" && screenshot.data.length > 0,
+            "Direct fixture needs a real read-only compositor capture before input",
+          );
+          remoteWitness.compositorCaptured = true;
+          await guard();
           if (kind === "click") {
-            const position = await point(id);
-            for (const type of ["mousePressed", "mouseReleased"])
+            const position = await rpc.evaluate<RemoteFixturePoint>(
+              `window.contract.point(${JSON.stringify(id)})`,
+            );
+            remoteWitness.position = position;
+            console.log(
+              "Remote frame fixture point",
+              JSON.stringify({ mode, position }),
+            );
+            assertRemoteFixturePoint(
+              position,
+              id,
+              mode.startsWith("nested-") ? 2 : 1,
+            );
+            assert.equal(position.documentId, before.documentId);
+            for (const type of ["mousePressed", "mouseReleased"]) {
+              remoteWitness.dispatchAttempts =
+                Number(remoteWitness.dispatchAttempts) + 1;
               await rpc.send("Input.dispatchMouseEvent", {
                 type,
-                ...position,
+                x: position.x,
+                y: position.y,
                 button: "left",
+                buttons: type === "mousePressed" ? 1 : 0,
                 clickCount: 1,
               });
+              remoteWitness.acknowledgedDispatches =
+                Number(remoteWitness.acknowledgedDispatches) + 1;
+            }
           } else {
-            for (const type of ["keyDown", "keyUp"])
+            for (const type of ["keyDown", "keyUp"]) {
+              remoteWitness.dispatchAttempts =
+                Number(remoteWitness.dispatchAttempts) + 1;
               await rpc.send("Input.dispatchKeyEvent", {
                 type,
                 key: " ",
@@ -1035,8 +1478,24 @@ export async function runTargetedInputContractSmoke(options: {
                 windowsVirtualKeyCode: 32,
                 ...(type === "keyDown" ? { text: " " } : {}),
               });
+              remoteWitness.acknowledgedDispatches =
+                Number(remoteWitness.acknowledgedDispatches) + 1;
+            }
           }
-          const after = await state();
+          const witness = remoteWitness;
+          const settled = await settleRemoteFixturePair(
+            async () => {
+              await guard();
+              const current = await state();
+              witness.after = current;
+              witness.settlementReads = Number(witness.settlementReads) + 1;
+              return current;
+            },
+            before,
+            kind,
+            id,
+          );
+          const after = settled.state;
           assert.deepEqual(
             after.events.slice(before.events.length).map((event) => ({
               type: event.type,
@@ -1052,11 +1511,13 @@ export async function runTargetedInputContractSmoke(options: {
           else assert.equal(after.values[id], before.values[id] + " ");
           assert.equal(after.visibility, "hidden");
           await guard();
+          remoteWitness.status = "passed";
           cases.push({
             case: `child-${kind}-witness`,
             layer: "direct-root-cdp-fixture-oracle",
             trustedPair: true,
             effect: true,
+            settlementReads: settled.reads,
           });
         }
         if (options.remoteFrameInput === "supported") {
@@ -1185,6 +1646,28 @@ export async function runTargetedInputContractSmoke(options: {
             case: "fresh-replacement-remote-text",
             pair: await paired("key", "text-a"),
           });
+        if (
+          options.remoteFrameInput === "supported" &&
+          mode === "nested-oopif"
+        ) {
+          // The shared target remains usable; held-input quarantine belongs only
+          // to the new physical tab and that exact tab is closed in finally.
+          cases.push(
+            await runInterruptedRemoteFrameSmoke({
+              backend,
+              sessionId,
+              endpoint,
+              url: contractUrl.href,
+              browserRpc: placementRpc,
+              inputs,
+              guard,
+            }),
+          );
+          cases.push({
+            case: "shared-target-still-usable-after-isolated-quarantine",
+            pair: await paired("key", "text-a"),
+          });
+        }
       } else if (mode === "stop-propagation" || mode === "stop-immediate") {
         // Repeat actions on the SAME attachment to prove no held-input quarantine.
         for (let iteration = 0; iteration < 2; iteration++) {
@@ -1414,8 +1897,13 @@ export async function runTargetedInputContractSmoke(options: {
         nativeExtensionRouting: "not-exercised",
         ...(remoteMode
           ? {
-              frameDepth: 1,
-              recursiveRouting: "not-exercised",
+              frameDepth: mode.startsWith("nested-") ? 2 : 1,
+              ownerChain: "cdp-observed",
+              recursiveProviderInput:
+                mode.startsWith("nested-") &&
+                options.remoteFrameInput === "supported"
+                  ? "trusted-inner-effect"
+                  : "not-exercised",
               providerInput:
                 options.remoteFrameInput === "supported"
                   ? "supported"
@@ -1427,6 +1915,25 @@ export async function runTargetedInputContractSmoke(options: {
       });
     }
     return reports;
+  } catch (error) {
+    const diagnostic = {
+      scenario: "targeted-input-contracts",
+      completedReports: reports,
+      lastDirectRemoteWitness: remoteWitness,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    // Preserve the current authored point, owner/inner hits and final read in
+    // both native entrypoint failure receipts, without replaying any action.
+    try {
+      options.onFailure?.(diagnostic);
+      console.error(
+        "Targeted input contract failure",
+        JSON.stringify(diagnostic),
+      );
+    } catch {
+      // Diagnostics never replace the original fixture assertion.
+    }
+    throw error;
   } finally {
     WebSocket.prototype.send = originalSend;
     rpc.close();
@@ -1605,6 +2112,7 @@ async function main(): Promise<void> {
   let browser: ChildProcess | undefined;
   let browserError = "";
   let phase = "startup";
+  let remoteFrameFailure: Record<string, unknown> | undefined;
   const transportDiagnostics: unknown[] = [];
   let transportDropped = 0;
   let stopTransport: (() => void) | undefined;
@@ -1623,7 +2131,10 @@ async function main(): Promise<void> {
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
     response.setHeader("Origin-Agent-Cluster", "?0");
-    if (request.url?.startsWith("/input-contract")) {
+    if (
+      request.url?.startsWith("/input-contract") ||
+      request.url?.startsWith("/remote-frame-child")
+    ) {
       response.end(targetedInputContractPage(request.url));
       return;
     }
@@ -1652,7 +2163,7 @@ async function main(): Promise<void> {
         `--user-data-dir=${profile}`,
         "--remote-debugging-port=0",
         "--site-per-process",
-        "--host-resolver-rules=MAP localhost 127.0.0.1",
+        "--host-resolver-rules=MAP localhost 127.0.0.1, MAP nested.localhost 127.0.0.1",
         // Renderer AX metadata is required by this owned Mac fixture's strict
         // native focused-element/value preflight. This grants no OS permission.
         ...(process.platform === "darwin"
@@ -2250,6 +2761,10 @@ async function main(): Promise<void> {
         tabId: opened.tabId,
         endpoint,
         origin,
+        remoteFrameInput: "supported",
+        onFailure: (diagnostic) => {
+          remoteFrameFailure = diagnostic;
+        },
         onPhase: (value) => {
           phase = value;
         },
@@ -2325,6 +2840,7 @@ async function main(): Promise<void> {
         phase,
         transportDiagnostics,
         transportDropped,
+        remoteFrameFailure,
         ownedBrowser: {
           pid: browser?.pid,
           exitCode: browser?.exitCode,

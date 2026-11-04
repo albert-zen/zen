@@ -742,6 +742,11 @@ jobs:
           icacls $browserDirectory /grant '*S-1-15-2-1:(OI)(CI)(RX)' '*S-1-15-2-2:(OI)(CI)(RX)' /T /Q
           if ($LASTEXITCODE -ne 0) { throw "Could not grant Chromium sandbox read-execute access" }
           "ZENX_USER_BROWSER_EXECUTABLE=$browserExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Exercise real extension debugger child sessions with a synthetic native port
+        timeout-minutes: 3
+        env:
+          ZENX_CHROME_DEBUGGER_ARTIFACT_DIR: ${{ runner.temp }}/zenx-parallel-input-evidence
+        run: node --import tsx apps/zenx/scripts/smoke-chrome-debugger-children.mjs
       - run: npm --workspace apps/zenx run smoke:windows-user-browser
       - name: Exercise parallel native user typing and inactive Agent tab input
         env:
