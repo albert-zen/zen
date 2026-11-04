@@ -59,6 +59,10 @@ test("integrated title bar aligns the product controls and conversation row arou
   );
   assert.match(
     styles,
+    /:root\[data-platform="darwin"\]\s*\.app-shell\.sidebar-collapsed\s*\.auxiliary-panel\[data-open="true"\]\[data-expanded="true"\]\s*>\s*\.auxiliary-heading\s*\{[^}]*margin-inline-start:\s*calc\(var\(--native-leading-safe-area\) - 8px\);[^}]*padding-inline-start:\s*8px;/su,
+  );
+  assert.match(
+    styles,
     /:root\[data-platform="darwin"\] \.sidebar\s*\{[^}]*padding-top:\s*var\(--product-row-height\);/su,
   );
   assert.match(main, /titleBarStyle: "hidden"/u);
