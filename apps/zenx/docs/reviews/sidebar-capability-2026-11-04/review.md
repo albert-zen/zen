@@ -49,58 +49,39 @@
 
 ## 3. 发现
 
-### F1 Room 的“展示态”和“共享状态”是同一条记录（影响面最大）
+### F0 先纠正我自己：Room 侧栏共享是已定决策，不是待定问题
 
-`ThreadSidebarState` 以 owner 为键（`kind: "thread" | "room"`），`open`、`fullscreen`、
-`selectedTab` 与 `tabs` 都存在同一条状态里（`thread-sidebar-state.ts:25-40`）。
-Room 只有一条状态，于是 agent 调 `sidebar_update({open/fullscreen/selectedTab})` 改的是
-**房间里每个参与者看到的展示**，而工具文案只承诺“不抢占前台/不切焦点”。
+本评审第一版把“Room 的 `open`/`fullscreen`/`selectedTab` 与 `tabs` 存在同一条状态”
+当成需要决策的设计问题，并建议拆成 per-viewer。这是错的：
+`ui-ux.md` 早已写明“Thread / Room 辅助侧栏的开合、全屏、标签顺序与选择由同一个
+main-process revision/CAS presentation store … Room 使用相同工作区界面”。
+房间的侧栏就是这个房间的，对该房间所有成员是同一份共享状态，**不按观看者拆分**。
+同类地，“人添加的标签/组件 agent 能不能删”也不是待定问题：agent 与人操作同一份状态，
+删除是正常能力，不需要按作者加只读保护。
 
-这是两种不同性质的事实被压在一个 owner 上：
+我最初把它当开放问题，是因为只读了实现和工具文案，没有先查 durable 产品决策文档。
+以下是仍然成立的发现；第一版里“拆成 per-viewer”“按作者给人写的内容加只读保护”
+这类建议已全部撤回。
 
-- `tabs`（有哪些面板）是房间的共享事实；
-- `open`/`fullscreen`/`selectedTab`（现在看哪一个）本质是**看的人的选择**，人是可以各自不同的。
+### F1 真正的缺口是 agent 不知道自己在改共享状态
 
-建议（需要产品决策）：
+`model-sidebar-facade.ts` 原先把 `open`/`fullscreen`/`selectedTab` 与 `tabs` 的写法
+当成普通 patch 描述，唯一承诺是“不抢占前台/不切焦点”。“不抢焦点”说的是不打断人的输入，
+并不等于“只影响自己”——agent 读到这句话，很容易以为自己在调整自己的视图，
+于是为了“把某个面板显示出来”而改掉整个房间的当前选中项。
 
-- 方案 A（推荐）：把 presentation 三维拆成 per-viewer 状态，agent 写入只影响调用者自己的视图；
-  房间共享的只剩 `tabs` 顺序与信息组件布局。
-- 方案 B：保持共享，但在工具文案与 `read` 返回里显式标注
-  `presentationScope: "room-shared"`，让 agent 知道这一步会改变所有人的视图。
+这是**文案缺口，不是语义缺口**。已在本 PR 修：`sidebar_read` 与 `sidebar_update` 的
+模型侧描述现在都写明“侧栏属于其 owner，Room 的侧栏是该 Room 的共享状态，所有成员都会看到
+你对 open/fullscreen/selectedTab 和标签列表的改动；`tabs` 是整表替换，替换前先重读并保留
+要留下的描述符”。`ui-ux.md` 也补了一条把这条语义与“不按作者区分读写权限”固定下来。
 
-在决策之前，现在的实现既不明确也不安全：agent 很可能为了“把某个面板显示出来”而改掉
-一个正在被别人看着的房间视图。
+### F2 `tabs` 整表替换的提示偏弱（已随 F1 修文案，不改行为）
 
-### F2 tab 没有来源归属，agent 的 `tabs` 替换会静默关掉人的面板
+替换语义本身是合理的（Room 的列表就是这一份），问题是原文案只说 "preserve tabs you want to
+keep"，没有说明“你看到的是当前全部描述符、替换等于房间的现状”。已并入 F1 的描述修正，
+不再单独提改动建议。
 
-`ThreadSidebarTab` 只有资源字段和可选的 `resourceThreadId`（`thread-sidebar-state.ts:15-24`），
-没有“谁加的”这一维。`SidebarChangeSource` 只在 `update` 的调用参数上携带来源
-（`thread-sidebar-state.ts:52-53`），持久化状态里没有。
-
-后果：`tabs` 是整体替换语义（工具文案要求 "preserve tabs you want to keep"），所以 agent
-一次替换就会把**人自己打开的面板**一起丢掉，而且事后无法区分“这是人加的”还是“这是 agent 加的”，
-连人类 UI 也无法据此提示“这个面板是我开的、被 agent 关闭了”。
-
-建议（需要产品决策）：
-
-- 在 tab 上持久化 `authoredBy: "human" | "tool"`（来源已有，只是没落盘）；
-- 或者：替换时对人写的描述符要求显式 `drop` 标记，否则拒绝并返回需要保留的列表。
-
-我倾向第一条：它同时让 UI 能显示来源，且不需要在写路径上新增拦截。
-
-### F3 Room 级信息组件没有归属，人类放置的组件可被 agent 删除/重置
-
-Room 里 `source: "room"` 的组件 binding 是 `{kind: "owner"}`
-（`information-layout.ts:155-176`），而 `canEditInformationWidget` 对 `owner` 一律返回 true
-（`information-layout.ts:336-344`）。也就是说：房间共享组件（例如有人放的 Board 位置）
-对**每个** agent 都可编辑，包括 `remove` 和 `reset`。
-
-同时错误文案是 "Another member's information instance may only be preserved or moved"
-（`information-layout.ts:436-438`），会让人以为房间级组件受保护——实际不受。
-
-建议：room 级组件也要有 `authoredBy`，人放的组件对 agent 只读（允许 move）；文案与实现一致。
-
-### F4 `reset` 的实际效果是“隐藏”，不是“删除”，但返回里没有区别
+### F3 `reset` 的实际效果是“隐藏”，不是“删除”，但返回里没有区别
 
 `reset` 把未出现在默认布局里的组件改成 `visible: false` 并留在数组尾部
 （`information-layout.ts:291-314`）。这是合理实现（可恢复），但 agent 的读模型里只能看到
@@ -108,13 +89,13 @@ Room 里 `source: "room"` 的组件 binding 是 `{kind: "owner"}`
 加一个 `hiddenByReset`/`origin` 事实，否则 agent 会反复 add 已存在的组件（Board 尤其明显：
 `add` 会受到 `Duplicate Board document placement` 拒绝，`information-layout.ts:286-289`）。
 
-### F5 `authorizedScopes` 静默截断到 101
+### F4 `authorizedScopes` 静默截断到 101
 
 `sidebar-tool-scope.ts:68`：`choices.slice(0, 101)`。房间数超过 100 时，agent 看到的
 授权 scope 列表被悄悄截断，且没有 `truncated` 标记。仓库里其他有界列表（browser observation、
 trigger 列表等）都会显式标注截断，这里不一致。建议加 `scopeTruncated: true`。
 
-### F6 非问题，但值得写进文档：默认 scope 可能直接落在共享 Room
+### F5 非问题，但值得写进文档：默认 scope 可能直接落在共享 Room
 
 当调用者是某个 Room 的唯一 dedicated assistant 时，不带 scope 默认操作该 Room
 （`sidebar-tool-scope.ts:56-59`）。read 会返回 `defaultReason`，update 又必须带 read 的
@@ -122,7 +103,7 @@ snapshot，所以链路是可解释的；但这个默认值意味着“agent 第
 建议：在 `ui-ux.md` 的侧栏章节把这条默认值与 F1 的展示态问题一起写明，
 避免以后被当成实现细节改掉。
 
-### F7 插件面板：agent 能开，但不能代表插件执行
+### F6 插件面板：agent 能开，但不能代表插件执行
 
 `plugin` tab 只是 `pluginId + panelId` 的引用（`thread-sidebar-state.ts:17`），
 工具文案承诺 "No provider content/action or foreground change occurs"。
@@ -132,17 +113,13 @@ snapshot，所以链路是可解释的；但这个默认值意味着“agent 第
 
 ## 4. 结论与后续
 
-- 能力面（scope、CAS、资源绑定、组件编辑权）设计是合理的，问题集中在**归属**：
-  我们缺“谁写的”这一维（tab、room 级组件、reset 隐藏），于是“只归人的东西”在数据上不存在，
-  只能靠文案自律。
-- F1 是唯一会直接影响他人的问题（改房间共享展示态），建议优先决策。
-- F2/F3/F4 是同一条根因（缺 `authoredBy`），适合一个 PR 一起做。
-- F5 是一个独立的小修，可以随时做。
-
-需要用户决策的点：
-
-1. 侧栏 presentation（open/fullscreen/selectedTab）是 per-viewer 还是 room-shared？（F1）
-2. 人添加的 tab / room 级组件对 agent 是否只读（只允许 move）？（F2、F3）
-
-在这两个问题有结论之前，我没有改动任何产品行为：任何一处都会改变 agent 可见契约或
-人类可见交互，属于必须由用户拍板的范围。
+- 语义层没有需要改的地方：Room 侧栏是房间自己的共享状态（`ui-ux.md` 已定），
+  agent 与人操作同一份状态，删除人加的标签/组件是正常能力，不需要按作者加只读保护。
+  能力面（scope、CAS、资源绑定、组件编辑权）经逐条核对也是自洽的。
+- 真正的缺口是**告知**：agent 原先拿不到“我在改共享状态”这一事实，容易把
+  “不抢焦点”误读成“只影响自己”。本 PR 已修模型侧与 Host 侧描述，并把语义写进 `ui-ux.md`。
+- 仍然成立的小问题：F3（`reset` 的效果是隐藏，读模型里与删除不可区分，会让 agent
+  重复 add 已存在的组件）、F4（`authorizedScopes` 静默截断到 101，缺 `truncated` 标记）。
+  这两个都不涉及共享语义，可以随时单独修。
+- F5（默认 scope 落在共享 Room）与 F6（插件面板不触发 provider 执行）已写进文档作为固定事实，
+  避免以后被当成实现细节改掉。
