@@ -1321,7 +1321,8 @@ export class AgentRuntime {
       if (failure !== undefined) {
         for (const [reasoningId, partialId] of reasoningItems) {
           const partial = reasoningDeltas.get(reasoningId)!;
-          if (!partial.content && !partial.summary) continue;
+          // Even a text-free provider lifecycle is an observed interrupted
+          // item. The incomplete trace remains displayable but never replays.
           const snapshot: ReasoningItem = {
             id: partialId,
             threadId: options.thread.id,

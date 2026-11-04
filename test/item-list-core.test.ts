@@ -97,6 +97,47 @@ test("empty observed assistant/tool text is legal and raw rendering annotations 
   );
 });
 
+test("empty reasoning observations never become semantic input or selected token context", () => {
+  for (const summary of [undefined, ""]) {
+    assert.deepEqual(
+      contextItemsFromLegacy({
+        ...base,
+        type: "reasoning",
+        reasoningContent: "",
+        contentVisibility: "public",
+        ...(summary === undefined ? {} : { summary }),
+      }),
+      [],
+    );
+    const existing: ContextItem = {
+      ...base,
+      source: { kind: "reasoning", sequence: 0 },
+      kind: "reasoning",
+      role: "assistant",
+      content: {
+        text: "",
+        visibility: "public",
+        ...(summary === undefined ? {} : { summary }),
+      },
+    };
+    assert.deepEqual(compileItemList([existing]), {
+      messages: [],
+      tools: [],
+      selectedItemIds: [],
+    });
+  }
+  assert.equal(
+    contextItemsFromLegacy({
+      ...base,
+      type: "reasoning",
+      reasoningContent: "",
+      contentVisibility: "public",
+      summary: "public summary",
+    }).length,
+    1,
+  );
+});
+
 test("partial samples and nested tool lifecycle are not semantic history", () => {
   assert.deepEqual(
     contextItemsFromLegacy({

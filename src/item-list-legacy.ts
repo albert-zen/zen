@@ -299,6 +299,14 @@ export function contextItemsFromLegacy(
     }
     case "reasoning": {
       if (item.incomplete) return [];
+      // Presence without any public content or continuation belongs to Trace,
+      // not model-semantic context. Keep the original observation for the UI.
+      if (
+        item.contentVisibility === "public" &&
+        item.reasoningContent === "" &&
+        (item.summary === undefined || item.summary === "")
+      )
+        return [];
       const start = previous.findLast(
         (candidate) =>
           candidate.type === "turn_started" && candidate.turnId === item.turnId,

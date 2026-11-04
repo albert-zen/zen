@@ -506,7 +506,7 @@ test("sends a native Codex Responses request and maps SSE output", async () => {
   assert.equal(JSON.stringify(body.input).includes("encrypted_content"), false);
 });
 
-test("ignores an empty subscription reasoning output without opening a lifecycle", async () => {
+test("preserves an empty subscription reasoning output as a completed observation", async () => {
   const adapter = new OpenAiSubscriptionModel({
     acquireAccessLease: async () => ({ accessToken: secretAccessToken }),
     fetch: async () =>
@@ -533,6 +533,13 @@ test("ignores an empty subscription reasoning output without opening a lifecycle
   });
 
   assert.deepEqual(await collect(adapter.stream(request())), [
+    { type: "reasoning_started", reasoningId: "reasoning:0" },
+    {
+      type: "reasoning",
+      reasoningId: "reasoning:0",
+      reasoningContent: "",
+      contentVisibility: "public",
+    },
     { type: "usage", inputTokens: 3, outputTokens: 0 },
   ]);
 });
