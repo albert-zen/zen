@@ -1,0 +1,70 @@
+{
+  "productCommit": "592d49c752fd7727b3503a0ef0f9ead85fd36bff",
+  "productTree": "2ae2706257381ab722fc675bfe3a94d8f15422cd",
+  "evidenceHead": "ec1ac7aab49f442eed74469c78dbd2af4ddd6063",
+  "evidenceMerge": "76423421f152a9a2bee200922bc6b38266755c66",
+  "evidenceTree": "32b485fca5d2d2fbd61d3da0d29f1b992735e08c",
+  "workflowRun": 41779667195,
+  "job": 126408091003,
+  "artifact": 13298372945,
+  "zipBytes": 215916,
+  "zipSha256": "ad923bb4b5106f410ce353b807ead97455d8b23ad12e59337d1aa0c7b5225a15",
+  "scope": "Production Electron App, preload and child Host with synthetic owned images and offline fake provider. Product and evidence trees differ only in five workflow/driver files; all production sources and dependencies are identical.",
+  "verified": {
+    "trackedSourceSha256": 20,
+    "pngSha256AndDimensions": 3,
+    "actualImagesViewed": 3,
+    "noImagePreparationCard": true,
+    "original2048PreviewAndFocusReturn": true,
+    "coldOriginalBytesAndSemanticHistoryUnchanged": true,
+    "realModelInputSamples": 4,
+    "unavailableModelSamples": 2,
+    "normalExitCode": 0,
+    "fixtureCleanedAfterHostShutdown": true
+  },
+  "recordedBuildManifestHashes": 363,
+  "buildManifestLimit": "The artifact records build hashes; compiled bundle bytes are not included for independent recomputation.",
+  "limitations": [
+    "Synthetic images and fake provider, no live account or HTTP transport acceptance.",
+    "No live Desktop upload/preparation, Windows or packaged-distribution acceptance.",
+    "Mounted blob identity is not directly measured; no CSP/read permission was expanded.",
+    "Chromium decodes the Host-unavailable original at 1x1; this does not exercise the browser error-placeholder path.",
+    "Narrow title crowding is visible and is not a new change in this removal."
+  ],
+  "retainedFailedRuns": [
+    41776827858,
+    41778497965
+  ],
+  "images": [
+    {
+      "path": "docs/images/remove-image-card-20261104/desktop-prepared.png",
+      "source": "01-prepared-desktop-en-light.png",
+      "sha256": "77efcf8ec9a7431a9883970b45160e1474259ec2c7fb717ef20d7f8c9c3bb32e",
+      "bytes": 87582,
+      "dimensions": [
+        1100,
+        820
+      ]
+    },
+    {
+      "path": "docs/images/remove-image-card-20261104/desktop-model-unavailable.png",
+      "source": "02-unavailable-desktop-en-light.png",
+      "sha256": "e83e7845b0fd0e8c4a91df1cda5bea4409425bd9565281d9e59d0230d779bac4",
+      "bytes": 88483,
+      "dimensions": [
+        1100,
+        820
+      ]
+    },
+    {
+      "path": "docs/images/remove-image-card-20261104/narrow-model-unavailable-zh.png",
+      "source": "03-unavailable-narrow-zh-dark.png",
+      "sha256": "a2e827c3ef8faf5641d4c48e0b41f9cba1f1457c27434e2e306a01f071e8b8ee",
+      "bytes": 28620,
+      "dimensions": [
+        390,
+        600
+      ]
+    }
+  ]
+}
