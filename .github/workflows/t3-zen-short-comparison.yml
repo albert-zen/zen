@@ -29,6 +29,7 @@ jobs:
         run: |
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
+          test "$(git -C product rev-parse HEAD)" = 1d6ac2794ce198acaf6259a93693154ad5b94753
           test "$(git -C product rev-parse 'HEAD^{tree}')" = db349a545c3f6502a6babb291314224c1708e5f6
           test -z "$(git -C product diff --name-only HEAD)"
           node --check diagnostic/apps/zenx/scripts/t3-comparison/launch-official-t3.mjs
