@@ -493,7 +493,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/zenx-dotnet-candidate
         with:
-          dotnet-version: 10.0.401
+          dotnet-version: 10.0.403
       - name: Validate downstream build and assembly contracts
         run: node --test apps/zenx/test/winapp-downstream-build.test.mjs apps/zenx/test/winapp-downstream-assembly.test.mjs apps/zenx/test/winapp-downstream-symbols.test.mjs
       - name: Build one native provider for this authorized app-build run

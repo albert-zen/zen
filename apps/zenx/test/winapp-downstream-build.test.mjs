@@ -214,21 +214,21 @@ test("SDK runtime resolution is bound to the same framework, RID and version bef
     },
     Items: {
       RuntimeFramework: [
-        { Identity: "Microsoft.NETCore.App", Version: "10.0.12" },
+        { Identity: "Microsoft.NETCore.App", Version: "10.0.14" },
       ],
       RuntimePack: [
         {
           Identity: "Microsoft.NETCore.App.Runtime.win-x64",
           FrameworkName: "Microsoft.NETCore.App",
           RuntimeIdentifier: "win-x64",
-          NuGetPackageVersion: "10.0.12",
+          NuGetPackageVersion: "10.0.14",
         },
       ],
     },
   };
   assert.equal(
     parseRuntimeResolution(JSON.stringify(resolution), lock).runtimeVersion,
-    "10.0.12",
+    "10.0.14",
   );
   const changes = [
     (r) => {
@@ -245,6 +245,12 @@ test("SDK runtime resolution is bound to the same framework, RID and version bef
     },
     (r) => {
       r.Items.RuntimeFramework[0].Version = "10.0.11";
+    },
+    (r) => {
+      r.Items.RuntimeFramework[0].Version = "10.0.12";
+    },
+    (r) => {
+      r.Items.RuntimePack[0].NuGetPackageVersion = "10.0.12";
     },
     (r) => {
       r.Items.RuntimePack[0].NuGetPackageVersion = "10.0.13";
@@ -440,7 +446,7 @@ test("reviewed NuGet closure is frozen as the exact CI-produced bytes", async ()
   assert.equal(bytes.length, 13704);
   assert.equal(
     digest(bytes),
-    "33e2b9b7fad15c4b582be384306f769ead57ac17cfc598672c3d361a54e4860a",
+    "5a2ccda657a74e12dddd30d81c056b89c0581f9fd62efced20a37c5aa13e1019",
   );
   assert.ok(bytes.includes(Buffer.from("\r\n")));
   assert.equal(lock.dependencyLock.sha256, digest(bytes));
@@ -449,6 +455,36 @@ test("reviewed NuGet closure is frozen as the exact CI-produced bytes", async ()
     "utf8",
   );
   assert.doesNotMatch(script, /--use-lock-file/u);
+});
+
+test("patched compiler closure and both workflow SDKs match the reviewed security pin", async () => {
+  assert.equal(lock.dotnetSdk, "10.0.403");
+  assert.equal(lock.runtimeVersion, "10.0.14");
+  const closure = JSON.parse(
+    await readFile(path.join(root, lock.dependencyLock.path), "utf8"),
+  );
+  let compilers = 0;
+  for (const packages of Object.values(closure.dependencies)) {
+    for (const [name, dependency] of Object.entries(packages)) {
+      if (
+        name === "Microsoft.DotNet.ILCompiler" ||
+        name === "runtime.win-x64.Microsoft.DotNet.ILCompiler" ||
+        name === "Microsoft.NET.ILLink.Tasks"
+      ) {
+        assert.equal(dependency.resolved, lock.runtimeVersion);
+        compilers++;
+      }
+    }
+  }
+  assert.equal(compilers, 4);
+  for (const name of ["ci.yml", "zenx-winapp-downstream.yml"]) {
+    const workflow = await readFile(
+      path.join(root, ".github/workflows", name),
+      "utf8",
+    );
+    assert.ok(workflow.includes(`dotnet-version: ${lock.dotnetSdk}`));
+    assert.doesNotMatch(workflow, /dotnet-version: 10\.0\.401/u);
+  }
 });
 
 test("new patch paths require absence from the exact source commit", async (t) => {
