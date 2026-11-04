@@ -18,10 +18,9 @@ assert.equal(
   "true",
   "Disposable hosted runner only",
 );
-assert.equal(
-  process.platform,
-  "darwin",
-  "Existing macOS capture permission only",
+assert.ok(
+  ["darwin", "win32"].includes(process.platform),
+  "Supported owned-window capture platform",
 );
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "zen-overlay-evidence-"));
 app.setPath("userData", profile);
@@ -87,8 +86,12 @@ async function capture(name, expected) {
 }
 (async () => {
   await app.whenReady();
-  receipt.screenPermission = systemPreferences.getMediaAccessStatus("screen");
-  if (receipt.screenPermission !== "granted") {
+  receipt.platform = process.platform;
+  receipt.screenPermission =
+    process.platform === "darwin"
+      ? systemPreferences.getMediaAccessStatus("screen")
+      : "no-macOS-permission-API";
+  if (process.platform === "darwin" && receipt.screenPermission !== "granted") {
     receipt.status = "blocked-existing-screen-permission-unavailable";
     return;
   }

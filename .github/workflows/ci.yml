@@ -6,8 +6,11 @@ permissions:
 jobs:
   native-overlay-evidence:
     if: github.head_ref == 'evidence/preview-native-overlap-20261104'
-    runs-on: macos-latest
+    runs-on: windows-latest
     timeout-minutes: 12
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
