@@ -1,0 +1,9 @@
+{
+  "name": "zenx-playwright-target-experiment",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Opt-in Playwright transport experiment; not imported by the production app",
+  "dependencies": {
+    "playwright-core": "1.62.1"
+  }
+}
