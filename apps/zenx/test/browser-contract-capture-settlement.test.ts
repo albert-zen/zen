@@ -93,3 +93,24 @@ test("contract capture fails boundedly and never retries an exception or fallbac
   }));
   await assert.rejects(fallback.invoke(), /fallback/);
 });
+
+test("hidden-page frame smoke never waits for suspended animation frames", async () => {
+  const source = await readFile(
+    new URL("../src/main/browser-parallel-input-smoke.ts", import.meta.url),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "smoke.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const smoke = parsed.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      node.name?.text === "runTargetedInputContractSmoke",
+  );
+  assert.ok(smoke);
+  assert.doesNotMatch(smoke.getText(parsed), /requestAnimationFrame/);
+  assert.match(smoke.getText(parsed), /assert\.equal\(reopenedScroll, 20\)/);
+});

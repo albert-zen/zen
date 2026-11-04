@@ -787,9 +787,14 @@ export async function runTargetedInputContractSmoke(options: {
           pair: await paired("key", "text-a"),
         });
         const beforeScroll = await inspect();
-        await rpc.evaluate(
-          "(async () => { document.querySelector('#contract-frame').contentWindow.scrollTo(0, 20); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()",
+        options.onPhase?.("input-contracts:same-origin-frame:reopened-scroll");
+        // This page is deliberately hidden: animation frames may be suspended.
+        // Read actual scroll geometry synchronously; the provider's next probe
+        // must reject the old capture without a timer or synthetic event.
+        const reopenedScroll = await rpc.evaluate<number>(
+          "(() => { const child = document.querySelector('#contract-frame').contentWindow; child.scrollTo(0, 20); return child.scrollY; })()",
         );
+        assert.equal(reopenedScroll, 20);
         cases.push(
           await rejected(
             "reopened-child-scroll-stales-capture",
