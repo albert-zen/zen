@@ -9,7 +9,7 @@ clipboard handler, or native command path are changed.
 
 - `segments.mjs`: canonical partition, static host-DOM clone/prune candidates,
   incremental interior replacement, endpoint-containing segment protection.
-- `segments.test.mjs`: seven JSDOM structural/Range tests.
+- `segments.test.mjs`: eight JSDOM structural/Range tests.
 - `README.md`: boundary and integration notes.
 
 From the repository root, run:
@@ -50,7 +50,7 @@ selection rebuild or copy substitution.
    and all text ancestors. Equal textContent is verified; exact native rendered
    text and clipboard are **not**. Changing even empty layout boxes can change
    browser boundary behavior. This candidate is not safe to enable yet.
-3. **Flat gap text** (next fixture): one rendered pre-wrapped text node per gap,
+3. **Flat gap text** (separate browser fixture): one rendered pre-wrapped text node per gap,
    using a captured baseline native string solely to isolate boundary behavior.
    This is an oracle-driven experiment, not a proposed product serializer.
 
@@ -85,3 +85,11 @@ scroll while selected, repeated Select All, narrowing, cancel/editor focus,
 sidebar/multiple transcript selection, anchor restoration, and visible native
 highlights. If a presentation has no exact projection, preserve the existing
 full-DOM path rather than silently changing text or order.
+
+## Separate browser mechanism fixture
+
+`BROWSER.md` documents the optional generated standalone fixture and its limits.
+The published first checkpoint remains independent of that fixture. The eighth
+structural test verifies that filling every gap in place retains the viewport,
+visible row and Selection endpoint identities; it does not validate the timing
+of an actual pointer or keyboard event in Chromium.

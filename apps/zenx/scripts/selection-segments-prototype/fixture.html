@@ -1,0 +1,732 @@
+<!doctype html><meta charset="utf-8"><title>Native selection segment mechanism fixture</title>
+<style>
+:root { --font-size-caption:12px; --color-text-primary:#222; --text-3:#555; --text-2:#333; --color-border:#ddd; --color-surface-elevated:#f5f5f5; --color-surface-wash:#fff; --surface-2:#eee; --border:#ccc; --border-soft:#ddd; --surface-inset:#fafafa; }
+body { margin:20px; font:14px system-ui; } .fixture-toolbar { margin-bottom:12px; display:flex; gap:8px; align-items:center; } .fixture-note { max-width:850px; } #viewport { height:540px; overflow:auto; border:1px solid #aaa; padding:12px; width:800px; max-width:calc(100vw - 70px); overflow-anchor:none; } .fixture-row { padding-bottom:20px; box-sizing:border-box; } .projection-gap { position:relative; overflow:clip; } .projection-body { position:absolute; inset:0; } .flat-gap { white-space:pre-wrap; margin:0; font:inherit; } #result { white-space:pre-wrap; } ::selection { background:#86b7ef; color:#111; }
+
+.turn {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.user-row {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  padding-left: 18%;
+}
+.user-bubble {
+  min-width: 0;
+  max-width: min(700px, 100%);
+  padding: 12px 15px;
+  border: 1px solid var(--color-border);
+  border-radius: 15px 15px 5px 15px;
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.55;
+  box-shadow: inset 0 1px var(--color-surface-wash);
+}
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 700px;
+  margin-bottom: 6px;
+}
+.image-thumbnail {
+  width: 100%;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-control);
+  border-radius: 9px;
+  background: var(--surface-inset);
+  color: var(--text-3);
+  cursor: pointer;
+}
+.image-thumbnail:not(:disabled):hover {
+  border-color: var(--border-focus);
+}
+.image-thumbnail:focus-visible,
+.remove-draft-image:focus-visible {
+  outline: 1px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.image-thumbnail img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.message-images .image-thumbnail {
+  width: 120px;
+  aspect-ratio: 4 / 3;
+}
+.image-placeholder {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  font-size: var(--font-size-caption);
+}
+.turn-running-label,
+.turn-toggle {
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 6px;
+  border-radius: 8px;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  line-height: 20px;
+}
+.turn-running-label > svg,
+.turn-toggle > svg {
+  flex: 0 0 auto;
+}
+.turn-usage {
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.turn-toggle {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.turn-toggle:hover {
+  color: var(--text-2);
+  background: var(--surface-wash);
+}
+.turn-toggle > svg:last-child {
+  transform: rotate(-90deg);
+  transition: transform 180ms ease;
+}
+.turn-toggle[aria-expanded="true"] > svg:last-child {
+  transform: rotate(0);
+}
+.turn-history {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.turn-final {
+  width: 100%;
+  min-width: 0;
+}
+.turn-terminal {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.agent-copy {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.68;
+}
+.message-actions {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+  transition: opacity 140ms ease;
+}
+.assistant-message-actions {
+  margin-top: 8px;
+}
+.user-row:hover .message-actions,
+.user-row:focus-within .message-actions,
+.agent-copy:hover .message-actions,
+.agent-copy:focus-within .message-actions {
+  opacity: 1;
+}
+.message-actions button {
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+}
+.message-actions button:hover,
+.message-actions button:focus-visible {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.message-actions:has(.message-fork-error),
+.message-actions:has(.message-fork[aria-busy="true"]) {
+  opacity: 1;
+}
+.message-actions:has(.message-fork) {
+  flex-wrap: wrap;
+}
+.message-actions button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.message-fork-error {
+  flex-basis: 100%;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+@media (hover: none), (pointer: coarse) {
+  .message-actions {
+    opacity: 1;
+  }
+  .message-actions button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+.message-time,
+.message-cache {
+  white-space: nowrap;
+}
+.message-cache {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trace-detail-markdown {
+  font-family: inherit;
+  white-space: normal;
+}
+.trace-detail-markdown .markdown-body {
+  font-size: var(--font-size-caption);
+  line-height: 1.6;
+}
+.trace-detail-markdown .markdown-body > :first-child {
+  margin-top: 0;
+}
+.trace-detail-markdown .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.trace-detail-markdown .markdown-body code,
+.trace-detail-markdown .markdown-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.agent-copy .markdown-body > :first-child,
+.user-bubble .markdown-body > :first-child {
+  margin-top: 0;
+}
+.agent-copy .markdown-body > :last-child,
+.user-bubble .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.markdown-body p {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 18px 0 8px;
+  line-height: 1.3;
+}
+.markdown-body h1 {
+  font-size: 20px;
+}
+.markdown-body h2 {
+  font-size: 17px;
+}
+.markdown-body h3 {
+  font-size: 15px;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+}
+.markdown-body blockquote {
+  margin: 12px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-2);
+}
+.markdown-body code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+}
+.markdown-code {
+  margin: 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-inset);
+}
+.markdown-code-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-3);
+  font-size: var(--font-size-caption);
+}
+.markdown-code-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.markdown-code-header button {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+}
+.markdown-code pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  padding: 12px 14px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.markdown-code code {
+  padding: 0;
+  background: transparent;
+}
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.markdown-body a {
+  color: var(--text-accent);
+}
+
+</style>
+<p class="fixture-note">Synthetic standalone fixture using actual ZenX Markdown HTML and literal relevant product CSS. Not the full product, native menu bridge, clipboard acceptance, or a React performance benchmark. The buttons below are test instrumentation only.</p>
+<div class="fixture-toolbar"><button id="run">Compare all candidates</button><button id="full">Reset full</button><button id="host">Host gap</button><button id="pruned">Pruned gap</button><button id="flat">Flat gap</button><button id="select">Select fixture</button><input id="editor" value="local editor draft"></div>
+<div id="viewport"><div id="transcript"></div></div><pre id="result"></pre>
+<script>/* Isolated mechanism, not product code. No clipboard listener or Selection override. */
+function planSegments(keys, retainedKeys, protectedGaps = []) {
+  if (new Set(keys).size !== keys.length) throw new Error("Duplicate row key");
+  const retained = new Set(retainedKeys);
+  const locked = new Map(protectedGaps.map((gap) => [gap.start, gap]));
+  const output = [];
+  for (let index = 0; index < keys.length;) {
+    const pinned = locked.get(index);
+    if (pinned) {
+      output.push({
+        ...pinned,
+        kind: "gap",
+        id: `gap:${pinned.start}:${pinned.end}`,
+      });
+      index = pinned.end;
+    } else if (retained.has(keys[index])) {
+      output.push({
+        kind: "row",
+        id: `row:${keys[index]}`,
+        start: index,
+        end: index + 1,
+      });
+      index++;
+    } else {
+      const start = index++;
+      while (
+        index < keys.length &&
+        !retained.has(keys[index]) &&
+        !locked.has(index)
+      )
+        index++;
+      output.push({
+        kind: "gap",
+        id: `gap:${start}:${index}`,
+        start,
+        end: index,
+      });
+    }
+  }
+  return output;
+}
+
+function cloneProjection(source, mode = "host") {
+  const clone = source.cloneNode(true);
+  // cloneNode copies DOM, not React state/listeners. Removing a host element is
+  // a separately tested hypothesis, never an assumed serialization invariant.
+  if (mode === "pruned") {
+    for (const node of clone.querySelectorAll("svg,button")) {
+      if (!node.textContent && !node.querySelector("img,input,textarea,select"))
+        node.remove();
+    }
+  }
+  return clone;
+}
+
+function containsBoundary(node, boundary) {
+  return boundary !== null && (node === boundary || node.contains(boundary));
+}
+
+function protectedSegments(container, selection) {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
+    return [];
+  return [...container.children].filter(
+    (node) =>
+      containsBoundary(node, selection.anchorNode) ||
+      containsBoundary(node, selection.focusNode),
+  );
+}
+
+/**
+ * Apply a new ordered partition without moving any surviving DOM node. A stable
+ * end sentinel or real boundary row keeps a page-wide Range across insertions.
+ * Endpoint-containing gaps are indivisible until the native selection changes.
+ */
+function applySegments(container, plan, createNode, selection) {
+  const before = [...container.children];
+  const byId = new Map(before.map((node) => [node.dataset.segmentId, node]));
+  const desired = new Set(plan.map((part) => part.id));
+  const protectedNodes = protectedSegments(container, selection);
+  if (protectedNodes.some((node) => !desired.has(node.dataset.segmentId))) {
+    throw new Error("Refusing to replace a live Selection endpoint segment");
+  }
+  for (let index = 0; index < plan.length; index++) {
+    const part = plan[index];
+    if (byId.has(part.id)) continue;
+    const next =
+      plan
+        .slice(index + 1)
+        .map((item) => byId.get(item.id))
+        .find(Boolean) ?? null;
+    const node = createNode(part);
+    node.dataset.segmentId = part.id;
+    node.dataset.segmentStart = String(part.start);
+    node.dataset.segmentEnd = String(part.end);
+    container.insertBefore(node, next);
+    byId.set(part.id, node);
+  }
+  for (const node of before) {
+    if (!desired.has(node.dataset.segmentId)) node.remove();
+  }
+  const actual = [...container.children].map((node) => node.dataset.segmentId);
+  if (actual.join("\0") !== plan.map((part) => part.id).join("\0")) {
+    throw new Error(
+      "Existing DOM order changed; reordering is intentionally unsupported",
+    );
+  }
+}
+
+function selectionSnapshot(document) {
+  const selection = document.getSelection();
+  return selection
+    ? {
+        anchorNode: selection.anchorNode,
+        anchorOffset: selection.anchorOffset,
+        focusNode: selection.focusNode,
+        focusOffset: selection.focusOffset,
+        text: selection.toString(),
+        collapsed: selection.isCollapsed,
+      }
+    : null;
+}
+
+function sameEndpoints(left, right) {
+  return (
+    !!left &&
+    !!right &&
+    ["anchorNode", "anchorOffset", "focusNode", "focusOffset"].every(
+      (name) => left[name] === right[name],
+    )
+  );
+}
+
+function firstDifference(expected, actual) {
+  if (expected === actual) return null;
+  let index = 0;
+  while (index < expected.length && expected[index] === actual[index]) index++;
+  return {
+    index,
+    expectedLength: expected.length,
+    actualLength: actual.length,
+    expected: expected.slice(Math.max(0, index - 24), index + 48),
+    actual: actual.slice(Math.max(0, index - 24), index + 48),
+  };
+}
+
+const rowHTML = ["\u003cdiv class=\"fixture-row\" data-row-key=\"0\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Simple user message\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cp>Simple agent answer.\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"1\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Line one\nLine two\u003c/p>\n\u003cp>Second paragraph\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cp>\u003cstrong>Bold\u003c/strong> and \u003cem>emphasis\u003c/em>, then \u003ccode>code\u003c/code>.\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"2\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>List request\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cul>\n\u003cli>first\u003c/li>\n\u003cli>second\u003c/li>\n\u003c/ul>\n\u003col>\n\u003cli>ordered\u003c/li>\n\u003cli>again\u003c/li>\n\u003c/ol>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"3\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Table request\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cdiv class=\"markdown-table-wrap\">\u003ctable>\u003cthead>\u003ctr>\u003cth>Name\u003c/th>\u003cth>Value\u003c/th>\u003c/tr>\u003c/thead>\u003ctbody>\u003ctr>\u003ctd>Alpha\u003c/td>\u003ctd>1\u003c/td>\u003c/tr>\u003ctr>\u003ctd>Beta\u003c/td>\u003ctd>2\u003c/td>\u003c/tr>\u003c/tbody>\u003c/table>\u003c/div>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"4\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Code request\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cdiv class=\"markdown-code\">\u003cdiv class=\"markdown-code-header\">\u003cspan>ts\u003c/span>\u003cspan class=\"markdown-code-actions\">\u003cbutton type=\"button\">Copy\u003c/button>\u003c/span>\u003c/div>\u003cpre>\u003ccode>const a = 1;\n  const b = 2;\u003c/code>\u003c/pre>\u003c/div>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"5\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Quote request\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cblockquote>\n\u003cp>quoted text\nnext line\u003c/p>\n\u003c/blockquote>\n\u003cp>\u003ca href=\"https://example.com/\" rel=\"noreferrer\" target=\"_blank\">Example\u003c/a>\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"6\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Unicode: 中 文 🙂\u003c/p>\n\u003cp>Trailing  spaces\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003cp>NBSP: A B and tab:\tend.\u003c/p>\n\u003cp>Last paragraph.\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>","\u003cdiv class=\"fixture-row\" data-row-key=\"7\">\u003csection class=\"turn completed\">\u003carticle class=\"user-row\" tabindex=\"-1\">\u003cdiv class=\"user-bubble\">\u003cdiv class=\"markdown-body\">\u003cp>Empty final response\u003c/p>\u003c/div>\u003c/div>\u003cdiv class=\"message-actions user-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003cbutton class=\"turn-toggle\" type=\"button\" aria-expanded=\"false\">\u003cspan class=\"turn-work-label\">Worked for 1s\u003c/span>\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003cdiv class=\"turn-final\">\u003carticle class=\"agent-copy\" tabindex=\"-1\">\u003cdiv data-message-quote-body>\u003cdiv class=\"markdown-body\">\u003c/div>\u003c/div>\u003cspan class=\"stream-cursor\">\u003c/span>\u003cdiv class=\"message-actions assistant-message-actions\">\u003ctime class=\"message-time\" datetime=\"2026-11-04T12:00:00Z\">12:00\u003c/time>\u003cspan class=\"message-cache\">cache 50%\u003c/span>\u003cbutton class=\"message-copy\" type=\"button\" aria-label=\"Copy\">\u003csvg aria-hidden=\"true\" width=\"14\" height=\"14\">\u003cpath d=\"M2 2h8v8H2z\" fill=\"none\" stroke=\"currentColor\"/>\u003c/svg>\u003c/button>\u003c/div>\u003c/article>\u003c/div>\u003c/section>\u003c/div>"];
+/* Browser-only instrumentation. This file does not register key/copy handlers. */
+(() => {
+  const viewport = document.querySelector("#viewport");
+  const container = document.querySelector("#transcript");
+  const result = document.querySelector("#result");
+  const selection = () => document.getSelection();
+  let rows = [],
+    keys = [],
+    heights = [],
+    tops = [],
+    baseline = "",
+    mode = "full";
+  let baselineHostCounts,
+    retained = [],
+    busy = false;
+  const flatOracle = new Map();
+  const nativeSlice = (start, end) => {
+    const range = document.createRange();
+    range.setStartBefore(rows[start]);
+    range.setEndAfter(rows[end - 1]);
+    selection().removeAllRanges();
+    selection().addRange(range);
+    return selection().toString();
+  };
+  const counts = (root = container) => ({
+    elements: root.querySelectorAll("*").length,
+    buttons: root.querySelectorAll("button").length,
+    textCharacters: root.textContent.length,
+  });
+  const pick = (center) =>
+    [...new Set([0, center - 1, center, center + 1, rows.length - 1])]
+      .filter((index) => index >= 0 && index < rows.length)
+      .map(String);
+  const reset = () => {
+    selection().removeAllRanges();
+    container.innerHTML = Array.from(
+      { length: 24 },
+      (_, index) => rowHTML[index % rowHTML.length],
+    ).join("");
+    rows = [...container.children];
+    keys = rows.map((row, index) => {
+      row.dataset.rowKey = String(index);
+      row.dataset.segmentId = `row:${index}`;
+      row.dataset.segmentStart = String(index);
+      row.dataset.segmentEnd = String(index + 1);
+      return String(index);
+    });
+    heights = rows.map((row) => row.getBoundingClientRect().height);
+    tops = heights.map((_, i) =>
+      heights.slice(0, i).reduce((a, b) => a + b, 0),
+    );
+    baselineHostCounts = counts();
+    baseline = nativeSlice(0, rows.length);
+    // Capture every possible contiguous gap once, only in this oracle fixture.
+    // Product projection has no such oracle for never-mounted historical rows.
+    flatOracle.clear();
+    for (let start = 0; start < rows.length; start++) {
+      for (let end = start + 1; end <= rows.length; end++) {
+        flatOracle.set(`${start}:${end}`, nativeSlice(start, end));
+      }
+    }
+    selection().removeAllRanges();
+    mode = "full";
+    retained = keys;
+    viewport.scrollTop = tops[12];
+    return { baseline, baselineHostCounts };
+  };
+  const make = (part) => {
+    if (part.kind === "row") return rows[part.start];
+    const gap = document.createElement("div");
+    gap.className = "projection-gap";
+    gap.style.height = `${heights.slice(part.start, part.end).reduce((a, b) => a + b, 0)}px`;
+    const body = document.createElement("div");
+    body.className = "projection-body";
+    if (mode === "flat") {
+      const pre = document.createElement("pre");
+      pre.className = "flat-gap";
+      pre.textContent = flatOracle.get(`${part.start}:${part.end}`);
+      body.append(pre);
+    } else {
+      for (let index = part.start; index < part.end; index++)
+        body.append(cloneProjection(rows[index], mode));
+    }
+    gap.append(body);
+    return gap;
+  };
+  const update = (next) => {
+    const snapshot = selectionSnapshot(document);
+    const locked = protectedSegments(container, selection());
+    const protectedGaps = locked
+      .filter((node) => node.classList.contains("projection-gap"))
+      .map((node) => ({
+        start: Number(node.dataset.segmentStart),
+        end: Number(node.dataset.segmentEnd),
+      }));
+    const pinnedRows = locked
+      .filter((node) => node.dataset.rowKey !== undefined)
+      .map((node) => node.dataset.rowKey);
+    retained = [...new Set([...next, ...pinnedRows])];
+    applySegments(
+      container,
+      planSegments(keys, retained, protectedGaps),
+      make,
+      selection(),
+    );
+    const after = selectionSnapshot(document);
+    return {
+      endpointsSame: sameEndpoints(snapshot, after),
+      difference: firstDifference(snapshot?.text ?? "", after?.text ?? ""),
+    };
+  };
+  const activate = (candidate) => {
+    reset();
+    mode = candidate;
+    update(pick(12));
+    return {
+      mode,
+      baselineCounts: baselineHostCounts,
+      candidateCounts: counts(),
+    };
+  };
+  const select = () => {
+    const range = document.createRange();
+    range.setStartBefore(container.firstElementChild);
+    range.setEndAfter(container.lastElementChild);
+    selection().removeAllRanges();
+    selection().addRange(range);
+    return selection().toString();
+  };
+  const verify = (candidate) => {
+    const metrics = activate(candidate);
+    const initial = select();
+    // Use actual first/last text nodes so the DOM-only mechanism deliberately
+    // exercises stable endpoints. This is not the product's Cocoa Select All.
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const all = [];
+    while (walker.nextNode()) all.push(walker.currentNode);
+    selection().setBaseAndExtent(all[0], 0, all.at(-1), all.at(-1).length);
+    const selectedBefore = selectionSnapshot(document);
+    const middleBefore = rows[12];
+    const movement = update(pick(18));
+    const selectedAfter = selectionSnapshot(document);
+    return {
+      ...metrics,
+      wholeSelectionDifference: firstDifference(baseline, initial),
+      interiorReplacementDifference: firstDifference(
+        selectedBefore.text,
+        selectedAfter.text,
+      ),
+      endpointsSame: movement.endpointsSame,
+      retainedBoundaryNodesSame:
+        rows[0] === container.firstElementChild &&
+        rows.at(-1) === container.lastElementChild,
+      oldWindowRetainedIfEndpoint: container.contains(middleBefore),
+      rawBaseline: baseline,
+      rawCandidate: initial,
+      clipboard:
+        "NOT RUN; use native product/menu test, no clipboard interception here",
+    };
+  };
+  const fillAll = () => {
+    if (
+      protectedSegments(container, selection()).some((node) =>
+        node.classList.contains("projection-gap"),
+      )
+    ) {
+      return {
+        blocked: true,
+        reason:
+          "Selection already has an endpoint in a projected gap; no endpoint rewrite is allowed",
+      };
+    }
+    const change = update(keys);
+    mode = "full";
+    return change;
+  };
+  const runAll = () => {
+    busy = true;
+    try {
+      const report = ["host", "pruned", "flat"].map(verify);
+      result.textContent = JSON.stringify(report, null, 2);
+      window.segmentFixture.lastReport = report;
+      return report;
+    } finally {
+      busy = false;
+    }
+  };
+  viewport.addEventListener(
+    "scroll",
+    () => {
+      if (busy || mode === "full") return;
+      const center = Math.max(
+        0,
+        tops.findLastIndex((top) => top <= viewport.scrollTop),
+      );
+      update(pick(center));
+    },
+    { passive: true },
+  );
+  // Experimental advanced-selection fallback: fill gaps in place before the
+  // original native event, without preventDefault, replay, or Range writes.
+  viewport.addEventListener(
+    "keydown",
+    (event) => {
+      if (mode !== "full" && /^(Arrow|Home$|End$|Page)/.test(event.key))
+        fillAll();
+    },
+    true,
+  );
+  viewport.addEventListener(
+    "pointerdown",
+    () => {
+      if (mode !== "full") fillAll();
+    },
+    true,
+  );
+  document.querySelector("#run").onclick = runAll;
+  document.querySelector("#full").onclick = () => {
+    reset();
+    result.textContent = "Full baseline";
+  };
+  for (const name of ["host", "pruned", "flat"])
+    document.querySelector(`#${name}`).onclick = () => {
+      result.textContent = JSON.stringify(activate(name), null, 2);
+    };
+  document.querySelector("#select").onclick = () => {
+    select();
+  };
+  window.segmentFixture = {
+    reset,
+    activate,
+    select,
+    update,
+    verify,
+    runAll,
+    fillAll,
+    counts,
+    lastReport: null,
+  };
+  reset();
+})();
+</script>

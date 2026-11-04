@@ -129,3 +129,27 @@ test("raw comparator preserves whitespace mismatches without normalization", () 
   assert.equal(firstDifference("x\n", "x").index, 1);
   assert.equal(firstDifference("x\n\n", "x\n").expectedLength, 3);
 });
+
+test("fill-all fallback retains viewport, visible row, and Selection endpoint identity", () => {
+  const { document, container, source, keys, update } = setup();
+  update(["0", "4", "11"]);
+  document
+    .getSelection()
+    .setBaseAndExtent(
+      source[0].firstChild.firstChild,
+      1,
+      source[11].lastChild.lastChild.firstChild,
+      4,
+    );
+  const before = selectionSnapshot(document);
+  const row = source[4];
+  update(keys);
+  assert.ok(sameEndpoints(before, selectionSnapshot(document)));
+  assert.equal(document.querySelector("#rows"), container);
+  assert.equal(container.children[4], row);
+  assert.equal(
+    container.querySelectorAll('[data-segment-id^="gap:"]').length,
+    0,
+  );
+  assert.equal(before.text, selectionSnapshot(document).text);
+});
