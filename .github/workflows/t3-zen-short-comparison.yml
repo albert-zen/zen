@@ -1,0 +1,87 @@
+name: Official T3 and Zen ordinary Send, shared 100-turn fixture
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostic/t3-zen-short-100-20261104]
+    paths:
+      - .github/workflows/t3-zen-short-comparison.yml
+      - apps/zenx/scripts/t3-comparison/**
+permissions:
+  contents: read
+jobs:
+  same-machine-short-comparison:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1d6ac2794ce198acaf6259a93693154ad5b94753
+          persist-credentials: false
+          path: product
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: diagnostic
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require matching ARM64 Mac and exact unchanged Zen source
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(git -C product rev-parse 'HEAD^{tree}')" = db349a545c3f6502a6babb291314224c1708e5f6
+          test -z "$(git -C product diff --name-only HEAD)"
+          node --check diagnostic/apps/zenx/scripts/t3-comparison/launch-official-t3.mjs
+          node --check diagnostic/apps/zenx/scripts/t3-comparison/launch-short-zen.mjs
+      - name: Build Zen product once, without modifying the old 5000 driver
+        working-directory: product
+        timeout-minutes: 12
+        run: |
+          npm ci
+          npm run build
+          npm run build --workspace @zen/zenx
+      - name: Create shared disposable project and exact common fixture
+        run: |
+          owned=$(mktemp -d "$RUNNER_TEMP/t3-zen-short-XXXXXXXX")
+          echo "COMPARISON_OWNED_ROOT=$owned" >> "$GITHUB_ENV"
+          mkdir -p "$owned/workspace" results/t3 results/zen
+          printf '%s\n' 'Synthetic ordinary Send comparison workspace. No user data.' > "$owned/workspace/README.md"
+          git -C "$owned/workspace" init -q
+          git -C "$owned/workspace" add README.md
+          git -C "$owned/workspace" -c user.name=OwnedFixture -c user.email=fixture@example.invalid commit -qm 'Owned synthetic fixture'
+          node diagnostic/apps/zenx/scripts/t3-comparison/short-run-common.mjs results/shared-fixture.json
+      - name: Acquire and verify the unmodified official T3 release
+        run: bash diagnostic/apps/zenx/scripts/t3-comparison/acquire-official-t3.sh "$COMPARISON_OWNED_ROOT/official"
+      - name: Actual official T3 first three Sends, admission and normal cold reopen
+        timeout-minutes: 8
+        run: |
+          set +e
+          node diagnostic/apps/zenx/scripts/t3-comparison/launch-official-t3.mjs "$COMPARISON_OWNED_ROOT/official/T3 Code (Nightly).app/Contents/MacOS/T3 Code (Nightly)" results/t3 "$COMPARISON_OWNED_ROOT/workspace" results/shared-fixture.json
+          status=$?
+          printf '%s\n' "$status" > results/t3/exit-code.txt
+          exit "$status"
+      - name: Actual Zen first three Sends, admission and normal cold reopen
+        if: ${{ !cancelled() && env.COMPARISON_OWNED_ROOT != '' }}
+        timeout-minutes: 8
+        run: |
+          set +e
+          node diagnostic/apps/zenx/scripts/t3-comparison/launch-short-zen.mjs product results/zen "$COMPARISON_OWNED_ROOT/workspace" results/shared-fixture.json
+          status=$?
+          printf '%s\n' "$status" > results/zen/exit-code.txt
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-t3-zen-100-turn-ordinary-send
+          path: |
+            results/shared-fixture.json
+            results/t3/official-t3-summary.json
+            results/t3/exit-code.txt
+            results/zen/zen-short-summary.json
+            results/zen/exit-code.txt
+          if-no-files-found: error
+      - name: Remove only the owned comparison workspace
+        if: ${{ always() && env.COMPARISON_OWNED_ROOT != '' }}
+        run: |
+          node -e "const f=require('node:fs');for(const p of ['results/t3/official-t3-summary.json','results/zen/zen-short-summary.json'])if(f.existsSync(p)&&JSON.parse(f.readFileSync(p)).cleanupError)process.exit(1)"
+          case "$COMPARISON_OWNED_ROOT" in "$RUNNER_TEMP"/t3-zen-short-*) rm -rf -- "$COMPARISON_OWNED_ROOT" ;; *) exit 1 ;; esac
