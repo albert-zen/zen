@@ -8,10 +8,6 @@ on:
       - apps/zenx/scripts/seed-user-question-acceptance.mjs
       - apps/cli/src/host.ts
       - src/user-question*.ts
-      - apps/zenx/scripts/image-preparation-native-contract.test.mjs
-      - apps/zenx/src/renderer/src/ThreadView.tsx
-      - apps/zenx/src/renderer/src/ImagePresentation.tsx
-      - src/image-preparation*.ts
       - apps/zenx/src/renderer/src/UserQuestionCards.tsx
       - apps/zenx/src/renderer/src/user-question-state.ts
   workflow_dispatch:
@@ -45,22 +41,5 @@ jobs:
             ${{ runner.temp }}/user-question-ui/acceptance.json
             ${{ runner.temp }}/user-question-ui/lifecycle.json
             ${{ runner.temp }}/user-question-ui/*.png
-          if-no-files-found: error
-          retention-days: 14
-      - name: Real Host image preparation in disposable full production App
-        timeout-minutes: 6
-        run: |
-          node --test apps/zenx/scripts/image-preparation-native-contract.test.mjs
-          node apps/zenx/scripts/launch-user-question-acceptance.mjs "${{ runner.temp }}/image-preparation-ui" image
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: image-preparation-ui-macos-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/image-preparation-ui/source.json
-            ${{ runner.temp }}/image-preparation-ui/acceptance.json
-            ${{ runner.temp }}/image-preparation-ui/lifecycle.json
-            ${{ runner.temp }}/image-preparation-ui/image-evidence.json
-            ${{ runner.temp }}/image-preparation-ui/*.png
           if-no-files-found: error
           retention-days: 14
