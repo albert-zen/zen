@@ -176,9 +176,8 @@ test("native image branch preserves existing question guards, limits and artifac
   );
 });
 
-test("thumbnail diagnostics report browser decode and exact blob identity without inventing an alert", async () => {
+test("thumbnail diagnostics measure decode state without refetching restricted blobs", async () => {
   const { runInNewContext } = await import("node:vm");
-  const { webcrypto } = await import("node:crypto");
   const capture = await readFile(
     new URL("capture-user-question.cjs", scripts),
     "utf8",
@@ -190,84 +189,55 @@ test("thumbnail diagnostics report browser decode and exact blob identity withou
     "// Accept only independently proven browser terminal states",
     start,
   );
-  assert.ok(start >= 0 && end > start);
-  const payloads = [
-    Buffer.from("synthetic-good"),
-    Buffer.from("synthetic-undecodable"),
-  ];
-  const originals = payloads.map((bytes) => ({
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    byteLength: bytes.byteLength,
-  }));
-  const images = payloads.map((_, index) => ({
+  const diagnosticSource = capture.slice(start, end).trim();
+  assert.doesNotMatch(diagnosticSource, /fetch\(|crypto\.subtle|arrayBuffer\(/);
+  const images = [2048, 1].map((size, index) => ({
     complete: true,
-    naturalWidth: index ? 1 : 2048,
-    naturalHeight: index ? 1 : 2048,
-    alt: "Synthetic image",
-    loading: "",
-    decoding: "auto",
+    naturalWidth: size,
+    naturalHeight: size,
     currentSrc: `blob:owned-${index}`,
     decode: async () => {
-      if (index)
-        throw Object.assign(new Error("Synthetic decoder rejection"), {
-          name: "EncodingError",
-        });
+      if (index) throw new Error("Synthetic decoder rejection");
     },
   }));
   const buttons = images.map((image) => ({
     querySelector: (selector) => (selector === "img" ? image : null),
     getBoundingClientRect: () => ({ x: 0, y: 0, width: 120, height: 90 }),
     disabled: false,
-    title: "Synthetic image",
     getAttribute: () => "false",
   }));
-  buttons.push({
-    querySelector: (selector) =>
-      selector === ".image-placeholder"
-        ? { textContent: "Image unavailable", getAttribute: () => "alert" }
-        : null,
-    getBoundingClientRect: () => ({ x: 0, y: 0, width: 120, height: 90 }),
-    disabled: true,
-    title: "Image unavailable",
-    getAttribute: () => "false",
-  });
-  const fetched = [];
-  const collect = runInNewContext(`(${capture.slice(start, end).trim()})`, {
+  const collect = runInNewContext(`(${diagnosticSource})`, {
     document: { querySelectorAll: () => buttons },
-    crypto: webcrypto,
     setTimeout,
     clearTimeout,
-    fetch: async (url) => {
-      fetched.push(url);
-      const bytes = payloads[Number(url.at(-1))];
-      return { arrayBuffer: async () => Uint8Array.from(bytes).buffer };
+    fetch: () => {
+      throw new Error("Must not add a second blob read");
     },
   });
-  const result = JSON.parse(JSON.stringify(await collect(originals)));
+  const result = JSON.parse(JSON.stringify(await collect([])));
   assert.equal(result[0].decode.status, "resolved");
   assert.equal(result[1].decode.status, "rejected");
-  assert.equal(result[1].image.naturalWidth, 1);
   assert.equal(
     result[1].placeholder,
     null,
-    "decode rejection is not invented as product alert state",
+    "decoder rejection is not invented as product alert state",
   );
-  assert.equal(result[0].blob.matchesOriginal, true);
-  assert.equal(result[1].blob.matchesOriginal, true);
-  assert.equal(result[2].image, null);
-  assert.equal(result[2].placeholder.role, "alert");
-  assert.deepEqual(fetched, ["blob:owned-0", "blob:owned-1"]);
-  images[1].currentSrc = "https://external.invalid/never-fetch";
-  fetched.length = 0;
-  await collect(originals);
-  assert.deepEqual(
-    fetched,
-    ["blob:owned-0"],
-    "diagnostics never fetch external images",
+  for (const value of result) {
+    assert.match(
+      value.identityEvidence,
+      /mounted blob identity not directly measured/,
+    );
+    assert.equal(value.blob, undefined);
+  }
+  assert.match(capture, /exact Host canonical original refs/);
+  assert.match(capture, /normal original must actually decode in the browser/);
+  assert.match(
+    capture,
+    /real Host seed evidence for the displayed owner is required/,
   );
 });
 
-test("model-unavailable browser acceptance rejects blank, pending, substituted and CSP-blocked originals", async () => {
+test("browser outcome requires actual decode, original dimensions and Host reference without claiming blob identity", async () => {
   const { runInNewContext } = await import("node:vm");
   const capture = await readFile(
     new URL("capture-user-question.cjs", scripts),
@@ -275,11 +245,12 @@ test("model-unavailable browser acceptance rejects blank, pending, substituted a
   );
   const start = capture.indexOf("function unavailableImageBrowserOutcome(");
   const end = capture.indexOf("// Image-only read/preview acceptance.", start);
-  assert.ok(start >= 0 && end > start);
   const classify = runInNewContext(`(${capture.slice(start, end).trim()})`, {
     assert,
   });
   const original = {
+    type: "attachment",
+    mediaType: "image/png",
     width: 1,
     height: 1,
     sha256: "1".repeat(64),
@@ -292,7 +263,6 @@ test("model-unavailable browser acceptance rejects blank, pending, substituted a
     disabled: false,
     busy: "false",
     sourceProtocol: "blob",
-    blob: { sha256: original.sha256, byteLength: original.byteLength },
   };
   assert.equal(
     classify(valid, original),
@@ -302,41 +272,41 @@ test("model-unavailable browser acceptance rejects blank, pending, substituted a
     classify({ image: null, placeholder: { role: "alert" } }, original),
     "browser-unavailable/model-unavailable",
   );
+  assert.throws(
+    () => classify(valid, undefined),
+    /Host original reference is required/,
+  );
+  assert.throws(() => classify(valid, { ...original, sha256: "missing" }));
   for (const mutate of [
-    (value) => {
-      value.decode.status = "rejected";
+    (v) => {
+      v.decode.status = "rejected";
     },
-    (value) => {
-      value.decode.status = "timeout";
+    (v) => {
+      v.decode.status = "timeout";
     },
-    (value) => {
-      value.image.complete = false;
+    (v) => {
+      v.image.complete = false;
     },
-    (value) => {
-      value.image.naturalWidth = 0;
+    (v) => {
+      v.image.naturalWidth = 0;
     },
-    (value) => {
-      value.image.naturalWidth = 1600;
+    (v) => {
+      v.image.naturalWidth = 1600;
     },
-    (value) => {
-      value.blob.sha256 = "2".repeat(64);
+    (v) => {
+      v.sourceProtocol = "https";
     },
-    (value) => {
-      value.blob.byteLength++;
-    },
-    (value) => {
-      value.blob = { error: "Blocked by existing CSP" };
-    },
-    (value) => {
-      value.sourceProtocol = "https";
-    },
-    (value) => {
-      value.image = null;
-      value.placeholder = { role: "status" };
+    (v) => {
+      v.image = null;
+      v.placeholder = { role: "status" };
     },
   ]) {
     const invalid = structuredClone(valid);
     mutate(invalid);
     assert.throws(() => classify(invalid, original));
   }
+  // This assertion deliberately does not claim to detect same-dimension browser
+  // byte substitution: mounted bytes are not directly measured. Host/model
+  // substitution and exact occurrence negative controls remain in the first test.
+  assert.doesNotMatch(capture.slice(start, end), /thumbnail\.blob/);
 });

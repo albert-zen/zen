@@ -133,6 +133,12 @@ for (const file of [
     ? [
         "src/renderer/src/ThreadView.tsx",
         "src/renderer/src/ImagePresentation.tsx",
+        "src/preload/index.ts",
+        "src/main/index.ts",
+        "src/main/image-attachments.ts",
+        "src/main/app-server-manager.ts",
+        "src/thread-attachment-projection.ts",
+        "../../src/attachment.ts",
         "src/renderer/src/styles.css",
         "src/renderer/src/theme.css",
         "scripts/image-preparation-native-contract.test.mjs",

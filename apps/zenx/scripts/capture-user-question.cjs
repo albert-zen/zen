@@ -670,7 +670,8 @@ async function collectImageThumbnailDiagnostics(originals) {
       const observation = {
         index,
         expectedOriginal: originals[index] ?? null,
-        identityEvidence: "DOM order only; blob identity not yet observed",
+        identityEvidence:
+          "DOM order and natural dimensions; mounted blob identity not directly measured",
         disabled: button.disabled,
         busy: button.getAttribute("aria-busy"),
         title: button.title,
@@ -719,28 +720,6 @@ async function collectImageThumbnailDiagnostics(originals) {
       }
       const source = image.currentSrc || image.src;
       observation.sourceProtocol = source.split(":", 1)[0];
-      if (observation.sourceProtocol !== "blob") return observation;
-      // Only the already-mounted production image's local blob, never a URL supplied
-      // by the fixture or an external fetch. Keep bytes/URLs out of the artifact.
-      try {
-        const bytes = await (await fetch(source)).arrayBuffer();
-        const sha256 = [
-          ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-        ]
-          .map((byte) => byte.toString(16).padStart(2, "0"))
-          .join("");
-        observation.blob = {
-          byteLength: bytes.byteLength,
-          sha256,
-          matchesOriginal:
-            sha256 === originals[index]?.sha256 &&
-            bytes.byteLength === originals[index]?.byteLength,
-        };
-        observation.identityEvidence =
-          "mounted production blob SHA-256 and length";
-      } catch (error) {
-        observation.blob = { error: String(error.message || error) };
-      }
       return observation;
     }),
   );
@@ -748,6 +727,16 @@ async function collectImageThumbnailDiagnostics(originals) {
 
 // Accept only independently proven browser terminal states for a model-unavailable original.
 function unavailableImageBrowserOutcome(thumbnail, original) {
+  assert.equal(
+    original?.type,
+    "attachment",
+    "Host original reference is required",
+  );
+  assert.equal(original.mediaType, "image/png");
+  assert.match(original.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(
+    Number.isSafeInteger(original.byteLength) && original.byteLength > 0,
+  );
   assert.deepEqual([original.width, original.height], [1, 1]);
   if (thumbnail.image === null && thumbnail.placeholder?.role === "alert")
     return "browser-unavailable/model-unavailable";
@@ -774,16 +763,6 @@ function unavailableImageBrowserOutcome(thumbnail, original) {
   assert.equal(thumbnail.disabled, false, "decoded original remains available");
   assert.notEqual(thumbnail.busy, "true");
   assert.equal(thumbnail.sourceProtocol, "blob");
-  assert.equal(
-    thumbnail.blob?.sha256,
-    original.sha256,
-    "mounted browser bytes must match the exact original SHA",
-  );
-  assert.equal(
-    thumbnail.blob?.byteLength,
-    original.byteLength,
-    "mounted browser bytes must match the exact original length",
-  );
   return "browser-original-visible/model-unavailable";
 }
 
@@ -805,6 +784,22 @@ async function runImage() {
   })()`);
   async function ready(entry) {
     try {
+      const hostEvidence = fixture.seedVerification.threads.find(
+        (item) => item.threadId === entry.threadId,
+      );
+      assert.ok(
+        hostEvidence,
+        "real Host seed evidence for the displayed owner is required",
+      );
+      assert.equal(hostEvidence.originalBytesUnchanged, true);
+      assert.deepEqual(
+        hostEvidence.originals,
+        entry.originals,
+        "exact Host canonical original refs",
+      );
+      assert.ok(hostEvidence.modelInputs.length >= 2);
+      if (entry.key === "unavailable")
+        assert.ok(hostEvidence.unavailable.length >= 2);
       await until(async () => {
         const state = await observe();
         result.imageReadiness = {
@@ -830,6 +825,11 @@ async function runImage() {
       );
       result.imageReadiness.thumbnails = thumbnails;
       assert.equal(
+        thumbnails[0]?.decode?.status,
+        "resolved",
+        "normal original must actually decode in the browser",
+      );
+      assert.equal(
         thumbnails.length,
         entry.originals.length,
         "one original thumbnail per admitted image",
@@ -844,7 +844,7 @@ async function runImage() {
           threadId: entry.threadId,
           key: entry.key,
           scope:
-            "Actual mounted thumbnail DOM, bounded decode() and local blob identity; browser state is independent of Host codec outcome",
+            "Actual mounted thumbnail DOM and bounded decode(); mounted blob identity not directly measured; Host codec outcome is independent",
           thumbnails: await evaluate(
             `(${collectImageThumbnailDiagnostics.toString()})(${JSON.stringify(entry.originals)})`,
           ),
@@ -910,6 +910,8 @@ async function runImage() {
       name,
       threadId: entry.threadId,
       browserOutcome: readiness.browserOutcome,
+      identityEvidence:
+        "Host canonical refs and unchanged production attachment read path; mounted blob identity not directly measured",
       thumbnails: readiness.thumbnails,
       ...state,
       windowContentBounds: window.getContentBounds(),
@@ -996,6 +998,7 @@ async function runImage() {
     "HTTP transport",
     "Windows",
     "packaged distribution",
+    "mounted blob identity not directly measured",
     ...(result.cases.some(
       (entry) =>
         entry.browserOutcome === "browser-original-visible/model-unavailable",
