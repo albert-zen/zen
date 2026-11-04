@@ -1,3 +1,4 @@
+import { userQuestionModelProjection } from "./user-question-model.js";
 import { imageUnavailableNotice } from "./image-preparation-notice.js";
 import type { AttachmentRef } from "./attachment-ref.js";
 import { bindModelMediaOrigin } from "./model-media-origin.js";
@@ -169,6 +170,7 @@ const metadataKeys = new Set([
   "includeOriginalReference",
   "referenceBindings",
   "queuedAdmission",
+  "questionOrigin",
   "receiptTimezone",
   "onlySampleId",
   "category",
@@ -285,6 +287,12 @@ export function decodeContextItem(value: unknown): ContextItem {
     }
     json(metadata, "source.metadata");
   }
+  if (
+    item.kind !== "tool_call" &&
+    source.metadata !== undefined &&
+    "questionOrigin" in (source.metadata as object)
+  )
+    throw Error("Question origin requires a tool call");
   const content = record(item.content, "content");
   switch (item.kind) {
     case "message": {
@@ -323,6 +331,20 @@ export function decodeContextItem(value: unknown): ContextItem {
       string(content.callId, "callId", false);
       string(content.name, "name", false);
       json(record(content.arguments, "arguments"), "arguments");
+      if (
+        source.metadata !== undefined &&
+        "questionOrigin" in (source.metadata as object)
+      ) {
+        if (content.name !== "ask_user_question")
+          throw Error("Question origin requires an Ask call");
+        const origin = record(
+          (source.metadata as Record<string, unknown>).questionOrigin,
+          "questionOrigin",
+        );
+        keys(origin, ["threadId", "callItemId"], "questionOrigin");
+        string(origin.threadId, "questionOrigin.threadId", false);
+        string(origin.callItemId, "questionOrigin.callItemId", false);
+      }
       break;
     case "tool_result":
       keys(
@@ -672,7 +694,7 @@ export function decodeContextItem(value: unknown): ContextItem {
   return structuredClone(value) as ContextItem;
 }
 
-/** Selection only. All model-visible strings already exist in durable content. */
+/** Selection/encoding plus the documented deterministic question display projection. */
 export function compileItemList(
   items: readonly ContextItem[],
   options: {
@@ -686,6 +708,7 @@ export function compileItemList(
     throw new Error("Duplicate semantic Item identity");
   if (new Set(validated.map((item) => item.threadId)).size > 1)
     throw new Error("Mixed Thread ItemList");
+  const questionDisplay = userQuestionModelProjection(validated);
   const selection = validated.findLast((item) => item.kind === "selection");
   let selected = validated;
   if (selection?.kind === "selection") {
@@ -782,6 +805,7 @@ export function compileItemList(
       selectedCalls.has(callKey(item)),
   );
   selected = orderSteeredContext(orderSnapshotReceipts(selected));
+  selected = selected.map((item) => questionDisplay.get(item.id) ?? item);
   const selectedItemIds: string[] = [];
   const supportedMedia = new Set(
     options.inputModalities ?? ["text", "image", "audio"],

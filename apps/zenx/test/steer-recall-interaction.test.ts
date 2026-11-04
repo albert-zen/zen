@@ -961,3 +961,60 @@ test("shelf read-only recovery and restore actions retain 44px hit targets", asy
     actions.forEach(largeEnough);
   });
 });
+
+test("native question origin driver observes the shelf status and invokes only whole-batch Recall", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const capture = await readFile(
+    new URL("../scripts/capture-user-question.cjs", import.meta.url),
+    "utf8",
+  );
+  const countSelector = capture.match(
+    /document\.querySelector\('([^']+)'\)\?\.textContent\.includes\('2'\)/,
+  )?.[1];
+  const actionSelector = capture.match(
+    /await click\(\s*"([^"]+)",\s*"Native one whole-batch Recall"/,
+  )?.[1];
+  assert.ok(countSelector, "native driver pending-count selector");
+  assert.ok(actionSelector, "native driver whole-batch Recall selector");
+  await withRuntimeDom(async (h) => {
+    const thread = staged();
+    const original = thread.canonicalItems!;
+    const requests: NativeSteerRecallParams[] = [];
+    let restores = 0;
+    protocol(async (method, value) => {
+      assert.equal(method, "zen/thread/steer/recall");
+      const request = value as NativeSteerRecallParams;
+      requests.push(request);
+      return reply(request, original);
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => {
+        restores++;
+        return true;
+      },
+    });
+    const status = document.querySelector(countSelector);
+    assert.ok(
+      status,
+      "native driver must find actual production pending count",
+    );
+    assert.ok(status.textContent!.includes("2"));
+    assert.equal(status.getAttribute("role"), "status");
+    const toggle = document.querySelector(
+      ".pending-steer-heading .queue-shelf-toggle",
+    )!;
+    const expanded = toggle.getAttribute("aria-expanded");
+    const action = document.querySelector(actionSelector);
+    assert.ok(action?.classList.contains("queue-header-action"));
+    await h.click(actionSelector);
+    await flush();
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      requests[0]!.targets.map((target) => target.queuedItemId),
+      ["queue-0", "queue-1"],
+    );
+    assert.equal(restores, 1);
+    assert.equal(toggle.getAttribute("aria-expanded"), expanded);
+  });
+});
