@@ -12,6 +12,8 @@ export function createThreadReadingState() {
   const listeners = new Set<() => void>();
   return {
     scroll: null as { top: number; following: boolean } | null,
+    virtualAnchor: null as
+      import("./transcript-viewport-pins.js").TranscriptAnchor | null,
     snapshot: () => disclosures,
     subscribe: (listener: () => void) => {
       listeners.add(listener);
