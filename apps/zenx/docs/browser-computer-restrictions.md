@@ -32,10 +32,22 @@ not prerequisites for using this cleanup and not default switches.
   action. The existing foreground activity indicator must still be painted, with
   approval, cancellation and exact focus checks unchanged.
 
-Native typing retains its 1024-scalar event preparation/operation budget. Background
-application keyboard still has no modifier/shortcut API, and background pointer
-input remains capture-bound left-click only. Those are explicit implementation
-gaps, not evidence that the underlying platform can never support them.
+- Background application shortcuts use the existing application-current-focus
+  keyboard path and permission. They resolve the key against the current keyboard
+  layout and recheck it before posting the matched pair. A separate helper
+  capability is required, so older helpers cannot silently reinterpret a shortcut.
+- Capture-bound background pointer input accepts left, right and middle buttons,
+  with left as the default. Non-left requests require an explicit supported-button
+  capability from the selected helper. Unsupported buttons are rejected before
+  consuming the capture. All buttons retain the same process, capture, geometry,
+  desktop-state and matching-release checks.
+
+Native typing retains its 1024-scalar event preparation/operation budget. This
+bounds prepared Unicode events and operation duration, rather than claiming a
+platform text limit. Background shortcuts affect the application's current focus,
+not necessarily the selected window. A right-click may open a context menu; if
+that changes a protected desktop condition, the result remains uncertain and is
+not replayed. Middle-button posting does not guarantee that an app handles it.
 
 ## Actual boundaries that remain
 
@@ -44,7 +56,12 @@ operate that class of UI. The current Browser coordinate/focus helper does not
 resolve iframe inner targets or closed shadow roots. Removing its identity checks
 would send input to an unverified inner document; a frame-aware executor is needed.
 Open shadow roots are supported within the existing tracked observation bounds.
-The top-level semantic inspector still reports iframe/shadow coverage omissions.
+Frame support needs per-frame document identity, lifecycle tracking and coordinate
+mapping, including cross-origin/out-of-process frames. Closed roots need trusted
+inner-node identity and change observation that the current open-root registry does
+not supply. Neither gap is fixed by accepting the outer host's screenshot/focus as
+proof of the inner target. The top-level semantic inspector still reports
+iframe/shadow coverage omissions.
 The experimental Playwright path is evaluated separately for these capabilities;
 it must not silently replace the default provider or move a user's page.
 
@@ -71,3 +88,9 @@ thresholds. The native Workspace smoke uses synthetic HTML controls with real
 trusted clicks; its fixture prevents the picker default action so the test does
 not open an OS dialog. Native macOS/Windows delivery and real hosted Browser smoke
 must be reported separately from synthetic provider tests.
+
+The background shortcut and non-left pointer extensions add Host/session/schema
+coverage and macOS event-construction/production-algorithm checks. Those checks do
+not by themselves prove delivery to a real owned background application's controls.
+The existing owned native GUI acceptance covers drag/AX behavior, not these new
+shortcut or non-left background effects. Report that acceptance gap explicitly.

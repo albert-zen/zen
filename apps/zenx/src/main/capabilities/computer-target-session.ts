@@ -5,8 +5,11 @@ export interface BoundComputerTarget {
   bindingId: string;
   /** Native runtime capability, absent on older/missing-SPI helpers. */
   windowLocalInputAvailable?: true;
+  /** Explicit helper handshake; old helpers silently ignore unknown button fields. */
+  supportedBackgroundButtons?: Array<"left" | "right" | "middle">;
   exactWindowCaptureAvailable?: true;
   appKeyboardInputAvailable?: true;
+  appShortcutInputAvailable?: true;
   /** Selection-time AX readiness, not a permission or an input-effect guarantee. */
   foregroundWindowInputAvailable?: boolean;
   /** Native routes are independently revalidated at dispatch; no implicit fallback. */
@@ -260,7 +263,7 @@ export class ComputerTargetSession {
     return result;
   }
 
-  /** One left click from the existing exact capture, never a new target lookup. */
+  /** One button pair from the existing exact capture, never a new target lookup. */
   async backgroundClick(
     owner: string,
     target: ComputerTarget,
@@ -269,13 +272,26 @@ export class ComputerTargetSession {
     x: number,
     y: number,
     signal: AbortSignal,
+    button: "left" | "right" | "middle" = "left",
   ): Promise<unknown> {
     signal.throwIfAborted();
+    if (!["left", "right", "middle"].includes(button))
+      throw new Error(
+        "Unsupported background mouse button; no input dispatched",
+      );
     const binding = this.#selected.get(owner),
       capture = this.#captures.get(owner);
     if (binding?.windowLocalInputAvailable !== true)
       throw new Error(
         "Selected native helper has no window-local input primitive; no input dispatched",
+      );
+    if (
+      button !== "left" &&
+      (!Array.isArray(binding.supportedBackgroundButtons) ||
+        !binding.supportedBackgroundButtons.includes(button))
+    )
+      throw new Error(
+        "Selected native helper does not advertise this background mouse button; no input dispatched",
       );
     if (
       this.#closed ||
@@ -320,6 +336,7 @@ export class ComputerTargetSession {
           operation: "backgroundClick",
           owner,
           bindingId,
+          button,
           x: binding.bounds.x + (x * binding.bounds.width) / capture.width,
           y: binding.bounds.y + (y * binding.bounds.height) / capture.height,
         },
@@ -374,6 +391,23 @@ export class ComputerTargetSession {
     );
   }
 
+  async backgroundShortcut(
+    owner: string,
+    bindingId: string,
+    shortcut: { key: string; modifiers: string[] },
+    signal: AbortSignal,
+    onStopping?: () => void,
+  ): Promise<unknown> {
+    const action = requiredComputerShortcut(shortcut);
+    return this.#appKeyboard(
+      owner,
+      bindingId,
+      { operation: "backgroundShortcut", ...action },
+      signal,
+      onStopping,
+    );
+  }
+
   async #appKeyboard(
     owner: string,
     bindingId: string,
@@ -387,7 +421,11 @@ export class ComputerTargetSession {
       throw new Error(
         "Selected application binding changed or expired; select again; no input dispatched",
       );
-    if (binding.appKeyboardInputAvailable !== true)
+    if (
+      binding.appKeyboardInputAvailable !== true ||
+      (action.operation === "backgroundShortcut" &&
+        binding.appShortcutInputAvailable !== true)
+    )
       throw new Error(
         "Selected helper has no app keyboard capability; no input dispatched",
       );
@@ -597,4 +635,32 @@ export function isPostedComputerInputReceipt(value: unknown): boolean {
     "applicationEffect" in value &&
     value.applicationEffect === "unverified"
   );
+}
+
+export function requiredComputerShortcut(arguments_: Record<string, unknown>): {
+  key: string;
+  modifiers: string[];
+} {
+  const key = arguments_.key;
+  if (typeof key !== "string" || !key)
+    throw new Error("Unsupported shortcut key");
+  const modifiers = arguments_.modifiers;
+  if (
+    !(
+      COMPUTER_BASIC_KEYS.includes(key) ||
+      (Array.from(key).length === 1 &&
+        !/[\u0000-\u0020\u007f\uD800-\uDFFF]/u.test(key))
+    ) ||
+    !Array.isArray(modifiers) ||
+    modifiers.length < 1 ||
+    modifiers.length > 4 ||
+    new Set(modifiers).size !== modifiers.length ||
+    !modifiers.every(
+      (value): value is string =>
+        typeof value === "string" &&
+        ["command", "control", "option", "shift"].includes(value),
+    )
+  )
+    throw new Error("Unsupported shortcut key or modifiers");
+  return { key, modifiers };
 }
