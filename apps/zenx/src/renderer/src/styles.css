@@ -12680,36 +12680,3 @@ button:disabled {
 .room-asking-badge {
   flex: 0 0 auto;
 }
-
-.image-preparation-notice {
-  display: grid;
-  gap: 0.25rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--border-control);
-  border-radius: 0.6rem;
-  color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.4;
-}
-.image-preparation-notice strong {
-  color: var(--text);
-  font-weight: 600;
-}
-.image-preparation-notice details {
-  margin-top: 0.2rem;
-}
-.image-preparation-notice summary {
-  cursor: pointer;
-  width: fit-content;
-}
-.image-preparation-notice summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.image-preparation-notice ul {
-  margin: 0.45rem 0 0;
-  padding-left: 1.35rem;
-}
-.image-preparation-fallback {
-  color: var(--text);
-}

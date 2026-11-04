@@ -280,6 +280,9 @@ Composer 保持一个位置、几何和命中区域稳定的 primary action，�
   Transcript 附件渲染为文字气泡上方的独立紧凑缩略图行（右对齐、可换行），不被包进气泡边框内；只有存在文字时才渲染文字气泡。这是视觉校准，不改变 `AttachmentRef` 权威与投影路径。
   附件 payload 读取按 `AttachmentRef` 身份（mediaType + sha256）复用 object URL：流式重渲染、projection 刷新与 disclosure 折叠重建不重新读取、不闪回 loading 占位；未挂载 URL 只保留最近 32 个并在驱逐时释放，renderer 退出时全部释放，读取失败不缓存且后续挂载重试。
 
+- 模型输入的图片准备、缩放和原图 fallback 状态不在 ThreadView 增加卡片、提示条或替代 UI。
+  Core 的 `image_preparation` 语义 notice、持久处理错误事实与原始附件保留；原有附件预览及实际操作失败反馈不变。
+
 ### 4.6 Settings 与 onboarding
 
 - General 的“原生跨端工具调用”使用现有设置开关与 Apply 草稿流程，旧配置默认关闭。说明其调用目标设备原生工具、仍需目标独立授权，以及远端目录变化可能影响上下文缓存；保存后对后续采样生效，不要求重启。普通 Fleet 连接、远程会话与独立 Shell 功能不受此开关影响。

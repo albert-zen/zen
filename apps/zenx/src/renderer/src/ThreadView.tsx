@@ -44,7 +44,6 @@ import {
 import { useReadVisibleMessage } from "./conversation-read-state.js";
 import { HostMessageContent } from "./HostMessageContent.js";
 import { ImportedThreadNotice } from "./ImportedThreadNotice.js";
-import { ImagePreparationNotice } from "./ImagePreparationNotice.js";
 import { projectThreadAttachmentItems } from "../../thread-attachment-projection.js";
 import {
   ThreadReadingContext,
@@ -1702,7 +1701,6 @@ function ThreadViewContent({
               <ImportedThreadNotice
                 items={displayedThread?.canonicalItems ?? []}
               />
-              <ImagePreparationNotice items={thread?.itemList ?? []} />
               {transcriptRows.length === 0 ? (
                 (emptyContent ?? (
                   <div className="thread-empty">
