@@ -1,0 +1,96 @@
+{
+  "scope": "Production ImageUrlPreview, WorkspaceBrowserPanel and native WorkspaceBrowser; synthetic owned window/page; OS-composed desktopCapturer window screenshots. Not full App/Host or user desktop acceptance.",
+  "productHead": "50e62a86c7067865b024bb79a7afb4e69abb2713",
+  "productTree": "667515933078ab9b46aa584dabb8d5be61967d6a",
+  "driverHead": "f896f8c511261c24cd314f9e25ae65b2c97ffc1a",
+  "capturedMerge": "2325e44c667545c59304cc6092653082b966c807",
+  "capturedTree": "2f8719e9fb72160edb79f62dc90b64d6a8c938dc",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41882101899",
+  "artifactId": 13348254333,
+  "zipSha256": "79f6e24bac5845204d1ffb7cd3b8add82330d98f2c401373df45b70d37d1cb95",
+  "platform": "win32",
+  "status": "passed",
+  "lifecycle": {
+    "childExitCode": 0,
+    "childSignal": null,
+    "profileRemoved": true
+  },
+  "cases": [
+    {
+      "name": "01-native-visible",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "pixel": [
+        200,
+        0,
+        200,
+        255
+      ],
+      "sha256": "a17260e07d9dc498c1e1153724fdb1aa467126f156d50e10f7adbf0db9fce4a0",
+      "nativeVisible": true
+    },
+    {
+      "name": "02-preview-open",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "pixel": [
+        0,
+        220,
+        255,
+        255
+      ],
+      "sha256": "4c03f1b5ad1b3441b4b180d8906ec6b593a016e91970b609a5b1d8cacfb76ade",
+      "nativeVisible": false
+    },
+    {
+      "name": "03-one-preview-remains",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "pixel": [
+        0,
+        220,
+        255,
+        255
+      ],
+      "sha256": "4c03f1b5ad1b3441b4b180d8906ec6b593a016e91970b609a5b1d8cacfb76ade",
+      "nativeVisible": false
+    },
+    {
+      "name": "04-native-restored",
+      "size": {
+        "width": 1000,
+        "height": 700
+      },
+      "pixel": [
+        200,
+        0,
+        200,
+        255
+      ],
+      "sha256": "37ad8a8fe5bbd570b5e66417215059f973415c9ed9d6f930be1953a3397ec293",
+      "nativeVisible": true
+    }
+  ],
+  "sources": {
+    "src/main/workspace-browser.ts": "702f331c828fe27c5bd77397cc73f605b4b5b58ba8799402469a8307be3fd2f3",
+    "src/main/workspace-browser-renderer.ts": "381b2442ea37f23e4d1ef96a1f2d07e2076e567a175b55ef4d702150bbebacb2",
+    "src/main/workspace-browser-electron.ts": "3d3bf8d9fe2a09c0835da6fa654f8de58d27f7cabd56a2466b24d630552b3a66",
+    "src/renderer/src/ImagePresentation.tsx": "bf47b90a21818fd32dbd18e5b8311e2c4d43f77112fcf1edecc89d63ca42502d",
+    "src/renderer/src/native-view-overlays.ts": "9abc64d17efe6a6637c6b06b9cc8331a839dbdf26938ca276d3a1c82eb713a87",
+    "src/renderer/src/workspace-browser-panel.tsx": "4bbe9df7b7ff71e0b7fae30fc0716d7fd565fa9cfad54483a24f314a734626aa",
+    "src/renderer/src/styles.css": "8927577d7219290af13f4168aea6821905e18b0732d85bff7648284e8cdfb282",
+    "src/renderer/src/theme.css": "1f21450cff2ad4f61232e16eb7e94977c22925356146a3d7edd7bfddafbca2ed"
+  },
+  "sourceHashNote": "Raw Windows CRLF checkout bytes; verified against product tree with LF to CRLF conversion.",
+  "priorAttempts": [
+    "macOS runner cancelled before execution; no artifacts.",
+    "First Windows attempt passed all visual assertions but failed pre-exit profile cleanup.",
+    "Second Windows attempt cleaned profile after child failure but initial native view did not become ready within unchanged 5-second fence. Cause remains unknown; diagnostic-only third attempt did not reproduce. No timeout or product/pixel assertion was relaxed."
+  ]
+}
