@@ -2,6 +2,7 @@ let cached:
   | {
       implementation: typeof Intl.DateTimeFormat;
       locale: string;
+      defaultLocale: string;
       timeZone: string;
       time: Intl.DateTimeFormat;
       date?: Intl.DateTimeFormat;
@@ -16,6 +17,8 @@ export function formatCompletedAt(seconds: number, locale?: string): string {
   // Resolve current OS defaults on every call: a formatter must not retain an
   // old timezone after a system change. Only the three presentation formats are
   // reused, with one bounded entry rather than a cache per locale or message.
+  // Default-zone names are invalidation keys, not explicit options: some POSIX
+  // zones do not round-trip through resolvedOptions().timeZone.
   const constructor = Intl.DateTimeFormat;
   const defaults = new constructor().resolvedOptions();
   const language = locale ?? defaults.locale;
@@ -24,17 +27,18 @@ export function formatCompletedAt(seconds: number, locale?: string): string {
     !cached ||
     cached.implementation !== constructor ||
     cached.locale !== language ||
+    cached.defaultLocale !== defaults.locale ||
     cached.timeZone !== timeZone
   ) {
     cached = {
       implementation: constructor,
       locale: language,
+      defaultLocale: defaults.locale,
       timeZone,
       time: new constructor(language, {
         hour: "2-digit",
         minute: "2-digit",
         hourCycle: "h23",
-        timeZone,
       }),
     };
   }
@@ -52,7 +56,6 @@ export function formatCompletedAt(seconds: number, locale?: string): string {
     ...(sameYear ? {} : { year: "numeric" }),
     month: "short",
     day: "numeric",
-    timeZone,
   })).format(completed);
   return `${date} ${time}`;
 }

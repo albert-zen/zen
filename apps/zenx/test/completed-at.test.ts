@@ -179,3 +179,50 @@ test("an omitted locale follows changes to the current system default locale", (
     Intl.DateTimeFormat = Real;
   }
 });
+
+test("POSIX offset timezone defaults retain native formatting across zone changes", () => {
+  const previous = process.env.TZ;
+  try {
+    const seconds = Date.UTC(2025, 0, 15, 2, 34) / 1_000;
+    const expected: string[] = [];
+    const actual: string[] = [];
+    for (const zone of ["GMT+03", "GMT+04", "GMT-03", "GMT-04"]) {
+      process.env.TZ = zone;
+      expected.push(original(seconds, "en"));
+      actual.push(formatCompletedAt(seconds, "en"));
+    }
+    assert.deepEqual(actual, expected);
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+test("an unsupported explicit locale follows changes to the default fallback locale", () => {
+  const Real = Intl.DateTimeFormat;
+  let language = "en-US";
+  Intl.DateTimeFormat = new Proxy(Real, {
+    construct(target, args) {
+      const locale = args[0];
+      return Reflect.construct(target, [
+        locale === undefined || Real.supportedLocalesOf(locale).length === 0
+          ? language
+          : locale,
+        args[1],
+      ]);
+    },
+  });
+  try {
+    const seconds = Date.UTC(2025, 0, 15, 2, 34) / 1_000;
+    const english = formatCompletedAt(seconds, "zz");
+    assert.equal(english, original(seconds, "zz"));
+    language = "zh-CN";
+    const chinese = formatCompletedAt(seconds, "zz");
+    assert.equal(chinese, original(seconds, "zz"));
+    assert.notEqual(chinese, english);
+    language = "en-US";
+    assert.equal(formatCompletedAt(seconds, "zz"), english);
+  } finally {
+    Intl.DateTimeFormat = Real;
+  }
+});
