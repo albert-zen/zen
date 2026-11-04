@@ -1890,8 +1890,13 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   ): Promise<T> {
     // Check admission only once: already-accepted queued operations retain their
     // settlement fence, while later work cannot create a page behind cleanup.
-    if (session.closeQueued && !allowTainted)
-      throw new Error("User browser session is closing");
+    if (session.closeQueued && !allowTainted) {
+      const rejected = session.operationTail.then<T>(() => {
+        throw new Error("User browser session is detaching");
+      });
+      observeRejection(rejected);
+      return rejected;
+    }
     return this.#closure.enqueue(
       session,
       () => {

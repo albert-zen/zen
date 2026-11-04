@@ -459,7 +459,7 @@ test("session finish rejects new creates after its cleanup request", async () =>
     const closing = invoke("browser_close_session");
     const rejected = assert.rejects(
       invoke("browser_open", { url: "https://example.test/too-late" }),
-      /session is closing/u,
+      /session is detaching/u,
     );
     await nextTurn();
     release();
