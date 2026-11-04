@@ -431,12 +431,18 @@ export async function verifyImagePreparationAcceptance({
       });
       assert.equal(observed.completeness, "complete");
       assert.equal(observed.artifactVerification, "verified");
+      const inputRecords = observed.records.filter(
+        (record) => record.type === "model_input",
+      );
+      assert.deepEqual(
+        inputRecords.map((record) => record.sampleId).sort(),
+        [...sampleIds].sort(),
+        "exactly one model input for each prepared sample, without extra or duplicate samples",
+      );
       const modelInputs = [];
-      for (const record of observed.records.filter(
-        (record) =>
-          record.type === "model_input" && sampleIds.has(record.sampleId),
-      )) {
+      for (const record of inputRecords) {
         assert.equal(record.data.exactTransport, false);
+        assert.equal(record.data.captureLayer, "model-adapter-input");
         const artifact = record.artifacts.find(
           (artifact) => artifact.name === "model_input",
         );
@@ -448,18 +454,14 @@ export async function verifyImagePreparationAcceptance({
           sampleId: record.sampleId,
           inputModalities: ["text", "image"],
         });
-        for (const messages of [input.messages, replay.messages]) {
-          const images = messages
-            .flatMap((message) => message.content ?? message.modelContent ?? [])
-            .filter((part) => part.type === "image");
-          assert.equal(images.length, 1);
-          assert.deepEqual(
-            [images[0].attachment.width, images[0].attachment.height],
-            [1600, 1600],
-          );
-          if (entry.key === "unavailable")
-            assert.match(JSON.stringify(messages), /image_decode_failed/);
-        }
+        for (const messages of [input.messages, replay.messages])
+          assertImagePreparationSample({
+            sampleId: record.sampleId,
+            user,
+            originals: entry.originals,
+            overlays,
+            messages,
+          });
         modelInputs.push({
           sampleId: record.sampleId,
           recordId: record.id,
@@ -472,6 +474,9 @@ export async function verifyImagePreparationAcceptance({
       threads.push({
         ...entry,
         originalBytesUnchanged: true,
+        semanticItemListSha256: createHash("sha256")
+          .update(JSON.stringify(snapshot.itemList))
+          .digest("hex"),
         agentNoticeEcho: false,
         prepared: prepared.map((item) => ({
           itemId: item.id,
@@ -497,4 +502,82 @@ export async function verifyImagePreparationAcceptance({
     await host.closeHostResources();
     await trace.flush();
   }
+}
+
+/** Fixture assertion shared by real readback and mutation-negative controls. */
+export function assertImagePreparationSample({
+  sampleId,
+  user,
+  originals,
+  overlays,
+  messages,
+}) {
+  const selected = overlays.filter(
+    (item) => item.source.metadata.onlySampleId === sampleId,
+  );
+  assert.equal(
+    selected.length,
+    originals.length,
+    "one overlay per exact image occurrence",
+  );
+  const preparedRefs = [];
+  const parts = messages.flatMap(
+    (message) => message.content ?? message.modelContent ?? [],
+  );
+  for (const [index, original] of originals.entries()) {
+    const item = selected[index];
+    const preparation = item.source.metadata.imagePreparation;
+    assert.deepEqual(user.content[index + 1], {
+      type: "image",
+      attachment: original,
+    });
+    assert.deepEqual(
+      preparation.occurrence,
+      {
+        itemId: user.id,
+        field: "content",
+        partIndex: index + 1,
+        sha256: original.sha256,
+      },
+      "overlay must belong to the exact original user image occurrence",
+    );
+    assert.deepEqual(
+      preparation.originalAttachment,
+      original,
+      "exact original receipt",
+    );
+    assert.equal(preparation.profile, "codex-high-v1");
+    assert.equal(preparation.requestedDetail, "high");
+    assert.ok(
+      parts.some(
+        (part) => part.type === "text" && part.text === item.content.text,
+      ),
+      "exact persisted model notice reaches this sample",
+    );
+    if (index === 0) {
+      assert.equal(preparation.outcome, "prepared");
+      const images = item.content.parts.filter((part) => part.type === "image");
+      assert.equal(images.length, 1);
+      preparedRefs.push(images[0].attachment);
+    } else {
+      assert.equal(preparation.outcome, "unavailable");
+      assert.equal(preparation.reason, "image_decode_failed");
+      assert.deepEqual(item.content.parts, [
+        { type: "text", text: item.content.text },
+      ]);
+    }
+  }
+  const imageRefs = parts
+    .filter((part) => part.type === "image")
+    .map((part) => part.attachment);
+  assert.deepEqual(
+    imageRefs,
+    preparedRefs,
+    "model input/replay must use this sample's exact prepared attachment",
+  );
+  for (const unavailable of originals.slice(1))
+    assert.ok(
+      !imageRefs.some((ref) => ref.sha256 === unavailable.sha256),
+      "unavailable original must have no model pixels",
+    );
 }

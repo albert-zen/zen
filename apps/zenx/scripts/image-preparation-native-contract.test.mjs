@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +43,80 @@ test("image acceptance uses real Host preparation and cold verification without 
       assert.ok(entry.prepared.length > 0);
     }
     assert.ok(evidence.threads[1].unavailable.length > 0);
+    for (const entry of evidence.threads)
+      assert.match(entry.semanticItemListSha256, /^[a-f0-9]{64}$/);
+    const { createHostedAppServer } =
+      await import("../../../dist/apps/cli/src/host.js");
+    const { compileItemList } = await import("../../../dist/src/item-list.js");
+    const host = createHostedAppServer({
+      cwd: workspace,
+      dataDirectory: data,
+      provider: { type: "fake" },
+      model: "fake",
+      approvalPolicy: "never",
+    });
+    let snapshot;
+    try {
+      snapshot = await host.readThread(fixture.threads[1].threadId);
+    } finally {
+      await host.closeHostResources();
+    }
+    const digest = (items) =>
+      createHash("sha256").update(JSON.stringify(items)).digest("hex");
+    assert.equal(
+      digest(snapshot.itemList),
+      evidence.threads[1].semanticItemListSha256,
+    );
+    const changedHistory = structuredClone(snapshot.itemList);
+    changedHistory.find(
+      (item) => item.source.kind === "user_message",
+    ).content.text += " unrelated mutation";
+    assert.notEqual(
+      digest(changedHistory),
+      evidence.threads[1].semanticItemListSha256,
+      "even an unrelated semantic text edit invalidates the history receipt",
+    );
+    const sampleId = evidence.threads[1].modelInputs[0].sampleId;
+    const valid = {
+      sampleId,
+      user: snapshot.items.find((item) => item.type === "user_message"),
+      originals: fixture.threads[1].originals,
+      overlays: snapshot.itemList.filter(
+        (item) => item.source.kind === "image_preparation",
+      ),
+      messages: compileItemList(snapshot.itemList, {
+        sampleId,
+        inputModalities: ["text", "image"],
+      }).messages,
+    };
+    seed.assertImagePreparationSample(valid);
+    const replaced = structuredClone(valid);
+    replaced.messages
+      .flatMap((message) => message.content ?? message.modelContent ?? [])
+      .find((part) => part.type === "image").attachment.sha256 = "0".repeat(64);
+    assert.throws(
+      () => seed.assertImagePreparationSample(replaced),
+      /exact prepared attachment/,
+      "same-size 1600px substitute cannot pass",
+    );
+    const wrongOccurrence = structuredClone(valid);
+    wrongOccurrence.overlays.find(
+      (item) => item.source.metadata.onlySampleId === sampleId,
+    ).source.metadata.imagePreparation.occurrence.partIndex = 99;
+    assert.throws(
+      () => seed.assertImagePreparationSample(wrongOccurrence),
+      /exact original user image occurrence/,
+    );
+    const wrongOriginal = structuredClone(valid);
+    wrongOriginal.overlays.find(
+      (item) => item.source.metadata.onlySampleId === sampleId,
+    ).source.metadata.imagePreparation.originalAttachment.sha256 = "0".repeat(
+      64,
+    );
+    assert.throws(
+      () => seed.assertImagePreparationSample(wrongOriginal),
+      /exact original receipt/,
+    );
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
