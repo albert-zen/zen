@@ -1,16 +1,16 @@
 {
-  "publicHead": "02a5a4679d847331a32bafbf555433effc8a82dc",
-  "testedSourceCommit": "ae2d5d2d9a35a1d5cb8477177dde5cfa0f97feb6",
-  "tree": "157f94fa4b0489dc6eeffa49030f0d99328a8754",
+  "publicHead": "a7012da238f3fec2dde504e2625d60f3df28120d",
+  "testedSourceCommit": "351ea7150d79d13fea40e0c39811448479e7fd99",
+  "tree": "2504327134c97d41de675e3c91523a1158e51e5f",
   "sameTreeVerifiedByGitDiff": true,
-  "run": "https://github.com/albert-zen/zen/actions/runs/41807368159",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41811090518",
   "synthetic": true,
   "artifacts": {
-    "macosApp": 13310841294,
-    "macosShelf": 13310981003,
-    "windowsApp": 13309579730,
-    "windowsShelf": 13311061271,
-    "imageCardRemoval": 13311166049
+    "macosApp": 13311783205,
+    "macosShelf": 13313080540,
+    "windowsApp": 13311933856,
+    "windowsShelf": 13311909000,
+    "imageCardRemoval": 13312606951
   },
   "results": {
     "macosApp": true,
@@ -45,14 +45,15 @@
     "The preceding 449de source-navigation screenshot captured a pre-navigation compositor frame and is rejected as visual evidence. These new source images were inspected after exact DOM source assertions and paint settlement; the actual pixels show the synthetic source Thread and body.",
     "Combined source integrates main PR683 linear selection-source deduplication and PR687 image-preparation card removal. Core preparation/fallback facts and original attachments remain preserved; no replacement notice UI is introduced.",
     "The three image-card-removal captures use production ThreadView/CSS in Linux Chromium with synthetic ItemList snapshots. They do not run native Host, attachment loading or model dispatch, and do not prove physical macOS/Windows or packaged behavior.",
-    "All images were freshly produced by the stated 02a5/ae2d source. Exact duplicate regenerated PNGs may reuse existing Git blobs.",
-    "Integrated main PR691 replaces the vulnerable Windows native toolchain with SDK10.0.403/runtime and compiler10.0.14. Seven exact-main blobs are preserved, with no audit suppression, ABI relaxation or renderer/capture change."
+    "All images were freshly produced by the stated a701/351ea715 source. Exact duplicate regenerated PNGs may reuse existing Git blobs.",
+    "The audited SDK10.0.403/runtime and compiler10.0.14 from main PR691 remain unchanged, with no audit suppression or ABI/lock relaxation.",
+    "Combined main PR682 preserves default virtual transcript and indexed Find. Independent merge review verified 42 main-only paths, 26 sidebar-only paths and the four shared files. Native capture and input guards are unchanged; 85 focused tests and Web typecheck pass. This native image set exercises ordinary full-App layout, not the full Find-specific acceptance matrix."
   ],
   "images": [
     {
       "file": "steer-wide-light.png",
       "platform": "darwin",
-      "sha256": "23eb4d963c8a3f09e872cb9a679461328cc2f4339a5911c80f61411e4b4c02fa"
+      "sha256": "674202e40ce5f5db4d5eb1580cc49722687b62acab53768243d59c11218e3edb"
     },
     {
       "file": "steer-wide-dark.png",
@@ -87,17 +88,17 @@
     {
       "file": "04-maximized-main-dock.png",
       "platform": "darwin",
-      "sha256": "2e1513521d02f974bf17343035f843d88092756a8cfd56803ed59abe7580ac5c"
+      "sha256": "47bff6d16d9c62d1292106d5b703cafa52c8f60c71779c3cc823d1714db497fd"
     },
     {
       "file": "15-macos-system-sidebar-click.png",
       "platform": "darwin",
-      "sha256": "7cfeeb54e5f5a924c06a72991877dcb64525cb76c8198dff47a778216d5e367a"
+      "sha256": "6fcd36adddc7d3fb175d2d5256c81a2dfd9e566a0e140bf3675edbf02d6244f5"
     },
     {
       "file": "17-reference-dark-Chinese-question-full-App.png",
       "platform": "darwin",
-      "sha256": "a4f47539f670d281109035cdccb9e3b32fb99d7ff93c15f1da29871a12221d5e"
+      "sha256": "af450b0b0cb9680a4d8f90a71f6f158c20c47720254f91c561ba2221c15d5826"
     },
     {
       "file": "windows-queue-human-edit-open.png",
@@ -112,35 +113,35 @@
     {
       "file": "windows-04-maximized-main-dock.png",
       "platform": "win32",
-      "sha256": "b921229f9db198cfd91f68293bdc1a8288715bbeaaccc53106688085b98873db"
+      "sha256": "333c7548c235195bd24fef46aa23756d1a21a82242c1415c060a445b80604d61"
     },
     {
       "file": "windows-17-reference-dark-Chinese-question-full-App.png",
       "platform": "win32",
-      "sha256": "99e44a3cdc7d2f321d7d707ea7d3149a834d01ecf44bc95970c942505a5315b7"
+      "sha256": "a4e25bd267da7013c20e2ba0c18605bbc154e9e7505407eddaf0cf976b951aec"
     },
     {
       "file": "image-card-removed-light.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "f67a4f897ee6ad5802087c201dd044f1b24f36ff1d36d7ff26cebce067ea9034"
+      "sha256": "35a86ecdaeba21c4cce7d85bec8b23ad8764e385a5eb7f1afc56321b35200baf"
     },
     {
       "file": "image-card-removed-dark.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "29fe6110557f3c6f881d328cae7b4b69c809bdaa2a0400585d458b63a6356b7d"
+      "sha256": "f438e757d4e223597584a4e3e7f989ffb27495cbbd3600b2d5e51dc72a8144b0"
     },
     {
       "file": "image-card-removed-narrow.png",
       "platform": "Linux Chromium synthetic production ThreadView component",
-      "sha256": "4639892fa6f326cfbde3575a95b8c1080160e27e30308d267074ef6ee00f5981"
+      "sha256": "cc865c3195f2008e113ccd39ea8d5452f7bd16989adf8e319c8ad84696300756"
     }
   ],
-  "integratedMain": "d4a793146db892d4f5b0d5e2dfd31bae08222860",
+  "integratedMain": "b23b2810ccca7fcbdce2c9657915fb6e29e3afdc",
   "completeCi": {
-    "statusAsOfPublication": "In progress: native Mac and Windows accepted on first attempt; Windows secure native build, package and RuntimeId ABI steps passed. Complete CI and native file end-navigation are not yet terminal.",
-    "run": "https://github.com/albert-zen/zen/actions/runs/41807368263"
+    "statusAsOfPublication": "In progress. Native Mac and Windows passed first attempts. Complete CI is still running; no claim of final acceptance.",
+    "run": "https://github.com/albert-zen/zen/actions/runs/41811091409"
   },
-  "verifiedAtUtc": "2026-11-04T09:37:19.583835+00:00",
+  "verifiedAtUtc": "2026-11-04T10:05:22.660260+00:00",
   "nativeCurrentAttempts": {
     "macos": 1,
     "windows": 1,
@@ -165,5 +166,14 @@
     "diagnostic": "NU1903 Microsoft.DotNet.ILCompiler10.0.12 GHSA-p3jp-9v83-76w9",
     "oldRunRetried": false,
     "auditSuppressed": false
+  },
+  "previousAuditedToolchainCheckpoint": {
+    "publicHead": "02a5a4679d847331a32bafbf555433effc8a82dc",
+    "run": 41807368263,
+    "allEightJobsPassed": true,
+    "zenxPassed": 5482,
+    "zenxSkipped": 56,
+    "zenxFailed": 0,
+    "substitutesForCurrentSource": false
   }
 }
