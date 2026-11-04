@@ -1,0 +1,210 @@
+{
+  "schema": "zen.virtual-transcript-default-native-evidence.v1",
+  "run": "https://github.com/albert-zen/zen/actions/runs/41780110984",
+  "runId": 41780110984,
+  "jobId": 126409476176,
+  "driver": "9591b8045b66657dd0329f7c5329a950c5e6fc5d",
+  "driverTree": "cc2f802b95bbf7d2c58f310757dd1a784bf529e3",
+  "source": "d4c642aecf731294cd415a2a3d11654cef908e87",
+  "sourceTree": "db349a545c3f6502a6babb291314224c1708e5f6",
+  "integratedMainCheckpoint": {
+    "head": "1d6ac2794ce198acaf6259a93693154ad5b94753",
+    "main": "0b0048eae22f1b05db9e713852957eaf716c1793",
+    "sameFullTree": true
+  },
+  "platform": "macOS, real packaged Electron App and production Host with isolated synthetic data and fake provider",
+  "priorTurns": 5000,
+  "sendsPerWidth": 3,
+  "defaultActivation": true,
+  "basicNativeFunctionalGatesPassed": true,
+  "formalReleaseApproved": false,
+  "observerTests": 61,
+  "timingPrivacyTests": 47,
+  "cases": [
+    {
+      "width": 1280,
+      "mode": "dock",
+      "source": "d4c642aecf731294cd415a2a3d11654cef908e87",
+      "tree": "db349a545c3f6502a6babb291314224c1708e5f6",
+      "default": {
+        "activation": "default",
+        "reloadedBeforeSelection": true,
+        "virtualTranscript": true,
+        "virtualTranscriptFind": true
+      },
+      "initialReader": {
+        "bottomDistance": 0,
+        "backToLivePresent": false,
+        "nativeBackToLiveUsed": false
+      },
+      "mountedTurnsBefore": 7,
+      "mountedTurnsAfter": 8,
+      "samples": [
+        {
+          "index": 0,
+          "phase": "first",
+          "clickToPendingNativeSubsequentFrameMs": 34,
+          "ipcDurationMs": 671.4687089999989,
+          "clickToCanonicalNotificationMs": 687.7999999999302,
+          "pendingNativeIntersectionRatio": 1
+        },
+        {
+          "index": 1,
+          "phase": "warm",
+          "clickToPendingNativeSubsequentFrameMs": 20.599999999976717,
+          "ipcDurationMs": 282.2426250000026,
+          "clickToCanonicalNotificationMs": 294.39999999990687,
+          "pendingNativeIntersectionRatio": 1
+        },
+        {
+          "index": 2,
+          "phase": "warm",
+          "clickToPendingNativeSubsequentFrameMs": 25.5,
+          "ipcDurationMs": 279.4187920000004,
+          "clickToCanonicalNotificationMs": 292.39999999990687,
+          "pendingNativeIntersectionRatio": 1
+        }
+      ],
+      "nativeCopy": {
+        "selectionOwnedByTarget": true,
+        "preservedAfterNativeWheel": true,
+        "selectedCharacterCount": 14,
+        "beforeScrollTop": 1399340,
+        "afterScrollTop": 1395716,
+        "beforeViewportHeight": 633,
+        "targetOffscreenAfterWheel": true,
+        "mountedRows": 12,
+        "pausedReader": true,
+        "bottomDistance": 4093,
+        "nativeMouseDrag": true,
+        "afterTiming": true,
+        "nativeCopyMatchesSelection": true,
+        "nativeCopyPreservesSelection": true,
+        "singleMessageCopyMatchesData": true,
+        "editableNativeCopyMatchesInput": true
+      },
+      "independentStorage": {
+        "independentReopen": true,
+        "userMessages": 5003,
+        "matchedNewMessages": 3,
+        "compactionAttempts": 0,
+        "compactionFacts": 0,
+        "traceCompleteness": "complete"
+      },
+      "normalClose": true,
+      "screenshotCount": 17
+    },
+    {
+      "width": 1120,
+      "mode": "popover",
+      "source": "d4c642aecf731294cd415a2a3d11654cef908e87",
+      "tree": "db349a545c3f6502a6babb291314224c1708e5f6",
+      "default": {
+        "activation": "default",
+        "reloadedBeforeSelection": true,
+        "virtualTranscript": true,
+        "virtualTranscriptFind": true
+      },
+      "initialReader": {
+        "bottomDistance": 0,
+        "backToLivePresent": false,
+        "nativeBackToLiveUsed": false
+      },
+      "mountedTurnsBefore": 7,
+      "mountedTurnsAfter": 8,
+      "samples": [
+        {
+          "index": 0,
+          "phase": "first",
+          "clickToPendingNativeSubsequentFrameMs": 60.40000000002328,
+          "ipcDurationMs": 928.9281250000004,
+          "clickToCanonicalNotificationMs": 953.1000000000931,
+          "pendingNativeIntersectionRatio": 1
+        },
+        {
+          "index": 1,
+          "phase": "warm",
+          "clickToPendingNativeSubsequentFrameMs": 23.300000000046566,
+          "ipcDurationMs": 431.54058299999997,
+          "clickToCanonicalNotificationMs": 447.60000000009313,
+          "pendingNativeIntersectionRatio": 1
+        },
+        {
+          "index": 2,
+          "phase": "warm",
+          "clickToPendingNativeSubsequentFrameMs": 42.79999999993015,
+          "ipcDurationMs": 296.91320799999994,
+          "clickToCanonicalNotificationMs": 308.5999999999767,
+          "pendingNativeIntersectionRatio": 1
+        }
+      ],
+      "nativeCopy": {
+        "selectionOwnedByTarget": true,
+        "preservedAfterNativeWheel": true,
+        "selectedCharacterCount": 14,
+        "beforeScrollTop": 1399289,
+        "afterScrollTop": 1395653,
+        "beforeViewportHeight": 633,
+        "targetOffscreenAfterWheel": true,
+        "mountedRows": 10,
+        "pausedReader": true,
+        "bottomDistance": 4093,
+        "nativeMouseDrag": true,
+        "afterTiming": true,
+        "nativeCopyMatchesSelection": true,
+        "nativeCopyPreservesSelection": true,
+        "singleMessageCopyMatchesData": true,
+        "editableNativeCopyMatchesInput": true
+      },
+      "independentStorage": {
+        "independentReopen": true,
+        "userMessages": 5003,
+        "matchedNewMessages": 3,
+        "compactionAttempts": 0,
+        "compactionFacts": 0,
+        "traceCompleteness": "complete"
+      },
+      "normalClose": true,
+      "screenshotCount": 17
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "01-wide-settled-send.png",
+      "sha256": "937e1a7c5fb6cc81a72308352f41c2d413b5b3faab7f076c1f9ed7bdfa104ae5",
+      "bytes": 129784
+    },
+    {
+      "file": "02-narrow-settled-send.png",
+      "sha256": "48bf4d1a1a76023e11762424919b70fe6957a7418e6cf7d0fc4369b9e9198a6f",
+      "bytes": 127195
+    },
+    {
+      "file": "03-responsive-history-390.png",
+      "sha256": "4a1705a2f058b76446b17f8262c80f92f71bccf89fef4bad341ab14f7bc7a9ba",
+      "bytes": 55334
+    }
+  ],
+  "limits": [
+    "Native Electron input and Cocoa Copy are not hardware-keyboard or physical-menu clicks.",
+    "Intersection geometry plus a subsequent rAF is not a compositor or physical-pixel timing.",
+    "First Send traced; warm samples untraced. No T3 App or latency A/B comparison is claimed.",
+    "User-message Copy, partial selected-text Copy and editor-local Copy were checked; arbitrary assistant rich text and whole-history selection are outside this native run.",
+    "Separate full CI has a short trigger-preview source-click failure; no merge approval is implied.",
+    "Screenshots show only an owned synthetic temporary workspace; no user project or personal data.",
+    "Normal App exit and independent storage reopen are observed. The historical launcher did not separately probe process-group emptiness on its successful path. No power-loss durability claim."
+  ],
+  "currentPullRequest": 682,
+  "currentPullRequestHead": "6707c5c2c9e127d8fd4fdec2f46a226e00d70b54",
+  "currentPullRequestTree": "b8cfe03ad32a8c0df7196df4f89a238bfeac2ea7",
+  "currentHeadEquivalence": {
+    "nativeSource": "d4c642aecf731294cd415a2a3d11654cef908e87",
+    "integratedMainCheckpoint": "1d6ac2794ce198acaf6259a93693154ad5b94753",
+    "productionFilesUnchanged": true,
+    "onlyTrackedFileChangesSinceNativeSource": [
+      "apps/zenx/scripts/capture-trigger-message-preview.mjs",
+      "apps/zenx/test/trigger-message-preview-input.test.mjs"
+    ],
+    "nativeEvidenceReusedNotRerun": true
+  }
+}
