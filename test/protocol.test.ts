@@ -301,7 +301,7 @@ test("projects correlated reasoning summary and content streams with canonical i
   }
 });
 
-test("ignores empty subscription reasoning without a dangling protocol item", async () => {
+test("projects empty subscription reasoning with a matched completed lifecycle", async () => {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   const accessToken = `${encode({ alg: "none" })}.${encode({
@@ -389,18 +389,26 @@ test("ignores empty subscription reasoning without a dangling protocol item", as
     });
     await within(completed.promise);
 
-    assert.equal(
-      messages.some(
-        (message) =>
-          "method" in message &&
-          (message.method === "item/started" ||
-            message.method === "item/completed") &&
-          isRecord(message.params) &&
-          isRecord(message.params.item) &&
-          message.params.item.type === "reasoning",
-      ),
-      false,
+    const reasoningLifecycle = messages.filter(
+      (message) =>
+        "method" in message &&
+        (message.method === "item/started" ||
+          message.method === "item/completed") &&
+        isRecord(message.params) &&
+        isRecord(message.params.item) &&
+        message.params.item.type === "reasoning",
     );
+    assert.deepEqual(
+      reasoningLifecycle.map(
+        (message) => "method" in message && message.method,
+      ),
+      ["item/started", "item/completed"],
+    );
+    const lifecycleItems = reasoningLifecycle.map(
+      (message) =>
+        (message as { params: { item: { id: string } } }).params.item,
+    );
+    assert.equal(lifecycleItems[0]?.id, lifecycleItems[1]?.id);
     assert.equal(
       messages.some(
         (message) => "method" in message && message.method === "error",
@@ -409,10 +417,18 @@ test("ignores empty subscription reasoning without a dangling protocol item", as
     );
     const snapshot = await appServer.readThread(String(thread.id));
     assert.equal(snapshot.turns[0]?.status, "completed");
+    const storedReasoning = snapshot.items.filter(
+      (item) => item.type === "reasoning",
+    );
+    assert.equal(storedReasoning.length, 1);
+    assert.equal(storedReasoning[0]?.id, lifecycleItems[1]?.id);
+    assert.equal(storedReasoning[0]?.reasoningContent, "");
     assert.equal(
-      snapshot.items.some(
-        (item) => item.type === "reasoning" || item.type === "failure",
-      ),
+      snapshot.items.some((item) => item.type === "failure"),
+      false,
+    );
+    assert.equal(
+      snapshot.itemList?.some((item) => item.kind === "reasoning"),
       false,
     );
   } finally {

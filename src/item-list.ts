@@ -934,6 +934,13 @@ export function compileItemList(
         });
         break;
       case "reasoning": {
+        // Old stores may already contain these display-only observations.
+        if (
+          item.content.visibility === "public" &&
+          item.content.text === "" &&
+          (item.content.summary === undefined || item.content.summary === "")
+        )
+          continue;
         const producing = item.source.metadata?.selection;
         if (
           item.content.visibility === "opaque" &&
