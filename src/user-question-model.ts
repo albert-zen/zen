@@ -59,10 +59,14 @@ class UserQuestionDisplayError extends Error {
   }
 }
 
-/** Read the complete native result frame, never search arbitrary user prose. */
-function publicationBody(
-  item: Receipt,
-): { marker: unknown; offset: number } | undefined {
+interface ResultBody {
+  marker: Record<string, unknown>;
+  offset: number;
+  standardFrame: boolean;
+}
+
+/** Parse only a complete result frame or its explicit typed body offset. */
+function publicationBody(item: Receipt): ResultBody | undefined {
   const prefixes = [
     "Exit code: 0\n",
     item.content.exitCode === null
@@ -71,21 +75,40 @@ function publicationBody(
   ];
   const prefix =
     prefixes.find((value) => item.content.text.startsWith(value)) ?? "";
-  const body = item.content.text.slice(prefix.length);
-  let marker: unknown;
-  try {
-    marker = JSON.parse(body);
-  } catch {
+  const parseAt = (
+    offset: number,
+    standardFrame: boolean,
+  ): ResultBody | undefined => {
+    const body = item.content.text.slice(offset);
+    if (!body.trimStart().startsWith("{")) return;
+    try {
+      const marker: unknown = JSON.parse(body);
+      if (
+        marker !== null &&
+        typeof marker === "object" &&
+        !Array.isArray(marker)
+      )
+        return {
+          marker: marker as Record<string, unknown>,
+          offset,
+          standardFrame,
+        };
+    } catch {
+      /* Not a complete machine object. Never search for an embedded JSON fragment. */
+    }
     return;
-  }
+  };
+  const standard = parseAt(prefix.length, true);
+  if (standard !== undefined) return standard;
+  const offset = item.source.metadata?.bodyStart;
   if (
-    marker !== null &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    "kind" in marker &&
-    marker.kind === USER_QUESTION_PUBLICATION_KIND
+    typeof offset === "number" &&
+    Number.isSafeInteger(offset) &&
+    offset >= 0 &&
+    offset <= item.content.text.length &&
+    offset !== prefix.length
   )
-    return { marker, offset: prefix.length };
+    return parseAt(offset, false);
   return;
 }
 
@@ -99,6 +122,25 @@ function receiptPrefix(part: UserInput[number] | undefined): boolean {
   );
 }
 
+/** Scope is the existing explicit Ask route, not a Task or Room authority. */
+function isExplicitRoomCall(call: Call): boolean {
+  const { roomId, ...specification } = call.content.arguments;
+  if (
+    typeof roomId !== "string" ||
+    !roomId ||
+    roomId.trim() !== roomId ||
+    roomId.length > 512 ||
+    /[\u0000-\u001f\u007f]/u.test(roomId)
+  )
+    return false;
+  try {
+    parseUserQuestionSpecification(specification);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Deterministic display of complete committed question facts, before selection.
  * No registry, mutation, native address resolution or free-text replacement.
@@ -107,18 +149,29 @@ export function userQuestionModelProjection(
   items: readonly ContextItem[],
 ): ReadonlyMap<string, ContextItem> {
   const calls = new Map<string, { call: Call; position: number }[]>();
+  const receipts: { item: Receipt; position: number }[] = [];
+  const replies: Extract<ContextItem, { kind: "message" }>[] = [];
   const key = (item: Call | Receipt) =>
     JSON.stringify([item.turnId, item.content.callId]);
+  // One visit to the full input. Subsequent work is limited to actual Tool
+  // receipts and typed native replies, including orphan machine candidates.
   items.forEach((item, position) => {
     if (item.kind === "tool_call") {
       const values = calls.get(key(item)) ?? [];
       values.push({ call: item, position });
       calls.set(key(item), values);
-    }
+    } else if (item.kind === "tool_result") receipts.push({ item, position });
+    else if (
+      item.kind === "message" &&
+      item.role === "user" &&
+      item.source.kind === "user_message" &&
+      item.source.metadata?.questionReply !== undefined
+    )
+      replies.push(item);
   });
+  if (receipts.length === 0 && replies.length === 0) return new Map();
   const publications = new Map<string, Publication>();
-  items.forEach((item, position) => {
-    if (item.kind !== "tool_result") return;
+  receipts.forEach(({ item, position }) => {
     const candidates = calls.get(key(item));
     // A known non-Ask tool can quote the very same JSON as ordinary content.
     // Neither its text nor user/third-party messages become native publications.
@@ -137,10 +190,37 @@ export function userQuestionModelProjection(
     )
       return;
     const observed = publicationBody(item);
-    if (observed === undefined) return;
     const fail: (reason: string) => never = (reason) => {
       throw new UserQuestionDisplayError(item.id, reason);
     };
+    // Room receipts remain under the separate Room authority. Failed/refused
+    // Ask results keep their useful error text; they are not publications.
+    if (observed?.marker.kind === "zen.room-question.published") return;
+    if (observed?.marker.kind !== USER_QUESTION_PUBLICATION_KIND) {
+      // A slow Room publisher can yield a legitimate intermediate Task result.
+      // Keep all results of its uniquely proven explicit Room route unchanged;
+      // compiler input has no Task annotations and must not guess from text.
+      // A recognizable Thread publication never takes this separate-scope path.
+      const call = candidates?.length === 1 ? candidates[0]!.call : undefined;
+      if (
+        call?.content.name === ASK_USER_QUESTION_NAME &&
+        call.source.kind === "tool_call" &&
+        item.source.kind === "tool_result" &&
+        isExplicitRoomCall(call)
+      )
+        return;
+      if (
+        item.content.exitCode === 0 &&
+        item.source.metadata?.executionStatus === "completed" &&
+        candidates?.some(
+          ({ call }) => call.content.name === ASK_USER_QUESTION_NAME,
+        )
+      )
+        fail(
+          "successful Ask result has no supported complete publication body",
+        );
+      return;
+    }
     if (candidates?.length !== 1)
       fail("original source call is unavailable or ambiguous");
     const { call, position: callPosition } = candidates[0]!;
@@ -157,6 +237,8 @@ export function userQuestionModelProjection(
       fail("publication is not a successful completed result");
     const identity = origin(call);
     const offset = item.source.metadata?.bodyStart;
+    if (!observed.standardFrame)
+      fail("publication uses an unsupported result frame");
     if (!identity || offset !== observed.offset)
       fail(
         "original request provenance or body offset is unavailable or inconsistent",
@@ -231,21 +313,29 @@ export function userQuestionModelProjection(
       projected.set(item.id, { ...item, content: { ...item.content, text } });
     }
   }
-  for (const item of items) {
-    if (
-      item.kind !== "message" ||
-      item.role !== "user" ||
-      item.source.kind !== "user_message" ||
-      item.source.metadata?.questionReply === undefined
-    )
-      continue;
+  for (const item of replies) {
     try {
-      const reply = parseUserQuestionReply(item.source.metadata.questionReply);
+      const reply = parseUserQuestionReply(item.source.metadata!.questionReply);
       const candidates = byIdentity.get(identityKey(reply.request));
-      if (candidates?.length !== 1) continue;
+      if (candidates?.length !== 1) {
+        // Cancellation's complete old renderer depends only on typed request
+        // and outcome, so an orphan can be rejected without guessing a spec.
+        if (reply.outcome === "cancel") {
+          const expected = `I chose not to answer question ${reply.request.callItemId}.`;
+          const body = receiptPrefix(item.content.parts[0])
+            ? item.content.parts.slice(1)
+            : item.content.parts;
+          if (textFromUserInput(body) === expected)
+            throw new UserQuestionDisplayError(
+              item.id,
+              "cancelled request publication is unavailable or ambiguous",
+            );
+        }
+        continue;
+      }
       const entry = candidates[0]!;
       const normalized = normalizeUserQuestionReply(entry.specification, reply);
-      const offset = item.source.metadata.bodyStart;
+      const offset = item.source.metadata!.bodyStart;
       const matchesAt = (position: number) =>
         matchesUserQuestionReplyBody(
           entry.specification,

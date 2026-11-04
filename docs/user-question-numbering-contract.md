@@ -146,3 +146,19 @@ If an exact historical machine wrapper is proven but its offset or body parts ar
 invalid, compilation stops rather than exposing the native wrapper or discarding
 content. A nonmatching literal/forged body is preserved without gaining native
 response authority. These diagnostics never rewrite durable ItemList or Trace.
+
+Successful Thread-scoped Ask results must have a supported complete Thread
+publication body. A uniquely paired, native Ask call with a validated explicit
+`roomId` retains its existing independent Room route, including intermediate Task
+receipts and final results, without allocating Thread numbers. The compiler does
+not receive nonsemantic Task content-type/status annotations and neither guesses
+Task state from text nor adds a Task parser. A recognized Thread publication still
+requires full native validation even when its call claims Room scope. Unknown or
+malformed Thread success bodies and unsupported result frames are diagnostic;
+failed or refused Ask results preserve their useful error text. A legal explicit body offset can identify an otherwise
+unsupported frame for rejection, never for guessing an origin or scanning text.
+An orphan exact cancellation wrapper can be rejected from its complete typed
+request/outcome and frame without a specification. Unknown-spec answer text is not
+inferred from a header prefix. The compiler builds one input index and processes
+only collected Tool receipts and typed replies afterward; ordinary no-question
+messages take one input pass and no publication JSON parsing.

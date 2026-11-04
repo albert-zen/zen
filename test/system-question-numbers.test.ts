@@ -10,6 +10,7 @@ import {
 } from "../src/user-question.js";
 import { contextItemsFromLegacy, type ContextItem } from "../src/item-list.js";
 import { compileItemList } from "../src/item-list.js";
+import { userQuestionModelProjection } from "../src/user-question-model.js";
 
 function options(directory: string) {
   return {
@@ -255,5 +256,125 @@ test("complete publication append order is stable across late-call repair, dupli
       receipt("final-result", "final", 38),
     ]),
     [["Q2"], ["Q1"], ["Q1"], ["Q3"]],
+  );
+});
+
+test("question display visits full input once and never skips orphan machine guards", () => {
+  const base = {
+    threadId: "cost-thread",
+    turnId: "cost-turn",
+    createdAt: "2026-11-04T00:00:00.000Z",
+  };
+  const ordinary = Array.from({ length: 5000 }, (_, sequence): ContextItem => ({
+    ...base,
+    id: `ordinary-${sequence}`,
+    kind: "message",
+    role: "user",
+    source: { kind: "user_message", sequence },
+    content: { text: "ordinary", parts: [{ type: "text", text: "ordinary" }] },
+  }));
+  const call = contextItemsFromLegacy(
+    {
+      ...base,
+      id: "cost-call",
+      type: "tool_call",
+      callId: "provider-call",
+      name: "ask_user_question",
+      arguments: { questions: [{ prompt: "Which?" }] },
+    },
+    [],
+    5000,
+  )[0]!;
+  assert.ok(call.kind === "tool_call");
+  const request = { threadId: base.threadId, callItemId: call.id };
+  const receipt = contextItemsFromLegacy(
+    {
+      ...base,
+      id: "cost-result",
+      type: "tool_result",
+      callId: "provider-call",
+      exitCode: 0,
+      executionStatus: "completed",
+      output: JSON.stringify({
+        kind: "zen.user-question.published",
+        version: 1,
+        request,
+      }),
+    },
+    [],
+    5001,
+  )[0]!;
+  const measure = (items: ContextItem[]) => {
+    let reads = 0,
+      parses = 0,
+      error: unknown,
+      size = 0;
+    const input = new Proxy(items, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/u.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const originalParse = JSON.parse;
+    JSON.parse = (...args: Parameters<typeof JSON.parse>) => {
+      parses++;
+      return originalParse(...args);
+    };
+    try {
+      size = userQuestionModelProjection(input).size;
+    } catch (caught) {
+      error = caught;
+    } finally {
+      JSON.parse = originalParse;
+    }
+    return { reads, parses, size, error };
+  };
+  assert.deepEqual(measure(ordinary), {
+    reads: 5000,
+    parses: 0,
+    size: 0,
+    error: undefined,
+  });
+  assert.deepEqual(measure([...ordinary, call, receipt]), {
+    reads: 5002,
+    parses: 1,
+    size: 1,
+    error: undefined,
+  });
+  const nonAsk = {
+    ...call,
+    content: { ...call.content, name: "ordinary_tool" },
+  };
+  assert.deepEqual(measure([...ordinary, nonAsk, receipt]), {
+    reads: 5002,
+    parses: 0,
+    size: 0,
+    error: undefined,
+  });
+  const orphanReceipt = measure([receipt]);
+  assert.equal(orphanReceipt.reads, 1);
+  assert.equal(orphanReceipt.parses, 1);
+  assert.match(
+    String(orphanReceipt.error),
+    /Cannot safely display user question/,
+  );
+  const cancel = contextItemsFromLegacy(
+    {
+      ...base,
+      id: "orphan-cancel",
+      type: "user_message",
+      clientId: "orphan-client",
+      text: `I chose not to answer question ${call.id}.`,
+      questionReply: { version: 1, request, outcome: "cancel" },
+    },
+    [],
+    5002,
+  )[0]!;
+  const orphanCancel = measure([cancel]);
+  assert.equal(orphanCancel.reads, 1);
+  assert.equal(orphanCancel.parses, 0);
+  assert.match(
+    String(orphanCancel.error),
+    /cancelled request publication is unavailable/,
   );
 });

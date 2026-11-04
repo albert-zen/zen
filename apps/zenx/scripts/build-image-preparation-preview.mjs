@@ -69,8 +69,6 @@ for (const [name, width, height, lang, theme] of [
 }
 const sources = [
   "apps/zenx/src/renderer/src/ThreadView.tsx",
-  "apps/zenx/src/renderer/src/ImagePreparationNotice.tsx",
-  "apps/zenx/src/renderer/src/image-preparation-projection.ts",
   "apps/zenx/src/renderer/src/styles.css",
   "apps/zenx/src/renderer/src/theme.css",
   "apps/zenx/src/renderer/src/i18n/shell.ts",
@@ -89,7 +87,7 @@ await writeFile(
       sourceTree,
       synthetic: true,
       scope:
-        "Production ThreadView, ImagePreparationNotice/projection and CSS in browser. Synthetic ItemList snapshots and fixture navigation only. Not full App, native Host, packaged, physical macOS or Windows acceptance. No user data or image payloads.",
+        "Production ThreadView and CSS in browser; image-preparation records never add a card or banner. Synthetic ItemList snapshots and fixture navigation only. Not full App, native Host, packaged, physical macOS or Windows acceptance. No user data or image payloads.",
       bundleSha256: sha(html),
       javascriptSha256: sha(js),
       cssSha256: sha(css),

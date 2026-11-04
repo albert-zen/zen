@@ -131,7 +131,8 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
           ...call.source.metadata,
           questionOrigin: { ...publication.request },
         };
-        const receipt = structuredClone(originalReceipt);
+        const receipt: Extract<ContextItem, { kind: "tool_result" }> =
+          structuredClone(originalReceipt);
         receipt.id = "other-inherited-result";
         receipt.content.callId = call.content.callId;
         return [...items, call, receipt];
@@ -173,9 +174,67 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
         return items;
       },
     ]);
+    for (const [name, body, prefix] of [
+      ["crlf-native-prefix", originalBody, "Exit code: 0\r\n"],
+      ["custom-native-prefix", originalBody, "Observed result:\n"],
+      ["native-json-suffix", originalBody + " trailing", "Exit code: 0\n"],
+      [
+        "native-unparseable-success",
+        "unparseable publication",
+        "Exit code: 0\n",
+      ],
+    ])
+      variants.push([
+        name!,
+        (items) => {
+          const receipt = items.find((item) => item.id === originalReceipt.id)!;
+          assert.ok(receipt.kind === "tool_result");
+          receipt.content.text = prefix! + body!;
+          receipt.source.metadata!.bodyStart = prefix!.length;
+          return items;
+        },
+      ]);
+    const cancelThread = await host.startThread();
+    await (
+      await host.startTurn(
+        cancelThread.id,
+        '!tool ask_user_question {"questions":[{"id":"scope","prompt":"Which?"}]}',
+      )
+    ).done;
+    const cancelPublication = (await host.listUserQuestions(cancelThread.id))
+      .questions[0]!;
+    await (
+      await host.respondToUserQuestion(cancelThread.id, {
+        questionCallItemId: cancelPublication.request.callItemId,
+        clientId: "orphan-cancel",
+        outcome: "cancel",
+      })
+    ).turn.done;
+    const cancelSnapshot = await host.readThread(cancelThread.id);
+    const cancelReply = cancelSnapshot.itemList!.find(
+      (item) => item.source.metadata?.questionReply !== undefined,
+    )!;
+    assert.ok(cancelReply.kind === "message");
+    const orphanItems = cancelSnapshot.itemList!.filter(
+      (item) => item.kind !== "tool_call" && item.kind !== "tool_result",
+    );
+    variants.push([
+      "orphan-exact-cancel",
+      () => structuredClone(orphanItems) as ContextItem[],
+    ]);
     for (const [name, mutate] of variants) {
+      const baseSnapshot =
+        name === "orphan-exact-cancel" ? cancelSnapshot : snapshot;
+      const testThreadId = baseSnapshot.id;
+      const facts =
+        name === "orphan-exact-cancel"
+          ? baseSnapshot.items.filter(
+              (item) =>
+                item.type !== "tool_call" && item.type !== "tool_result",
+            )
+          : baseSnapshot.items;
       const items = mutate(
-        structuredClone(snapshot.itemList!) as ContextItem[],
+        structuredClone(baseSnapshot.itemList!) as ContextItem[],
       );
       await t.test(`${name}: standalone compiler`, () => {
         const exact = structuredClone(items);
@@ -208,7 +267,7 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
             metadata,
           };
           const writer = new DomainThreadJournal(journalOptions);
-          await writer.create(snapshot.items, items);
+          await writer.create(facts, items);
           await writer.close();
           const journal = new DomainThreadJournal(journalOptions);
           const requests: ModelRequest[] = [];
@@ -227,11 +286,11 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
             }),
             providerRegistry: new ProviderRegistry([
               {
-                providerProfileId: snapshot.providerProfileId,
+                providerProfileId: baseSnapshot.providerProfileId,
                 adapter: model,
                 modelCatalog: new StaticModelCatalog([
                   {
-                    id: snapshot.modelId,
+                    id: baseSnapshot.modelId,
                     isDefault: true,
                     contextWindow: 32768,
                   },
@@ -240,15 +299,15 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
             ]),
             defaults: {
               cwd: root,
-              providerProfileId: snapshot.providerProfileId,
-              modelId: snapshot.modelId,
+              providerProfileId: baseSnapshot.providerProfileId,
+              modelId: baseSnapshot.modelId,
               reasoningEffort: "medium",
               sandbox: "read-only",
               approvalPolicy: "never",
             },
           });
           try {
-            const replay = await journal.readItemList(thread.id);
+            const replay = await journal.readItemList(testThreadId);
             if (name === "missing-call") {
               assert.ok(
                 replay.some((item) => item.id === originalCall.id),
@@ -259,7 +318,7 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
                 items,
               );
             } else assert.deepEqual(replay, items);
-            const traceBefore = await trace.read(thread.id);
+            const traceBefore = await trace.read(testThreadId);
             let compileError: unknown;
             try {
               compileItemList(replay);
@@ -267,30 +326,33 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
               compileError = caught;
             }
             assert.deepEqual(
-              await journal.readItemList(thread.id),
+              await journal.readItemList(testThreadId),
               replay,
               "compiler never rewrites committed ItemList",
             );
             assert.deepEqual(
-              await trace.read(thread.id),
+              await trace.read(testThreadId),
               traceBefore,
               "compiler never rewrites Trace",
             );
             let dispatchError: unknown;
             try {
               await (
-                await server.startTurn(thread.id, "Continue safely")
+                await server.startTurn(testThreadId, "Continue safely")
               ).done;
             } catch (caught) {
               dispatchError = caught;
             }
             assert.deepEqual(
-              (await journal.readItemList(thread.id)).slice(0, replay.length),
+              (await journal.readItemList(testThreadId)).slice(
+                0,
+                replay.length,
+              ),
               replay,
               "dispatch cannot rewrite original semantic facts",
             );
             assert.deepEqual(
-              (await trace.read(thread.id)).records.slice(
+              (await trace.read(testThreadId)).records.slice(
                 0,
                 traceBefore.records.length,
               ),
@@ -326,6 +388,76 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
         },
       );
     }
+    await t.test(
+      "orphan cancellation text requires exact native provenance; unknown answers stay literal",
+      () => {
+        for (const mode of ["wrong-request", "no-provenance"] as const) {
+          const items = structuredClone(orphanItems);
+          const reply = items.find((item) => item.id === cancelReply.id)!;
+          assert.ok(reply.kind === "message");
+          if (mode === "no-provenance")
+            delete reply.source.metadata!.questionReply;
+          else {
+            const provenance = reply.source.metadata!.questionReply as {
+              request: { callItemId: string };
+            };
+            provenance.request.callItemId = "unrelated-request";
+          }
+          const before = structuredClone(items);
+          const users = compileItemList(items).messages.filter(
+            (message) => message.role === "user",
+          );
+          assert.ok(
+            users.some(
+              (message) =>
+                "content" in message &&
+                JSON.stringify(message.content) ===
+                  JSON.stringify(reply.content.parts),
+            ),
+            mode,
+          );
+          assert.deepEqual(items, before);
+        }
+        const unknownAnswer = snapshot.itemList!.filter(
+          (item) => item.kind !== "tool_call" && item.kind !== "tool_result",
+        );
+        const users = compileItemList(unknownAnswer).messages.filter(
+          (message) => message.role === "user",
+        );
+        assert.ok(
+          users.some(
+            (message) =>
+              "content" in message &&
+              JSON.stringify(message.content) ===
+                JSON.stringify(originalReply.content.parts),
+          ),
+          "unknown specification cannot justify guessing an answer body",
+        );
+      },
+    );
+    await t.test(
+      "failed and denied Ask error text remains model-visible",
+      () => {
+        for (const status of ["failed", "denied"] as const) {
+          const receipt: Extract<ContextItem, { kind: "tool_result" }> =
+            structuredClone(originalReceipt);
+          receipt.content.exitCode = 1;
+          receipt.source.metadata!.executionStatus = status;
+          receipt.content.text = `Exit code: 1\nAsk ${status}: publication did not happen`;
+          receipt.source.metadata!.bodyStart = "Exit code: 1\n".length;
+          const items: ContextItem[] = [originalCall, receipt];
+          const before = structuredClone(items);
+          assert.deepEqual(
+            compileItemList(items)
+              .messages.filter((message) => message.role === "tool")
+              .map((message) => message.text),
+            [receipt.content.text],
+          );
+          assert.deepEqual(items, before);
+        }
+      },
+    );
+
     await t.test(
       "user prose, UUIDs and full JSON publication text stay literal",
       () => {
@@ -417,7 +549,8 @@ test("Host publications fail closed at compiler and cold dispatch boundaries wit
       () => {
         const call = structuredClone(originalCall);
         call.content.arguments.roomId = "r1";
-        const receipt = structuredClone(originalReceipt);
+        const receipt: Extract<ContextItem, { kind: "tool_result" }> =
+          structuredClone(originalReceipt);
         const body = JSON.stringify({
           kind: "zen.room-question.published",
           version: 1,
