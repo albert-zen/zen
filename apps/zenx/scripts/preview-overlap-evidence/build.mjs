@@ -44,7 +44,7 @@ await esbuild({
   packages: "external",
   outfile: path.join(out, "browser.cjs"),
 });
-for (const name of ["preload.cjs", "run.cjs"])
+for (const name of ["preload.cjs", "run.cjs", "run-host.cjs"])
   await copyFile(path.join(here, name), path.join(out, name));
 const sources = [
   "src/main/workspace-browser.ts",

@@ -23,7 +23,7 @@ jobs:
         run: node apps/zenx/scripts/preview-overlap-evidence/build.mjs "$RUNNER_TEMP/preview-overlap-evidence"
       - name: Capture only the owned composed window with existing permission
         timeout-minutes: 2
-        run: NODE_PATH="$GITHUB_WORKSPACE/node_modules" npx --no-install electron "$RUNNER_TEMP/preview-overlap-evidence/run.cjs"
+        run: NODE_PATH="$GITHUB_WORKSPACE/node_modules" node "$RUNNER_TEMP/preview-overlap-evidence/run-host.cjs"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

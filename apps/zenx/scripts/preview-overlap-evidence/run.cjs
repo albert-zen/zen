@@ -1,6 +1,5 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { createServer } = require("node:http");
 const { once } = require("node:events");
@@ -22,7 +21,11 @@ assert.ok(
   ["darwin", "win32"].includes(process.platform),
   "Supported owned-window capture platform",
 );
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), "zen-overlay-evidence-"));
+const profile = process.env.ZENX_OVERLAY_EVIDENCE_PROFILE;
+assert.ok(
+  profile && fs.statSync(profile).isDirectory(),
+  "Parent-owned fresh synthetic profile",
+);
 app.setPath("userData", profile);
 app.on("window-all-closed", () => {});
 const receipt = {
@@ -206,7 +209,6 @@ async function capture(name, expected) {
       await browser?.shutdown();
       owner?.destroy();
       server?.close();
-      fs.rmSync(profile, { recursive: true, force: true });
     } catch (error) {
       receipt.cleanupError = String(error);
       process.exitCode = 1;
