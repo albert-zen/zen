@@ -61,3 +61,9 @@ Keep the current path unless this experiment demonstrates a clear behavioral and
 - [Playwright existing-browser attachment via extension](https://playwright.dev/agent-cli/commands/attach)
 
 Related behavior and architecture context: [#590](https://github.com/albert-zen/zen/issues/590), [#672 and the newer timeout report](https://github.com/albert-zen/zen/issues/672#issuecomment-6628190612). #689 concerns rendering/composition and is separate from the automation transport.
+
+## Isolated hosted evidence
+
+The `Experimental Playwright native evidence` workflow checks out the exact PR head, installs only this experiment's pinned dependencies, and runs the synthetic native smoke under Xvfb. It retains provenance, a screenshot and the native result. It is restricted to this repository's `codex/unify-playwright-browser-20261104` branch.
+
+This evidence-only draft also temporarily skips the unrelated broad CI jobs **only for that exact repository/branch combination**. Main pushes, other branches and fork PRs are unaffected. These workflow guards are not production changes and must not be merged. A passing native fixture is not full functional parity or merge approval. Remove/review the evidence-only CI arrangement before proposing any future adoption.

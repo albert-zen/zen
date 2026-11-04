@@ -1,0 +1,55 @@
+name: Experimental Playwright native evidence
+on:
+  pull_request:
+    paths:
+      - .github/workflows/playwright-target-experiment.yml
+      - apps/zenx/experiments/playwright/**
+      - apps/zenx/test/playwright-target-transport.test.ts
+permissions:
+  contents: read
+concurrency:
+  group: playwright-target-experiment-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  native-evidence:
+    if: github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/zenx/experiments/playwright/package-lock.json
+      - name: Install only isolated fixture dependencies
+        run: npm ci --prefix apps/zenx/experiments/playwright --no-audit --no-fund
+      - name: Protocol boundary tests
+        working-directory: apps/zenx/experiments/playwright
+        run: node --import tsx --test ../../test/playwright-target-transport.test.ts
+      - name: Install display and Electron system prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb libgtk-3-0t64 libnss3 libasound2t64 libgbm1
+      - name: Native WebContentsView through public Playwright API
+        timeout-minutes: 3
+        env:
+          ZENX_EXPERIMENT_EVIDENCE: ${{ runner.temp }}/playwright-native-evidence
+          ZENX_EXPERIMENT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$ZENX_EXPERIMENT_EVIDENCE"
+          git rev-parse HEAD > "$ZENX_EXPERIMENT_EVIDENCE/checked-out-head.txt"
+          set -o pipefail
+          timeout 90s xvfb-run -a apps/zenx/experiments/playwright/node_modules/.bin/electron --no-sandbox \
+            --user-data-dir="$(mktemp -d)" \
+            apps/zenx/experiments/playwright/electron-smoke.cjs \
+            2>&1 | tee "$ZENX_EXPERIMENT_EVIDENCE/native-smoke.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-native-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/playwright-native-evidence
+          if-no-files-found: warn
+          retention-days: 14
