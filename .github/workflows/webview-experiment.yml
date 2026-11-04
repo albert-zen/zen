@@ -1,0 +1,36 @@
+name: Experimental persistent WebView guest
+on:
+  pull_request:
+    paths:
+      - apps/zenx/experiments/webview/**
+      - .github/workflows/webview-experiment.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-guest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test apps/zenx/experiments/webview/persistent-host.test.mjs
+      - run: node apps/zenx/experiments/webview/launch.mjs "${{ runner.temp }}/webview-experiment"
+        timeout-minutes: 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview-experiment-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/webview-experiment/report.json
+            ${{ runner.temp }}/webview-experiment/*.png
+          if-no-files-found: error
+          retention-days: 14
