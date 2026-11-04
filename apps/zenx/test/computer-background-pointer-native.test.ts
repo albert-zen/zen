@@ -26,6 +26,7 @@ test(
     // services, screenshots, app activation or OS input. Delivery is not tested.
     const source =
       `import Foundation
+import CoreGraphics
 import Darwin
 struct Failure: Error {}
 func refuse(_ message: String) throws -> Never { throw Failure() }
