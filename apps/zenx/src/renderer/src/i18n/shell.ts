@@ -1,4 +1,17 @@
 export const en = {
+  findInThread: "Find in thread",
+  threadFindCount: "{{current}} of {{total}}",
+  threadFindNoMatches: "No matches",
+  previousThreadMatch: "Previous match",
+  nextThreadMatch: "Next match",
+  closeThreadFind: "Close thread search",
+  threadFindScope:
+    "WIP: messages, Host details, reasoning and plain tool text across loaded history. Opaque custom plugin output is not indexed.",
+  threadFindRevealFailed:
+    "Match could not be revealed. Try next or previous again.",
+  threadFindHighlightUnsupported:
+    "This browser cannot paint search highlights. Your text selection is unchanged.",
+
   pendingSendSending: "Sending…",
   pendingSendAdmitted: "Admitted; waiting for the conversation to update",
   pendingSendNotSent: "Not sent",
@@ -975,6 +988,18 @@ export const en = {
 } as const;
 
 export const zhCN = {
+  findInThread: "在会话中查找",
+  threadFindCount: "{{current}} / {{total}}",
+  threadFindNoMatches: "没有匹配项",
+  previousThreadMatch: "上一个匹配项",
+  nextThreadMatch: "下一个匹配项",
+  closeThreadFind: "关闭会话查找",
+  threadFindScope:
+    "实验：搜索已加载历史中的消息、Host 详情、思考和纯文本工具内容。暂不包含不透明的自定义插件输出。",
+  threadFindRevealFailed: "未能显示匹配项，请再次选择上一个或下一个。",
+  threadFindHighlightUnsupported:
+    "当前浏览器不支持搜索高亮，已有文本选择保持不变。",
+
   pendingSendSending: "正在发送…",
   pendingSendAdmitted: "已接纳，等待会话更新",
   pendingSendNotSent: "未发送",
