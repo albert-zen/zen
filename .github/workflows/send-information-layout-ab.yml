@@ -76,7 +76,7 @@ jobs:
         timeout-minutes: 20
         run: |
           failed=0
-          for case_spec in "1280 enter control baseline candidate"; do
+          for case_spec in "1280 enter control candidate baseline"; do
             read -r width activation prefix first second <<< "$case_spec"
             for source in "$first" "$second"; do
               case="$prefix-$source"
