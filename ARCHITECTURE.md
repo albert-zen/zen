@@ -1046,6 +1046,8 @@ Item，adapter 按目标 Provider/model 的工具续接或 preserved-thinking �
 一次性提交为 `incomplete: true` canonical Item，保留 opaque visibility，随后丢弃内存
 correlation/buffer；所有 incomplete Item 都不重放给模型。
 
+Responses 的公开 reasoning summary 由 adapter 对已验证的 OpenAI 官方端点及明确模型请求 `summary: auto`；未知模型、别名、第三方兼容端点与不请求 reasoning 的采样不自动添加该参数。摘要是否返回仍由 Provider 决定，摘要不是 opaque reasoning 的解码，也不改变其持久化与回放。
+
 Reasoning control 只有一个权威：UI/Core 在 Turn admission 时冻结 canonical
 `reasoningEffort`，ModelAdapter 只把该值翻译为目标模型支持的 wire 字段。OpenAI-compatible
 `defaultParams` 不得包含 `reasoning_effort` 或 `thinking_budget`；这两项会形成第二控制权威，

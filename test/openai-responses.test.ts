@@ -50,6 +50,111 @@ const provenance = {
     .digest("hex"),
 };
 
+test("public Responses opts into summaries only on verified OpenAI models and routes", async (t) => {
+  const cases = [
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      expected: "auto",
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-6-astra",
+      effort: "high",
+      expected: "auto",
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-6.1-sol",
+      effort: "high",
+      expected: "auto",
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.6-terra",
+      effort: null,
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.4",
+      effort: "none",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.3-codex-spark",
+      effort: "medium",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "unknown-model",
+      effort: "medium",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com/v1",
+      model: "openai/gpt-5.6-terra",
+      effort: "medium",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com/v1/proxy",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://api.openai.com.example.test/v1",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      expected: undefined,
+    },
+    {
+      baseUrl: "https://example.test/v1",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      expected: undefined,
+    },
+  ];
+  for (const entry of cases) {
+    await t.test(
+      `${entry.baseUrl} ${entry.model} ${entry.effort}`,
+      async () => {
+        let body: any;
+        const adapter = new OpenAiResponsesModel({
+          baseUrl: entry.baseUrl,
+          apiKey,
+          fetch: async (_url, init) => {
+            body = JSON.parse(String(init?.body));
+            return sse();
+          },
+        });
+        await collect(
+          adapter.stream(
+            request({ model: entry.model, reasoningEffort: entry.effort }),
+          ),
+        );
+        assert.deepEqual(
+          body.reasoning,
+          entry.effort === null
+            ? undefined
+            : {
+                effort: entry.effort,
+                ...(entry.expected === undefined
+                  ? {}
+                  : { summary: entry.expected }),
+              },
+        );
+        assert.deepEqual(body.include, ["reasoning.encrypted_content"]);
+        assert.equal(body.store, false);
+      },
+    );
+  }
+});
+
 test("public Responses retains developer instructions independently of Chat compatibility", async () => {
   let body: any;
   const adapter = new OpenAiResponsesModel({
