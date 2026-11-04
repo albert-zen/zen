@@ -657,6 +657,95 @@ async function runOrigin() {
   result.ok = true;
 }
 
+// Read-only browser evidence. Sharp failure does not imply browser decode failure.
+async function collectImageThumbnailDiagnostics(originals) {
+  const buttons = [
+    ...document.querySelectorAll(".thread-view .image-thumbnail"),
+  ];
+  return await Promise.all(
+    buttons.map(async (button, index) => {
+      const image = button.querySelector("img");
+      const placeholder = button.querySelector(".image-placeholder");
+      const rect = button.getBoundingClientRect();
+      const observation = {
+        index,
+        expectedOriginal: originals[index] ?? null,
+        identityEvidence: "DOM order only; blob identity not yet observed",
+        disabled: button.disabled,
+        busy: button.getAttribute("aria-busy"),
+        title: button.title,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        placeholder: placeholder
+          ? {
+              text: placeholder.textContent,
+              role: placeholder.getAttribute("role"),
+            }
+          : null,
+        image: image
+          ? {
+              complete: image.complete,
+              naturalWidth: image.naturalWidth,
+              naturalHeight: image.naturalHeight,
+              alt: image.alt,
+              loading: image.loading,
+              decoding: image.decoding,
+            }
+          : null,
+      };
+      if (!image) return observation;
+      let timer;
+      try {
+        observation.decode = await Promise.race([
+          image.decode().then(
+            () => ({ status: "resolved" }),
+            (error) => ({
+              status: "rejected",
+              name: error.name,
+              message: error.message,
+            }),
+          ),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve({ status: "timeout" }), 1500);
+          }),
+        ]);
+      } catch (error) {
+        observation.decode = {
+          status: "threw",
+          name: error.name,
+          message: error.message,
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+      const source = image.currentSrc || image.src;
+      observation.sourceProtocol = source.split(":", 1)[0];
+      if (observation.sourceProtocol !== "blob") return observation;
+      // Only the already-mounted production image's local blob, never a URL supplied
+      // by the fixture or an external fetch. Keep bytes/URLs out of the artifact.
+      try {
+        const bytes = await (await fetch(source)).arrayBuffer();
+        const sha256 = [
+          ...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+        ]
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join("");
+        observation.blob = {
+          byteLength: bytes.byteLength,
+          sha256,
+          matchesOriginal:
+            sha256 === originals[index]?.sha256 &&
+            bytes.byteLength === originals[index]?.byteLength,
+        };
+        observation.identityEvidence =
+          "mounted production blob SHA-256 and length";
+      } catch (error) {
+        observation.blob = { error: String(error.message || error) };
+      }
+      return observation;
+    }),
+  );
+}
+
 // Image-only read/preview acceptance. No alternate App, bridge, DOM or model.
 async function runImage() {
   window.setSize(1100, 820);
@@ -675,15 +764,39 @@ async function runImage() {
       language:document.documentElement.lang,appearance:document.documentElement.dataset.appearance};
   })()`);
   async function ready(entry) {
-    await until(async () => {
-      const state = await observe();
-      return (
-        state.images.length === 1 &&
-        state.images[0].complete &&
-        state.images[0].width === 2048 &&
-        state.failures.length === (entry.key === "unavailable" ? 1 : 0)
-      );
-    }, "original image and genuine codec failure rendered");
+    try {
+      await until(async () => {
+        const state = await observe();
+        result.imageReadiness = {
+          threadId: entry.threadId,
+          key: entry.key,
+          state,
+        };
+        return (
+          state.images.length === 1 &&
+          state.images[0].complete &&
+          state.images[0].width === 2048 &&
+          state.failures.length === (entry.key === "unavailable" ? 1 : 0)
+        );
+      }, "original image and genuine codec failure rendered");
+    } catch (error) {
+      try {
+        result.imageFailureDiagnostics = {
+          threadId: entry.threadId,
+          key: entry.key,
+          scope:
+            "Actual mounted thumbnail DOM, bounded decode() and local blob identity; browser state is independent of Host codec outcome",
+          thumbnails: await evaluate(
+            `(${collectImageThumbnailDiagnostics.toString()})(${JSON.stringify(entry.originals)})`,
+          ),
+        };
+      } catch (diagnosticError) {
+        result.imageFailureDiagnostics = {
+          error: String(diagnosticError.stack || diagnosticError),
+        };
+      }
+      throw error;
+    }
     await evaluate(
       `document.querySelector(${JSON.stringify(goodImage)}).scrollIntoView({block:'center'})`,
     );

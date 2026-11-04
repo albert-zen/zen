@@ -175,3 +175,91 @@ test("native image branch preserves existing question guards, limits and artifac
     ],
   );
 });
+
+test("thumbnail diagnostics report browser decode and exact blob identity without inventing an alert", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const { webcrypto } = await import("node:crypto");
+  const capture = await readFile(
+    new URL("capture-user-question.cjs", scripts),
+    "utf8",
+  );
+  const start = capture.indexOf(
+    "async function collectImageThumbnailDiagnostics(",
+  );
+  const end = capture.indexOf("// Image-only read/preview acceptance.", start);
+  assert.ok(start >= 0 && end > start);
+  const payloads = [
+    Buffer.from("synthetic-good"),
+    Buffer.from("synthetic-undecodable"),
+  ];
+  const originals = payloads.map((bytes) => ({
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    byteLength: bytes.byteLength,
+  }));
+  const images = payloads.map((_, index) => ({
+    complete: true,
+    naturalWidth: index ? 1 : 2048,
+    naturalHeight: index ? 1 : 2048,
+    alt: "Synthetic image",
+    loading: "",
+    decoding: "auto",
+    currentSrc: `blob:owned-${index}`,
+    decode: async () => {
+      if (index)
+        throw Object.assign(new Error("Synthetic decoder rejection"), {
+          name: "EncodingError",
+        });
+    },
+  }));
+  const buttons = images.map((image) => ({
+    querySelector: (selector) => (selector === "img" ? image : null),
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 120, height: 90 }),
+    disabled: false,
+    title: "Synthetic image",
+    getAttribute: () => "false",
+  }));
+  buttons.push({
+    querySelector: (selector) =>
+      selector === ".image-placeholder"
+        ? { textContent: "Image unavailable", getAttribute: () => "alert" }
+        : null,
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 120, height: 90 }),
+    disabled: true,
+    title: "Image unavailable",
+    getAttribute: () => "false",
+  });
+  const fetched = [];
+  const collect = runInNewContext(`(${capture.slice(start, end).trim()})`, {
+    document: { querySelectorAll: () => buttons },
+    crypto: webcrypto,
+    setTimeout,
+    clearTimeout,
+    fetch: async (url) => {
+      fetched.push(url);
+      const bytes = payloads[Number(url.at(-1))];
+      return { arrayBuffer: async () => Uint8Array.from(bytes).buffer };
+    },
+  });
+  const result = JSON.parse(JSON.stringify(await collect(originals)));
+  assert.equal(result[0].decode.status, "resolved");
+  assert.equal(result[1].decode.status, "rejected");
+  assert.equal(result[1].image.naturalWidth, 1);
+  assert.equal(
+    result[1].placeholder,
+    null,
+    "decode rejection is not invented as product alert state",
+  );
+  assert.equal(result[0].blob.matchesOriginal, true);
+  assert.equal(result[1].blob.matchesOriginal, true);
+  assert.equal(result[2].image, null);
+  assert.equal(result[2].placeholder.role, "alert");
+  assert.deepEqual(fetched, ["blob:owned-0", "blob:owned-1"]);
+  images[1].currentSrc = "https://external.invalid/never-fetch";
+  fetched.length = 0;
+  await collect(originals);
+  assert.deepEqual(
+    fetched,
+    ["blob:owned-0"],
+    "diagnostics never fetch external images",
+  );
+});
