@@ -27,6 +27,11 @@ test("confirmed release retires a failed public session without replaying its un
   const cdp = await createFakeCdpServer();
   const connection = await connectUserBrowserCdp(cdp.endpoint);
   const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const events: BrowserThreadEvent[] = [];
+  const stopCatalog = capability.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
   const invoke = (
     name: string,
     args: Record<string, unknown> = {},
@@ -78,6 +83,19 @@ test("confirmed release retires a failed public session without replaying its un
     await receipt;
     assert.equal(cdp.count("Target.detachFromTarget"), 1);
     assert.deepEqual(cdp.detachedSessionIds(), [oldAttachment]);
+    const ended = events.findLast((event) => event.type === "turn-ended");
+    assert.equal(ended?.type, "turn-ended");
+    if (ended?.type === "turn-ended") {
+      assert.equal(ended.failed, true);
+      assert.match(ended.message ?? "", /session was released/u);
+      assert.match(ended.message ?? "", /earlier.*outcome is unknown/u);
+    }
+    const cleared = events.findLast((event) => event.type === "targets");
+    assert.equal(cleared?.type, "targets");
+    if (cleared?.type === "targets") {
+      assert.deepEqual(cleared.targets, []);
+      assert.equal(cleared.selectedId, undefined);
+    }
 
     await invoke("browser_list_tabs");
     const after = (await invoke("browser_inspect", {
@@ -105,8 +123,50 @@ test("confirmed release retires a failed public session without replaying its un
       "a pre-existing human page is never closed",
     );
   } finally {
+    stopCatalog();
     // The original unknown-effect receipt remains recorded even after a fresh session.
     await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("successful explicit close publishes a confirmed receipt and clears the old product target", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const events: BrowserThreadEvent[] = [];
+  const stopCatalog = capability.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
+  const invoke = (name: string) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false },
+      signal: new AbortController().signal,
+    });
+  try {
+    await invoke("browser_list_tabs");
+    const before = events.findLast((event) => event.type === "targets");
+    assert.equal(before?.type, "targets");
+    if (before?.type === "targets") assert.equal(before.targets.length, 1);
+    assert.deepEqual(await invoke("browser_close_session"), {
+      closed: true,
+      sessionId: "task",
+    });
+    const ended = events.findLast((event) => event.type === "turn-ended");
+    assert.equal(ended?.type, "turn-ended");
+    if (ended?.type === "turn-ended") assert.equal(ended.failed, false);
+    const cleared = events.findLast((event) => event.type === "targets");
+    assert.equal(cleared?.type, "targets");
+    if (cleared?.type === "targets") assert.deepEqual(cleared.targets, []);
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+  } finally {
+    stopCatalog();
+    await capability.close();
     await cdp.close();
   }
 });
@@ -138,6 +198,12 @@ test("closing a session stops live reads before its unsettled action can release
     await assert.rejects(action, /outcome is unknown/u);
     const closing = Promise.resolve(connection.backend.closeSession("work"));
     const receipt = assert.rejects(closing, /outcome is unknown/u);
+    assert.deepEqual(events.at(-1), {
+      type: "status",
+      status: "unavailable",
+      message:
+        "Live observation stopped because browser session cleanup was requested.",
+    });
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
     assert.equal(cdp.count("Target.detachFromTarget"), 0);
     const count = events.length;
@@ -174,7 +240,10 @@ test("finishing a session with a temporary page stops live reads before queued c
       "https://example.test/temporary",
     );
     const inspected = await connection.backend.inspect("work", tab.tabId);
-    connection.backend.observeTab!("work", tab.tabId, () => {});
+    const events: BrowserLiveObservationEvent[] = [];
+    connection.backend.observeTab!("work", tab.tabId, (event) =>
+      events.push(event),
+    );
     await waitUntil(() => cdp.count("Page.startScreencast") === 1);
     cdp.holdNextActionReply();
     const controller = new AbortController();
@@ -190,6 +259,12 @@ test("finishing a session with a temporary page stops live reads before queued c
     await assert.rejects(action, /outcome is unknown/u);
     const closing = Promise.resolve(connection.backend.finishSession!("work"));
     const receipt = assert.rejects(closing, /earlier.*outcome is unknown/u);
+    assert.deepEqual(events.at(-1), {
+      type: "status",
+      status: "unavailable",
+      message:
+        "Live observation stopped because browser session cleanup was requested.",
+    });
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
     assert.equal(cdp.count("Target.closeTarget"), 0);
     cdp.releaseLateActionReply();
@@ -249,6 +324,12 @@ test("unknown detach keeps the public lease fail-closed while stopping live read
       return true;
     });
     await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    assert.deepEqual(liveEvents.at(-1), {
+      type: "status",
+      status: "unavailable",
+      message:
+        "Live observation stopped because browser session cleanup was requested.",
+    });
     await assert.rejects(
       invoke("browser_list_tabs"),
       /outcome is unknown|tainted/u,

@@ -1678,8 +1678,20 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     session.closeQueued = true;
     // Disposable reads stop at the request, before temporary-page cleanup or
     // mutation settlement, and remain stopped even when cleanup later fails.
-    for (const live of [...this.#liveSubscriptions])
-      if (live.sessionId === session.id) live.stop();
+    for (const live of [...this.#liveSubscriptions]) {
+      if (live.sessionId !== session.id) continue;
+      live.stop();
+      try {
+        live.listener({
+          type: "status",
+          status: "unavailable",
+          message:
+            "Live observation stopped because browser session cleanup was requested.",
+        });
+      } catch {
+        // A disposable observer cannot prevent native resource cleanup.
+      }
+    }
   }
 
   async close(): Promise<void> {
