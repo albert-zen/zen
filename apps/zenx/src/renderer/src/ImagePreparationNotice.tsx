@@ -9,7 +9,10 @@ export function ImagePreparationNotice({
   items: readonly ContextItem[];
 }) {
   const { t } = useTranslation("shell");
-  const projection = projectImagePreparation(items);
+  const projection = React.useMemo(
+    () => projectImagePreparation(items),
+    [items],
+  );
   if (projection === null) return null;
   const preparedCount = projection.images.filter(
     (image) => image.outcome === "prepared",
