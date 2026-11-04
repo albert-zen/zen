@@ -27,9 +27,30 @@ const timer = setTimeout(
   () => finish(new Error("Native experiment exceeded 60 seconds")),
   60_000,
 );
-async function check(name, operation) {
-  await operation();
-  report.checks.push({ name, status: "passed" });
+async function check(name, operation, continueAfterFailure = false) {
+  try {
+    await operation();
+    report.checks.push({ name, status: "passed" });
+  } catch (error) {
+    report.checks.push({ name, status: "failed", error: String(error) });
+    if (!continueAfterFailure) throw error;
+  }
+}
+async function bounded(promise, name) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${name} did not complete within 5 seconds`)),
+          5000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 async function until(predicate, message) {
   const deadline = Date.now() + 10_000;
@@ -44,8 +65,10 @@ async function finish(error) {
   report.finished = true;
   clearTimeout(timer);
   if (error) report.error = error.stack || String(error);
-  report.status = error ? "failed" : "passed";
-  let exitCode = error ? 1 : 0;
+  const failed =
+    error || report.checks.some((check) => check.status === "failed");
+  report.status = failed ? "failed" : "passed";
+  let exitCode = failed ? 1 : 0;
   try {
     await fs.mkdir(output, { recursive: true });
     await fs.writeFile(
@@ -316,44 +339,56 @@ async function finish(error) {
       await ui("document.querySelector('#overlay').style.display='none'");
     },
   );
-  await check(
-    "hidden persistent guest accepts CDP action and fresh screenshot without activation",
-    async () => {
-      // Reset to green before hiding so a stale pre-action blue image cannot pass.
-      await a.executeJavaScript(
-        "document.body.style.background='rgb(20,180,70)'",
+  await show("b");
+  const focusedBefore = BrowserWindow.getFocusedWindow()?.id;
+  a.debugger.attach("1.3");
+  try {
+    await check("hidden persistent guest accepts CDP action", async () => {
+      const result = await bounded(
+        a.debugger.sendCommand("Runtime.evaluate", {
+          expression:
+            "document.querySelector('#click').click(); document.body.style.background='rgb(230,140,10)'; window.clicks",
+          returnByValue: true,
+        }),
+        "Hidden Runtime.evaluate",
       );
-      await frame();
-      await show("b");
-      const focusedBefore = BrowserWindow.getFocusedWindow()?.id;
-      a.debugger.attach("1.3");
-      const result = await a.debugger.sendCommand("Runtime.evaluate", {
-        expression:
-          "document.querySelector('#click').click(); document.body.style.background='rgb(230,140,10)'; window.clicks",
-        returnByValue: true,
-      });
       assert.equal(result.result.value, 2);
-      const image = await a.debugger.sendCommand("Page.captureScreenshot", {
-        format: "png",
-        captureBeyondViewport: false,
-      });
-      const bytes = Buffer.from(image.data, "base64");
-      await fs.writeFile(
-        path.join(output, "synthetic-hidden-guest.png"),
-        bytes,
-      );
-      const native = nativeImage.createFromBuffer(bytes);
-      assert.ok(!native.isEmpty());
-      // Orange is only painted by the hidden action, never by the visible baseline.
-      const pixel = native
-        .crop({ x: 20, y: 150, width: 1, height: 1 })
-        .toBitmap();
-      assert.ok(
-        pixel[0] < 40 && pixel[1] > 110 && pixel[1] < 170 && pixel[2] > 200,
-        `Hidden frame pixel: ${[...pixel]}`,
-      );
+    });
+    await check(
+      "hidden persistent guest produces fresh CDP screenshot",
+      async () => {
+        const image = await bounded(
+          a.debugger.sendCommand("Page.captureScreenshot", {
+            format: "png",
+            captureBeyondViewport: false,
+          }),
+          "Hidden Page.captureScreenshot",
+        );
+        const bytes = Buffer.from(image.data, "base64");
+        await fs.writeFile(
+          path.join(output, "synthetic-hidden-guest.png"),
+          bytes,
+        );
+        const native = nativeImage.createFromBuffer(bytes);
+        assert.ok(!native.isEmpty());
+        // Orange exists only after the hidden action; a stale visible frame cannot pass.
+        const pixel = native
+          .crop({ x: 20, y: 150, width: 1, height: 1 })
+          .toBitmap();
+        assert.ok(
+          pixel[0] < 40 && pixel[1] > 110 && pixel[1] < 170 && pixel[2] > 200,
+          `Hidden frame pixel: ${[...pixel]}`,
+        );
+      },
+      true,
+    ); // Keep measuring independent lifecycle behavior after an observation failure.
+  } finally {
+    a.debugger.detach();
+  }
+  await check(
+    "background probes do not change focused Electron window",
+    async () => {
       assert.equal(BrowserWindow.getFocusedWindow()?.id, focusedBefore);
-      a.debugger.detach();
     },
   );
   await check("explicit close destroys only its guest", async () => {
