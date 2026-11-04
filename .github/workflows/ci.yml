@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   core-cli-imzen:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: Core, CLI, and IMZen
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -43,6 +45,8 @@ jobs:
       - run: npm run check
 
   zenx:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX typecheck, tests, and build
     runs-on: ubuntu-24.04
     # Complete previews, typechecks, tests and build reached the former 26-minute
@@ -331,6 +335,8 @@ jobs:
           retention-days: 14
 
   zenx-capability-smoke:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX packaged capability smoke
     runs-on: macos-latest
     timeout-minutes: 20
@@ -425,6 +431,8 @@ jobs:
           retention-days: 14
 
   zenx-windows-computer-smoke:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX Windows WinApp adapter smoke
     runs-on: windows-latest
     timeout-minutes: 20
@@ -469,6 +477,8 @@ jobs:
       - run: npm --workspace apps/zenx run smoke:windows-computer
 
   zenx-windows-packaged-provider-smoke:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX Windows packaged bundled-provider smoke
     runs-on: windows-2025
     timeout-minutes: 90
@@ -715,6 +725,8 @@ jobs:
           retention-days: 14
 
   zenx-windows-user-browser-smoke:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX Windows attached user-browser smoke
     runs-on: windows-latest
     timeout-minutes: 20
@@ -756,6 +768,8 @@ jobs:
           if-no-files-found: ignore
 
   zenx-playwright-provider-smoke:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: ZenX real Playwright provider smoke
     runs-on: macos-latest
     timeout-minutes: 20
@@ -839,6 +853,8 @@ jobs:
           if-no-files-found: ignore
 
   android-mobile:
+    # Evidence-only experiment: this exact draft branch is never a merge candidate.
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'codex/unify-playwright-browser-20261104' && github.event.pull_request.head.repo.full_name == 'albert-zen/zen') }}
     name: Android TLS Host integration and debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
