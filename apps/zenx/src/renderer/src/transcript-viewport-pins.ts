@@ -34,18 +34,20 @@ export function readTranscriptAnchor(
   viewport: HTMLElement,
 ): TranscriptAnchor | null {
   const top = viewport.getBoundingClientRect().top;
-  const rows = Array.from(
-    viewport.querySelectorAll<HTMLElement>("[data-transcript-row-key]"),
-  );
-  const row = rows
-    .filter((row) => row.getBoundingClientRect().bottom > top)
-    .sort(
-      (a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top,
-    )[0];
-  const key = row?.dataset.transcriptRowKey;
-  return row && key
-    ? { key, offset: row.getBoundingClientRect().top - top }
-    : null;
+  let anchorRow: HTMLElement | null = null;
+  let anchorTop = 0;
+  // DOM slot order can differ from visual order. Keep the first row on ties.
+  for (const row of viewport.querySelectorAll<HTMLElement>(
+    "[data-transcript-row-key]",
+  )) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > top && (!anchorRow || rect.top < anchorTop)) {
+      anchorRow = row;
+      anchorTop = rect.top;
+    }
+  }
+  const key = anchorRow?.dataset.transcriptRowKey;
+  return key ? { key, offset: anchorTop - top } : null;
 }
 
 /** A scrollable tool/code region owns its input independently of the transcript. */
