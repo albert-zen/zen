@@ -492,6 +492,7 @@ export function legacyItemFromContext(
     "summaryOffset",
     "summaryLength",
     "historicalSnapshot",
+    "questionOrigin",
   ])
     delete metadata[key];
   Object.assign(base, metadata, { type: kind });

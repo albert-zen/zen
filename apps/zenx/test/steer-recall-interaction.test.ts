@@ -73,7 +73,7 @@ function protocol(
     value: { protocol: { request } },
   });
 }
-const recallButton = ".pending-steer-heading button";
+const recallButton = ".pending-steer-heading .queue-header-action";
 
 test("actual ThreadView recalls exact whole snapshot while newer input and later arrivals remain independent", async () => {
   await withRuntimeDom(async (h) => {
@@ -107,6 +107,27 @@ test("actual ThreadView recalls exact whole snapshot while newer input and later
     });
     await h.render(thread, props());
     assert.equal(document.querySelector(".queue-row-steer"), null);
+    const shelf = document.querySelector(".pending-steer-panel")!;
+    assert.ok(shelf.classList.contains("queue-shelf"));
+    assert.ok(shelf.closest(".bottom-zone"));
+    assert.equal(
+      shelf.querySelector(".steer-shelf-details")!.hasAttribute("hidden"),
+      false,
+    );
+    assert.equal(
+      shelf.textContent!.includes(i18n.t("shell:steerPendingDetails")),
+      false,
+    );
+    assert.ok(shelf.querySelector(".queue-header-action svg"));
+    assert.equal(
+      shelf.querySelector(".queue-shelf-toggle")!.getAttribute("aria-expanded"),
+      "true",
+    );
+    assert.equal(shelf.closest(".messages"), null);
+    assert.equal(
+      document.querySelector(recallButton)!.textContent,
+      i18n.t("shell:steerRecallAllShort"),
+    );
     await h.click(recallButton);
     assert.deepEqual(
       request.targets.map((target) => target.queuedItemId),
@@ -709,13 +730,10 @@ for (const [scopeIndex, interruption] of [
             },
           };
           await h.render(thread, props);
-          const details = document.querySelector<HTMLDetailsElement>(
-            ".pending-steer-panel > details",
+          const toggle = document.querySelector<HTMLButtonElement>(
+            ".pending-steer-heading .queue-shelf-toggle",
           )!;
-          await act(async () => {
-            details.open = true;
-            details.dispatchEvent(new window.Event("toggle"));
-          });
+          assert.equal(toggle.getAttribute("aria-expanded"), "true");
           await flush();
           assert.equal(reads, 1);
           const oldButton = document.querySelector<HTMLButtonElement>(
@@ -724,8 +742,7 @@ for (const [scopeIndex, interruption] of [
           assert.ok(oldButton);
           if (interruption === "close") {
             await act(async () => {
-              details.open = false;
-              details.dispatchEvent(new window.Event("toggle"));
+              toggle.click();
             });
           } else if (interruption === "receipt") {
             await h.render(
@@ -830,18 +847,24 @@ test("pending images use canonical attachment refs and their preview closes afte
       },
     };
     await h.render(thread, props);
+    assert.ok(
+      reads > 0,
+      "visible pending content loads uncached exact image payloads",
+    );
+    const visibleReads = reads;
+    await h.click(".pending-steer-heading .queue-shelf-toggle");
+    assert.equal(
+      document.querySelector(".steer-shelf-details")!.hasAttribute("hidden"),
+      true,
+    );
+    assert.equal(document.querySelector(".pending-steer-images"), null);
+    await flush();
     assert.equal(
       reads,
-      0,
-      "collapsed pending content does not read image payloads",
+      visibleReads,
+      "collapsed content starts no image reads",
     );
-    const details = document.querySelector<HTMLDetailsElement>(
-      ".pending-steer-panel > details",
-    )!;
-    await act(async () => {
-      details.open = true;
-      details.dispatchEvent(new window.Event("toggle"));
-    });
+    await h.click(".pending-steer-heading .queue-shelf-toggle");
     await flush();
     assert.equal(
       document.querySelectorAll(".pending-steer-images .image-thumbnail")
@@ -877,5 +900,121 @@ test("pending images use canonical attachment refs and their preview closes afte
     assert.equal(document.querySelector(".image-preview-layer"), null);
     assert.equal(document.querySelector(".pending-steer-images"), null);
     assert.equal(reads, before);
+  });
+});
+
+test("shelf read-only recovery and restore actions retain 44px hit targets", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const styles = await readFile(
+    new URL("../src/renderer/src/queued-messages.css", import.meta.url),
+    "utf8",
+  );
+  await withRuntimeDom(async (h) => {
+    const style = document.createElement("style");
+    style.textContent = styles;
+    document.head.append(style);
+    const thread = staged();
+    protocol(async () => {
+      throw Error("Synthetic disconnected recall");
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => true,
+    });
+    await h.click(recallButton);
+    await flush();
+    const check = document.querySelector<HTMLButtonElement>(
+      ".steer-shelf > button",
+    )!;
+    assert.ok(check);
+    const largeEnough = (button: HTMLButtonElement) =>
+      assert.equal(
+        window.getComputedStyle(button).minHeight,
+        "44px",
+        button.textContent ?? "recovery button",
+      );
+    largeEnough(check);
+    const recalled = applyQueueItem(
+      thread,
+      receipt({
+        threadId: thread.id,
+        recallId: "hit-target",
+        targets: pendingSteerMessages(thread.canonicalItems!).map((item) => ({
+          queuedItemId: item.id,
+          clientId: item.clientId,
+          expectedRevision: item.revision,
+        })),
+      }),
+    );
+    await h.render(recalled, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => false,
+    });
+    largeEnough(
+      document.querySelector<HTMLButtonElement>(".steer-recovery button")!,
+    );
+    await h.click(".steer-recovery button");
+    const actions = [
+      ...document.querySelectorAll<HTMLButtonElement>(".steer-recovery button"),
+    ];
+    assert.equal(actions.length, 2);
+    actions.forEach(largeEnough);
+  });
+});
+
+test("native question origin driver observes the shelf status and invokes only whole-batch Recall", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const capture = await readFile(
+    new URL("../scripts/capture-user-question.cjs", import.meta.url),
+    "utf8",
+  );
+  const countSelector = capture.match(
+    /document\.querySelector\('([^']+)'\)\?\.textContent\.includes\('2'\)/,
+  )?.[1];
+  const actionSelector = capture.match(
+    /await click\(\s*"([^"]+)",\s*"Native one whole-batch Recall"/,
+  )?.[1];
+  assert.ok(countSelector, "native driver pending-count selector");
+  assert.ok(actionSelector, "native driver whole-batch Recall selector");
+  await withRuntimeDom(async (h) => {
+    const thread = staged();
+    const original = thread.canonicalItems!;
+    const requests: NativeSteerRecallParams[] = [];
+    let restores = 0;
+    protocol(async (method, value) => {
+      assert.equal(method, "zen/thread/steer/recall");
+      const request = value as NativeSteerRecallParams;
+      requests.push(request);
+      return reply(request, original);
+    });
+    await h.render(thread, {
+      steerRecallStore: createSteerRecallStore(),
+      onRestoreRecalled: () => {
+        restores++;
+        return true;
+      },
+    });
+    const status = document.querySelector(countSelector);
+    assert.ok(
+      status,
+      "native driver must find actual production pending count",
+    );
+    assert.ok(status.textContent!.includes("2"));
+    assert.equal(status.getAttribute("role"), "status");
+    const toggle = document.querySelector(
+      ".pending-steer-heading .queue-shelf-toggle",
+    )!;
+    const expanded = toggle.getAttribute("aria-expanded");
+    const action = document.querySelector(actionSelector);
+    assert.ok(action?.classList.contains("queue-header-action"));
+    await h.click(actionSelector);
+    await flush();
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      requests[0]!.targets.map((target) => target.queuedItemId),
+      ["queue-0", "queue-1"],
+    );
+    assert.equal(restores, 1);
+    assert.equal(toggle.getAttribute("aria-expanded"), expanded);
   });
 });
