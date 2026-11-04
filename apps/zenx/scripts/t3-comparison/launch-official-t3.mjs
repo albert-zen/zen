@@ -5,14 +5,22 @@
  */
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,writeFile,readFile,rm,open,realpath} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,readFile,rm,open,realpath,lstat} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {Wire,delay,until,loadFixture,installObservation,assertOwnedInput,requireLiveBottom,stopOwnedProcess,ownedProcessMetadata} from './short-run-common.mjs';
 assert.equal(process.env.GITHUB_ACTIONS,'true');
+assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted');
 assert.equal(process.platform,'darwin');
 assert.equal(process.arch,'arm64');
+const runnerHome=process.env.HOME;
+assert(runnerHome&&path.isAbsolute(runnerHome)&&runnerHome===os.userInfo().homedir,'Expected real CI runner HOME');
+// First launch only: never reuse or import an existing real-HOME T3 profile.
+for(const name of ['t3code-v2','T3 Code (Alpha)','t3code']){
+ let absent=false;try{await lstat(path.join(runnerHome,'Library','Application Support',name));}catch(error){if(error.code!=='ENOENT')throw Error('Cannot prove fresh CI T3 profile');absent=true;}
+ assert(absent,'Refusing existing CI T3 profile');
+}
 const [executableArg,outArg,workspaceArg,fixtureArg]=process.argv.slice(2);
 assert(executableArg&&outArg&&workspaceArg&&fixtureArg);
 assert.equal(process.argv.length,6);
@@ -35,7 +43,10 @@ for(const turn of fixture.turns)transcript.push(
 const sessions=path.join(codex,'sessions','2026','11','04');await mkdir(sessions,{recursive:true,mode:0o700});
 await writeFile(path.join(sessions,'rollout-'+session+'.jsonl'),transcript.map(x=>JSON.stringify(x)).join('\n')+'\n',{mode:0o600});
 const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(PATH|LANG|LC_ALL|TMPDIR|GITHUB_ACTIONS|CI|DISPLAY)$/.test(k)));
-Object.assign(env,{HOME:home,USER_HOME:home,XDG_CONFIG_HOME:path.join(home,'.config'),XDG_CACHE_HOME:path.join(home,'.cache'),T3CODE_HOME:base,CODEX_HOME:codex,CLAUDE_CONFIG_DIR:path.join(home,'.claude'),T3CODE_DISABLE_AUTO_UPDATE:'true',T3CODE_TELEMETRY_ENABLED:'false',T3CODE_OTEL_SDK_DISABLED:'true',OTEL_SDK_DISABLED:'true'});
+// Match official smoke-desktop-app: macOS safeStorage needs the CI runner's real
+// HOME/login keychain. Official app overrides userData under that HOME, so a
+// --user-data-dir flag cannot promise profile isolation. T3/CLI/XDG state stays owned.
+Object.assign(env,{HOME:runnerHome,XDG_CONFIG_HOME:path.join(home,'.config'),XDG_CACHE_HOME:path.join(home,'.cache'),XDG_DATA_HOME:path.join(home,'.local','share'),T3CODE_HOME:base,CODEX_HOME:codex,CLAUDE_CONFIG_DIR:path.join(home,'.claude'),T3CODE_DISABLE_AUTO_UPDATE:'true',T3CODE_TELEMETRY_ENABLED:'false',T3CODE_OTEL_SDK_DISABLED:'true',OTEL_SDK_DISABLED:'true'});
 let child,closed,main,page,privateLog,phase='prepare',rpcTag=null;
 const diagnostics={bindingAttempts:0,bindings:[],processIdentities:[]};
 const lifecycle=[];const results=[];
