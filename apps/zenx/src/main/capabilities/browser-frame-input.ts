@@ -107,11 +107,9 @@ export class BrowserFrameInputObserver {
   ): Promise<BrowserFrameInputCapture | undefined> {
     const root = this.evidence.rootSessionId;
     rootTree ??= await this.#send(root, "Page.getFrameTree", {});
-    const tree = record(record(rootTree)?.frameTree);
-    // Leave ordinary top-level/legacy input available on Chrome 120. No child
-    // attachment is requested until a native frame tree actually requires it.
-    if (!Array.isArray(tree?.childFrames) || tree.childFrames.length === 0)
-      return;
+    // The caller observed iframe owners that legacy recursion cannot resolve.
+    // OOPIF documents may be absent from the parent Page frame tree entirely;
+    // only trusted child attachment events can introduce their native routes.
     const failedSetup = setupFailures.get(this.evidence);
     if (failedSetup) throw failedSetup;
     for (let depth = 0; depth <= 8; depth++) {
@@ -318,9 +316,16 @@ export class BrowserFrameInputObserver {
         awaitPromise: true,
       }),
     );
-    return requireBrowserInputSnapshot(
+    const snapshot = requireBrowserInputSnapshot(
       await resolveBrowserInputEvidence(raw, send),
     );
+    if (
+      !snapshot.localFrame ||
+      snapshot.frameOwnerScanComplete !== true ||
+      !Array.isArray(snapshot.frameOwnerIds)
+    )
+      fail();
+    return snapshot;
   }
 
   async #sample(
@@ -344,7 +349,11 @@ export class BrowserFrameInputObserver {
     const documents: BrowserInputFrameDocument[] = [];
     for (const frame of frames) {
       const snapshot = await this.#probe(frame, assertCurrent);
-      if (!snapshot.localFrame || (snapshot.frameDocuments?.length ?? 0) !== 0)
+      if (
+        !snapshot.localFrame ||
+        snapshot.frameOwnerScanComplete !== true ||
+        (snapshot.frameDocuments?.length ?? 0) !== 0
+      )
         fail();
       const key = JSON.stringify([
         frame.document.sessionId,
@@ -425,6 +434,18 @@ export class BrowserFrameInputObserver {
           },
         });
       }
+    }
+    for (const sample of samples.values()) {
+      const candidates = sample.snapshot.frameOwnerIds;
+      const verified = [...samples.values()]
+        .filter((child) => child.frame.parent === sample.frame)
+        .map((child) => child.ownerId!);
+      if (
+        !Array.isArray(candidates) ||
+        candidates.length !== verified.length ||
+        candidates.some((id) => !verified.includes(id))
+      )
+        fail();
     }
     const root = samples.get(frames[0]!.document.frameId)!;
     const role = async (
@@ -721,6 +742,13 @@ export function browserFrameInputNeedsObserver(
   legacy: unknown,
 ): boolean {
   const tree = record(record(treeResponse)?.frameTree);
+  const snapshot = record(legacy);
+  if (
+    Array.isArray(snapshot?.frameOwnerIds) &&
+    (!Array.isArray(snapshot.frameDocuments) ||
+      snapshot.frameOwnerIds.length !== snapshot.frameDocuments.length)
+  )
+    return true;
   if (
     !tree ||
     !Array.isArray(tree.childFrames) ||
@@ -741,7 +769,6 @@ export function browserFrameInputNeedsObserver(
     }
     return size;
   };
-  const snapshot = record(legacy);
   return (
     !Array.isArray(snapshot?.frameDocuments) ||
     count(tree, 0) !== snapshot.frameDocuments.length + 1

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import {
+  autoAttach,
   browserArguments,
   currentDefaultContext,
   fixturePage,
@@ -366,4 +367,18 @@ test("frame readiness excludes an inherited blank context from the wrong origin"
     ).id,
     2,
   );
+});
+
+test("hosted native commands keep enable iframe-only and omit filter on disable", () => {
+  assert.deepEqual(autoAttach(), {
+    autoAttach: true,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+    filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+  });
+  assert.deepEqual(autoAttach(false), {
+    autoAttach: false,
+    flatten: true,
+    waitForDebuggerOnStart: false,
+  });
 });

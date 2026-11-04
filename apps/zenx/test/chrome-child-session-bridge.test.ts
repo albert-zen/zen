@@ -12,7 +12,9 @@ const autoAttach = (enabled = true) => ({
   autoAttach: enabled,
   flatten: true,
   waitForDebuggerOnStart: false,
-  filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+  ...(enabled
+    ? { filter: [{ type: "iframe", exclude: false }, { exclude: true }] }
+    : {}),
 });
 
 class Socket extends EventEmitter {
@@ -151,14 +153,27 @@ async function fixture(iframeSessions = true) {
     )!.result.sessionId as string;
   const latestCommand = () =>
     native.messages.findLast((message) => message.type === "cdp-command")!;
-  const settle = (command = latestCommand(), failed = false) =>
+  const settle = (command = latestCommand(), failed = false) => {
+    const invalidDisable =
+      command.method === "Target.setAutoAttach" &&
+      command.params.autoAttach === false &&
+      command.params.filter?.length;
     native.receive({
       type: "cdp-result",
       requestId: command.requestId,
-      ...(failed
-        ? { error: { message: "Native cleanup failed" } }
-        : { result: {} }),
+      ...(invalidDisable
+        ? {
+            error: {
+              code: -32602,
+              message:
+                "Target filter should be empty when disabling auto-attach",
+            },
+          }
+        : failed
+          ? { error: { message: "Native cleanup failed" } }
+          : { result: {} }),
     });
+  };
   const event = (
     root: string,
     method: string,
@@ -355,7 +370,7 @@ test("root teardown confirms cleanup but pins shared autoattach to the retired l
   });
   const cleanup = f.latestCommand();
   assert.equal(cleanup.method, "Target.setAutoAttach");
-  assert.equal(cleanup.params.autoAttach, false);
+  assert.deepEqual(cleanup.params, autoAttach(false));
   assert.equal(f.response(f.client, detached), undefined);
   assert.ok(f.response(f.client, pending)!.error);
   const denied = f.request(
@@ -404,7 +419,7 @@ test("unconfirmed cleanup blocks transfer; socket and transport retirement fence
   const child = f.client.messages.at(-1)!.params.sessionId;
   f.client.close();
   const cleanup = f.latestCommand();
-  assert.equal(cleanup.params.autoAttach, false);
+  assert.deepEqual(cleanup.params, autoAttach(false));
   f.settle(cleanup, true);
   const other = f.connect();
   const otherRoot = f.attach(other);
@@ -548,5 +563,84 @@ test("same live root can resubscribe without reviving retired native IDs", async
   const nextChild = f.client.messages.at(-1)!.params.sessionId;
   assert.notEqual(nextChild, oldChild);
   assert.equal(f.client.messages.at(-1)!.sessionId, successor);
+  await f.bridge.close();
+});
+
+test("bridge accepts absent or empty disable filters on exact root and child routes", async () => {
+  for (const emptyFilter of [false, true]) {
+    const f = await fixture();
+    const root = f.attach();
+    f.enable(root);
+    f.attachEvent(root, "child");
+    const child = f.client.messages.at(-1)!.params.sessionId;
+    f.enable(root, child);
+    f.attachEvent(root, "grandchild", "child");
+    const grandchild = f.client.messages.at(-1)!.params.sessionId;
+    const params = {
+      ...autoAttach(false),
+      ...(emptyFilter ? { filter: [] } : {}),
+    };
+    const disableChild = f.request(
+      f.client,
+      "Target.setAutoAttach",
+      params,
+      child,
+    );
+    assert.equal(f.latestCommand().sessionId, "child");
+    assert.deepEqual(f.latestCommand().params, params);
+    f.settle();
+    assert.deepEqual(f.response(f.client, disableChild)!.result, {});
+    assert.ok(
+      f.response(f.client, f.request(f.client, "Page.enable", {}, grandchild))!
+        .error,
+    );
+    const childRead = f.request(f.client, "Page.enable", {}, child);
+    f.settle();
+    assert.deepEqual(f.response(f.client, childRead)!.result, {});
+    const disableRoot = f.request(
+      f.client,
+      "Target.setAutoAttach",
+      params,
+      root,
+    );
+    assert.equal(f.latestCommand().sessionId, undefined);
+    assert.deepEqual(f.latestCommand().params, params);
+    f.settle();
+    assert.deepEqual(f.response(f.client, disableRoot)!.result, {});
+    assert.ok(
+      f.response(f.client, f.request(f.client, "Page.enable", {}, child))!
+        .error,
+    );
+    f.enable(root);
+    await f.bridge.close();
+  }
+});
+
+test("bridge rejects nonempty disable filters without weakening enable scope or retiring children", async () => {
+  const f = await fixture();
+  const root = f.attach();
+  f.enable(root);
+  f.attachEvent(root, "child");
+  const child = f.client.messages.at(-1)!.params.sessionId;
+  const count = f.native.messages.length;
+  for (const params of [
+    { ...autoAttach(), filter: undefined },
+    { ...autoAttach(), filter: [] },
+    { ...autoAttach(), filter: [{ exclude: false }] },
+    { ...autoAttach(false), filter: autoAttach().filter },
+    { ...autoAttach(false), filter: [{ exclude: true }] },
+    { ...autoAttach(false), filter: null },
+    { ...autoAttach(false), filter: {} },
+    { ...autoAttach(false), flatten: false },
+    { ...autoAttach(false), waitForDebuggerOnStart: true },
+    { ...autoAttach(false), unrelated: true },
+  ]) {
+    const id = f.request(f.client, "Target.setAutoAttach", params, root);
+    assert.match(f.response(f.client, id)!.error.message, /Only flattened/);
+    assert.equal(f.native.messages.length, count);
+  }
+  const childRead = f.request(f.client, "Page.enable", {}, child);
+  f.settle();
+  assert.deepEqual(f.response(f.client, childRead)!.result, {});
   await f.bridge.close();
 });

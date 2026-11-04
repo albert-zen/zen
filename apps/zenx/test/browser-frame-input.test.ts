@@ -9,7 +9,7 @@ import {
 } from "../src/main/capabilities/browser-frame-input.js";
 import { dispatchBrowserTargetedInput } from "../src/main/capabilities/browser-targeted-input.js";
 
-function fixture(remote = true, nested = false) {
+function fixture(remote = true, nested = false, omitRemote = false) {
   const evidence = new BrowserFrameEvidence("root-route");
   const frames = [
     {
@@ -109,12 +109,22 @@ function fixture(remote = true, nested = false) {
       ...(frame.parent ? { parentId: frame.parent } : {}),
     };
   };
-  const tree = (id: string): unknown => ({
-    frame: frameRecord(id),
-    ...(id === "main" || id === "same-process"
-      ? { childFrames: [tree(id === "main" ? "same-process" : "inner")] }
-      : {}),
-  });
+  const tree = (id: string): unknown => {
+    const childId =
+      id === "main"
+        ? "same-process"
+        : id === "same-process"
+          ? "inner"
+          : undefined;
+    const own = frames.find((frame) => frame.id === id)!;
+    const child = frames.find((frame) => frame.id === childId);
+    return {
+      frame: frameRecord(id),
+      ...(child && (!omitRemote || child.session === own.session)
+        ? { childFrames: [tree(child.id)] }
+        : {}),
+    };
+  };
   const createContext = (session: string, frame: string, name: string) => {
     const key = session + "|" + frame + "|" + name;
     let context = contexts.get(key);
@@ -684,3 +694,71 @@ for (const method of [
       }
     },
   );
+
+test("omitted remote child trees are discovered only through exact parent-derived sessions", async () => {
+  const f = fixture(true, true, true);
+  try {
+    const rootTree = await f.observer.port.send(
+      "root-route",
+      "Page.getFrameTree",
+      {},
+    );
+    assert.equal(
+      (rootTree as { frameTree: { childFrames?: unknown } }).frameTree
+        .childFrames,
+      undefined,
+    );
+    assert.equal(
+      browserFrameInputNeedsObserver(rootTree, {
+        frameDocuments: [],
+        frameOwnerIds: ["exact-owner"],
+      }),
+      true,
+    );
+    const capture = (await f.observer.prepare(rootTree))!;
+    assert.equal(capture.snapshot.frameDocuments?.length, 2);
+    assert.deepEqual(
+      capture.snapshot.frameDocuments![1]!.geometry.contentQuad,
+      [70, 100, 230, 100, 230, 220, 70, 220],
+    );
+    assert.ok(
+      (
+        await capture.probe({ kind: "click", x: 90, y: 120 })
+      ).pointerHitId?.includes("inner"),
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("missing native child attachment cannot hide an observed iframe owner", async () => {
+  const f = fixture(true, true, true);
+  try {
+    const send = f.observer.port.send;
+    f.observer.port.send = async (session, method, params) =>
+      method === "Target.setAutoAttach"
+        ? {}
+        : await send(session, method, params);
+    await assert.rejects(f.observer.prepare(), /identity/);
+    assert.equal(
+      f.calls.some((call) => call.method.startsWith("Input.")),
+      false,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("incomplete local owner scan never authorizes a truncated frame vector", async () => {
+  const f = fixture(true, true, true);
+  try {
+    const window = f.windows.get("main")!;
+    const fragment = window.document.createDocumentFragment();
+    for (let index = 0; index < 8200; index++)
+      fragment.append(window.document.createElement("span"));
+    window.document.body.prepend(fragment);
+    await assert.rejects(f.observer.prepare(), /identity/);
+  } finally {
+    f.close();
+  }
+});

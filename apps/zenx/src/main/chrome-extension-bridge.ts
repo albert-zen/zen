@@ -1468,7 +1468,9 @@ function iframeAutoAttach(autoAttach: boolean): Record<string, unknown> {
     autoAttach,
     flatten: true,
     waitForDebuggerOnStart: false,
-    filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+    ...(autoAttach
+      ? { filter: [{ type: "iframe", exclude: false }, { exclude: true }] }
+      : {}),
   };
 }
 
@@ -1485,6 +1487,12 @@ function iframeAutoAttachParams(params: Record<string, unknown>): boolean {
     )
   )
     return false;
+  // Native CDP rejects a nonempty target filter when auto-attach is disabled.
+  if (!params.autoAttach)
+    return (
+      params.filter === undefined ||
+      (Array.isArray(params.filter) && params.filter.length === 0)
+    );
   if (!Array.isArray(params.filter) || params.filter.length !== 2) return false;
   const first = asRecord(params.filter[0]);
   const last = asRecord(params.filter[1]);

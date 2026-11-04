@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 import {
   assertRemoteFramePlacement,
   assertRemoteFixturePoint,
+  observeRemoteFramePlacement,
   settleRemoteFixturePair,
   remoteFrameContractPage,
   targetedInputContractPage,
@@ -928,5 +929,333 @@ test("authored remote point requires current owner geometry and exact parent and
       change(point);
       assert.throws(() => assertRemoteFixturePoint(point, "canvas", depth));
     }
+  }
+});
+
+function placementFixture(
+  mode: Parameters<typeof observeRemoteFramePlacement>[2],
+  fault?:
+    | "extra-owner"
+    | "wrong-src"
+    | "duplicate-target"
+    | "wrong-owner"
+    | "wrong-parent"
+    | "wrong-placeholder"
+    | "missing-attached-event"
+    | "duplicate-attached-event"
+    | "missing-parent-id",
+  expectedChildRevision = 0,
+) {
+  const nested = mode.startsWith("nested-");
+  const config = {
+    ...configuration,
+    mode,
+    childOrigin:
+      mode === "cross-origin-same-process"
+        ? configuration.childOrigin
+        : "http://localhost:30002",
+    ...(nested
+      ? {
+          leafOrigin:
+            mode === "nested-oopif"
+              ? "http://nested.localhost:30002"
+              : "http://localhost:30001",
+        }
+      : {}),
+  };
+  const url = (
+    origin: string,
+    pathname: string,
+    values: Record<string, string>,
+  ) => {
+    const result = new URL(pathname, origin);
+    for (const [key, value] of Object.entries(values))
+      result.searchParams.set(key, value);
+    return result.href;
+  };
+  const rootUrl = url(config.parentOrigin, "/input-contract", config);
+  const childUrl = url(config.childOrigin, "/remote-frame-child", {
+    ...config,
+    ...(expectedChildRevision > 0
+      ? { revision: String(expectedChildRevision) }
+      : {}),
+  });
+  const layers = [
+    {
+      id: "root-frame",
+      url: rootUrl,
+      session: undefined as string | undefined,
+      target: undefined as string | undefined,
+      local: mode === "cross-origin-same-process",
+      backend: 101,
+    },
+    {
+      id: "child-frame",
+      url: childUrl,
+      session:
+        mode === "cross-origin-same-process" ? undefined : "child-session",
+      target:
+        mode === "cross-origin-same-process"
+          ? undefined
+          : "child-target-distinct",
+      local: mode === "nested-same-process",
+      backend: 202,
+    },
+    ...(nested
+      ? [
+          {
+            id: "leaf-frame",
+            url: url(config.leafOrigin!, "/remote-frame-child", {
+              ...config,
+              parentOrigin: config.childOrigin,
+              childOrigin: config.leafOrigin!,
+              leafOrigin: "",
+            }),
+            session: mode === "nested-oopif" ? "leaf-session" : "child-session",
+            target:
+              mode === "nested-oopif" ? "leaf-target-distinct" : undefined,
+            local: false,
+            backend: 303,
+          },
+        ]
+      : []),
+  ];
+  type Endpoint = Parameters<typeof observeRemoteFramePlacement>[0];
+  type Event = Parameters<Parameters<Endpoint["onEvent"]>[0]>[0];
+  const rootListeners = new Set<(event: Event) => void>();
+  const browserListeners = new Set<(event: Event) => void>();
+  const operations: {
+    method: string;
+    params: Record<string, unknown>;
+    sessionId?: string;
+  }[] = [];
+  const targets = layers
+    .filter((layer) => layer.target)
+    .map((layer) => ({
+      targetId: layer.target!,
+      type: "iframe",
+      url: layer.url,
+    }));
+  const send: Endpoint["send"] = async (method, params = {}, sessionId) => {
+    operations.push({ method, params, sessionId });
+    const layerIndex = sessionId
+      ? layers.findIndex((layer) => layer.session === sessionId)
+      : 0;
+    assert.notEqual(layerIndex, -1);
+    const layer = layers[layerIndex]!;
+    const child = layers[layerIndex + 1];
+    if (method === "Runtime.disable") return {};
+    if (method === "Runtime.enable") {
+      for (const current of [layer, ...(layer.local && child ? [child] : [])]) {
+        const event = {
+          method: "Runtime.executionContextCreated",
+          params: { context: context(current.id) },
+          ...(sessionId ? { sessionId } : {}),
+        };
+        for (const listener of sessionId ? browserListeners : rootListeners)
+          listener(event);
+      }
+      return {};
+    }
+    if (method === "Page.getFrameTree")
+      return {
+        frameTree: {
+          frame: {
+            id: layer.id,
+            url: layer.url,
+            ...(layerIndex > 0 && fault !== "missing-parent-id"
+              ? {
+                  parentId:
+                    fault === "wrong-parent"
+                      ? "foreign-parent"
+                      : layers[layerIndex - 1]!.id,
+                }
+              : {}),
+          },
+          ...(child && (layer.local || fault === "wrong-placeholder")
+            ? {
+                childFrames: [
+                  {
+                    frame: {
+                      id:
+                        fault === "wrong-placeholder"
+                          ? "foreign-child"
+                          : child.id,
+                      url: child.url,
+                    },
+                  },
+                ],
+              }
+            : {}),
+        },
+      };
+    if (method === "DOM.getDocument")
+      return { root: { nodeId: layer.backend + 1000 } };
+    if (method === "DOM.querySelectorAll") {
+      assert.equal(params.nodeId, layer.backend + 1000);
+      assert.equal(params.selector, "iframe");
+      return {
+        nodeIds:
+          fault === "extra-owner" ? [layer.backend, 999] : [layer.backend],
+      };
+    }
+    if (method === "DOM.describeNode") {
+      assert.equal(params.nodeId, layer.backend);
+      assert.ok(child);
+      return {
+        node: {
+          localName: "iframe",
+          backendNodeId: layer.backend,
+          attributes: [
+            "id",
+            layerIndex === 0 ? "contract-frame" : "nested-contract-frame",
+            "src",
+            fault === "wrong-src" ? "http://localhost:1/foreign" : child.url,
+          ],
+        },
+      };
+    }
+    if (method === "DOM.getFrameOwner") {
+      assert.equal(params.frameId, child?.id);
+      return { backendNodeId: fault === "wrong-owner" ? 999 : layer.backend };
+    }
+    if (method === "Target.getTargets")
+      return {
+        targetInfos:
+          fault === "duplicate-target" ? [...targets, targets[0]] : targets,
+      };
+    if (method === "Target.attachToTarget") {
+      const target = targets.find(
+        (target) => target.targetId === params.targetId,
+      );
+      assert.ok(target);
+      const attached = layers.find(
+        (layer) => layer.target === target.targetId,
+      )!;
+      assert.equal(params.flatten, true);
+      if (fault !== "missing-attached-event")
+        for (const listener of browserListeners) {
+          const event = {
+            method: "Target.attachedToTarget",
+            params: { sessionId: attached.session, targetInfo: target },
+          };
+          listener(event);
+          if (fault === "duplicate-attached-event") listener(event);
+        }
+      return { sessionId: attached.session };
+    }
+    if (method === "Target.detachFromTarget") return {};
+    throw new Error(`Unexpected fixture CDP method ${method}`);
+  };
+  const endpoint = (listeners: typeof rootListeners): Endpoint => ({
+    send,
+    onEvent: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  });
+  return {
+    run: () =>
+      observeRemoteFramePlacement(
+        endpoint(rootListeners),
+        endpoint(browserListeners),
+        mode,
+        rootUrl,
+        expectedChildRevision,
+      ),
+    operations,
+    listeners: () => rootListeners.size + browserListeners.size,
+  };
+}
+
+test("placement discovery joins omitted remote trees to exact owners and child sessions recursively", async () => {
+  for (const mode of [
+    "cross-origin-same-process",
+    "cross-origin-oopif",
+    "nested-oopif",
+    "nested-same-process",
+  ] as const) {
+    const fixture = placementFixture(mode);
+    const evidence = await fixture.run();
+    assert.equal(evidence.childFrameId, "child-frame");
+    assert.equal(evidence.ownerBackendNodeId, 101);
+    const replacement = await placementFixture(mode, undefined, 1).run();
+    assert.equal(
+      new URL(replacement.childUrl).searchParams.get("revision"),
+      "1",
+    );
+    if (replacement.descendant)
+      assert.equal(
+        new URL(replacement.descendant.childUrl).searchParams.has("revision"),
+        false,
+      );
+    assert.equal(
+      evidence.parentTreeChildFrames?.length,
+      mode === "cross-origin-same-process" ? 1 : 0,
+    );
+    if (mode.startsWith("nested-")) {
+      assert.equal(evidence.descendant?.childFrameId, "leaf-frame");
+      assert.equal(evidence.descendant?.ownerBackendNodeId, 202);
+      assert.equal(
+        evidence.descendant?.parentTreeChildFrames?.length,
+        mode === "nested-same-process" ? 1 : 0,
+      );
+    }
+    assert.equal(fixture.listeners(), 0);
+    assert.equal(
+      fixture.operations.some(({ method }) => method.startsWith("Input.")),
+      false,
+    );
+    assert.deepEqual(
+      fixture.operations
+        .filter(({ method }) => method === "Target.detachFromTarget")
+        .map(({ params }) => params.sessionId),
+      mode === "cross-origin-same-process"
+        ? []
+        : mode === "nested-oopif"
+          ? ["leaf-session", "child-session"]
+          : ["child-session"],
+    );
+  }
+  const noParent = await placementFixture(
+    "cross-origin-oopif",
+    "missing-parent-id",
+  ).run();
+  assert.equal(noParent.childSessionParentFrameId, undefined);
+  assert.equal(
+    noParent.ownerBackendNodeId,
+    101,
+    "Exact native owner join, never an invented parent ID",
+  );
+});
+
+test("placement discovery refuses ambiguous targets and mismatched ownership and always detaches", async (t) => {
+  t.mock.method(console, "error", () => undefined);
+  for (const fault of [
+    "extra-owner",
+    "wrong-src",
+    "duplicate-target",
+    "wrong-owner",
+    "wrong-parent",
+    "wrong-placeholder",
+    "missing-attached-event",
+    "duplicate-attached-event",
+  ] as const) {
+    const fixture = placementFixture("cross-origin-oopif", fault);
+    await assert.rejects(fixture.run(), fault);
+    assert.equal(fixture.listeners(), 0);
+    const attached = fixture.operations.filter(
+      ({ method }) => method === "Target.attachToTarget",
+    );
+    const detached = fixture.operations.filter(
+      ({ method }) => method === "Target.detachFromTarget",
+    );
+    assert.equal(detached.length, attached.length, fault);
+    assert.equal(
+      fixture.operations.some(({ method }) => method.startsWith("Input.")),
+      false,
+    );
   }
 });

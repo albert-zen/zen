@@ -3371,7 +3371,15 @@ export async function evaluateBrowserDocument<T>(
       const inputSnapshot = nested
         ? (resolved as BrowserDomInspection)?.inputSnapshot
         : resolved;
-      if (browserFrameInputNeedsObserver(tree, inputSnapshot)) {
+      if (
+        browserFrameInputNeedsObserver(
+          tree,
+          inputSnapshot ??
+            (nested
+              ? (response.result?.value as BrowserDomInspection)?.inputSnapshot
+              : response.result?.value),
+        )
+      ) {
         try {
           const capture = await frameObserver().prepare(tree);
           resolved = nested

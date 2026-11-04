@@ -33,7 +33,9 @@ export const autoAttach = (autoAttach = true) => ({
   autoAttach,
   flatten: true,
   waitForDebuggerOnStart: false,
-  filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+  ...(autoAttach
+    ? { filter: [{ type: "iframe", exclude: false }, { exclude: true }] }
+    : {}),
 });
 
 /** Synthetic transport only. The imported production worker and debugger APIs stay unchanged. */

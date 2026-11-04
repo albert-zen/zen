@@ -726,6 +726,8 @@ interface FramePlacementEvidence {
   childSessionId?: string;
   childSessionTargetId?: string;
   childSessionFrameId?: string;
+  childSessionParentFrameId?: string;
+  parentTreeChildFrames?: { id: string; url: string }[];
   childContexts?: FixtureExecutionContext[];
   childAttachedEvent?: {
     sessionId: string;
@@ -803,6 +805,8 @@ export function assertRemoteFramePlacement(
       evidence.childUrl,
     );
     assert.equal(evidence.childSessionFrameId, evidence.childFrameId);
+    if (evidence.childSessionParentFrameId !== undefined)
+      assert.equal(evidence.childSessionParentFrameId, evidence.rootFrameId);
     const child = evidence.childContexts?.filter(
       (context) =>
         context.auxData?.isDefault &&
@@ -836,11 +840,12 @@ export function assertRemoteFramePlacement(
 
 type FixtureCdpEndpoint = Pick<Rpc, "send" | "onEvent">;
 
-async function observeRemoteFramePlacement(
+export async function observeRemoteFramePlacement(
   rpc: FixtureCdpEndpoint,
-  browserRpc: Rpc,
+  browserRpc: FixtureCdpEndpoint,
   mode: RemoteFrameMode,
   rootUrl: string,
+  expectedChildRevision = 0,
 ): Promise<FramePlacementEvidence> {
   const rootContexts: FixtureExecutionContext[] = [];
   const removeRoot = rpc.onEvent((event) => {
@@ -849,6 +854,7 @@ async function observeRemoteFramePlacement(
   });
   let childSessionId: string | undefined;
   let removeChild: (() => void) | undefined;
+  const diagnostic: Record<string, unknown> = { mode, rootUrl };
   try {
     // Re-enabling this independent observer session enumerates its current
     // contexts without consulting provider caches or changing page state.
@@ -858,29 +864,99 @@ async function observeRemoteFramePlacement(
       frame: { id: string; url: string };
       childFrames?: { frame: { id: string; url: string } }[];
     };
+    diagnostic.rootTree = tree;
     assert.equal(tree.frame.url, rootUrl);
-    assert.equal(tree.childFrames?.length, 1);
-    const child = tree.childFrames![0]!.frame;
+    // Native Chromium may omit remote children from a renderer's frame tree.
+    // Discover the exact authored owner and nonce-bound URL independently, then
+    // join the attached child's own frame identity through DOM.getFrameOwner.
+    const fixture = remoteFrameFixtureFromUrl(rootUrl);
+    const nestedOwner = new URL(rootUrl).pathname === "/remote-frame-child";
+    if (nestedOwner) assert.ok(fixture.leafOrigin);
+    const childUrl = new URL(
+      "/remote-frame-child",
+      nestedOwner ? fixture.leafOrigin! : fixture.childOrigin,
+    );
+    for (const [key, value] of Object.entries(
+      nestedOwner
+        ? {
+            ...fixture,
+            parentOrigin: fixture.childOrigin,
+            childOrigin: fixture.leafOrigin!,
+            leafOrigin: "",
+          }
+        : fixture,
+    ))
+      childUrl.searchParams.set(key, value);
+    assert.ok(
+      Number.isSafeInteger(expectedChildRevision) && expectedChildRevision >= 0,
+    );
+    if (expectedChildRevision > 0) {
+      assert.equal(
+        nestedOwner,
+        false,
+        "Only the top fixture reloads its direct child",
+      );
+      childUrl.searchParams.set("revision", String(expectedChildRevision));
+    }
+    const document = (await rpc.send("DOM.getDocument", { depth: 0 })).root as {
+      nodeId: number;
+    };
+    const owners = (
+      await rpc.send("DOM.querySelectorAll", {
+        nodeId: document.nodeId,
+        selector: "iframe",
+      })
+    ).nodeIds as number[];
+    assert.equal(
+      owners.length,
+      1,
+      "Need one actual iframe owner in this parent document",
+    );
+    const ownerNode = (
+      await rpc.send("DOM.describeNode", { nodeId: owners[0], depth: 0 })
+    ).node as {
+      localName: string;
+      backendNodeId: number;
+      frameId?: string;
+      attributes: string[];
+    };
+    diagnostic.ownerNode = ownerNode;
+    assert.equal(ownerNode.localName, "iframe");
+    const attributes = new Map<string, string>();
+    for (let index = 0; index < ownerNode.attributes.length; index += 2)
+      attributes.set(
+        ownerNode.attributes[index]!,
+        ownerNode.attributes[index + 1]!,
+      );
+    assert.equal(
+      attributes.get("id"),
+      nestedOwner ? "nested-contract-frame" : "contract-frame",
+    );
+    assert.equal(
+      attributes.get("src"),
+      childUrl.href,
+      "Owner must have the exact authored nonce-bound child URL",
+    );
+    assert.ok(
+      Number.isSafeInteger(ownerNode.backendNodeId) &&
+        ownerNode.backendNodeId > 0,
+    );
     const targets = (await browserRpc.send("Target.getTargets"))
       .targetInfos as FramePlacementEvidence["targets"];
-    const owner = await rpc.send("DOM.getFrameOwner", { frameId: child.id });
-    const ownerNode = (
-      await rpc.send("DOM.describeNode", { backendNodeId: owner.backendNodeId })
-    ).node as { localName: string; frameId: string };
-    assert.equal(ownerNode.localName, "iframe");
-    assert.equal(ownerNode.frameId, child.id);
-    const evidence: FramePlacementEvidence = {
-      mode,
-      rootFrameId: tree.frame.id,
-      childFrameId: child.id,
-      rootContexts,
-      targets,
-      childUrl: child.url,
-      ownerBackendNodeId: owner.backendNodeId as number,
-    };
-    if (mode !== "cross-origin-same-process") {
+    diagnostic.targets = targets;
+    let child: { id: string; url: string; parentId?: string };
+    const childEvidence: Partial<FramePlacementEvidence> = {};
+    if (mode === "cross-origin-same-process") {
+      assert.equal(
+        tree.childFrames?.length,
+        1,
+        "Same-process child must appear in its parent's renderer tree",
+      );
+      child = tree.childFrames![0]!.frame;
+      assert.equal(child.url, childUrl.href);
+    } else {
       const candidates = targets.filter(
-        (target) => target.type === "iframe" && target.url === child.url,
+        (target) => target.type === "iframe" && target.url === childUrl.href,
       );
       assert.equal(
         candidates.length,
@@ -889,14 +965,16 @@ async function observeRemoteFramePlacement(
       );
       const childTargetId = candidates[0]!.targetId;
       const childContexts: FixtureExecutionContext[] = [];
-      let childAttachedEvent: FramePlacementEvidence["childAttachedEvent"];
+      const childAttachedEvents: NonNullable<
+        FramePlacementEvidence["childAttachedEvent"]
+      >[] = [];
       removeChild = browserRpc.onEvent((event) => {
         if (event.method === "Target.attachedToTarget") {
           const params = event.params as unknown as NonNullable<
             FramePlacementEvidence["childAttachedEvent"]
           >;
           if (params.targetInfo.targetId === childTargetId)
-            childAttachedEvent = params;
+            childAttachedEvents.push(params);
         }
         if (
           event.sessionId === childSessionId &&
@@ -913,39 +991,90 @@ async function observeRemoteFramePlacement(
       await browserRpc.send("Runtime.enable", {}, childSessionId);
       const childTree = (
         await browserRpc.send("Page.getFrameTree", {}, childSessionId)
-      ).frameTree as { frame: { id: string; url: string } };
-      assert.equal(childTree.frame.url, child.url);
-      Object.assign(evidence, {
+      ).frameTree as { frame: { id: string; url: string; parentId?: string } };
+      diagnostic.childTree = childTree;
+      diagnostic.childAttachedEvents = childAttachedEvents;
+      assert.equal(
+        childAttachedEvents.length,
+        1,
+        "Need exactly one trusted attachment for the observed child target",
+      );
+      child = childTree.frame;
+      assert.equal(child.url, childUrl.href);
+      if (child.parentId !== undefined)
+        assert.equal(child.parentId, tree.frame.id);
+      const reportedChildren = tree.childFrames ?? [];
+      assert.ok(
+        reportedChildren.length <= 1,
+        "Parent tree must not contain additional children",
+      );
+      if (reportedChildren.length === 1)
+        assert.deepEqual(
+          {
+            id: reportedChildren[0]!.frame.id,
+            url: reportedChildren[0]!.frame.url,
+          },
+          { id: child.id, url: child.url },
+          "A supplied remote placeholder must match the child-session frame",
+        );
+      Object.assign(childEvidence, {
         childSessionId,
         childSessionTargetId: childTargetId,
-        childAttachedEvent,
-        childSessionFrameId: childTree.frame.id,
+        childAttachedEvent: childAttachedEvents[0],
+        childSessionFrameId: child.id,
+        childSessionParentFrameId: child.parentId,
         childContexts,
       });
-      if (mode === "nested-oopif" || mode === "nested-same-process") {
-        removeChild();
-        removeChild = undefined;
-        const parentSessionId = childSessionId;
-        const childRpc: FixtureCdpEndpoint = {
-          send: async (method, params = {}) =>
-            await browserRpc.send(method, params, parentSessionId),
-          onEvent: (listener) =>
-            browserRpc.onEvent((event) => {
-              if (event.sessionId === parentSessionId) listener(event);
-            }),
-        };
-        evidence.descendant = await observeRemoteFramePlacement(
-          childRpc,
-          browserRpc,
-          mode === "nested-oopif"
-            ? "cross-origin-oopif"
-            : "cross-origin-same-process",
-          child.url,
-        );
-      }
+    }
+    const owner = await rpc.send("DOM.getFrameOwner", { frameId: child.id });
+    assert.equal(
+      owner.backendNodeId,
+      ownerNode.backendNodeId,
+      "Child-session frame must belong to the exact authored parent owner",
+    );
+    if (ownerNode.frameId !== undefined)
+      assert.equal(ownerNode.frameId, child.id);
+    const evidence: FramePlacementEvidence = {
+      mode,
+      rootFrameId: tree.frame.id,
+      childFrameId: child.id,
+      rootContexts,
+      targets,
+      childUrl: child.url,
+      ownerBackendNodeId: ownerNode.backendNodeId,
+      parentTreeChildFrames: (tree.childFrames ?? []).map(({ frame }) => ({
+        id: frame.id,
+        url: frame.url,
+      })),
+      ...childEvidence,
+    };
+    if (mode === "nested-oopif" || mode === "nested-same-process") {
+      removeChild?.();
+      removeChild = undefined;
+      assert.ok(childSessionId);
+      const parentSessionId = childSessionId;
+      const childRpc: FixtureCdpEndpoint = {
+        send: async (method, params = {}) =>
+          await browserRpc.send(method, params, parentSessionId),
+        onEvent: (listener) =>
+          browserRpc.onEvent((event) => {
+            if (event.sessionId === parentSessionId) listener(event);
+          }),
+      };
+      evidence.descendant = await observeRemoteFramePlacement(
+        childRpc,
+        browserRpc,
+        mode === "nested-oopif"
+          ? "cross-origin-oopif"
+          : "cross-origin-same-process",
+        child.url,
+      );
     }
     assertRemoteFramePlacement(evidence);
     return evidence;
+  } catch (error) {
+    console.error("Remote frame placement failure", JSON.stringify(diagnostic));
+    throw error;
   } finally {
     removeRoot();
     removeChild?.();
@@ -1639,6 +1768,7 @@ export async function runTargetedInputContractSmoke(options: {
             placementRpc,
             mode,
             contractUrl.href,
+            1,
           )),
         });
         if (options.remoteFrameInput === "supported")

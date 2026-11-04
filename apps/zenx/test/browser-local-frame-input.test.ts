@@ -121,3 +121,18 @@ test("changing snapshot mode retires old observer identities rather than mixing 
     f.dom.window.close();
   }
 });
+
+test("isolated owner candidates expose inaccessible frames without authorizing them", () => {
+  const f = fixture();
+  try {
+    Object.defineProperty(f.frame, "contentDocument", { get: () => null });
+    const snapshot = requireBrowserInputSnapshot(
+      f.dom.window.eval(browserInputSnapshotScript),
+    );
+    assert.equal(snapshot.frameOwnerScanComplete, true);
+    assert.equal(snapshot.frameOwnerIds?.length, 1);
+    assert.equal(snapshot.frameDocuments?.length, 0);
+  } finally {
+    f.dom.window.close();
+  }
+});

@@ -2984,7 +2984,15 @@ class JsonRpcUserBrowserCdpClient implements UserBrowserCdpClient {
         : rawValue;
       if (expression === browserInspectScript || optionalInputOnly) {
         const legacy = asRecord(resolved)?.inputSnapshot;
-        if (browserFrameInputNeedsObserver(before.frameTree, legacy)) {
+        if (
+          browserFrameInputNeedsObserver(
+            before.frameTree,
+            legacy ??
+              (optionalInputOnly
+                ? rawValue
+                : asRecord(rawValue)?.inputSnapshot),
+          )
+        ) {
           try {
             const evidence = before.attachmentEpoch.frameEvidence;
             if (!evidence)

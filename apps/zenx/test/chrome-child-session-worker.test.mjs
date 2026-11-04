@@ -7,7 +7,9 @@ const autoAttach = (autoAttach = true) => ({
   autoAttach,
   flatten: true,
   waitForDebuggerOnStart: false,
-  filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+  ...(autoAttach
+    ? { filter: [{ type: "iframe", exclude: false }, { exclude: true }] }
+    : {}),
 });
 function event() {
   const listeners = [];
@@ -90,6 +92,15 @@ async function fixture(
       detach: nativeDetach,
       sendCommand: async (target, method, params) => {
         commands.push(JSON.parse(JSON.stringify({ target, method, params })));
+        // Match the native protocol rejection observed in the hosted Chrome run.
+        if (
+          method === "Target.setAutoAttach" &&
+          params.autoAttach === false &&
+          params.filter?.length
+        )
+          throw new Error(
+            '{"code":-32602,"message":"Target filter should be empty when disabling auto-attach"}',
+          );
         return await nativeCommand(target, method, params);
       },
     },
@@ -430,4 +441,75 @@ test("failed native attachment retirement retains quarantine when a tab becomes 
     /reconnect/,
   );
   assert.equal(f.port.disconnected, false);
+});
+
+test("extension accepts absent or empty disable filters on exact root and child routes", async () => {
+  for (const emptyFilter of [false, true]) {
+    const f = await fixture();
+    await f.enable();
+    f.attach("child");
+    await f.enable("child");
+    f.attach("grandchild", "child");
+    const params = {
+      ...autoAttach(false),
+      ...(emptyFilter ? { filter: [] } : {}),
+    };
+    assert.deepEqual(
+      (await f.result(f.send("Target.setAutoAttach", params, "child"))).result,
+      {},
+    );
+    assert.deepEqual(f.commands.at(-1), {
+      target: { tabId: 7, sessionId: "child" },
+      method: "Target.setAutoAttach",
+      params,
+    });
+    assert.match(
+      (await f.result(f.send("Page.enable", {}, "grandchild"))).error.message,
+      /Unknown or retired/,
+    );
+    assert.deepEqual(
+      (await f.result(f.send("Page.enable", {}, "child"))).result,
+      {},
+    );
+    assert.deepEqual(
+      (await f.result(f.send("Target.setAutoAttach", params))).result,
+      {},
+    );
+    assert.deepEqual(f.commands.at(-1).target, { tabId: 7 });
+    assert.deepEqual(f.commands.at(-1).params, params);
+    assert.match(
+      (await f.result(f.send("Page.enable", {}, "child"))).error.message,
+      /Unknown or retired/,
+    );
+    await f.enable();
+  }
+});
+
+test("extension rejects nonempty disable filters without weakening enable scope or retiring children", async () => {
+  const f = await fixture();
+  await f.enable();
+  f.attach("child");
+  const count = f.commands.length;
+  for (const params of [
+    { ...autoAttach(), filter: undefined },
+    { ...autoAttach(), filter: [] },
+    { ...autoAttach(), filter: [{ exclude: false }] },
+    { ...autoAttach(false), filter: autoAttach().filter },
+    { ...autoAttach(false), filter: [{ exclude: true }] },
+    { ...autoAttach(false), filter: null },
+    { ...autoAttach(false), filter: {} },
+    { ...autoAttach(false), flatten: false },
+    { ...autoAttach(false), waitForDebuggerOnStart: true },
+    { ...autoAttach(false), unrelated: true },
+  ]) {
+    assert.match(
+      (await f.result(f.send("Target.setAutoAttach", params))).error.message,
+      /Only flattened/,
+    );
+    assert.equal(f.commands.length, count);
+  }
+  assert.deepEqual(
+    (await f.result(f.send("Page.enable", {}, "child"))).result,
+    {},
+  );
 });

@@ -780,15 +780,18 @@ async function setIframeAutoAttach(session, message) {
           key,
         ),
     ) ||
-    !Array.isArray(params.filter) ||
-    params.filter.length !== 2 ||
-    params.filter[0]?.type !== "iframe" ||
-    ![undefined, false].includes(params.filter[0].exclude) ||
-    Object.keys(params.filter[0]).some(
-      (key) => key !== "type" && key !== "exclude",
-    ) ||
-    params.filter[1]?.exclude !== true ||
-    Object.keys(params.filter[1]).length !== 1
+    (params.autoAttach
+      ? !Array.isArray(params.filter) ||
+        params.filter.length !== 2 ||
+        params.filter[0]?.type !== "iframe" ||
+        ![undefined, false].includes(params.filter[0].exclude) ||
+        Object.keys(params.filter[0]).some(
+          (key) => key !== "type" && key !== "exclude",
+        ) ||
+        params.filter[1]?.exclude !== true ||
+        Object.keys(params.filter[1]).length !== 1
+      : params.filter !== undefined &&
+        (!Array.isArray(params.filter) || params.filter.length !== 0))
   )
     throw new Error(
       "Only flattened, non-pausing iframe auto-attach is supported",

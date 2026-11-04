@@ -67,6 +67,9 @@ export interface BrowserInputSnapshot {
   documentKey: string;
   /** Internal local-document probe; iframe owners are resolved by the Host. */
   localFrame?: boolean;
+  /** Isolated-DOM candidates only; native owner/session proof is still required. */
+  frameOwnerIds?: string[];
+  frameOwnerScanComplete?: boolean;
   focusFrameOwner?: boolean;
   pointerFrameOwner?: boolean;
   viewport: BrowserInputViewport;
@@ -271,6 +274,8 @@ function browserInputSnapshotSource(localFrame = false): string {
   const roots = [{ root: document, doc: document, depth: 0 }];
   const activeDocuments = new Set([document]);
   const frameDocuments = [];
+  const frameOwnerIds = [];
+  let frameOwnerScanComplete = true;
   const nativeFrameCandidates = [];
   const frameAncestorCandidates = [];
   state.activeFrames = new WeakMap();
@@ -288,8 +293,9 @@ function browserInputSnapshotSource(localFrame = false): string {
         if (state.observeShadowRoot(shadow)) {
           state.shadowRoots.add(shadow);
           roots.push({ root: shadow, doc, depth });
-        }
+        } else frameOwnerScanComplete = false;
       }
+      if (element.localName === 'iframe') frameOwnerIds.push(nodeId(element));
       if (localFrame || element.localName !== 'iframe' || depth >= 8 || activeDocuments.size >= 32) continue;
       try {
         const child = element.contentDocument;
@@ -325,6 +331,7 @@ function browserInputSnapshotSource(localFrame = false): string {
       }
     }
   }
+  if (budget <= 0) frameOwnerScanComplete = false;
   for (const [doc, entry] of state.documents) {
     entry.recordMutations(entry.observer.takeRecords());
     if (activeDocuments.has(doc)) continue;
@@ -344,7 +351,7 @@ function browserInputSnapshotSource(localFrame = false): string {
     ...(localFrame ? { localFrame: true, ...(focused?.localName === 'iframe' ? { focusFrameOwner: true } : {}) } : {}),
     viewport: viewport(globalThis),
     focusId, ...(focusId && canHostShadow(focused) ? { focusNeedsShadowEvidence: true } : {}), ...(focus.unsupported ? { focusUnsupported: focus.unsupported } : {}), inputRevision: state.inputRevision, layoutRevision: state.layoutRevision,
-    frameDocuments, ...(nativeFrameCandidates.length ? { nativeFrameCandidates } : {}), ...(frameAncestorCandidates.length ? { frameAncestorCandidates } : {}),
+    frameDocuments, frameOwnerIds, frameOwnerScanComplete, ...(nativeFrameCandidates.length ? { nativeFrameCandidates } : {}), ...(frameAncestorCandidates.length ? { frameAncestorCandidates } : {}),
   };
 })()`;
 }
@@ -950,6 +957,23 @@ export function requireBrowserInputSnapshot(
     throw new Error(
       "Browser targeted input requires a valid, unzoomed CSS viewport; inspect again",
     );
+  if (
+    snapshot.frameOwnerScanComplete !== undefined &&
+    typeof snapshot.frameOwnerScanComplete !== "boolean"
+  )
+    throw new Error("Browser iframe owner scan metadata is invalid");
+  if (
+    snapshot.frameOwnerIds !== undefined &&
+    (!Array.isArray(snapshot.frameOwnerIds) ||
+      snapshot.frameOwnerIds.length > 31 ||
+      new Set(snapshot.frameOwnerIds).size !== snapshot.frameOwnerIds.length ||
+      snapshot.frameOwnerIds.some(
+        (id) => typeof id !== "string" || id.length === 0 || id.length > 128,
+      ))
+  )
+    throw new Error(
+      "Browser iframe owner candidates are unavailable or exceed their bound",
+    );
   if (snapshot.frameDocuments !== undefined) {
     const frames = snapshot.frameDocuments;
     if (!Array.isArray(frames) || frames.length > 31)
@@ -1084,6 +1108,9 @@ export function assertBrowserInputSnapshot(
 ): void {
   if (
     actual.documentKey !== expected.documentKey ||
+    actual.frameOwnerScanComplete !== expected.frameOwnerScanComplete ||
+    JSON.stringify(actual.frameOwnerIds ?? []) !==
+      JSON.stringify(expected.frameOwnerIds ?? []) ||
     JSON.stringify(actual.viewport) !== JSON.stringify(expected.viewport) ||
     JSON.stringify(actual.frameDocuments ?? []) !==
       JSON.stringify(expected.frameDocuments ?? []) ||
