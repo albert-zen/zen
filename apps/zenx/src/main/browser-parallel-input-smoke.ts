@@ -334,11 +334,18 @@ const events=[];
 const eventTypes=['pointerdown','pointerup','keydown','keyup'];
 // Register the fixture witness before the consuming handler and before inspection.
 // The witness observes real trusted events; it never changes them or tracker state.
-for(const type of eventTypes)window.addEventListener(type,event=>events.push({type,trusted:event.isTrusted,target:event.composedPath()[0]?.id||''}),true);
+for(const type of eventTypes)window.addEventListener(type,event=>events.push({type,trusted:event.isTrusted,target:event.composedPath().find(node=>node.id)?.id||''}),true);
 if(mode==='stop-propagation'||mode==='stop-immediate'){
   for(const type of eventTypes)window.addEventListener(type,event=>{
     if(mode==='stop-immediate')event.stopImmediatePropagation();else event.stopPropagation();
   },true);
+}
+// Suppress control defaults (including focus/activation) in this fixture only.
+// This proves trusted dispatch, not real picker operation or value changes. The
+// witness above still records both events, including open-shadow controls.
+for(const element of root.querySelectorAll('input:not([type]),input[type=file],input[type=color],input[type=date],select,label')){
+  if(!element.id.startsWith('native-')&&!element.id.startsWith('label-'))continue;
+  for(const type of ['pointerdown','mousedown','click','keydown','keyup'])element.addEventListener(type,event=>event.preventDefault());
 }
 window.contract={mode,events,clicks:0,widgets:{},
   point(id){const element=node(id);if(!element)throw Error('Missing fixture node '+id);const hit=id.startsWith('label-')?element.querySelector('span'):element;const r=hit.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}},
@@ -444,7 +451,11 @@ export async function runTargetedInputContractSmoke(options: {
     await rpc.evaluate<{ x: number; y: number }>(
       `window.contract.point(${JSON.stringify(id)})`,
     );
-  const paired = async (kind: "click" | "key", id: string) => {
+  const paired = async (
+    kind: "click" | "key",
+    id: string,
+    key: "Space" | "Enter" = "Space",
+  ) => {
     if (kind === "key") assert.equal((await focus(id)).inner, id);
     const position = kind === "click" ? await point(id) : undefined;
     const observation = await inspect();
@@ -460,12 +471,7 @@ export async function runTargetedInputContractSmoke(options: {
         position.y,
       );
     else
-      await backend.keyPress!(
-        sessionId,
-        tabId,
-        observation.observationId,
-        "Space",
-      );
+      await backend.keyPress!(sessionId, tabId, observation.observationId, key);
     const dispatched = inputs.slice(inputIndex);
     assert.equal(
       dispatched.length,
@@ -503,7 +509,8 @@ export async function runTargetedInputContractSmoke(options: {
     );
     if (kind === "click")
       assert.equal(after.clicks, before.clicks + Number(id === "canvas"));
-    else assert.equal(after.values[id], before.values[id] + " ");
+    else if (key === "Space" && id in before.values)
+      assert.equal(after.values[id], before.values[id] + " ");
     if (kind === "click" && ["button-span", "widget"].includes(id))
       assert.equal(after.widgets[id], (before.widgets[id] ?? 0) + 1);
     await guard();
@@ -512,7 +519,7 @@ export async function runTargetedInputContractSmoke(options: {
   const rejected = async (
     label: string,
     action: () => Promise<unknown>,
-    expected: RegExp | "native-surface" | "shadow-surface",
+    expected: RegExp | "shadow-surface",
   ) => {
     const inputIndex = inputs.length;
     const before = await state();
@@ -625,52 +632,19 @@ export async function runTargetedInputContractSmoke(options: {
         }
         for (const type of ["file", "color", "date", "select"]) {
           for (const id of [`native-${type}`, `label-${type}`]) {
-            const position = await point(id);
-            let observation = await inspect();
-            cases.push(
-              await rejected(
-                `${id}-pointer`,
-                () =>
-                  backend.pointerClick!(
-                    sessionId,
-                    tabId,
-                    observation.observationId,
-                    position.x,
-                    position.y,
-                  ),
-                "native-surface",
-              ),
-            );
-            assert.equal(
-              (await focus(id)).inner,
-              id,
-              "Native/label key test must focus that exact fixture node",
-            );
-            for (const key of ["Enter", "Space"] as const) {
-              observation = await inspect();
-              assert.equal(
-                observation.focusedInputAvailable,
-                false,
-                "Native/label focus must not advertise keyboard support",
-              );
-              cases.push(
-                await rejected(
-                  `${id}-${key}`,
-                  () =>
-                    backend.keyPress!(
-                      sessionId,
-                      tabId,
-                      observation.observationId,
-                      key,
-                    ),
-                  "native-surface",
-                ),
-              );
-            }
+            cases.push({
+              case: `${id}-pointer`,
+              pair: await paired("click", id),
+            });
+            for (const key of ["Enter", "Space"] as const)
+              cases.push({
+                case: `${id}-${key}`,
+                pair: await paired("key", id, key),
+              });
           }
         }
         cases.push({
-          case: "ordinary-after-rejection",
+          case: "ordinary-after-native-controls",
           pair: await paired("key", "text-a"),
         });
       } else if (mode === "ordinary-dom") {
