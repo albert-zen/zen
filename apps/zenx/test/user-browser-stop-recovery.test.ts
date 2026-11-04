@@ -1,0 +1,288 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  BrowserZenXCapabilityPackage,
+  type BrowserInspection,
+  type BrowserTabSummary,
+  type BrowserLiveObservationEvent,
+} from "../src/main/capabilities/browser-provider.js";
+import type { BrowserThreadEvent } from "../src/main/capabilities/browser-thread-observation.js";
+import { connectUserBrowserCdp } from "../src/main/capabilities/user-browser-provider.js";
+import {
+  createFakeCdpServer,
+  nextTurn,
+  waitUntil,
+} from "./fixtures/user-browser-cdp.js";
+
+const fakeImageDecoder = async (encoded: Buffer) => ({
+  isEmpty: () => false,
+  getSize: () => ({ width: 800, height: 600 }),
+  resize: () => {
+    throw new Error("fixture does not resize");
+  },
+  toJPEG: () => encoded,
+});
+
+test("confirmed release retires a failed public session without replaying its unknown action", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint);
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const invoke = (
+    name: string,
+    args: Record<string, unknown> = {},
+    signal = new AbortController().signal,
+  ) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false, ...args },
+      signal,
+    });
+  try {
+    const tabs = (await invoke("browser_list_tabs")) as BrowserTabSummary[];
+    const tabId = tabs[0]!.tabId;
+    const before = (await invoke("browser_inspect", {
+      tabId,
+    })) as BrowserInspection;
+    const oldAttachment = cdp.latestSessionId();
+    cdp.holdNextActionReply();
+    const controller = new AbortController();
+    const action = invoke(
+      "browser_click",
+      {
+        tabId,
+        observationId: before.observationId,
+        targetId: before.targets[0]!.targetId,
+      },
+      controller.signal,
+    );
+    await cdp.heldActionStarted();
+    const expression = cdp.requests("Runtime.evaluate").at(-1)!.expression;
+    controller.abort();
+    await assert.rejects(action, /outcome is unknown/u);
+    const closing = invoke("browser_close_session");
+    const receipt = assert.rejects(closing, (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.name, "BrowserSessionReleasedWithUnknownEffectsError");
+      assert.match(error.message, /session was released/u);
+      assert.match(error.message, /earlier.*outcome is unknown/u);
+      assert.match(error.message, /do not repeat/u);
+      assert.doesNotMatch(error.message, /session close outcome is unknown/u);
+      return true;
+    });
+    await nextTurn();
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    cdp.releaseLateActionReply();
+    await receipt;
+    assert.equal(cdp.count("Target.detachFromTarget"), 1);
+    assert.deepEqual(cdp.detachedSessionIds(), [oldAttachment]);
+
+    await invoke("browser_list_tabs");
+    const after = (await invoke("browser_inspect", {
+      tabId,
+    })) as BrowserInspection;
+    assert.notEqual(cdp.latestSessionId(), oldAttachment);
+    assert.notEqual(after.observationId, before.observationId);
+    await assert.rejects(
+      invoke("browser_click", {
+        tabId,
+        observationId: before.observationId,
+        targetId: before.targets[0]!.targetId,
+      }),
+      /expired|stale|unknown/u,
+    );
+    assert.equal(
+      cdp
+        .requests("Runtime.evaluate")
+        .filter((request) => request.expression === expression).length,
+      1,
+    );
+    assert.equal(
+      cdp.count("Target.closeTarget"),
+      0,
+      "a pre-existing human page is never closed",
+    );
+  } finally {
+    // The original unknown-effect receipt remains recorded even after a fresh session.
+    await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("closing a session stops live reads before its unsettled action can release", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+    liveFrameImageDecoder: fakeImageDecoder,
+  });
+  const events: BrowserLiveObservationEvent[] = [];
+  try {
+    await connection.backend.listTabs("work");
+    const inspected = await connection.backend.inspect("work", "target-1");
+    const stop = connection.backend.observeTab!("work", "target-1", (event) =>
+      events.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    cdp.holdNextActionReply();
+    const controller = new AbortController();
+    const action = connection.backend.click(
+      "work",
+      "target-1",
+      inspected.observationId,
+      inspected.targets[0]!.targetId,
+      controller.signal,
+    );
+    await cdp.heldActionStarted();
+    controller.abort();
+    await assert.rejects(action, /outcome is unknown/u);
+    const closing = Promise.resolve(connection.backend.closeSession("work"));
+    const receipt = assert.rejects(closing, /outcome is unknown/u);
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    assert.equal(cdp.count("Target.detachFromTarget"), 0);
+    const count = events.length;
+    cdp.emitTargetInfoChanged(
+      "target-1",
+      "Late private title",
+      "https://example.test/late",
+    );
+    cdp.emitScreencastFrame("late frame", 999);
+    await nextTurn();
+    assert.equal(
+      events.length,
+      count,
+      "no metadata or frame from the retiring session reaches the observer",
+    );
+    cdp.releaseLateActionReply();
+    await receipt;
+    stop();
+  } finally {
+    cdp.releaseLateActionReply();
+    await Promise.resolve(connection.backend.close()).catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("finishing a session with a temporary page stops live reads before queued cleanup", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+    liveFrameImageDecoder: fakeImageDecoder,
+  });
+  try {
+    const tab = await connection.backend.open(
+      "work",
+      "https://example.test/temporary",
+    );
+    const inspected = await connection.backend.inspect("work", tab.tabId);
+    connection.backend.observeTab!("work", tab.tabId, () => {});
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    cdp.holdNextActionReply();
+    const controller = new AbortController();
+    const action = connection.backend.click(
+      "work",
+      tab.tabId,
+      inspected.observationId,
+      inspected.targets[0]!.targetId,
+      controller.signal,
+    );
+    await cdp.heldActionStarted();
+    controller.abort();
+    await assert.rejects(action, /outcome is unknown/u);
+    const closing = Promise.resolve(connection.backend.finishSession!("work"));
+    const receipt = assert.rejects(closing, /earlier.*outcome is unknown/u);
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+    cdp.releaseLateActionReply();
+    await receipt;
+    assert.equal(
+      cdp.count("Target.closeTarget"),
+      1,
+      "only the known temporary page is disposable",
+    );
+  } finally {
+    cdp.releaseLateActionReply();
+    await Promise.resolve(connection.backend.close()).catch(() => undefined);
+    await cdp.close();
+  }
+});
+
+test("unknown detach keeps the public lease fail-closed while stopping live reads", async () => {
+  const cdp = await createFakeCdpServer();
+  const connection = await connectUserBrowserCdp(cdp.endpoint, undefined, {
+    liveFrameImageDecoder: fakeImageDecoder,
+  });
+  const capability = new BrowserZenXCapabilityPackage(connection.backend);
+  const events: BrowserThreadEvent[] = [];
+  const stopCatalog = capability.observeThread(
+    { threadId: "thread", frames: false },
+    (event) => events.push(event),
+  );
+  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+    capability.invoke(name, {
+      name,
+      callId: name,
+      threadId: "thread",
+      cwd: process.cwd(),
+      arguments: { sessionId: "task", observe: false, ...args },
+      signal: new AbortController().signal,
+    });
+  try {
+    const tabs = (await invoke("browser_list_tabs")) as BrowserTabSummary[];
+    await invoke("browser_inspect", { tabId: tabs[0]!.tabId });
+    const target = events
+      .flatMap((event) => (event.type === "targets" ? event.targets : []))
+      .at(-1)!;
+    const liveEvents: BrowserThreadEvent[] = [];
+    const stopLive = capability.observeThread(
+      { threadId: "thread", frames: true, targetId: target.id },
+      (event) => liveEvents.push(event),
+    );
+    await waitUntil(() => cdp.count("Page.startScreencast") === 1);
+    cdp.dropNextDetachReply();
+    await assert.rejects(invoke("browser_close_session"), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.notEqual(
+        error.name,
+        "BrowserSessionReleasedWithUnknownEffectsError",
+      );
+      assert.match(error.message, /detach.*outcome is unknown/u);
+      return true;
+    });
+    await waitUntil(() => cdp.count("Page.stopScreencast") === 1);
+    await assert.rejects(
+      invoke("browser_list_tabs"),
+      /outcome is unknown|tainted/u,
+    );
+    assert.equal(
+      cdp.count("Target.attachToTarget"),
+      1,
+      "no successor lease can silently attach after uncertain cleanup",
+    );
+    const latest = events.filter((event) => event.type === "targets").at(-1)!;
+    assert.equal(latest.type, "targets");
+    if (latest.type === "targets")
+      assert.equal(latest.targets[0]!.id, target.id);
+    assert.equal(
+      events.some((event) => event.type === "turn-ended"),
+      false,
+    );
+    const count = liveEvents.length;
+    cdp.emitTargetInfoChanged(
+      "target-1",
+      "Late synthetic metadata",
+      "https://example.test/late",
+    );
+    await nextTurn();
+    assert.equal(
+      liveEvents.length,
+      count,
+      "failed close cannot leak later metadata",
+    );
+    stopLive();
+    assert.equal(cdp.count("Target.closeTarget"), 0);
+  } finally {
+    stopCatalog();
+    await capability.close().catch(() => undefined);
+    await cdp.close();
+  }
+});

@@ -159,6 +159,20 @@ export type BrowserLiveObservationListener = (
   event: BrowserLiveObservationEvent,
 ) => void;
 
+/** A release receipt, never evidence that an earlier page action did not run. */
+export class BrowserSessionReleasedWithUnknownEffectsError extends Error {
+  constructor(
+    readonly releasedTabs: number,
+    detail: string,
+  ) {
+    super(
+      "Browser session was released, but an earlier action outcome is unknown. Check the current page; do not repeat the action. List tabs and inspect again before continuing.",
+      { cause: new Error(detail) },
+    );
+    this.name = "BrowserSessionReleasedWithUnknownEffectsError";
+  }
+}
+
 export interface ZenXBrowserBackend {
   readonly extensionOperations?: readonly BrowserExtensionOperation[];
   extension?(
@@ -741,6 +755,14 @@ export class BrowserZenXCapabilityPackage implements ZenXCapabilityPackage {
       settle(false, result);
     } catch (error) {
       settle(true);
+      if (
+        toolName === "browser_close_session" &&
+        error instanceof BrowserSessionReleasedWithUnknownEffectsError
+      ) {
+        // Only a confirmed release can retire this exact lease after an error.
+        // Unknown detach/setup outcomes retain the old fail-closed route.
+        this.#threadObservation.retireSession(session, error);
+      }
       throw error;
     }
     const project = (value: unknown) =>

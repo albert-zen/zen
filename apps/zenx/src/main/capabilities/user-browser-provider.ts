@@ -29,6 +29,7 @@ import {
   redactBrowserUrl,
   resolveBrowserObservedTarget,
   BrowserScreenshotArtifactStore,
+  BrowserSessionReleasedWithUnknownEffectsError,
   type BrowserInspection,
   type BrowserDomInspection,
   type BrowserLiveObservationEvent,
@@ -465,7 +466,12 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
   ): () => void {
     const { session } = this.#sessionTab(sessionId, tabId);
     const observe = this.#client.observeScreencast;
-    if (this.#backendCloseQueued || this.#closing || observe === undefined) {
+    if (
+      session.closeQueued ||
+      this.#backendCloseQueued ||
+      this.#closing ||
+      observe === undefined
+    ) {
       listener({
         type: "status",
         status: "unavailable",
@@ -499,6 +505,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
       tabId,
       listener,
       stop: () => {
+        if (!active) return;
         active = false;
         stopMetadata?.();
         this.#liveSubscriptions.delete(entry);
@@ -1532,6 +1539,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
 
   async finishSession(sessionId: string): Promise<void> {
     const session = this.#requireSession(sessionId);
+    this.#stopSessionObservation(session);
     // Only positively identified pages created by this session are disposable.
     // Unknown creates and pre-existing user pages never enter this set.
     const outcomes = await Promise.allSettled(
@@ -1564,7 +1572,7 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
     const existing = this.#sessionCloseOperations.get(sessionId);
     if (existing !== undefined) return await existing;
     const session = this.#requireSession(sessionId);
-    session.closeQueued = true;
+    this.#stopSessionObservation(session);
     const closing = this.#startSessionOperation(
       session,
       async () => {
@@ -1605,6 +1613,10 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
             `detach outcome is unknown (${describeError(failure.reason)})`,
           );
         }
+        const cleanupConfirmed =
+          session.taints.length === 0 &&
+          session.detachFailures.length === 0 &&
+          session.unresolvedCreates.size === 0;
         for (const targetId of targetIds) {
           const tab = this.#tabs.get(targetId);
           if (tab?.tainted !== undefined) {
@@ -1629,6 +1641,12 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
         }
         this.#sessions.delete(sessionId);
         await this.#artifacts.clearScope(sessionId);
+        if (cleanupConfirmed && session.taints.length > 0) {
+          throw new BrowserSessionReleasedWithUnknownEffectsError(
+            count,
+            session.taints.join("; "),
+          );
+        }
         this.#throwIfSessionTainted(session, "session close");
         return count;
       },
@@ -1641,10 +1659,15 @@ export class UserBrowserCdpBackend implements ZenXBrowserBackend {
           this.#sessionCloseOperations.delete(sessionId);
       })
       .catch(() => undefined);
-    const count = await closing;
+    return await closing;
+  }
+
+  #stopSessionObservation(session: UserBrowserSession): void {
+    session.closeQueued = true;
+    // Disposable reads stop at the request, before temporary-page cleanup or
+    // mutation settlement, and remain stopped even when cleanup later fails.
     for (const live of [...this.#liveSubscriptions])
-      if (live.sessionId === sessionId) live.stop();
-    return count;
+      if (live.sessionId === session.id) live.stop();
   }
 
   async close(): Promise<void> {
